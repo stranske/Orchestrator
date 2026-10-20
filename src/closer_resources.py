@@ -24,6 +24,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -62,6 +63,14 @@ class CorruptShard(RuntimeError):
 
 class ResourceBlocked(RuntimeError):
     """A mutation reservation or pool slot was not obtained; the effect was NOT started."""
+
+
+class FinitePoolUncertain(RuntimeError):
+    """A bounded finite request returned with an owned process group unverified."""
+
+    def __init__(self, fence):
+        super().__init__("finite request process cleanup is uncertain")
+        self.finite_pool_fence = fence
 
 
 class ScopeBlocked(ResourceBlocked):
@@ -176,8 +185,56 @@ def default_resource_keys(target: str) -> list[str]:
     return [f"pr:{owner}/{repo}#{int(match.group(3))}", f"repo:{owner}/{repo}"]
 
 
+_INVENTORY_REQUEST = threading.local()
+
+
 @contextlib.contextmanager
-def inventory_lock(root, *, exclusive=False):
+def inventory_request(deadline, *, now=time.time):
+    """Carry one finite request window through nested shard journal commits."""
+    previous = getattr(_INVENTORY_REQUEST, "window", None)
+    previous_limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    sampled_at, monotonic_at = now(), time.monotonic()
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+        for value in (deadline, sampled_at, monotonic_at)
+    ):
+        raise ResourceBlocked("finite request window requires finite numeric clocks and deadline")
+    limit = monotonic_at + max(0.0, deadline - sampled_at)
+    if not math.isfinite(limit):
+        raise ResourceBlocked("finite request monotonic deadline is not finite")
+    if previous is not None:
+        deadline = min(deadline, previous[0])
+    if previous_limit is not None:
+        limit = min(limit, previous_limit)
+    _INVENTORY_REQUEST.window = (deadline, now)
+    _INVENTORY_REQUEST.monotonic_limit = limit
+    try:
+        yield
+    finally:
+        _INVENTORY_REQUEST.window = previous
+        _INVENTORY_REQUEST.monotonic_limit = previous_limit
+
+
+def finite_request_remaining() -> float | None:
+    """Return this active request's remaining time without starting a new window."""
+    window = getattr(_INVENTORY_REQUEST, "window", None)
+    if window is None:
+        return None
+    deadline, now = window
+    sampled_at, monotonic_at = now(), time.monotonic()
+    limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+        for value in (deadline, sampled_at, monotonic_at, limit)
+    ):
+        raise ResourceBlocked("finite request window has an invalid clock or deadline")
+    if not isinstance(limit, (int, float)):
+        raise ResourceBlocked("finite request window has no monotonic deadline")
+    return max(0.0, min(deadline - sampled_at, limit - monotonic_at))
+
+
+@contextlib.contextmanager
+def inventory_lock(root, *, exclusive=False, deadline=None, now=time.time):
     """Bind short metadata/state commits to a census; never held across target work."""
     root = Path(root)
     lock = root.with_name(root.name + ".inventory.lock")
@@ -189,15 +246,38 @@ def inventory_lock(root, *, exclusive=False):
     if exclusive:
         root.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a+" if exclusive else "r") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        window = getattr(_INVENTORY_REQUEST, "window", None)
+        if deadline is None and window is not None:
+            deadline, now = window
+        mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        if deadline is None:
+            fcntl.flock(handle, mode)
+        else:
+            if (
+                not isinstance(deadline, (int, float))
+                or isinstance(deadline, bool)
+                or not math.isfinite(deadline)
+            ):
+                raise ResourceBlocked("inventory lock requires a finite request deadline")
+            # Wall time is the original request's authority; monotonic time also
+            # bounds the wait if the wall clock moves backwards while contended.
+            monotonic_limit = time.monotonic() + max(0.0, deadline - now())
+            while True:
+                try:
+                    fcntl.flock(handle, mode | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if now() >= deadline or time.monotonic() >= monotonic_limit:
+                        raise ResourceBlocked("inventory lock exceeded finite request window")
+                    time.sleep(min(_POLL_SECONDS, max(0.0, monotonic_limit - time.monotonic())))
         try:
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def open_root(state_path, *, pipeline_schema, pin=None):
-    with inventory_lock(scoped_root(state_path), exclusive=True):
+def open_root(state_path, *, pipeline_schema, pin=None, deadline=None, now=time.time):
+    with inventory_lock(scoped_root(state_path), exclusive=True, deadline=deadline, now=now):
         return _open_root(state_path, pipeline_schema=pipeline_schema, pin=pin)
 
 
@@ -250,28 +330,59 @@ def _open_root(
 
 
 class Lease:
-    def __init__(self, directory: Path, target: str, owner: str, epoch: int, handle, expires_at):
+    def __init__(
+        self,
+        directory: Path,
+        target: str,
+        owner: str,
+        epoch: int,
+        handle,
+        expires_at,
+        finite_frontier=None,
+    ):
         self.directory = directory
         self.target = target
         self.owner = owner
         self.epoch = epoch
-        self.expires_at = float(expires_at)
+        self.finite_frontier = finite_frontier
+        self.expires_at = float(expires_at) if finite_frontier is None else None
         self._handle = handle
         self.state_path = directory / "state.json"
 
     def check(self, now: Callable[[], float] = time.time) -> None:
         if self._handle is None or self._handle.closed:
             raise StaleLease(f"{self.target}: lease released")
-        if now() > self.expires_at:
-            raise StaleLease(f"{self.target}: lease expired at {self.expires_at}")
+        if self.finite_frontier is None:
+            expires_at = self.expires_at
+            if expires_at is None or now() > expires_at:
+                raise StaleLease(f"{self.target}: lease expired at {expires_at}")
         try:
             doc = json.loads((self.directory / "lease.json").read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise StaleLease(f"{self.target}: lease record unreadable: {exc}") from exc
         if doc.get("epoch") != self.epoch or doc.get("owner") != self.owner:
             raise StaleLease(f"{self.target}: lease superseded by {doc.get('owner')!r}")
+        if self.finite_frontier is not None and (
+            doc.get("finite_frontier") != self.finite_frontier
+            or type(doc.get("epoch")) is not int
+            or doc.get("target") != canonical_target(self.target)
+            or doc.get("authority") != "held-owner-epoch-lock/v1"
+            or "expires_at" in doc
+        ):
+            raise StaleLease(f"{self.target}: finite frontier lease identity changed")
 
     def release(self) -> None:
+        if self.finite_frontier is not None:
+            try:
+                with inventory_lock(
+                    self.directory.parents[1], exclusive=True, deadline=time.time()
+                ):
+                    self._release()
+            except ResourceBlocked:
+                # The callback has ended. Unlock without waiting; its durable
+                # running row/intents retain UNKNOWN and cannot be replayed.
+                self._release()
+            return
         with inventory_lock(self.directory.parents[1], exclusive=True):
             self._release()
 
@@ -283,9 +394,35 @@ class Lease:
             handle.close()
 
 
-def acquire(root, target, *, owner, expires_at, now=time.time):
-    with inventory_lock(root, exclusive=True):
-        return _acquire(root, target, owner=owner, expires_at=expires_at, now=now)
+def acquire(
+    root,
+    target,
+    *,
+    owner,
+    expires_at=None,
+    now=time.time,
+    finite_frontier=None,
+    request_deadline=None,
+):
+    if finite_frontier is not None:
+        from closer_frontier_policy import validate_frontier
+
+        finite_frontier = validate_frontier(finite_frontier)
+        if expires_at is not None or target not in finite_frontier["targets"]:
+            raise ValueError("finite target lease requires its selected frontier and no duration")
+        if request_deadline is None:
+            request_deadline = now() + RESOURCE_WAIT_SECONDS
+    elif expires_at is None:
+        raise ValueError("legacy target lease requires its original expiry")
+    with inventory_lock(root, exclusive=True, deadline=request_deadline, now=now):
+        return _acquire(
+            root,
+            target,
+            owner=owner,
+            expires_at=expires_at,
+            now=now,
+            finite_frontier=finite_frontier,
+        )
 
 
 def _acquire(
@@ -293,8 +430,9 @@ def _acquire(
     target: str,
     *,
     owner: str,
-    expires_at: float,
+    expires_at: float | None,
     now: Callable[[], float] = time.time,
+    finite_frontier=None,
 ) -> Lease | None:
     """Take the target's lease without waiting; ``None`` means a live owner holds it."""
     directory = shard_dir(root, target)
@@ -337,13 +475,20 @@ def _acquire(
                 "owner": owner,
                 "epoch": epoch,
                 "acquired_at": now(),
-                "expires_at": expires_at,
+                **(
+                    {"expires_at": expires_at}
+                    if finite_frontier is None
+                    else {
+                        "finite_frontier": finite_frontier,
+                        "authority": "held-owner-epoch-lock/v1",
+                    }
+                ),
             },
         )
     except BaseException:
         handle.close()
         raise
-    return Lease(directory, target, owner, epoch, handle, expires_at)
+    return Lease(directory, target, owner, epoch, handle, expires_at, finite_frontier)
 
 
 # state-file path -> commit fence; consulted by closer_pipeline._save before replace. Keys are
@@ -436,6 +581,46 @@ def _unresolved_effect(path: Path, target: str, row: Mapping[str, Any]) -> str |
     return "unverified_act_outcome"
 
 
+def finite_unresolved(doc):
+    """A mode switch cannot replay any unfinished frozen frontier item."""
+    from closer_frontier_policy import TERMINAL_STATES, validate_frontier
+
+    entries = doc.get("frontiers", {})
+    if not isinstance(entries, dict):
+        raise ValueError("malformed finite frontier namespace")
+    found = {}
+    for frontier_id, entry in entries.items():
+        descriptor = validate_frontier(entry.get("finite_frontier"))
+        items = entry.get("items")
+        if (
+            entry.get("schema") != "closer-pipeline-frontier/v2"
+            or descriptor["frontier_id"] != frontier_id
+            or not isinstance(items, dict)
+            or not items
+            or not set(items).issubset(descriptor["targets"])
+        ):
+            raise ValueError("malformed finite frontier history")
+        for target, row in items.items():
+            if not isinstance(row, dict):
+                raise ValueError("malformed finite frontier item")
+            act = row.get("results", {}).get("act")
+            if (
+                row.get("status") not in TERMINAL_STATES
+                or row.get("stage_status") == "unknown"
+                or row.get("recovery_barrier") is not None
+                or row.get("provider_outcome_uncertain") not in (None, False)
+                or (
+                    isinstance(act, Mapping)
+                    and (
+                        act.get("status") in {"unknown", "uncertain", "running", "submitted"}
+                        or act.get("outcome_uncertain") is True
+                    )
+                )
+            ):
+                found[canonical_target(target)] = "finite_frontier_unresolved"
+    return found
+
+
 def legacy_unresolved(state_path: str | Path) -> tuple[dict[str, str], str | None]:
     """Targets the LEGACY ledger leaves unresolved, read-only.
 
@@ -463,6 +648,7 @@ def legacy_unresolved(state_path: str | Path) -> tuple[dict[str, str], str | Non
             reason = _unresolved_effect(path, target, row)
             if reason:
                 found[canonical_target(target)] = "legacy_" + reason
+        found.update(finite_unresolved(doc))
         return found, None
     except (OSError, ValueError, AttributeError, TypeError) as exc:
         return {}, f"legacy ledger unreadable: {exc}"
@@ -552,6 +738,7 @@ def scoped_rollback_report(state_path: str | Path) -> tuple[dict[str, str], list
                 reason = _unresolved_effect(state, target, row)
                 if reason:
                     found[canonical_target(target)] = "scoped_" + reason
+            found.update(finite_unresolved(doc))
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             malformed.append(f"{shard.name}: {type(exc).__name__}: {exc}"[:200])
     return found, malformed
@@ -1105,7 +1292,7 @@ def release_target(root: Path, target: str, *, owner: str) -> list[str]:
 
 
 def _release_known_shard_boundary(
-    root, state_path, target, *, owner, now, run_id=None, progress=False
+    root, state_path, target, *, owner, now, run_id=None, progress=False, finite_frontier=None
 ):
     """Drain only this executor's intent after its durable known target boundary.
 
@@ -1115,6 +1302,23 @@ def _release_known_shard_boundary(
     import closer_pipeline as cp
 
     try:
+        if finite_frontier is not None:
+            if progress or run_id is None:
+                return False
+            if canonical_target(target) in finite_unresolved(cp._load(state_path)):
+                return False
+            verdict = cp.validate_stop(
+                state_path,
+                [target],
+                now=now,
+                expected_run_id=run_id,
+                finite_frontier=finite_frontier,
+                frontier_target=target,
+            )
+            if verdict.get("valid") is not True or verdict.get("run_id") != run_id:
+                return False
+            release_target(root, target, owner=owner)
+            return True
         doc = cp._load(state_path)
         current_id, run = max(doc["runs"].items(), key=lambda pair: pair[1]["created"])
         if run_id is not None and current_id != run_id:
@@ -1167,9 +1371,322 @@ def _release_known_shard_boundary(
 
 # --------------------------------------------------------------------------- shared pools
 
+_pool_slot_local = threading.local()
+
+
+def _pool_slots():
+    slots = getattr(_pool_slot_local, "slots", None)
+    if slots is None:
+        slots = []
+        _pool_slot_local.slots = slots
+    return slots
+
+
+class _FiniteExecutionContext:
+    """Same-process borrow of an original request and already-held pool slots."""
+
+    def __init__(self, target, frontier, window, monotonic_limit, slots):
+        self.pid = os.getpid()
+        self.target = target
+        self.frontier = frontier
+        self.window = window
+        self.monotonic_limit = monotonic_limit
+        self.slots = tuple(slots)
+
+
+def _validate_execution_slots(slots, target, frontier):
+    for item in slots:
+        record, handle = item["record"], item["handle"]
+        if (
+            handle.closed
+            or canonical_target(record.get("target", "")) != canonical_target(target)
+            or record.get("frontier_id") != frontier["frontier_id"]
+        ):
+            raise ResourceBlocked("finite executor pool ownership differs from target/frontier")
+
+
+def capture_finite_execution_context(target, frontier):
+    """Capture references only; never renew a window or acquire another lease."""
+    from closer_frontier_policy import validate_frontier
+
+    frontier = validate_frontier(frontier)
+    if target not in frontier["targets"]:
+        raise ResourceBlocked("finite executor target is outside the frontier")
+    slots = tuple(_pool_slots())
+    window = getattr(_INVENTORY_REQUEST, "window", None)
+    limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    if slots and window is None:
+        raise ResourceBlocked("finite executor pool has no original request window")
+    if window is not None:
+        finite_request_remaining()  # validate the original clocks without extending them
+    _validate_execution_slots(slots, target, frontier)
+    return _FiniteExecutionContext(target, frontier, window, limit, slots)
+
 
 @contextlib.contextmanager
-def pool_slot(root: Path, lane: str, bound: int, *, deadline: float, now=time.time):
+def finite_execution_context(context, *, target, frontier, deadline, now=time.time):
+    """Restore exact request authority in one joined queue worker, then restore its TLS.
+
+    Held handles remain owned by the waiting coordinator. This context never
+    closes/unlocks them, claims capacity, or publishes lease ownership.
+    """
+    from closer_frontier_policy import validate_frontier
+
+    frontier = validate_frontier(frontier)
+    if (
+        not isinstance(context, _FiniteExecutionContext)
+        or context.pid != os.getpid()
+        or context.target != target
+        or context.frontier != frontier
+    ):
+        raise ResourceBlocked("finite executor context target/frontier/process differs")
+    _validate_execution_slots(context.slots, target, frontier)
+    previous_window = getattr(_INVENTORY_REQUEST, "window", None)
+    previous_limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    previous_slots = getattr(_pool_slot_local, "slots", None)
+    if previous_slots and (
+        len(previous_slots) != len(context.slots)
+        or any(a is not b for a, b in zip(previous_slots, context.slots))
+    ):
+        raise ResourceBlocked("finite executor thread already holds another pool context")
+    restored_window = context.window
+    restored_limit = context.monotonic_limit
+    if previous_window is not None:
+        finite_request_remaining()  # validate the worker's already-active bound
+        if restored_window is None:
+            restored_window, restored_limit = previous_window, previous_limit
+        else:
+            if restored_window[1] is not previous_window[1]:
+                raise ResourceBlocked("finite executor cannot replace another request clock")
+            restored_window = (min(restored_window[0], previous_window[0]), restored_window[1])
+            restored_limit = min(restored_limit, previous_limit)
+    borrowed = []
+    try:
+        for item in sorted(context.slots, key=id):
+            lock = item.setdefault("executor_borrow_lock", threading.Lock())
+            if not lock.acquire(blocking=False):
+                raise ResourceBlocked("finite executor pool is already borrowed")
+            borrowed.append(lock)
+        # A closed/rebound owner cannot race capture into a new worker.
+        _validate_execution_slots(context.slots, target, frontier)
+        _INVENTORY_REQUEST.window = restored_window
+        _INVENTORY_REQUEST.monotonic_limit = restored_limit
+        _pool_slot_local.slots = list(context.slots)  # same item/record/FD references
+        original_now = restored_window[1] if restored_window is not None else now
+        with inventory_request(deadline, now=original_now):
+            yield
+    finally:
+        _INVENTORY_REQUEST.window = previous_window
+        _INVENTORY_REQUEST.monotonic_limit = previous_limit
+        _pool_slot_local.slots = previous_slots
+        for lock in reversed(borrowed):
+            lock.release()
+
+
+def _write_pool_record(handle, record):
+    """Atomically publish metadata beside the stable inode holding the flock."""
+    record_path = Path(f"{handle.name}.json")
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{record_path.name}.", suffix=".tmp", dir=record_path.parent
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(record, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, record_path)
+        _fsync_dir(record_path.parent)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+
+
+def finite_pool_prepare_request(observation):
+    """Persist a fresh request intent before each owned transport is spawned."""
+    if not isinstance(observation, Mapping) or not all(
+        isinstance(observation.get(key), str) and observation.get(key)
+        for key in ("run_id", "agent", "profile_id", "finite_frontier_id", "finite_frontier_target")
+    ):
+        raise ResourceBlocked("finite request prelaunch identity is incomplete")
+    active = _pool_slots()
+    if not active:
+        raise ResourceBlocked("finite request has no held pool reservation")
+    # Validate the whole held set before changing any journal. A request with
+    # an assigned run_id may already have spawned without a recorded birth.
+    for item in active:
+        record = item["record"]
+        if (
+            record.get("frontier_id") != observation["finite_frontier_id"]
+            or record.get("target") != observation["finite_frontier_target"]
+            or record.get("status") not in {"starting", "resolved"}
+            or (record.get("status") == "starting" and record.get("run_id") is not None)
+        ):
+            raise ResourceBlocked("finite request does not match a reusable held pool reservation")
+    for item in active:
+        record = item["record"]
+        record.update(
+            {
+                "status": "starting",
+                "run_id": observation["run_id"],
+                "agent": observation["agent"],
+                "profile_id": observation["profile_id"],
+                "process_group": None,
+                "process_birth": None,
+                "request_started_at": time.time(),
+            }
+        )
+        _write_pool_record(item["handle"], record)
+
+
+def finite_pool_process_started(observation):
+    """Durably bind all active finite pool reservations to the exact observed child."""
+    if not isinstance(observation, Mapping) or observation.get("source") not in {
+        "trusted-popen-transport/v1",
+        "trusted-bounded-run/v1",
+        "trusted-artifact-runner/v1",
+    }:
+        raise ResourceBlocked("finite pool process start lacks trusted transport identity")
+    pgid = observation.get("process_group") or observation.get("pid")
+    if (
+        type(pgid) is not int
+        or pgid <= 1
+        or observation.get("pid") != pgid
+        or not all(
+            isinstance(observation.get(key), str) and observation.get(key)
+            for key in ("run_id", "agent", "profile_id", "os_started")
+        )
+    ):
+        raise ResourceBlocked("finite pool process start identity is incomplete")
+    changed = 0
+    for item in _pool_slots():
+        record = item["record"]
+        if record.get("status") != "starting":
+            continue
+        if record.get("run_id") != observation.get("run_id"):
+            continue
+        if record.get("agent") != observation.get("agent") or record.get(
+            "profile_id"
+        ) != observation.get("profile_id"):
+            continue
+        if observation.get("finite_frontier_id", record.get("frontier_id")) != record.get(
+            "frontier_id"
+        ):
+            continue
+        if observation.get("finite_frontier_target", record.get("target")) != record.get("target"):
+            continue
+        record.update(
+            {
+                "status": "uncertain",
+                "process_group": pgid,
+                "run_id": observation["run_id"],
+                "agent": observation["agent"],
+                "profile_id": observation["profile_id"],
+                **(
+                    {"process_birth": observation["os_started"]}
+                    if observation.get("os_started")
+                    else {}
+                ),
+            }
+        )
+        _write_pool_record(item["handle"], record)
+        changed += 1
+    if not changed:
+        raise ResourceBlocked("finite provider spawned without a matching durable pool reservation")
+
+
+def finite_pool_process_finished(observation):
+    """Release durable reservation only after positive proof of the original group's absence."""
+    pgid = observation.get("process_group") or observation.get("pid")
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        raise ResourceBlocked("finite process-group termination could not be verified") from exc
+    else:
+        raise ResourceBlocked("finite process group is still present")
+    matched = 0
+    for item in _pool_slots():
+        record = item["record"]
+        if record.get("status") not in {"starting", "uncertain"}:
+            continue
+        if record.get("status") == "uncertain" and record.get("process_group") != pgid:
+            continue
+        if record.get("status") == "starting" and record.get("process_group") is not None:
+            continue
+        if record.get("run_id") != observation.get("run_id"):
+            continue
+        if record.get("agent") != observation.get("agent") or record.get(
+            "profile_id"
+        ) != observation.get("profile_id"):
+            continue
+        if record.get("frontier_id") != observation.get("finite_frontier_id") or record.get(
+            "target"
+        ) != observation.get("finite_frontier_target"):
+            raise ResourceBlocked("finite pool completion does not match original run")
+        record.update(
+            {
+                "status": "resolved",
+                "process_group": pgid,
+                "run_id": observation.get("run_id"),
+                "agent": observation.get("agent", record.get("agent")),
+                "profile_id": observation.get("profile_id", record.get("profile_id")),
+                "resolved_at": time.time(),
+                "resolution": "process_group_absent",
+            }
+        )
+        _write_pool_record(item["handle"], record)
+        matched += 1
+    if not matched:
+        raise ResourceBlocked("finite process completion has no matching pool reservation")
+
+
+def finite_pool_has_active_reservations():
+    return bool(_pool_slots())
+
+
+def finite_pool_current_binding():
+    active = _pool_slots()
+    if not active:
+        return None
+    records = [item["record"] for item in active]
+    frontiers = {record.get("frontier_id") for record in records}
+    targets = {record.get("target") for record in records}
+    if len(frontiers) != 1 or len(targets) != 1:
+        raise ResourceBlocked("active finite pool reservations disagree on target binding")
+    return {"frontier_id": next(iter(frontiers)), "target": next(iter(targets))}
+
+
+def finite_pool_no_start(observation=None):
+    """Clear only current-thread reservations still in prelaunch state."""
+    for item in _pool_slots():
+        record = item["record"]
+        if record.get("status") == "starting" and (
+            (observation is None and record.get("run_id") is None)
+            or (
+                isinstance(observation, Mapping)
+                and record.get("run_id") == observation.get("run_id")
+                and record.get("frontier_id") == observation.get("finite_frontier_id")
+                and record.get("target") == observation.get("finite_frontier_target")
+            )
+        ):
+            record.update(
+                {"status": "resolved", "resolved_at": time.time(), "resolution": "trusted_no_spawn"}
+            )
+            _write_pool_record(item["handle"], record)
+
+
+@contextlib.contextmanager
+def pool_slot(
+    root: Path,
+    lane: str,
+    bound: int,
+    *,
+    deadline: float,
+    now=time.time,
+    finite_frontier: bool = False,
+    reservation: Mapping[str, str] | None = None,
+):
     """One of ``bound`` process-wide slots for ``lane`` (flock files shared by every process).
 
     Every coordinator must pass the same bound for a lane; the bounds are the existing
@@ -1178,22 +1695,154 @@ def pool_slot(root: Path, lane: str, bound: int, *, deadline: float, now=time.ti
     directory = root / "pools" / lane
     directory.mkdir(parents=True, exist_ok=True)
     limit = min(float(deadline), now() + RESOURCE_WAIT_SECONDS)
+
+    def read_fence(handle):
+        record_path = Path(f"{handle.name}.json")
+        if not record_path.exists():
+            handle.seek(0)
+            if handle.read():
+                raise ResourceBlocked(f"{lane} pool lock contains an unsupported inline record")
+            return None
+        try:
+            fence = json.loads(record_path.read_text(encoding="utf-8"))
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ResourceBlocked(f"{lane} pool slot has unreadable uncertainty fence") from exc
+        if not isinstance(fence, dict) or fence.get("schema") != "finite-pool-uncertainty/v1":
+            raise ResourceBlocked(f"{lane} pool slot has unsupported uncertainty fence")
+        return fence
+
+    def group_absent(pgid):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        except OSError:
+            return False
+        return False
+
+    def slot_available(candidate):
+        try:
+            fence = read_fence(candidate)
+            if not fence:
+                return True
+            if fence.get("status") == "resolved":
+                return True
+            pgid = fence.get("process_group")
+            if (
+                fence.get("status") != "uncertain"
+                or type(pgid) is not int
+                or pgid <= 1
+                or fence.get("lane") != lane
+                or not all(
+                    isinstance(fence.get(key), str) and fence.get(key)
+                    for key in (
+                        "run_id",
+                        "agent",
+                        "profile_id",
+                        "target",
+                        "frontier_id",
+                        "process_birth",
+                    )
+                )
+                or not group_absent(pgid)
+            ):
+                return False
+            fence.update(
+                {"status": "resolved", "resolved_at": now(), "resolution": "process_group_absent"}
+            )
+            _write_pool_record(candidate, fence)
+            return True
+        except (OSError, ResourceBlocked, TypeError, ValueError):
+            return False
+
     handle = None
     while handle is None:
         for index in range(bound):
             candidate = (directory / f"slot-{index}").open("a+")
             try:
                 fcntl.flock(candidate.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                handle = candidate
-                break
+                if slot_available(candidate):
+                    handle = candidate
+                    break
+                fcntl.flock(candidate.fileno(), fcntl.LOCK_UN)
             except BlockingIOError:
-                candidate.close()
+                pass
+            finally:
+                if candidate is not handle:
+                    candidate.close()
         if handle is None:
             if now() >= limit:
                 raise ResourceBlocked(f"no {lane} pool slot before the deadline")
             time.sleep(_POLL_SECONDS)
+
     try:
-        yield
+        if finite_frontier:
+            required = ("reservation_id", "target", "frontier_id", "agent", "profile_id")
+            if not isinstance(reservation, Mapping) or not all(
+                isinstance(reservation.get(key), str) and reservation.get(key) for key in required
+            ):
+                raise ResourceBlocked("finite pool slot requires an exact prelaunch reservation")
+            starting = {
+                "schema": "finite-pool-uncertainty/v1",
+                "status": "starting",
+                "lane": lane,
+                **{key: reservation[key] for key in required},
+                "process_group": None,
+                "run_id": None,
+                "process_birth": None,
+                "observed_at": now(),
+            }
+            _write_pool_record(handle, starting)
+            item = {"handle": handle, "record": starting}
+            _pool_slots().append(item)
+            try:
+                yield
+            finally:
+                with contextlib.suppress(ValueError):
+                    _pool_slots().remove(item)
+        else:
+            yield
+    except BaseException as exc:
+        fence = getattr(exc, "finite_pool_fence", None)
+        if finite_frontier and isinstance(fence, dict):
+            pgid = fence.get("process_group")
+            if (
+                type(pgid) is not int
+                or pgid <= 1
+                or fence.get("cleanup_terminal") is not False
+                or not all(
+                    isinstance(fence.get(key), str) and fence.get(key)
+                    for key in (
+                        "run_id",
+                        "agent",
+                        "profile_id",
+                        "target",
+                        "frontier_id",
+                        "process_birth",
+                    )
+                )
+            ):
+                raise ResourceBlocked(
+                    f"{lane} pool slot uncertainty lacks exact cleanup evidence"
+                ) from exc
+            saved = {
+                "schema": "finite-pool-uncertainty/v1",
+                "status": "uncertain",
+                "lane": lane,
+                "process_group": pgid,
+                "run_id": fence.get("run_id"),
+                "agent": fence.get("agent"),
+                "profile_id": fence.get("profile_id"),
+                "target": fence.get("target"),
+                "process_birth": fence.get("process_birth"),
+                "frontier_id": fence.get("frontier_id"),
+                "observed_at": now(),
+                "cleanup_error": fence.get("cleanup_error"),
+            }
+            _write_pool_record(handle, saved)
+        raise
     finally:
         with contextlib.suppress(OSError):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -1392,6 +2041,13 @@ def validate_stop(
         assignment = receipt["assignment"]
         run_ids = receipt["run_ids"]
         rows = receipt["targets"]
+        frontier = receipt.get("finite_frontier")
+        if frontier is not None:
+            from closer_frontier_policy import validate_frontier
+
+            frontier = validate_frontier(frontier)
+            if sorted(frontier["targets"]) != assignment:
+                raise ValueError("finite round assignment differs from frozen frontier")
         if (
             not isinstance(assignment, list)
             or not assignment
@@ -1431,18 +2087,35 @@ def validate_stop(
         shard_state = shard_dir(root, target) / "state.json"
         try:
             doc = cp._load(shard_state)
-            admitted_row = doc["runs"][run_id]["targets"][target]
+            admitted_row = (
+                doc["runs"][run_id]["targets"][target]
+                if frontier is None
+                else doc["frontiers"][frontier["frontier_id"]]["items"][target]
+            )
         except (OSError, ValueError, KeyError, TypeError) as exc:
             reasons.append(f"unreadable_shard_run:{target}:{type(exc).__name__}")
             admitted_reasons.append(reasons[-1])
             containment_accounted = False
             continue
         unresolved = _unresolved_effect(shard_state, target, admitted_row)
+        if frontier is not None and canonical_target(target) in finite_unresolved(doc):
+            unresolved = "finite_unknown_outcome"
         if unresolved:
             admitted_reasons.append(f"unresolved_admitted_outcome:{target}:{unresolved}")
         # Native receipts bind their original shard location. Select this exact
         # recorded run in place, never relocate its proof or substitute latest.
-        verdict = cp._validate_stop_legacy(shard_state, [target], now=now, expected_run_id=run_id)
+        verdict = (
+            cp._validate_stop_legacy(shard_state, [target], now=now, expected_run_id=run_id)
+            if frontier is None
+            else cp.validate_stop(
+                shard_state,
+                [target],
+                now=now,
+                expected_run_id=run_id,
+                finite_frontier=frontier,
+                frontier_target=target,
+            )
+        )
         if verdict.get("run_id") != run_id:
             reasons.append(f"run_binding_lost:{target}")
             admitted_reasons.append(reasons[-1])
@@ -1527,7 +2200,11 @@ def validate_stop(
         "receipt_sha256": receipt_hash,
         "run_ids": dict(run_ids),
         "continuation_required": continuation,
-        "deadline": receipt.get("deadline"),
+        **(
+            {"deadline": receipt["deadline"]}
+            if "finite_frontier" not in receipt and "deadline" in receipt
+            else {}
+        ),
         "reasons": reasons,
     }
 
@@ -1546,7 +2223,11 @@ def run_scoped(
     exception,
     reconcile=None,
     capacity_fn,
-    deadline: float,
+    deadline: float | None = None,
+    finite_frontier=None,
+    request_timeout_seconds: float = 120.0,
+    cancelled_fn=None,
+    paused_fn=None,
     priority_targets=(),
     max_io_workers: int = 4,
     max_low_workers: int = 2,
@@ -1576,6 +2257,27 @@ def run_scoped(
     import closer_pipeline as cp
 
     raw_list = list(targets)
+    legacy_deadline: float | None = None
+    if finite_frontier is not None:
+        cp._require_dispatcher_finite_callbacks(
+            {
+                "prepare": prepare,
+                "interpret": interpret,
+                "exception": exception,
+                "act": act,
+                "reconcile": reconcile,
+            }
+        )
+        from closer_frontier_policy import request_window, validate_frontier
+
+        finite_frontier = validate_frontier(finite_frontier, targets=raw_list)
+        request_window(now(), request_timeout_seconds)
+        if deadline is not None:
+            raise ValueError("finite frontier cannot inherit an aggregate deadline")
+    else:
+        if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+            raise ValueError("legacy scoped execution requires a finite deadline")
+        legacy_deadline = float(deadline)
     canonical = [canonical_target(t) for t in raw_list]
     if len(set(canonical)) != len(canonical):
         raise ValueError("targets must be unique non-empty strings (compared canonically)")
@@ -1591,14 +2293,38 @@ def run_scoped(
         raise ValueError("resource_keys must be callable")
 
     started = now()
-    root = open_root(state_path, pipeline_schema=cp.SCHEMA, pin=contract_pin)
+    root = open_root(
+        state_path,
+        pipeline_schema=cp.SCHEMA,
+        pin=contract_pin,
+        deadline=now() + request_timeout_seconds if finite_frontier is not None else None,
+        now=now,
+    )
     owner = f"{os.getpid()}:{threading.get_ident()}:{started}"
     round_id = hashlib.sha256(
         json.dumps([sorted(canonical), started, owner], sort_keys=True).encode()
     ).hexdigest()[:32]
 
-    def check_scope(target, stage, keys, context=None, refusal=None):
-        with inventory_lock(root):
+    def callback_deadline(context):
+        if finite_frontier is None:
+            return deadline
+        # The pipeline supplies ONE original request window for this callback.
+        # Waiting for its pool/alias claims consumes that same finite window.
+        value = context.get("deadline")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ResourceBlocked("finite callback has no bounded request window")
+        from closer_frontier_policy import request_is_live
+
+        if not request_is_live({"deadline": value}, now()):
+            raise ResourceBlocked("finite callback request window expired")
+        if (cancelled_fn and cancelled_fn()) or (paused_fn and paused_fn()):
+            raise ResourceBlocked("finite callback cancelled or paused")
+        return value
+
+    def check_scope(target, stage, keys, context=None, refusal=None, request_deadline=None):
+        if finite_frontier is not None and context is not None:
+            request_deadline = callback_deadline(context)
+        with inventory_lock(root, deadline=request_deadline, now=now):
             return check_scope_locked(target, stage, keys, context, refusal)
 
     def check_scope_locked(target, stage, keys, context=None, refusal=None):
@@ -1675,10 +2401,13 @@ def run_scoped(
             )
             with contextlib.ExitStack() as stack:
                 try:
-                    stack.enter_context(scope_locks(root, keys, deadline=deadline, now=now))
+                    stack.enter_context(
+                        scope_locks(root, keys, deadline=callback_deadline(ctx), now=now)
+                    )
                 except ResourceBlocked as exc:
                     check_scope(target, stage, keys, ctx, refusal=str(exc))
                 check_scope(target, stage, keys, ctx)
+                callback_deadline(ctx)
                 return fn(target, ctx)
 
         return call
@@ -1688,9 +2417,47 @@ def run_scoped(
             if pool_lease is not None:
                 lease_cm = pool_lease(lane, target, ctx)
             else:
-                lease_cm = pool_slot(root, lane, bounds[lane], deadline=deadline, now=now)
+                reservation = None
+                if finite_frontier is not None:
+                    reservation_id = hashlib.sha256(
+                        f"{root.resolve()}\0{lane}\0{finite_frontier['frontier_id']}\0{target}".encode()
+                    ).hexdigest()
+                    reservation = {
+                        "reservation_id": reservation_id,
+                        "target": target,
+                        "frontier_id": finite_frontier["frontier_id"],
+                        "agent": "closer-dispatcher",
+                        "profile_id": lane,
+                    }
+                lease_cm = pool_slot(
+                    root,
+                    lane,
+                    bounds[lane],
+                    deadline=callback_deadline(ctx),
+                    now=now,
+                    finite_frontier=finite_frontier is not None,
+                    reservation=reservation,
+                )
             with lease_cm:
-                return fn(target, ctx)
+                try:
+                    callback_deadline(ctx)
+                    if finite_frontier is not None:
+                        with inventory_request(ctx["deadline"], now=now):
+                            result = fn(target, ctx)
+                    else:
+                        return fn(target, ctx)
+                except Exception:
+                    if finite_frontier is not None:
+                        # Only an unassigned prelaunch record proves no owned
+                        # request was prepared. Bound/uncertain requests stay.
+                        finite_pool_no_start()
+                    raise
+                if finite_frontier is not None:
+                    # Successful callbacks that made no owned process request
+                    # prove this initial lane reservation had no spawn. A per-
+                    # request starting/uncertain row is never cleared here.
+                    finite_pool_no_start()
+                    return result
 
         return call
 
@@ -1705,7 +2472,7 @@ def run_scoped(
                         ctx,
                         lambda _t, _c: keys,
                         owner=owner,
-                        deadline=deadline,
+                        deadline=callback_deadline(ctx),
                         now=now,
                         scope_check=lambda ordered: check_scope(target, "act", ordered, ctx),
                     )
@@ -1714,6 +2481,7 @@ def run_scoped(
                 raise
             except ResourceBlocked as exc:
                 check_scope(target, "act", keys, ctx, refusal=str(exc))
+            callback_deadline(ctx)
             return act(target, ctx)
 
     results: dict[str, dict[str, Any]] = {}
@@ -1732,21 +2500,37 @@ def run_scoped(
 
     def work_locked(target: str) -> None:
         began = now()
+        admission_deadline = (
+            began + request_timeout_seconds if finite_frontier is not None else None
+        )
         row: dict[str, Any] | None
         try:
             check_scope(
-                target, "target_admission", _scope_keys(target, {}, None, quarantine_workspaces)
+                target,
+                "target_admission",
+                _scope_keys(target, {}, None, quarantine_workspaces),
+                request_deadline=admission_deadline,
             )
         except ScopeBlocked as exc:
             row = _fenced_row("scope_quarantined", str(exc))
             row["scope_proof"] = exc.proof
         else:
             try:
+                if finite_frontier is None:
+                    assert legacy_deadline is not None
+                    expires_at = legacy_deadline + LEASE_COMMIT_GRACE_SECONDS
+                else:
+                    expires_at = None
                 lease = acquire(
                     root,
                     target,
                     owner=owner,
-                    expires_at=float(deadline) + LEASE_COMMIT_GRACE_SECONDS,
+                    **(
+                        {"expires_at": expires_at}
+                        if finite_frontier is None
+                        else {"finite_frontier": finite_frontier}
+                    ),
+                    request_deadline=admission_deadline,
                     now=now,
                 )
             except CorruptShard as exc:
@@ -1763,12 +2547,23 @@ def run_scoped(
                     def known_progress_prepare(name, context):
                         lease.check(now)
                         _release_known_shard_boundary(
-                            root, lease.state_path, target, owner=owner, now=now, progress=True
+                            root,
+                            lease.state_path,
+                            target,
+                            owner=owner,
+                            now=now,
+                            progress=True,
+                            finite_frontier=finite_frontier,
                         )
                         return scope_guard(prepare, "prepare")(name, context)
 
                     with fenced(lease, now):
-                        receipt = cp._run_pipeline_legacy(
+                        runner = (
+                            cp._run_pipeline_legacy
+                            if finite_frontier is None
+                            else cp._run_pipeline_finite
+                        )
+                        receipt = runner(
                             lease.state_path,
                             [target],
                             prepare=gated(known_progress_prepare, "io"),
@@ -1781,20 +2576,38 @@ def run_scoped(
                                 else None
                             ),
                             capacity_fn=capacity_fn,
-                            deadline=deadline,
-                            priority_targets=[target] if target in priority else (),
+                            **(
+                                {
+                                    "deadline": deadline,
+                                    "priority_targets": [target] if target in priority else (),
+                                    "round_deadline_exception": round_deadline_exception,
+                                    "round_capacity_exception": round_capacity_exception,
+                                }
+                                if finite_frontier is None
+                                else {
+                                    "finite_frontier": finite_frontier,
+                                    "frontier_target": target,
+                                    "request_timeout_seconds": request_timeout_seconds,
+                                    "cancelled_fn": cancelled_fn,
+                                    "paused_fn": paused_fn,
+                                }
+                            ),
                             max_io_workers=1,
                             max_low_workers=1,
                             max_exception_workers=1,
-                            round_deadline_exception=round_deadline_exception,
-                            round_capacity_exception=round_capacity_exception,
                             now=now,
                         )
                     found_row = (receipt.get("targets") or {}).get(target)
                     row = found_row or _fenced_row(str(receipt.get("reason") or "no_shard_receipt"))
                     if found_row is not None and receipt.get("run_id"):
                         run_ids[target] = receipt["run_id"]
-                        run_deadlines[target] = receipt.get("deadline", deadline)
+                        receipt_deadline = receipt.get("deadline")
+                        if isinstance(receipt_deadline, (int, float)) and not isinstance(
+                            receipt_deadline, bool
+                        ):
+                            run_deadlines[target] = float(receipt_deadline)
+                        elif finite_frontier is None and legacy_deadline is not None:
+                            run_deadlines[target] = legacy_deadline
                     if found_row is not None and receipt.get("run_id"):
                         lease.check(now)
                         _release_known_shard_boundary(
@@ -1804,6 +2617,7 @@ def run_scoped(
                             owner=owner,
                             now=now,
                             run_id=receipt["run_id"],
+                            finite_frontier=finite_frontier,
                         )
                 except StaleLease as exc:
                     row = _fenced_row("stale_lease", str(exc))
@@ -1819,6 +2633,10 @@ def run_scoped(
     with ThreadPoolExecutor(max_workers=threads) as pool:
         list(pool.map(work, ordered))
     finished = now()
+    overrun_seconds = None
+    if finite_frontier is None:
+        assert legacy_deadline is not None
+        overrun_seconds = max(0.0, finished - legacy_deadline)
     fenced_targets = sorted(t for t, r in results.items() if r.get("scoped_fence"))
     unknown = unknown_reservations(root)
     owners = set(canonical)
@@ -1827,12 +2645,23 @@ def run_scoped(
         "mode": "resource_scoped",
         "round_id": round_id,
         "run_ids": dict(sorted(run_ids.items())),
-        "run_deadlines": dict(sorted(run_deadlines.items())),
+        **(
+            {"run_deadlines": dict(sorted(run_deadlines.items()))}
+            if finite_frontier is None
+            else {}
+        ),
         "shards": {t: shard_dir(root, t).name for t in sorted(raw_list)},
-        "deadline": deadline,
+        **(
+            {"deadline": deadline}
+            if finite_frontier is None
+            else {
+                "finite_frontier": finite_frontier,
+                "request_timeout_seconds": request_timeout_seconds,
+            }
+        ),
         "elapsed_seconds": max(0.0, finished - started),
         "finished_at": finished,
-        "overrun_seconds": max(0.0, finished - float(deadline)),
+        **({"overrun_seconds": overrun_seconds} if overrun_seconds is not None else {}),
         "assignment": sorted(raw_list),
         "carry_targets": [],
         "targets": {t: results[t] for t in sorted(results)},

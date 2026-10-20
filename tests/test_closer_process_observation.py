@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import subprocess
 import sys
@@ -213,8 +214,9 @@ def test_observed_cleanup_denial_retains_exact_error_and_pending_transport(tmp_p
 
 
 def test_slow_transport_birth_probe_uses_remaining_original_timeout(tmp_path, monkeypatch):
-    clock = iter([10.0, 10.1])
+    clock = itertools.chain([10.0, 10.1], itertools.count(10.2, 0.05))
     calls = []
+    signals = []
 
     class Child:
         pid = 12345
@@ -222,7 +224,7 @@ def test_slow_transport_birth_probe_uses_remaining_original_timeout(tmp_path, mo
         returncode = -9
 
         def communicate(self, *, timeout):
-            assert timeout == 2
+            assert 0 < timeout <= 2
             return "", ""
 
         def poll(self):
@@ -232,10 +234,15 @@ def test_slow_transport_birth_probe_uses_remaining_original_timeout(tmp_path, mo
         calls.append(kwargs["timeout"])
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
+    def signal_group(pid, sig):
+        signals.append((pid, sig))
+        if sig == 0:
+            raise ProcessLookupError
+
     monkeypatch.setattr(dispatcher.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(dispatcher.subprocess, "Popen", lambda *a, **kw: Child())
     monkeypatch.setattr(dispatcher.subprocess, "run", stalled)
-    monkeypatch.setattr(dispatcher.os, "killpg", lambda *a: None)
+    monkeypatch.setattr(dispatcher.os, "killpg", signal_group)
     with pytest.raises(dispatcher.ObservedOffloadFailure) as caught:
         dispatcher.run_observed_offload(
             ["offline-no-spawn"],
@@ -248,11 +255,15 @@ def test_slow_transport_birth_probe_uses_remaining_original_timeout(tmp_path, mo
     assert calls == [pytest.approx(0.15)]
     assert "TimeoutExpired" in str(caught.value)
     assert caught.value.returncode == -9
+    assert signals[0] == (Child.pid, 9)
+    assert all(pid == Child.pid and sig in {0, 9} for pid, sig in signals)
+    assert sum(sig != 0 for _, sig in signals) == 1
 
 
 def test_expired_before_birth_does_not_persist_prompt_in_error(tmp_path, monkeypatch):
-    clock = iter([10.0, 11.0])
+    clock = itertools.chain([10.0, 11.0], itertools.count(11.1, 0.05))
     prompt = "offline-prompt-must-not-be-persisted-in-timeout-error"
+    signals = []
 
     class Child:
         pid = 12345
@@ -265,10 +276,15 @@ def test_expired_before_birth_does_not_persist_prompt_in_error(tmp_path, monkeyp
         def poll(self):
             return self.returncode
 
+    def signal_group(pid, sig):
+        signals.append((pid, sig))
+        if sig == 0:
+            raise ProcessLookupError
+
     monkeypatch.setattr(dispatcher.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(dispatcher.subprocess, "Popen", lambda *a, **kw: Child())
     monkeypatch.setattr(dispatcher.subprocess, "run", lambda *a, **kw: pytest.fail("expired ps"))
-    monkeypatch.setattr(dispatcher.os, "killpg", lambda *a: None)
+    monkeypatch.setattr(dispatcher.os, "killpg", signal_group)
     with pytest.raises(dispatcher.ObservedOffloadFailure) as caught:
         dispatcher.run_observed_offload(
             ["bash", "-lc", prompt],
@@ -282,3 +298,6 @@ def test_expired_before_birth_does_not_persist_prompt_in_error(tmp_path, monkeyp
     assert prompt not in str(caught.value)
     public = dispatcher._public_process_observation(caught.value.observation)
     assert prompt not in json.dumps(public)
+    assert signals[0] == (Child.pid, 9)
+    assert all(pid == Child.pid and sig in {0, 9} for pid, sig in signals)
+    assert sum(sig != 0 for _, sig in signals) == 1

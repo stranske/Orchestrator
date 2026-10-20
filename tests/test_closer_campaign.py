@@ -119,6 +119,184 @@ def test_capacity_exhaustion_leaves_durable_pending_action(tmp_path):
     assert later["kind"] == "launched"
 
 
+def test_finite_frontier_is_bound_to_campaign_targets_and_resume(tmp_path):
+    from closer_frontier_policy import make_frontier
+
+    c = cc.Campaign(tmp_path / "finite.json")
+    targets = ["acme/one#1", "acme/two#2"]
+    frontier = make_frontier(
+        targets,
+        owner="runner-a",
+        frontier_id="frontier-1",
+        bindings={target: {"revision": "rev-1", "action_id": "a" * 64} for target in targets},
+    )
+    created = c.begin(
+        "finite-camp",
+        targets,
+        owner="runner-a",
+        release_pin=DIGEST,
+        worker_config={"granularity": "round", "finite_frontier": frontier},
+    )
+    assert created["worker_config"]["finite_frontier"] == frontier
+    assert (
+        c.begin(
+            "finite-camp",
+            targets,
+            owner="runner-a",
+            release_pin=DIGEST,
+            worker_config={"granularity": "round", "finite_frontier": frontier},
+        )
+        == created
+    )
+    assert "closer_frontier_policy.py" in cc.module_closure(
+        Path(cc.__file__).resolve().parent, cc.PINNED_MODULES
+    )
+
+    with pytest.raises(ValueError, match="does not match campaign targets"):
+        c.begin(
+            "different",
+            ["acme/one#1"],
+            owner="runner-a",
+            release_pin=DIGEST,
+            worker_config={"granularity": "round", "finite_frontier": frontier},
+        )
+    with pytest.raises(cc.CampaignError, match="immutable"):
+        c.begin(
+            "finite-camp",
+            targets,
+            owner="runner-a",
+            release_pin=DIGEST,
+            worker_config={"granularity": "round"},
+        )
+
+
+def test_finite_frontier_campaign_refuses_corrupted_target_snapshot(tmp_path):
+    from closer_frontier_policy import make_frontier
+
+    c = cc.Campaign(tmp_path / "finite-corrupt.json")
+    targets = ["acme/one#1"]
+    frontier = make_frontier(
+        targets,
+        owner="runner-a",
+        frontier_id="frontier-1",
+        bindings={target: {"revision": "rev-1", "action_id": "a" * 64} for target in targets},
+    )
+    c.begin(
+        "finite-camp",
+        targets,
+        owner="runner-a",
+        release_pin=DIGEST,
+        worker_config={"granularity": "round", "finite_frontier": frontier},
+    )
+    c.update(lambda doc: doc.update(assignment_targets=["acme/two#2"]))
+    with pytest.raises(cc.CampaignError, match="finite frontier record is invalid"):
+        c.read()
+
+
+def test_finite_frontier_campaign_dispatch_uses_exact_cli_flags(tmp_path):
+    import closer_dispatcher
+    import closer_pipeline
+    from closer_frontier_policy import make_frontier
+
+    target = "acme/one#1"
+    frontier = make_frontier(
+        [target],
+        owner="runner-a",
+        frontier_id="dispatch-frontier",
+        bindings={target: {"revision": "rev-1", "action_id": "a" * 64}},
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": target}]}))
+    command = cc.dispatch_command(
+        {
+            "assignment": str(assignment),
+            "dispatch_state": str(tmp_path / "dispatch.json"),
+            "dispatch_workers": 2,
+            "coordinator_mode": "resource_scoped",
+            "coordinator_contract_pin": closer_pipeline.scoped_capability(),
+            "finite_frontier": frontier,
+            "execution_policy": "finite-frontier/v2",
+            "request_timeout_seconds": 30,
+            "apply": True,
+            "runtime_manifest": str(tmp_path / "runtime.json"),
+        },
+        "/offline/python",
+        tmp_path,
+    )
+    assert "--budget-seconds" not in command
+    assert command[command.index("--finite-frontier-json") + 1] == json.dumps(
+        frontier, sort_keys=True, separators=(",", ":")
+    )
+    assert command[command.index("--request-timeout-seconds") + 1] == "30"
+
+    from contextlib import contextmanager
+
+    import closer_resources
+
+    @contextmanager
+    def no_effect_admission(*_args, **_kwargs):
+        yield object()
+
+    captured = {}
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(closer_resources, "coordination_admission", no_effect_admission)
+        monkeypatch.setattr(
+            closer_dispatcher,
+            "_main_admitted",
+            lambda args, _parser, _rows, _targets: captured.update(vars(args)) or 0,
+        )
+        assert closer_dispatcher.main(command[2:]) == 0
+    finally:
+        monkeypatch.undo()
+    assert captured["finite_frontier"] == frontier
+    assert captured["request_timeout_seconds"] == 30
+    assert captured["budget_seconds"] is None
+    assert captured["coordinator_mode"] == "resource_scoped"
+
+
+def test_finite_campaign_does_not_relaunch_unavailable_worker(tmp_path):
+    from closer_frontier_policy import make_frontier
+
+    target = "acme/one#1"
+    frontier = make_frontier(
+        [target],
+        owner="runner-a",
+        frontier_id="single-attempt",
+        bindings={target: {"revision": "rev-1", "action_id": "a" * 64}},
+    )
+    c = cc.Campaign(tmp_path / "finite-no-retry.json")
+    c.begin(
+        "finite-no-retry",
+        [target],
+        owner="runner-a",
+        release_pin=DIGEST,
+        worker_config={
+            "granularity": "round",
+            "finite_frontier": frontier,
+            "execution_policy": "finite-frontier/v2",
+        },
+    )
+    worker_id = "worker-finite-unavailable"
+    c.update(
+        lambda doc: doc["workers"].append(
+            {
+                "worker_id": worker_id,
+                "target": cc.ROUND_UNIT,
+                "claim_target": "finite-no-retry:__round__",
+                "pid": 12345,
+                "state": "active",
+            }
+        )
+    )
+    result = cc.result_path(c.path, worker_id)
+    result.parent.mkdir(parents=True)
+    cc.write_result(result, worker_id, cc.ROUND_UNIT, "unavailable", "capacity was absent")
+    doc = cc.reconcile(c, pid_alive=lambda _pid: True, release_claim=lambda *_: True)
+    assert doc["targets"][cc.ROUND_UNIT] == "reconcile"
+    assert cc.next_action(doc)["kind"] == "reconcile"
+
+
 def test_claim_held_elsewhere_blocks_launch(tmp_path):
     c, pids = make(tmp_path, ("t1",)), []
     out = cc.step(c, worker_command=cmd, launcher=launch_fn(pids), claim=lambda t, a: False)

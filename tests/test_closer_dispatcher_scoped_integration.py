@@ -264,6 +264,81 @@ def test_provider_exception_after_execution_is_never_retried(tmp_path, monkeypat
         )
 
 
+@pytest.mark.parametrize("failure", ["capacity_false", "capacity_exception", "partial_pool"])
+def test_finite_profile_prespawn_failure_resolves_held_pool_slots(tmp_path, monkeypatch, failure):
+    import hashlib
+
+    profile = {
+        "agent": "fixture",
+        "profile_id": "fixture-two-pool",
+        "capacity_pool_ids": ["pool-a", "pool-b"],
+    }
+    selected = {
+        "agent": "fixture",
+        "profile_id": profile["profile_id"],
+        "pools": list(profile["capacity_pool_ids"]),
+    }
+    target = "owner/repo#prespawn"
+    frontier = {
+        "frontier_id": "prespawn-frontier",
+    }
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path))
+    monkeypatch.setattr(profiles, "get_profile", lambda _profile_id: profile)
+    monkeypatch.setattr(profiles, "profiles_for_agent", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(d, "_pipeline_low_route", lambda **_kwargs: (None, "exhausted"))
+    monkeypatch.setattr(d, "_fresh_capacity_report", lambda: {"capacity": "fresh"})
+    monkeypatch.setattr(
+        d,
+        "_profile_exception_qualified",
+        lambda *_args, **_kwargs: failure != "capacity_false",
+    )
+    invoke_calls = []
+
+    held = None
+    if failure == "capacity_exception":
+        monkeypatch.setattr(
+            d,
+            "_fresh_capacity_report",
+            lambda: (_ for _ in ()).throw(RuntimeError("capacity read failed")),
+        )
+    elif failure == "partial_pool":
+        second = hashlib.sha256(b"pool-b").hexdigest()
+        held = resources.pool_slot(
+            tmp_path / "closer-profile-execution",
+            second,
+            1,
+            deadline=time.time() + 3,
+        )
+        held.__enter__()
+
+    kwargs = {
+        "lane": "low",
+        "load": {},
+        "deadline": time.time() + 3,
+        "finite_frontier": frontier,
+        "frontier_target": target,
+    }
+    try:
+        expected = RuntimeError if failure == "capacity_exception" else resources.ResourceBlocked
+        with pytest.raises(expected):
+            d._execute_profile_route(
+                selected,
+                lambda *_: invoke_calls.append("invoke"),
+                **kwargs,
+            )
+    finally:
+        if held is not None:
+            held.__exit__(None, None, None)
+
+    assert invoke_calls == []
+    first = hashlib.sha256(b"pool-a").hexdigest()
+    record = json.loads(
+        (tmp_path / "closer-profile-execution/pools" / first / "slot-0.json").read_text()
+    )
+    assert record["status"] == "resolved"
+    assert record["resolution"] == "trusted_no_spawn"
+
+
 @pytest.mark.parametrize("collision", ["pr", "source", "branch"])
 def test_actual_entry_alias_collisions_hold_mutation_but_allow_prepare(tmp_path, collision):
     aliases = {

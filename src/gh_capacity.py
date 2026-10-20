@@ -50,6 +50,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,7 @@ TRACKED = ("core", "search", "graphql")
 # Ledger row `source`s whose figures are the x-ratelimit-* headers of a call that drew from the
 # bucket: the bucket's own count. The other source, `probe`, is not always one (below).
 REAL_SOURCES = frozenset({"call", "preflight", "gate"})
+_DEFAULT_GH_RUNNER = subprocess.run
 # The resources `gh api rate_limit` has been MEASURED misreporting, each with the one real call that
 # reads it instead. That endpoint is exempt from the limit and answers from another count: core and
 # graphql 5000/5000 while every real call was refused (2026-09-23); core 5000/5000 used 0 while a
@@ -287,7 +289,38 @@ def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runn
     if "api" in cmd and "--include" not in cmd and "-i" not in cmd:
         cmd.insert(cmd.index("api") + 1, "--include")
     try:
-        r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
+        if runner is _DEFAULT_GH_RUNNER:
+            try:
+                import closer_resources
+
+                binding = closer_resources.finite_pool_current_binding()
+            except ImportError:
+                binding = None
+            if binding:
+                import dispatcher
+
+                run_id = "gh-" + uuid.uuid4().hex
+                r = dispatcher.run_observed_offload(
+                    cmd,
+                    callback=closer_resources.finite_pool_process_started,
+                    finished_callback=closer_resources.finite_pool_process_finished,
+                    starting_callback=closer_resources.finite_pool_prepare_request,
+                    observation={
+                        "run_id": run_id,
+                        "agent": "github",
+                        "profile_id": "github-api",
+                        "finite_frontier_id": binding["frontier_id"],
+                        "finite_frontier_target": binding["target"],
+                        "provider_argv": list(cmd),
+                    },
+                    cwd=None,
+                    timeout=timeout_s,
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
+        else:
+            r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
     except Exception:
         return 1, None
     headers, body = _split_headers_body(getattr(r, "stdout", "") or "")

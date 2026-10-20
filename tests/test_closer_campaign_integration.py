@@ -339,6 +339,28 @@ def test_route_uses_router_choice_not_a_hardcoded_agent(tmp_path):
     assert route(capacity(tmp_path, {"aider": "ok"}))["hold"]  # Aider is never eligible
 
 
+@pytest.mark.parametrize("ranks", [None, {}, {"closer_interpret": {"gemini": 0}}])
+def test_route_without_learned_feedback_retains_qualified_router_prior(tmp_path, ranks):
+    seen = []
+
+    class ColdStartRouter(FakeRouter):
+        @staticmethod
+        def learned_ranks():
+            return ranks
+
+        @staticmethod
+        def select_agent(task, report, only=None, **kw):
+            seen.append((only, kw["learned"]))
+            return FakeRouter.select_agent(task, report, only=only, **kw)
+
+    report = capacity(tmp_path, {"claude": "exhausted", "gemini": "ok", "aider": "ok"})
+    assert cc.select_route(report, router=ColdStartRouter, profiles=FakeProfiles) == {
+        "agent": "gemini",
+        "profile_id": "gemini-low",
+    }
+    assert seen == [({"gemini"}, ranks.get("closer_interpret") if ranks is not None else None)]
+
+
 def test_stale_partial_or_missing_capacity_holds_without_running_capacity_py(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("no subprocess"))
     assert "stale" in route(capacity(tmp_path, {"claude": "ok"}, age=99999))["hold"]

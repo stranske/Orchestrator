@@ -552,7 +552,7 @@ def test_controlled_crash_denial_does_not_try_alternate_group_cleanup(configured
     def tracked_group(pid, sig):
         # Dispatcher owns its normal timeout cleanup; the supervisor must not
         # route around its own denied controlled crash with a group signal.
-        group_attempts.append(pid)
+        group_attempts.append((pid, sig))
         return original_killpg(pid, sig)
 
     with monkeypatch.context() as patch:
@@ -568,7 +568,10 @@ def test_controlled_crash_denial_does_not_try_alternate_group_cleanup(configured
         )
     try:
         assert not result["passed"] and len(calls) == 1
-        assert len(denied_pids) == 1 and not group_attempts
+        assert len(denied_pids) == 1
+        # Signal zero only probes liveness; after the controlled crash denial,
+        # no alternate terminating group signal may be attempted.
+        assert all(sig == 0 for _pid, sig in group_attempts)
         assert result["cleanup"][0]["phase"] == "controlled-crash"
         assert result["cleanup"][0]["error"]["type"] == "PermissionError"
         assert result["cleanup"][0]["error"]["errno"] == errno.EPERM

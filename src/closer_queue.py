@@ -17,6 +17,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 import tempfile
 import time
@@ -51,6 +52,8 @@ RESOURCE_DEFERRALS = frozenset(
         "repo_operation_running",
         "receipt_reserve",
         "pass_limit",
+        "finite_frontier_identity_mismatch",
+        "observation_failed",
     }
 )
 DEFAULT_RECEIPT_RESERVE_SECONDS = 15.0
@@ -194,7 +197,49 @@ def _read_state(path: Path) -> dict[str, Any]:
         raise QueueStateError("unsupported or malformed closer queue schema")
     if not isinstance(data.get("items"), dict) or not isinstance(data.get("round"), dict):
         raise QueueStateError("closer queue items and round must be objects")
+    if "frontiers" in data and not isinstance(data["frontiers"], dict):
+        raise QueueStateError("closer queue finite frontier namespace must be an object")
     return data
+
+
+def state_for_frontier(
+    state: Mapping[str, Any],
+    frontier_id: str,
+    *,
+    expected_policy: Mapping[str, Any] | None = None,
+    allow_missing: bool = False,
+) -> dict[str, Any] | None:
+    """Return the selected finite queue namespace as a validation view.
+
+    This does not mutate the durable document. Missing IDs can be represented as
+    an empty selection only for callers that explicitly request ``allow_missing``;
+    malformed or mismatched existing buckets always fail closed.
+    """
+    if not isinstance(frontier_id, str) or not frontier_id.strip():
+        raise QueueStateError("finite frontier id is invalid")
+    frontiers = state.get("frontiers", {})
+    if not isinstance(frontiers, Mapping):
+        raise QueueStateError("closer queue finite frontier namespace must be an object")
+    if frontier_id not in frontiers:
+        if allow_missing:
+            return None
+        raise QueueStateError("finite frontier is missing")
+    bucket = frontiers[frontier_id]
+    if not isinstance(bucket, Mapping):
+        raise QueueStateError("finite frontier bucket is corrupt")
+    policy = bucket.get("policy")
+    items = bucket.get("items")
+    round_state = bucket.get("round")
+    if not isinstance(policy, Mapping) or policy.get("frontier_id") != frontier_id:
+        raise QueueStateError("finite frontier binding or state namespace is corrupt")
+    if expected_policy is not None and dict(policy) != dict(expected_policy):
+        raise QueueStateError("finite frontier id is already bound to another policy")
+    if not isinstance(items, Mapping) or not isinstance(round_state, Mapping):
+        raise QueueStateError("finite frontier binding or state namespace is corrupt")
+    round_policy = round_state.get("finite_frontier")
+    if round_state and round_policy != policy:
+        raise QueueStateError("finite frontier round policy differs from its bucket")
+    return {**state, "items": items, "round": round_state}
 
 
 def _atomic_write(path: Path, payload: Mapping[str, Any]) -> None:
@@ -294,11 +339,27 @@ def _budget_available(
     return available > 0 and available >= minimum
 
 
-def _invoke_before_cutoff(execute, target, action, snapshot, operation, now):
-    """A queued callback must recheck its deadline before entering adapter code."""
+def _invoke_before_cutoff(
+    execute, target, action, snapshot, operation, now, execution_context=None
+):
+    """A queued callback rechecks its original request and held resource context."""
     invoked_at = float(now())
     if invoked_at >= float(operation["deadline"]):
         return None, None
+    if operation.get("finite_frontier") is not None:
+        import closer_resources
+
+        with closer_resources.finite_execution_context(
+            execution_context,
+            target=target,
+            frontier=operation["finite_frontier"],
+            deadline=operation["deadline"],
+            now=now,
+        ):
+            remaining = closer_resources.finite_request_remaining()
+            if remaining is None or remaining <= 0:
+                return None, None
+            return execute(target, action, snapshot, operation), invoked_at
     return execute(target, action, snapshot, operation), invoked_at
 
 
@@ -388,23 +449,58 @@ def _validate_data(
     deadline = round_state.get("deadline")
     reserve = round_state.get("receipt_reserve_seconds")
     finished_at = receipt.get("finished_at")
-    if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+    frontier = round_state.get("finite_frontier")
+    finite_frontier = frontier is not None
+    if finite_frontier:
+        try:
+            from closer_frontier_policy import validate_frontier
+
+            frontier_target = round_state.get("frontier_target")
+            frontier = validate_frontier(frontier)
+            if frontier_target is None:
+                if targets != frontier["targets"]:
+                    raise ValueError("finite frontier assignment differs")
+            elif targets != [frontier_target] or frontier_target not in frontier["targets"]:
+                raise ValueError("finite frontier target differs")
+        except (TypeError, ValueError):
+            reasons.append("invalid_finite_frontier")
+        if deadline is not None or reserve != 0:
+            reasons.append("finite_frontier_has_aggregate_deadline")
+    elif not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         reasons.append("invalid_deadline")
         deadline = now_value
     if not isinstance(reserve, (int, float)) or isinstance(reserve, bool) or reserve < 0:
         reasons.append("invalid_receipt_reserve")
         reserve = 0.0
+    if finite_frontier:
+        legacy_deadline = None
+    else:
+        if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+            legacy_deadline = float(now_value)
+        else:
+            legacy_deadline = float(deadline)
+    legacy_reserve = float(reserve)
     if not isinstance(finished_at, (int, float)) or isinstance(finished_at, bool):
         reasons.append("missing_finish_time")
         finished_at = now_value
-    overrun_seconds = max(0.0, finished_at - deadline)
-    if overrun_seconds:
-        warnings.append("deadline_overrun")
-    available_at_finish = deadline - finished_at - reserve
+    if finite_frontier:
+        overrun_seconds = None
+        available_at_finish = None
+    else:
+        assert legacy_deadline is not None
+        overrun_seconds = max(0.0, finished_at - legacy_deadline)
+        if overrun_seconds:
+            warnings.append("deadline_overrun")
+        assert legacy_deadline is not None
+        available_at_finish = legacy_deadline - finished_at - legacy_reserve
     items = state.get("items", {})
     # Expired recovery may finalize a truthful resource stop, but it may never
     # retroactively authorize an intent or callback launched after its cutoff.
-    cutoff = deadline - reserve
+    if finite_frontier:
+        cutoff = None
+    else:
+        assert legacy_deadline is not None
+        cutoff = legacy_deadline - legacy_reserve
     for target, item in items.items():
         if not isinstance(item, Mapping):
             continue
@@ -416,7 +512,17 @@ def _validate_data(
                 continue
             for field in ("submitted_at", "invoked_at"):
                 at = operation.get(field)
-                if isinstance(at, (int, float)) and at >= cutoff:
+                if finite_frontier:
+                    request_deadline = operation.get("deadline")
+                    if (
+                        isinstance(request_deadline, bool)
+                        or not isinstance(request_deadline, (int, float))
+                        or not math.isfinite(request_deadline)
+                        or not isinstance(at, (int, float))
+                        or at >= request_deadline
+                    ):
+                        reasons.append(f"invalid_request_window:{target}:{field}")
+                elif isinstance(at, (int, float)) and cutoff is not None and at >= cutoff:
                     reasons.append(f"operation_after_cutoff:{target}:{field}")
     rows = receipt.get("accounting")
     if not isinstance(rows, list):
@@ -436,9 +542,9 @@ def _validate_data(
         if row.get("requires_coordinator"):
             integration_required.append(target)
             continuation_required = True
-            if available_at_finish > 0:
+            if available_at_finish is not None and available_at_finish > 0:
                 reasons.append(f"coordinator_integration_required:{target}")
-            elif row.get("reason") != "receipt_reserve":
+            elif not finite_frontier and row.get("reason") != "receipt_reserve":
                 reasons.append(f"integration_deferral_without_budget_exhaustion:{target}")
             if not row.get("next_trigger"):
                 reasons.append(f"missing_integration_trigger:{target}")
@@ -493,20 +599,46 @@ def _validate_data(
             if not holders:
                 reasons.append(f"unverified_claim_conflict:{target}")
         elif reason == "receipt_reserve":
-            if available_at_finish > 0:
+            if finite_frontier or (available_at_finish is not None and available_at_finish > 0):
                 reasons.append(f"premature_deadline_deferral:{target}")
         elif reason == "pass_limit":
             if not receipt.get("continuation_required"):
                 reasons.append(f"missing_continuation:{target}")
             if round_state.get("passes", 0) < round_state.get("max_passes", 1):
                 reasons.append(f"premature_pass_limit:{target}")
-            if available_at_finish > 0:
+            if available_at_finish is not None and available_at_finish > 0:
                 reasons.append(f"pass_limit_requires_continuation:{target}")
+        elif reason == "finite_frontier_identity_mismatch":
+            mismatch = item.get("frontier_identity_mismatch") if isinstance(item, dict) else None
+            frozen = round_state.get("finite_frontier")
+            expected = frozen.get("bindings", {}).get(target) if isinstance(frozen, dict) else None
+            if (
+                not finite_frontier
+                or not isinstance(mismatch, dict)
+                or not isinstance(expected, dict)
+                or mismatch.get("expected") != expected
+                or (
+                    mismatch.get("observed_revision") == expected.get("revision")
+                    and mismatch.get("observed_action_id") == expected.get("action_id")
+                )
+                or item.get("operation") is not None
+            ):
+                reasons.append(f"unverified_frontier_identity_mismatch:{target}")
+        elif reason == "observation_failed":
+            invalid = round_state.get("invalid_observations")
+            if (
+                not finite_frontier
+                or not isinstance(invalid, dict)
+                or target not in invalid
+                or item.get("operation") is not None
+                or row.get("next_trigger") != "retry_observation_next_round"
+            ):
+                reasons.append(f"unverified_observation_failure:{target}")
     if continuation_required != bool(receipt.get("continuation_required")):
         reasons.append("continuation_flag_mismatch")
     if receipt.get("integration_required") != integration_required:
         reasons.append("integration_required_mismatch")
-    if available_at_finish > 0:
+    if available_at_finish is not None and available_at_finish > 0:
         # An explicit continuation preserves the queue, but cannot justify early
         # finalization without a verified actual resource reason above.
         for target in targets:
@@ -532,6 +664,7 @@ def validate_stop(
     now: Callable[[], float] = time.time,
     holder_fn: Callable[[str], Any] | None = None,
     receipt: Mapping[str, Any] | None = None,
+    frontier_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate the latest durable receipt against its assignments and source hash."""
     path = Path(state_path)
@@ -540,11 +673,30 @@ def validate_stop(
         if not locked:
             return {"valid": False, "stop_valid": False, "reasons": ["ledger_lock_busy"]}
         state = _read_state(path)
+        if frontier_id is not None:
+            try:
+                selected_state = state_for_frontier(state, frontier_id)
+            except QueueStateError as exc:
+                return {
+                    "valid": False,
+                    "stop_valid": False,
+                    "reasons": [f"invalid_frontier:{exc}"],
+                }
+            assert selected_state is not None
+            state = selected_state
         round_state = state.get("round", {})
         stored = round_state.get("receipt") if isinstance(round_state, dict) else None
         selected = receipt if receipt is not None else stored
         if not isinstance(selected, Mapping):
             return {"valid": False, "stop_valid": False, "reasons": ["missing_receipt"]}
+        if frontier_id is not None and (
+            not isinstance(stored, Mapping) or dict(selected) != dict(stored)
+        ):
+            return {
+                "valid": False,
+                "stop_valid": False,
+                "reasons": ["finite_frontier_receipt_mismatch"],
+            }
         supplied = _assignment_list(assignment_targets) if assignment_targets is not None else None
         return _validate_data(
             state,
@@ -659,7 +811,7 @@ def run_round(
     *,
     reconcile: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None,
     owner: str | None = None,
-    deadline: float,
+    deadline: float | None,
     receipt_reserve_seconds: float = DEFAULT_RECEIPT_RESERVE_SECONDS,
     max_workers: int = 2,
     max_passes: int = 4,
@@ -670,6 +822,9 @@ def run_round(
     claim_fn: Callable[[str, str], bool] | None = None,
     holder_fn: Callable[[str], Any] | None = None,
     release_fn: Callable[[str, str], bool] | None = None,
+    finite_frontier: Mapping[str, Any] | None = None,
+    frontier_target: str | None = None,
+    request_timeout_seconds: float = 120.0,
 ) -> dict[str, Any]:
     """Run a fair, durable, deadline-bounded action round.
 
@@ -681,8 +836,39 @@ def run_round(
     """
     path = Path(state_path)
     targets = _assignment_list(assignment_targets)
-    if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+    frontier = None
+    if finite_frontier is not None:
+        from closer_frontier_policy import request_window, validate_frontier
+
+        frontier = validate_frontier(finite_frontier)
+        if frontier_target is None:
+            if targets != frontier["targets"]:
+                raise ValueError("finite frontier assignment differs")
+        elif targets != [frontier_target] or frontier_target not in frontier["targets"]:
+            raise ValueError("finite frontier target differs")
+        if deadline is not None or receipt_reserve_seconds != 0:
+            raise ValueError("finite frontier requires no aggregate deadline or receipt reserve")
+        if (
+            isinstance(request_timeout_seconds, bool)
+            or not isinstance(request_timeout_seconds, (int, float))
+            or not math.isfinite(request_timeout_seconds)
+            or request_timeout_seconds <= 0
+        ):
+            raise ValueError("finite frontier request timeout must be positive and finite")
+        if max_operation_retries != 0:
+            raise ValueError("finite frontier does not retry uncertain operations")
+        finite_timeout = float(request_timeout_seconds)
+        request_window(now(), finite_timeout)
+    elif not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         raise ValueError("deadline must be an epoch timestamp")
+    else:
+        finite_timeout = None
+    if frontier is None:
+        if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+            raise ValueError("deadline must be an epoch timestamp")
+        legacy_deadline = float(deadline)
+    else:
+        legacy_deadline = None
     if receipt_reserve_seconds < 0 or min_action_seconds < 0:
         raise ValueError("time reserves must be non-negative")
     if max_workers < 1 or max_passes < 1 or max_operation_retries < 0:
@@ -691,7 +877,48 @@ def run_round(
     claim_call = claim_fn or claims.claim
     holder_call = holder_fn or claims.holder
     release_call = release_fn or claims.release
-    cutoff = float(deadline) - float(receipt_reserve_seconds)
+    if frontier is not None:
+        assert finite_timeout is not None
+        cutoff = float(now()) + finite_timeout
+    else:
+        assert legacy_deadline is not None
+        cutoff = legacy_deadline - float(receipt_reserve_seconds)
+
+    def budget_available() -> bool:
+        if frontier is not None:
+            return True
+        assert legacy_deadline is not None
+        return _budget_available(legacy_deadline, receipt_reserve_seconds, min_action_seconds, now)
+
+    def request_deadline() -> float:
+        if frontier is not None:
+            from closer_frontier_policy import request_window
+
+            assert finite_timeout is not None
+            return request_window(now(), finite_timeout)["deadline"]
+        assert legacy_deadline is not None
+        return legacy_deadline - float(receipt_reserve_seconds)
+
+    def frontier_identity_matches(target: str, snapshot: Mapping[str, Any]) -> bool:
+        if frontier is None:
+            return True
+        from closer_frontier_policy import action_identity
+
+        expected = frontier["bindings"].get(target)
+        if not isinstance(expected, Mapping):
+            return False
+        revision = snapshot.get("revision")
+        action = snapshot.get("action")
+        actual = None
+        if isinstance(revision, str) and isinstance(action, str):
+            operation_binding = snapshot.get("operation_binding")
+            actual = action_identity(
+                target,
+                revision,
+                action,
+                operation_binding if isinstance(operation_binding, Mapping) else {},
+            )
+        return revision == expected["revision"] and actual == expected["action_id"]
 
     with _ledger_lock(path, cutoff=cutoff, now=now) as locked:
         if not locked:
@@ -702,7 +929,7 @@ def run_round(
                     "action": None,
                     "eligible": True,
                     "status": "deferred",
-                    "reason": "receipt_reserve",
+                    "reason": "ledger_lock_busy" if frontier is not None else "receipt_reserve",
                     "next_trigger": "retry_after_ledger_unlock",
                     "operation_id": None,
                     "operation_status": None,
@@ -726,9 +953,71 @@ def run_round(
             }
 
         state = _read_state(path)
-        items: dict[str, Any] = state["items"]
-        current_round = state.get("round", {})
+        frontier_bucket = None
+        if frontier is not None:
+            frontiers = state.setdefault("frontiers", {})
+            if not isinstance(frontiers, dict):
+                raise QueueStateError("finite frontier namespace is corrupt")
+            frontier_id = frontier["frontier_id"]
+            if frontier_id not in frontiers:
+                frontier_bucket = {"policy": frontier, "items": {}, "round": {}}
+                frontiers[frontier_id] = frontier_bucket
+                items = frontier_bucket["items"]
+                current_round = frontier_bucket["round"]
+            else:
+                selected_state = state_for_frontier(state, frontier_id, expected_policy=frontier)
+                if selected_state is None:
+                    raise QueueStateError("finite frontier is missing")
+                frontier_bucket = frontiers[frontier_id]
+                items = selected_state["items"]
+                current_round = selected_state["round"]
+            if not isinstance(items, dict) or not isinstance(current_round, dict):
+                raise QueueStateError("finite frontier state namespace is corrupt")
+            if set(items).difference(frontier["targets"]):
+                raise QueueStateError("finite frontier ledger contains a foreign target")
+        else:
+            items = state["items"]
+            current_round = state.get("round", {})
         timestamp = float(now())
+        if frontier is not None and current_round.get("status") == "finished":
+            # A finite frontier is a single immutable selection, not a reusable
+            # scheduler round. Return its retained terminal receipt (including
+            # UNKNOWN/invalid receipts) without observing, reconciling, or
+            # invoking callbacks again under the same action identities.
+            if (
+                current_round.get("finite_frontier") != frontier
+                or current_round.get("frontier_target") != frontier_target
+                or current_round.get("assignment_targets") != targets
+                or (owner is not None and current_round.get("owner") != owner)
+            ):
+                raise QueueStateError("finished finite frontier identity differs")
+            retained = current_round.get("receipt")
+            if not isinstance(retained, Mapping):
+                raise QueueStateError("finished finite frontier has no retained receipt")
+            retained_accounting = retained.get("accounting")
+            revisions = current_round.get("source_revisions")
+            if (
+                retained.get("schema") != RECEIPT_SCHEMA
+                or retained.get("assignment_targets") != targets
+                or retained.get("accounted_targets") != targets
+                or retained.get("assignment_hash") != assignment_hash
+                or not isinstance(retained_accounting, list)
+                or retained_accounting
+                != [_account_row(target, items[target]) for target in targets]
+                or not isinstance(revisions, Mapping)
+                or retained.get("source_hash")
+                != _digest({target: revisions.get(target) for target in targets})
+            ):
+                raise QueueStateError("finished finite frontier receipt does not match its ledger")
+            validation_state = {**state, "items": items, "round": current_round}
+            validation = _validate_data(
+                validation_state,
+                retained,
+                assignment_targets=targets,
+                now_value=timestamp,
+                holder_fn=holder_call,
+            )
+            return {**dict(retained), **validation}
         # A slice ending with an invalid stop is still the same bounded round.
         # Refreshing assignments must not purchase another wall-clock budget.
         resume = current_round.get("status") == "running" or (
@@ -737,15 +1026,31 @@ def run_round(
         )
         if resume:
             round_state = current_round
+            if round_state.get("finite_frontier") != frontier:
+                raise QueueStateError("resume finite frontier policy differs from durable round")
+            if round_state.get("frontier_target") != frontier_target:
+                raise QueueStateError("resume finite frontier target differs")
             round_owner = str(round_state["owner"])
             if owner is not None and owner != round_owner:
                 raise QueueStateError("resume owner differs from durable round owner")
             # A restarted process continues the original budget; it cannot extend
             # an unfinished round by supplying a later wall-clock deadline.
-            deadline = float(round_state["deadline"])
-            receipt_reserve_seconds = float(round_state["receipt_reserve_seconds"])
+            if frontier is None:
+                # Historical rounds must retain their original finite deadline.
+                if round_state.get("deadline") is None:
+                    raise QueueStateError("legacy round has no original deadline")
+                deadline = float(round_state["deadline"])
+                receipt_reserve_seconds = float(round_state["receipt_reserve_seconds"])
+            elif round_state.get("deadline") is not None:
+                raise QueueStateError("finite frontier cannot resume a deadline round")
             max_workers = int(round_state.get("max_workers", max_workers))
-            max_passes = int(round_state.get("max_passes", max_passes))
+            max_passes = (
+                len(targets)
+                if frontier is not None
+                else int(round_state.get("max_passes", max_passes))
+            )
+            if frontier is not None:
+                round_state["max_passes"] = len(targets)
             max_operation_retries = int(
                 round_state.get("max_operation_retries", max_operation_retries)
             )
@@ -760,8 +1065,12 @@ def run_round(
                 raise ValueError("owner must be a non-empty string")
             round_state = {
                 "started_at": timestamp,
-                "deadline": float(deadline),
-                "receipt_reserve_seconds": float(receipt_reserve_seconds),
+                **({"deadline": legacy_deadline} if frontier is None else {}),
+                "receipt_reserve_seconds": (
+                    0.0 if frontier is not None else float(receipt_reserve_seconds)
+                ),
+                "finite_frontier": frontier,
+                "frontier_target": frontier_target,
                 "owner": round_owner,
                 "assignment_targets": targets,
                 "assignment_hash": assignment_hash,
@@ -769,19 +1078,31 @@ def run_round(
                 "source_hash": None,
                 "status": "running",
                 "max_workers": max_workers,
-                "max_passes": max_passes,
+                "max_passes": len(targets) if frontier is not None else max_passes,
                 "max_operation_retries": max_operation_retries,
                 "min_action_seconds": min_action_seconds,
                 "passes": 0,
                 "events": [],
                 "progress": [],
             }
-            state["round"] = round_state
+            if frontier_bucket is None:
+                state["round"] = round_state
+            else:
+                frontier_bucket["round"] = round_state
 
-        cutoff = float(deadline) - float(receipt_reserve_seconds)
-        budget_available_at_start = _budget_available(
-            float(deadline), receipt_reserve_seconds, min_action_seconds, now
-        )
+        if frontier is None:
+            if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
+                raise QueueStateError("legacy round has no original deadline")
+            legacy_deadline = float(deadline)
+
+        def persist_state():
+            if frontier_bucket is not None:
+                frontier_bucket["items"] = items
+                frontier_bucket["round"] = round_state
+            _atomic_write(path, state)
+
+        cutoff = request_deadline()
+        budget_available_at_start = budget_available()
 
         # An unfinished operation from any assignment remains a duplicate-action
         # barrier. Reconcile all such records, not merely today's assignment set.
@@ -792,9 +1113,7 @@ def run_round(
                 or operation.get("status") not in PENDING_OPERATION_STATES
             ):
                 continue
-            if not budget_available_at_start or not _budget_available(
-                float(deadline), receipt_reserve_seconds, min_action_seconds, now
-            ):
+            if not budget_available_at_start or not budget_available():
                 pending_item["deferred_reason"] = "receipt_reserve"
                 pending_item["deferred_next_trigger"] = "reconcile_next_round"
                 continue
@@ -806,10 +1125,19 @@ def run_round(
             else:
                 try:
                     bounded = dict(operation)
-                    bounded["deadline"] = cutoff
-                    bounded["timeout_seconds"] = max(
-                        0.0, _remaining(float(deadline), receipt_reserve_seconds, now)
-                    )
+                    if frontier is not None:
+                        # A fresh reconciliation read has its own request window;
+                        # preserve the original effect deadline separately.
+                        bounded["effect_deadline"] = operation.get("deadline")
+                        assert finite_timeout is not None
+                        bounded["deadline"] = float(now()) + finite_timeout
+                        bounded["timeout_seconds"] = finite_timeout
+                    else:
+                        bounded["deadline"] = cutoff
+                        assert legacy_deadline is not None
+                        bounded["timeout_seconds"] = max(
+                            0.0, _remaining(legacy_deadline, receipt_reserve_seconds, now)
+                        )
                     resolution = reconcile(pending_target, bounded)
                 except Exception as exc:
                     resolution = {"status": "unknown", "error_type": type(exc).__name__}
@@ -856,17 +1184,18 @@ def run_round(
                 pending_item["status"] = "deferred"
                 pending_item["deferred_reason"] = "operation_uncertain"
                 pending_item["deferred_next_trigger"] = operation["next_trigger"]
-            _atomic_write(path, state)
+            persist_state()
 
         # Observe every assigned target before queueing. Unexpected/invalid reads
         # become explicit blockers, never apparent idle targets.
         snapshots: dict[str, dict[str, Any]] = {}
         source_revisions: dict[str, Any] = round_state.setdefault("source_revisions", {})
+        # Identity mismatches are terminal for this immutable frontier and
+        # must be excluded from later progression in the same round.
+        stalled: set[str] = set()
         for target in targets:
             item = items.setdefault(target, {"operation": None, "operation_history": []})
-            if not budget_available_at_start or not _budget_available(
-                float(deadline), receipt_reserve_seconds, min_action_seconds, now
-            ):
+            if not budget_available_at_start or not budget_available():
                 if "revision" in item or "evidence" in item:
                     snapshot = _cached_snapshot(target, item)
                     item.update(snapshot)
@@ -893,7 +1222,7 @@ def run_round(
                     source_revisions[target] = None
                 snapshots[target] = snapshot
                 _defer(item, "receipt_reserve", "retry_observation_next_round")
-                _atomic_write(path, state)
+                persist_state()
                 continue
             try:
                 snapshot = _observe_or_error(observe, target)
@@ -904,18 +1233,42 @@ def run_round(
                 item, snapshot, owner=round_owner, source_revisions=source_revisions
             )
             snapshots[target] = snapshot
+            if frontier is not None:
+                from closer_frontier_policy import action_identity
+
+                expected = frontier["bindings"][target]
+                actual = None
+                if isinstance(snapshot.get("revision"), str):
+                    actual = action_identity(
+                        target,
+                        snapshot["revision"],
+                        snapshot["action"],
+                        snapshot["operation_binding"],
+                    )
+                if target not in round_state.get("invalid_observations", {}) and (
+                    snapshot.get("revision") != expected["revision"]
+                    or actual != expected["action_id"]
+                ):
+                    _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
+                    item["frontier_identity_mismatch"] = {
+                        "expected": dict(expected),
+                        "observed_revision": snapshot.get("revision"),
+                        "observed_action_id": actual,
+                    }
+                    stalled.add(target)
+                    persist_state()
+                    continue
             if changed:
                 _event(round_state, target, "revision_refreshed", revision=snapshot["revision"])
             item["status"] = "observed"
             item.pop("deferred_reason", None)
             item.pop("deferred_next_trigger", None)
-            _atomic_write(path, state)
+            persist_state()
         round_state["source_hash"] = _digest(
             {target: source_revisions.get(target) for target in targets}
         )
 
         progress_targets: list[str] = []
-        stalled: set[str] = set()
         active_ops, active_mutating_repos = _active_operations(items)
         # Reconcile-completed assigned operations and confirmed-not-started items
         # using the current observation; stale snapshots are never executed.
@@ -967,11 +1320,12 @@ def run_round(
         stop_launch_reason: str | None = None
         executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="closer-action")
         slice_start_pass = int(round_state.get("passes", 0))
-        slice_pass_limit = slice_start_pass + max_passes
+        # A finite frontier's only queue-pass bound is its immutable cardinality:
+        # each selected target can start at most one source-bound operation.
+        # Legacy rounds retain their configured pass limit unchanged.
+        slice_pass_limit = len(targets) if frontier is not None else slice_start_pass + max_passes
         for pass_number in range(slice_start_pass, slice_pass_limit):
-            if not budget_available_at_start or not _budget_available(
-                float(deadline), receipt_reserve_seconds, min_action_seconds, now
-            ):
+            if not budget_available_at_start or not budget_available():
                 stop_launch_reason = "receipt_reserve"
                 break
             round_state["passes"] = pass_number + 1
@@ -1014,6 +1368,17 @@ def run_round(
                     item.pop("deferred_next_trigger", None)
                     stalled.add(target)
                     continue
+                if not frontier_identity_matches(target, snapshot):
+                    _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
+                    item["frontier_identity_mismatch"] = {
+                        "expected": (
+                            dict(frontier["bindings"][target]) if frontier is not None else {}
+                        ),
+                        "observed_revision": snapshot.get("revision"),
+                        "observed_action": snapshot.get("action"),
+                    }
+                    stalled.add(target)
+                    continue
                 if snapshot["action"] == "wait" or not snapshot["eligible"]:
                     why = snapshot["reason"] or "not_eligible"
                     trigger = snapshot["next_trigger"] or "wait_for_trigger"
@@ -1025,7 +1390,12 @@ def run_round(
                     _defer(item, "invalid_action", "repair_observation")
                     stalled.add(target)
                     continue
-                available = _remaining(float(deadline), receipt_reserve_seconds, now)
+                if frontier is not None:
+                    assert finite_timeout is not None
+                    available = finite_timeout
+                else:
+                    assert legacy_deadline is not None
+                    available = _remaining(legacy_deadline, receipt_reserve_seconds, now)
                 if available <= 0 or available < min_action_seconds:
                     _defer(item, "receipt_reserve", "continue_next_round")
                     stop_launch_reason = "receipt_reserve"
@@ -1059,6 +1429,17 @@ def run_round(
                 snapshot = fresh
                 snapshots[target] = fresh
                 _set_observation(item, fresh, owner=round_owner, source_revisions=source_revisions)
+                if not frontier_identity_matches(target, fresh):
+                    _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
+                    item["frontier_identity_mismatch"] = {
+                        "expected": (
+                            dict(frontier["bindings"][target]) if frontier is not None else {}
+                        ),
+                        "observed_revision": fresh.get("revision"),
+                        "observed_action": fresh.get("action"),
+                    }
+                    stalled.add(target)
+                    continue
                 # Eligibility and lifecycle action can change without a new head
                 # (e.g. a human hold or a check conclusion). Never execute the old
                 # action with refreshed but contradictory selection evidence.
@@ -1100,9 +1481,7 @@ def run_round(
                         stalled.add(target)
                         continue
 
-                if not _budget_available(
-                    float(deadline), receipt_reserve_seconds, min_action_seconds, now
-                ):
+                if not budget_available():
                     _release_all(acquired, round_owner, release_call)
                     _defer(item, "receipt_reserve", "continue_next_round")
                     stop_launch_reason = "receipt_reserve"
@@ -1154,22 +1533,45 @@ def run_round(
                         "binding": _json_copy(fresh["operation_binding"], limit=8192),
                         "submitted_at": float(now()),
                     }
-                op_deadline = float(deadline) - float(receipt_reserve_seconds)
+                execution_context = None
+                if frontier is not None:
+                    import closer_resources
+
+                    try:
+                        execution_context = closer_resources.capture_finite_execution_context(
+                            target, frontier
+                        )
+                    except closer_resources.ResourceBlocked:
+                        _release_all(acquired, round_owner, release_call)
+                        _defer(item, "finite_execution_context_refused", "inspect_original_owner")
+                        stalled.add(target)
+                        continue
+                op_deadline = request_deadline()
+                op["request_started_at"] = float(now())
                 op["deadline"] = op_deadline
                 op["timeout_seconds"] = max(0.0, op_deadline - float(now()))
+                if frontier is not None:
+                    op["finite_frontier"] = frontier
                 item["operation"] = op
                 item["status"] = "submitted"
                 item.pop("deferred_reason", None)
                 item.pop("deferred_next_trigger", None)
-                _atomic_write(path, state)  # intent is durable before the callback
+                persist_state()  # intent is durable before the callback
                 _event(
                     round_state, target, "operation_submitted", operation_id=op["id"], action=action
                 )
-                _atomic_write(path, state)
+                persist_state()
                 started = monotonic()
                 callback_snapshot = _execution_snapshot(fresh)
                 future = executor.submit(
-                    _invoke_before_cutoff, execute, target, action, callback_snapshot, dict(op), now
+                    _invoke_before_cutoff,
+                    execute,
+                    target,
+                    action,
+                    callback_snapshot,
+                    dict(op),
+                    now,
+                    execution_context,
                 )
                 launched.append((target, item, op, future, acquired, started))
 
@@ -1215,9 +1617,7 @@ def run_round(
                     item["operation"] = op
                     if result_status == "completed":
                         op["completed_at"] = float(now())
-                        if not budget_available_at_start or not _budget_available(
-                            float(deadline), receipt_reserve_seconds, min_action_seconds, now
-                        ):
+                        if not budget_available_at_start or not budget_available():
                             item["observation_freshness"] = "cached_budget_exhausted"
                             if result.get("advisory_only") or result.get("requires_coordinator"):
                                 item["requires_coordinator"] = True
@@ -1318,13 +1718,11 @@ def run_round(
                         item["deferred_reason"] = "claim_release_failed"
                         item["deferred_next_trigger"] = "inspect_claim_state"
                         stalled.add(target)
-                    _atomic_write(path, state)
+                    persist_state()
 
             # Check an active write/observe callback did not overrun the action
             # cutoff. No further task is launched when only receipt reserve remains.
-            if not budget_available_at_start or not _budget_available(
-                float(deadline), receipt_reserve_seconds, min_action_seconds, now
-            ):
+            if not budget_available_at_start or not budget_available():
                 stop_launch_reason = "receipt_reserve"
                 break
             # A full worker batch may have made no progress while untouched
@@ -1347,9 +1745,15 @@ def run_round(
         active_ops, active_mutating_repos = _active_operations(items)
         for target in targets:
             item = items[target]
-            if not budget_available_at_start or not _budget_available(
-                float(deadline), receipt_reserve_seconds, min_action_seconds, now
+            if frontier is not None and target in round_state.get("invalid_observations", {}):
+                _defer(item, "observation_failed", "retry_observation_next_round")
+                continue
+            if (
+                frontier is not None
+                and item.get("deferred_reason") == "finite_frontier_identity_mismatch"
             ):
+                continue
+            if not budget_available_at_start or not budget_available():
                 # No final read is worth crossing the cutoff. The durable item is
                 # explicitly marked cached or unobserved when the round started
                 # without budget; otherwise it retains the freshest in-round view.
@@ -1365,7 +1769,11 @@ def run_round(
                 continue
             operation = item.get("operation")
             if isinstance(operation, dict) and operation.get("status") in PENDING_OPERATION_STATES:
-                if _remaining(float(deadline), receipt_reserve_seconds, now) <= 0:
+                if (
+                    frontier is None
+                    and legacy_deadline is not None
+                    and _remaining(legacy_deadline, receipt_reserve_seconds, now) <= 0
+                ):
                     _defer(item, "receipt_reserve", "reconcile_next_round")
                     continue
                 reason = (
@@ -1382,9 +1790,13 @@ def run_round(
                 round_state.setdefault("invalid_observations", {})[target] = type(exc).__name__
             _set_observation(item, final, owner=round_owner, source_revisions=source_revisions)
             snapshots[target] = final
-            if (
+            if frontier is not None and target in round_state.get("invalid_observations", {}):
+                _defer(item, "observation_failed", "retry_observation_next_round")
+            elif (
                 final.get("requires_coordinator")
-                and _remaining(float(deadline), receipt_reserve_seconds, now) <= 0
+                and frontier is None
+                and legacy_deadline is not None
+                and _remaining(legacy_deadline, receipt_reserve_seconds, now) <= 0
             ):
                 _defer(item, "receipt_reserve", "continue_next_round")
             elif final["action"] == "complete":
@@ -1435,7 +1847,7 @@ def run_round(
             "schema": RECEIPT_SCHEMA,
             "started_at": round_state["started_at"],
             "finished_at": finished_at,
-            "deadline": round_state["deadline"],
+            **({"deadline": round_state["deadline"]} if frontier is None else {}),
             "receipt_reserve_seconds": round_state["receipt_reserve_seconds"],
             "owner": round_owner,
             "assignment_targets": targets,
@@ -1450,8 +1862,13 @@ def run_round(
             "events": list(round_state.get("events", [])),
             "continuation_required": bool(eligible_remaining),
         }
+        validation_state = (
+            {**state, "items": items, "round": round_state}
+            if frontier_bucket is not None
+            else state
+        )
         validation = _validate_data(
-            state,
+            validation_state,
             receipt,
             assignment_targets=targets,
             now_value=finished_at,
@@ -1459,7 +1876,7 @@ def run_round(
         )
         receipt.update(validation)
         round_state["receipt"] = receipt
-        _atomic_write(path, state)
+        persist_state()
         return receipt
 
 

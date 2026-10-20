@@ -14,11 +14,20 @@ import math
 import os
 import re
 import sys
+import tempfile
+import threading
 import time
 import tomllib
 import types
+import urllib.error
+import uuid
+from http.client import HTTPMessage
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, cast
+
+# Bind child bootstrap to the source present when this module was loaded,
+# never to a replacement discovered at transport construction/request time.
+_BINDING_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 CORE_FILES = (
     "scripts/closer_runtime.py",
@@ -237,6 +246,12 @@ def dependency_problems() -> list[str]:
     return problems
 
 
+# Core namespaces and legacy helper sys.path restoration are process-global.
+# Hold this only while executing verified module initialization, never Core effects.
+_CORE_IMPORT_LOCK = threading.RLock()
+_CORE_MISSING = object()
+
+
 class CoreBundle:
     """Load a closed hash-bound Core package under a private import namespace.
 
@@ -292,33 +307,83 @@ class CoreBundle:
             self.sources[name] = data
         self.namespace = "_closer_core_" + expected
         self.loaded: dict[str, types.ModuleType] = {}
+        self._loading: dict[str, types.ModuleType] = {}
         package = types.ModuleType(self.namespace)
         package.__path__ = [str(self.root / "scripts")]
-        sys.modules[self.namespace] = package
         self.package = package
-        self.runtime = self.load("closer_runtime")
-        self.github = self.load("closer_operation_github")
+        with _CORE_IMPORT_LOCK:
+            previous = {
+                key: value
+                for key, value in sys.modules.items()
+                if key == self.namespace or key.startswith(self.namespace + ".")
+            }
+            sys.modules[self.namespace] = package
+            try:
+                self.runtime = self.load("closer_runtime")
+                self.github = self.load("closer_operation_github")
+            except BaseException:
+                # A failed bundle must not discard another root's successful aliases.
+                owned = {package, *self.loaded.values(), *self._loading.values()}
+                for key, value in list(sys.modules.items()):
+                    if (key == self.namespace or key.startswith(self.namespace + ".")) and (
+                        value in owned
+                    ):
+                        if key in previous:
+                            sys.modules[key] = previous[key]
+                        else:
+                            del sys.modules[key]
+                self.loaded.clear()
+                raise
 
     def load(self, name: str) -> types.ModuleType:
-        if name in self.loaded:
-            return self.loaded[name]
-        relative = f"scripts/{name}.py"
-        if relative not in CORE_FILES:
-            raise BindingError(f"Core import outside closed package: {name}")
-        module = types.ModuleType(self.namespace + "." + name)
-        path = self.root / relative
-        module.__file__ = str(path)
-        module.__package__ = self.namespace
-        module.__dict__["__builtins__"] = {**vars(builtins), "__import__": self.import_owned}
-        self.loaded[name] = module
-        sys.modules[module.__name__] = module
-        setattr(self.package, name, module)
-        original_path = list(sys.path)
-        try:
-            exec(compile(self.sources[relative], str(path), "exec"), module.__dict__)
-        finally:
-            sys.path[:] = original_path  # legacy Core helper prepends its script directory
-        return module
+        with _CORE_IMPORT_LOCK:
+            if name in self.loaded:
+                return self.loaded[name]
+            if name in self._loading:
+                # Only the initializing thread can reenter this recursive lock;
+                # preserve ordinary same-thread circular-import semantics.
+                return self._loading[name]
+            relative = f"scripts/{name}.py"
+            if relative not in CORE_FILES:
+                raise BindingError(f"Core import outside closed package: {name}")
+            module = types.ModuleType(self.namespace + "." + name)
+            path = self.root / relative
+            module.__file__ = str(path)
+            module.__package__ = self.namespace
+            module.__dict__["__builtins__"] = {**vars(builtins), "__import__": self.import_owned}
+            previous_module = sys.modules.get(module.__name__, _CORE_MISSING)
+            previous_package = sys.modules.get(self.namespace, _CORE_MISSING)
+            previous_child = getattr(self.package, name, _CORE_MISSING)
+            self._loading[name] = module
+            # Python decorators (including dataclasses) require an import-time
+            # sys.modules entry. It is never returned as completed by load().
+            sys.modules[self.namespace] = self.package
+            sys.modules[module.__name__] = module
+            setattr(self.package, name, module)
+            original_path = list(sys.path)
+            try:
+                exec(compile(self.sources[relative], str(path), "exec"), module.__dict__)
+            except BaseException:
+                for key, owned, previous in (
+                    (module.__name__, module, previous_module),
+                    (self.namespace, self.package, previous_package),
+                ):
+                    if sys.modules.get(key) is owned:
+                        if previous is _CORE_MISSING:
+                            sys.modules.pop(key, None)
+                        else:
+                            sys.modules[key] = cast(types.ModuleType, previous)
+                if getattr(self.package, name, _CORE_MISSING) is module:
+                    if previous_child is _CORE_MISSING:
+                        delattr(self.package, name)
+                    else:
+                        setattr(self.package, name, previous_child)
+                raise
+            finally:
+                self._loading.pop(name, None)
+                sys.path[:] = original_path  # legacy Core helper prepends its script directory
+            self.loaded[name] = module
+            return module
 
     def import_owned(self, name, globals=None, locals=None, fromlist=(), level=0):
         if level == 0 and (name == "scripts" or name.startswith("scripts.")):
@@ -331,6 +396,185 @@ class CoreBundle:
         if level == 0 and f"scripts/{name}.py" in CORE_FILES:
             return self.load(name)
         return builtins.__import__(name, globals, locals, fromlist, level)
+
+
+_CORE_HTTP_PROTOCOL_BYTES = 2 * 100_000_000  # preserve Core's existing Git blob allowance
+_CORE_HTTP_CHILD = r"""
+import math,signal,sys,time
+try:
+    deadline=float(sys.argv[1])
+    remaining=deadline-time.monotonic()
+    if not math.isfinite(deadline) or not 0 < remaining <= 30:
+        raise ValueError("original Core HTTP deadline expired or invalid")
+    # Default SIGALRM terminates even a stuck response read and survives loss of
+    # the parent supervisor. No new duration is minted in this child.
+    signal.signal(signal.SIGALRM,signal.SIG_DFL)
+    remaining=deadline-time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("original Core HTTP deadline expired")
+    signal.setitimer(signal.ITIMER_REAL,remaining)
+except BaseException:
+    sys.stdout.write('{"schema":"core-http-result/v1","status":"unknown"}')
+    raise SystemExit(0)
+import hashlib,json,types,urllib.error
+from pathlib import Path
+packet=json.load(sys.stdin)
+try:
+    if packet.get("request_deadline_mono") != deadline:
+        raise ValueError("original Core HTTP deadline differs")
+    path=Path(packet["loader_path"])
+    source=path.read_bytes()
+    if hashlib.sha256(source).hexdigest()!=packet["loader_sha256"]:
+        raise ValueError("binding source changed")
+    module=types.ModuleType("_owned_core_http_binding")
+    module.__file__=str(path)
+    sys.modules[module.__name__]=module
+    exec(compile(source,str(path),"exec"),module.__dict__)
+    bundle=module.CoreBundle(packet["pin"])
+    try:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("original Core HTTP deadline expired before HTTP")
+        value=bundle.github.NativeGitHubTransport()(packet["method"],packet["path"],packet["body"])
+        result={"schema":"core-http-result/v1","status":"ok","value":value}
+    except urllib.error.HTTPError as error:
+        result={"schema":"core-http-result/v1","status":"http_error","code":error.code,
+                "rate_limited":bool(bundle.github._rate_limited(error)),
+                "headers":{key:value for key,value in (error.headers or {}).items()
+                           if key.lower() in {"retry-after","x-ratelimit-remaining","x-ratelimit-reset","x-ratelimit-resource"}}}
+        error.close()
+    except bundle.runtime.PolicyDenied:
+        result={"schema":"core-http-result/v1","status":"denied"}
+    raw=json.dumps(result,separators=(",",":"))
+    if len(raw.encode())>packet["max_bytes"]:
+        raise ValueError("Core HTTP protocol too large")
+except BaseException:
+    raw='{"schema":"core-http-result/v1","status":"unknown"}'
+sys.stdout.write(raw)
+"""
+
+
+class _CoreHTTPTransport:
+    """One cancellable default Core HTTP operation; never a frontier-wide timer."""
+
+    def __init__(self, bundle: CoreBundle):
+        self.bundle = bundle
+
+    def __call__(self, method, path, body):
+        import closer_resources
+        import dispatcher
+
+        try:
+            bootstrap_matches = _hash(Path(__file__)) == _BINDING_SOURCE_SHA256
+        except OSError as exc:
+            raise BindingError("Core HTTP binding source changed") from exc
+        if not bootstrap_matches:
+            raise BindingError("Core HTTP binding source changed")
+        if not self.bundle.github._allowed_native_call(method, path):
+            raise self.bundle.runtime.PolicyDenied("unsupported native API operation")
+        # Keep the existing Core socket limit, additionally enforcing TOTAL time
+        # in an owned process. The callback's original remaining window can only
+        # shorten this request; it never renews an expired callback.
+        started = time.monotonic()
+        request_limit = started + min(30.0, float(self.bundle.load("api_client").DEFAULT_TIMEOUT))
+        sampled_mono = time.monotonic()
+        remaining = closer_resources.finite_request_remaining()
+        if remaining is not None:
+            request_limit = min(request_limit, sampled_mono + remaining)
+        timeout = request_limit - time.monotonic()
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise TimeoutError("Core HTTP original request window expired")
+        binding = closer_resources.finite_pool_current_binding()
+        observation = {
+            "run_id": "core-http-" + uuid.uuid4().hex,
+            "agent": "github",
+            "profile_id": "github-api",
+            **(
+                {
+                    "finite_frontier_id": binding["frontier_id"],
+                    "finite_frontier_target": binding["target"],
+                }
+                if binding
+                else {}
+            ),
+        }
+        packet = {
+            "loader_path": str(Path(__file__).resolve()),
+            "loader_sha256": _BINDING_SOURCE_SHA256,
+            "pin": {
+                "package_root": str(self.bundle.root),
+                "package_digest": self.bundle.namespace.removeprefix("_closer_core_"),
+            },
+            "method": method,
+            "path": path,
+            "body": body,
+            "max_bytes": _CORE_HTTP_PROTOCOL_BYTES,
+        }
+        # Anonymous mode-0600 owned input carries no credentials. The child uses
+        # the existing GH_TOKEN/GITHUB_TOKEN environment, exactly as native Core.
+        with tempfile.TemporaryFile(mode="w+") as request_input:
+            sampled_mono = time.monotonic()
+            current = closer_resources.finite_request_remaining()
+            if current is not None:
+                request_limit = min(request_limit, sampled_mono + current)
+            packet["request_deadline_mono"] = request_limit
+            json.dump(packet, request_input)
+            if request_input.tell() > _CORE_HTTP_PROTOCOL_BYTES:
+                raise BindingError("Core HTTP request protocol too large")
+            request_input.seek(0)
+            # Serialization/setup consumes this same request, not a new window.
+            timeout = request_limit - time.monotonic()
+            if timeout <= 0:
+                raise TimeoutError("Core HTTP original request window expired")
+            done = dispatcher.run_observed_offload(
+                [sys.executable, "-c", _CORE_HTTP_CHILD, str(request_limit)],
+                callback=(
+                    closer_resources.finite_pool_process_started if binding else lambda _: None
+                ),
+                starting_callback=closer_resources.finite_pool_prepare_request if binding else None,
+                finished_callback=(
+                    closer_resources.finite_pool_process_finished if binding else None
+                ),
+                observation=observation,
+                cwd=None,
+                timeout=timeout,
+                stdin=request_input,
+            )
+        if done.returncode != 0 or len((done.stdout or "").encode()) > _CORE_HTTP_PROTOCOL_BYTES:
+            raise BindingError("Core HTTP request result unavailable")
+        try:
+            result = json.loads(done.stdout)
+        except (TypeError, ValueError) as exc:
+            raise BindingError("Core HTTP request protocol invalid") from exc
+        if not isinstance(result, dict) or result.get("schema") != "core-http-result/v1":
+            raise BindingError("Core HTTP request protocol invalid")
+        if result.get("status") == "denied":
+            raise self.bundle.runtime.PolicyDenied("native Core HTTP denied; no fallback")
+        if result.get("status") == "http_error":
+            code, headers = result.get("code"), result.get("headers")
+            limited = result.get("rate_limited")
+            if (
+                type(code) is not int
+                or not 400 <= code <= 599
+                or not isinstance(headers, dict)
+                or type(limited) is not bool
+                or any(
+                    not isinstance(key, str) or not isinstance(value, str)
+                    for key, value in headers.items()
+                )
+            ):
+                raise BindingError("Core HTTP error protocol invalid")
+            http_headers = HTTPMessage()
+            for key, value in headers.items():
+                http_headers[key] = value
+            reason = (
+                "native Core HTTP rate limit exceeded" if limited else "native Core HTTP refused"
+            )
+            error = urllib.error.HTTPError(path, code, reason, http_headers, None)
+            error.close()
+            raise error
+        if result.get("status") != "ok":
+            raise BindingError("Core HTTP request outcome unknown; reconcile original operation")
+        return result.get("value")
 
 
 class RuntimeBinding:
@@ -356,7 +600,7 @@ class RuntimeBinding:
             token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
             if self.transport is None and not token:
                 raise BindingError("shared Core requires independently supplied env token")
-            request = self.transport or self.bundle.github.NativeGitHubTransport(token)
+            request = self.transport or _CoreHTTPTransport(self.bundle)
             store = self.bundle.github.GitHubContentsOperationStore(request, repository)
             adapter = PinnedCoreAdapter(self.bundle.runtime, ".", store=store)
             self.adapters[repository] = adapter
@@ -683,7 +927,26 @@ class PinnedNativeHooks:
                 if (
                     cfg.get("mechanism") != "native-handoff/v1"
                     or str(Path(cfg["runtime_manifest"]).resolve()) != context["runtime_manifest"]
-                    or cfg.get("original_deadline") != context["original_deadline"]
+                    or (
+                        context["schema"] == "native-invocation-admission/v1"
+                        and cfg.get("original_deadline") != context["original_deadline"]
+                    )
+                    or (
+                        context["schema"] == "native-invocation-admission/v2"
+                        and (
+                            cfg.get("finite_frontier") != context["finite_frontier"]
+                            or cfg.get("request_timeout_seconds")
+                            != context["request_timeout_seconds"]
+                            or any(
+                                key in cfg
+                                for key in (
+                                    "original_deadline",
+                                    "budget_seconds",
+                                    "dispatch_budget_seconds",
+                                )
+                            )
+                        )
+                    )
                     or cfg.get("capacity_report") != context["report"]["path"]
                     or dependencies.get("assignment")
                     != {key: context["assignment"][key] for key in ("path", "sha256")}
@@ -990,6 +1253,12 @@ class PinnedNativeHooks:
             if candidate.get("receipt_path") != str(path):
                 raise ValueError("terminal receipt path mismatch")
             receipt, digest = closer_resources.read_round_receipt(path)
+            frontier = cfg.get("finite_frontier")
+            if (
+                receipt.get("finite_frontier") != frontier
+                or candidate.get("finite_frontier") != frontier
+            ):
+                raise ValueError("terminal receipt finite frontier binding differs")
             targets = targets_from_assignment(assignment)
             verdict = closer_resources.validate_stop(pipeline, round_id, targets)
             if (
@@ -1128,6 +1397,13 @@ def scoped_continuation_proof(cfg, candidate):
         receipt = closer_resources.scoped_root(pipeline) / "rounds" / (round_id + ".json")
         if receipt.is_symlink() or candidate["receipt_path"] != str(receipt):
             return None
+        frontier = cfg.get("finite_frontier")
+        if candidate.get("finite_frontier") != frontier:
+            return None
+        if frontier is not None:
+            actual_receipt, _digest = closer_resources.read_round_receipt(receipt)
+            if actual_receipt.get("finite_frontier") != frontier:
+                return None
         targets = targets_from_assignment(assignment)
         verdict = closer_resources.validate_stop(pipeline, round_id, targets)
         receipt_hash = verdict.get("receipt_sha256")
@@ -1177,11 +1453,68 @@ def scoped_continuation_proof(cfg, candidate):
             "accepted": False,
             "domain_outcome": domain_outcome,
         }
+        if frontier is not None:
+            proof["finite_frontier"] = frontier
         if domain_outcome == "quarantined":
             proof["quarantined_admitted_items"] = verdict["quarantined_admitted_items"]
         return proof
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return None
+
+
+def _finite_native_frontier(cfg):
+    """Only an explicit signed v2 admission selects no aggregate work cutoff."""
+    from closer_frontier_policy import request_window, validate_frontier
+
+    candidate = cfg.get("finite_frontier")
+    context = cfg.get("native_admission") or {}
+    if candidate is None:
+        if context.get("schema") == "native-invocation-admission/v2":
+            raise BindingError("native finite frontier missing from worker config")
+        return None
+    try:
+        frontier = validate_frontier(candidate)
+        timeout = cfg.get("request_timeout_seconds")
+        window = request_window(0, timeout)
+        if (
+            frontier != candidate
+            or context.get("schema") != "native-invocation-admission/v2"
+            or context.get("finite_frontier") != frontier
+            or context.get("request_timeout_seconds") != timeout
+            or cfg.get("mechanism") != "native-handoff/v1"
+            or any(
+                key in cfg
+                for key in ("original_deadline", "budget_seconds", "dispatch_budget_seconds")
+            )
+            or not math.isfinite(window["deadline"])
+            or timeout > 120
+        ):
+            raise ValueError("finite frontier/config admission differs")
+        return frontier, float(timeout)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise BindingError("native finite frontier requires exact signed v2 admission") from exc
+
+
+def _finite_dispatch_command(command, frontier, timeout):
+    """Reject ambiguous flags or any attempt to mix legacy aggregate authority."""
+    for flag in ("--finite-frontier-json", "--request-timeout-seconds"):
+        if command.count(flag) != 1 or any(
+            arg != flag and arg.startswith("--") and flag.startswith(arg.partition("=")[0])
+            for arg in command
+        ):
+            raise BindingError("native finite dispatcher flags missing or ambiguous")
+    if any(
+        arg.startswith("--") and "--budget-seconds".startswith(arg.partition("=")[0])
+        for arg in command
+    ):
+        raise BindingError("native finite dispatcher cannot mix aggregate budget")
+    try:
+        descriptor = json.loads(command[command.index("--finite-frontier-json") + 1])
+        request_timeout = float(command[command.index("--request-timeout-seconds") + 1])
+        if descriptor != frontier or request_timeout != timeout:
+            raise ValueError("finite dispatcher descriptor/timeout differs")
+    except (IndexError, ValueError, TypeError) as exc:
+        raise BindingError("native finite dispatcher binding differs") from exc
 
 
 def run_native_round(
@@ -1207,15 +1540,26 @@ def run_native_round(
         except (BindingError, KeyError, TypeError) as exc:
             return "unavailable", str(exc)
     started = now()
-    deadline = min(
-        started + float(cfg.get("budget_seconds", 600)),
-        float(cfg.get("original_deadline", started + 600)),
-    )
-    if isinstance(hooks, PinnedNativeHooks) and hooks.bounded and deadline - started > 900:
-        return "unavailable", "bounded native hook policy exceeds original 900-second limit"
-    reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
-    if deadline - started <= reserve:
-        return "unavailable", "native round has no action budget after receipt reserve"
+    try:
+        finite = _finite_native_frontier(cfg)
+        if finite:
+            _finite_dispatch_command(command, *finite)
+            deadline = started + finite[1]
+            if not math.isfinite(deadline):
+                raise BindingError("native finite request deadline overflow")
+            reserve = 0.0
+        else:
+            deadline = min(
+                started + float(cfg.get("budget_seconds", 600)),
+                float(cfg.get("original_deadline", started + 600)),
+            )
+            if isinstance(hooks, PinnedNativeHooks) and hooks.bounded and deadline - started > 900:
+                return "unavailable", "bounded native hook policy exceeds original 900-second limit"
+            reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
+            if deadline - started <= reserve:
+                return "unavailable", "native round has no action budget after receipt reserve"
+    except BindingError as exc:
+        return "unavailable", str(exc)
     if isinstance(hooks, PinnedNativeHooks) and hooks.bounded:
         interpreter = hooks.dependencies["interpreter"][0]
         if not command or Path(command[0]) not in {hooks.interpreter_anchor, interpreter}:
@@ -1302,9 +1646,9 @@ def run_native_round(
         else:
             # B owns only its original safe action deadline, never a fresh budget.
             try:
-                if cfg.get("native_admission") is not None:
-                    import math
-
+                if finite:
+                    _finite_dispatch_command(command, *finite)
+                elif cfg.get("native_admission") is not None:
                     if command.count("--budget-seconds") != 1:
                         raise BindingError("native original B budget argument missing or ambiguous")
                     index = command.index("--budget-seconds") + 1
@@ -1323,7 +1667,9 @@ def run_native_round(
                     command,
                     capture_output=True,
                     check=False,
-                    timeout=max(0.001, deadline - reserve - now()),
+                    # B is the finite frontier coordinator, not one I/O request.
+                    # Its adapters enforce each request's original finite window.
+                    timeout=None if finite else max(0.001, deadline - reserve - now()),
                     **(
                         {
                             "env": {
@@ -1383,7 +1729,10 @@ def run_native_round(
             try:
                 phases["C"]["attempted"] = True
                 phases["C"]["started_at"] = now()
-                code = hooks.postrun(token, deadline)
+                cleanup_deadline = now() + finite[1] if finite else deadline
+                if not math.isfinite(cleanup_deadline):
+                    raise BindingError("native finite cleanup deadline overflow")
+                code = hooks.postrun(token, cleanup_deadline)
                 postrun_completed = True
             except PermissionError as exc:
                 code = 65
