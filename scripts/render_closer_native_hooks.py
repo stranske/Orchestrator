@@ -130,10 +130,19 @@ _release_lane_lease_postrun() {{
     echo "handoff-lease: release refused: missing original credential; lane retained" >&2
     return 2
   fi
-  local _rc=0
-  "$CLOSER_NATIVE_LEASE_INTERPRETER" "$CLOSER_NATIVE_LEASE_PY" \\
-    --handoff-root "$HANDOFF_HANDOFF_ROOT" release --lane "$lane" \\
-    --expected-token "$_tok" --lane-dir "$LANE_MUTEX_DIR" >/dev/null || _rc=$?
+  local _rc=0 _cleanup_receipt=""
+  if [[ -n "${{CLOSER_ADMISSION_NONCE:-}}" ]]; then
+    _cleanup_receipt="$("$CLOSER_NATIVE_LEASE_INTERPRETER" "$CLOSER_NATIVE_LEASE_PY" \\
+      --handoff-root "$HANDOFF_HANDOFF_ROOT" release --lane "$lane" \\
+      --expected-token "$_tok" --lane-dir "$LANE_MUTEX_DIR" --receipt-json)" || _rc=$?
+    if (( _rc == 0 )); then
+      printf 'CLOSER_NATIVE_CLEANUP_V1 %s %s\\n' "$CLOSER_ADMISSION_NONCE" "$_cleanup_receipt"
+    fi
+  else
+    "$CLOSER_NATIVE_LEASE_INTERPRETER" "$CLOSER_NATIVE_LEASE_PY" \\
+      --handoff-root "$HANDOFF_HANDOFF_ROOT" release --lane "$lane" \\
+      --expected-token "$_tok" --lane-dir "$LANE_MUTEX_DIR" >/dev/null || _rc=$?
+  fi
   if (( _rc != 0 )); then
     echo "handoff-lease: release refused rc=$_rc; lane retained" >&2
   fi
@@ -238,6 +247,9 @@ if [[ -n "${CLOSER_POSTRUN_ROUND_ID:-}" ]]; then
   fi
   _closer_round_args+=(--round-id "$CLOSER_POSTRUN_ROUND_ID")
 elif [[ "${CLOSER_POSTRUN_REQUIRE_NAMED_ROUND:-0}" == "1" ]]; then
+  if [[ -n "${CLOSER_ADMISSION_NONCE:-}" ]]; then
+    printf 'CLOSER_NATIVE_POSTRUN_REFUSAL_V1 %s terminal_named_receipt_unavailable\\n' "$CLOSER_ADMISSION_NONCE"
+  fi
   echo "handoff-postrun: terminal named receipt unavailable; cleanup only" >&2
   exit 65
 fi

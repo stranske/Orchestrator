@@ -61,6 +61,87 @@ def _key(value: Any) -> str:
     return normalized
 
 
+WORKSPACE_SCHEMA = "closer-workspace-bindings/v1"
+
+
+def workspace_bindings(value):
+    """Separate old scope hints from prospective exact-target execution choices.
+
+    Neither a current map nor its hash is evidence of an old callback's cwd.
+    Flat maps retain their legacy conservative alias expansion.
+    """
+    envelope = isinstance(value, dict) and value.get("schema") == WORKSPACE_SCHEMA
+    if envelope:
+        if set(value) != {"schema", "historical", "execution"}:
+            raise ValueError("unbounded_workspace_mapping")
+        historical, execution = value["historical"], value["execution"]
+    else:
+        historical, execution = ({} if value is None else value), {}
+    output = []
+    for mapping, exact in ((historical, False), (execution, True)):
+        if not isinstance(mapping, dict) or len(mapping) > MAX_ENTRIES:
+            raise ValueError("unbounded_workspace_mapping")
+        normalized = {}
+        for target, location in mapping.items():
+            if not isinstance(target, str) or not isinstance(location, str):
+                raise ValueError("unbounded_workspace_mapping")
+            name = _target(target) if "#" in target else _key("repo:" + target)[5:]
+            if exact and "#" not in name:
+                raise ValueError("execution_workspace_requires_exact_target")
+            path = Path(location)
+            if not path.is_absolute():
+                raise ValueError("unbounded_workspace_mapping")
+            resolved = str(path.resolve())
+            if name in normalized and normalized[name] != resolved:
+                raise ValueError("ambiguous_workspace_mapping")
+            normalized[name] = resolved
+        output.append(normalized)
+    return output[0], output[1], envelope
+
+
+def current_workspace_keys(target, keys, bindings):
+    if bindings is None or bindings == {}:
+        return set()
+    historical, execution, _ = workspace_bindings(bindings)
+    canonical = _target(target)
+    if canonical in execution:
+        # Exactly one checkout is selected by the worker. Generated repo aliases
+        # must not silently add a second, unused canonical checkout.
+        return {"worktree:" + execution[canonical]}
+    names = {canonical, canonical.split("#")[0]}
+    for key in keys:
+        kind, value = key.split(":", 1)
+        if kind in {"pr", "issue"}:
+            names.update({value, value.split("#")[0]})
+        elif kind in {"repo", "branch"}:
+            names.add(value.split("@")[0])
+    return {"worktree:" + historical[name] for name in names if name in historical}
+
+
+def resource_overlap(left, right):
+    if left == right:
+        return True
+    if left.startswith("worktree:") and right.startswith("worktree:"):
+        a, b = Path(left[9:]), Path(right[9:])
+        if a.is_relative_to(b) or b.is_relative_to(a):
+            return True
+
+        # macOS can preserve different casing in resolve() for the same physical
+        # directory. Compare directory identity without rewriting historical keys.
+        def identity(path):
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                return None
+            return stat.st_dev, stat.st_ino
+
+        a_id, b_id = identity(a), identity(b)
+        return (
+            a_id is not None and any(identity(parent) == a_id for parent in (b, *b.parents))
+        ) or (b_id is not None and any(identity(parent) == b_id for parent in (a, *a.parents)))
+    return False
+
+
 class _Census:
     def __init__(self, path: Path, workspaces=None):
         self.path = path
@@ -73,16 +154,9 @@ class _Census:
         self.observations: list[dict[str, Any]] = []
         self.raw_records: dict[str, Any] = {}
         self.workspaces = {}
+        self.execution_workspaces = {}
         try:
-            if workspaces is not None:
-                if not isinstance(workspaces, dict) or len(workspaces) > MAX_ENTRIES:
-                    raise ValueError("unbounded_workspace_mapping")
-                for target, location in workspaces.items():
-                    name = _target(target) if "#" in target else _key("repo:" + target)[5:]
-                    path = Path(location)
-                    if not path.is_absolute():
-                        raise ValueError("unbounded_workspace_mapping")
-                    self.workspaces[name] = str(path.resolve())
+            self.workspaces, self.execution_workspaces, _ = workspace_bindings(workspaces)
         except (TypeError, ValueError, AttributeError):
             self.reasons.append("unbounded_workspace_mapping")
 
@@ -314,14 +388,10 @@ class _Census:
             ):
                 raise ValueError("original_repository_scope_mismatch")
         if not remote and not observation_only:
-            execution_workspaces = {
-                self.workspaces[name]
-                for name in (target, target.split("#")[0])
-                if name in self.workspaces
-            }
-            if len(execution_workspaces) != 1:
-                raise ValueError("original_execution_workspace_unavailable")
-            keys.update(self.mapped_keys(target, keys))
+            # PR/head/source hashes do not bind an ORIGINAL execution cwd. A
+            # current config (including a new target override) cannot narrow an
+            # old unknown onto whichever checkout it selects today.
+            raise ValueError("original_execution_workspace_unavailable")
         proof["action_contract"] = (
             "record_snapshot_observation_only"
             if observation_only
@@ -389,7 +459,13 @@ class _Census:
             results = row.get("results")
             prepared = results.get("prepare") if isinstance(results, dict) else None
             snapshot = prepared.get("snapshot") if isinstance(prepared, dict) else None
-            if isinstance(snapshot, dict):
+            snapshots = [snapshot] if isinstance(snapshot, dict) else []
+            try:
+                retained_snapshot, _ = self.verified_snapshot(target, row)
+                snapshots.append(retained_snapshot)
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                pass
+            for snapshot in snapshots:
                 if snapshot.get("pr_target"):
                     keys.add("pr:" + _target(snapshot["pr_target"]))
                 for item in snapshot.get("sources") or []:
@@ -401,8 +477,13 @@ class _Census:
                 for name in ("workspace", "worktree"):
                     if snapshot.get(name):
                         keys.add(_key("worktree:" + snapshot[name]))
-            for value in row.get("resource_keys") or []:
-                keys.add(_key(value))
+        if isinstance(row, dict):
+            # Explicit ORIGINAL intent keys remain fences even when a verified
+            # remote operation excludes additional filesystem inference.
+            for record in (row, row.get("operation")):
+                if isinstance(record, dict):
+                    for value in record.get("resource_keys") or []:
+                        keys.add(_key(value))
         if closure == "repository_fallback":
             for key in list(keys):
                 kind, value = key.split(":", 1)
@@ -922,6 +1003,7 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
         "observations": census.observations,
         "source_hashes": dict(sorted(census.sources.items())),
         "workspaces": dict(sorted(census.workspaces.items())),
+        "execution_workspaces": dict(sorted(census.execution_workspaces.items())),
         "acceptance_authority": False,
         "global_stop_authority": False,
     }
@@ -944,7 +1026,14 @@ def scope_problem(snapshot: dict, target: str, resource_keys) -> str | None:
         ):
             return "invalid_scope_snapshot"
         if (
-            scope_snapshot(snapshot["state_path"], workspaces=snapshot.get("workspaces"))
+            scope_snapshot(
+                snapshot["state_path"],
+                workspaces={
+                    "schema": WORKSPACE_SCHEMA,
+                    "historical": snapshot.get("workspaces", {}),
+                    "execution": snapshot.get("execution_workspaces", {}),
+                },
+            )
             != snapshot
         ):
             return "scope_sources_changed"
@@ -960,8 +1049,16 @@ def scope_problem(snapshot: dict, target: str, resource_keys) -> str | None:
         repo = canonical.split("#")[0]
         if not ({"pr:" + canonical, "issue:" + canonical} & keys) or "repo:" + repo not in keys:
             return "incomplete_resource_inventory"
-        mapped = _Census(Path(snapshot["state_path"]), snapshot["workspaces"])
-        if not mapped.mapped_keys(canonical, keys).issubset(keys):
+        mapped = current_workspace_keys(
+            canonical,
+            keys,
+            {
+                "schema": WORKSPACE_SCHEMA,
+                "historical": snapshot["workspaces"],
+                "execution": snapshot.get("execution_workspaces", {}),
+            },
+        )
+        if not mapped.issubset(keys):
             return "incomplete_resource_inventory"
         for key in keys:
             kind, value = key.split(":", 1)
@@ -969,7 +1066,7 @@ def scope_problem(snapshot: dict, target: str, resource_keys) -> str | None:
                 linked_repo = value.split("#")[0] if kind != "branch" else value.split("@")[0]
                 if "repo:" + linked_repo not in keys:
                     return "incomplete_resource_inventory"
-            if key in snapshot["quarantine_keys"]:
+            if any(resource_overlap(key, held) for held in snapshot["quarantine_keys"]):
                 return "quarantined_resource:" + key
         return None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):

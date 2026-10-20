@@ -114,33 +114,31 @@ def inventory(target="owner/repo#9", branch="other-feature", **kwargs):
     return result
 
 
-def test_exact_prepared_closure_allows_same_repo_disjoint_but_holds_every_actual_alias(tmp_path):
-    path, _raw, _snapshot, row, _doc, _ref, retained = prepared(tmp_path)
+def test_current_workspace_mapping_cannot_prove_original_local_cwd(tmp_path):
+    path, _raw, _snapshot, row, _doc, _ref, _retained = prepared(tmp_path)
     original = path.read_bytes()
     workspace = str(tmp_path / "original-checkout")
     other_workspace = str(tmp_path / "separate-checkout")
     snapshot = quarantine.scope_snapshot(
-        path, workspaces={"owner/repo#1": workspace, "owner/repo#9": other_workspace}
+        path,
+        workspaces={
+            "owner/repo": workspace,
+            "owner/repo#9": other_workspace,
+        },
     )
     assert not snapshot["global_reasons"]
-    assert "repo:owner/repo" not in snapshot["quarantine_keys"]
-    assert {"pr:owner/repo#2", "issue:owner/repo#1", "branch:owner/repo@feature-one"}.issubset(
-        snapshot["quarantine_keys"]
-    )
-    assert (
-        quarantine.scope_problem(
-            snapshot, "owner/repo#9", inventory(aliases=["worktree:" + other_workspace])
-        )
-        is None
-    )
-    for alias in ("pr:owner/repo#2", "issue:owner/repo#1", "branch:owner/repo@feature-one"):
-        assert quarantine.scope_problem(
-            snapshot, "owner/repo#9", inventory(aliases=[alias, "worktree:" + other_workspace])
-        )
-    assert snapshot["items"][0]["closure"] == "complete_immutable_snapshot"
-    assert (
-        snapshot["items"][0]["closure_proof"]["snapshot_ref"]["sha256"]
-        == hashlib.sha256(retained.read_bytes()).hexdigest()
+    assert snapshot["items"][0]["closure"] == "repository_fallback"
+    assert snapshot["items"][0]["closure_reason"] == "original_execution_workspace_unavailable"
+    assert {
+        "repo:owner/repo",
+        "pr:owner/repo#2",
+        "issue:owner/repo#1",
+        "branch:owner/repo@feature-one",
+    }.issubset(snapshot["quarantine_keys"])
+    assert quarantine.scope_problem(
+        snapshot,
+        "owner/repo#9",
+        inventory(aliases=["worktree:" + workspace, "worktree:" + other_workspace]),
     )
     assert snapshot["items"][0]["item_sha256"] == quarantine._digest(row)
     assert path.read_bytes() == original
@@ -307,18 +305,15 @@ def test_extra_native_or_unknown_fields_cannot_borrow_observation_contract(tmp_p
     assert not snapshot["observations"] and snapshot["quarantine_keys"]
 
 
-def test_original_cross_repository_sources_are_in_complete_closure(tmp_path):
+def test_original_cross_repository_sources_remain_in_conservative_fallback(tmp_path):
     path, *_ = prepared(tmp_path, extra_sources=["owner/linked#7"])
     snapshot = quarantine.scope_snapshot(
         path, workspaces={"owner/repo": str(tmp_path / "checkout")}
     )
     assert "issue:owner/linked#7" in snapshot["quarantine_keys"]
-    assert "repo:owner/linked" not in snapshot["quarantine_keys"]
-    assert (
-        quarantine.scope_problem(
-            snapshot, "owner/linked#8", ["pr:owner/linked#8", "repo:owner/linked"]
-        )
-        is None
+    assert "repo:owner/linked" in snapshot["quarantine_keys"]
+    assert quarantine.scope_problem(
+        snapshot, "owner/linked#8", ["pr:owner/linked#8", "repo:owner/linked"]
     )
     assert quarantine.scope_problem(
         snapshot,
@@ -511,6 +506,12 @@ def test_direct_pr_without_pr_target_keeps_exact_original_provenance_and_scope(t
         assert not result["items"] and not result["quarantine_keys"]
         assert len(result["observations"]) == 1
         proof = result["observations"][0]["closure_proof"]
+    elif mode == "retained_read":
+        assert result["items"][0]["closure"] == "repository_fallback"
+        assert result["items"][0]["closure_reason"] == "original_execution_workspace_unavailable"
+        assert "repo:owner/repo" in result["quarantine_keys"]
+        assert originals == {p: Path(p).read_bytes() for p in originals}
+        return
     else:
         assert result["items"][0]["closure"] == "complete_immutable_snapshot"
         assert "pr:" + snap["target"] in result["quarantine_keys"]

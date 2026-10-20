@@ -734,11 +734,12 @@ def _key_dir(root: Path, key: str) -> Path:
     return _reservation_base(root) / hashlib.sha256(key.encode()).hexdigest()[:24]
 
 
-def _poll_lock(handle, deadline: float, now) -> bool:
+def _poll_lock(handle, deadline: float, now, *, shared=False) -> bool:
     limit = min(float(deadline), now() + RESOURCE_WAIT_SECONDS)
     while True:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+            fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
             return True
         except BlockingIOError:
             if now() >= limit:
@@ -758,6 +759,90 @@ def _read_intent(path: Path) -> dict[str, Any] | None:
     return doc
 
 
+@contextlib.contextmanager
+def _workspace_locks(root, keys, *, deadline, now):
+    """Shared ancestor/exclusive leaf locks exclude overlapping writable trees.
+
+    Siblings share only SH ancestor locks, so their actual effects can overlap.
+    This namespace is separate from durable intents and their receipt cleanup.
+    """
+    modes = {}
+
+    def add(path, shared):
+        identities = ["path:" + str(path)]
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            pass
+        else:
+            identities.append(f"inode:{stat.st_dev}:{stat.st_ino}")
+        for identity in identities:
+            modes[identity] = modes.get(identity, True) and shared
+
+    for key in keys:
+        if not key.startswith("worktree:"):
+            continue
+        path = Path(key[9:])
+        if not path.is_absolute() or path.resolve() != path:
+            raise ResourceBlocked("workspace lock requires canonical physical identity")
+        for ancestor in path.parents:
+            add(ancestor, True)
+        add(path, False)
+    handles = []
+    directory = _reservation_base(Path(root)).parent / "workspace-locks"
+    try:
+        if modes:
+            directory.mkdir(parents=True, exist_ok=True)
+        for path, shared in sorted(modes.items()):
+            lock = directory / (hashlib.sha256(path.encode()).hexdigest() + ".lock")
+            handle = lock.open("a+")
+            if not _poll_lock(handle, deadline, now, shared=shared):
+                handle.close()
+                raise ResourceBlocked(f"workspace {path} overlaps another callback")
+            handles.append(handle)
+        yield
+    finally:
+        for handle in reversed(handles):
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+
+def _check_workspace_intents(root, keys, *, legacy_owner=None, target=None):
+    """Called under hierarchy locks: a completed callback still retains its intent."""
+    import closer_quarantine
+
+    workspaces = [key for key in keys if key.startswith("worktree:")]
+    if not workspaces:
+        return
+    for base in _reservation_bases(Path(root)):
+        for directory in sorted(base.iterdir()) if base.is_dir() else []:
+            for filename in ("intent.json", "legacy-intent.json"):
+                intent = _read_intent(directory / filename)
+                if intent is None:
+                    continue
+                try:
+                    key = normalize_key(intent["key"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ResourceBlocked("malformed retained workspace intent") from exc
+                if not key.startswith("worktree:"):
+                    continue
+                path = Path(key[9:])
+                if not path.is_absolute() or path.resolve() != path:
+                    raise ResourceBlocked("retained workspace intent identity is aliased")
+                if not any(
+                    closer_quarantine.resource_overlap(key, candidate) for candidate in workspaces
+                ):
+                    continue
+                if (
+                    filename == "legacy-intent.json"
+                    and legacy_owner is not None
+                    and intent.get("owner") == legacy_owner
+                    and intent.get("target") == canonical_target(target)
+                ):
+                    continue
+                raise ResourceBlocked(f"workspace {key[9:]} carries an unresolved effect")
+
+
 def _scope_keys(target, context, resource_keys, workspaces=None):
     keys = default_resource_keys(target)
     if resource_keys is not None:
@@ -772,23 +857,20 @@ def _scope_keys(target, context, resource_keys, workspaces=None):
         kind, value = key.split(":", 1)
         if kind in {"pr", "issue", "branch"}:
             normalized.add(normalize_key("repo:" + value.split("#")[0].split("@")[0]))
-    mapping = {str(k).lower(): v for k, v in (workspaces or {}).items()}
-    for key in list(normalized):
-        kind, value = key.split(":", 1)
-        if kind in {"pr", "issue", "repo", "branch"}:
-            workspace = mapping.get(value.lower()) or mapping.get(
-                value.split("#")[0].split("@")[0].lower()
-            )
-            if workspace:
-                normalized.add(normalize_key("worktree:" + str(Path(workspace).resolve())))
+    import closer_quarantine
+
+    normalized.update(closer_quarantine.current_workspace_keys(target, normalized, workspaces))
     return sorted(normalized)
 
 
 @contextlib.contextmanager
 def scope_locks(root, keys, *, deadline, now):
     """Use the effect locks for read admission without advertising a fictitious effect."""
+    keys = list(keys)
     handles = []
+    hierarchy = contextlib.ExitStack()
     try:
+        hierarchy.enter_context(_workspace_locks(root, keys, deadline=deadline, now=now))
         for key in sorted(set(keys)):
             directory = _key_dir(root, normalize_key(key))
             directory.mkdir(parents=True, exist_ok=True)
@@ -802,6 +884,7 @@ def scope_locks(root, keys, *, deadline, now):
         for handle in reversed(handles):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             handle.close()
+        hierarchy.close()
 
 
 @contextlib.contextmanager
@@ -826,7 +909,9 @@ def reserve(
     ordered = sorted({normalize_key(k) for k in keys})
     held: list[tuple[str, Any, Path]] = []
     started = False
+    hierarchy = contextlib.ExitStack()
     try:
+        hierarchy.enter_context(_workspace_locks(root, ordered, deadline=deadline, now=now))
         for key in ordered:
             directory = _key_dir(root, key)
             directory.mkdir(parents=True, exist_ok=True)
@@ -835,6 +920,7 @@ def reserve(
                 handle.close()
                 raise ResourceBlocked(f"resource {key} held by another effect")
             held.append((key, handle, directory / "intent.json"))
+        _check_workspace_intents(root, ordered)
         if scope_check is not None:
             scope_check(ordered)
         for key, _handle, path in held:
@@ -882,6 +968,7 @@ def reserve(
             with contextlib.suppress(OSError):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             handle.close()
+        hierarchy.close()
 
 
 @contextlib.contextmanager
@@ -894,8 +981,11 @@ def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time, causal
     Core intents are never adopted, including those with the same target/owner.
     """
     held = []
+    ordered = sorted({normalize_key(k) for k in keys})
+    hierarchy = contextlib.ExitStack()
     try:
-        for key in sorted({normalize_key(k) for k in keys}):
+        hierarchy.enter_context(_workspace_locks(root, ordered, deadline=deadline, now=now))
+        for key in ordered:
             directory = _key_dir(root, key)
             directory.mkdir(parents=True, exist_ok=True)
             handle = (directory / "lock").open("a+")
@@ -911,6 +1001,7 @@ def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time, causal
                     prior.get("owner") != owner or prior.get("target") != canonical_target(target)
                 ):
                     raise ResourceBlocked(f"resource {key} carries an unresolved legacy executor")
+        _check_workspace_intents(root, ordered, legacy_owner=owner, target=target)
         for key, _handle, directory in held:
             if key.split(":", 1)[0] in DURABLE_KINDS:
                 _atomic_write(
@@ -929,6 +1020,7 @@ def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time, causal
         for _key, handle, _directory in reversed(held):
             fcntl.flock(handle, fcntl.LOCK_UN)
             handle.close()
+        hierarchy.close()
 
 
 def release_legacy_boundary(root, owner):

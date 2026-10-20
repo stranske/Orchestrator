@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -217,38 +218,44 @@ def acquire(
         _unlock(handle)
 
 
-def release(
+def release_with_receipt(
     root: Path,
     lane: str,
     expected_token: str,
     *,
     lane_dir_override: str | None = None,
-) -> bool:
+) -> tuple[bool, dict[str, Any] | None]:
+    """Release the matching lease and attest that removal while holding its lock.
+
+    Absence remains an idempotent success, but supplies no exact-release receipt.
+    A caller must never use absence to invent ownership of an earlier lease.
+    """
     lane_dir = _lane_dir(root, lane, lane_dir_override)
     coord = _coord_path(lane_dir)
     if not lane_dir.is_dir():
-        return True
+        return True, None
     handle = _parent_lock(coord)
     try:
         if not lane_dir.is_dir():
-            return True
+            return True, None
         if not _lane_dir_releaseable(lane_dir):
-            return False
+            return False, None
         try:
             meta_bytes = read_meta_bytes(lane_dir)
         except LeaseShapeError:
-            return False
+            return False, None
         if not _credential_matches(meta_bytes, expected_token):
-            return False
+            return False, None
         try:
             identity = read_meta(lane_dir)
             if (
                 identity["lane"] != lane
                 or int(identity["token"].rsplit(":", 1)[1]) != lane_dir.stat().st_ino
             ):
-                return False
+                return False, None
         except (LeaseShapeError, ValueError, OSError):
-            return False
+            return False, None
+        lease_inode = lane_dir.stat().st_ino
         meta_path = lane_dir / "meta"
         meta_path.unlink(missing_ok=True)
         try:
@@ -261,11 +268,35 @@ def release(
                 restored.flush()
                 os.fsync(restored.fileno())
             _fsync_dir(lane_dir)
-            return False
+            return False, None
         _fsync_dir(lane_dir.parent)
-        return True
+        return True, {
+            "schema": "closer-native-lease-cleanup/v1",
+            "lane": lane,
+            "lane_dir": str(lane_dir),
+            "expected_token_sha256": hashlib.sha256(expected_token.encode()).hexdigest(),
+            "meta_sha256": hashlib.sha256(meta_bytes).hexdigest(),
+            "released_lease_inode": lease_inode,
+            "released": True,
+            "exact_token_matched": True,
+            "released_at": time.time(),
+        }
     finally:
         _unlock(handle)
+
+
+def release(
+    root: Path,
+    lane: str,
+    expected_token: str,
+    *,
+    lane_dir_override: str | None = None,
+) -> bool:
+    """Compatibility API: an absent lane is still an idempotent success."""
+    ok, _receipt = release_with_receipt(
+        root, lane, expected_token, lane_dir_override=lane_dir_override
+    )
+    return ok
 
 
 def protocol_record(lease_module: Path) -> dict[str, Any]:
@@ -278,6 +309,7 @@ def protocol_record(lease_module: Path) -> dict[str, Any]:
         "coord_lock": _COORD_SUFFIX,
         "coord_lock_key": "canonical_lane_dir",
         "lease_module_sha256": hashlib.sha256(data).hexdigest(),
+        "cleanup_receipt_schema": "closer-native-lease-cleanup/v1",
         "refuse_existing_lane_env": "HANDOFF_REFUSE_EXISTING_LANE",
         "expected_token_env": "HANDOFF_EXPECTED_LANE_TOKEN",
         "lane_token_env": "HANDOFF_LANE_TOKEN",
@@ -318,6 +350,9 @@ def _cli(argv: list[str] | None = None) -> int:
     release_p.add_argument("--lane", required=True)
     release_p.add_argument("--expected-token", required=True)
     release_p.add_argument("--lane-dir", default="")
+    release_p.add_argument(
+        "--receipt-json", action="store_true", help="attest actual exact-token removal"
+    )
 
     sub.add_parser("protocol-json")
 
@@ -355,7 +390,7 @@ def _cli(argv: list[str] | None = None) -> int:
 
     if args.cmd == "release":
         try:
-            ok = release(
+            ok, receipt = release_with_receipt(
                 root,
                 args.lane,
                 args.expected_token,
@@ -363,6 +398,12 @@ def _cli(argv: list[str] | None = None) -> int:
             )
         except LeaseShapeError:
             return 3
+        if args.receipt_json:
+            if not ok:
+                return 2
+            if receipt is None:
+                return 4  # Already absent is not evidence of this caller's exact cleanup.
+            print(json.dumps(receipt, sort_keys=True))
         return 0 if ok else 2
 
     if args.cmd == "inspect":

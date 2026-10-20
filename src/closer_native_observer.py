@@ -227,10 +227,51 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         raise mechanisms.MechanismError("native assignment missing or exceeds bound")
     assignment = directory / "assignment.json"
     _immutable(assignment, raw)
-    from closer_dispatcher import targets_from_assignment
+    from closer_dispatcher import load_workspace_config, targets_from_assignment
 
-    if not targets_from_assignment(assignment):
+    targets = targets_from_assignment(assignment)
+    if not targets:
         raise mechanisms.MechanismError("native canonical assignment has no eligible targets")
+    workspace_config = None
+    if cfg.get("workspaces") is not None:
+        pin = cfg["workspaces"]
+        if (
+            not isinstance(pin, dict)
+            or set(pin) != {"path", "sha256"}
+            or not isinstance(pin["path"], str)
+            or not isinstance(pin["sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", pin["sha256"])
+        ):
+            raise mechanisms.MechanismError("native workspace configuration pin malformed")
+        source = Path(pin["path"])
+        if not source.is_absolute() or source.resolve() != source:
+            raise mechanisms.MechanismError("native workspace configuration is aliased")
+        workspace_bytes = _bounded_bytes(source, 1024 * 1024)
+        if hashlib.sha256(workspace_bytes).hexdigest() != pin["sha256"]:
+            raise mechanisms.MechanismError("native workspace configuration hash differs")
+        from closer_quarantine import workspace_bindings
+
+        def unique(pairs):
+            value = {}
+            for key, entry in pairs:
+                if key in value:
+                    raise mechanisms.MechanismError(
+                        "native workspace configuration has duplicate keys"
+                    )
+                value[key] = entry
+            return value
+
+        workspace_bindings(json.loads(workspace_bytes, object_pairs_hook=unique))
+        # Validate every selected physical checkout before A. The captured bytes
+        # cannot later resolve an alias to a different execution route.
+        load_workspace_config(source, pin["sha256"], require_pin=True, targets=targets)
+        workspace_path = directory / "workspaces.json"
+        _immutable(workspace_path, workspace_bytes)
+        workspace_config = {
+            "path": str(workspace_path),
+            "sha256": pin["sha256"],
+            "source_path": str(source),
+        }
     # The producer's public API reserves the global capacity.json basename.
     report_path = directory / "scoped-capacity.json"
     producer_cfg = {
@@ -260,6 +301,8 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         "runtime_manifest": producer_cfg["runtime_manifest"],
         "runtime_manifest_sha256": producer_cfg["runtime_manifest_sha256"],
     }
+    if workspace_config is not None:
+        context["workspace_config"] = workspace_config
     path = directory / "admission.json"
     if path.exists() or path.is_symlink():
         raise mechanisms.MechanismError("native admission already exists; no replacement")
@@ -319,6 +362,19 @@ def validate_admission(manifest, context, *, for_effects):
         path = directory / name
         if pin.get("path") != str(path) or path.is_symlink() or _hash(path) != pin.get("sha256"):
             raise mechanisms.MechanismError("native immutable admission artifact differs")
+    if "workspace_config" in context:
+        pin = context["workspace_config"]
+        path = directory / "workspaces.json"
+        if (
+            not isinstance(pin, dict)
+            or set(pin) != {"path", "sha256", "source_path"}
+            or pin.get("path") != str(path)
+            or path.is_symlink()
+            or hashlib.sha256(_bounded_bytes(path, 1024 * 1024)).hexdigest() != pin.get("sha256")
+            or not isinstance(pin.get("source_path"), str)
+            or not Path(pin["source_path"]).is_absolute()
+        ):
+            raise mechanisms.MechanismError("native immutable workspace configuration differs")
     if context["assignment"].get("source_path") != str(source):
         raise mechanisms.MechanismError("native assignment source differs")
     manifest_path = Path(context["runtime_manifest"])
@@ -341,6 +397,20 @@ def admission_config(manifest, cfg, context, *, for_effects=True):
 
     validate_admission(manifest, context, for_effects=for_effects)
     result = copy.deepcopy(cfg)
+    workspace = context.get("workspace_config")
+    source_pin = (
+        {"path": workspace["source_path"], "sha256": workspace["sha256"]}
+        if workspace is not None
+        else None
+    )
+    if for_effects and cfg.get("workspaces") != source_pin:
+        raise mechanisms.MechanismError(
+            "native workspace configuration differs from signed admission"
+        )
+    if workspace is not None:
+        result["workspaces"] = {key: workspace[key] for key in ("path", "sha256")}
+    else:
+        result.pop("workspaces", None)
     result["assignment"] = context["assignment"]["path"]
     result["capacity_json"] = result["capacity_report"] = context["report"]["path"]
     result["original_deadline"] = context["original_deadline"]
@@ -398,7 +468,196 @@ def result_admission_config(cfg, context, state_path, doc, worker):
         or record.get("fields") != expected
     ):
         raise mechanisms.MechanismError("native result admission lacks exact pre-launch handoff")
-    return admission_config(manifest, cfg, context, for_effects=False)
+    result = admission_config(manifest, cfg, context, for_effects=False)
+    result["native_worker"] = expected
+    return result
+
+
+def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=False):
+    """Seal/recheck this worker's positive no-B and exact native cleanup evidence.
+
+    This never settles an older plaintext UNKNOWN. The producer must observe both
+    phases in its own invocation, and the reader requires its create-only signed
+    boundary in addition to the original signed worker handoff.
+    """
+    try:
+        context = validate_admission(manifest, cfg["native_admission"], for_effects=False)
+        fields = cfg["native_worker"]
+        result = Path(fields["result"])
+        worker_id = result.stem
+        if (
+            not re.fullmatch(r"[0-9a-f]{12}", worker_id)
+            or fields.get("mechanism") != mechanisms.NATIVE
+            or fields.get("runtime-manifest") != context["runtime_manifest"]
+            or result != Path(fields["state"] + ".results") / (worker_id + ".json")
+            or result.resolve() != result
+        ):
+            return None
+        root = contract(manifest)[3]
+        directory = root / context["nonce"]
+        handoff = _read(directory / ("worker-" + worker_id + ".json"))
+        original = handoff["record"]
+        if (
+            original.get("binding") != binding(manifest)
+            or original.get("admission") != context
+            or original.get("fields") != fields
+            or original.get("schema") != "native-worker-handoff/v1"
+            or original.get("nonce") != context["nonce"]
+            or not hmac.compare_digest(
+                handoff["signature"], mechanisms._signature(original, mechanisms._key(root))
+            )
+            or not isinstance(candidate, dict)
+        ):
+            return None
+        phases = candidate["phases"]
+        if (
+            not isinstance(phases, dict)
+            or set(phases) != {"A", "B", "C"}
+            or any(not isinstance(phases.get(name), dict) for name in ("A", "B", "C"))
+        ):
+            return None
+        if any("denial" in phase or "error" in phase for phase in phases.values()):
+            return None
+        execution = candidate["execution"]
+        if (
+            not isinstance(execution, dict)
+            or set(execution)
+            != {
+                "schema",
+                "worker",
+                "admission_nonce",
+                "admission_started_at",
+                "runtime_binding_entered_at",
+                "runtime_binding_ready_at",
+                "phases",
+            }
+            or execution.get("schema") != "native-round-execution/v1"
+            or execution.get("worker") != fields
+            or execution.get("admission_nonce") != context["nonce"]
+            or execution.get("admission_started_at") != context["started_at"]
+            or execution.get("phases") != phases
+        ):
+            return None
+        cleanup = phases["C"]["cleanup"]
+        token_hash = phases["A"]["token_sha256"]
+        lane = (
+            Path(
+                cfg.get("handoff_dir")
+                or os.environ.get("HANDOFF_DIR")
+                or Path.home() / ".codex/handoff"
+            )
+            / ".lane-closer.lock"
+        )
+        times = [
+            phases[phase].get(key)
+            for phase, key in (
+                ("A", "started_at"),
+                ("A", "finished_at"),
+                ("B", "checked_at"),
+                ("C", "started_at"),
+                ("C", "finished_at"),
+            )
+        ]
+        entry_times = [
+            execution.get(key) for key in ("runtime_binding_entered_at", "runtime_binding_ready_at")
+        ]
+        if (
+            any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in [*entry_times, *times]
+            )
+            or not context["started_at"] <= entry_times[0] <= entry_times[1] <= times[0]
+            or not context["started_at"]
+            <= times[0]
+            <= times[1]
+            <= times[2]
+            <= times[3]
+            <= times[4]
+            <= context["original_deadline"]
+        ):
+            return None
+        if (
+            type(phases["A"].get("exit_code")) is not int
+            or phases["A"].get("exit_code") != 0
+            or phases["A"].get("admitted") is not True
+            or phases["A"].get("attempted") is not True
+            or type(phases["A"].get("lease_inode")) is not int
+            or phases["A"]["lease_inode"] <= 0
+            or not re.fullmatch(r"[0-9a-f]{64}", token_hash)
+            or phases["B"].get("started") is not False
+            or phases["B"].get("reason") != "pre_dispatch_binding_refusal"
+            or phases["B"].get("started_at") is not None
+            or phases["B"].get("finished_at") is not None
+            or phases["C"].get("attempted") is not True
+            or phases["C"].get("exit_code") != 65
+            or phases["C"].get("dependencies_valid") is not True
+            or phases["C"].get("refusal") != "terminal_named_receipt_unavailable"
+            or not isinstance(cleanup, dict)
+            or cleanup.get("schema") != "closer-native-lease-cleanup/v1"
+            or cleanup.get("lane") != "closer"
+            or cleanup.get("lane_dir") != str(lane)
+            or cleanup.get("expected_token_sha256") != token_hash
+            or cleanup.get("meta_sha256") != token_hash
+            or cleanup.get("released") is not True
+            or cleanup.get("exact_token_matched") is not True
+            or type(cleanup.get("released_lease_inode")) is not int
+            or cleanup["released_lease_inode"] != phases["A"]["lease_inode"]
+            or isinstance(cleanup.get("released_at"), bool)
+            or not isinstance(cleanup.get("released_at"), (int, float))
+            or not math.isfinite(cleanup["released_at"])
+            or not times[3] <= cleanup["released_at"] <= times[4]
+        ):
+            return None
+        proof = {
+            "schema": "native-pre-dispatch-no-start/v1",
+            "worker": fields,
+            "admission_nonce": context["nonce"],
+            "assignment_sha256": context["assignment"]["sha256"],
+            "original_deadline": context["original_deadline"],
+            "phases": phases,
+            "execution": execution,
+            "accepted": False,
+        }
+        boundary = directory / ("pre-dispatch-no-start-" + worker_id + ".json")
+        record = {"binding": binding(manifest), "proof": proof}
+        if record_boundary:
+            observed_now = time.time()
+            if (
+                not math.isfinite(observed_now)
+                or _CURRENT_ENTRY.get(str(root)) != context["nonce"]
+                or not times[4] <= observed_now < context["original_deadline"]
+                or result.exists()
+                or result.is_symlink()
+                or boundary.exists()
+                or boundary.is_symlink()
+            ):
+                return None
+            _immutable(
+                boundary,
+                json.dumps(
+                    {
+                        "record": record,
+                        "signature": mechanisms._signature(record, mechanisms._key(root)),
+                    },
+                    sort_keys=True,
+                ).encode(),
+            )
+        else:
+            signed = json.loads(_bounded_bytes(boundary, 128 * 1024))
+            if (
+                not isinstance(signed, dict)
+                or candidate != proof
+                or signed.get("record") != record
+                or not hmac.compare_digest(
+                    signed["signature"], mechanisms._signature(record, mechanisms._key(root))
+                )
+            ):
+                return None
+        return proof
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        return None
 
 
 def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
