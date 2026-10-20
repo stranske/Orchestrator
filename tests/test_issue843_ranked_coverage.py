@@ -37,6 +37,9 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ORCH_CAPABILITIES_PATH", str(tmp_path / "capabilities.json"))
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    # router._selftest assigns this module attribute directly. Register its undo
+    # before invoking it so later test modules retain the real dynamic accessor.
+    monkeypatch.setattr(router.claims, "_handoff_dir", lambda: tmp_path / "handoff")
     attempted: list[object] = []
 
     def forbidden(*args, **kwargs):
@@ -365,33 +368,11 @@ def test_router_learned_ranks_and_plan_failures(monkeypatch, tmp_path):
 
 
 def test_router_main_cli_paths(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("ORCH_EXPLORATION_RATE", "0.1")
-    monkeypatch.setenv("ORCH_EXPLORATION_MODE", "thompson-hybrid")
-    # Selftest restore-when-set branches (1973/1977) via a short-circuited selftest.
-    restored = {"rate": None, "mode": None}
-
-    def fake_selftest():
-        # Mimic the finally-block restore path by calling the real finally logic indirectly:
-        # run a tiny stand-in that sets then restores.
-        old_rate = os.environ.get("ORCH_EXPLORATION_RATE")
-        old_mode = os.environ.get("ORCH_EXPLORATION_MODE")
-        os.environ["ORCH_EXPLORATION_RATE"] = "9"
-        os.environ["ORCH_EXPLORATION_MODE"] = "epsilon-greedy"
-        if old_rate is None:
-            os.environ.pop("ORCH_EXPLORATION_RATE", None)
-        else:
-            os.environ["ORCH_EXPLORATION_RATE"] = old_rate
-        if old_mode is None:
-            os.environ.pop("ORCH_EXPLORATION_MODE", None)
-        else:
-            os.environ["ORCH_EXPLORATION_MODE"] = old_mode
-        restored["rate"] = os.environ.get("ORCH_EXPLORATION_RATE")
-        restored["mode"] = os.environ.get("ORCH_EXPLORATION_MODE")
-
-    monkeypatch.setattr(router, "_selftest", fake_selftest)
+    # Only test CLI dispatch here; the real selftest restoration is tested below.
+    called: list[bool] = []
+    monkeypatch.setattr(router, "_selftest", lambda: called.append(True))
     assert router.main(["--selftest"]) == 0
-    assert restored["rate"] == "0.1"
-    assert restored["mode"] == "thompson-hybrid"
+    assert called == [True]
 
     monkeypatch.setattr(router, "HANDOFF", tmp_path / "handoff")
     monkeypatch.setattr(
@@ -589,8 +570,8 @@ def test_effectiveness_lift_and_main_cli(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(effectiveness, "_arm_stats", fake_arm_stats)
     rep = effectiveness.measure(path=ledger, conn=FakeConn())
     row_out = next(r for r in rep["rows"] if r["capability_id"] == "role-triage")
-    assert row_out["lift"] is not None
-    assert row_out["verdict"] in {"helps", "hurts", "neutral"}
+    assert row_out["lift"] == pytest.approx(1.0)
+    assert row_out["verdict"] == "helps"
 
     # main() without --selftest (lines 948-950); FakeConn.close covers selftest-only lines
     # indirectly when we invoke main with stubs.
