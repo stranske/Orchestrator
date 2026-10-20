@@ -332,7 +332,7 @@ def test_hook_installer_patches_exact_shape_only(tmp_path):
 
 
 def test_begin_checks_and_creates_before_another_owner_can_interleave(tmp_path, monkeypatch):
-    import select
+    import selectors
     import subprocess
 
     campaign = cc.Campaign(tmp_path / "new.campaign.json")
@@ -372,6 +372,12 @@ except cc.CampaignError as exc:
             assert peer.returncode == 0, error
             peer_result.append(json.loads(output))
 
+    def _stdout_readable(stream, timeout: float) -> bool:
+        """Wait for pipe readiness without select's platform descriptor ceiling."""
+        with selectors.DefaultSelector() as selector:
+            selector.register(stream, selectors.EVENT_READ)
+            return bool(selector.select(timeout))
+
     def first_lock():
         nonlocal peer
         stream = original_lock()
@@ -390,7 +396,7 @@ except cc.CampaignError as exc:
             stderr=subprocess.PIPE,
             text=True,
         )
-        assert select.select([peer.stdout], [], [], 10)[0], "competitor never attempted ownership"
+        assert _stdout_readable(peer.stdout, 10), "competitor never attempted ownership"
         assert peer.stdout.readline().strip() == "ATTEMPT_BLOCKED"
         used["attempt"] = True
         return FirstRelease(stream)
