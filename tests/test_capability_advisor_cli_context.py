@@ -3,8 +3,28 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
+
+import pytest
 
 import capability_advisor as advisor
+
+
+@pytest.fixture(autouse=True)
+def isolated_cli(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    attempted = []
+
+    def forbid_external(*args, **kwargs):
+        attempted.append(args)
+        raise AssertionError("CLI tests must not start processes or network calls")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid_external)
+    monkeypatch.setattr(socket, "create_connection", forbid_external)
+    yield
+    assert attempted == []
 
 
 def test_cli_preserves_explicit_context_and_overrides_its_pr_with_the_cli_value(

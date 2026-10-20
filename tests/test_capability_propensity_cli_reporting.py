@@ -8,8 +8,28 @@ every reader and heartbeat, so no live ledger, process, or network call can occu
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
+
+import pytest
 
 import capability_propensity as propensity
+
+
+@pytest.fixture(autouse=True)
+def isolated_cli(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    attempted = []
+
+    def forbid_external(*args, **kwargs):
+        attempted.append(args)
+        raise AssertionError("CLI tests must not start processes or network calls")
+
+    monkeypatch.setattr(subprocess, "Popen", forbid_external)
+    monkeypatch.setattr(socket, "create_connection", forbid_external)
+    yield
+    assert attempted == []
 
 
 def test_read_only_cli_commands_render_their_injected_reports(monkeypatch, capsys):
