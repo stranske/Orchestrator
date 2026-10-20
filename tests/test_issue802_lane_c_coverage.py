@@ -178,6 +178,61 @@ def test_redirect_apply_format_candidate_counts_and_merge() -> None:
     assert [c["report"]["target"] for c in merged] == ["a/r#1", "b/r#2"]
 
 
+@pytest.mark.parametrize(
+    "overrides, expected_answers, expected_last",
+    [
+        ({"valid_proposal": False}, {}, {"o/r#1": 20}),
+        ({"source": "historical-replay"}, {}, {}),
+        ({"kind": "redirect_outcome_link"}, {}, {}),
+        ({}, {("o/r#1", "report", "criteria"): {"action": "wait", "ts": 20}}, {"o/r#1": 20}),
+    ],
+    ids=["invalid-live", "historical", "not-a-proposal", "valid-live"],
+)
+def test_redirect_apply_judged_inputs_only_caches_valid_live_answers(
+    tmp_path, overrides, expected_answers, expected_last
+) -> None:
+    event = {
+        "kind": "redirect_proposal",
+        "source": "live-dispatch",
+        "target": "o/r#1",
+        "ts": 20,
+        "valid_proposal": True,
+        "report_sha256": "report",
+        "acceptance_criteria_sha256": "criteria",
+        "proposal_action": "wait",
+        **overrides,
+    }
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+    assert ra.judged_inputs(corpus) == (expected_answers, expected_last)
+
+
+def test_redirect_apply_judged_inputs_preserves_newest_valid_answer(tmp_path) -> None:
+    event = {
+        "kind": "redirect_proposal",
+        "source": "live-dispatch",
+        "target": "o/r#1",
+        "valid_proposal": True,
+        "report_sha256": "report",
+        "acceptance_criteria_sha256": "criteria",
+    }
+    # Arrival order may differ from judgement time. A later failure still contributes
+    # to fairness ordering, but must not erase the last usable answer.
+    events = [
+        {**event, "ts": 20, "proposal_action": "wait"},
+        {**event, "ts": 30, "valid_proposal": False, "proposal_action": "redirect"},
+        {**event, "ts": 10, "proposal_action": "redirect"},
+    ]
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text("".join(json.dumps(row) + "\n" for row in events), encoding="utf-8")
+
+    assert ra.judged_inputs(corpus) == (
+        {("o/r#1", "report", "criteria"): {"action": "wait", "ts": 20}},
+        {"o/r#1": 30},
+    )
+
+
 def test_redirect_apply_sweep_stalled_candidates(tmp_path: Path) -> None:
     now = 1_700_000_000
     sweep = tmp_path / "sweep.json"
