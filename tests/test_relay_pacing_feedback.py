@@ -337,6 +337,79 @@ def test_append_relay_pacing_decision_writes_joinable_line(tmp_path, monkeypatch
         )
 
 
+@pytest.fixture
+def pacing_decision_args():
+    return {
+        "source": "codex",
+        "lane": "opener",
+        "candidates": "claude_code,cursor,muse",
+        "chosen": "claude_code",
+        "weights": "claude_code:1,cursor:1,muse:1",
+        "states": "codex:shed,claude_code:ok,cursor:ok,muse:ok",
+        "fallback": "no",
+    }
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("source", "unsupported", "source must be a supported relay agent"),
+        ("lane", "invalid", "lane must be opener or closer"),
+        ("fallback", "maybe", "fallback must be yes or no"),
+        ("candidates", "", "candidates must include chosen"),
+        ("candidates", "claude_code,unsupported", "candidates must include chosen"),
+        ("chosen", "codex", "candidates must include chosen"),
+        ("weights", "", "weights must be a nonempty no-whitespace token"),
+        ("weights", "claude_code:1 cursor:1", "weights must be a nonempty no-whitespace token"),
+        ("states", "", "states must be a nonempty no-whitespace token"),
+        ("states", "codex:shed\ncursor:ok", "states must be a nonempty no-whitespace token"),
+        ("decision_id", "", "decision_id must be a nonempty token"),
+        ("decision_id", "has space", "decision_id must be a nonempty token"),
+        ("decision_id", "has\nnewline", "decision_id must be a nonempty token"),
+        (
+            "decision_id",
+            "x" * (feedback.RELAY_DECISION_ID_MAX_CHARS + 1),
+            "decision_id must be a nonempty token",
+        ),
+    ],
+)
+def test_append_rejects_invalid_metadata_before_writing(
+    tmp_path, pacing_decision_args, field, value, message
+):
+    log = tmp_path / "pacing" / "relay-pacing.log"
+    with pytest.raises(ValueError, match=message):
+        rate_incidents.append_relay_pacing_decision(
+            **{**pacing_decision_args, field: value}, log=log
+        )
+    assert not log.parent.exists()
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("source", "unsupported", "source must be a supported relay agent"),
+        ("decision_id", "", "decision_id must be a nonempty token"),
+        ("decision_id", "has space", "decision_id must be a nonempty token"),
+        ("lane", "invalid", "invalid choice"),
+        ("fallback", "maybe", "invalid choice"),
+    ],
+)
+def test_cli_append_invalid_input_reports_error_without_writing(
+    tmp_path, pacing_decision_args, capsys, field, value, message
+):
+    log = tmp_path / "pacing" / "relay-pacing.log"
+    args = ["append-relay-pacing-decision", "--log", str(log)]
+    for name, argument in {**pacing_decision_args, field: value}.items():
+        args.extend(["--" + name.replace("_", "-"), argument])
+    with pytest.raises(SystemExit) as exc:
+        rate_incidents.main(args)
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    assert not log.parent.exists()
+
+
 @pytest.mark.parametrize("explicit", [True, False])
 def test_cli_id_selects_one_interleaved_decision(tmp_path, monkeypatch, capsys, explicit):
     log = _setup(tmp_path, monkeypatch)

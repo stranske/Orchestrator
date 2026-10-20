@@ -8,11 +8,16 @@ counts only `profile_selection` rows.
 
 The relay hook belongs in `~/.codex/bin/handoff-relay.sh`, after the receiver
 process exits and before it prints the `RELAY exit=` trailer. That script is
-outside this repository and is not changed by this PR. With `$relay_log`,
-`$status`, `$next_lane`, `$other_agent` and `$ORCH` set by the relay, the hook is:
+outside this repository and is not changed by this PR. The relay supplies
+`$relay_log`, `$status`, `$next_lane`, `$other_agent` and `$ORCH`, plus `$source`,
+`$candidates`, `$chosen`, `$weights`, `$states` and `$fallback` from the pacing
+decision. The append helper replaces the relay's existing `relay-pacing.log`
+writer; do not also emit a legacy pacing line for the same decision. The hook is:
 
 ```bash
 # At decision time (before dispatch): append an importer-valid line with decision_id=<id>.
+# Replace the existing pacing-log writer with this call; do not also write a legacy line.
+# Requires $source, $candidates, $chosen, $weights, $states and $fallback from the decision.
 # Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
 # On failure leave decision_id empty and omit --relay-decision-id rather than aborting.
 decision_id="$(python3 "$ORCH/rate_incidents.py" append-relay-pacing-decision \
