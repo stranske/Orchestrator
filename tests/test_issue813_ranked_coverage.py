@@ -8,13 +8,32 @@ must not turn into a network call or a write to the shared runtime.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 import capability_compiler
 import experiment_recovery
 import exploration_evidence_plan
 import gh_capacity
 import keepalive_shadow
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_without_processes(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    started = []
+
+    def forbid_process(*args, **kwargs):
+        started.append((args, kwargs))
+        pytest.fail("ranked CLI coverage must never start a subprocess or agent")
+
+    monkeypatch.setattr(subprocess, "run", forbid_process)
+    monkeypatch.setattr(subprocess, "Popen", forbid_process)
+    yield
+    assert started == []
 
 
 def test_capability_compiler_reference_cli_requires_only_the_injected_workflow(
@@ -51,26 +70,37 @@ def test_keepalive_shadow_cli_uses_temp_corpus_and_no_live_github(
     decision = {"target": "o/r#7", "shadow_action": "wait"}
     monkeypatch.setattr(keepalive_shadow, "gather_signals", lambda target: {"target": target})
     monkeypatch.setattr(keepalive_shadow, "shadow_decide", lambda signals: decision)
-    monkeypatch.setattr(
-        keepalive_shadow, "record", lambda entry, path: {"recorded": True, "corpus": str(path)}
-    )
+    recorded = []
+
+    def fake_record(entry, path):
+        recorded.append((entry, path))
+        return {"recorded": True, "corpus": str(path)}
+
+    monkeypatch.setattr(keepalive_shadow, "record", fake_record)
 
     assert keepalive_shadow.main(["--shadow", "o/r#7", "--corpus", str(corpus)]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result == {**decision, "recorded": True, "corpus": str(corpus)}
+    assert recorded == [(decision, corpus)]
 
 
 def test_experiment_recovery_cli_apply_uses_only_injected_rows(monkeypatch, capsys) -> None:
     row = {"exp_id": "tick-1-o-r-7", "repo": "o/r"}
     monkeypatch.setattr(experiment_recovery, "plan", lambda **_: {"experiments": 1, "counts": {}})
-    monkeypatch.setattr(experiment_recovery, "unevaluated_experiments", lambda: [row])
-    monkeypatch.setattr(
-        experiment_recovery,
-        "restore_experiment",
-        lambda received, **_: {"exp_id": received["exp_id"], "applied": True},
-    )
+    second_row = {"exp_id": "tick-2-o-r-8", "repo": "o/r"}
+    monkeypatch.setattr(experiment_recovery, "unevaluated_experiments", lambda: [row, second_row])
+    restored = []
+
+    def fake_restore(received, **kwargs):
+        restored.append((received, kwargs))
+        return {"exp_id": received["exp_id"], "applied": kwargs["apply"]}
+
+    monkeypatch.setattr(experiment_recovery, "restore_experiment", fake_restore)
 
     assert experiment_recovery.main(["--apply", "--limit", "1", "--json"]) == 0
+    assert len(restored) == 1
+    assert restored[0][0] == row
+    assert restored[0][1]["apply"] is True
     assert json.loads(capsys.readouterr().out) == {
         "applied": 1,
         "counts": {},
