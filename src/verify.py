@@ -878,6 +878,7 @@ def _appended_note(prior: str | None, collected: int, passed: int, today: str) -
 # disagree about which number they mean.
 CEILINGS = (
     ("skipped_max", "skipped test(s)"),
+    ("core_sibling_skipped_max", "Core sibling skipped test(s)"),
     ("selftest_skipped_max", "skipped selftest(s)"),
     ("gate_skipped_max", "skipped gate(s)"),
     # The mypy exempt list is bounded exactly like skipping, and for the same reason: a list of
@@ -978,6 +979,10 @@ def ceiling_limit(floor: dict, key: str, *, shape: str = CHECKOUT) -> tuple[int 
     occur, and adding the two would buy headroom nothing there can legitimately spend. The bare
     mirror's value is measured on the union directly, so it needs no addition either.
     """
+    # This external source is absent in checkouts and both mirror shapes alike. It has one
+    # agreement, independent of the general shape budget, and an unset agreement grants zero.
+    if key == "core_sibling_skipped_max":
+        return int(floor.get(key, 0)), key
     if shape != CHECKOUT:
         sk = shape_key(key, shape)
         limit = floor.get(sk)
@@ -985,6 +990,46 @@ def ceiling_limit(floor: dict, key: str, *, shape: str = CHECKOUT) -> tuple[int 
             return int(limit), sk
     base = floor.get(key)
     return (None if base is None else int(base)), key
+
+
+# Exact prerequisite reasons, scoped to the tests that actually use the independent source.
+# A generic skip in one of these files, or the same words in another file, stays general.
+CORE_SIBLING_SKIP_REASONS = {
+    "test_closer_runtime_binding": {
+        "independent Core source unavailable for snapshot",
+        "independent Core packager source unavailable",
+    },
+    "test_closer_runtime_drain": {"independent Core source unavailable for snapshot"},
+    "test_closer_mechanisms": {"independent Core source unavailable for snapshot"},
+    "test_closer_campaign_integration": {"Core draft not present at the sibling path"},
+}
+CORE_SIBLING_REMEDY = (
+    "Provide the independent Workflows Core source via CLOSER_CORE_SOURCE (including its "
+    "scripts and schemas) to execute these tests, or deliberately review "
+    "`core_sibling_skipped_max` in .verify-floor.json; never raise the general skip ceiling "
+    "for Core absence."
+)
+
+
+def pytest_skip_counts(py: dict) -> dict[str, int | None]:
+    """Partition actual per-test skips, never pytest's aggregated summary lines.
+
+    Missing/incomplete JUnit evidence cannot buy an exemption. Report both counts as unknown
+    so their ceilings fail closed, rather than subtracting an unverified Core population.
+    """
+    skipped = [
+        (module, result)
+        for module, by_name in (py.get("verdicts") or {}).items()
+        for result in by_name.values()
+        if result["outcome"] == "skipped"
+    ]
+    if len(skipped) != py["skipped"]:
+        return {"skipped_max": None, "core_sibling_skipped_max": None}
+    core = sum(
+        result["message"] in CORE_SIBLING_SKIP_REASONS.get(module, set())
+        for module, result in skipped
+    )
+    return {"skipped_max": py["skipped"] - core, "core_sibling_skipped_max": core}
 
 
 def mypy_exempt_modules() -> list[str] | None:
@@ -1302,6 +1347,21 @@ def _ceiling_report(
         # agreement they are reading without going to look it up.
         via = "" if in_force == key else f" [{in_force}]"
         rendered[key] = f"{observed}/{limit} max{via}"
+    # Receipt consumers need the total, but all limits must come from this same shape decision.
+    skip_keys = ("skipped_max", "core_sibling_skipped_max")
+    skip_limits = [ceiling_limit(floor, key, shape=shape)[0] for key in skip_keys]
+    skip_counts = [actual.get(key, 0) for key in skip_keys]
+    total = sum(value for value in skip_counts if value is not None)
+    total_limit = sum(value for value in skip_limits if value is not None)
+    rendered["pytest_skipped_total"] = (
+        "NOT COUNTED"
+        if None in skip_counts
+        else (
+            f"{total}/{total_limit} max [combined categories below]"
+            if None not in skip_limits
+            else f"{total} (no combined ceiling set)"
+        )
+    )
     return problems, rendered
 
 
@@ -1358,6 +1418,18 @@ def _ceiling_problems(
                 + (
                     _drainable_clause(drainable.get(key), in_force)
                     if drainable is not None and key in SKIP_CEILINGS
+                    else ""
+                )
+                + (
+                    " Skip categories: "
+                    + "; ".join(
+                        f"{category}={actual.get(category, 0)}/{ceiling_limit(floor, category, shape=shape)[0]} "
+                        f"max [{ceiling_limit(floor, category, shape=shape)[1]}]"
+                        for category in ("skipped_max", "core_sibling_skipped_max")
+                    )
+                    + ". For general skips, restore the missing prerequisite named in the skip "
+                    "reasons or remove the unrelated skip. " + CORE_SIBLING_REMEDY
+                    if key in ("skipped_max", "core_sibling_skipped_max")
                     else ""
                 )
             )
@@ -1417,7 +1489,7 @@ def verify(
     # both numbers — `24/24` alone reads as "fine", `24/24 (ceiling)` reads as "at the limit".
     exempt = mypy_exempt_modules()
     actual = {
-        "skipped_max": py["skipped"],
+        **pytest_skip_counts(py),
         "selftest_skipped_max": len(st["skipped"]),
         "gate_skipped_max": sum(1 for r in gates.values() if r["skipped"]),
         # None (uncountable) must not read as 0 — that would let the ceiling pass by being
@@ -1485,8 +1557,13 @@ def verify(
     )
     lines.append(
         f"  pytest:     {py['passed']} passed, {py['failed']} failed, "
-        f"{_cap('skipped_max')} skipped "
+        f"{_cap('pytest_skipped_total')} skipped "
         f"({py['collected']} collected; floor {floor_state})"
+    )
+    lines.append(f"  general skips: {_cap('skipped_max')} skipped")
+    lines.append(
+        f"  Core sibling skips: {_cap('core_sibling_skipped_max')} "
+        f"[core_sibling_skipped_max]. {CORE_SIBLING_REMEDY}"
     )
     lines.append(
         f"  selftests:  {len(st['ok'])} of {len(mods)} modules ran, "
@@ -1617,7 +1694,104 @@ def _duration(seconds: float) -> str:
     return f"{whole // 60}m{whole % 60:02d}s" if whole >= 60 else f"{whole}s"
 
 
+def _selftest_core_skip_category() -> None:
+    """Real pytest/JUnit partition and deliberate break in a temporary flat mirror.
+
+    Kept in the existing verifier selftest so the repository's pytest collection floor stays
+    exactly origin/main's. No Core source, live mirror or live state is read or written here.
+    """
+    floor = {"mirror_skipped_max": 21, "core_sibling_skipped_max": 19}
+    counts = {
+        "test_closer_runtime_binding": 10,
+        "test_closer_runtime_drain": 7,
+        "test_closer_mechanisms": 1,
+        "test_closer_campaign_integration": 1,
+    }
+    saved_root = ROOT
+    with tempfile.TemporaryDirectory(prefix="verify-core-skip-") as td:
+        mirror = pathlib.Path(td)
+        for module, count in counts.items():
+            reason = next(r for r in CORE_SIBLING_SKIP_REASONS[module] if "packager" not in r)
+            (mirror / f"{module}.py").write_text(
+                "import pytest\n"
+                f"@pytest.mark.parametrize('case', range({count}))\n"
+                f"def test_core(case):\n    pytest.skip({reason!r})\n",
+                encoding="utf-8",
+            )
+        (mirror / "test_general.py").write_text(
+            "import pytest\n"
+            "@pytest.mark.parametrize('case', range(21))\n"
+            "def test_git(case):\n    pytest.skip('mirror is not a git repository')\n",
+            encoding="utf-8",
+        )
+        try:
+            globals()["ROOT"] = mirror
+
+            def run() -> dict:
+                result = run_pytest(junit=mirror / "results.xml")
+                assert result["returncode"] == 0 and result["failed"] == 0, result
+                return result
+
+            green = run()
+            actual = pytest_skip_counts(green)
+            assert green["skipped"] == 40 and actual == {
+                "skipped_max": 21,
+                "core_sibling_skipped_max": 19,
+            }, (green, actual)
+            assert not _ceiling_problems(floor, actual, shape=EXEC_MIRROR)
+            # An unrelated skip must spend the general budget, even with the Core reason.
+            extra = mirror / "test_unrelated.py"
+            extra.write_text(
+                "import pytest\ndef test_extra():\n"
+                "    pytest.skip('independent Core source unavailable for snapshot')\n",
+                encoding="utf-8",
+            )
+            red = pytest_skip_counts(run())
+            problems = _ceiling_problems(floor, red, shape=EXEC_MIRROR)
+            assert red == {"skipped_max": 22, "core_sibling_skipped_max": 19}, red
+            assert len(problems) == 1 and "`mirror_skipped_max`" in problems[0], problems
+            for text in (
+                "skipped_max=22/21",
+                "core_sibling_skipped_max=19/19",
+                "CLOSER_CORE_SOURCE",
+            ):
+                assert text in problems[0], problems
+            extra.unlink()
+            assert (
+                pytest_skip_counts(run()) == actual
+            ), "removing deliberate break must restore green"
+            # An absent or incomplete per-test record must not silently grant an exemption.
+            assert set(pytest_skip_counts({"skipped": 40}).values()) == {None}
+            incomplete = {**green, "skipped": 41}
+            unknown = pytest_skip_counts(incomplete)
+            assert len(_ceiling_problems(floor, unknown, shape=EXEC_MIRROR)) == 2
+            # Named categories have no implicit allowance and no shape-dependent headroom.
+            assert _ceiling_problems({"mirror_skipped_max": 21}, actual, shape=EXEC_MIRROR)
+            for shape in SHAPE_CEILING_PREFIX:
+                assert ceiling_limit(floor, "core_sibling_skipped_max", shape=shape) == (
+                    19,
+                    "core_sibling_skipped_max",
+                )
+            core_over = _ceiling_problems(
+                floor, {**actual, "core_sibling_skipped_max": 20}, shape=EXEC_MIRROR
+            )
+            assert len(core_over) == 1 and "Core sibling skipped" in core_over[0], core_over
+            # A different reason in a Core-using module also remains a general skip.
+            verdicts = {
+                "test_closer_runtime_binding": {
+                    "test_other": {"outcome": "skipped", "message": "unrelated prerequisite"}
+                }
+            }
+            assert pytest_skip_counts({"skipped": 1, "verdicts": verdicts}) == {
+                "skipped_max": 1,
+                "core_sibling_skipped_max": 0,
+            }
+        finally:
+            globals()["ROOT"] = saved_root
+
+
 def _selftest() -> None:
+    _selftest_core_skip_category()
     # Count parsing must survive the real shapes pytest emits.
     for text, expect_collected, expect_passed in (
         ("182 passed, 3 skipped in 41.20s", 185, 182),
