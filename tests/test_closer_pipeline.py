@@ -2812,18 +2812,41 @@ def test_resumed_backlog_priority_preserves_other_interpretations(
     assert validate_stop(path, ["a", "b", "z"])["valid"]
 
 
-def test_capacity_shape_fails_closed(tmp_path):
-    cb = callbacks()
+@pytest.mark.parametrize("invalid_io", [-1, True, 1.5, "1", None])
+def test_capacity_shape_fails_closed(tmp_path, monkeypatch, invalid_io):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setenv("ORCH_CLOSER_COORDINATOR_MODE", "legacy")
+    started = []
+
+    def forbid(*args, **kwargs):
+        started.append((args, kwargs))
+        raise AssertionError("invalid capacity must not start work")
+
+    monkeypatch.setattr("subprocess.run", forbid)
+    monkeypatch.setattr("subprocess.Popen", forbid)
+    monkeypatch.setattr("socket.create_connection", forbid)
+    monkeypatch.setattr("socket.socket.connect", forbid)
+    cb = {stage: forbid for stage in ("prepare", "interpret", "act", "exception")}
+
+    # Capacity validation is independent of setup/fsync speed on a busy CI runner.
+    def now():
+        return 1_800_000_000.0
+
     receipt = run_pipeline(
         tmp_path / "state.json",
         ["a"],
         **cb,
-        capacity_fn=lambda: {"io": -1, "low": 1, "exception": 1},
-        deadline=time.time() + 0.05,
+        capacity_fn=lambda: {"io": invalid_io, "low": 1, "exception": 1},
+        deadline=now() + 10,
+        now=now,
     )
     assert receipt["targets"]["a"]["status"] == "failed"
-    assert receipt["metrics"]["capacity_samples"][0]["error"]
-    assert not validate_stop(tmp_path / "state.json", ["a"])["valid"]
+    error = "ValueError: capacity io must be a non-negative integer"
+    assert receipt["metrics"]["capacity_samples"][0]["error"] == error
+    assert receipt["targets"]["a"]["error"] == "capacity_unavailable:" + error
+    assert not validate_stop(tmp_path / "state.json", ["a"], now=now)["valid"]
+    assert started == []
 
 
 def test_missing_capacity_lane_is_unknown_not_measured_zero(tmp_path):
