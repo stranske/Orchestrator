@@ -18,7 +18,10 @@ import pytest
 import capability_compiler as compiler
 import evidence_schema
 import feedback
+import roles
 from capability_ir import CapabilityIR, Lifecycle, SourceOccurrence, stable_hash
+
+ROLE_NAME = "issue807-evidence-gap-ranker"
 
 NOW = 2_000_000_000
 NAMED_TEST = (
@@ -37,6 +40,11 @@ def isolated_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
     monkeypatch.setenv("ORCH_FEEDBACK_DB", str(runtime / "feedback" / "orchestrator.db"))
     monkeypatch.setattr(feedback, "DB_PATH", runtime / "feedback" / "orchestrator.db")
+    roles.unregister_generated_role(ROLE_NAME)
+    roles.reset_role_invocation_counts()
+    yield
+    roles.unregister_generated_role(ROLE_NAME)
+    roles.reset_role_invocation_counts()
 
 
 def _script(tmp_path: Path, name: str = "helper.sh") -> Path:
@@ -397,7 +405,7 @@ def _role_candidate(*, now: int | None = None) -> CapabilityIR:
     role_contract = {
         "schema": compiler.ROLE_SOURCE_SCHEMA,
         "version": compiler.ROLE_VERSION,
-        "name": "evidence-gap-prioritizer",
+        "name": ROLE_NAME,
         "description": "Compare bounded evidence gaps and recommend the next investigation priority.",
         "authority": (
             "Advisory only: compare supplied evidence and recommend one bounded investigation "
@@ -455,7 +463,7 @@ def _role_candidate(*, now: int | None = None) -> CapabilityIR:
         },
         "expires_at": current + 7 * 86400,
         "kill_switch": {
-            "env": "ORCH_GENERATED_ROLE_EVIDENCE_GAP_PRIORITIZER_DISABLED",
+            "env": "ORCH_GENERATED_ROLE_ISSUE807_EVIDENCE_GAP_RANKER_DISABLED",
             "disabled_value": "1",
         },
         "rollback": {
@@ -465,9 +473,9 @@ def _role_candidate(*, now: int | None = None) -> CapabilityIR:
         },
     }
     return CapabilityIR(
-        capability_id="capability:evidence-gap-prioritizer",
-        fingerprint=stable_hash("role-candidate", "evidence-gap"),
-        semantic_fingerprint=stable_hash("role-semantic", "evidence-gap"),
+        capability_id="capability:issue807-evidence-gap-ranker",
+        fingerprint=stable_hash("role-candidate", "issue807-evidence-gap"),
+        semantic_fingerprint=stable_hash("role-semantic", "issue807-evidence-gap"),
         output_contract_fingerprint=stable_hash("role-output", role_contract["output_schema"]),
         kind_proposal="role",
         owner_proposal="orchestrator",
