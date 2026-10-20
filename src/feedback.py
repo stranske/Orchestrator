@@ -6433,10 +6433,13 @@ def record_lane_round(
     if relay_decision_id is not None:
         if (
             not relay_decision_id
-            or len(relay_decision_id) > 400
+            or len(relay_decision_id) > RELAY_DECISION_ID_MAX_CHARS
             or any(char.isspace() for char in relay_decision_id)
         ):
-            raise ValueError("relay_decision_id must be a nonempty token of at most 400 characters")
+            raise ValueError(
+                "relay_decision_id must be a nonempty token of at most "
+                f"{RELAY_DECISION_ID_MAX_CHARS} characters"
+            )
         facts.append(relay_decision_id)
     decision_id = (
         "lane-round:"
@@ -6465,6 +6468,9 @@ RELAY_PACING_CAPABILITY = "windowed-capacity-policy"
 RELAY_PACING_VERSION = "relay-pacing-v1"
 RELAY_PACING_BACKLOG_CUTOFF = int(datetime(2026, 10, 20, 11, 58, tzinfo=timezone.utc).timestamp())
 RELAY_PACING_UNJOINED_REASON = "no round recorded (pre-2026-10-20T11:58Z relay subshell bug)"
+# Match `_safe_identifier` (192) so join keys stay valid completion identifiers under
+# MAX_COMPLETION_STRING_CHARS (256), including the `relay-pacing:id:` prefix.
+RELAY_DECISION_ID_MAX_CHARS = 192
 
 
 def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
@@ -6504,7 +6510,11 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
             relay_id = facts.get("decision_id")
             if relay_id is not None:
                 # Match record_lane_round: reject empty, oversized, or whitespace tokens.
-                if not relay_id or len(relay_id) > 400 or any(char.isspace() for char in relay_id):
+                if (
+                    not relay_id
+                    or len(relay_id) > RELAY_DECISION_ID_MAX_CHARS
+                    or any(char.isspace() for char in relay_id)
+                ):
                     continue
                 decision_id = "relay-pacing:id:" + relay_id
             facts = {key: facts[key] for key in required}

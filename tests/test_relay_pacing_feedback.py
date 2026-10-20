@@ -255,8 +255,16 @@ def test_generate_relay_decision_id_matches_documented_shape():
     assert token == "20261020T132256Z-4242-a1b2c3d4"
     assert _DECISION_ID_RE.fullmatch(token)
     assert _DECISION_ID_RE.fullmatch(rate_incidents.generate_relay_decision_id())
+    assert len(token) <= feedback.RELAY_DECISION_ID_MAX_CHARS
     with pytest.raises(ValueError, match="random_hex"):
         rate_incidents.generate_relay_decision_id(random_hex="has space")
+
+
+def test_cli_generate_relay_decision_id_prints_one_token(capsys):
+    assert rate_incidents.main(["generate-relay-decision-id"]) == 0
+    token = capsys.readouterr().out.strip()
+    assert _DECISION_ID_RE.fullmatch(token)
+    assert len(token) <= feedback.RELAY_DECISION_ID_MAX_CHARS
 
 
 @pytest.mark.parametrize("explicit", [True, False])
@@ -439,7 +447,10 @@ def test_pre_fix_id_decision_survives_rotation_until_exact_exit(tmp_path, monkey
     assert (result["joined"], result["unjoined"]) == (1, 0)
 
 
-@pytest.mark.parametrize("bad_id", ["", "with space", "x" * 401])
+@pytest.mark.parametrize(
+    "bad_id",
+    ["", "with space", "x" * (feedback.RELAY_DECISION_ID_MAX_CHARS + 1)],
+)
 def test_invalid_explicit_id_is_rejected(tmp_path, monkeypatch, bad_id):
     _setup(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="relay_decision_id"):
@@ -448,7 +459,15 @@ def test_invalid_explicit_id_is_rejected(tmp_path, monkeypatch, bad_id):
         )
 
 
-@pytest.mark.parametrize("bad_id", ["", "x" * 401])
+def test_max_length_explicit_id_is_accepted(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    token = "x" * feedback.RELAY_DECISION_ID_MAX_CHARS
+    log.write_text(_line(decision_id=token))
+    feedback.record_lane_round("claude", "opener", None, 0, "none", NOW, relay_decision_id=token)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+
+
+@pytest.mark.parametrize("bad_id", ["", "x" * (feedback.RELAY_DECISION_ID_MAX_CHARS + 1)])
 def test_importer_skips_invalid_decision_id_in_log(tmp_path, monkeypatch, bad_id):
     log = _setup(tmp_path, monkeypatch)
     log.write_text(_line(decision_id=bad_id))

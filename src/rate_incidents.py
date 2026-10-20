@@ -166,7 +166,9 @@ def generate_relay_decision_id(
 
     Compact UTC (no ``:``) keeps the token a single log field. The importer and
     ``record-lane-round --relay-decision-id`` accept any nonempty no-whitespace
-    token up to 400 characters; this helper is the documented production form.
+    token up to ``feedback.RELAY_DECISION_ID_MAX_CHARS`` (192); this helper is the
+    documented production form. Prefer the ``generate-relay-decision-id`` CLI so
+    the relay does not need ``$ORCH`` on ``PYTHONPATH``.
     """
     stamp = (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     token = random_hex if random_hex is not None else secrets.token_hex(4)
@@ -748,10 +750,17 @@ def main(argv: list[str]) -> int:
     lane_parser.add_argument("--output-file", type=Path, required=True)
     lane_parser.add_argument("--ts", type=int)
     lane_parser.add_argument("--relay-decision-id")
+    subparsers.add_parser(
+        "generate-relay-decision-id",
+        help="print one <utc>-<pid>-<random> token for the relay pacing log",
+    )
     subparsers.add_parser("summary", help="summarize the append-only incident ledger")
     args = parser.parse_args(argv)
     if args.selftest:
         return _selftest()
+    if args.command == "generate-relay-decision-id":
+        print(generate_relay_decision_id())
+        return 0
     if args.command == "classify":
         evidence = args.evidence if args.evidence is not None else sys.stdin.read()
         print(json.dumps(get_structured_evidence(evidence, "unknown", "cli"), sort_keys=True))

@@ -13,19 +13,23 @@ outside this repository and is not changed by this PR. With `$relay_log`,
 
 ```bash
 # At decision time (before dispatch): emit decision_id=<id> on the pacing log line.
-decision_id="$(python3 -c 'import rate_incidents; print(rate_incidents.generate_relay_decision_id())')"
+# Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
+# On failure leave decision_id empty and omit --relay-decision-id rather than aborting.
+decision_id="$(python3 "$ORCH/rate_incidents.py" generate-relay-decision-id)" || decision_id=""
 # After the receiver exits:
 tail -n 40 "$relay_log" > "$tail"
 python3 "$ORCH/rate_incidents.py" record-lane-round \
   --agent "${other_agent/claude_code/claude}" --surface handoff-relay --lane "$next_lane" \
-  --exit "$status" --output-file "$tail" --relay-decision-id "$decision_id"
+  --exit "$status" --output-file "$tail" \
+  ${decision_id:+--relay-decision-id "$decision_id"}
 ```
 
 Set `$tail` to a private temporary file and remove it after the call. Pass
 `--receiver-reason "$reason"` when the relay has retained its actual routing
 reason; otherwise the stored value is NULL. The optional `--ts` accepts a UTC
 epoch second for replay or testing. Prefer `--relay-decision-id` so interleaved
-opener/closer rounds join by explicit ID; omit it only for legacy lines.
+opener/closer rounds join by explicit ID; omit it when generation failed or for
+legacy lines (empty tokens are rejected and would drop the round).
 
 Every exit writes a decision row. Exit zero writes no incident, even if a
 successful summary quotes a rate-limit message. A nonzero exit creates an
