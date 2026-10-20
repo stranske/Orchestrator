@@ -532,8 +532,9 @@ def _supervise_cli_locked(
     Only the exact observed no-effect launcher is signalled. Unknown provider or
     child identity outcomes hold; there is no fallback or resubmission of them.
     """
-    from closer_agent_launchers import offload_profiles, profile_offload_mode, validate_profile
+    from closer_agent_launchers import profile_offload_mode, validate_profile
     from closer_campaign import load_manifest
+    from execution_profiles import get_profile
 
     manifest = load_manifest(manifest_path)
     mechanism(manifest, CLI)
@@ -545,6 +546,14 @@ def _supervise_cli_locked(
         or profile_id != manifest["mechanism_contract"]["profile_id"]
     ):
         raise MechanismError(problem or "selected CLI/profile differs from configured lane")
+    profile = get_profile(profile_id)
+    if (
+        profile["profile_id"] != profile_id
+        or profile["agent"] != agent
+        or profile["lifecycle_status"] != "active"
+        or "offload" not in profile["transport_support"]
+    ):
+        raise MechanismError("selected explicit CLI profile is not active for this agent/offload")
     if type(timeout) is not int or not 1 <= timeout <= 120:
         raise MechanismError("qualification provider budget must be 1..120 seconds per phase")
     if type(budget_seconds) is not int or not 6 <= budget_seconds <= 2 * timeout + 5:
@@ -576,7 +585,6 @@ def _supervise_cli_locked(
     _write(active_path, {"nonce": nonce, "status": "running", "binding": request["binding"]})
     if offload is None:
         from dispatcher import offload
-    profile = next(p for p in offload_profiles(agent) if p["profile_id"] == profile_id)
     processes = []
     transports = []
     outcome: dict[str, Any] = {}

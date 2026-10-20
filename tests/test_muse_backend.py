@@ -507,7 +507,10 @@ def test_muse_has_an_offload_profile_in_its_existing_subscription_pool():
     import execution_profiles
 
     profiles = execution_profiles.profiles_for_agent("muse", transport="offload")
-    assert [p["profile_id"] for p in profiles] == ["muse-wonder-1.0"], profiles
+    assert [p["profile_id"] for p in profiles] == [
+        "muse-wonder-1.0",
+        "muse-wonder-1.0-low",
+    ], profiles
     pool = execution_profiles.CAPACITY_POOLS["muse-subscription"]
     assert pool["agent"] == "muse" and pool["tier"] == "flat", pool
     argv = adapters.build_command("muse", "x", requested_model="muse-wonder-1.0")

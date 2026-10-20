@@ -24,6 +24,18 @@ Codex receipt cannot qualify Claude or any other provider. Other supervising own
 until an exact canonical mapping is reviewed. Provider quota and capacity guards remain separate;
 this binding never grants a quota override or promotes an unqualified member of the approved pool.
 
+Supported low requests have distinct immutable profile IDs: `claude-sonnet-5-5-low` sends
+`--model claude-sonnet-5-5 --effort low`, and `muse-wonder-1.0-low` sends the existing account model
+with `--reasoning-effort low`. Both use their existing subscription pools. The old high profile
+rows remain unchanged; corrected future calls explicitly send high, while historical v1 attempts
+that omitted effort are not retroactively proven. Unspecified legacy effort adds no flag.
+
+`cursor-gpt-5.6-luna-low` names a model advertised by the installed CLI. It is explicit-only;
+normal inventories, routing and default offloads stay on Composer. A named profile can qualify
+only its own CLI lifecycle; normal campaign tick selection does not automatically roll it out.
+Vibe remains capable pending separate integration of its per-invocation configuration and proof;
+these entries do not establish current provider availability or successful queue acceptance.
+
 The pinned launcher's `qualify-cli` command starts two bounded submissions through the existing CLI
 offloader, with no provider retries. It first persists intent, exact command/profile/nonce and the
 original hard/action deadlines. `--budget-seconds` is required: five cleanup seconds are

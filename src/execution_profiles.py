@@ -95,6 +95,7 @@ def _profile(
     adapter_version: str = "codex-cli-profile-v1",
     lifecycle_status: str = "active",
     successor_profile_id: str | None = None,
+    requires_explicit_selection: bool = False,
 ) -> dict[str, Any]:
     """One registered execution profile. Defaults stay codex so existing entries are unchanged.
 
@@ -121,6 +122,7 @@ def _profile(
         "lifecycle_status": lifecycle_status,
         "successor_profile_id": successor_profile_id,
         "prior_offset": prior_offset,
+        **({"requires_explicit_selection": True} if requires_explicit_selection else {}),
     }
 
 
@@ -157,6 +159,17 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             provider="anthropic",
             pool="claude-subscription",
             adapter_version="claude-cli-profile-v1",
+        ),
+        # Explicit effort wiring is versioned for new combinations. Historical
+        # v1 high attempts may have omitted the flag; do not upgrade their evidence.
+        _profile(
+            "claude-sonnet-5-5-low",
+            "claude-sonnet-5-5",
+            "low",
+            agent="claude",
+            provider="anthropic",
+            pool="claude-subscription",
+            adapter_version="claude-cli-profile-v2",
         ),
         _profile(
             "aider-codestral-high",
@@ -275,6 +288,18 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="cursor-subscription",
             adapter_version="cursor-cli-profile-v1",
         ),
+        # Native advertised low-effort model, not a Composer setting. Explicit
+        # opt-in only: ordinary Cursor routes/default offloads remain Composer.
+        _profile(
+            "cursor-gpt-5.6-luna-low",
+            "gpt-5.6-luna-low",
+            "low",
+            agent="cursor",
+            provider="cursor",
+            pool="cursor-subscription",
+            adapter_version="cursor-cli-profile-v2",
+            requires_explicit_selection=True,
+        ),
         _profile(
             "vibe-medium-3.5",
             "mistral-medium-3.5",
@@ -297,6 +322,15 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             provider="meta",
             pool="muse-subscription",
             adapter_version="muse-cli-profile-v1",
+        ),
+        _profile(
+            "muse-wonder-1.0-low",
+            "muse-wonder-1.0",
+            "low",
+            agent="muse",
+            provider="meta",
+            pool="muse-subscription",
+            adapter_version="muse-cli-profile-v2",
         ),
     )
 }
@@ -482,9 +516,9 @@ def _selftest() -> None:
         ), "historical Flash must resolve to Flash"
         routable = {p["profile_id"] for p in profiles_for_agent("gemini")}
         assert current in routable and old not in routable, "current Flash must remain routable"
-    # muse (#612): one offload profile, in its own subscription allowance pool.
+    # Muse high/low share one existing subscription allowance pool.
     _mp = profiles_for_agent("muse", transport="offload")
-    assert [p["profile_id"] for p in _mp] == ["muse-wonder-1.0"], _mp
+    assert [p["profile_id"] for p in _mp] == ["muse-wonder-1.0", "muse-wonder-1.0-low"], _mp
     assert CAPACITY_POOLS["muse-subscription"]["tier"] == "flat", CAPACITY_POOLS[
         "muse-subscription"
     ]
@@ -500,15 +534,24 @@ def get_profile(profile: str | dict[str, Any]) -> dict[str, Any]:
 
 
 def profiles_for_agent(
-    agent: str, *, transport: str | None = None, include_retired: bool = False
+    agent: str,
+    *,
+    transport: str | None = None,
+    include_retired: bool = False,
+    include_explicit: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return routable profiles, or include historical/trial profiles for reporting."""
+    """Return automatic candidates; explicit-only profiles require a named opt-in.
+
+    get_profile(id) remains the direct, validated explicit selection API. Inventories
+    can request include_explicit without changing default routing or pool accounting.
+    """
     rows = [
         dict(p)
         for p in PROFILE_REGISTRY.values()
         if p["agent"] == agent
         and p["lifecycle_status"] == "active"
         and (include_retired or p["profile_id"] not in PROFILE_RETIREMENTS)
+        and (include_explicit or not p.get("requires_explicit_selection"))
     ]
     if transport:
         rows = [p for p in rows if transport in p["transport_support"]]

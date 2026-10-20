@@ -1872,12 +1872,26 @@ def build_command(
         return cmd + [prompt]
     if agent == "claude":
         cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions"]
-        if requested_model:
-            cmd += ["--model", requested_model]
-        else:
-            tiered = _tier_model("claude", mode)
-            if tiered:
-                cmd += ["--model", tiered]
+        model = requested_model or _tier_model("claude", mode)
+        if model:
+            cmd += ["--model", model]
+        if reasoning_effort is not None:
+            # Sonnet 5.5 effort support verified in Claude's model-config docs.
+            # v1 high-profile history is not retroactively evidence of this flag.
+            if (
+                model != "claude-sonnet-5-5"
+                or not isinstance(reasoning_effort, str)
+                or reasoning_effort
+                not in {
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                }
+            ):
+                raise ValueError("unsupported explicit Claude model/reasoning effort")
+            cmd += ["--effort", reasoning_effort]
         return cmd
     if agent == "cursor":
         # OFFLOADS ASK FOR stream-json SO THE RUN REPORTS ITS OWN MODEL. cursor's `system/init`
@@ -1945,6 +1959,19 @@ def build_command(
         ]
         if requested_model:
             cmd += ["--model", requested_model]
+        if reasoning_effort is not None:
+            if not isinstance(reasoning_effort, str) or reasoning_effort not in {
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra",
+            }:
+                raise ValueError("unsupported explicit Muse reasoning effort")
+            cmd += ["--reasoning-effort", reasoning_effort]
         if prompt_file is not None:
             return cmd + ["--prompt-file", str(prompt_file)]
         return cmd + [prompt]
