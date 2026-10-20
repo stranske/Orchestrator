@@ -159,15 +159,16 @@ def test_verifier_claims_skip_invalid_and_inherited_candidates():
         notes=f"{outcomes.REPLACEMENT_CREDIT} PR #10 merged",
     )
 
-    found, inherited = sweep._verifier_claims()
-    assert ("o/r", 10) not in found or "ka" in found.get(("o/r", 10), set())
     key = ("o/r", 10)
-    # Keepalive claims the PR; local replacement inherits it.
-    assert "ka" in found.get(key, set()) or key in inherited
+    found, inherited = sweep._verifier_claims()
+    assert found == {key: {"ka"}}
+    assert inherited == {key: {"local"}}
     assert sweep.verifier_candidate_run_ids("o/r", 10, prospective_run_id="ka") == {"ka"}
-    # With no found claim and no prospective id, inherited ids are used.
-    with patch.object(sweep, "_verifier_claims", return_value=({}, {key: {"local"}})):
-        assert sweep.verifier_candidate_run_ids("o/r", 10) == {"local"}
+    # Removing the direct claim exposes the real inherited fallback, without stubbing it.
+    with feedback._conn() as conn:
+        conn.execute("UPDATE outcomes SET merged=0 WHERE run_id=?", ("ka",))
+    assert sweep._verifier_claims() == ({}, {key: {"local"}})
+    assert sweep.verifier_candidate_run_ids("o/r", 10) == {"local"}
 
 
 def test_find_merge_rejects_missing_target_named_non_pr_and_no_branch():
@@ -309,6 +310,9 @@ def test_undo_truncated_recheck_missing_log_and_bad_lines(tmp_path, monkeypatch)
     feedback.record_run("r1", "o/r#1", "implement", "codex", mode="local", ts=NOW)
     feedback.record_outcome("r1", adjudicated_verdict="PASS", merged=True, durability="pending")
     assert sweep.undo_truncated_recheck()["restored"] == 1
+    with feedback._conn() as conn:
+        row = conn.execute("SELECT durability FROM outcomes WHERE run_id=?", ("r1",)).fetchone()
+    assert row[0] == "durable"
 
 
 def test_recheck_truncated_closes_bad_merge_and_unstated():
@@ -590,7 +594,6 @@ def test_post_merge_transcript_hash_mismatch_and_long_body(tmp_path, monkeypatch
     identity = __import__("hashlib").sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
     transcript = root / f"post-merge-{identity}.txt"
     transcript.write_text("ok", encoding="utf-8")
-    good_hash = __import__("hashlib").sha256(b"ok").hexdigest()
     event_id = f"event:post-merge-recheck:{identity}"
     payload = {
         "runtime_ac_post_merge": {
@@ -629,13 +632,7 @@ def test_post_merge_transcript_hash_mismatch_and_long_body(tmp_path, monkeypatch
         out = sweep._post_merge_rechecks(dry_run=False, gh=gh, now=NOW, spec_dir=root)
         assert out["errors"] and "hash mismatch" in out["errors"][0]
 
-    # Repair hash; exercise long-transcript comment path (line 1341).
-    payload["runtime_ac_post_merge"]["transcript_hash"] = good_hash
-    with feedback._conn() as conn:
-        conn.execute(
-            "UPDATE completion_events SET payload_json=? WHERE event_id=?",
-            (json.dumps(payload), event_id),
-        )
+    # Repair the transcript hash and exercise the long-transcript comment path.
     transcript.write_text("Z" * 56000, encoding="utf-8")
     payload["runtime_ac_post_merge"]["transcript_hash"] = (
         __import__("hashlib").sha256(transcript.read_bytes()).hexdigest()
@@ -742,6 +739,13 @@ def test_post_merge_comment_path_hash_mismatch_after_receipt_ok(tmp_path, monkey
         out = sweep._post_merge_rechecks(dry_run=False, gh=gh, now=NOW, spec_dir=root)
         assert out["errors"] and "hash mismatch" in out["errors"][0]
         assert reads["n"] >= 2
+    with feedback._conn() as conn:
+        row = conn.execute(
+            "SELECT payload_json FROM completion_events WHERE event_id=?", (event_id,)
+        ).fetchone()
+    stored = json.loads(row[0])["runtime_ac_post_merge"]
+    assert stored["commented"] is False
+    assert stored["delivery_complete"] is False
 
 
 def test_sweep_dry_run_stuck_truncated_and_unread(monkeypatch, tmp_path):
@@ -815,12 +819,10 @@ def test_sweep_dry_run_stuck_truncated_and_unread(monkeypatch, tmp_path):
         _state_fn=lambda _t: None,
         _verifier_fetch_fn=lambda *_a, **_k: {},
     )
-    assert (
-        summary["truncated"]["waiting"] >= 1
-        or any(
-            d.get("action") == "recheck-unread" or "unread" in str(d) for d in summary["details"]
-        )
-        or summary["truncated"]["closed"] >= 0
+    assert summary["truncated"]["waiting"] == 1
+    assert summary["truncated"]["closed"] == 0
+    assert any(
+        d["run_id"] == "u1" and d.get("action") == "recheck-wait" for d in summary["details"]
     )
 
     # Dry-run patch detail on a pending merge that can be judged.

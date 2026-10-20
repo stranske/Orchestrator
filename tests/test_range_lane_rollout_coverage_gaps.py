@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+import capabilities
+import feedback
 import range_lane_rollout as rollout
 
 
@@ -13,7 +15,28 @@ import range_lane_rollout as rollout
 def isolated_runtime(monkeypatch, tmp_path):
     """A planner test must never discover or dispatch from the live runtime."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    runtime = tmp_path / "runtime"
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    # load() captured REG as a default at import time: pass the isolated path explicitly.
+    original_load = capabilities.load
+    original_lock = capabilities._locked
+
+    def isolated_lock(path, **kwargs):
+        assert path == registry, f"live capability path reached: {path}"
+        return original_lock(path, **kwargs)
+
+    monkeypatch.setattr(capabilities, "_locked", isolated_lock)
+    registry = runtime / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", registry)
+    monkeypatch.setattr(
+        capabilities, "load", lambda path=registry, **kwargs: original_load(path, **kwargs)
+    )
+    monkeypatch.setattr(rollout.router, "HANDOFF", tmp_path / "handoff")
+    monkeypatch.setattr(rollout.router, "DECISION_JSON", tmp_path / "handoff" / "decision.json")
+    monkeypatch.setattr(rollout.router, "BACKLOG_JSON", tmp_path / "handoff" / "backlog.json")
+    monkeypatch.setattr(rollout.backlog, "BACKLOG_JSON", tmp_path / "handoff" / "backlog.json")
 
 
 def test_cached_backlog_distinguishes_valid_invalid_and_missing_payloads(tmp_path):
@@ -124,8 +147,9 @@ def test_main_refuses_unguarded_active_request(capsys):
 
 
 def test_main_rejects_record_campaign_without_a_campaign_file():
-    with pytest.raises(SystemExit, match="2"):
+    with pytest.raises(SystemExit) as exc:
         rollout.main(["--record-campaign"])
+    assert exc.value.code == 2
 
 
 def test_offline_selftest_exercises_guarded_planner_without_a_dispatch(monkeypatch, tmp_path):
