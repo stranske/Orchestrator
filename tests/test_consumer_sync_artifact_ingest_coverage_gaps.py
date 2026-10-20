@@ -774,3 +774,200 @@ def test_zip_extraction_failure_returns_one(
         == 1
     )
     assert "Zip extraction failed/unsafe" in capsys.readouterr().err
+
+
+def test_token_file_read_errors_are_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    creds = tmp_path / ".codex" / "credentials"
+    creds.mkdir(parents=True)
+    token = creds / "gh_cli_token"
+    token.write_text("secret\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(ingest, "GH_COMMAND_MOCK", None)
+
+    real_read = Path.read_text
+
+    def selective_read(self, *a, **k):  # noqa: ANN001
+        if self.name == "gh_cli_token":
+            raise OSError("unreadable")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", selective_read)
+    calls: list[dict] = []
+
+    def fake_run(args, **kwargs):  # noqa: ANN001
+        calls.append({"env": kwargs.get("env"), "text": kwargs.get("text")})
+        if kwargs.get("text"):
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+    monkeypatch.setattr(ingest.subprocess, "run", fake_run)
+    assert ingest.run_gh(["gh", "api", "x"]) == "ok"
+    assert "GH_TOKEN" not in (calls[0]["env"] or {})
+    assert ingest.run_gh_bytes(["gh", "api", "y"]) == b"ok"
+    assert "GH_TOKEN" not in (calls[1]["env"] or {})
+
+
+def test_blob_sha256_rejects_oversized_decoded_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"Z" * (ingest.REPO_READ_MAX_BLOB_BYTES + 1)
+    # Node size under the gate, decoded payload over it.
+    sha = "c" * 40
+    monkeypatch.setattr(
+        ingest,
+        "GH_COMMAND_MOCK",
+        lambda args: json.dumps(
+            {
+                "encoding": "base64",
+                "content": base64.b64encode(body).decode("ascii"),
+            }
+        ),
+    )
+    with pytest.raises(ValueError, match="blob_exceeds_max_bytes"):
+        ingest.blob_sha256(
+            "r/a",
+            {"sha": sha, "size": 16, "path": "big.bin"},
+            ingest.BlobReader(),
+        )
+
+
+def test_get_maint_68_repos_stops_at_next_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Break requires a non-indented key line (jobs:) after the list — indented OTHER_KEY
+    # still starts with space and would be skipped by the parser's continue conditions.
+    yaml = (
+        "env:\n"
+        "  REGISTERED_CONSUMER_REPOS:\n"
+        '    - "stranske/Ready"\n'
+        "jobs:\n"
+        "  sync:\n"
+        '    - "stranske/Ignored"\n'
+    )
+    monkeypatch.setattr(ingest, "GH_COMMAND_MOCK", lambda args: _b64_workflow(yaml))
+    assert ingest.get_maint_68_repos() == ["stranske/Ready"]
+
+
+def test_main_defaults_missing_command_to_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ORCH_REFERENCE_WORKFLOW_DISABLED", "1")
+    # No subcommand -> argv.insert(0, "ingest") then kill-switch exit.
+    assert ingest.main(["--state-dir", str(tmp_path / "s"), "--now", "1"]) == 0
+    assert "Kill switch active" in capsys.readouterr().out
+
+
+def test_main_preview_rejects_classification_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import consumer_sync_shadow
+
+    state_dir = tmp_path / "state"
+    ledger = tmp_path / "ledger.json"
+    capabilities.save({}, ledger)
+    plan = valid_plan()
+    handoff = valid_handoff(plan)
+    handoff["run_ref"] = "github-actions:stranske/Workflows:44:1"
+    handoff["handoff_id"] = stable_hash(
+        "consumer-sync-shadow-handoff",
+        {k: handoff[k] for k in handoff if k != "handoff_id"},
+    )
+    zbytes = make_zip(
+        {"consumer-sync-plan.json": json.dumps(plan), "handoff.json": json.dumps(handoff)}
+    )
+    tree, blobs = ingest.make_tree_responses({"README.md": "# hi\n"})
+
+    def mock_gh(args: list[str]) -> str | bytes:
+        cmd = " ".join(args)
+        if "runs?status=success" in cmd:
+            return json.dumps({"workflow_runs": [{"id": 44, "run_attempt": 1}]})
+        if "runs/44/artifacts" in cmd:
+            return json.dumps(
+                {
+                    "artifacts": [
+                        {
+                            "id": 440,
+                            "name": "consumer-sync-shadow-evidence-44-1",
+                            "expired": False,
+                        }
+                    ]
+                }
+            )
+        if "artifacts/440/zip" in cmd:
+            return zbytes
+        if cmd.endswith("repos/stranske/Template"):
+            return json.dumps({"default_branch": "main"})
+        if "git/trees/" in cmd:
+            return json.dumps(tree)
+        if "/git/blobs/" in cmd:
+            sha = cmd.rsplit("/", 1)[-1]
+            return json.dumps(blobs[sha])
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(ingest, "GH_COMMAND_MOCK", mock_gh)
+    monkeypatch.setattr(ingest, "TEST_REGISTRY", ["stranske/template"])
+    monkeypatch.setattr(
+        consumer_sync_shadow,
+        "classify_shadow_drift",
+        lambda *a, **k: {
+            "result_id": "r1",
+            "proposals": [],
+            "side_effects_performed": ["wrote"],
+        },
+    )
+    assert (
+        ingest.main(
+            [
+                "preview",
+                "--state-dir",
+                str(state_dir),
+                "--ledger",
+                str(ledger),
+                "--repository",
+                "stranske/Template",
+                "--now",
+                "100",
+            ]
+        )
+        == 1
+    )
+    err = capsys.readouterr().err
+    assert "classification_returned_side_effects" in err
+
+
+def test_main_loads_cohort_from_registry_when_repositories_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(ingest, "TEST_REGISTRY", ["stranske/template"])
+    monkeypatch.setattr(
+        ingest, "get_maint_68_repos", lambda fallback_allowed=True: ["stranske/Template"]
+    )
+    monkeypatch.setattr(
+        ingest,
+        "discover_artifact",
+        lambda **k: {
+            "artifact_id": 1,
+            "artifact_name": "consumer-sync-shadow-evidence-1-1",
+            "run_id": 1,
+            "run_attempt": 1,
+        },
+    )
+    monkeypatch.setattr(
+        ingest, "run_gh_bytes", lambda args: (_ for _ in ()).throw(RuntimeError("zip gone"))
+    )
+    # After cohort load (line 1602), zip download fails closed.
+    assert (
+        ingest.main(
+            [
+                "preview",
+                "--state-dir",
+                str(tmp_path / "s"),
+                "--now",
+                "100",
+            ]
+        )
+        == 1
+    )
+    assert "Error downloading artifact zip" in capsys.readouterr().err
