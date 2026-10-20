@@ -260,6 +260,21 @@ def test_safe_extract_size_and_absolute_path_guards(tmp_path: Path) -> None:
         ingest.safe_extract_zip(abs_buf.getvalue(), dest)
 
 
+def test_safe_extract_rejects_resolve_escape_via_dest_symlink(tmp_path: Path) -> None:
+    """Filename has no `..`, but a pre-existing dest symlink still escapes after resolve."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (dest / "escape").symlink_to(outside)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("escape/evil.txt", "x")
+    with pytest.raises(ValueError, match="Unsafe zip entry: escape/evil.txt"):
+        ingest.safe_extract_zip(buf.getvalue(), dest)
+    assert not (outside / "evil.txt").exists()
+
+
 def test_load_state_schema_guards(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     path.write_text(

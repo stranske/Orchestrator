@@ -130,7 +130,9 @@ def test_main_rejects_record_campaign_without_a_campaign_file():
 
 def test_offline_selftest_exercises_guarded_planner_without_a_dispatch(monkeypatch, tmp_path):
     """The module selftest is useful coverage only when its preview cannot launch anything."""
-    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    # HANDOFF unset → pop restore; exploration rate pre-set → assign restore (both CI gaps).
+    monkeypatch.delenv("HANDOFF_DIR", raising=False)
+    monkeypatch.setenv("ORCH_EXPLORATION_RATE", "0.25")
     monkeypatch.setattr(
         rollout.dispatcher,
         "run",
@@ -150,6 +152,8 @@ def test_offline_selftest_exercises_guarded_planner_without_a_dispatch(monkeypat
         },
     )
     rollout._selftest()
+    assert "HANDOFF_DIR" not in __import__("os").environ
+    assert __import__("os").environ.get("ORCH_EXPLORATION_RATE") == "0.25"
 
 
 def test_live_loader_and_rejected_claim_release_are_isolated(monkeypatch):
@@ -224,3 +228,234 @@ def test_main_returns_read_only_error_when_planning_fails(monkeypatch, capsys):
     )
     assert rollout.main(["--json"]) == 2
     assert json.loads(capsys.readouterr().out) == {"error": "nope", "read_only": True}
+
+
+def test_release_rejected_claims_swallows_release_errors(monkeypatch):
+    def boom(target, agent):  # noqa: ANN001
+        raise RuntimeError(f"claim store down for {target}/{agent}")
+
+    monkeypatch.setattr(rollout.claims, "release", boom)
+    # Must not raise: a failed release must not abort the rollout sanitize path.
+    rollout._release_rejected_claims(
+        [{"assignment": {"target": "o/r#1", "agent": "codex"}}, {"assignment": {}}]
+    )
+
+
+def test_build_rollout_rejects_campaign_combined_with_backlog_or_non_codemod():
+    campaign = {"campaign": {"id": "c1"}}
+    with pytest.raises(ValueError, match="cannot be combined"):
+        rollout.build_rollout(campaign=campaign, backlog_payload={"items": []})
+    with pytest.raises(ValueError, match="cannot be combined"):
+        rollout.build_rollout(campaign=campaign, cached_backlog=True)
+    with pytest.raises(ValueError, match="supports only codemod"):
+        rollout.build_rollout(campaign=campaign, task_types={"testgen"})
+
+
+def test_build_rollout_releases_rejected_claims_when_not_dry_run(monkeypatch):
+    released = []
+    monkeypatch.setattr(
+        rollout.claims, "release", lambda target, agent: released.append((target, agent))
+    )
+    monkeypatch.setattr(
+        rollout.router,
+        "plan",
+        lambda *_a, **_k: {
+            "assignments": [
+                {
+                    "target": "o/r#1",
+                    "task_type": "testgen",
+                    "lane": "opener",
+                    "agent": "codex",
+                },
+                {
+                    "target": "o/r#2",
+                    "task_type": "testgen",
+                    "lane": "closer",
+                    "agent": "codex",
+                },
+            ],
+            "notes": [],
+        },
+    )
+    monkeypatch.setattr(rollout, "_dispatch_preview", lambda decision: [])
+    report = rollout.build_rollout(
+        backlog_payload={
+            "items": [
+                {"target": "o/r#1", "task_type": "testgen", "lane": "opener"},
+                {"target": "o/r#2", "task_type": "testgen", "lane": "opener"},
+            ]
+        },
+        capacity_payload={},
+        max_dispatches=2,
+        dry_run=False,
+    )
+    assert released == [("o/r#2", "codex")]
+    assert any(d.get("reason") == "unsafe_assignment_rejected" for d in report["blocked_details"])
+    assert [a["target"] for a in report["decision"]["assignments"]] == ["o/r#1"]
+
+
+def test_main_selftest_skips_when_codex_profile_binary_absent(monkeypatch):
+    monkeypatch.setattr(
+        rollout.env_prereq,
+        "selftest_skipped",
+        lambda name, reason: True,
+    )
+    assert rollout.main(["--selftest"]) == 0
+
+
+def test_main_selftest_runs_when_prereq_present(monkeypatch):
+    ran = []
+    monkeypatch.setattr(
+        rollout.env_prereq,
+        "selftest_skipped",
+        lambda name, reason: False,
+    )
+    monkeypatch.setattr(rollout, "_selftest", lambda: ran.append("ok"))
+    assert rollout.main(["--selftest"]) == 0
+    assert ran == ["ok"]
+
+
+def test_build_rollout_campaign_attaches_prompts_and_capability(monkeypatch):
+    monkeypatch.setattr(
+        rollout.codemod_lane,
+        "campaign_backlog",
+        lambda campaign: {
+            "source": "campaign",
+            "program": {"repos": {"o/r": {}}},
+            "items": [
+                {
+                    "target": "o/r#1",
+                    "task_type": "codemod",
+                    "lane": "opener",
+                    "prompt": "do the codemod",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        rollout.router,
+        "plan",
+        lambda *_a, **_k: {
+            "assignments": [
+                {
+                    "target": "o/r#1",
+                    "task_type": "codemod",
+                    "lane": "opener",
+                    "agent": "codex",
+                    "capability_ids": ["prior"],
+                }
+            ],
+            "notes": [],
+        },
+    )
+    monkeypatch.setattr(rollout, "_dispatch_preview", lambda decision: [])
+    report = rollout.build_rollout(campaign={"campaign": {"id": "c1"}}, max_dispatches=1)
+    assignment = report["decision"]["assignments"][0]
+    assert assignment["prompt"] == "do the codemod"
+    assert assignment["capability_ids"] == ["prior", "codemod-campaign"]
+    assert report["campaign"] == {"repos": {"o/r": {}}}
+
+
+def test_main_apply_blocked_and_preview_human_paths(monkeypatch, capsys):
+    monkeypatch.setenv(rollout.ENV_FLAG, "1")
+    monkeypatch.setattr(
+        rollout,
+        "build_rollout",
+        lambda **_kwargs: {
+            "eligible": False,
+            "decision": {"assignments": []},
+            "counts": {"selected": 0, "assigned": 0, "dispatched": 0},
+            "blocked_reasons": ["max dispatch cap is zero"],
+        },
+    )
+    assert rollout.main(["--apply", "--confirm-rollout", "--json"]) == 0
+    blocked = json.loads(capsys.readouterr().out)
+    assert blocked["dispatch_result"] == {"count": 0, "blocked": True}
+
+    monkeypatch.setattr(
+        rollout,
+        "build_rollout",
+        lambda **_kwargs: {
+            "eligible": True,
+            "read_only": True,
+            "max_dispatches": 1,
+            "task_types": ["testgen"],
+            "decision": {"assignments": [{"target": "o/r#1"}]},
+            "counts": {"selected": 1, "assigned": 1, "dispatched": 0},
+            "blocked_reasons": [],
+            "blocked_details": [],
+            "guards": {},
+        },
+    )
+    assert rollout.main([]) == 0
+    assert "range_lane_rollout:" in capsys.readouterr().out
+
+
+def test_main_apply_records_campaign_dispatches(monkeypatch, tmp_path, capsys):
+    handoff = tmp_path / "handoff"
+    decision_path = handoff / "decision.json"
+    campaign_path = tmp_path / "campaign.json"
+    campaign_path.write_text('{"campaign": {"id": "c1"}}', encoding="utf-8")
+    program_path = tmp_path / "program.json"
+    written = []
+
+    monkeypatch.setenv(rollout.ENV_FLAG, "1")
+    monkeypatch.setattr(rollout.router, "HANDOFF", handoff)
+    monkeypatch.setattr(rollout.router, "DECISION_JSON", decision_path)
+    monkeypatch.setattr(
+        rollout.codemod_lane,
+        "parse_campaign_json",
+        lambda _text: {"campaign": {"id": "c1", "repos": ["o/r"]}},
+    )
+    monkeypatch.setattr(
+        rollout,
+        "build_rollout",
+        lambda **_kwargs: {
+            "eligible": True,
+            "decision": {
+                "assignments": [
+                    {
+                        "target": "o/r#9",
+                        "task_type": "codemod",
+                        "lane": "opener",
+                        "agent": "codex",
+                        "capability_ids": [],
+                    }
+                ]
+            },
+            "counts": {"selected": 1, "assigned": 1, "dispatched": 0},
+            "campaign": {"repos": {"o/r": {"target": "o/r#9"}}},
+        },
+    )
+    monkeypatch.setattr(rollout.capabilities, "production_heartbeat", lambda *a, **k: None)
+    monkeypatch.setattr(
+        rollout.dispatcher,
+        "run",
+        lambda decision, **kwargs: {
+            "launched": [{"target": "o/r#9", "agent": "codex"}],
+        },
+    )
+    monkeypatch.setattr(rollout.codemod_lane, "campaign_program_path", lambda _c: program_path)
+    monkeypatch.setattr(
+        rollout.codemod_lane,
+        "_write_program",
+        lambda path, payload: written.append((path, payload)),
+    )
+
+    assert (
+        rollout.main(
+            [
+                "--apply",
+                "--confirm-rollout",
+                "--record-campaign",
+                "--campaign",
+                str(campaign_path),
+                "--json",
+            ]
+        )
+        == 0
+    )
+    assert written and written[0][0] == program_path
+    repos = written[0][1]["repos"]
+    assert repos["o/r"]["dispatches"] == [{"target": "o/r#9", "agent": "codex"}]
+    assert json.loads(capsys.readouterr().out)["counts"]["dispatched"] == 1

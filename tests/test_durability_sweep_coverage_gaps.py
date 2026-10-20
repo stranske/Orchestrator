@@ -670,6 +670,80 @@ def test_post_merge_transcript_hash_mismatch_and_long_body(tmp_path, monkeypatch
         assert posted and "Full transcript retained" in posted[0]
 
 
+def test_post_merge_comment_path_hash_mismatch_after_receipt_ok(tmp_path, monkeypatch):
+    """Line 1329: receipt hash matched once, then the artifact changed before the comment body."""
+    monkeypatch.setenv("ORCH_RUN_RUNTIME_AC", "1")
+    monkeypatch.setenv("ORCH_RUNTIME_AC_REOPEN", "0")
+    root = tmp_path / "specs"
+    root.mkdir()
+    monkeypatch.setattr(backlog, "SUPPORTED_REPOS", ["owner/repo"])
+    sha = "d" * 40
+    target = "owner/repo#16"
+    issue = "owner/repo#18"
+    spec = {
+        "verification": {"target": target, "source_issue": issue},
+        "acceptance_criteria": [],
+    }
+    gate.spec_path(target, spec_dir=root).write_text(json.dumps(spec), encoding="utf-8")
+    identity = __import__("hashlib").sha256(f"{issue.lower()}@{sha}".encode()).hexdigest()
+    transcript = root / f"post-merge-{identity}.txt"
+    transcript.write_text("stable", encoding="utf-8")
+    good_hash = __import__("hashlib").sha256(b"stable").hexdigest()
+    event_id = f"event:post-merge-recheck:{identity}"
+    payload = {
+        "runtime_ac_post_merge": {
+            "result": "FAIL",
+            "issue": issue,
+            "merge_sha": sha,
+            "reopened": False,
+            "commented": False,
+            "delivery_complete": False,
+            "transcript_path": str(transcript),
+            "transcript_hash": good_hash,
+        }
+    }
+    feedback.record_completion_event(
+        f"runtime-ac-post-merge:{identity}",
+        event_type="verification",
+        phase="post_merge_recheck",
+        producer="runtime_ac_gate",
+        event_id=event_id,
+        status="completed",
+        payload=payload,
+    )
+
+    reads = {"n": 0}
+    real_read = type(transcript).read_bytes
+
+    def flaky_read(self):  # noqa: ANN001
+        if self == transcript:
+            reads["n"] += 1
+            if reads["n"] >= 2:
+                return b"tampered-after-receipt"
+            return b"stable"
+        return real_read(self)
+
+    monkeypatch.setattr(type(transcript), "read_bytes", flaky_read)
+
+    def gh(args, **_k):
+        if args[1:3] == ["pr", "view"]:
+            return {
+                "state": "MERGED",
+                "mergeCommit": {"oid": sha},
+                "closingIssuesReferences": [{"number": 18}],
+            }, None
+        if "--slurp" in args:
+            return [[]], None
+        raise AssertionError(args)
+
+    with patch.object(
+        sweep, "_merged_verifier_candidates", return_value={("owner/repo", 16): {"r"}}
+    ):
+        out = sweep._post_merge_rechecks(dry_run=False, gh=gh, now=NOW, spec_dir=root)
+        assert out["errors"] and "hash mismatch" in out["errors"][0]
+        assert reads["n"] >= 2
+
+
 def test_sweep_dry_run_stuck_truncated_and_unread(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     # Role run truncated durable with acting runs not selected → stuck.

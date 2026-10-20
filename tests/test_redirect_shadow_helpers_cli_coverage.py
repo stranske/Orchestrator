@@ -134,31 +134,70 @@ def test_outcome_for_run_handles_empty_id_db_error_and_row(
     assert out["durability"] == "durable"
 
 
-def test_historical_candidates_skips_non_dict_rows(tmp_path: Path) -> None:
-    keepalive = tmp_path / "k.jsonl"
-    keepalive.write_text(
-        "\n".join(
-            [
-                json.dumps(["not", "dict"]),
-                json.dumps(
-                    {
-                        "target": "owner/repo#x",
-                        "outcome": "needs_human",
-                        "keepalive_blunt": "needs-human",
-                        "shadow_action": "redirect",
-                        "signals_summary": {"failure_count": 3},
-                    }
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
+def test_historical_candidates_skips_non_dict_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `_iter_events` already drops non-dicts; the continue at the candidate loop is only
+    # reachable when a caller (or stub) hands the loop a non-dict row.
+    monkeypatch.setattr(
+        redirect_shadow,
+        "_iter_events",
+        lambda _path: [
+            ["not", "dict"],
+            {
+                "target": "owner/repo#x",
+                "outcome": "needs_human",
+                "keepalive_blunt": "needs-human",
+                "shadow_action": "redirect",
+                "signals_summary": {"failure_count": 3},
+            },
+        ],
     )
     result = redirect_shadow.historical_candidates_from_keepalive(
-        keepalive_corpus_path=keepalive, limit=5
+        keepalive_corpus_path=tmp_path / "unused.jsonl", limit=5
     )
     assert result["candidate_count"] == 1
     assert result["items"][0]["target"] == "owner/repo#x"
+
+
+def test_main_falls_through_when_cmd_is_unhandled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The final `return 0` is the unknown-subcommand guard after the known handlers."""
+
+    class _Args:
+        cmd = "not-a-real-command"
+
+    monkeypatch.setattr(
+        "argparse.ArgumentParser.parse_args",
+        lambda self, argv=None: _Args(),
+    )
+    assert redirect_shadow.main(["summarize"]) == 0
+
+
+def test_historical_candidates_counts_missing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        redirect_shadow,
+        "_iter_events",
+        lambda _path: [
+            {
+                "outcome": "needs_human",
+                "keepalive_blunt": "needs-human",
+                "shadow_action": "redirect",
+                "signals_summary": {"failure_count": 3},
+            },
+            {
+                "target": "owner/repo#ok",
+                "outcome": "needs_human",
+                "keepalive_blunt": "needs-human",
+                "shadow_action": "redirect",
+                "signals_summary": {"failure_count": 3},
+            },
+        ],
+    )
+    result = redirect_shadow.historical_candidates_from_keepalive(limit=5)
+    assert result["missing_target_rows"] == 1
+    assert result["candidate_count"] == 1
 
 
 def test_historical_report_state_and_outcome_branches(monkeypatch: pytest.MonkeyPatch) -> None:
