@@ -117,6 +117,15 @@ class Campaign:
             raise IncompatibleState(
                 f"record schema {version} is newer than supported {self.supported_schema}"
             )
+        worker_config = doc.get("worker_config") or {}
+        frontier = worker_config.get("finite_frontier")
+        if frontier is not None:
+            try:
+                from closer_frontier_policy import validate_frontier
+
+                validate_frontier(frontier, targets=doc.get("assignment_targets"))
+            except (TypeError, ValueError) as exc:
+                raise CampaignError(f"finite frontier record is invalid: {exc}") from exc
         return doc
 
     def _write_unlocked(self, doc: dict[str, Any]) -> None:
@@ -179,6 +188,15 @@ class Campaign:
         if mode not in GRANULARITIES:
             raise ValueError(f"unsupported work-unit granularity {mode!r}")
         assignment_targets = list(targets)
+        frontier = worker_config.get("finite_frontier")
+        if frontier is not None:
+            try:
+                from closer_frontier_policy import validate_frontier
+
+                frontier = validate_frontier(frontier, targets=assignment_targets)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"finite frontier does not match campaign targets: {exc}") from exc
+            worker_config["finite_frontier"] = frontier
         if mode == "round":  # one whole-round owner; the dispatcher gives its own parallelism
             targets = [ROUND_UNIT]
             max_workers = 1
@@ -209,6 +227,15 @@ class Campaign:
                 if current["release_pin"] != release_pin:
                     raise CampaignError(
                         "campaign is pinned to a different release; reconcile first"
+                    )
+                current_frontier = (current.get("worker_config") or {}).get("finite_frontier")
+                if current_frontier != frontier:
+                    raise CampaignError(
+                        "campaign finite frontier is immutable; reconcile or use a new campaign"
+                    )
+                if frontier is not None and current.get("assignment_targets") != assignment_targets:
+                    raise CampaignError(
+                        "campaign finite frontier targets changed; use a new campaign"
                     )
                 return current
             fresh["revision"] = 1
@@ -391,13 +418,26 @@ def reconcile(
                     ):
                         outcome = "unknown"
                 worker.update(state="terminal", outcome=outcome, detail=result.get("detail"))
-                doc["targets"][worker["target"]] = {
-                    "ok": "done",
-                    "unknown": "reconcile",
-                    "unavailable": "pending",
-                    "scoped_continuation": "pending",
-                    "denied": "denied",
-                }[outcome]
+                if (doc.get("worker_config") or {}).get("finite_frontier") is not None:
+                    # A finite descriptor authorizes one attempt per target. Even
+                    # pre-effect unavailability requires explicit new authority;
+                    # it never becomes an automatic campaign retry.
+                    target_state = {
+                        "ok": "done",
+                        "unknown": "reconcile",
+                        "unavailable": "reconcile",
+                        "scoped_continuation": "reconcile",
+                        "denied": "denied",
+                    }[outcome]
+                else:
+                    target_state = {
+                        "ok": "done",
+                        "unknown": "reconcile",
+                        "unavailable": "pending",
+                        "scoped_continuation": "pending",
+                        "denied": "denied",
+                    }[outcome]
+                doc["targets"][worker["target"]] = target_state
                 if outcome == "denied":
                     worker["state"] = "denied"
                     doc["hold"] = {
@@ -574,9 +614,8 @@ def select_route(
             for key in known
         },
     }
-    learned = (
-        router.learned_ranks().get("closer_interpret") if hasattr(router, "learned_ranks") else None
-    )
+    learned_ranks = router.learned_ranks() if hasattr(router, "learned_ranks") else None
+    learned = learned_ranks.get("closer_interpret") if learned_ranks is not None else None
     pick = router.select_agent(
         "closer_interpret",
         qualified,
@@ -1191,18 +1230,43 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         cfg["assignment"],
         "--state",
         cfg["dispatch_state"],
-        "--budget-seconds",
-        str(
-            int(
-                cfg.get("dispatch_budget_seconds", cfg.get("budget_seconds", 600))
-                if cfg.get("mechanism") == "native-handoff/v1"
-                and cfg.get("native_admission") is not None
-                else cfg.get("budget_seconds", 600)
-            )
-        ),
         "--max-workers",
         str(min(MAX_WORKERS_CAP, max(1, int(cfg.get("dispatch_workers", 1))))),
     ]
+    finite_frontier = cfg.get("finite_frontier")
+    if finite_frontier is not None:
+        from closer_frontier_policy import request_window, validate_frontier
+
+        try:
+            finite_frontier = validate_frontier(finite_frontier)
+            request_timeout = cfg.get("request_timeout_seconds")
+            request_window(time.time(), request_timeout)
+        except (TypeError, ValueError) as exc:
+            raise CampaignError(f"invalid finite frontier dispatcher binding: {exc}") from exc
+        if cfg.get("execution_policy") != "finite-frontier/v2":
+            raise CampaignError("finite frontier dispatcher requires its explicit execution policy")
+        command.extend(
+            [
+                "--finite-frontier-json",
+                json.dumps(finite_frontier, sort_keys=True, separators=(",", ":")),
+                "--request-timeout-seconds",
+                str(request_timeout),
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--budget-seconds",
+                str(
+                    int(
+                        cfg.get("dispatch_budget_seconds", cfg.get("budget_seconds", 600))
+                        if cfg.get("mechanism") == "native-handoff/v1"
+                        and cfg.get("native_admission") is not None
+                        else cfg.get("budget_seconds", 600)
+                    )
+                ),
+            ]
+        )
     workspace_pin = cfg.get("workspaces")
     if workspace_pin is not None:
         if not isinstance(workspace_pin, dict) or set(workspace_pin) != {"path", "sha256"}:

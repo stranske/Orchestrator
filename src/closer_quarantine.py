@@ -118,6 +118,31 @@ def current_workspace_keys(target, keys, bindings):
     return {"worktree:" + historical[name] for name in names if name in historical}
 
 
+def _live_finite_lease(lease, target, held, sampled_at):
+    """Only a held exact lease can authorize a new finite shard's live rows."""
+    from closer_frontier_policy import validate_frontier
+
+    try:
+        frontier = validate_frontier(lease.get("finite_frontier"))
+        return (
+            held is True
+            and lease.get("authority") == "held-owner-epoch-lock/v1"
+            and "expires_at" not in lease
+            and frontier == lease.get("finite_frontier")
+            and _target(lease.get("target")) == target
+            and target in {_target(t) for t in frontier["targets"]}
+            and isinstance(lease.get("owner"), str)
+            and bool(lease["owner"])
+            and type(lease.get("epoch")) is int
+            and lease["epoch"] > 0
+            and type(lease.get("acquired_at")) in {int, float}
+            and math.isfinite(lease["acquired_at"])
+            and lease["acquired_at"] <= sampled_at
+        )
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def resource_overlap(left, right):
     if left == right:
         return True
@@ -601,6 +626,10 @@ class _Census:
                 reason = self.row_problem(self.path, run_id, target, row, doc)
                 if reason:
                     self.quarantine(target, row, self.path, run_id, reason)
+        from closer_resources import finite_unresolved
+
+        for target, reason in finite_unresolved(doc).items():
+            self.quarantine(target, None, self.path, "finite", reason)
 
     def row_problem(self, source, run_id, target, row, doc=None):
         problem = _row_problem(row)
@@ -858,6 +887,7 @@ class _Census:
                     else:
                         fcntl.flock(stream, fcntl.LOCK_UN)
             self.sources[str(lock) + ":held"] = str(held)
+            finite_live = _live_finite_lease(lease, target, held, time.time())
             try:
                 doc = self.read(source)
                 if self.sources.get(str(source)) is None:
@@ -873,7 +903,7 @@ class _Census:
                         )
                         and lease["acquired_at"] <= time.time() <= lease["expires_at"]
                     )
-                    if not first_lease:
+                    if not first_lease and not (finite_live and lease["epoch"] == 1):
                         self.quarantine(target, None, source, "shard", "missing_shard_state")
                     continue
                 if (
@@ -921,6 +951,48 @@ class _Census:
                             reason := self.row_problem(source, run_id, name, row, doc)
                         ):
                             self.quarantine(name, row, source, run_id, "shard_" + reason)
+                # New explicit frontiers coexist with every historical run. An
+                # interrupted/mismatched finite owner never inherits live status.
+                frontiers = doc.get("frontiers", {})
+                if not isinstance(frontiers, dict):
+                    raise ValueError("malformed_finite_frontiers")
+                for frontier_id, entry in frontiers.items():
+                    from closer_frontier_policy import validate_frontier
+                    from closer_resources import finite_unresolved
+
+                    descriptor = validate_frontier(entry.get("finite_frontier"))
+                    items = entry.get("items")
+                    if (
+                        entry.get("schema") != "closer-pipeline-frontier/v2"
+                        or descriptor["frontier_id"] != frontier_id
+                        or not isinstance(items, dict)
+                        or len(items) != 1
+                        or {_target(name) for name in items} != {target}
+                    ):
+                        raise ValueError("malformed_finite_shard")
+                    unresolved = finite_unresolved({"frontiers": {frontier_id: entry}})
+                    for name, row in items.items():
+                        if canonical_target(name) != target or not isinstance(row, dict):
+                            raise ValueError("finite_shard_target_mismatch")
+                        active = (
+                            finite_live
+                            and descriptor == lease.get("finite_frontier")
+                            and row.get("scope_lease")
+                            == {"target": target, "owner": lease["owner"], "epoch": lease["epoch"]}
+                            and type(row.get("last_scheduled")) in {int, float}
+                            and math.isfinite(row["last_scheduled"])
+                            and lease["acquired_at"] <= row["last_scheduled"] <= time.time()
+                            and row.get("status") in {"pending", "running"}
+                            and row.get("stage_status") != "unknown"
+                            and row.get("recovery_barrier") is None
+                            and row.get("provider_outcome_uncertain") in (None, False)
+                        )
+                        if active:
+                            continue
+                        if target in unresolved:
+                            self.quarantine(
+                                name, row, source, entry.get("run_id"), "finite_frontier_unresolved"
+                            )
             except (ValueError, TypeError, KeyError, AttributeError):
                 # The lease target and directory hash were checked independently.
                 # A bad state/history cannot expand that known owner into all repos.

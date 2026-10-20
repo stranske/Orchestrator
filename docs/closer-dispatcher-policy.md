@@ -196,3 +196,37 @@ cannot produce a valid stop. `native_cleanup_performed` remains false: the recei
 is a handoff seam, not evidence of installed cleanup. Historical uncertain intents
 remain held until a separately verified, resource/head-bound reconciliation exists;
 this integration exposes no clearing shortcut.
+
+## Explicit finite frontiers
+
+New work may opt into `finite-frontier/v2` with an immutable selected target set.
+This policy removes aggregate elapsed-work admission and round cutoffs only for
+that new frontier. Existing rounds retain their original deadlines, stop verdicts,
+claims and uncertainty barriers; selecting the same target again does not authorize
+replaying an interrupted operation.
+
+Build the descriptor with `closer_frontier_policy.make_frontier_from_observations`
+from the already-produced, eligible normalized source observations. It binds an
+explicit owner and frontier ID, ordered target identities, and each target's exact
+source revision and action/operation fingerprint. Canonical duplicate targets,
+assignment growth, changed bindings and unselected work are rejected. Do not invent
+replacement action fingerprints to make old work eligible.
+
+Pass the serialized descriptor as `--finite-frontier-json` and an individual
+request timeout as `--request-timeout-seconds` to the staged dispatcher. This mode
+requires `--pipeline --coordinator-mode resource_scoped`, the complete coordinator
+contract pin above, and the usual authorization and worker options. It rejects
+`--budget-seconds`; legacy callers retain their existing aggregate budget behavior.
+The campaign forwards the exact descriptor and request timeout to its dispatcher.
+Native admission additionally requires the matching versioned capacity and
+invocation proofs; proof freshness is separate from the frontier's work duration.
+
+Each request retains its original finite timeout, at most 120 seconds. Quota,
+cost, rate, profile capacity, concurrency, pause, cancellation, exact ownership and
+resource-conflict checks still gate admission. The supported production callback
+factory is required; this policy does not promise cancellation of arbitrary Python
+callbacks. Each selected operation is attempted once and reaches completed, held,
+paused, cancelled or capacity-blocked state. A changed source binding returns to a
+hold rather than growing the frontier. Interrupted or uncertain provider/action
+work remains durably fenced across restart and cannot become a fresh pending
+attempt merely because time has passed.

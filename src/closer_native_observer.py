@@ -119,16 +119,41 @@ def capacity_contract(manifest):
     value = (manifest.get("mechanism_contract") or {}).get("capacity_publication")
     if value is None:
         return None
-    if not isinstance(value, dict) or value.get("schema") != "native-scoped-capacity/v1":
+    if not isinstance(value, dict) or value.get("schema") not in {
+        "native-scoped-capacity/v1",
+        "native-scoped-capacity/v2",
+    }:
         raise mechanisms.MechanismError("native capacity publication contract missing")
-    seconds = value.get("admission_seconds")
+    if value["schema"] == "native-scoped-capacity/v2":
+        from closer_frontier_policy import POLICY, request_window
+
+        if value.get("execution_policy") != POLICY or "admission_seconds" in value:
+            raise mechanisms.MechanismError("native finite frontier policy must be explicit")
+        try:
+            request_window(0, value.get("request_timeout_seconds"))
+            if value["request_timeout_seconds"] > 120:
+                raise ValueError("native request timeout exceeds supported 120 seconds")
+        except (ValueError, TypeError) as exc:
+            raise mechanisms.MechanismError("native finite request timeout invalid") from exc
+        seconds = value.get("freshness_seconds")
+    else:
+        if any(
+            key in value
+            for key in ("execution_policy", "request_timeout_seconds", "freshness_seconds")
+        ):
+            raise mechanisms.MechanismError(
+                "legacy native capacity cannot infer finite frontier policy"
+            )
+        seconds = value.get("admission_seconds")
     if (
         isinstance(seconds, bool)
         or not isinstance(seconds, (int, float))
         or not math.isfinite(seconds)
         or not 1 <= seconds <= 900
     ):
-        raise mechanisms.MechanismError("native admission window must be bounded by 900 seconds")
+        raise mechanisms.MechanismError(
+            "native admission/freshness window must be bounded by 900 seconds"
+        )
     if not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", str(value.get("owner", ""))):
         raise mechanisms.MechanismError("native capacity publication owner missing")
     if type(value.get("continue_on_assignment_change", False)) is not bool:
@@ -272,6 +297,22 @@ def publish_admission(manifest, manifest_path, state_path, doc):
             "sha256": pin["sha256"],
             "source_path": str(source),
         }
+    finite = policy["schema"] == "native-scoped-capacity/v2"
+    frontier = None
+    if finite:
+        from closer_frontier_policy import validate_frontier
+
+        frontier = validate_frontier(cfg.get("finite_frontier"), targets=targets)
+        if (
+            frontier != cfg.get("finite_frontier")
+            or frontier["owner"] != doc["owner"]
+            or cfg.get("request_timeout_seconds") != policy["request_timeout_seconds"]
+            or invocation.get("execution_policy") != frontier["schema"]
+            or "original_deadline" in invocation
+        ):
+            raise mechanisms.MechanismError("native finite frontier differs from admitted campaign")
+    elif cfg.get("finite_frontier") is not None:
+        raise mechanisms.MechanismError("finite frontier requires explicit native v2 publication")
     # The producer's public API reserves the global capacity.json basename.
     report_path = directory / "scoped-capacity.json"
     producer_cfg = {
@@ -279,7 +320,10 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         "owner": policy["owner"],
         "profile_ids": policy["profile_ids"],
         "bounded_trial_agents": policy["bounded_trial_agents"],
-        "original_deadline": invocation["original_deadline"],
+        # This report window limits evidence freshness, never frontier work duration.
+        "original_deadline": (
+            time.time() + policy["freshness_seconds"] if finite else invocation["original_deadline"]
+        ),
         "runtime_manifest": str(Path(manifest_path).resolve()),
         "runtime_manifest_sha256": _hash(Path(manifest_path).resolve()),
     }
@@ -287,10 +331,9 @@ def publish_admission(manifest, manifest_path, state_path, doc):
     if not scoped.validate_report(report, now=time.time()):
         raise mechanisms.MechanismError("native scoped capacity readback is not current")
     context = {
-        "schema": "native-invocation-admission/v1",
+        "schema": "native-invocation-admission/v2" if finite else "native-invocation-admission/v1",
         "nonce": nonce,
         "started_at": invocation["started_at"],
-        "original_deadline": invocation["original_deadline"],
         "campaign": _campaign_identity(state_path, doc),
         "assignment": {
             "path": str(assignment),
@@ -303,6 +346,11 @@ def publish_admission(manifest, manifest_path, state_path, doc):
     }
     if workspace_config is not None:
         context["workspace_config"] = workspace_config
+    if finite:
+        context["finite_frontier"] = frontier
+        context["request_timeout_seconds"] = policy["request_timeout_seconds"]
+    else:
+        context["original_deadline"] = invocation["original_deadline"]
     path = directory / "admission.json"
     if path.exists() or path.is_symlink():
         raise mechanisms.MechanismError("native admission already exists; no replacement")
@@ -339,18 +387,39 @@ def validate_admission(manifest, context, *, for_effects):
         or not hmac.compare_digest(
             signed["signature"], mechanisms._signature(signed["record"], mechanisms._key(root))
         )
-        or context.get("schema") != "native-invocation-admission/v1"
+        or context.get("schema")
+        != (
+            "native-invocation-admission/v2"
+            if policy["schema"] == "native-scoped-capacity/v2"
+            else "native-invocation-admission/v1"
+        )
     ):
         raise mechanisms.MechanismError("native admission signature/binding differs")
     start, deadline = context.get("started_at"), context.get("original_deadline")
-    if (
-        isinstance(start, bool)
-        or not isinstance(start, (int, float))
-        or not math.isfinite(start)
-        or isinstance(deadline, bool)
+    finite = policy["schema"] == "native-scoped-capacity/v2"
+    if isinstance(start, bool) or not isinstance(start, (int, float)) or not math.isfinite(start):
+        raise mechanisms.MechanismError("native admission start invalid")
+    if finite:
+        from closer_dispatcher import targets_from_assignment
+        from closer_frontier_policy import validate_frontier
+
+        frontier = validate_frontier(
+            context.get("finite_frontier"),
+            targets=targets_from_assignment(Path(context["assignment"]["path"])),
+        )
+        if (
+            frontier != context.get("finite_frontier")
+            or frontier["owner"] != context["campaign"]["owner"]
+            or context.get("request_timeout_seconds") != policy["request_timeout_seconds"]
+            or "original_deadline" in context
+        ):
+            raise mechanisms.MechanismError("native signed finite frontier differs")
+    elif (
+        isinstance(deadline, bool)
         or not isinstance(deadline, (int, float))
         or not math.isfinite(deadline)
         or deadline != start + policy["admission_seconds"]
+        or "finite_frontier" in context
     ):
         raise mechanisms.MechanismError("native original admission deadline differs")
     source = (
@@ -384,7 +453,7 @@ def validate_admission(manifest, context, *, for_effects):
     ):
         raise mechanisms.MechanismError("native admission manifest bytes differ")
     if for_effects and (
-        not time.time() < deadline
+        (not finite and not time.time() < deadline)
         or not scoped.validate_report(_read(directory / "scoped-capacity.json"), now=time.time())
     ):
         raise mechanisms.MechanismError("native admission expired or operational inputs changed")
@@ -413,18 +482,36 @@ def admission_config(manifest, cfg, context, *, for_effects=True):
         result.pop("workspaces", None)
     result["assignment"] = context["assignment"]["path"]
     result["capacity_json"] = result["capacity_report"] = context["report"]["path"]
-    result["original_deadline"] = context["original_deadline"]
-    remaining = (
-        context["original_deadline"] - time.time()
-        if for_effects
-        else context["original_deadline"] - context["started_at"]
-    )
-    reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
-    inner = math.floor(remaining - reserve - 300 - 15)
-    if for_effects and inner <= 0:
-        raise mechanisms.MechanismError("native original admission has no B/C/inner receipt budget")
-    result["budget_seconds"] = remaining
-    result["dispatch_budget_seconds"] = inner
+    if context["schema"] == "native-invocation-admission/v2":
+        if (
+            cfg.get("finite_frontier") != context["finite_frontier"]
+            or cfg.get("request_timeout_seconds") != context["request_timeout_seconds"]
+        ):
+            raise mechanisms.MechanismError(
+                "native worker finite frontier differs from signed admission"
+            )
+        for key in ("original_deadline", "budget_seconds", "dispatch_budget_seconds"):
+            result.pop(key, None)
+        result["finite_frontier"] = copy.deepcopy(context["finite_frontier"])
+        result["request_timeout_seconds"] = context["request_timeout_seconds"]
+        result["execution_policy"] = context["finite_frontier"]["schema"]
+    else:
+        if cfg.get("finite_frontier") is not None:
+            raise mechanisms.MechanismError("legacy admission cannot authorize finite frontier")
+        result["original_deadline"] = context["original_deadline"]
+        remaining = (
+            context["original_deadline"] - time.time()
+            if for_effects
+            else context["original_deadline"] - context["started_at"]
+        )
+        reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
+        inner = math.floor(remaining - reserve - 300 - 15)
+        if for_effects and inner <= 0:
+            raise mechanisms.MechanismError(
+                "native original admission has no B/C/inner receipt budget"
+            )
+        result["budget_seconds"] = remaining
+        result["dispatch_budget_seconds"] = inner
     result["native_hooks"]["postrun_dependencies"]["assignment"] = {
         key: context["assignment"][key] for key in ("path", "sha256")
     }
@@ -482,6 +569,8 @@ def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=Fal
     """
     try:
         context = validate_admission(manifest, cfg["native_admission"], for_effects=False)
+        if context.get("schema") != "native-invocation-admission/v1":
+            return None  # no legacy deadline proof can authorize a new frontier
         fields = cfg["native_worker"]
         result = Path(fields["result"])
         worker_id = result.stem
@@ -688,6 +777,12 @@ def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
         if candidate.get("receipt_sha256", digest) != digest:
             return None
         aggregate = json.loads(raw)
+        frontier = context.get("finite_frontier")
+        if (
+            aggregate.get("finite_frontier") != frontier
+            or candidate.get("finite_frontier") != frontier
+        ):
+            return None
         targets = targets_from_assignment(Path(cfg["assignment"]))
         verdict = closer_resources.validate_stop(state, round_id, targets)
         if (
@@ -702,7 +797,12 @@ def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
         row_hashes = {}
         for target, run_id in verdict["run_ids"].items():
             shard = closer_resources.shard_dir(root, target) / "state.json"
-            row = closer_pipeline._load(shard)["runs"][run_id]["targets"][target]
+            shard_doc = closer_pipeline._load(shard)
+            row = (
+                shard_doc["runs"][run_id]["targets"][target]
+                if frontier is None
+                else shard_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+            )
             if aggregate["targets"][target] != row or aggregate["run_ids"][target] != run_id:
                 return None
             row_hashes[target] = mechanisms.digest(row)
@@ -726,6 +826,8 @@ def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
             "boundary_global_stop_valid": True,
             "accepted": False,
         }
+        if frontier is not None:
+            proof["finite_frontier"] = frontier
         directory = contract(manifest)[3]
         boundary = directory / context["nonce"] / ("completed-round-" + round_id + ".json")
         record = {"binding": binding(manifest), "proof": proof}
@@ -753,7 +855,11 @@ def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
 def rearm_on_assignment_change(campaign, doc, manifest):
     """Standing mode only: a different assignment may follow a proven completed round."""
     policy = capacity_contract(manifest)
-    if not policy or policy.get("continue_on_assignment_change") is not True:
+    if (
+        not policy
+        or policy.get("schema") == "native-scoped-capacity/v2"
+        or policy.get("continue_on_assignment_change") is not True
+    ):
         return doc
     if (
         doc.get("phase") != "work"
@@ -1319,7 +1425,13 @@ def _native_entry(manifest, manifest_path, campaign_root):
                     _CURRENT_ADMISSION[str(root)] = {
                         "nonce": nonce,
                         "started_at": started,
-                        "original_deadline": started + capacity_policy["admission_seconds"],
+                        **(
+                            {"execution_policy": "finite-frontier/v2"}
+                            if capacity_policy["schema"] == "native-scoped-capacity/v2"
+                            else {
+                                "original_deadline": started + capacity_policy["admission_seconds"]
+                            }
+                        ),
                     }
                 try:
                     result = tick(campaign_root, str(manifest_path), mechanism=mechanisms.NATIVE)

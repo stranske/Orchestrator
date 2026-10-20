@@ -1,10 +1,30 @@
+import fcntl
 import json
+import multiprocessing
 import threading
 import time
 
 import pytest
 
 import closer_queue
+
+
+def _frontier(targets, *, frontier_id, actions):
+    from closer_frontier_policy import action_identity, make_frontier
+
+    bindings = {
+        target: {
+            "revision": "r1",
+            "action_id": action_identity(
+                target,
+                "r1",
+                actions[target],
+                {"pr_target": target, "source_targets": []},
+            ),
+        }
+        for target in targets
+    }
+    return make_frontier(targets, owner="runner-a", frontier_id=frontier_id, bindings=bindings)
 
 
 def _snapshot(
@@ -46,6 +66,13 @@ def _run(path, targets, observe, execute, **kwargs):
         min_action_seconds=0,
         **kwargs,
     )
+
+
+def _hold_queue_lock(path, ready, hold_seconds):
+    with open(str(path) + ".lock", "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        ready.set()
+        time.sleep(hold_seconds)
 
 
 @pytest.mark.parametrize("pair", [("collect_evidence", "review"), ("repair", "merge")])
@@ -96,6 +123,314 @@ def test_waiting_target_does_not_block_another_target(tmp_path):
     assert receipt["eligible_remaining"] == []
     assert receipt["valid"]
     assert receipt["accounting"][0]["next_trigger"] == "check conclusion"
+
+
+def test_finite_frontier_has_no_aggregate_clock_but_each_request_is_bounded(tmp_path):
+    path = tmp_path / "finite-frontier.json"
+    targets = ["acme/repo#1", "acme/repo#2"]
+    phase = {target: "collect_evidence" for target in targets}
+    time_value = [1000.0]
+    windows = []
+
+    def observe(target):
+        return {
+            **_snapshot("r1", phase[target], eligible=phase[target] != "complete"),
+            "target": target,
+            "operation_binding": {"pr_target": target, "source_targets": []},
+            "claim_targets": [target],
+            "repo_keys": [target.split("#", 1)[0]],
+        }
+
+    def execute(_target, _action, _snapshot, operation):
+        windows.append((operation["request_started_at"], operation["deadline"]))
+        assert operation["deadline"] - operation["request_started_at"] == 10.0
+        # The second selected target gets its own bounded window after a long
+        # elapsed interval; the finite target set remains unchanged.
+        time_value[0] += 1_000_000.0
+        phase[_target] = "complete"
+        return {"status": "completed", "advanced": True}
+
+    frontier = _frontier(
+        targets,
+        frontier_id="frontier-1",
+        actions={target: "collect_evidence" for target in targets},
+    )
+    receipt = closer_queue.run_round(
+        path,
+        targets,
+        observe,
+        execute,
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_workers=1,
+        max_passes=1,
+        max_operation_retries=0,
+        min_action_seconds=0,
+        now=lambda: time_value[0],
+        claim_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+        release_fn=lambda *_: True,
+        finite_frontier=frontier,
+        request_timeout_seconds=10,
+    )
+
+    assert len(windows) == 2
+    assert windows[1][0] - windows[0][0] == 1_000_000.0
+    assert receipt["valid"] and receipt["stop_valid"]
+    assert "deadline" not in receipt
+    state = closer_queue._read_state(path)["frontiers"]["frontier-1"]
+    assert "deadline" not in state["round"]
+    assert state["round"]["passes"] == 2  # configured max_passes=1 is legacy-only
+    assert state["round"]["finite_frontier"] == frontier
+
+
+def test_finite_frontier_observation_must_match_frozen_revision_and_action(tmp_path):
+    target = "acme/repo#binding"
+    frontier = _frontier([target], frontier_id="frontier-binding", actions={target: "merge"})
+    calls = []
+    observation = {
+        **_snapshot("r2", "merge"),
+        "target": target,
+        "operation_binding": {"pr_target": target, "source_targets": []},
+        "claim_targets": [target],
+        "repo_keys": ["acme/repo"],
+    }
+    closer_queue.run_round(
+        tmp_path / "queue-binding.json",
+        [target],
+        lambda _target: observation,
+        lambda *_args, **_kwargs: calls.append("execute"),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    assert calls == []
+    row = closer_queue._read_state(tmp_path / "queue-binding.json")["frontiers"][
+        "frontier-binding"
+    ]["items"][target]
+    assert row["status"] == "deferred"
+    assert row["frontier_identity_mismatch"]["expected"]["revision"] == "r1"
+    assert row["frontier_identity_mismatch"]["observed_revision"] == "r2"
+
+
+def test_finite_frontier_does_not_progress_to_a_new_action_after_effect(tmp_path):
+    target = "acme/repo#phase"
+    frontier = _frontier(
+        [target], frontier_id="frontier-phase", actions={target: "collect_evidence"}
+    )
+    action = ["collect_evidence"]
+    calls = []
+
+    def observe(_target):
+        return {
+            **_snapshot("r1", action[0]),
+            "target": target,
+            "operation_binding": {"pr_target": target, "source_targets": []},
+            "claim_targets": [target],
+            "repo_keys": ["acme/repo"],
+        }
+
+    def execute(*_args):
+        calls.append(action[0])
+        action[0] = "review"
+        return {"status": "completed", "advanced": True}
+
+    closer_queue.run_round(
+        tmp_path / "queue-phase.json",
+        [target],
+        observe,
+        execute,
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_passes=4,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    assert calls == ["collect_evidence"]
+
+
+def test_finite_queue_lock_wait_is_bounded_by_request_timeout(tmp_path):
+    target = "acme/repo#queue-lock"
+    frontier = _frontier([target], frontier_id="frontier-lock", actions={target: "merge"})
+    path = tmp_path / "queue-lock.json"
+    ready = multiprocessing.Event()
+    holder = multiprocessing.Process(target=_hold_queue_lock, args=(path, ready, 0.4))
+    holder.start()
+    assert ready.wait(timeout=2)
+    calls = []
+    started = time.monotonic()
+    receipt = closer_queue.run_round(
+        path,
+        [target],
+        lambda *_: calls.append("observe") or _snapshot("r1", "merge"),
+        lambda *_: calls.append("execute"),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=0.05,
+    )
+    elapsed = time.monotonic() - started
+    holder.join(timeout=2)
+    assert holder.exitcode == 0
+    assert elapsed < 0.25
+    assert calls == []
+    assert receipt["valid"] is False
+    assert "ledger_lock_busy" in receipt["reasons"]
+
+
+def test_finite_frontier_uses_same_ledger_file_without_touching_legacy_unknowns(tmp_path):
+    import json
+
+    path = tmp_path / "shared-ledger.json"
+    legacy = {
+        "schema": closer_queue.SCHEMA,
+        "items": {"acme/old#9": {"operation": {"status": "uncertain", "id": "old-op"}}},
+        "round": {"status": "finished", "deadline": 1234.0, "receipt": {"unknown": True}},
+    }
+    path.write_text(json.dumps(legacy))
+    target = "acme/new#1"
+    frontier = _frontier([target], frontier_id="frontier-isolated", actions={target: "complete"})
+    receipt = closer_queue.run_round(
+        path,
+        [target],
+        lambda _target: _snapshot("r1", "complete", eligible=False),
+        lambda *_: {},
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+    )
+
+    stored = closer_queue._read_state(path)
+    assert stored["items"] == legacy["items"]
+    assert stored["round"] == legacy["round"]
+    assert stored["frontiers"]["frontier-isolated"]["policy"] == frontier
+    assert receipt["valid"]
+    assert closer_queue.validate_stop(path, [target], frontier_id="frontier-isolated")["valid"]
+
+
+def test_finite_frontier_rejects_deadline_or_retry_policy(tmp_path):
+    target = "acme/repo#1"
+    frontier = _frontier([target], frontier_id="frontier-1", actions={target: "complete"})
+    with pytest.raises(ValueError, match="no aggregate deadline"):
+        closer_queue.run_round(
+            tmp_path / "finite.json",
+            ["acme/repo#1"],
+            lambda target: _snapshot("r1", "complete", eligible=False),
+            lambda *_: {},
+            owner="runner-a",
+            deadline=1_000.0,
+            receipt_reserve_seconds=0,
+            finite_frontier=frontier,
+            frontier_target=target,
+            max_operation_retries=0,
+        )
+
+
+def test_finite_frontier_restart_never_replays_unknown_effect(tmp_path):
+    path = tmp_path / "finite-unknown.json"
+    target = "acme/repo#1"
+    frontier = _frontier([target], frontier_id="frontier-1", actions={target: "merge"})
+    calls = []
+
+    def observe(_target):
+        return _snapshot("r1", "merge")
+
+    def execute(*_args):
+        calls.append("effect")
+        raise TimeoutError("transport ended after submission")
+
+    options = dict(
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_workers=1,
+        max_passes=2,
+        max_operation_retries=0,
+        min_action_seconds=0,
+        claim_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+        release_fn=lambda *_: True,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    first = closer_queue.run_round(path, [target], observe, execute, **options)
+    second = closer_queue.run_round(path, [target], observe, execute, **options)
+
+    assert calls == ["effect"]
+    assert first["valid"] is False
+    assert second["valid"] is False
+    assert closer_queue._read_state(path)["frontiers"]["frontier-1"]["items"][target]["operation"][
+        "status"
+    ] in {
+        "uncertain",
+        "unknown",
+    }
+    with pytest.raises(ValueError, match="does not retry"):
+        closer_queue.run_round(
+            tmp_path / "finite.json",
+            ["acme/repo#1"],
+            lambda target: _snapshot("r1", "complete", eligible=False),
+            lambda *_: {},
+            owner="runner-a",
+            deadline=None,
+            receipt_reserve_seconds=0,
+            finite_frontier=frontier,
+            max_operation_retries=1,
+        )
+
+
+def test_finite_frontier_rejects_foreign_ledger_items_before_reconcile(tmp_path):
+    target = "acme/repo#selected"
+    foreign = "acme/repo#foreign"
+    frontier = _frontier([target], frontier_id="frontier-no-foreign", actions={target: "merge"})
+    path = tmp_path / "foreign-ledger.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": closer_queue.SCHEMA,
+                "items": {},
+                "round": {},
+                "frontiers": {
+                    frontier["frontier_id"]: {
+                        "policy": frontier,
+                        "items": {foreign: {"operation": {"status": "uncertain"}}},
+                        "round": {},
+                    }
+                },
+            }
+        )
+    )
+    callbacks = []
+    with pytest.raises(closer_queue.QueueStateError, match="foreign target"):
+        closer_queue.run_round(
+            path,
+            [target],
+            lambda *_: callbacks.append("observe") or _snapshot("r1", "merge"),
+            lambda *_: callbacks.append("execute"),
+            owner="runner-a",
+            deadline=None,
+            receipt_reserve_seconds=0,
+            max_operation_retries=0,
+            finite_frontier=frontier,
+            frontier_target=target,
+            request_timeout_seconds=10,
+        )
+    assert callbacks == []
 
 
 def test_repository_alias_claim_prevents_parallel_mutations(tmp_path):

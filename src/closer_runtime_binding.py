@@ -14,11 +14,12 @@ import math
 import os
 import re
 import sys
+import threading
 import time
 import tomllib
 import types
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, cast
 
 CORE_FILES = (
     "scripts/closer_runtime.py",
@@ -237,6 +238,12 @@ def dependency_problems() -> list[str]:
     return problems
 
 
+# Core namespaces and legacy helper sys.path restoration are process-global.
+# Hold this only while executing verified module initialization, never Core effects.
+_CORE_IMPORT_LOCK = threading.RLock()
+_CORE_MISSING = object()
+
+
 class CoreBundle:
     """Load a closed hash-bound Core package under a private import namespace.
 
@@ -292,33 +299,83 @@ class CoreBundle:
             self.sources[name] = data
         self.namespace = "_closer_core_" + expected
         self.loaded: dict[str, types.ModuleType] = {}
+        self._loading: dict[str, types.ModuleType] = {}
         package = types.ModuleType(self.namespace)
         package.__path__ = [str(self.root / "scripts")]
-        sys.modules[self.namespace] = package
         self.package = package
-        self.runtime = self.load("closer_runtime")
-        self.github = self.load("closer_operation_github")
+        with _CORE_IMPORT_LOCK:
+            previous = {
+                key: value
+                for key, value in sys.modules.items()
+                if key == self.namespace or key.startswith(self.namespace + ".")
+            }
+            sys.modules[self.namespace] = package
+            try:
+                self.runtime = self.load("closer_runtime")
+                self.github = self.load("closer_operation_github")
+            except BaseException:
+                # A failed bundle must not discard another root's successful aliases.
+                owned = {package, *self.loaded.values(), *self._loading.values()}
+                for key, value in list(sys.modules.items()):
+                    if (key == self.namespace or key.startswith(self.namespace + ".")) and (
+                        value in owned
+                    ):
+                        if key in previous:
+                            sys.modules[key] = previous[key]
+                        else:
+                            del sys.modules[key]
+                self.loaded.clear()
+                raise
 
     def load(self, name: str) -> types.ModuleType:
-        if name in self.loaded:
-            return self.loaded[name]
-        relative = f"scripts/{name}.py"
-        if relative not in CORE_FILES:
-            raise BindingError(f"Core import outside closed package: {name}")
-        module = types.ModuleType(self.namespace + "." + name)
-        path = self.root / relative
-        module.__file__ = str(path)
-        module.__package__ = self.namespace
-        module.__dict__["__builtins__"] = {**vars(builtins), "__import__": self.import_owned}
-        self.loaded[name] = module
-        sys.modules[module.__name__] = module
-        setattr(self.package, name, module)
-        original_path = list(sys.path)
-        try:
-            exec(compile(self.sources[relative], str(path), "exec"), module.__dict__)
-        finally:
-            sys.path[:] = original_path  # legacy Core helper prepends its script directory
-        return module
+        with _CORE_IMPORT_LOCK:
+            if name in self.loaded:
+                return self.loaded[name]
+            if name in self._loading:
+                # Only the initializing thread can reenter this recursive lock;
+                # preserve ordinary same-thread circular-import semantics.
+                return self._loading[name]
+            relative = f"scripts/{name}.py"
+            if relative not in CORE_FILES:
+                raise BindingError(f"Core import outside closed package: {name}")
+            module = types.ModuleType(self.namespace + "." + name)
+            path = self.root / relative
+            module.__file__ = str(path)
+            module.__package__ = self.namespace
+            module.__dict__["__builtins__"] = {**vars(builtins), "__import__": self.import_owned}
+            previous_module = sys.modules.get(module.__name__, _CORE_MISSING)
+            previous_package = sys.modules.get(self.namespace, _CORE_MISSING)
+            previous_child = getattr(self.package, name, _CORE_MISSING)
+            self._loading[name] = module
+            # Python decorators (including dataclasses) require an import-time
+            # sys.modules entry. It is never returned as completed by load().
+            sys.modules[self.namespace] = self.package
+            sys.modules[module.__name__] = module
+            setattr(self.package, name, module)
+            original_path = list(sys.path)
+            try:
+                exec(compile(self.sources[relative], str(path), "exec"), module.__dict__)
+            except BaseException:
+                for key, owned, previous in (
+                    (module.__name__, module, previous_module),
+                    (self.namespace, self.package, previous_package),
+                ):
+                    if sys.modules.get(key) is owned:
+                        if previous is _CORE_MISSING:
+                            sys.modules.pop(key, None)
+                        else:
+                            sys.modules[key] = cast(types.ModuleType, previous)
+                if getattr(self.package, name, _CORE_MISSING) is module:
+                    if previous_child is _CORE_MISSING:
+                        delattr(self.package, name)
+                    else:
+                        setattr(self.package, name, previous_child)
+                raise
+            finally:
+                self._loading.pop(name, None)
+                sys.path[:] = original_path  # legacy Core helper prepends its script directory
+            self.loaded[name] = module
+            return module
 
     def import_owned(self, name, globals=None, locals=None, fromlist=(), level=0):
         if level == 0 and (name == "scripts" or name.startswith("scripts.")):
@@ -683,7 +740,26 @@ class PinnedNativeHooks:
                 if (
                     cfg.get("mechanism") != "native-handoff/v1"
                     or str(Path(cfg["runtime_manifest"]).resolve()) != context["runtime_manifest"]
-                    or cfg.get("original_deadline") != context["original_deadline"]
+                    or (
+                        context["schema"] == "native-invocation-admission/v1"
+                        and cfg.get("original_deadline") != context["original_deadline"]
+                    )
+                    or (
+                        context["schema"] == "native-invocation-admission/v2"
+                        and (
+                            cfg.get("finite_frontier") != context["finite_frontier"]
+                            or cfg.get("request_timeout_seconds")
+                            != context["request_timeout_seconds"]
+                            or any(
+                                key in cfg
+                                for key in (
+                                    "original_deadline",
+                                    "budget_seconds",
+                                    "dispatch_budget_seconds",
+                                )
+                            )
+                        )
+                    )
                     or cfg.get("capacity_report") != context["report"]["path"]
                     or dependencies.get("assignment")
                     != {key: context["assignment"][key] for key in ("path", "sha256")}
@@ -990,6 +1066,12 @@ class PinnedNativeHooks:
             if candidate.get("receipt_path") != str(path):
                 raise ValueError("terminal receipt path mismatch")
             receipt, digest = closer_resources.read_round_receipt(path)
+            frontier = cfg.get("finite_frontier")
+            if (
+                receipt.get("finite_frontier") != frontier
+                or candidate.get("finite_frontier") != frontier
+            ):
+                raise ValueError("terminal receipt finite frontier binding differs")
             targets = targets_from_assignment(assignment)
             verdict = closer_resources.validate_stop(pipeline, round_id, targets)
             if (
@@ -1128,6 +1210,13 @@ def scoped_continuation_proof(cfg, candidate):
         receipt = closer_resources.scoped_root(pipeline) / "rounds" / (round_id + ".json")
         if receipt.is_symlink() or candidate["receipt_path"] != str(receipt):
             return None
+        frontier = cfg.get("finite_frontier")
+        if candidate.get("finite_frontier") != frontier:
+            return None
+        if frontier is not None:
+            actual_receipt, _digest = closer_resources.read_round_receipt(receipt)
+            if actual_receipt.get("finite_frontier") != frontier:
+                return None
         targets = targets_from_assignment(assignment)
         verdict = closer_resources.validate_stop(pipeline, round_id, targets)
         receipt_hash = verdict.get("receipt_sha256")
@@ -1177,11 +1266,68 @@ def scoped_continuation_proof(cfg, candidate):
             "accepted": False,
             "domain_outcome": domain_outcome,
         }
+        if frontier is not None:
+            proof["finite_frontier"] = frontier
         if domain_outcome == "quarantined":
             proof["quarantined_admitted_items"] = verdict["quarantined_admitted_items"]
         return proof
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return None
+
+
+def _finite_native_frontier(cfg):
+    """Only an explicit signed v2 admission selects no aggregate work cutoff."""
+    from closer_frontier_policy import request_window, validate_frontier
+
+    candidate = cfg.get("finite_frontier")
+    context = cfg.get("native_admission") or {}
+    if candidate is None:
+        if context.get("schema") == "native-invocation-admission/v2":
+            raise BindingError("native finite frontier missing from worker config")
+        return None
+    try:
+        frontier = validate_frontier(candidate)
+        timeout = cfg.get("request_timeout_seconds")
+        window = request_window(0, timeout)
+        if (
+            frontier != candidate
+            or context.get("schema") != "native-invocation-admission/v2"
+            or context.get("finite_frontier") != frontier
+            or context.get("request_timeout_seconds") != timeout
+            or cfg.get("mechanism") != "native-handoff/v1"
+            or any(
+                key in cfg
+                for key in ("original_deadline", "budget_seconds", "dispatch_budget_seconds")
+            )
+            or not math.isfinite(window["deadline"])
+            or timeout > 120
+        ):
+            raise ValueError("finite frontier/config admission differs")
+        return frontier, float(timeout)
+    except (ValueError, TypeError, KeyError) as exc:
+        raise BindingError("native finite frontier requires exact signed v2 admission") from exc
+
+
+def _finite_dispatch_command(command, frontier, timeout):
+    """Reject ambiguous flags or any attempt to mix legacy aggregate authority."""
+    for flag in ("--finite-frontier-json", "--request-timeout-seconds"):
+        if command.count(flag) != 1 or any(
+            arg != flag and arg.startswith("--") and flag.startswith(arg.partition("=")[0])
+            for arg in command
+        ):
+            raise BindingError("native finite dispatcher flags missing or ambiguous")
+    if any(
+        arg.startswith("--") and "--budget-seconds".startswith(arg.partition("=")[0])
+        for arg in command
+    ):
+        raise BindingError("native finite dispatcher cannot mix aggregate budget")
+    try:
+        descriptor = json.loads(command[command.index("--finite-frontier-json") + 1])
+        request_timeout = float(command[command.index("--request-timeout-seconds") + 1])
+        if descriptor != frontier or request_timeout != timeout:
+            raise ValueError("finite dispatcher descriptor/timeout differs")
+    except (IndexError, ValueError, TypeError) as exc:
+        raise BindingError("native finite dispatcher binding differs") from exc
 
 
 def run_native_round(
@@ -1207,15 +1353,26 @@ def run_native_round(
         except (BindingError, KeyError, TypeError) as exc:
             return "unavailable", str(exc)
     started = now()
-    deadline = min(
-        started + float(cfg.get("budget_seconds", 600)),
-        float(cfg.get("original_deadline", started + 600)),
-    )
-    if isinstance(hooks, PinnedNativeHooks) and hooks.bounded and deadline - started > 900:
-        return "unavailable", "bounded native hook policy exceeds original 900-second limit"
-    reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
-    if deadline - started <= reserve:
-        return "unavailable", "native round has no action budget after receipt reserve"
+    try:
+        finite = _finite_native_frontier(cfg)
+        if finite:
+            _finite_dispatch_command(command, *finite)
+            deadline = started + finite[1]
+            if not math.isfinite(deadline):
+                raise BindingError("native finite request deadline overflow")
+            reserve = 0.0
+        else:
+            deadline = min(
+                started + float(cfg.get("budget_seconds", 600)),
+                float(cfg.get("original_deadline", started + 600)),
+            )
+            if isinstance(hooks, PinnedNativeHooks) and hooks.bounded and deadline - started > 900:
+                return "unavailable", "bounded native hook policy exceeds original 900-second limit"
+            reserve = max(15.0, float(cfg.get("receipt_reserve_seconds", 300)))
+            if deadline - started <= reserve:
+                return "unavailable", "native round has no action budget after receipt reserve"
+    except BindingError as exc:
+        return "unavailable", str(exc)
     if isinstance(hooks, PinnedNativeHooks) and hooks.bounded:
         interpreter = hooks.dependencies["interpreter"][0]
         if not command or Path(command[0]) not in {hooks.interpreter_anchor, interpreter}:
@@ -1302,9 +1459,9 @@ def run_native_round(
         else:
             # B owns only its original safe action deadline, never a fresh budget.
             try:
-                if cfg.get("native_admission") is not None:
-                    import math
-
+                if finite:
+                    _finite_dispatch_command(command, *finite)
+                elif cfg.get("native_admission") is not None:
                     if command.count("--budget-seconds") != 1:
                         raise BindingError("native original B budget argument missing or ambiguous")
                     index = command.index("--budget-seconds") + 1
@@ -1323,7 +1480,9 @@ def run_native_round(
                     command,
                     capture_output=True,
                     check=False,
-                    timeout=max(0.001, deadline - reserve - now()),
+                    # B is the finite frontier coordinator, not one I/O request.
+                    # Its adapters enforce each request's original finite window.
+                    timeout=None if finite else max(0.001, deadline - reserve - now()),
                     **(
                         {
                             "env": {
@@ -1383,7 +1542,10 @@ def run_native_round(
             try:
                 phases["C"]["attempted"] = True
                 phases["C"]["started_at"] = now()
-                code = hooks.postrun(token, deadline)
+                cleanup_deadline = now() + finite[1] if finite else deadline
+                if not math.isfinite(cleanup_deadline):
+                    raise BindingError("native finite cleanup deadline overflow")
+                code = hooks.postrun(token, cleanup_deadline)
                 postrun_completed = True
             except PermissionError as exc:
                 code = 65

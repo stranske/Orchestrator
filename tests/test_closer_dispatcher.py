@@ -1432,26 +1432,35 @@ def test_issue_delivery_alias_advertises_actual_pr_and_source_claims(tmp_path):
 def test_bounded_runner_owns_session_and_kills_only_its_process_group(monkeypatch, timeout):
     created = []
     killed = []
+    probes = []
+
+    class Pipe:
+        closed = False
+
+        def close(self):
+            self.closed = True
 
     class Process:
         pid = 43210
-        returncode = 0
+        returncode = None
 
         def __init__(self):
             self.timeouts = []
-            self.exited = False
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            self.exited = True
+            self.stdout, self.stderr = Pipe(), Pipe()
 
         def communicate(self, *, timeout):
             self.timeouts.append(timeout)
             if len(self.timeouts) == 1 and globals_timeout:
                 raise adapter.subprocess.TimeoutExpired(["owned"], timeout)
+            self.returncode = -9 if globals_timeout else 0
             return "retained stdout", "retained stderr"
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, *, timeout):
+            assert self.returncode is not None
+            return self.returncode
 
     globals_timeout = timeout
     process = Process()
@@ -1460,18 +1469,31 @@ def test_bounded_runner_owns_session_and_kills_only_its_process_group(monkeypatc
         created.append((command, kwargs))
         return process
 
+    def killpg(pid, sig):
+        assert pid == process.pid
+        if sig == 0:
+            probes.append(pid)
+            if process.poll() is not None:
+                raise ProcessLookupError
+        else:
+            killed.append((pid, sig))
+
     monkeypatch.setattr(adapter.subprocess, "Popen", popen)
-    monkeypatch.setattr(adapter.os, "killpg", lambda pid, signal: killed.append((pid, signal)))
+    monkeypatch.setattr(adapter.os, "killpg", killpg)
     if timeout:
         with pytest.raises(adapter.subprocess.TimeoutExpired):
             adapter.bounded_run(["owned"], timeout=3)
         assert killed == [(process.pid, adapter.signal.SIGKILL)]
-        assert process.timeouts == [3, 5]
+        assert process.timeouts[0] == 3 and len(process.timeouts) == 2
+        assert 0 < process.timeouts[1] <= 5
     else:
         result = adapter.bounded_run(["owned"], timeout=3)
         assert result.returncode == 0 and result.stdout == "retained stdout"
         assert killed == []
-    assert process.exited
+        assert process.timeouts == [3]
+        assert probes and set(probes) == {process.pid}
+    assert process.poll() is not None
+    assert process.stdout.closed and process.stderr.closed
     assert created[0][1]["start_new_session"] is True
     assert created[0][1]["stdout"] == adapter.subprocess.PIPE
 

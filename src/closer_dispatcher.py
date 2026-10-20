@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import select
 import signal
 import stat
 import subprocess
@@ -25,6 +26,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Mapping
 
 import closer_evidence
 import gh_capacity
@@ -37,6 +39,19 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 def _pipeline_state_path(state_path, *, shadow=False):
     suffix = ".shadow.pipeline.json" if shadow else ".pipeline.json"
     return Path(str(state_path) + suffix)
+
+
+def _accept_owned_transport(_observation):
+    """Acknowledge the exact child owned by dispatcher.offload supervision."""
+    import closer_resources
+
+    closer_resources.finite_pool_process_started(_observation)
+
+
+def _finish_owned_transport(observation):
+    import closer_resources
+
+    closer_resources.finite_pool_process_finished(observation)
 
 
 EXCLUDED = {"stranske/collab-admin", "stranske/collab-deliverables"}
@@ -188,6 +203,43 @@ def _finite_number(value):
         return math.isfinite(value)
     except (OverflowError, TypeError, ValueError):
         return False
+
+
+def _finite_queue_operation(item, frontier, target):
+    """Read a finite queue operation without turning malformed intent into no-op."""
+    if not isinstance(item, Mapping) or not item:
+        raise ValueError("finite queue target item is corrupt")
+    if "operation" not in item or item["operation"] is None:
+        return None
+    operation = item["operation"]
+    binding = frontier.get("bindings", {}).get(target)
+    if (
+        not isinstance(operation, Mapping)
+        or not operation
+        or operation.get("finite_frontier") != frontier
+        or not isinstance(binding, Mapping)
+        or not isinstance(operation.get("id"), str)
+        or not operation.get("id")
+        or operation.get("status")
+        not in {"submitted", "running", "uncertain", "confirmed_not_started", "completed", "failed"}
+        or not isinstance(operation.get("action"), str)
+        or not operation.get("action")
+        or not isinstance(operation.get("revision"), str)
+        or operation.get("revision") != binding.get("revision")
+        or not isinstance(operation.get("binding"), Mapping)
+    ):
+        raise ValueError("finite queue operation record is corrupt")
+    import closer_frontier_policy
+
+    try:
+        action_id = closer_frontier_policy.action_identity(
+            target, operation["revision"], operation["action"], operation["binding"]
+        )
+    except (TypeError, ValueError):
+        raise ValueError("finite queue operation record is corrupt") from None
+    if action_id != binding.get("action_id"):
+        raise ValueError("finite queue operation binding differs from frontier")
+    return operation
 
 
 def _validly_finished_legacy_round(state_path, state_doc):
@@ -621,16 +673,106 @@ def acceptance_ok(snapshot, decision):
 
 def bounded_run(command, *, timeout):
     """Bound the entire owned process group, retaining ambiguous writes for reconciliation."""
-    with subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
-    ) as process:
+    import closer_resources
+
+    try:
+        binding = closer_resources.finite_pool_current_binding()
+    except closer_resources.ResourceBlocked:
+        binding = None
+    observation = None
+    if binding:
+        observation = {
+            "source": "trusted-bounded-run/v1",
+            "run_id": f"bounded-{time.monotonic_ns()}",
+            "agent": "github",
+            "profile_id": "github-api",
+            "finite_frontier_id": binding["frontier_id"],
+            "finite_frontier_target": binding["target"],
+        }
+        closer_resources.finite_pool_prepare_request(observation)
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except BaseException:
+        if binding:
+            closer_resources.finite_pool_no_start(observation)
+        raise
+
+    def group_absent():
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False
+        return False
+
+    if binding:
+        observation.update({"pid": process.pid, "process_group": process.pid})
+        try:
+            try:
+                observation["os_started"] = subprocess.run(
+                    ["ps", "-p", str(process.pid), "-o", "lstart="],
+                    capture_output=True,
+                    text=True,
+                    timeout=min(1, max(0.05, timeout)),
+                    check=True,
+                ).stdout.strip()
+            except Exception:
+                observation["os_started"] = ""
+            if observation["os_started"]:
+                closer_resources.finite_pool_process_started(observation)
+        except BaseException:
+            # Publication can fail after Popen. Reap only this owned group,
+            # once and within a fixed bound, before returning the failure.
+            with contextlib.suppress(OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+            try:
+                process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                pass
+            if group_absent() and process.poll() is not None:
+                with contextlib.suppress(closer_resources.ResourceBlocked):
+                    closer_resources.finite_pool_process_finished(observation)
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+            raise
+
+    try:
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.communicate(timeout=5)
+            with contextlib.suppress(OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+            try:
+                process.communicate(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                pass
+            if observation and group_absent() and process.poll() is not None:
+                closer_resources.finite_pool_process_finished(observation)
             raise
+        if not group_absent():
+            with contextlib.suppress(OSError):
+                os.killpg(process.pid, signal.SIGKILL)
+            try:
+                process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                pass
+            if not group_absent():
+                raise RuntimeError("owned GitHub process group remained after request completion")
+        if observation:
+            closer_resources.finite_pool_process_finished(observation)
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    finally:
+        for pipe in (process.stdout, process.stderr):
+            if pipe is not None:
+                pipe.close()
 
 
 class RoundDeadlineExhausted(TimeoutError, closer_evidence.RoundControlException):
@@ -1197,8 +1339,34 @@ class Closer:
         operation = self.pending_integration.get(target)
         if not operation:
             try:
-                entry = json.loads(self.state_path.read_text()).get("items", {}).get(target, {})
-                previous = entry.get("operation") or {}
+                state = json.loads(self.state_path.read_text())
+                frontier = getattr(self, "finite_frontier", None)
+                if frontier is None:
+                    items = state.get("items", {})
+                else:
+                    frontiers = state.get("frontiers", {})
+                    if not isinstance(frontiers, Mapping):
+                        raise RuntimeError("finite queue frontier namespace is corrupt")
+                    frontier_id = frontier["frontier_id"]
+                    if frontier_id not in frontiers:
+                        items = {}
+                    else:
+                        bucket = frontiers[frontier_id]
+                        if not isinstance(bucket, Mapping) or bucket.get("policy") != frontier:
+                            raise RuntimeError("finite queue frontier binding is corrupt")
+                        items = bucket.get("items")
+                        if not isinstance(items, Mapping):
+                            raise RuntimeError("finite queue frontier items are corrupt")
+                entry = items.get(target, {}) if isinstance(items, Mapping) else {}
+                if target in items and not isinstance(entry, Mapping):
+                    raise RuntimeError("finite queue target item is corrupt")
+                if frontier is not None and target in items:
+                    try:
+                        previous = _finite_queue_operation(entry, frontier, target) or {}
+                    except ValueError as exc:
+                        raise RuntimeError(str(exc)) from exc
+                else:
+                    previous = entry.get("operation") or {}
                 if previous.get("status") == "completed" and (previous.get("result") or {}).get(
                     "advisory_only"
                 ):
@@ -1905,7 +2073,20 @@ class Closer:
         started = time.monotonic()
 
         def invoke(chosen):
-            return (self.offload_fn or dispatcher.offload)(
+            request_options = {}
+            if operation.get("finite_frontier") is not None and self.offload_fn is None:
+                import closer_resources
+
+                finite_remaining = float(operation["deadline"]) - time.time()
+                request_options = {
+                    "request_deadline_mono": time.monotonic() + max(0.0, finite_remaining),
+                    "process_starting_callback": closer_resources.finite_pool_prepare_request,
+                    "process_started_callback": _accept_owned_transport,
+                    "process_finished_callback": _finish_owned_transport,
+                    "finite_frontier_id": operation["finite_frontier"]["frontier_id"],
+                    "finite_frontier_target": target,
+                }
+            result = (self.offload_fn or dispatcher.offload)(
                 chosen["agent"],
                 prompt,
                 cwd=workspace,
@@ -1924,7 +2105,23 @@ class Closer:
                 ),
                 subject_id=target,
                 max_network_retries=0,
+                **request_options,
             )
+            fence = result.get("finite_pool_fence") if isinstance(result, dict) else None
+            if fence and operation.get("finite_frontier") is not None:
+                import closer_resources
+
+                raise closer_resources.FinitePoolUncertain(fence)
+            if (
+                operation.get("finite_frontier") is not None
+                and isinstance(result, dict)
+                and result.get("process_started") is False
+                and result.get("outcome_uncertain") is not True
+            ):
+                import closer_resources
+
+                closer_resources.finite_pool_no_start()
+            return result
 
         if pipeline_reserved:
             result = invoke(route)  # outer staged callback holds these exact pools
@@ -1944,6 +2141,8 @@ class Closer:
                 load={},
                 deadline=operation["deadline"],
                 repair=repair,
+                finite_frontier=operation.get("finite_frontier"),
+                frontier_target=target,
             )
             selected_agent = route["agent"]
             selected_profile_id = route["profile_id"]
@@ -2481,7 +2680,16 @@ def _release_route_load(route, load):
 
 
 def _execute_profile_route(
-    route, invoke, *, lane, load, deadline, unavailable_profiles=(), repair=False
+    route,
+    invoke,
+    *,
+    lane,
+    load,
+    deadline,
+    unavailable_profiles=(),
+    repair=False,
+    finite_frontier=None,
+    frontier_target=None,
 ):
     """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
 
@@ -2510,22 +2718,51 @@ def _execute_profile_route(
                 pools = sorted(set((profile or {}).get("capacity_pool_ids") or []))
                 if not pools or pools != sorted(set(route.get("pools") or [])):
                     raise closer_resources.ResourceBlocked("profile pool binding changed")
-                for pool in pools:
-                    name = hashlib.sha256(pool.encode()).hexdigest()
-                    try:
-                        slots.enter_context(
-                            closer_resources.pool_slot(
-                                root, name, 1, deadline=min(deadline, time.time())
+                try:
+                    for pool in pools:
+                        name = hashlib.sha256(pool.encode()).hexdigest()
+                        try:
+                            reservation = None
+                            if finite_frontier is not None:
+                                reservation = {
+                                    "reservation_id": hashlib.sha256(
+                                        f"{root.resolve()}\0{name}\0{finite_frontier['frontier_id']}\0{frontier_target}\0{profile['profile_id']}".encode()
+                                    ).hexdigest(),
+                                    "target": frontier_target,
+                                    "frontier_id": finite_frontier["frontier_id"],
+                                    "agent": str(
+                                        profile.get("agent") or route.get("agent") or "unknown"
+                                    ),
+                                    "profile_id": profile["profile_id"],
+                                }
+                            slots.enter_context(
+                                closer_resources.pool_slot(
+                                    root,
+                                    name,
+                                    1,
+                                    deadline=min(deadline, time.time()),
+                                    finite_frontier=finite_frontier is not None,
+                                    reservation=reservation,
+                                )
                             )
-                        )
-                    except closer_resources.ResourceBlocked:
-                        blocked_pools.add(pool)
-                        raise
-                report = _fresh_capacity_report()
-                qualified = _profile_exception_qualified(
-                    report, profile, repair=repair, substantive=lane != "low"
-                )
+                        except closer_resources.ResourceBlocked:
+                            blocked_pools.add(pool)
+                            raise
+                    report = _fresh_capacity_report()
+                    qualified = _profile_exception_qualified(
+                        report, profile, repair=repair, substantive=lane != "low"
+                    )
+                except BaseException:
+                    # This whole section is prelaunch: if pool acquisition,
+                    # capacity refresh, or qualification fails, resolve only
+                    # these exact still-unstarted reservations while ExitStack
+                    # still holds every acquired profile slot.
+                    if finite_frontier is not None:
+                        closer_resources.finite_pool_no_start()
+                    raise
                 if not qualified:
+                    if finite_frontier is not None:
+                        closer_resources.finite_pool_no_start()
                     raise closer_resources.ResourceBlocked(
                         "capacity changed after pool reservation"
                     )
@@ -2535,6 +2772,8 @@ def _execute_profile_route(
         except closer_resources.ResourceBlocked:
             if invoked:
                 raise
+            if finite_frontier is not None:
+                closer_resources.finite_pool_no_start()
             excluded.add(route["profile_id"])
         finally:
             _release_route_load(route, load)
@@ -2717,6 +2956,156 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     import closer_evidence
     import closer_pipeline
     import closer_queue
+
+    finite_frontier = getattr(args, "finite_frontier", None)
+    request_timeout = getattr(args, "request_timeout_seconds", 120.0)
+
+    def queue_state_readback(path):
+        state = closer_queue._read_state(Path(path))
+        if finite_frontier is None:
+            return state
+        frontiers = state.get("frontiers", {})
+        frontier_id = finite_frontier["frontier_id"]
+        if frontier_id not in frontiers:
+            return {**state, "items": {}, "round": {}}
+        bucket = frontiers[frontier_id]
+        if not isinstance(bucket, Mapping) or bucket.get("policy") != finite_frontier:
+            raise closer_queue.QueueStateError(
+                "finite frontier id is already bound to another policy"
+            )
+        items, round_state = bucket.get("items"), bucket.get("round")
+        if not isinstance(items, Mapping) or not isinstance(round_state, Mapping):
+            raise closer_queue.QueueStateError("finite frontier state namespace is corrupt")
+        return {**state, "items": items, "round": round_state}
+
+    def queue_item_readback(path, target):
+        state = queue_state_readback(path)
+        items = state.get("items", {})
+        if not isinstance(items, Mapping):
+            raise closer_queue.QueueStateError("queue items namespace is corrupt")
+        if target not in items:
+            return {}
+        item = items[target]
+        if not isinstance(item, Mapping):
+            raise closer_queue.QueueStateError("queue target item is corrupt")
+        if finite_frontier is not None:
+            try:
+                _finite_queue_operation(item, finite_frontier, target)
+            except ValueError as exc:
+                raise closer_queue.QueueStateError(str(exc)) from exc
+        return dict(item)
+
+    def verified_finite_partial_progress(target, action_state, row, receipt):
+        """Return a one-step progress result only from its exact durable queue proof."""
+        if (
+            finite_frontier is None
+            or row.get("status") != "deferred"
+            or row.get("reason") != "pass_limit"
+            or row.get("operation_status") != "completed"
+            or not isinstance(row.get("operation_id"), str)
+            or not row.get("operation_id")
+            or row.get("eligible") is not True
+            or not receipt.get("stop_valid")
+        ):
+            return None
+        try:
+            checked = closer_queue.validate_stop(
+                action_state,
+                [target],
+                receipt=receipt,
+                frontier_id=finite_frontier["frontier_id"],
+            )
+            inner = queue_item_readback(action_state, target)
+            operation = inner.get("operation")
+            if not (
+                checked.get("valid")
+                and checked.get("stop_valid")
+                and inner.get("observation_freshness") == "fresh"
+                and inner.get("revision") == row.get("revision")
+                and inner.get("action") == row.get("action")
+                and inner.get("eligible") is True
+                and isinstance(operation, Mapping)
+                and operation.get("id") == row.get("operation_id")
+                and operation.get("status") == "completed"
+                and operation.get("finite_frontier") == finite_frontier
+            ):
+                return None
+            from closer_frontier_policy import action_identity
+
+            original = finite_frontier["bindings"][target]
+            if (
+                action_identity(
+                    target,
+                    operation.get("revision"),
+                    operation.get("action"),
+                    operation.get("binding"),
+                )
+                != original["action_id"]
+                or operation.get("revision") != original["revision"]
+                or (
+                    row.get("revision") == original["revision"]
+                    and row.get("action") == operation.get("action")
+                )
+            ):
+                return None
+            events = receipt.get("events")
+            if not isinstance(events, list):
+                return None
+            submitted = any(
+                isinstance(event, Mapping)
+                and event.get("kind") == "operation_submitted"
+                and event.get("target") == target
+                and event.get("operation_id") == operation.get("id")
+                and event.get("action") == operation.get("action")
+                for event in events
+            )
+            advanced = any(
+                isinstance(event, Mapping)
+                and event.get("kind") == "action_advanced"
+                and event.get("target") == target
+                and event.get("action") == operation.get("action")
+                and event.get("revision") == row.get("revision")
+                for event in events
+            )
+            if not (submitted and advanced):
+                return None
+            progress_key = digest(
+                {
+                    "revision": row.get("revision"),
+                    "action": row.get("action"),
+                    "operation_id": row.get("operation_id"),
+                    "operation_status": row.get("operation_status"),
+                    "events": events[-8:],
+                }
+            )
+            return {
+                "status": "completed",
+                "target_complete": False,
+                "progress_key": progress_key,
+                "queue_receipt": receipt,
+            }
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
+
+    def queue_policy(target, context):
+        if finite_frontier is not None:
+            remaining = float(context.get("deadline", 0)) - time.time()
+            if not math.isfinite(remaining) or remaining <= 0:
+                raise RoundDeadlineExhausted(
+                    deadline=float(context.get("deadline", 0)), remaining_seconds=remaining
+                )
+            return {
+                "finite_frontier": finite_frontier,
+                "frontier_target": target,
+                "request_timeout_seconds": min(float(request_timeout), remaining),
+                "deadline": None,
+                "receipt_reserve_seconds": 0,
+                "max_operation_retries": 0,
+            }
+        return {
+            "deadline": float(context["deadline"]) + receipt_reserve,
+            "receipt_reserve_seconds": receipt_reserve,
+        }
 
     state_path = Path(args.state)
     receipt_reserve = PIPELINE_RECEIPT_RESERVE_SECONDS
@@ -2991,7 +3380,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         ):
             return None
         try:
-            inner = closer_queue._read_state(Path(action_state_path)).get("items", {}).get(target)
+            inner = queue_item_readback(action_state_path, target)
         except (OSError, ValueError, TypeError):
             return None
         if not isinstance(inner, dict):
@@ -3104,7 +3493,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             ) as locked:
                 if not locked:
                     return None
-                inner = closer_queue._read_state(inner_path)
+                inner = queue_state_readback(inner_path)
                 receipt = inner.get("round", {}).get("receipt")
                 if not isinstance(receipt, dict):
                     return None
@@ -3229,30 +3618,96 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             def binary_runner(command, *, capture_output=True, text=True, timeout=None):
                 # Stream into a hard-capped buffer and kill the owned process group
                 # immediately if a lying/malformed artifact exceeds its allowance.
-                with subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                ) as proc:
-                    chunks, size = [], 0
+                import closer_resources
+
+                try:
+                    binding = closer_resources.finite_pool_current_binding()
+                except closer_resources.ResourceBlocked:
+                    binding = None
+                try:
+                    observation = None
+                    if binding:
+                        observation = {
+                            "source": "trusted-artifact-runner/v1",
+                            "run_id": f"artifact-{time.monotonic_ns()}",
+                            "agent": "github",
+                            "profile_id": "github-artifact",
+                            "finite_frontier_id": binding["frontier_id"],
+                            "finite_frontier_target": binding["target"],
+                        }
+                        closer_resources.finite_pool_prepare_request(observation)
+                    proc = subprocess.Popen(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                except BaseException:
+                    if binding:
+                        closer_resources.finite_pool_no_start(observation)
+                    raise
+                chunks, size = [], 0
+                try:
+                    if binding:
+                        observation.update({"pid": proc.pid, "process_group": proc.pid})
+                        try:
+                            birth = subprocess.run(
+                                ["ps", "-p", str(proc.pid), "-o", "lstart="],
+                                capture_output=True,
+                                text=True,
+                                timeout=min(1, max(0.05, deadline - time.monotonic())),
+                                check=True,
+                            ).stdout.strip()
+                        except Exception:
+                            birth = ""
+                        if birth:
+                            observation["os_started"] = birth
+                            closer_resources.finite_pool_process_started(observation)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("artifact download deadline reached")
+                        ready, _, _ = select.select([proc.stdout.fileno()], [], [], remaining)
+                        if not ready:
+                            raise TimeoutError("artifact download deadline reached")
+                        # Use os.read after readiness. BufferedReader.read(n) can
+                        # continue waiting for n bytes after the pipe becomes quiet.
+                        chunk = os.read(proc.stdout.fileno(), min(65536, max_bytes + 1 - size))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise ValueError("artifact archive exceeds configured byte cap")
+                    rc = proc.wait(timeout=max(0.05, min(5, deadline - time.monotonic())))
                     try:
-                        while True:
-                            if time.monotonic() >= deadline:
-                                raise TimeoutError("artifact download deadline reached")
-                            chunk = proc.stdout.read(min(65536, max_bytes + 1 - size))
-                            if not chunk:
-                                break
-                            chunks.append(chunk)
-                            size += len(chunk)
-                            if size > max_bytes:
-                                raise ValueError("artifact archive exceeds configured byte cap")
-                        rc = proc.wait(timeout=max(1, min(5, deadline - time.monotonic())))
-                    except Exception:
-                        with contextlib.suppress(ProcessLookupError):
-                            os.killpg(proc.pid, signal.SIGKILL)
-                        proc.wait()
-                        raise
+                        os.killpg(proc.pid, 0)
+                    except ProcessLookupError:
+                        if observation:
+                            closer_resources.finite_pool_process_finished(observation)
+                    else:
+                        raise RuntimeError(
+                            "artifact transport descendants remained after completion"
+                        )
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=0.25)
+                    try:
+                        os.killpg(proc.pid, 0)
+                    except ProcessLookupError:
+                        if observation:
+                            closer_resources.finite_pool_process_finished(observation)
+                    except OSError:
+                        pass
+                    else:
+                        # Leave the durable starting/uncertain reservation in place.
+                        pass
+                    raise
+                finally:
+                    if proc.stdout is not None:
+                        proc.stdout.close()
                 return SimpleNamespace(
                     returncode=rc, stdout=b"".join(chunks).decode("latin-1"), stderr=""
                 )
@@ -3788,23 +4243,49 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         started = time.monotonic()
         import closer_resources
 
+        def invoke_interpretation(chosen):
+            remaining = float(context["deadline"]) - time.time()
+            if finite_frontier is not None and remaining < 5:
+                raise RoundDeadlineExhausted(
+                    deadline=context["deadline"], remaining_seconds=remaining
+                )
+            result = dispatcher.offload(
+                chosen["agent"],
+                prompt,
+                mode="assess",
+                profile_id=chosen["profile_id"],
+                timeout=max(5, min(120, int(remaining))),
+                task_type="closer_interpret",
+                subject_id=target,
+                max_network_retries=0,
+                **(
+                    {
+                        "request_deadline_mono": time.monotonic() + max(0.0, remaining),
+                        "process_starting_callback": closer_resources.finite_pool_prepare_request,
+                        "process_started_callback": _accept_owned_transport,
+                        "process_finished_callback": _finish_owned_transport,
+                        "finite_frontier_id": finite_frontier["frontier_id"],
+                        "finite_frontier_target": target,
+                    }
+                    if finite_frontier is not None
+                    else {}
+                ),
+            )
+            fence = result.get("finite_pool_fence") if isinstance(result, dict) else None
+            if fence and finite_frontier is not None:
+                raise closer_resources.FinitePoolUncertain(fence)
+            return result
+
         try:
             result, route = _execute_profile_route(
                 route,
-                lambda chosen: dispatcher.offload(
-                    chosen["agent"],
-                    prompt,
-                    mode="assess",
-                    profile_id=chosen["profile_id"],
-                    timeout=max(5, min(120, int(context["deadline"] - time.time()))),
-                    task_type="closer_interpret",
-                    subject_id=target,
-                    max_network_retries=0,
-                ),
+                invoke_interpretation,
                 lane="low",
                 load=route_load,
                 deadline=context["deadline"],
                 unavailable_profiles=failed_low_profiles,
+                finite_frontier=finite_frontier,
+                frontier_target=target,
             )
         except closer_resources.ResourceBlocked:
             return {
@@ -4206,6 +4687,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "deadline": context["deadline"],
                     "id": context.get("work_key", "pipeline-exception"),
                     "revision": context.get("revision"),
+                    **({"finite_frontier": finite_frontier} if finite_frontier is not None else {}),
                 },
                 profile_id=chosen["profile_id"],
                 advisory_context={
@@ -4218,6 +4700,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             load=route_load,
             deadline=context["deadline"],
             unavailable_profiles=failed_low_profiles,
+            finite_frontier=finite_frontier,
+            frontier_target=target,
         )
         route_agent = route["agent"]
         route_profile = route["profile_id"]
@@ -4340,6 +4824,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             runtime_binding=backend.runtime_binding,
             require_runtime_binding=backend.require_runtime_binding,
         )
+        if finite_frontier is not None:
+            current.finite_frontier = finite_frontier
         interpreted = full_interpretation(context.get("interpret", {}))
         if (
             isinstance(interpreted, dict)
@@ -4566,8 +5052,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             reconcile=current.reconcile,
             # The pipeline owns a five-minute receipt reserve. Preserve the
             # callback cutoff while giving the inner queue the same full deadline.
-            deadline=float(context["deadline"]) + receipt_reserve,
-            receipt_reserve_seconds=receipt_reserve,
+            **queue_policy(target, context),
             max_workers=1,
             max_passes=1,
         )
@@ -4581,6 +5066,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             # an invented external event. The outer ledger records this as uncertain
             # and must reconcile against the durable inner queue.
             raise RuntimeError("inner closer queue did not prove a valid continuation boundary")
+        if finite_frontier is not None:
+            progress = verified_finite_partial_progress(target, action_state, row, receipt)
+            if progress is not None:
+                return progress
         if (
             receipt.get("stop_valid")
             and row.get("eligible")
@@ -4606,7 +5095,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("eligible")
             and reason in closer_queue.RESOURCE_DEFERRALS
         ):
-            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            inner = queue_item_readback(action_state, target)
             return {
                 "status": "deferred",
                 "reason": reason,
@@ -4620,7 +5109,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("action") == "wait"
             and reason == "current-head checks pending or unknown"
         ):
-            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            inner = queue_item_readback(action_state, target)
             evidence = inner.get("evidence", {}) if isinstance(inner, dict) else {}
             check_ids = (
                 evidence.get("pending_check_run_ids") if isinstance(evidence, dict) else None
@@ -4657,7 +5146,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("action") == "wait"
             and str(reason).startswith("existing verifier run ")
         ):
-            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            inner = queue_item_readback(action_state, target)
             verified_run_wait = _verified_active_verifier_pending(target, row, receipt, inner)
             if verified_run_wait is not None:
                 return verified_run_wait
@@ -4667,7 +5156,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("eligible") is False
             and row.get("status") in {"deferred", "ineligible"}
         ):
-            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            inner = queue_item_readback(action_state, target)
             if not isinstance(inner, dict):
                 inner = {}
             if inner.get("revision") != row.get("revision"):
@@ -4704,7 +5193,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and row.get("action") == "collect_evidence"
             and reason == "collect terminal or unattributed verifier evidence; do not rerun"
         ):
-            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            inner = queue_item_readback(action_state, target)
             verified_label_wait = _verified_post_merge_label_pending(target, row, receipt, inner)
             if verified_label_wait is not None:
                 return verified_label_wait
@@ -4726,7 +5215,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             import closer_pipeline
 
             prep_snapshot = context.get("prepare", {}).get("snapshot", {})
-            inner = closer_queue._read_state(Path(action_state)).get("items", {}).get(target, {})
+            inner = queue_item_readback(action_state, target)
             fresh_snapshot = inner.get("evidence") if isinstance(inner, dict) else None
             fresh_revision = inner.get("revision") if isinstance(inner, dict) else None
             nonpass_ref = None
@@ -4881,8 +5370,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 return barrier
             return {"outcome": "confirmed_not_started", "reason": "inner queue was never created"}
         try:
-            inner = closer_queue._read_state(action_state)
-            item = inner.get("items", {}).get(target, {})
+            item = queue_item_readback(action_state, target)
             operation = item.get("operation") or {}
         except Exception as exc:
             return {"outcome": "unknown", "reason": f"inner queue unreadable: {type(exc).__name__}"}
@@ -4899,6 +5387,76 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if operation.get("revision") != context.get("revision"):
             return {"outcome": "unknown", "reason": "inner queue operation revision differs"}
         if operation.get("status") == "completed":
+            if finite_frontier is not None:
+                queue_state = queue_state_readback(action_state)
+                round_state = queue_state.get("round", {})
+                receipt = round_state.get("receipt") if isinstance(round_state, Mapping) else None
+                rows = receipt.get("accounting") if isinstance(receipt, Mapping) else None
+                row = (
+                    next(
+                        (
+                            candidate
+                            for candidate in rows
+                            if isinstance(candidate, Mapping) and candidate.get("target") == target
+                        ),
+                        None,
+                    )
+                    if isinstance(rows, list)
+                    else None
+                )
+                partial = (
+                    verified_finite_partial_progress(target, action_state, row, receipt)
+                    if isinstance(row, Mapping) and isinstance(receipt, Mapping)
+                    else None
+                )
+                if partial is not None:
+                    return {
+                        "outcome": "confirmed_completed",
+                        "target_complete": False,
+                        "finite_partial_progress": True,
+                        "progress_key": partial["progress_key"],
+                        "queue_receipt": receipt,
+                        "operation_id": operation.get("id"),
+                    }
+                try:
+                    checked = closer_queue.validate_stop(
+                        action_state,
+                        [target],
+                        receipt=receipt,
+                        frontier_id=finite_frontier["frontier_id"],
+                    )
+                    from closer_frontier_policy import action_identity
+
+                    binding = finite_frontier["bindings"][target]
+                    operation_is_original = (
+                        operation.get("revision") == binding["revision"]
+                        and action_identity(
+                            target,
+                            operation.get("revision"),
+                            operation.get("action"),
+                            operation.get("binding"),
+                        )
+                        == binding["action_id"]
+                    )
+                except (OSError, TypeError, ValueError, KeyError):
+                    return {"outcome": "unknown", "reason": "finite queue receipt is unreadable"}
+                if not (
+                    checked.get("valid")
+                    and checked.get("stop_valid")
+                    and isinstance(row, Mapping)
+                    and row.get("status") == "complete"
+                    and operation_is_original
+                ):
+                    return {
+                        "outcome": "unknown",
+                        "reason": "completed finite operation lacks an exact terminal receipt",
+                    }
+                return {
+                    "outcome": "confirmed_completed",
+                    "target_complete": True,
+                    "operation_id": operation.get("id"),
+                    "queue_receipt": receipt,
+                }
             complete = item.get("status") == "complete" and not item.get("requires_coordinator")
             return {
                 "outcome": "confirmed_completed",
@@ -4918,12 +5476,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 current.observe,
                 current.execute,
                 reconcile=current.reconcile,
-                deadline=float(context["deadline"]) + receipt_reserve,
-                receipt_reserve_seconds=receipt_reserve,
+                **queue_policy(target, context),
                 max_workers=1,
                 max_passes=1,
             )
-            refreshed = closer_queue._read_state(action_state).get("items", {}).get(target, {})
+            refreshed = queue_item_readback(action_state, target)
             operation = refreshed.get("operation") or {}
             if operation.get("status") == "completed":
                 complete = refreshed.get("status") == "complete" and not refreshed.get(
@@ -4974,6 +5531,18 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             }
         else:
             quarantine_workspaces = {**known_workspaces(held_targets), **backend.workspaces}
+    if finite_frontier is not None:
+        if shadow:
+            raise ValueError("finite frontier is unavailable for shadow callback drivers")
+        closer_pipeline._register_dispatcher_finite_callbacks(
+            {
+                "prepare": prepare,
+                "interpret": interpret,
+                "exception": exception,
+                "act": act,
+                "reconcile": reconcile_action,
+            }
+        )
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
@@ -5016,7 +5585,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # Keep the same active-work/final-receipt split as the existing queue:
         # the outer pipeline stops new callbacks at the action cutoff, while
         # the inner queue receives the full deadline and reserves 300 seconds.
-        deadline=deadline - receipt_reserve,
+        **(
+            {"deadline": deadline - receipt_reserve}
+            if finite_frontier is None
+            else {
+                "finite_frontier": finite_frontier,
+                "request_timeout_seconds": request_timeout,
+            }
+        ),
         priority_targets=set(backend.dispositions).intersection(targets) if not shadow else (),
         max_io_workers=4,
         max_low_workers=min(2, args.max_workers),
@@ -5033,7 +5609,9 @@ def main(argv=None):
     run = sub.add_parser("run")
     run.add_argument("--assignment", required=True)
     run.add_argument("--state", required=True)
-    run.add_argument("--budget-seconds", type=int, default=2700)
+    run.add_argument("--budget-seconds", type=int)
+    run.add_argument("--finite-frontier-json", help="exact frozen finite-frontier/v2 descriptor")
+    run.add_argument("--request-timeout-seconds", type=float, default=120.0)
     run.add_argument("--max-workers", type=int, default=2)
     run.add_argument("--worker-timeout", type=int, default=120)
     run.add_argument("--apply", action="store_true")
@@ -5109,7 +5687,25 @@ def main(argv=None):
             }
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("valid") else 78
-    if not 10 <= args.budget_seconds <= 2700 or not 1 <= args.max_workers <= 4:
+    if args.finite_frontier_json is not None:
+        if args.budget_seconds is not None:
+            p.error("finite frontier cannot use --budget-seconds")
+        if not args.pipeline or args.coordinator_mode != "resource_scoped":
+            p.error("finite frontier requires --pipeline --coordinator-mode resource_scoped")
+        try:
+            from closer_frontier_policy import request_window, validate_frontier
+
+            args.finite_frontier = validate_frontier(json.loads(args.finite_frontier_json))
+            request_window(time.time(), args.request_timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            p.error(str(exc))
+    else:
+        args.finite_frontier = None
+        if args.budget_seconds is None:
+            args.budget_seconds = 2700
+    if (
+        args.finite_frontier is None and not 10 <= args.budget_seconds <= 2700
+    ) or not 1 <= args.max_workers <= 4:
         p.error("budget must be 10..2700 seconds; workers 1..4")
     if args.coordinator_mode == "resource_scoped" and not (args.pipeline or args.shadow):
         p.error("resource_scoped requires --pipeline or --shadow")
@@ -5145,6 +5741,11 @@ def main(argv=None):
             )
     assignment_rows = assignment_rows_from_file(args.assignment)
     targets = list(assignment_rows)
+    if args.finite_frontier is not None:
+        try:
+            args.finite_frontier = validate_frontier(args.finite_frontier, targets=targets)
+        except ValueError as exc:
+            p.error(str(exc))
     import closer_resources
 
     pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
@@ -5158,9 +5759,18 @@ def main(argv=None):
 def _main_admitted(args, p, assignment_rows, targets):
     import closer_queue
 
-    deadline = time.time() + args.budget_seconds + 300
+    finite_frontier = getattr(args, "finite_frontier", None)
+    # This initial adapter receives one request window in finite mode. Actual
+    # staged callbacks each construct their own adapter from their exact window.
+    deadline = (time.time() + args.budget_seconds + 300) if finite_frontier is None else None
     budget_admission = None
-    if args.pipeline and args.coordinator_mode == "resource_scoped":
+    if finite_frontier is not None:
+        budget_admission = {
+            "policy": "finite-frontier/v2",
+            "finite_frontier": finite_frontier,
+            "legacy_round_renewed": False,
+        }
+    elif args.pipeline and args.coordinator_mode == "resource_scoped":
         # A disjoint shard's bounded window is not a renewal of the shared
         # historical round. Every callback separately proves resource admission;
         # an existing shard still selects/preserves its own original deadline.
@@ -5231,7 +5841,11 @@ def _main_admitted(args, p, assignment_rows, targets):
     elif getattr(args, "workspaces_sha256", None):
         p.error("workspace pin requires --workspaces")
     backend = Closer(
-        GitHub(deadline=deadline),
+        GitHub(
+            deadline=(
+                deadline if finite_frontier is None else time.time() + args.request_timeout_seconds
+            )
+        ),
         runtime_binding=runtime_binding,
         require_runtime_binding=args.runtime_manifest is not None,
         state_path=args.state,
