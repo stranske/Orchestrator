@@ -147,6 +147,7 @@ def test_missing_fact_batch_continues_after_failure_and_counts_only_new_records(
     "matcher,trigger,reason",
     [
         ({"kind": ""}, {}, "empty_matcher_kind"),
+        ({"kind": "lane"}, {}, "matcher_kind_missing_expected_value:lane"),
         ({"lane": "closer"}, {"lane": "opener"}, "lane_mismatch"),
     ],
 )

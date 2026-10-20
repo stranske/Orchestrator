@@ -194,3 +194,140 @@ class DispatchPlanBoundaries(unittest.TestCase):
         self.assertEqual(self.command.call_args.args, ("gemini", "workspace prompt", None))
         self.assertEqual(self.command.call_args.kwargs["cwd"], self.cwd)
         self.assertEqual(result["cwd"], str(self.cwd))
+
+    def test_review_loop_handoff_is_appended_before_role_activation(self):
+        self.assignment["review_loop"] = True
+        self.assignment["review_run_id"] = "review-root"
+        result = self.plan()
+        supplied = self.activate.call_args.args[1]
+        self.assertIn("REVIEW-LOOP HANDOFF", supplied)
+        self.assertIn("PR_URL=https://github.com/<owner>/<repo>/pull/<number>", supplied)
+        self.assertTrue(result["review_loop"])
+        self.assertEqual(result["review_run_id"], "review-root")
+
+    def test_invalid_branch_prefix_returns_a_skip_error_without_provisioning(self):
+        self.enterContext(
+            patch.object(dispatcher, "_dispatch_branch", side_effect=ValueError("bad prefix"))
+        )
+        result = self.plan()
+        self.assertEqual(
+            result,
+            {"error": "bad prefix", "target": "fixture/repo#7", "agent": "cursor"},
+        )
+        self.worktree_path.assert_not_called()
+        self.activate.assert_not_called()
+        self.command.assert_not_called()
+
+    def test_active_provision_failure_skips_without_spawning(self):
+        self.enterContext(
+            patch.object(
+                dispatcher.provision,
+                "provision",
+                side_effect=RuntimeError("clone denied"),
+            )
+        )
+        result = dispatcher.plan_dispatch(self.assignment, dry_run=False)
+        self.assertEqual(
+            result,
+            {
+                "error": "provision failed: clone denied",
+                "target": "fixture/repo#7",
+                "agent": "cursor",
+            },
+        )
+        self.command.assert_not_called()
+        self.external.assert_not_called()
+
+    def test_refused_workspace_is_reported_like_a_provision_failure(self):
+        self.enterContext(
+            patch.object(
+                dispatcher.adapters,
+                "broad_workspace_reason",
+                return_value="workspace is home directory",
+            )
+        )
+        result = self.plan()
+        self.assertEqual(
+            result,
+            {
+                "error": "provisioned workspace refused: workspace is home directory",
+                "target": "fixture/repo#7",
+                "agent": "cursor",
+            },
+        )
+        self.activate.assert_not_called()
+        self.command.assert_not_called()
+
+    def test_selected_capability_marks_dry_run_fallback_before_command_build(self):
+        self.assignment["selected_capability_id"] = "compiled-rail"
+        result = self.plan()
+        tagged = self.tags.call_args.args[0]
+        self.assertEqual(tagged["capability_fallback"], "baseline")
+        self.assertEqual(
+            tagged["capability_dispatch_result"],
+            {"invoked": False, "accepted": False, "reason": "dry_run"},
+        )
+        self.assertEqual(result["capability_ids"], ["rail", "new-rail"])
+
+    def test_missing_prompt_uses_the_task_template_path(self):
+        del self.assignment["prompt"]
+        built = self.enterContext(
+            patch.object(dispatcher, "build_prompt", return_value="templated brief")
+        )
+        self.plan()
+        built.assert_called_once_with("implement", "fixture/repo#7", lane="opener")
+        self.assertIn("templated brief", self.activate.call_args.args[1])
+
+    def test_closer_lane_skips_branch_policy_and_still_plans(self):
+        self.assignment["lane"] = "closer"
+        branch = self.enterContext(patch.object(dispatcher, "_dispatch_branch"))
+        result = self.plan()
+        branch.assert_not_called()
+        self.assertIsNone(result["branch"])
+        self.assertNotIn("BRANCH POLICY", self.activate.call_args.args[1])
+        self.assertEqual(result["lane"], "closer")
+
+
+class NetHygieneBoundaries(unittest.TestCase):
+    """Proxy scrubbing must stay executable, not only mocked away by plan tests."""
+
+    def setUp(self):
+        temporary = self.enterContext(tempfile.TemporaryDirectory(prefix="dispatcher-net-"))
+        self.root = Path(temporary).resolve()
+        self.enterContext(
+            patch.dict(
+                os.environ,
+                {
+                    "ORCH_STATE_DIR": str(self.root / "state"),
+                    "ORCH_LOCAL_RUNTIME": str(self.root / "runtime"),
+                },
+                clear=False,
+            )
+        )
+        for name in dispatcher._PROXY_VARS + (
+            "ORCH_KEEP_PROXY",
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "NODE_EXTRA_CA_CERTS",
+            "NODE_OPTIONS",
+        ):
+            os.environ.pop(name, None)
+
+    def test_net_hygiene_prelude_unsets_the_proxy_family_unless_kept(self):
+        prelude = dispatcher._net_hygiene_prelude()
+        self.assertTrue(prelude.startswith("unset "))
+        self.assertIn("HTTPS_PROXY", prelude)
+        self.assertTrue(prelude.endswith("; "))
+        os.environ["ORCH_KEEP_PROXY"] = "1"
+        self.assertEqual(dispatcher._net_hygiene_prelude(), "")
+
+    def test_suspicious_net_env_masks_proxy_userinfo_and_lists_present_overrides(self):
+        os.environ["HTTPS_PROXY"] = "http://user:secret@proxy.example:8080"
+        os.environ["NODE_OPTIONS"] = "--max-old-space-size=2048"
+        rows = dispatcher._suspicious_net_env()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(rows[0].startswith("HTTPS_PROXY="))
+        self.assertNotIn("secret", rows[0])
+        self.assertIn("[REDACTED]", rows[0])
+        self.assertEqual(rows[1], "NODE_OPTIONS=--max-old-space-size=2048")
