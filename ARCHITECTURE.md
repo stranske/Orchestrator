@@ -1217,6 +1217,15 @@ consult actually lands on. It follows the same two rules as binding: it **annota
 It is deliberately **repo-scoped rather than surface-scoped**: a demotion learned here would unbind
 the capability for every other repo, which is the wrong granularity for "broken against this one app".
 
+The writable repo-knowledge registry lives under the operational runtime
+(`$ORCH_LOCAL_RUNTIME/experiments/repo_knowledge.json`, defaulting to
+`~/.codex/orchestrator/experiments/repo_knowledge.json`); `ORCH_REPO_KNOWLEDGE_PATH` remains an
+explicit override. Prompt construction can seed or migrate it during a read. That mutable state
+must survive code-generation swaps without writing into the verified mirror. Existing misplaced
+state requires exact-byte preservation and guarded reconciliation; changing the default does not
+silently import or delete a historical generation's registry, and snapshot ownership/digests stay
+enforced.
+
 **And a fifth input, which is NOT that one: the capability's own declared PRECONDITION**
 (`applies_to: self | audited_repo | both`, plus named one-time repo facts —
 `capability_advisor.CAPABILITY_PRECONDITIONS`). The distinction matters and the two must not merge. A
