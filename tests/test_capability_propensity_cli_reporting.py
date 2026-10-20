@@ -12,7 +12,7 @@ import json
 import capability_propensity as propensity
 
 
-def test_read_only_cli_commands_render_their_injected_reports(monkeypatch, capsys, tmp_path):
+def test_read_only_cli_commands_render_their_injected_reports(monkeypatch, capsys):
     """Each read-only command reaches its reader without opening a live capability store."""
     calls: list[tuple[str, object]] = []
     props = [
@@ -60,11 +60,6 @@ def test_read_only_cli_commands_render_their_injected_reports(monkeypatch, capsy
     )
     monkeypatch.setattr(
         propensity,
-        "migrate_fixture_provenance",
-        lambda *, path: calls.append(("migrate", path)) or {"changed": 0, "left": 2},
-    )
-    monkeypatch.setattr(
-        propensity,
         "detect",
         lambda *, apply_promotions: calls.append(("detect", apply_promotions)) or detection,
     )
@@ -98,11 +93,7 @@ def test_read_only_cli_commands_render_their_injected_reports(monkeypatch, capsy
     assert propensity.main(["binding-quality", "--surface", "opener-lane", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == quality
 
-    ledger = tmp_path / "fixture.json"
-    assert propensity.main(["migrate-fixture-provenance", "--ledger", str(ledger), "--json"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"changed": 0, "left": 2}
-
-    assert propensity.main(["detect", "--json", "--apply"]) == 0
+    assert propensity.main(["detect", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == detection
 
     assert propensity.main(["offer-improvements", "--window-days", "7"]) == 0
@@ -118,11 +109,52 @@ def test_read_only_cli_commands_render_their_injected_reports(monkeypatch, capsy
         ("repair", 7),
         ("heartbeat", ("invocation", "repair-proposals:1")),
         ("binding-quality", ("opener-lane", 90)),
-        ("migrate", ledger),
-        ("detect", True),
+        ("detect", False),
         ("heartbeat", ("invocation", "detect:0")),
         ("offer-improvements", (7, True)),
         ("experiments", 7),
         ("report", 7),
         ("heartbeat", ("invocation", "cli:report:0")),
+    ]
+
+
+def test_mutating_cli_commands_forward_their_explicit_mutation_inputs(
+    monkeypatch, capsys, tmp_path
+):
+    """Migration and `detect --apply` take mutation-only paths, never the reporting default."""
+    calls: list[tuple[str, object]] = []
+    detection = {
+        "surfaces": {},
+        "promotions": [],
+        "demotions": [],
+        "not_selected_by_design": {"count": 0, "withheld": 0, "capabilities": {}},
+        "applied": [],
+    }
+    ledger = tmp_path / "fixture.json"
+    monkeypatch.setattr(
+        propensity,
+        "migrate_fixture_provenance",
+        lambda *, path: calls.append(("migrate", path)) or {"changed": 0, "left": 2},
+    )
+    monkeypatch.setattr(
+        propensity,
+        "detect",
+        lambda *, apply_promotions: calls.append(("detect", apply_promotions)) or detection,
+    )
+    monkeypatch.setattr(
+        propensity,
+        "_capability_heartbeat",
+        lambda event, ref: calls.append(("heartbeat", (event, ref))),
+    )
+
+    assert propensity.main(["migrate-fixture-provenance", "--ledger", str(ledger), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"changed": 0, "left": 2}
+
+    assert propensity.main(["detect", "--json", "--apply"]) == 0
+    assert json.loads(capsys.readouterr().out) == detection
+
+    assert calls == [
+        ("migrate", ledger),
+        ("detect", True),
+        ("heartbeat", ("invocation", "detect:0")),
     ]

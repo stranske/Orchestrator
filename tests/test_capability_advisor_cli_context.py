@@ -14,6 +14,7 @@ def test_cli_preserves_explicit_context_and_overrides_its_pr_with_the_cli_value(
     seen = {}
 
     def fake_advise(task, **kwargs):
+        """Capture the CLI contract without consulting a capability ledger."""
         seen["task"] = task
         seen.update(kwargs)
         return {"useful": False, "capabilities": []}
