@@ -190,7 +190,8 @@ handling continue while shed.
 ## Scheduled installation
 
 The repository record of truth is [`scripts/usage_poll/`](../scripts/usage_poll/).
-Install **all** Python files (including `usage_history.py`) and the shell wrapper
+Install **all** Python files (including `usage_history.py`), `usage-poll.sh`, and
+`py-standard.sh`
 on **local disk** at `~/.codex/bin`;
 launchd cannot execute them from CloudStorage. Render the plist's `__HOME__`
 placeholder to the absolute home directory and install it at
@@ -198,9 +199,25 @@ placeholder to the absolute home directory and install it at
 `com.stranske.usage-poll`, `StartInterval=600`, with `RunAtLoad=true`. Create
 `~/.codex/orchestrator/usage-poll` for stdout/stderr logs before loading it.
 
-The wrapper explicitly uses `/opt/anaconda3/bin/python3`, or an explicitly selected
-`ORCH_USAGE_POLL_PYTHON` venv interpreter, and fails if unavailable. It never falls
-back to Apple's Python. It attempts both providers even when one fails and returns
+The wrapper sources `~/.codex/bin/py-standard.sh`: the owner standard is Python
+3.14 (uv-managed or Homebrew), with 3.13 as backup. It refuses to fall back to
+macOS system 3.9 or the Anaconda 3.12 base. `ORCH_STANDARD_PYTHON` selects an
+override only if it reports 3.13 or 3.14; other versions are ignored. The existing
+`ORCH_USAGE_POLL_PYTHON` explicit venv selection remains supported only for
+3.13/3.14; unsupported or unavailable legacy overrides are ignored with a
+diagnostic. If no standard interpreter is available, the wrapper fails explicitly.
+
+For the Claude poll only, the wrapper sources
+`~/.codex/handoff/.claude-oauth-token` in a subshell for headless authentication;
+the token must be exported there as `CLAUDE_CODE_OAUTH_TOKEN`. Keep that file
+outside the repository and never print its contents. Both output streams from
+sourcing the file are suppressed, and inherited token state is cleared before
+polling. If the file is absent, the Claude
+poll falls back to the CLI login and may fail intermittently, returning the
+API-billing “Total cost” view instead of subscription usage. Neither the Codex
+poll nor the stale-alert helper sources the token file.
+
+The wrapper attempts both providers even when one fails and returns
 non-zero for any failure. After both polls it checks each latest file's own `ts`.
 The wrapper defines `STALE_AFTER_SECONDS=1800` once, mirroring
 `pacing.STALE_AFTER_SECONDS` with a parity test. Missing/invalid timestamps are

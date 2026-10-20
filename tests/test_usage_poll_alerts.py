@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -30,8 +31,17 @@ def wrapper(tmp_path):
     home = tmp_path / "home"
     installed = home / ".codex/bin"
     installed.mkdir(parents=True)
-    for name in ("usage-poll.sh", "usage_alerts.py"):
+    for name in ("usage-poll.sh", "py-standard.sh", "usage_alerts.py"):
         shutil.copyfile(SCRIPTS / name, installed / name)
+    # These tests exercise real alert Python on every CI runtime, including 3.12.
+    # Standard-interpreter version selection is covered independently by fake
+    # interpreters in test_usage_poll_shell.py, so do not depend on host installs.
+    standard = installed / "standard-python"
+    standard.write_text(
+        '#!/bin/bash\nif [[ "$1" == -c ]]; then printf "3.14\\n"; exit 0; fi\n'
+        f'exec {shlex.quote(sys.executable)} "$@"\n'
+    )
+    standard.chmod(0o755)
     for name in ("codex", "claude"):
         (installed / f"{name}-usage-poll.py").write_text(
             "import os, sys\n"
@@ -47,7 +57,11 @@ def wrapper(tmp_path):
 
     def run(mode="failed", override=None):
         env = dict(
-            os.environ, HOME=str(home), ORCH_USAGE_POLL_PYTHON=sys.executable, FAKE_POLL_MODE=mode
+            os.environ,
+            HOME=str(home),
+            ORCH_STANDARD_PYTHON=str(standard),
+            ORCH_USAGE_POLL_PYTHON=str(standard),
+            FAKE_POLL_MODE=mode,
         )
         env.pop("HANDOFF_ALERT_LOG", None)
         if override:
