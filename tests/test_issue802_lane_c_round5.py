@@ -17,6 +17,7 @@ import pytest
 
 import feedback
 import redirect_apply as ra
+import redirect_plan
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +29,11 @@ def isolated_runtime(tmp_path, monkeypatch):
     runtime.mkdir()
     monkeypatch.setenv("ORCH_STATE_DIR", str(state))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+    monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
+    monkeypatch.setattr(ra.capabilities, "REG", runtime / "capabilities.json")
+    # apply_plan writes the retry prompt before it reaches the injected runner tripwire.
+    monkeypatch.setattr(redirect_plan, "PROMPT_DIR", tmp_path / "redirect-prompts")
     db = runtime / "feedback" / "orchestrator.db"
     db.parent.mkdir(parents=True)
     monkeypatch.setenv("ORCH_FEEDBACK_DB", str(db))
@@ -40,6 +46,8 @@ def isolated_runtime(tmp_path, monkeypatch):
 
     monkeypatch.setattr("subprocess.run", forbid)
     monkeypatch.setattr("subprocess.Popen", forbid)
+    monkeypatch.setattr("socket.create_connection", forbid)
+    monkeypatch.setattr("socket.socket.connect", forbid)
     yield
     assert started == []
 
