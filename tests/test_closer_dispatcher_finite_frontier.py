@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 import time
 
 import pytest
@@ -321,7 +322,7 @@ def test_bounded_run_reaps_child_when_start_publication_fails(tmp_path, monkeypa
     def capture_popen(*args, **kwargs):
         child = real_popen(*args, **kwargs)
         command = args[0] if args else kwargs.get("args")
-        if command and command[0] == "/bin/sh":
+        if command and command[0] == sys.executable:
             child_processes.append(child)
         return child
 
@@ -344,7 +345,7 @@ def test_bounded_run_reaps_child_when_start_publication_fails(tmp_path, monkeypa
         reservation=reservation,
     ):
         with pytest.raises(resources.ResourceBlocked, match="publication failure"):
-            dispatcher.bounded_run(["/bin/sh", "-c", "sleep 30"], timeout=3)
+            dispatcher.bounded_run([sys.executable, "-c", "import time; time.sleep(30)"], timeout=3)
         assert child_processes and child_processes[0].poll() is not None
     record = json.loads((root / "pools/github-api/slot-0.json").read_text())
     assert record["status"] == "resolved"

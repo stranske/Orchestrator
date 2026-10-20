@@ -4278,10 +4278,77 @@ def _run_pipeline_finite(
                                 "next_trigger", "capacity_recheck"
                             )
                         elif result.get("status") == "pending":
-                            current.update(status="held", deferred_reason="pending_external_event")
-                            current["deferred_next_trigger"] = result.get(
-                                "next_trigger", "external_event"
+                            pending_kind = result.get("pending_kind")
+                            pending_evidence = result.get("pending_evidence")
+                            pending_field = {
+                                "ci": "check_run_id",
+                                "async_operation": "operation_id",
+                                "external_event": "event_id",
+                            }.get(pending_kind)
+                            pending_revision = (
+                                pending_evidence.get("observed_revision")
+                                or pending_evidence.get("revision")
+                                if isinstance(pending_evidence, Mapping)
+                                else None
                             )
+                            assignment_hold = (
+                                pending_kind == "external_event"
+                                and isinstance(pending_evidence, Mapping)
+                                and isinstance(pending_evidence.get("fingerprint"), str)
+                                and bool(pending_evidence["fingerprint"])
+                                and pending_evidence.get("execution_state") not in {None, "active"}
+                            )
+                            pending_identifier = (
+                                pending_evidence.get(pending_field)
+                                if isinstance(pending_evidence, Mapping) and pending_field
+                                else None
+                            )
+                            valid_pending_identifier = (
+                                type(pending_identifier) is int and pending_identifier > 0
+                                if pending_kind == "ci"
+                                else isinstance(pending_identifier, str)
+                                and bool(pending_identifier.strip())
+                            )
+                            if (
+                                pending_field
+                                and isinstance(pending_evidence, Mapping)
+                                and pending_evidence.get("target") == target
+                                and valid_pending_identifier
+                                and (pending_revision == current.get("revision") or assignment_hold)
+                                and isinstance(result.get("next_trigger"), str)
+                                and result["next_trigger"].strip()
+                            ):
+                                current.update(
+                                    status="held",
+                                    deferred_reason=f"pending_{pending_kind}",
+                                )
+                                current["deferred_next_trigger"] = result["next_trigger"]
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="interpretation pending result lacks exact event evidence",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
+                        elif result.get("status") == "deferred":
+                            evidence = result.get("resource_evidence")
+                            if (
+                                result.get("reason") == "provider_failure"
+                                and isinstance(result.get("next_trigger"), str)
+                                and result["next_trigger"].strip()
+                                and _valid_provider_failure(evidence)
+                            ):
+                                current.update(
+                                    status="held",
+                                    deferred_reason="provider_failure",
+                                    resource_evidence=dict(evidence),
+                                )
+                                current["deferred_next_trigger"] = result["next_trigger"]
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="interpretation deferral lacks validated no-effect evidence",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
                         elif result.get("substantive_needs"):
                             current.update(status="pending", stage="exception")
                         elif result.get("substantive_needs") == []:
@@ -4468,14 +4535,147 @@ def _run_pipeline_finite(
                             current["deferred_next_trigger"] = result.get(
                                 "next_trigger", "capacity_recheck"
                             )
-                        elif status in {"blocked", "not_started"}:
-                            current.update(
-                                status="held",
-                                error="finite frontier action did not complete its target",
-                            )
-                            current["deferred_next_trigger"] = result.get(
-                                "next_trigger", "new_frontier_required"
-                            )
+                        elif status in {"pending", "deferred", "blocked", "not_started"}:
+                            # A status label alone cannot prove no effect. Require
+                            # the exact inner queue stop receipt and a matching
+                            # accounting row before classifying the wait as held.
+                            action_state_path = context.get("action_state_path")
+                            queue_receipt = result.get("queue_receipt")
+                            reason = result.get("reason")
+                            trigger = result.get("next_trigger")
+                            row = None
+                            proof_ok = False
+                            if (
+                                isinstance(action_state_path, str)
+                                and isinstance(queue_receipt, Mapping)
+                                and isinstance(trigger, str)
+                                and trigger.strip()
+                            ):
+                                try:
+                                    import closer_queue
+
+                                    checked = closer_queue.validate_stop(
+                                        action_state_path,
+                                        [target],
+                                        receipt=queue_receipt,
+                                        frontier_id=frontier["frontier_id"],
+                                    )
+                                    rows = queue_receipt.get("accounting")
+                                    row = (
+                                        next(
+                                            (
+                                                value
+                                                for value in rows
+                                                if isinstance(value, Mapping)
+                                                and value.get("target") == target
+                                            ),
+                                            None,
+                                        )
+                                        if isinstance(rows, list)
+                                        else None
+                                    )
+                                    proof_ok = bool(
+                                        checked.get("valid")
+                                        and checked.get("stop_valid")
+                                        and queue_receipt.get("stop_valid") is True
+                                        and isinstance(row, Mapping)
+                                        and row.get("operation_status")
+                                        not in {
+                                            "running",
+                                            "submitted",
+                                            "uncertain",
+                                        }
+                                    )
+                                    if status == "pending":
+                                        kind = result.get("pending_kind")
+                                        evidence = result.get("pending_evidence")
+                                        field = {
+                                            "ci": "check_run_id",
+                                            "async_operation": "operation_id",
+                                            "external_event": "event_id",
+                                        }.get(kind)
+                                        identifier = (
+                                            evidence.get(field)
+                                            if isinstance(evidence, Mapping) and field
+                                            else None
+                                        )
+                                        valid_identifier = (
+                                            type(identifier) is int and identifier > 0
+                                            if kind == "ci"
+                                            else isinstance(identifier, str)
+                                            and bool(identifier.strip())
+                                        )
+                                        proof_ok = bool(
+                                            proof_ok
+                                            and field
+                                            and isinstance(evidence, Mapping)
+                                            and evidence.get("target") == target
+                                            and valid_identifier
+                                            and evidence.get("observed_revision")
+                                            == row.get("revision")
+                                            and (
+                                                (
+                                                    kind in {"ci", "async_operation"}
+                                                    and row.get("eligible") is False
+                                                    and row.get("action") == "wait"
+                                                )
+                                                or (
+                                                    kind == "external_event"
+                                                    and row.get("action") == "collect_evidence"
+                                                    and row.get("reason")
+                                                    == "collect terminal or unattributed verifier evidence; do not rerun"
+                                                )
+                                            )
+                                        )
+                                    elif reason == "validated_inner_wait":
+                                        resource = result.get("resource_evidence")
+                                        proof = (
+                                            resource.get("inner_wait")
+                                            if isinstance(resource, Mapping)
+                                            else None
+                                        )
+                                        prepared = context.get("prepare")
+                                        snapshot = (
+                                            prepared.get("snapshot")
+                                            if isinstance(prepared, Mapping)
+                                            else None
+                                        )
+                                        proof_ok = bool(
+                                            proof_ok
+                                            and isinstance(proof, Mapping)
+                                            and _valid_inner_wait(
+                                                path,
+                                                target,
+                                                context.get("revision"),
+                                                snapshot,
+                                                proof.get("reason"),
+                                                trigger,
+                                                proof,
+                                            )
+                                        )
+                                    else:
+                                        proof_ok = bool(
+                                            proof_ok
+                                            and row.get("reason") == reason
+                                            and reason in closer_queue.RESOURCE_DEFERRALS
+                                            and reason
+                                            not in {"operation_running", "repo_operation_running"}
+                                        )
+                                except (OSError, TypeError, ValueError, KeyError):
+                                    proof_ok = False
+                            if proof_ok:
+                                current.update(
+                                    status="held",
+                                    deferred_reason=reason or result.get("pending_kind"),
+                                    queue_receipt=dict(queue_receipt),
+                                )
+                                current["deferred_next_trigger"] = trigger
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="action wait lacks exact verified no-effect queue proof",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
                         else:
                             current.update(
                                 status="unknown", error="action returned an unsupported outcome"

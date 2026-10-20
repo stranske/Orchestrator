@@ -14,12 +14,19 @@ import math
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 import tomllib
 import types
+import urllib.error
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
+
+# Bind child bootstrap to the source present when this module was loaded,
+# never to a replacement discovered at transport construction/request time.
+_BINDING_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 CORE_FILES = (
     "scripts/closer_runtime.py",
@@ -390,6 +397,178 @@ class CoreBundle:
         return builtins.__import__(name, globals, locals, fromlist, level)
 
 
+_CORE_HTTP_PROTOCOL_BYTES = 2 * 100_000_000  # preserve Core's existing Git blob allowance
+_CORE_HTTP_CHILD = r"""
+import math,signal,sys,time
+try:
+    deadline=float(sys.argv[1])
+    remaining=deadline-time.monotonic()
+    if not math.isfinite(deadline) or not 0 < remaining <= 30:
+        raise ValueError("original Core HTTP deadline expired or invalid")
+    # Default SIGALRM terminates even a stuck response read and survives loss of
+    # the parent supervisor. No new duration is minted in this child.
+    signal.signal(signal.SIGALRM,signal.SIG_DFL)
+    remaining=deadline-time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("original Core HTTP deadline expired")
+    signal.setitimer(signal.ITIMER_REAL,remaining)
+except BaseException:
+    sys.stdout.write('{"schema":"core-http-result/v1","status":"unknown"}')
+    raise SystemExit(0)
+import hashlib,json,types,urllib.error
+from pathlib import Path
+packet=json.load(sys.stdin)
+try:
+    if packet.get("request_deadline_mono") != deadline:
+        raise ValueError("original Core HTTP deadline differs")
+    path=Path(packet["loader_path"])
+    source=path.read_bytes()
+    if hashlib.sha256(source).hexdigest()!=packet["loader_sha256"]:
+        raise ValueError("binding source changed")
+    module=types.ModuleType("_owned_core_http_binding")
+    module.__file__=str(path)
+    sys.modules[module.__name__]=module
+    exec(compile(source,str(path),"exec"),module.__dict__)
+    bundle=module.CoreBundle(packet["pin"])
+    try:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("original Core HTTP deadline expired before HTTP")
+        value=bundle.github.NativeGitHubTransport()(packet["method"],packet["path"],packet["body"])
+        result={"schema":"core-http-result/v1","status":"ok","value":value}
+    except urllib.error.HTTPError as error:
+        result={"schema":"core-http-result/v1","status":"http_error","code":error.code,
+                "rate_limited":bool(bundle.github._rate_limited(error)),
+                "headers":{key:value for key,value in (error.headers or {}).items()
+                           if key.lower() in {"retry-after","x-ratelimit-remaining","x-ratelimit-reset","x-ratelimit-resource"}}}
+        error.close()
+    except bundle.runtime.PolicyDenied:
+        result={"schema":"core-http-result/v1","status":"denied"}
+    raw=json.dumps(result,separators=(",",":"))
+    if len(raw.encode())>packet["max_bytes"]:
+        raise ValueError("Core HTTP protocol too large")
+except BaseException:
+    raw='{"schema":"core-http-result/v1","status":"unknown"}'
+sys.stdout.write(raw)
+"""
+
+
+class _CoreHTTPTransport:
+    """One cancellable default Core HTTP operation; never a frontier-wide timer."""
+
+    def __init__(self, bundle: CoreBundle):
+        self.bundle = bundle
+
+    def __call__(self, method, path, body):
+        import closer_resources
+        import dispatcher
+
+        try:
+            bootstrap_matches = _hash(Path(__file__)) == _BINDING_SOURCE_SHA256
+        except OSError as exc:
+            raise BindingError("Core HTTP binding source changed") from exc
+        if not bootstrap_matches:
+            raise BindingError("Core HTTP binding source changed")
+        if not self.bundle.github._allowed_native_call(method, path):
+            raise self.bundle.runtime.PolicyDenied("unsupported native API operation")
+        # Keep the existing Core socket limit, additionally enforcing TOTAL time
+        # in an owned process. The callback's original remaining window can only
+        # shorten this request; it never renews an expired callback.
+        started = time.monotonic()
+        request_limit = started + min(30.0, float(self.bundle.load("api_client").DEFAULT_TIMEOUT))
+        sampled_mono = time.monotonic()
+        remaining = closer_resources.finite_request_remaining()
+        if remaining is not None:
+            request_limit = min(request_limit, sampled_mono + remaining)
+        timeout = request_limit - time.monotonic()
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise TimeoutError("Core HTTP original request window expired")
+        binding = closer_resources.finite_pool_current_binding()
+        observation = {
+            "run_id": "core-http-" + uuid.uuid4().hex,
+            "agent": "github",
+            "profile_id": "github-api",
+            **(
+                {
+                    "finite_frontier_id": binding["frontier_id"],
+                    "finite_frontier_target": binding["target"],
+                }
+                if binding
+                else {}
+            ),
+        }
+        packet = {
+            "loader_path": str(Path(__file__).resolve()),
+            "loader_sha256": _BINDING_SOURCE_SHA256,
+            "pin": {
+                "package_root": str(self.bundle.root),
+                "package_digest": self.bundle.namespace.removeprefix("_closer_core_"),
+            },
+            "method": method,
+            "path": path,
+            "body": body,
+            "max_bytes": _CORE_HTTP_PROTOCOL_BYTES,
+        }
+        # Anonymous mode-0600 owned input carries no credentials. The child uses
+        # the existing GH_TOKEN/GITHUB_TOKEN environment, exactly as native Core.
+        with tempfile.TemporaryFile(mode="w+") as request_input:
+            sampled_mono = time.monotonic()
+            current = closer_resources.finite_request_remaining()
+            if current is not None:
+                request_limit = min(request_limit, sampled_mono + current)
+            packet["request_deadline_mono"] = request_limit
+            json.dump(packet, request_input)
+            if request_input.tell() > _CORE_HTTP_PROTOCOL_BYTES:
+                raise BindingError("Core HTTP request protocol too large")
+            request_input.seek(0)
+            # Serialization/setup consumes this same request, not a new window.
+            timeout = request_limit - time.monotonic()
+            if timeout <= 0:
+                raise TimeoutError("Core HTTP original request window expired")
+            done = dispatcher.run_observed_offload(
+                [sys.executable, "-c", _CORE_HTTP_CHILD, str(request_limit)],
+                callback=(
+                    closer_resources.finite_pool_process_started if binding else lambda _: None
+                ),
+                starting_callback=closer_resources.finite_pool_prepare_request if binding else None,
+                finished_callback=(
+                    closer_resources.finite_pool_process_finished if binding else None
+                ),
+                observation=observation,
+                cwd=None,
+                timeout=timeout,
+                stdin=request_input,
+            )
+        if done.returncode != 0 or len((done.stdout or "").encode()) > _CORE_HTTP_PROTOCOL_BYTES:
+            raise BindingError("Core HTTP request result unavailable")
+        try:
+            result = json.loads(done.stdout)
+        except (TypeError, ValueError) as exc:
+            raise BindingError("Core HTTP request protocol invalid") from exc
+        if not isinstance(result, dict) or result.get("schema") != "core-http-result/v1":
+            raise BindingError("Core HTTP request protocol invalid")
+        if result.get("status") == "denied":
+            raise self.bundle.runtime.PolicyDenied("native Core HTTP denied; no fallback")
+        if result.get("status") == "http_error":
+            code, headers = result.get("code"), result.get("headers")
+            limited = result.get("rate_limited")
+            if (
+                type(code) is not int
+                or not 400 <= code <= 599
+                or not isinstance(headers, dict)
+                or type(limited) is not bool
+            ):
+                raise BindingError("Core HTTP error protocol invalid")
+            reason = (
+                "native Core HTTP rate limit exceeded" if limited else "native Core HTTP refused"
+            )
+            error = urllib.error.HTTPError(path, code, reason, headers, None)
+            error.close()
+            raise error
+        if result.get("status") != "ok":
+            raise BindingError("Core HTTP request outcome unknown; reconcile original operation")
+        return result.get("value")
+
+
 class RuntimeBinding:
     def __init__(
         self,
@@ -413,7 +592,7 @@ class RuntimeBinding:
             token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
             if self.transport is None and not token:
                 raise BindingError("shared Core requires independently supplied env token")
-            request = self.transport or self.bundle.github.NativeGitHubTransport(token)
+            request = self.transport or _CoreHTTPTransport(self.bundle)
             store = self.bundle.github.GitHubContentsOperationStore(request, repository)
             adapter = PinnedCoreAdapter(self.bundle.runtime, ".", store=store)
             self.adapters[repository] = adapter

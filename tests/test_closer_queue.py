@@ -182,6 +182,7 @@ def test_finite_frontier_has_no_aggregate_clock_but_each_request_is_bounded(tmp_
     state = closer_queue._read_state(path)["frontiers"]["frontier-1"]
     assert "deadline" not in state["round"]
     assert state["round"]["passes"] == 2  # configured max_passes=1 is legacy-only
+    assert state["round"]["max_passes"] == len(targets)
     assert state["round"]["finite_frontier"] == frontier
 
 
@@ -196,7 +197,7 @@ def test_finite_frontier_observation_must_match_frozen_revision_and_action(tmp_p
         "claim_targets": [target],
         "repo_keys": ["acme/repo"],
     }
-    closer_queue.run_round(
+    receipt = closer_queue.run_round(
         tmp_path / "queue-binding.json",
         [target],
         lambda _target: observation,
@@ -208,14 +209,187 @@ def test_finite_frontier_observation_must_match_frozen_revision_and_action(tmp_p
         finite_frontier=frontier,
         frontier_target=target,
         request_timeout_seconds=10,
+        claim_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+        release_fn=lambda *_: True,
     )
     assert calls == []
-    row = closer_queue._read_state(tmp_path / "queue-binding.json")["frontiers"][
-        "frontier-binding"
-    ]["items"][target]
+    state = closer_queue._read_state(tmp_path / "queue-binding.json")
+    bucket = state["frontiers"]["frontier-binding"]
+    row = bucket["items"][target]
     assert row["status"] == "deferred"
     assert row["frontier_identity_mismatch"]["expected"]["revision"] == "r1"
     assert row["frontier_identity_mismatch"]["observed_revision"] == "r2"
+    checked = closer_queue.validate_stop(
+        tmp_path / "queue-binding.json",
+        [target],
+        receipt=receipt,
+        frontier_id="frontier-binding",
+    )
+    assert checked["valid"] and checked["stop_valid"]
+    assert row["deferred_reason"] == "finite_frontier_identity_mismatch"
+
+
+def test_finite_observation_failure_is_preserved_and_stop_valid(tmp_path):
+    target = "acme/repo#observe-failed"
+    frontier = _frontier([target], frontier_id="frontier-observe-failed", actions={target: "merge"})
+
+    def fail_observation(_target):
+        raise OSError("read failed")
+
+    receipt = closer_queue.run_round(
+        tmp_path / "queue-observe-failed.json",
+        [target],
+        fail_observation,
+        lambda *_args, **_kwargs: pytest.fail("failed observation must not execute"),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+        claim_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+        release_fn=lambda *_: True,
+    )
+    row = receipt["accounting"][0]
+    assert row["reason"] == "observation_failed"
+    assert row["next_trigger"] == "retry_observation_next_round"
+    checked = closer_queue.validate_stop(
+        tmp_path / "queue-observe-failed.json",
+        [target],
+        receipt=receipt,
+        frontier_id="frontier-observe-failed",
+    )
+    assert checked["valid"] and checked["stop_valid"]
+    replay = closer_queue.run_round(
+        tmp_path / "queue-observe-failed.json",
+        [target],
+        lambda *_: pytest.fail("a terminal frontier must not refresh its failed observation"),
+        lambda *_args, **_kwargs: pytest.fail("a terminal frontier must not execute"),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    assert replay == receipt
+
+
+def test_finite_completed_frontier_is_not_a_reusable_round(tmp_path):
+    target = "acme/repo#completed-once"
+    frontier = _frontier([target], frontier_id="frontier-completed-once", actions={target: "merge"})
+    calls = []
+    path = tmp_path / "queue-completed-once.json"
+    first = closer_queue.run_round(
+        path,
+        [target],
+        lambda _target: {
+            **_snapshot("r1", "merge"),
+            "target": target,
+            "operation_binding": {"pr_target": target, "source_targets": []},
+            "claim_targets": [target],
+            "repo_keys": ["acme/repo"],
+        },
+        lambda *_args, **_kwargs: calls.append("execute")
+        or {"status": "completed", "advanced": True},
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+        claim_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+        release_fn=lambda *_: True,
+    )
+    replay = closer_queue.run_round(
+        path,
+        [target],
+        lambda *_: pytest.fail("a terminal frontier must not observe again"),
+        lambda *_args, **_kwargs: pytest.fail("a terminal frontier must not execute again"),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    assert calls == ["execute"]
+    assert first["valid"] and replay == first
+    changed = _frontier(
+        [target],
+        frontier_id="frontier-completed-once",
+        actions={target: "collect_evidence"},
+    )
+    with pytest.raises(closer_queue.QueueStateError, match="already bound|identity differs"):
+        closer_queue.run_round(
+            path,
+            [target],
+            lambda *_: pytest.fail("a mismatched frontier must not observe"),
+            lambda *_args, **_kwargs: pytest.fail("a mismatched frontier must not execute"),
+            owner="runner-a",
+            deadline=None,
+            receipt_reserve_seconds=0,
+            max_operation_retries=0,
+            finite_frontier=changed,
+            frontier_target=target,
+            request_timeout_seconds=10,
+        )
+
+
+def test_finite_unknown_frontier_is_not_reconciled_or_replayed(tmp_path):
+    target = "acme/repo#unknown-once"
+    frontier = _frontier([target], frontier_id="frontier-unknown-once", actions={target: "merge"})
+    calls = []
+    path = tmp_path / "queue-unknown-once.json"
+    first = closer_queue.run_round(
+        path,
+        [target],
+        lambda _target: {
+            **_snapshot("r1", "merge"),
+            "target": target,
+            "operation_binding": {"pr_target": target, "source_targets": []},
+            "claim_targets": [target],
+            "repo_keys": ["acme/repo"],
+        },
+        lambda *_args, **_kwargs: calls.append("execute")
+        or (_ for _ in ()).throw(TimeoutError("possibly submitted")),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+        claim_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+        release_fn=lambda *_: True,
+    )
+    replay = closer_queue.run_round(
+        path,
+        [target],
+        lambda *_: pytest.fail("UNKNOWN frontier must not observe again"),
+        lambda *_args, **_kwargs: pytest.fail("UNKNOWN frontier must not execute again"),
+        reconcile=lambda *_args, **_kwargs: pytest.fail(
+            "UNKNOWN frontier must not reconcile again"
+        ),
+        owner="runner-a",
+        deadline=None,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        finite_frontier=frontier,
+        frontier_target=target,
+        request_timeout_seconds=10,
+    )
+    assert calls == ["execute"]
+    assert not first["valid"] and not replay["valid"]
+    assert replay["accounting"] == first["accounting"]
 
 
 def test_finite_frontier_does_not_progress_to_a_new_action_after_effect(tmp_path):

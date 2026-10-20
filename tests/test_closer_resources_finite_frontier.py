@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 
 import pytest
 
@@ -97,6 +98,33 @@ def test_legacy_lease_keeps_original_expiry(tmp_path):
             lease.check(lambda: 21)
     finally:
         lease.release()
+
+
+def test_finite_request_remaining_uses_original_wall_and_monotonic_window(monkeypatch):
+    wall, monotonic = [100.0], [10.0]
+    monkeypatch.setattr(time, "monotonic", lambda: monotonic[0])
+    assert resources.finite_request_remaining() is None
+    with resources.inventory_request(105.0, now=lambda: wall[0]):
+        assert resources.finite_request_remaining() == 5.0
+        wall[0], monotonic[0] = 90.0, 12.0
+        assert resources.finite_request_remaining() == 3.0
+        with resources.inventory_request(200.0, now=lambda: wall[0]):
+            assert resources.finite_request_remaining() == 3.0
+        wall[0] = 106.0
+        assert resources.finite_request_remaining() == 0.0
+        wall[0], monotonic[0] = 90.0, 15.0
+        assert resources.finite_request_remaining() == 0.0
+    assert resources.finite_request_remaining() is None
+
+
+@pytest.mark.parametrize(
+    "deadline,clock", [(True, 100), (float("inf"), 100), (105, float("nan")), (105, False)]
+)
+def test_finite_request_remaining_rejects_invalid_clocks_without_context_leak(deadline, clock):
+    with pytest.raises(resources.ResourceBlocked, match="finite numeric"):
+        with resources.inventory_request(deadline, now=lambda: clock):
+            pytest.fail("invalid request clock accepted")
+    assert resources.finite_request_remaining() is None
 
 
 def run_selected(path, selected, **overrides):
@@ -361,19 +389,51 @@ def test_finite_census_requires_held_exact_owner_epoch_and_descriptor(tmp_path):
         replacement.release()
 
 
-def test_hung_request_transport_is_killed_and_not_repeated(tmp_path):
+def test_hung_request_transport_is_killed_and_not_repeated(tmp_path, monkeypatch):
     pid_file = tmp_path / "request.pid"
     calls = []
+    script = (
+        "import json,os,pathlib,subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(5)'],"
+        "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(json.dumps({'parent':os.getpid(),'descendant':child.pid})); "
+        "time.sleep(5)"
+    )
+    command = [sys.executable, "-c", script, str(pid_file)]
+    original_popen = subprocess.Popen
+
+    def read_pids():
+        try:
+            pids = json.loads(pid_file.read_text())
+        except (FileNotFoundError, ValueError):
+            return None
+        if (
+            set(pids) != {"parent", "descendant"}
+            or any(type(pid) is not int or pid <= 1 for pid in pids.values())
+            or pids["parent"] == pids["descendant"]
+        ):
+            return None
+        return pids
+
+    def ready_popen(argv, *args, **kwargs):
+        process = original_popen(argv, *args, **kwargs)
+        if argv == command:
+            # Establish mandatory PID evidence before communicate's short
+            # timeout starts, rather than relying on scheduler startup speed.
+            limit = time.monotonic() + 3
+            while read_pids() is None and process.poll() is None and time.monotonic() < limit:
+                time.sleep(0.01)
+            pids = read_pids()
+            assert pids is not None, "owned parent/descendant PID evidence was not published"
+            assert pids["parent"] == process.pid
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", ready_popen)
 
     def prepare(_target, context):
         calls.append("prepare")
         return bounded_run(
-            [
-                sys.executable,
-                "-c",
-                "import os,time,pathlib,sys; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(30)",
-                str(pid_file),
-            ],
+            command,
             timeout=min(0.1, context["deadline"] - time.time()),
         )
 
@@ -381,12 +441,34 @@ def test_hung_request_transport_is_killed_and_not_repeated(tmp_path):
     selected = frontier()
     started = time.monotonic()
     result = run_selected(path, selected, prepare=prepare)
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < 6
     assert result["targets"][selected["targets"][0]]["status"] == "held"
     assert "TimeoutExpired" in result["targets"][selected["targets"][0]]["error"]
-    if pid_file.exists():
-        with pytest.raises(ProcessLookupError):
-            os.kill(int(pid_file.read_text()), 0)
+    pids = read_pids()
+    assert pids is not None
+    with pytest.raises(ProcessLookupError):
+        os.kill(pids["parent"], 0)  # communicate must reap the direct child.
+
+    def descendant_stopped():
+        try:
+            os.kill(pids["descendant"], 0)
+        except ProcessLookupError:
+            return True
+        if sys.platform.startswith("linux"):
+            # Some container PID1s do not promptly reap orphaned descendants.
+            # Z is terminal/non-runnable, not proof that the group is absent;
+            # the production pool fence still requires its own absence proof.
+            try:
+                state = Path(f"/proc/{pids['descendant']}/stat").read_text()
+            except FileNotFoundError:
+                return True
+            return state.rsplit(")", 1)[1].split()[0] == "Z"
+        return False
+
+    limit = time.monotonic() + 2
+    while not descendant_stopped() and time.monotonic() < limit:
+        time.sleep(0.01)
+    assert descendant_stopped(), "owned descendant remained runnable after group timeout cleanup"
     run_selected(path, selected, prepare=lambda *_: pytest.fail("timed out request repeated"))
     assert calls == ["prepare"]
 
@@ -590,6 +672,111 @@ def test_finite_pool_prelaunch_record_survives_coordinator_interruption(tmp_path
     with pytest.raises(resources.ResourceBlocked, match="no low pool slot"):
         with resources.pool_slot(root, "low", 1, deadline=time.time() + 0.1):
             pytest.fail("unresolved prelaunch reservation was cleared")
+
+
+@pytest.mark.parametrize("replacement_run", ["original-request", "later-request"])
+def test_prepared_starting_request_cannot_be_replaced(tmp_path, replacement_run):
+    root = tmp_path / "pool"
+    reservation = {
+        "reservation_id": "starting-identity",
+        "target": "owner/repo#1",
+        "frontier_id": "frozen-1",
+        "agent": "closer",
+        "profile_id": "io",
+    }
+    original = {
+        "run_id": "original-request",
+        "agent": "github",
+        "profile_id": "github-api",
+        "finite_frontier_id": reservation["frontier_id"],
+        "finite_frontier_target": reservation["target"],
+    }
+    with resources.pool_slot(
+        root, "io", 1, deadline=time.time() + 1, finite_frontier=True, reservation=reservation
+    ):
+        resources.finite_pool_prepare_request(original)
+        path = root / "pools" / "io" / "slot-0.json"
+        before = path.read_bytes()
+        with pytest.raises(resources.ResourceBlocked, match="reusable"):
+            resources.finite_pool_prepare_request({**original, "run_id": replacement_run})
+        resources.finite_pool_no_start()
+        assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "failure", ["pause", "expiry", "inventory", "before-request", "after-request"]
+)
+def test_finite_callback_exception_releases_only_never_prepared_slot(
+    tmp_path, monkeypatch, failure
+):
+    selected = frontier()
+    target = selected["targets"][0]
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    paused = [False]
+    pool_root = tmp_path / "probe-pools"
+    path = tmp_path / "state.json"
+    reservation = {
+        "reservation_id": "callback-entry",
+        "target": target,
+        "frontier_id": selected["frontier_id"],
+        "agent": "closer",
+        "profile_id": "io",
+    }
+
+    @contextmanager
+    def controlled_pool(_lane, _target, context):
+        with resources.pool_slot(
+            pool_root,
+            "io",
+            1,
+            deadline=context["deadline"],
+            finite_frontier=True,
+            reservation=reservation,
+        ):
+            if failure == "pause":
+                paused[0] = True
+            elif failure == "expiry":
+                clock[0] += 1
+            if failure == "inventory":
+                with held_inventory(resources.scoped_root(path)):
+                    yield
+            else:
+                yield
+
+    def prepare(*_):
+        if failure == "after-request":
+            resources.finite_pool_prepare_request(
+                {
+                    "run_id": "possible-spawn",
+                    "agent": "github",
+                    "profile_id": "github-api",
+                    "finite_frontier_id": selected["frontier_id"],
+                    "finite_frontier_target": target,
+                }
+            )
+        raise RuntimeError("synthetic callback refusal")
+
+    run_selected(
+        path,
+        selected,
+        request_timeout_seconds=0.1,
+        pool_lease=controlled_pool,
+        paused_fn=lambda: paused[0],
+        now=lambda: clock[0],
+        prepare=prepare,
+    )
+    record = json.loads((pool_root / "pools" / "io" / "slot-0.json").read_text())
+    if failure == "after-request":
+        assert record["status"] == "starting" and record["run_id"] == "possible-spawn"
+        with pytest.raises(resources.ResourceBlocked):
+            with resources.pool_slot(pool_root, "io", 1, deadline=time.time() + 0.05):
+                pytest.fail("possibly spawned request reservation cleared")
+    else:
+        assert record["status"] == "resolved" and record["run_id"] is None
+        assert record["resolution"] == "trusted_no_spawn"
+        with resources.pool_slot(pool_root, "io", 1, deadline=time.time() + 0.05):
+            pass
 
 
 def test_finite_owned_transport_updates_and_resolves_prelaunch_fence(tmp_path):

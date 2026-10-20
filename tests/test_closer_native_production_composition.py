@@ -40,7 +40,7 @@ LOG=Path(os.environ['COMPOSITION_LOG'])
 def load(): return json.loads(STATE.read_text())
 def save(value): STATE.write_text(json.dumps(value,sort_keys=True))
 def event(kind,method,path,body=None):
-    with LOG.open('a') as f: f.write(json.dumps({'kind':kind,'method':method,'path':path,'body_keys':sorted(body or {}),'time':time.time()})+'\n')
+    with LOG.open('a') as f: f.write(json.dumps({'kind':kind,'method':method,'path':path,'body_keys':sorted(body or {}),'time':time.time(),'pid':os.getpid(),'trace_active':sys.gettrace() is not None})+'\n')
 def _response(method,path,body=None):
     state=load(); parsed=urllib.parse.urlsplit(path); path=parsed.path; body=body or {}
     if not re.match(r'^/repos/offline/repo[12](?:/|$)',path) and path!='/graphql': raise AssertionError('unexpected synthetic URL '+path)
@@ -240,7 +240,7 @@ def test_late_native_production_act_enters_actual_inner_queue(capacity_host, tmp
     monkeypatch.setenv("GH_TOKEN", "isolated-fixture-token")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     (seams / "sitecustomize.py").write_text(
-        """import io,json,os,socket,time,urllib.request,sys\nfrom pathlib import Path\nreal=time.time\ndef clock():\n return real()+float(Path(os.environ['COMPOSITION_OFFSET']).read_text())\ntime.time=clock\ndef blocked(*a,**k):raise AssertionError('fixture network is prohibited')\nsocket.socket.connect=blocked\nfrom transcript import response,event\nclass Reply(io.BytesIO):\n def __init__(self,value):super().__init__(json.dumps(value).encode())\ndef opener(request,timeout=None):\n from urllib.parse import urlsplit\n parsed=urlsplit(request.full_url)\n if parsed.scheme!='https' or parsed.netloc!='api.github.com':raise AssertionError('unexpected Core origin')\n method=request.get_method();body=json.loads(request.data) if request.data else None\n event('core-http',method,parsed.path,body)\n return Reply(response(method,parsed.path+('?' + parsed.query if parsed.query else ''),body))\nurllib.request.urlopen=opener\ndef trace(frame,kind,arg):\n if kind=='call' and frame.f_code.co_name=='publish_admission' and Path(frame.f_code.co_filename).name=='closer_native_observer.py' and Path(os.environ['COMPOSITION_ARM']).exists():\n  offset=Path(os.environ['COMPOSITION_OFFSET'])\n  if float(offset.read_text())==0:offset.write_text('1021')\n return None\nsys.settrace(trace)\n"""
+        """import io,json,os,socket,time,urllib.request,sys\nfrom pathlib import Path\nreal=time.time\ndef clock():\n return real()+float(Path(os.environ['COMPOSITION_OFFSET']).read_text())\ntime.time=clock\ndef blocked(*a,**k):raise AssertionError('fixture network is prohibited')\nsocket.socket.connect=blocked\nfrom transcript import response,event\nclass Reply(io.BytesIO):\n def __init__(self,value):super().__init__(json.dumps(value).encode())\ndef opener(request,timeout=None):\n from urllib.parse import urlsplit\n parsed=urlsplit(request.full_url)\n if parsed.scheme!='https' or parsed.netloc!='api.github.com':raise AssertionError('unexpected Core origin')\n method=request.get_method();body=json.loads(request.data) if request.data else None\n event('core-http',method,parsed.path,body)\n return Reply(response(method,parsed.path+('?' + parsed.query if parsed.query else ''),body))\nurllib.request.urlopen=opener\ndef trace(frame,kind,arg):\n if kind=='call' and frame.f_code.co_name=='publish_admission' and Path(frame.f_code.co_filename).name=='closer_native_observer.py' and Path(os.environ['COMPOSITION_ARM']).exists():\n  offset=Path(os.environ['COMPOSITION_OFFSET'])\n  if float(offset.read_text())==0:offset.write_text('1021')\n  sys.settrace(None)\n return None\nif float(Path(os.environ['COMPOSITION_OFFSET']).read_text())==0:sys.settrace(trace)\n"""
     )
     gh = seams / "gh"
     gh.write_text(
@@ -453,6 +453,13 @@ fi
             >= 1021
         )
         events = [json.loads(line) for line in log.read_text().splitlines()]
+        # The HTTP seam is reached by actual watchdog children, without the
+        # one-shot admission clock trace slowing each fresh Python startup.
+        core_http = [event for event in events if event["kind"] == "core-http"]
+        assert core_http
+        assert all(event["pid"] not in {os.getpid(), row["pid"]} for event in core_http)
+        assert all(event["trace_active"] is False for event in core_http)
+        assert len({event["pid"] for event in core_http}) == len(core_http)
         labels = [
             event
             for event in events

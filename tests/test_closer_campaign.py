@@ -149,7 +149,7 @@ def test_finite_frontier_is_bound_to_campaign_targets_and_resume(tmp_path):
         == created
     )
     assert "closer_frontier_policy.py" in cc.module_closure(
-        Path(__file__).resolve().parents[1] / "src", cc.PINNED_MODULES
+        Path(cc.__file__).resolve().parent, cc.PINNED_MODULES
     )
 
     with pytest.raises(ValueError, match="does not match campaign targets"):

@@ -192,11 +192,45 @@ _INVENTORY_REQUEST = threading.local()
 def inventory_request(deadline, *, now=time.time):
     """Carry one finite request window through nested shard journal commits."""
     previous = getattr(_INVENTORY_REQUEST, "window", None)
+    previous_limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    sampled_at, monotonic_at = now(), time.monotonic()
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+        for value in (deadline, sampled_at, monotonic_at)
+    ):
+        raise ResourceBlocked("finite request window requires finite numeric clocks and deadline")
+    limit = monotonic_at + max(0.0, deadline - sampled_at)
+    if not math.isfinite(limit):
+        raise ResourceBlocked("finite request monotonic deadline is not finite")
+    if previous is not None:
+        deadline = min(deadline, previous[0])
+    if previous_limit is not None:
+        limit = min(limit, previous_limit)
     _INVENTORY_REQUEST.window = (deadline, now)
+    _INVENTORY_REQUEST.monotonic_limit = limit
     try:
         yield
     finally:
         _INVENTORY_REQUEST.window = previous
+        _INVENTORY_REQUEST.monotonic_limit = previous_limit
+
+
+def finite_request_remaining() -> float | None:
+    """Return this active request's remaining time without starting a new window."""
+    window = getattr(_INVENTORY_REQUEST, "window", None)
+    if window is None:
+        return None
+    deadline, now = window
+    sampled_at, monotonic_at = now(), time.monotonic()
+    limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+        for value in (deadline, sampled_at, monotonic_at, limit)
+    ):
+        raise ResourceBlocked("finite request window has an invalid clock or deadline")
+    if not isinstance(limit, (int, float)):
+        raise ResourceBlocked("finite request window has no monotonic deadline")
+    return max(0.0, min(deadline - sampled_at, limit - monotonic_at))
 
 
 @contextlib.contextmanager
@@ -1348,6 +1382,107 @@ def _pool_slots():
     return slots
 
 
+class _FiniteExecutionContext:
+    """Same-process borrow of an original request and already-held pool slots."""
+
+    def __init__(self, target, frontier, window, monotonic_limit, slots):
+        self.pid = os.getpid()
+        self.target = target
+        self.frontier = frontier
+        self.window = window
+        self.monotonic_limit = monotonic_limit
+        self.slots = tuple(slots)
+
+
+def _validate_execution_slots(slots, target, frontier):
+    for item in slots:
+        record, handle = item["record"], item["handle"]
+        if (
+            handle.closed
+            or canonical_target(record.get("target", "")) != canonical_target(target)
+            or record.get("frontier_id") != frontier["frontier_id"]
+        ):
+            raise ResourceBlocked("finite executor pool ownership differs from target/frontier")
+
+
+def capture_finite_execution_context(target, frontier):
+    """Capture references only; never renew a window or acquire another lease."""
+    from closer_frontier_policy import validate_frontier
+
+    frontier = validate_frontier(frontier)
+    if target not in frontier["targets"]:
+        raise ResourceBlocked("finite executor target is outside the frontier")
+    slots = tuple(_pool_slots())
+    window = getattr(_INVENTORY_REQUEST, "window", None)
+    limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    if slots and window is None:
+        raise ResourceBlocked("finite executor pool has no original request window")
+    if window is not None:
+        finite_request_remaining()  # validate the original clocks without extending them
+    _validate_execution_slots(slots, target, frontier)
+    return _FiniteExecutionContext(target, frontier, window, limit, slots)
+
+
+@contextlib.contextmanager
+def finite_execution_context(context, *, target, frontier, deadline, now=time.time):
+    """Restore exact request authority in one joined queue worker, then restore its TLS.
+
+    Held handles remain owned by the waiting coordinator. This context never
+    closes/unlocks them, claims capacity, or publishes lease ownership.
+    """
+    from closer_frontier_policy import validate_frontier
+
+    frontier = validate_frontier(frontier)
+    if (
+        not isinstance(context, _FiniteExecutionContext)
+        or context.pid != os.getpid()
+        or context.target != target
+        or context.frontier != frontier
+    ):
+        raise ResourceBlocked("finite executor context target/frontier/process differs")
+    _validate_execution_slots(context.slots, target, frontier)
+    previous_window = getattr(_INVENTORY_REQUEST, "window", None)
+    previous_limit = getattr(_INVENTORY_REQUEST, "monotonic_limit", None)
+    previous_slots = getattr(_pool_slot_local, "slots", None)
+    if previous_slots and (
+        len(previous_slots) != len(context.slots)
+        or any(a is not b for a, b in zip(previous_slots, context.slots))
+    ):
+        raise ResourceBlocked("finite executor thread already holds another pool context")
+    restored_window = context.window
+    restored_limit = context.monotonic_limit
+    if previous_window is not None:
+        finite_request_remaining()  # validate the worker's already-active bound
+        if restored_window is None:
+            restored_window, restored_limit = previous_window, previous_limit
+        else:
+            if restored_window[1] is not previous_window[1]:
+                raise ResourceBlocked("finite executor cannot replace another request clock")
+            restored_window = (min(restored_window[0], previous_window[0]), restored_window[1])
+            restored_limit = min(restored_limit, previous_limit)
+    borrowed = []
+    try:
+        for item in sorted(context.slots, key=id):
+            lock = item.setdefault("executor_borrow_lock", threading.Lock())
+            if not lock.acquire(blocking=False):
+                raise ResourceBlocked("finite executor pool is already borrowed")
+            borrowed.append(lock)
+        # A closed/rebound owner cannot race capture into a new worker.
+        _validate_execution_slots(context.slots, target, frontier)
+        _INVENTORY_REQUEST.window = restored_window
+        _INVENTORY_REQUEST.monotonic_limit = restored_limit
+        _pool_slot_local.slots = list(context.slots)  # same item/record/FD references
+        original_now = restored_window[1] if restored_window is not None else now
+        with inventory_request(deadline, now=original_now):
+            yield
+    finally:
+        _INVENTORY_REQUEST.window = previous_window
+        _INVENTORY_REQUEST.monotonic_limit = previous_limit
+        _pool_slot_local.slots = previous_slots
+        for lock in reversed(borrowed):
+            lock.release()
+
+
 def _write_pool_record(handle, record):
     """Atomically publish metadata beside the stable inode holding the flock."""
     record_path = Path(f"{handle.name}.json")
@@ -1376,15 +1511,19 @@ def finite_pool_prepare_request(observation):
     active = _pool_slots()
     if not active:
         raise ResourceBlocked("finite request has no held pool reservation")
-    matched = 0
+    # Validate the whole held set before changing any journal. A request with
+    # an assigned run_id may already have spawned without a recorded birth.
     for item in active:
         record = item["record"]
         if (
             record.get("frontier_id") != observation["finite_frontier_id"]
             or record.get("target") != observation["finite_frontier_target"]
             or record.get("status") not in {"starting", "resolved"}
+            or (record.get("status") == "starting" and record.get("run_id") is not None)
         ):
             raise ResourceBlocked("finite request does not match a reusable held pool reservation")
+    for item in active:
+        record = item["record"]
         record.update(
             {
                 "status": "starting",
@@ -1397,9 +1536,6 @@ def finite_pool_prepare_request(observation):
             }
         )
         _write_pool_record(item["handle"], record)
-        matched += 1
-    if not matched:
-        raise ResourceBlocked("finite request could not bind a prelaunch reservation")
 
 
 def finite_pool_process_started(observation):
@@ -2303,16 +2439,25 @@ def run_scoped(
                     reservation=reservation,
                 )
             with lease_cm:
-                callback_deadline(ctx)
+                try:
+                    callback_deadline(ctx)
+                    if finite_frontier is not None:
+                        with inventory_request(ctx["deadline"], now=now):
+                            result = fn(target, ctx)
+                    else:
+                        return fn(target, ctx)
+                except Exception:
+                    if finite_frontier is not None:
+                        # Only an unassigned prelaunch record proves no owned
+                        # request was prepared. Bound/uncertain requests stay.
+                        finite_pool_no_start()
+                    raise
                 if finite_frontier is not None:
-                    with inventory_request(ctx["deadline"], now=now):
-                        result = fn(target, ctx)
                     # Successful callbacks that made no owned process request
                     # prove this initial lane reservation had no spawn. A per-
                     # request starting/uncertain row is never cleared here.
                     finite_pool_no_start()
                     return result
-                return fn(target, ctx)
 
         return call
 

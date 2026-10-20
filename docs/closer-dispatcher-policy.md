@@ -230,3 +230,15 @@ paused, cancelled or capacity-blocked state. A changed source binding returns to
 hold rather than growing the frontier. Interrupted or uncertain provider/action
 work remains durably fenced across restart and cannot become a fresh pending
 attempt merely because time has passed.
+
+Finite inner-queue workers inherit the original scoped request window and the
+same held pool records and handles. Crossing a thread boundary cannot renew a
+request, acquire another lease, or reuse a slot for another target. Finished
+finite frontiers return their retained receipt without invoking callbacks again.
+
+Default Core HTTP operations use one owned child per request, bounded by Core's
+existing 30-second limit and the original request's remaining time. The child
+also enforces that same absolute deadline if its supervisor exits. A timeout or
+unproved outcome retains the original operation's uncertainty fence; it does
+not authorize another attempt. HTTP status and rate-limit classification remain
+bound to the pinned Core implementation.

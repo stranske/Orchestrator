@@ -397,6 +397,55 @@ def _offload_ignore(_dir: str, names: list[str]) -> set[str]:
     return {name for name in names if name in heavy or name.endswith(".pyc")}
 
 
+def _remove_owned_offload_partial(partial: Path, identity: tuple[int, int]) -> bool:
+    """Bound failed-copy deletion; a replaced path is never cleanup authority."""
+    try:
+        current = partial.lstat()
+    except FileNotFoundError:
+        return True
+    if partial.is_symlink() or (current.st_dev, current.st_ino) != identity:
+        return False
+    cleanup = (
+        "import os,shutil,stat,sys\n"
+        "path,device,inode=sys.argv[1:]\n"
+        "current=os.lstat(path)\n"
+        "if not stat.S_ISDIR(current.st_mode) or (current.st_dev,current.st_ino)!=(int(device),int(inode)): sys.exit(3)\n"
+        "shutil.rmtree(path)\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", cleanup, str(partial), *map(str, identity)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        child.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        # One attempt against this helper's private group. A denial propagates;
+        # no alternate signal or in-process rmtree may bypass that fence.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.communicate(timeout=2)
+        return False
+    return child.returncode == 0 and not partial.exists() and not partial.is_symlink()
+
+
+def _offload_copier_terminal(proc) -> bool:
+    if proc.poll() is None:
+        return False
+    try:
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        raise
+    except OSError:
+        return False
+    return False
+
+
 def _isolate_offload_cwd(cwd: str | Path, *, timeout: float | None = None) -> Path:
     if timeout is not None and timeout <= 0:
         raise TimeoutError("bounded offload workspace copy has no request time remaining")
@@ -417,12 +466,15 @@ def _isolate_offload_cwd(cwd: str | Path, *, timeout: float | None = None) -> Pa
         shutil.copytree(src, dest, ignore=_offload_ignore)
     else:
         partial = dest.with_name(dest.name + ".partial")
+        partial.mkdir(mode=0o700)  # exclusive operation-owned destination
+        stat = partial.lstat()
+        partial_identity = (stat.st_dev, stat.st_ino)
         copier = (
             "import json,shutil,sys\n"
             "src,dst,raw=sys.argv[1:]\n"
             "heavy=set(json.loads(raw))\n"
             "def ignore(_directory,names): return {name for name in names if name in heavy or name.endswith('.pyc')}\n"
-            "shutil.copytree(src,dst,ignore=ignore)\n"
+            "shutil.copytree(src,dst,ignore=ignore,dirs_exist_ok=True)\n"
         )
         proc = subprocess.Popen(
             [
@@ -460,10 +512,32 @@ def _isolate_offload_cwd(cwd: str | Path, *, timeout: float | None = None) -> Pa
         except subprocess.TimeoutExpired:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate(timeout=2)
-            raise TimeoutError("bounded offload workspace copy exceeded request window") from None
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                raise TimeoutError(
+                    "bounded offload workspace copy exceeded request window; "
+                    f"copier terminality unverified; partial retained: {partial}"
+                ) from None
+            removed = _offload_copier_terminal(proc) and _remove_owned_offload_partial(
+                partial, partial_identity
+            )
+            retained = (
+                "" if removed else f"; copier/cleanup unverified; partial retained: {partial}"
+            )
+            raise TimeoutError(
+                "bounded offload workspace copy exceeded request window" + retained
+            ) from None
         if proc.returncode != 0:
-            raise RuntimeError(f"bounded offload workspace copy failed: {(stderr or '')[:500]}")
+            removed = _offload_copier_terminal(proc) and _remove_owned_offload_partial(
+                partial, partial_identity
+            )
+            retained = (
+                "" if removed else f"; copier/cleanup unverified; partial retained: {partial}"
+            )
+            raise RuntimeError(
+                f"bounded offload workspace copy failed: {(stderr or '')[:500]}" + retained
+            )
         os.replace(partial, dest)
     # Canonical like `src`: offload writes this path into gemini's `--add-dir` over the adapter's
     # own resolved value, so an OFFLOAD_DIR behind a symlink handed agy's guard, the GEMINI

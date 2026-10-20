@@ -7,6 +7,7 @@ import time
 import pytest
 
 import closer_pipeline as cp
+import closer_queue
 from closer_frontier_policy import action_identity, make_frontier
 
 
@@ -217,6 +218,134 @@ def test_finite_interpret_uncertainty_never_advances_to_action(tmp_path):
     assert action_calls == []
     assert receipt["targets"][target]["status"] == "unknown"
     assert not receipt["valid"]
+
+
+def test_finite_interpret_provider_failure_holds_without_act(tmp_path):
+    target = "acme/repo#provider-failure"
+    frontier = _frontier(target)
+    act_calls = []
+    failure = {
+        "provider_failure": {
+            "profile_id": "claude-low",
+            "agent": "claude",
+            "run_id": "run-1",
+            "category": "transport_error",
+            "evidence_hash": "a" * 64,
+            "exit": 1,
+        }
+    }
+    receipt = _run(
+        tmp_path / "provider-failure.json",
+        target,
+        frontier,
+        now=lambda: 6_000.0,
+        interpret=lambda *_: {
+            "status": "deferred",
+            "reason": "provider_failure",
+            "next_trigger": "provider repaired",
+            "resource_evidence": failure,
+            "substantive_needs": [],
+        },
+        act=lambda *_: act_calls.append("act") or {"status": "completed", "target_complete": True},
+    )
+    row = receipt["targets"][target]
+    assert act_calls == []
+    assert row["status"] == "held"
+    assert row["deferred_reason"] == "provider_failure"
+    assert row["deferred_next_trigger"] == "provider repaired"
+    assert receipt["valid"] and receipt["stop_valid"]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"status": "pending", "pending_kind": "ci", "next_trigger": "check terminal"},
+        {"status": "deferred", "reason": "operation_running", "next_trigger": "reconcile"},
+        {"status": "deferred", "reason": "made_up_wait", "next_trigger": "later"},
+    ],
+)
+def test_finite_act_wait_without_exact_queue_proof_stays_unknown(tmp_path, result):
+    target = "acme/repo#unproven-wait"
+    frontier = _frontier(target)
+    receipt = _run(
+        tmp_path / f"unproven-{result['status']}-{result.get('reason', 'pending')}.json",
+        target,
+        frontier,
+        now=lambda: 7_000.0,
+        act=lambda *_: result,
+    )
+    assert receipt["targets"][target]["status"] == "unknown"
+    assert not receipt["valid"] and not receipt["stop_valid"]
+
+
+def test_finite_act_pending_requires_and_accepts_exact_queue_proof(tmp_path):
+    target = "acme/repo#verified-pending"
+    frontier = make_frontier(
+        [target],
+        owner="frontier-owner",
+        frontier_id="frontier-verified-pending",
+        bindings={
+            target: {
+                "revision": "rev-1",
+                "action_id": action_identity(
+                    target,
+                    "rev-1",
+                    "wait",
+                    {"pr_target": target, "source_targets": []},
+                ),
+            }
+        },
+    )
+
+    def act(_target, context):
+        action_state = context["action_state_path"]
+        queue_receipt = closer_queue.run_round(
+            action_state,
+            [target],
+            lambda _item: {
+                "revision": "rev-1",
+                "action": "wait",
+                "eligible": False,
+                "reason": "current-head checks pending or unknown",
+                "next_trigger": "check run reaches a terminal conclusion",
+                "target": target,
+                "operation_binding": {"pr_target": target, "source_targets": []},
+                "claim_targets": [target],
+                "repo_keys": ["acme/repo"],
+            },
+            lambda *_args, **_kwargs: pytest.fail("wait rows cannot execute"),
+            owner="runner-a",
+            deadline=None,
+            receipt_reserve_seconds=0,
+            max_operation_retries=0,
+            finite_frontier=frontier,
+            frontier_target=target,
+            request_timeout_seconds=10,
+        )
+        return {
+            "status": "pending",
+            "pending_kind": "ci",
+            "next_trigger": "check run reaches a terminal conclusion",
+            "pending_evidence": {
+                "check_run_id": 123,
+                "target": target,
+                "observed_revision": "rev-1",
+            },
+            "queue_receipt": queue_receipt,
+        }
+
+    receipt = _run(
+        tmp_path / "verified-pending.json",
+        target,
+        frontier,
+        now=lambda: 8_000.0,
+        act=act,
+    )
+    row = receipt["targets"][target]
+    assert row["status"] == "held"
+    assert row["deferred_reason"] == "ci"
+    assert row["deferred_next_trigger"] == "check run reaches a terminal conclusion"
+    assert receipt["valid"] and receipt["stop_valid"]
 
 
 def test_finite_exception_uncertainty_never_advances_to_action(tmp_path):
