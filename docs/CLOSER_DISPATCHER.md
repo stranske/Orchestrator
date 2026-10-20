@@ -48,6 +48,12 @@ also remains unbound and held; this API does not infer a pipeline identity for i
 Reconciliation grants neither
 acceptance nor a valid global stop, and never resets an execution deadline.
 
+An interrupted receipt-less queued or running action/reconciliation boundary
+retains its original row in the audit and projects only to reconciliation in a
+successor. A missing callback return, absent action ledger or old not-started
+claim never authorizes replay. Other unsupported continuation facts and unresolved
+resource reservations still hold global admission.
+
 A later CLI invocation starts a new budget only after the persisted round has a
 finished receipt that passes the queue's normal locked stop validation against the
 current state and claim ledger. Running rounds, invalid receipts and unreadable

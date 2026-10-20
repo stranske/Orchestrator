@@ -51,7 +51,9 @@ staged-pipeline legacy actions. Exact-plan reconciliation independently validate
 no-operation evidence wait under the original locks and archives its evidence
 before retiring only matching advertisements. Historical records without causal
 binding and all uncertain operations remain held; no acceptance or global-stop
-authority is added.
+authority is added. Interrupted action boundaries preserve original audit rows
+and project only to reconciliation; unsupported continuation facts and unresolved
+reservations continue to hold global admission.
 
 **Runtime ownership and the campaign layer (`src/closer_campaign.py`, 2026-10-19).** The Orchestrator
 owns the closer *runtime*: capacity routing, parallel bounded workers, handoffs, recovery, release
