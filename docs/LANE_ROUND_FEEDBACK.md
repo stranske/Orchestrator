@@ -53,9 +53,13 @@ lines share a content-derived ID. Only a single decision between successive obse
 exits in that lane, with a matching chosen agent, earns an accepted edge to the
 lane-round ID. Codex, Claude (`claude_code` in logs), Cursor and Muse are supported.
 Multiple decisions, timestamp ties, a changed receiver, or an absent round never earn
-credit. Binding is one-to-one even when an older round arrives late. The importer and
-round hook use the same SQLite transaction for the event/edge writes; rereading does
-not add counts or change the decision's original window.
+credit. Binding is one-to-one even when an older round arrives late. The round hook
+commits the lane-round row first; the importer then writes events and edges in its
+own transaction. Rereading does not add counts or change the decision's original window.
+Settled events are not rewritten. Pending decisions survive log rotation, and only
+rounds since the oldest unresolved decision are matched, preserving the preceding
+exit boundary. Sorted timestamp lookup avoids quadratic history scans under the
+Brain write lock.
 
 The target completion event records `completed` (exit zero), `rate-limited`
 (nonzero plus authoritative capacity evidence), or `failed` (other nonzero).

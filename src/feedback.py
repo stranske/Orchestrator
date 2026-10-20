@@ -33,6 +33,8 @@ import re
 import sqlite3
 import sys
 import time
+from bisect import bisect_left, bisect_right
+from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
 from datetime import datetime, timezone
@@ -6452,10 +6454,9 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
     rounds retain their decision event but earn no accepted edge. Re-reading is idempotent.
     """
     end = int(time.time()) if now is None else now
-    if not log.exists():
-        return {"status": "absent", "decisions": 0, "joined": 0}
+    log_exists = log.exists()
     decisions: dict[str, tuple[int, dict[str, Any]]] = {}
-    for line in log.read_text(encoding="utf-8").splitlines():
+    for line in log.read_text(encoding="utf-8").splitlines() if log_exists else []:
         try:
             raw_stamp, *parts = line.split()
             facts: dict[str, Any] = dict(part.split("=", 1) for part in parts)
@@ -6484,40 +6485,81 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
             decisions[decision_id] = (ts, facts)
         except (ValueError, OverflowError):
             continue  # incomplete trailing lines and unrelated log prose are not evidence
-    joined = 0
     with _conn() as c:
+        # Serialize binding even when the decision event was saved by an earlier invocation.
+        c.execute("BEGIN IMMEDIATE")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relay_lane_round "
+            "ON routing_decisions_v2(record_kind,lane,ts)"
+        )
         events = {}
+        for key, event_id, ts, payload in c.execute(
+            "SELECT run_id,event_id,created_ts,payload_json FROM completion_events "
+            "WHERE capability_id=? AND capability_version_id=? AND phase='decision' "
+            "AND producer='feedback.relay_pacing' AND validation_status='accepted' "
+            "AND created_ts<=?",
+            (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION, end),
+        ):
+            events[key] = event_id
+            # A saved but unbound decision can outlive a rotated/missing log.
+            decisions.setdefault(key, (ts, json.loads(payload)["relay_pacing"]))
+        bound = dict(
+            c.execute(
+                "SELECT source_run_id,target_run_id FROM influence_edges "
+                "WHERE capability_id=? AND capability_version_id=? AND accepted=1",
+                (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION),
+            )
+        )
+        bound_targets = set(bound.values())
+        joined = len(set(bound) & decisions.keys())
         for decision_id, (ts, facts) in decisions.items():
-            events[decision_id] = _record_completion_event_in_conn(
-                c,
-                decision_id,
-                event_type="decision",
-                phase="decision",
-                producer="feedback.relay_pacing",
-                capability_id=RELAY_PACING_CAPABILITY,
-                capability_version_id=RELAY_PACING_VERSION,
-                status="recorded",
-                payload={"relay_pacing": facts},
-                timestamp=ts,
-            )["event_id"]
-        rounds = c.execute(
-            "SELECT decision_id,ts,agent,lane,exit_status,error_class FROM routing_decisions_v2 "
-            "WHERE record_kind='lane_round' AND ts<=? ORDER BY ts,decision_id",
-            (end,),
-        ).fetchall()
+            if decision_id not in events:
+                events[decision_id] = _record_completion_event_in_conn(
+                    c,
+                    decision_id,
+                    event_type="decision",
+                    phase="decision",
+                    producer="feedback.relay_pacing",
+                    capability_id=RELAY_PACING_CAPABILITY,
+                    capability_version_id=RELAY_PACING_VERSION,
+                    status="recorded",
+                    payload={"relay_pacing": facts},
+                    timestamp=ts,
+                )["event_id"]
         for lane in ("opener", "closer"):
-            lane_rounds = [r for r in rounds if r[3] == lane]
-            previous = -1
+            unbound = [
+                ts
+                for key, (ts, facts) in decisions.items()
+                if key not in bound and facts["lane"] == lane
+            ]
+            if not unbound:
+                continue
+            oldest = min(unbound)
+            previous = c.execute(
+                "SELECT MAX(ts) FROM routing_decisions_v2 "
+                "WHERE record_kind='lane_round' AND lane=? AND ts<?",
+                (lane, oldest),
+            ).fetchone()[0]
+            previous = -1 if previous is None else previous
+            lane_rounds = c.execute(
+                "SELECT decision_id,ts,agent,lane,exit_status,error_class "
+                "FROM routing_decisions_v2 WHERE record_kind='lane_round' "
+                "AND lane=? AND ts>=? AND ts<=? ORDER BY ts,decision_id",
+                (lane, oldest, end),
+            ).fetchall()
+            ties = Counter(r[1] for r in lane_rounds)
+            lane_decisions = sorted(
+                (ts, key, facts) for key, (ts, facts) in decisions.items() if facts["lane"] == lane
+            )
+            stamps = [item[0] for item in lane_decisions]
             for round_id, ts, agent, _, exit_status, error_class in lane_rounds:
-                matches = [
-                    (key, stamp, facts)
-                    for key, (stamp, facts) in decisions.items()
-                    if facts["lane"] == lane and previous < stamp < ts
-                ]
+                lo, hi = bisect_right(stamps, previous), bisect_left(stamps, ts)
                 previous = ts
-                if sum(r[1] == ts for r in lane_rounds) != 1 or len(matches) != 1:
+                if ties[ts] != 1 or hi - lo != 1:
                     continue
-                key, stamp, facts = matches[0]
+                stamp, key, facts = lane_decisions[lo]
+                if key in bound or round_id in bound_targets:
+                    continue
                 if facts["chosen"].replace("claude_code", "claude") != agent:
                     continue
                 status = (
@@ -6535,15 +6577,6 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
                         else "failed"
                     )
                 )
-                # Late/out-of-order exits must never reassign a decision or credit one round twice.
-                bound = c.execute(
-                    "SELECT source_run_id,target_run_id FROM influence_edges "
-                    "WHERE capability_id=? AND capability_version_id=? "
-                    "AND (source_run_id=? OR target_run_id=?)",
-                    (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION, key, round_id),
-                ).fetchall()
-                if any(pair != (key, round_id) for pair in bound):
-                    continue
                 outcome = {
                     **facts,
                     "round_id": round_id,
@@ -6576,8 +6609,14 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
                     accepted=True,
                     timestamp=stamp,
                 )
+                bound[key] = round_id
+                bound_targets.add(round_id)
                 joined += 1
-    return {"status": "recorded", "decisions": len(decisions), "joined": joined}
+    return {
+        "status": "recorded" if log_exists or decisions else "absent",
+        "decisions": len(decisions),
+        "joined": joined,
+    }
 
 
 def attach_profile_attempt_to_decision(decision_id: str, attempt_id: str) -> list[str]:

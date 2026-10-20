@@ -201,3 +201,40 @@ def test_round_outcome_is_not_visible_before_its_end(tmp_path, monkeypatch):
     before = _counts(now=NOW - 30)
     assert (before["acted_on"], before["outcome"]) == (1, 0)
     assert _counts()["outcome"] == 1
+
+
+def test_saved_pending_decision_can_join_after_log_rotation(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line())
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 0
+    log.unlink()
+    feedback.record_lane_round("claude", "opener", None, 0, "none", NOW)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+
+
+def test_settled_history_is_not_rewritten_on_reread(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line())
+    feedback.record_lane_round("claude", "opener", None, 0, "none", NOW)
+    feedback.ingest_relay_pacing(log, now=NOW)
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("reread rewrote an already settled decision or outcome")
+
+    monkeypatch.setattr(feedback, "_record_completion_event_in_conn", unexpected_write)
+    assert feedback.ingest_relay_pacing(log, now=NOW + 60)["joined"] == 1
+    assert _counts()["acted_on"] == 1
+
+
+def test_incremental_join_keeps_preceding_exit_boundary(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line(NOW - 100))
+    feedback.record_lane_round("claude", "opener", None, 0, "none", NOW - 80)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    # A new pending decision does not have to share a file with the settled predecessor.
+    log.write_text(_line(NOW - 50, chosen="muse"))
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    feedback.record_lane_round("muse", "opener", None, 0, "none", NOW)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 2
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (2, 2)
