@@ -329,6 +329,15 @@ def test_same_repo_acts_serialise_by_default_but_reasoning_is_not_blocked(tmp_pa
     common = {"state": str(state), "mode": "resource_scoped", "log": str(log), "act_sleep": 0.3}
     procs = [spawn({**common, "targets": [f"o/r#{n}"]}) for n in (11, 12)]
     receipts = [finish(p) for p in procs]
+    deferred = [
+        (target, row)
+        for receipt in receipts
+        for target, row in receipt["targets"].items()
+        if row["status"] == "deferred"
+    ]
+    assert len(deferred) <= 1, deferred
+    for _target, row in deferred:
+        assert row.get("deferred_reason") == "scope_quarantined", row
     for receipt in receipts:
         for target, row in receipt["targets"].items():
             if row["status"] == "deferred":

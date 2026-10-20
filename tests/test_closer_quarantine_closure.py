@@ -18,7 +18,7 @@ def write(path, value):
     path.write_text(json.dumps(value))
 
 
-def prepared(tmp_path, extra_sources=()):
+def prepared(tmp_path, extra_sources=(), *, direct_pr=False, snapshot_overrides=None):
     raw = tmp_path / "dispatch.json"
     path = Path(str(raw) + ".pipeline.json")
     target = "owner/repo#1"
@@ -45,6 +45,9 @@ def prepared(tmp_path, extra_sources=()):
         "threads": [],
         "checks": "SUCCESS",
     }
+    if direct_pr:
+        snapshot.pop("pr_target")
+    snapshot.update(snapshot_overrides or {})
     root = Path(str(raw) + ".evidence")
     snapshot["sources"].extend(
         {
@@ -472,3 +475,92 @@ def test_unsettled_local_scope_needs_unique_verified_execution_workspace(tmp_pat
     if workspace_mode == "ambiguous":
         candidate = inventory(aliases=["worktree:" + str(tmp_path / "two")])
     assert quarantine.scope_problem(snapshot, "owner/repo#9", candidate)
+
+
+@pytest.mark.parametrize("mode", ["retained_read", "observation", "bound_remote_operation"])
+def test_direct_pr_without_pr_target_keeps_exact_original_provenance_and_scope(tmp_path, mode):
+    path, raw, snap, row, doc, packet_ref, retained = prepared(tmp_path, direct_pr=True)
+    mapping = {"owner/repo": str(tmp_path / "checkout")}
+    if mode != "retained_read":
+        doc["runs"] = {}
+        write(path, doc)
+        feed.record_snapshot(raw, snap["target"], snap, packet_ref=packet_ref)
+    if mode == "bound_remote_operation":
+        state = json.loads(raw.read_text())
+        state["items"][snap["target"]].update(
+            status="uncertain",
+            operation={
+                "status": "uncertain",
+                "action": "merge",
+                "binding": {
+                    "pr_target": snap["target"],
+                    "head": snap["head"],
+                    "merge": snap["merge"],
+                    "source_targets": [snap["target"]],
+                },
+            },
+        )
+        write(raw, state)
+        mapping = {}  # Exact remote intent excludes filesystem effects.
+    originals = {
+        str(p): p.read_bytes() for p in (path, retained) + ((raw,) if raw.exists() else ())
+    }
+    result = quarantine.scope_snapshot(path, workspaces=mapping)
+    assert not result["global_reasons"]
+    if mode == "observation":
+        assert not result["items"] and not result["quarantine_keys"]
+        assert len(result["observations"]) == 1
+        proof = result["observations"][0]["closure_proof"]
+    else:
+        assert result["items"][0]["closure"] == "complete_immutable_snapshot"
+        assert "pr:" + snap["target"] in result["quarantine_keys"]
+        assert "repo:owner/repo" not in result["quarantine_keys"]
+        proof = result["items"][0]["closure_proof"]
+    assert proof["snapshot_ref"]["sha256"] == hashlib.sha256(retained.read_bytes()).hexdigest()
+    assert proof["packet_ref"] == packet_ref
+    assert originals == {p: Path(p).read_bytes() for p in originals}
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["issue_kind", "invalid_kind", "wrong_target", "snapshot_hash", "packet_hash", "binding"],
+)
+def test_direct_pr_fallback_does_not_bless_wrong_kind_identity_or_proof(tmp_path, damage):
+    overrides = {"kind": "issue"} if damage == "issue_kind" else {}
+    if damage == "invalid_kind":
+        overrides = {"kind": "other"}
+    if damage == "wrong_target":
+        overrides = {"target": "owner/other#8"}
+    path, raw, snap, row, doc, ref, retained = prepared(
+        tmp_path, direct_pr=True, snapshot_overrides=overrides
+    )
+    if damage == "snapshot_hash":
+        retained.write_bytes(retained.read_bytes() + b" ")
+    elif damage == "packet_hash":
+        row["results"]["prepare"]["packet_ref"]["sha256"] = "0" * 64
+        write(path, doc)
+    elif damage == "binding":
+        row["operation"] = {
+            "action": "merge",
+            "binding": {
+                "pr_target": "owner/repo#9",
+                "head": snap["head"],
+                "merge": None,
+                "source_targets": [snap["target"]],
+            },
+        }
+        write(path, doc)
+    result = quarantine.scope_snapshot(path, workspaces={"owner/repo": str(tmp_path / "checkout")})
+    assert "repo:owner/repo" in result["quarantine_keys"]
+    assert result["items"][0]["closure"] == "repository_fallback"
+    assert not result["observations"]
+
+
+@pytest.mark.parametrize("invalid_pr_target", [False, "", "not-a-target"])
+def test_direct_pr_fallback_rejects_explicit_malformed_pr_target(tmp_path, invalid_pr_target):
+    path, *_ = prepared(
+        tmp_path, direct_pr=True, snapshot_overrides={"pr_target": invalid_pr_target}
+    )
+    result = quarantine.scope_snapshot(path, workspaces={"owner/repo": str(tmp_path / "checkout")})
+    assert result["items"][0]["closure"] == "repository_fallback"
+    assert "repo:owner/repo" in result["quarantine_keys"]

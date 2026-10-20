@@ -219,7 +219,10 @@ class _Census:
             for key in ("head", "base")
         ):
             raise ValueError("delivery_scope_incomplete")
-        pr = _target(snap.get("pr_target"))
+        subject_pr = snap.get("pr_target")
+        if subject_pr is None:
+            subject_pr = snap["target"]
+        pr = _target(subject_pr)
         sources = snap.get("sources")
         if not isinstance(sources, list) or not sources or len(sources) > MAX_ENTRIES:
             raise ValueError("source_scope_incomplete")
@@ -256,7 +259,7 @@ class _Census:
                 or any(
                     binding.get(key) != value
                     for key, value in {
-                        "pr_target": snap["pr_target"],
+                        "pr_target": subject_pr,
                         "head": snap["head"],
                         "merge": snap.get("merge"),
                     }.items()
