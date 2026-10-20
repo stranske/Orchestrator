@@ -124,6 +124,10 @@ run-attempt mismatches remain uncertainty barriers. Integrity
 validation still permits incomplete packets for collection and diagnosis; it is
 not model admission or acceptance. Substantive review and bound NON_PASS triage
 retain their narrower input contracts, including usable partial optional evidence.
+Stable redaction or truncation of original source criteria creates a typed senior
+source dependency; refreshing the same source is not a resolution. Review bodies
+may be redacted only when all thread and comment pages are complete, no content
+was truncated, and retained displayed bytes still match their hashes.
 
 `--dispositions` is a **trusted coordinator input**, never a private-worker output
 file. Each target's acceptance disposition names `reviewer`, exact `head`, current

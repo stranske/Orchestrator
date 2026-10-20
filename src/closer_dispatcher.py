@@ -3301,16 +3301,28 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         readiness = closer_evidence.readiness_summary(
             readiness, packet_ref=prep.get("packet_ref"), inventory_ref=inventory_ref
         )
+        dependency = readiness.get("dependency") or {}
+        source_transform = dependency.get("schema") == "closer-source-transform-dependency/v1"
         ambiguous = (readiness.get("delivery_links") or {}).get("status") == "ambiguous"
         return {
             "status": "pending",
             "pending_kind": "external_event",
-            "classification": "evidence_pending",
-            "reason": "action_evidence_not_ready",
+            "classification": (
+                "source_transform_pending" if source_transform else "evidence_pending"
+            ),
+            "reason": (
+                "source_transform_requires_senior_resolution"
+                if source_transform
+                else "action_evidence_not_ready"
+            ),
             "next_trigger": (
-                "explicit guarded source-to-delivery resolution binds all listed candidate PRs to original criteria and exact delivery heads"
-                if ambiguous
-                else "fresh identified delivery and retained action evidence resolves the named gaps"
+                dependency["next_trigger"]
+                if source_transform
+                else (
+                    "explicit guarded source-to-delivery resolution binds all listed candidate PRs to original criteria and exact delivery heads"
+                    if ambiguous
+                    else "fresh identified delivery and retained action evidence resolves the named gaps"
+                )
             ),
             "pending_evidence": {
                 "event_id": "evidence-readiness:"

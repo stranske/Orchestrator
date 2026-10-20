@@ -1106,3 +1106,180 @@ def test_merged_collect_requires_exact_trusted_marker_even_with_valid_codeproof(
     monkeypatch.setattr(closer_pipeline, "run_pipeline", run_pipeline)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), shadow=False, max_workers=1)
     adapter._run_staged_pipeline(args, [snap["target"]], backend, time.time() + 60)
+
+
+def transformed_packet(
+    tmp_path, *, source_body=None, review_body="Please validate password: at least 8 chars"
+):
+    snapshot, original = code_only_packet(tmp_path)
+    if source_body is not None:
+        snapshot["sources"][0]["body"] = source_body
+    snapshot["revision"] = adapter.digest(snapshot)
+
+    def api(endpoint, **_kwargs):
+        if "/compare/" in endpoint:
+            return {
+                "status": "ahead",
+                "files": original["sections"]["diff_files"]["content"]["files"],
+            }
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": []}
+        raise AssertionError(endpoint)
+
+    packet = evidence.collect_evidence(
+        snapshot,
+        api,
+        tmp_path / "evidence",
+        action="review",
+        review_threads_fetch=lambda *_a, **_kw: {
+            "threads": [
+                {
+                    "id": "offline-review",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "id": "offline-comment",
+                                "body": review_body,
+                                "author": {"login": "offline-reviewer"},
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False, "hasPreviousPage": False},
+                    },
+                }
+            ],
+            "complete": True,
+            "has_next_page": False,
+        },
+    )
+    return snapshot, packet
+
+
+def reseal_section(packet, name, root):
+    section = packet["sections"][name]
+    section["sha256"] = evidence._section_hash(section)
+    section["retained"] = evidence._retain_bytes(
+        root, evidence._bytes({k: v for k, v in section.items() if k != "retained"}), "json"
+    )
+    packet["section_digests"][name] = section["sha256"]
+    packet["semantic_cache_key"] = evidence._semantic_cache_key(packet)
+    packet["manifest"]["section_files"][name] = section["retained"]
+    packet["manifest"]["packet_sha256"] = evidence._packet_hash(packet)
+
+
+@pytest.mark.parametrize("transform", ["redacted", "oversized"])
+def test_original_source_transform_requires_specific_senior_dependency_before_models(
+    tmp_path, monkeypatch, transform
+):
+    original_body = (
+        "## Tasks\n- [ ] Validate password: at least 8 chars"
+        if transform == "redacted"
+        else "## Tasks\n- [ ] Preserve complete criteria\n" + "x" * (evidence.MAX_TEXT_BYTES + 1)
+    )
+    snapshot, packet = transformed_packet(tmp_path, source_body=original_body)
+    source = packet["sections"]["source"]
+    assert source["status"] == ("partial" if transform == "redacted" else "truncated")
+    assert snapshot["sources"][0]["body"] == original_body
+    assert evidence.validate_packet(packet)
+    readiness = evidence.action_evidence_readiness(
+        snapshot, packet, "collect_evidence", retained_dir=tmp_path / "evidence"
+    )
+    assert readiness["ready"] is False and readiness["mode"] == "source_transform"
+    assert packet["collection_result"]["status"] == "pending"
+    assert packet["collection_result"]["evaluation_ready"] is False
+    dependency = readiness["dependency"]
+    assert packet["collection_result"]["readiness"]["dependency"] == dependency
+    assert dependency["schema"] == "closer-source-transform-dependency/v1"
+    assert dependency["kind"] == "senior_source_transform"
+    assert dependency["source_status"] == source["status"]
+    assert dependency["reason"] == source["reason"]
+    assert dependency["source_ref"] == source["retained"]
+    assert dependency["source_sha256"] == source["sha256"]
+    assert dependency["original_source_sha256"] == packet["bindings"]["source"]
+    assert dependency["target"] == snapshot["target"]
+    assert dependency["revision"] == snapshot["revision"]
+    assert dependency["next_trigger"] == (
+        "senior source resolution supplies a complete criteria-preserving safely representable "
+        "original source bound to this source identity"
+    )
+    prep = prepared(tmp_path, snapshot, packet)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("stable source transform needs senior resolution, not another model attempt")
+
+    backend = runtime_fixture.closer(tmp_path, snapshot)
+    backend.campaign_admission = forbidden
+    monkeypatch.setattr(adapter, "_pipeline_low_route", forbidden)
+    monkeypatch.setattr(adapter, "_exception_route", forbidden)
+    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace(offload=forbidden))
+
+    def run_pipeline(_path, _targets, **callbacks):
+        for stage in ["interpret", "exception"]:
+            result = callbacks[stage](
+                snapshot["target"],
+                {
+                    "prepare": prep,
+                    "deadline": time.time() + 60,
+                    "interpret": {"substantive_needs": ["old incomplete evidence"]},
+                },
+            )
+            assert result["status"] == "pending" and result["authority"] is False
+            assert result["classification"] == "source_transform_pending"
+            assert result["reason"] == "source_transform_requires_senior_resolution"
+            assert result["next_trigger"] == dependency["next_trigger"]
+            assert result["pending_evidence"]["readiness"]["dependency"] == dependency
+        return {"targets": {}}
+
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", run_pipeline)
+    args = SimpleNamespace(state=str(tmp_path / "state.json"), shadow=False, max_workers=1)
+    adapter._run_staged_pipeline(args, [snapshot["target"]], backend, time.time() + 60)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "valid",
+        "incomplete-pagination",
+        "incomplete-comment-pages",
+        "next-comment-page",
+        "truncated",
+        "bad-ref",
+        "displayed-body-mismatch",
+        "not-redaction-only",
+    ],
+)
+def test_only_complete_retained_redaction_review_partial_is_assessable_without_ci(
+    tmp_path, mutation
+):
+    snapshot, packet = transformed_packet(tmp_path)
+    section = packet["sections"]["review_conversations"]
+    assert section["status"] == "partial" and section["reason"] == "credential-like values redacted"
+    comment = section["content"][0]["comments"][0]
+    assert comment["redaction_applied"] is True and "[REDACTED]" in comment["body"]
+    assert comment["body_sha256"] != comment["body_retained"]["sha256"]
+    assert packet["sections"]["ci_artifacts"]["status"] == "missing"
+    if mutation == "incomplete-pagination":
+        section["provenance"]["pagination_complete"] = False
+    elif mutation == "incomplete-comment-pages":
+        section["content"][0]["comments_complete"] = False
+    elif mutation == "next-comment-page":
+        section["content"][0]["comments_has_next_page"] = True
+    elif mutation == "truncated":
+        comment["truncated"] = True
+        comment["body_retained"]["truncated"] = True
+    elif mutation == "bad-ref":
+        comment["body_retained"]["sha256"] = "0" * 64
+    elif mutation == "displayed-body-mismatch":
+        comment["body"] += " altered after retention"
+    elif mutation == "not-redaction-only":
+        comment["redaction_applied"] = False
+    if mutation != "valid":
+        reseal_section(packet, "review_conversations", tmp_path / "evidence")
+    assert evidence.validate_packet(packet)
+    verdict = evidence.action_evidence_readiness(
+        snapshot, packet, "review", retained_dir=tmp_path / "evidence"
+    )
+    assert verdict["ready"] is (mutation == "valid"), verdict
+    if mutation != "valid":
+        assert verdict["gaps"]

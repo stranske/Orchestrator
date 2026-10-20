@@ -35,7 +35,9 @@ candidates and exact ancestry evidence remain bound to the original source.
 The producer publishes an explicit ready or collection-failure result after
 assembling action-specific raw inputs. Packet integrity alone does not admit model work. Substantive current review and
 bound NON_PASS triage may use partial optional evidence; readiness grants no
-acceptance or action authority.
+acceptance or action authority. Stable source transformations require typed senior
+resolution preserving original criteria. Redacted review bodies require complete
+pagination, no truncation and verified retained displayed bytes.
 
 Postrun validates assignment accounting and actual remaining budget before end-round
 or relay. No pass quota or one-complex-repository limit can authorize early stop.

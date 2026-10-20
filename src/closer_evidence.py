@@ -106,6 +106,11 @@ def _retained_section_valid(section: Any, *, allow_partial: bool = False) -> boo
         allow_partial and section.get("status") == "partial" and section.get("truncated") is False
     ):
         return False
+    return _retained_section_payload_valid(section)
+
+
+def _retained_section_payload_valid(section: dict) -> bool:
+    """Check immutable storage without granting any completeness status."""
     if section.get("sha256") != _section_hash(section):
         return False
     ref = section.get("retained")
@@ -119,6 +124,42 @@ def _retained_section_valid(section: Any, *, allow_partial: bool = False) -> boo
         return False
     expected = {k: v for k, v in section.items() if k != "retained"}
     return raw == expected
+
+
+def _redaction_only_review(section: Any) -> bool:
+    if (
+        not isinstance(section, dict)
+        or section.get("status") != "partial"
+        or section.get("reason") != "credential-like values redacted"
+        or section.get("truncated") is not False
+        or section.get("provenance", {}).get("pagination_complete") is not True
+        or not _retained_section_valid(section, allow_partial=True)
+    ):
+        return False
+    rows = section.get("content")
+    if not isinstance(rows, list) or not rows:
+        return False
+    comments = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or row.get("comments_complete") is not True
+            or row.get("comments_has_next_page") is True
+            or not isinstance(row.get("comments"), list)
+        ):
+            return False
+        comments.extend(row["comments"])
+    return (
+        bool(comments)
+        and any(isinstance(c, dict) and c.get("redaction_applied") is True for c in comments)
+        and all(
+            isinstance(c, dict)
+            and c.get("truncated") is False
+            and isinstance(c.get("body_retained"), dict)
+            and c["body_retained"].get("truncated") is False
+            for c in comments
+        )
+    )
 
 
 def _safe_text(value: Any, limit: int = MAX_TEXT_BYTES) -> tuple[str, bool]:
@@ -403,6 +444,31 @@ def _action_evidence_readiness(
         gaps.append("source:original_inventory_missing")
     elif packet["bindings"].get("source") != _hash(sources):
         gaps.append("source:inventory_binding_mismatch")
+    original_source = sections.get("source") or {}
+    if (
+        original_source.get("status") in {"partial", "truncated"}
+        and original_source.get("reason")
+        in {
+            "credential-like values redacted",
+            "source count/body byte bound reached",
+            "section byte limit exceeded",
+        }
+        and original_source.get("provenance", {}).get("source_digest") == _hash(sources)
+        and _retained_section_payload_valid(original_source)
+    ):
+        verdict["mode"] = "source_transform"
+        verdict["dependency"] = {
+            "schema": "closer-source-transform-dependency/v1",
+            "kind": "senior_source_transform",
+            "target": snapshot.get("target"),
+            "revision": snapshot.get("revision"),
+            "source_status": original_source["status"],
+            "reason": original_source["reason"],
+            "source_ref": original_source["retained"],
+            "source_sha256": original_source["sha256"],
+            "original_source_sha256": packet["bindings"].get("source"),
+            "next_trigger": "senior source resolution supplies a complete criteria-preserving safely representable original source bound to this source identity",
+        }
     if retained("source"):
         rows = sections["source"].get("content")
         if (
@@ -431,7 +497,10 @@ def _action_evidence_readiness(
         verdict["mode"] = "review"
         if packet["bindings"].get("reviews") != _hash(snapshot.get("review_revision")):
             gaps.append("review_conversations:revision_binding_mismatch")
-        if retained("review_conversations"):
+        if retained(
+            "review_conversations",
+            partial=_redaction_only_review(sections.get("review_conversations")),
+        ):
             reviews = sections["review_conversations"]
             comments = [
                 comment for row in reviews.get("content", []) for comment in row["comments"]
@@ -439,10 +508,19 @@ def _action_evidence_readiness(
             if (
                 reviews.get("provenance", {}).get("review_revision")
                 != snapshot.get("review_revision")
+                or reviews.get("provenance", {}).get("pagination_complete") is not True
+                or reviews.get("truncated") is not False
+                or any(
+                    row.get("comments_complete") is not True
+                    or row.get("comments_has_next_page") is True
+                    for row in reviews.get("content", [])
+                )
                 or not comments
                 or any(
                     not isinstance(comment.get("body"), str)
+                    or comment.get("truncated") is not False
                     or not _retained_ref_valid(comment.get("body_retained"))
+                    or comment["body_retained"].get("truncated") is not False
                     or comment["body_retained"].get("sha256")
                     != hashlib.sha256(comment["body"].encode()).hexdigest()
                     or comment["body_retained"].get("bytes") != len(comment["body"].encode())
@@ -524,7 +602,7 @@ def readiness_summary(readiness: dict, *, packet_ref=None, inventory_ref=None) -
     """Bound callback metadata; immutable packet/section refs retain all proof."""
     summary = {
         key: readiness[key]
-        for key in ("schema", "ready", "action", "mode", "gaps", "section_reasons")
+        for key in ("schema", "ready", "action", "mode", "gaps", "section_reasons", "dependency")
         if key in readiness
     }
     summary.update(packet_ref=packet_ref, inventory_ref=inventory_ref)
