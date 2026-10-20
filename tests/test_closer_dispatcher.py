@@ -2985,8 +2985,8 @@ def test_queue_observation_failure_is_accounted_unknown_and_never_runs_action(tm
     )
     assert not receipt["stop_valid"]
     row = receipt["accounting"][0]
-    assert row["reason"] == "unresolved_eligible_work"
-    assert row["next_trigger"] == "continue_next_round"
+    assert row["reason"] == "observation_failed"
+    assert row["next_trigger"] == "retry_observation"
     state = closer_queue._read_state(tmp_path / "queue.json")
     assert state["items"]["o/r#99"]["evidence"]["unknown"] is True
     assert state["items"]["o/r#99"]["evidence"]["error"] == "incomplete live read"
