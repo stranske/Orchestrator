@@ -38,6 +38,17 @@ claims. Provider exit 0 without these observations remains held. Unknown submiss
 and prohibit another attempt; `cli-supervision-status` reads their evidence without clearing it or
 creating a new budget.
 
+Process ownership is established from parent/start metadata before any argument query. The bounded
+trusted reader uses Linux `/proc/<pid>/cmdline` or macOS `KERN_PROCARGS2`, never rendered `ps`
+command text. It emits only argument count and the SHA-256 of the exact NUL-delimited argument
+bytes; multiline, Unicode and empty subsequent arguments retain their boundaries. The macOS
+[SDK/kernel API](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sysctl.c)
+can return trailing environment bytes in its mutable buffer: the parser consumes only the `argc`
+argument prefix, never inspects/copies/hashes those opaque extras, and zeros the buffer in `finally`.
+Only independently proved owned lineage is queried. The reader has a fixed 1 MiB ceiling and an
+original-deadline subprocess bound; a permission denial holds without another API or rendered-text
+fallback. Neither raw provider arguments nor prompts are written by this observer.
+
 The signed local observation binds mechanism, package/state, host policy, exact agent/profile and
 phase artifacts. A fresh launcher process validates it from the fixed reader implementation; a
 caller-selected observer, module or unsigned receipt grants no authority. The signature detects

@@ -2258,6 +2258,21 @@ def _offload_subject(
     return (caller, "caller") if caller else (None, None)
 
 
+def _public_process_observation(observation):
+    """Preserve process evidence without persisting raw prompt-bearing argv."""
+    if not isinstance(observation, dict):
+        return None
+    public = {k: v for k, v in observation.items() if k not in {"provider_argv", "transport_argv"}}
+    for name in ("provider_argv", "transport_argv"):
+        argv = observation.get(name)
+        if isinstance(argv, list) and all(isinstance(arg, str) for arg in argv):
+            public[name + "_argc"] = len(argv)
+            public[name + "_sha256"] = hashlib.sha256(
+                b"".join(os.fsencode(arg) + b"\0" for arg in argv)
+            ).hexdigest()
+    return public
+
+
 class ObservedOffloadFailure(RuntimeError):
     """A transport was spawned before trusted observation failed; never prelaunch."""
 
@@ -2344,8 +2359,13 @@ def run_observed_offload(command, *, callback, observation, cwd, timeout, stdin)
             stdout, stderr = stop_known_group()
             if not isinstance(exc, Exception):
                 raise
+            detail = (
+                "original observation timeout exhausted"
+                if isinstance(exc, subprocess.TimeoutExpired)
+                else str(exc)
+            )
             raise ObservedOffloadFailure(
-                f"trusted process observation failed after spawn: {type(exc).__name__}: {exc}",
+                f"trusted process observation failed after spawn: {type(exc).__name__}: {detail}",
                 observed,
                 child.poll(),
                 stdout,
@@ -3003,7 +3023,7 @@ def offload(
                 "run_id": run_id,
                 "log": str(logf),
                 "process_started": True,
-                "process_observation": exc.observation,
+                "process_observation": _public_process_observation(exc.observation),
                 "outcome_uncertain": True,
                 "outcome_status": "uncertain",
                 "retry_safe": False,
@@ -3075,7 +3095,9 @@ def offload(
                     partial_stdout=safe_partial(timeout_error.output),
                     partial_stderr=safe_partial(timeout_error.stderr),
                     raw_exit=getattr(timeout_error, "raw_exit", None),
-                    process_observation=getattr(timeout_error, "observation", None),
+                    process_observation=_public_process_observation(
+                        getattr(timeout_error, "observation", None)
+                    ),
                 )
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail

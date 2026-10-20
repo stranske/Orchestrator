@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -113,12 +114,20 @@ def test_offload_retains_postspawn_unknown_and_never_network_retries(tmp_path, m
     isolated_offload(tmp_path, monkeypatch)
     observations, receipts, starts = [], [], []
 
+    raw_prompt = "offline-prompt-must-not-enter-observer-receipt"
+    observed = {
+        "pid": 999,
+        "run_id": "fixture-only",
+        "provider_argv": ["offline-provider", raw_prompt],
+        "transport_argv": ["bash", "-lc", raw_prompt],
+    }
+
     def instrumented(command, **kwargs):
         observations.append(command)
         if fault == "callback":
             raise dispatcher.ObservedOffloadFailure(
                 "offline callback failure",
-                {"pid": 999, "run_id": "fixture-only"},
+                observed,
                 -9,
                 "retained-out",
                 "retained-err",
@@ -127,7 +136,7 @@ def test_offload_retains_postspawn_unknown_and_never_network_retries(tmp_path, m
             command, kwargs["timeout"], output="retained-out", stderr="retained-err"
         )
         exc.raw_exit = -9
-        exc.observation = {"pid": 999, "run_id": "fixture-only"}
+        exc.observation = observed
         raise exc
 
     monkeypatch.setattr(dispatcher, "run_observed_offload", instrumented)
@@ -144,6 +153,11 @@ def test_offload_retains_postspawn_unknown_and_never_network_retries(tmp_path, m
     assert result["outcome_uncertain"] and result["retry_safe"] is False
     assert result["process_started"] and result.get("disabled") is not True
     assert receipts[0]["run_id"] == result["run_id"]
+    public = result["process_observation"]
+    assert public["provider_argv_argc"] == 2 and public["provider_argv_sha256"]
+    assert "provider_argv" not in public and "transport_argv" not in public
+    assert raw_prompt not in json.dumps(result) and raw_prompt not in json.dumps(receipts)
+    assert observed["provider_argv"][-1] == raw_prompt  # Trusted cleanup input retained in memory.
     if fault == "timeout":
         assert result["partial_stdout"] == "retained-out"
         assert result["partial_stderr"] == "retained-err"
@@ -234,3 +248,37 @@ def test_slow_transport_birth_probe_uses_remaining_original_timeout(tmp_path, mo
     assert calls == [pytest.approx(0.15)]
     assert "TimeoutExpired" in str(caught.value)
     assert caught.value.returncode == -9
+
+
+def test_expired_before_birth_does_not_persist_prompt_in_error(tmp_path, monkeypatch):
+    clock = iter([10.0, 11.0])
+    prompt = "offline-prompt-must-not-be-persisted-in-timeout-error"
+
+    class Child:
+        pid = 12345
+        stdout = stderr = None
+        returncode = -9
+
+        def communicate(self, *, timeout):
+            return "", ""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(dispatcher.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(dispatcher.subprocess, "Popen", lambda *a, **kw: Child())
+    monkeypatch.setattr(dispatcher.subprocess, "run", lambda *a, **kw: pytest.fail("expired ps"))
+    monkeypatch.setattr(dispatcher.os, "killpg", lambda *a: None)
+    with pytest.raises(dispatcher.ObservedOffloadFailure) as caught:
+        dispatcher.run_observed_offload(
+            ["bash", "-lc", prompt],
+            callback=lambda _: pytest.fail("expired observer"),
+            observation={"provider_argv": ["offline-provider", prompt]},
+            cwd=str(tmp_path),
+            timeout=0.25,
+            stdin=subprocess.DEVNULL,
+        )
+    assert "TimeoutExpired" in str(caught.value)
+    assert prompt not in str(caught.value)
+    public = dispatcher._public_process_observation(caught.value.observation)
+    assert prompt not in json.dumps(public)

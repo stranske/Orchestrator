@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"launcher": "refused", "problems": problems}))
         return 78
     runtime = load_runtime(manifest)
-    from closer_mechanisms import CLI, mechanism, qualification_child
+    from closer_mechanisms import CLI, MechanismError, mechanism, qualification_child
 
     try:
         selected = mechanism(manifest, getattr(args, "mechanism", None))
@@ -230,18 +230,27 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "cli-supervision-status":
         from closer_mechanisms import supervision_status
 
-        print(json.dumps(supervision_status(args.manifest), sort_keys=True))
+        try:
+            status = supervision_status(args.manifest)
+        except (MechanismError, FileNotFoundError) as exc:
+            print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
+            return 78
+        print(json.dumps(status, sort_keys=True))
         return 0
     if args.command == "qualify-cli":
         from closer_mechanisms import supervise_cli
 
-        result = supervise_cli(
-            args.manifest,
-            args.agent,
-            args.profile_id,
-            timeout=args.timeout,
-            budget_seconds=args.budget_seconds,
-        )
+        try:
+            result = supervise_cli(
+                args.manifest,
+                args.agent,
+                args.profile_id,
+                timeout=args.timeout,
+                budget_seconds=args.budget_seconds,
+            )
+        except MechanismError as exc:
+            print(json.dumps({"launcher": "refused", "problems": [str(exc)]}))
+            return 78
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("passed") else 78
     if args.command == "qualification-child":

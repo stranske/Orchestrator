@@ -69,7 +69,7 @@ def configured(tmp_path, monkeypatch):
     return manifest, path, root, installed, profile
 
 
-def transport_boundary(calls, *, unknown=False, ignore=False, failure=False):
+def transport_boundary(calls, *, unknown=False, ignore=False, failure=False, complex_argv=False):
     def offload(agent, prompt, **kwargs):
         # Simulated provider transport invokes the REAL pinned production launcher.
         # Only the external provider is simulated; PID/argv/durable child evidence is real.
@@ -88,6 +88,8 @@ def transport_boundary(calls, *, unknown=False, ignore=False, failure=False):
                 + ("sys.exit(1)" if failure else "sys.exit(r)")
             )
             provider_argv = [sys.executable, str(provider_script), json.dumps(argv)]
+            if complex_argv:
+                provider_argv += ["offline multiline\nargument — 雪", "x" * 16000]
             done = dispatcher.run_observed_offload(
                 ["bash", "-lc", shlex.join(provider_argv)],
                 callback=kwargs["process_started_callback"],
@@ -114,14 +116,19 @@ def test_actual_launcher_supervision_proves_cli_only_and_child_process_bootstrap
     manifest, path, _root, _installed, profile = configured
     calls = []
     receipt = mechanisms.supervise_cli(
-        str(path), "codex", profile, timeout=8, budget_seconds=21, offload=transport_boundary(calls)
+        str(path),
+        "codex",
+        profile,
+        timeout=8,
+        budget_seconds=21,
+        offload=transport_boundary(calls, complex_argv=True),
     )
     assert receipt.get("passed"), receipt
     assert len(calls) == 2
     assert receipt["desktop_qualified"] is False and receipt["queue_action_accepted"] is False
     assert len({p["pid"] for p in receipt["processes"]}) == 2
     assert all(
-        p["source"] == "os-ps"
+        p["source"] == "os-byte-argv"
         and p["os_ancestry"]
         and p["provider_pid"]
         and p["transport_pid"]
@@ -141,6 +148,10 @@ def test_actual_launcher_supervision_proves_cli_only_and_child_process_bootstrap
     assert readback["retry_authorized"] is False
     assert readback["active"]["status"] == "terminal"
     assert readback["evidence"]["first-terminal"]["observed_terminal"]
+    spawn = json.loads((observation / active["nonce"] / "first-provider-spawn.json").read_text())
+    assert "provider_argv" not in spawn and "transport_argv" not in spawn
+    assert spawn["provider_argv_sha256"]
+    assert "offline multiline" not in json.dumps(readback)
     # Fresh process reads and validates the same persisted observation, not a
     # registration inherited from this test interpreter.
     observed = subprocess.run(
@@ -495,7 +506,7 @@ def test_early_lineage_failure_drains_owned_provider_with_original_budget(config
     def wrong_lineage(pid, **kwargs):
         rows = original(pid, **kwargs)
         for row in rows:
-            row["command"] = "offline lineage mismatch"
+            row["argv_sha256"] = "offline lineage mismatch"
         return rows
 
     monkeypatch.setattr(mechanisms, "_lineage", wrong_lineage)
@@ -594,9 +605,7 @@ def test_slow_ancestry_probe_cannot_renew_original_budget(monkeypatch):
 
     def observed(command, **kwargs):
         calls.append(kwargs)
-        return subprocess.CompletedProcess(
-            command, 0, "999999 Mon Oct 19 00:00:00 2026 offline", ""
-        )
+        return subprocess.CompletedProcess(command, 0, "999999 Mon Oct 19 00:00:00 2026", "")
 
     monkeypatch.setattr(mechanisms.subprocess, "run", observed)
     with pytest.raises(mechanisms.MechanismError, match="budget exhausted"):
@@ -691,3 +700,90 @@ def test_supervising_owner_provider_roles_fail_closed_before_submission(configur
             offload=transport_boundary(calls),
         )
     assert not calls
+
+
+@pytest.mark.parametrize("explicit", [mechanisms.CLI, mechanisms.DESKTOP, "unknown/v1"])
+def test_explicit_worker_mechanism_without_pin_refuses_without_claiming_it(
+    configured, tmp_path, monkeypatch, explicit
+):
+    manifest, _path, _root, _installed, _profile = configured
+    state, result = tmp_path / "w.campaign.json", tmp_path / "w.json"
+    record = campaign.Campaign(state)
+    record.begin(
+        "offline",
+        [campaign.ROUND_UNIT],
+        owner="owner",
+        release_pin=manifest["package_digest"],
+        worker_config={"granularity": "round"},
+    )
+    record.update(
+        lambda doc: doc["workers"].append(
+            {"worker_id": "w", "target": campaign.ROUND_UNIT, "state": "launched"}
+        )
+    )
+
+    def forbidden(*a, **kw):
+        pytest.fail("unverified mechanism executed transport")
+
+    monkeypatch.setattr(campaign, "run_dispatcher", forbidden)
+    monkeypatch.setattr(binding, "run_native_round", forbidden)
+    outcome = campaign.run_worker(
+        str(state),
+        str(result),
+        campaign.ROUND_UNIT,
+        "owner",
+        1,
+        holder=lambda _: {"agent": campaign.AGENT},
+        native_probe=forbidden,
+        delegate=forbidden,
+        mechanism=explicit,
+        runtime_manifest=None,
+    )
+    assert outcome == "unavailable"
+    durable = json.loads(result.read_text())
+    assert "pinned manifest" in durable["detail"]
+    assert durable.get("mechanism") is None
+
+
+@pytest.mark.parametrize("state", ["pending", "missing", "concurrent", "policy"])
+def test_launcher_expected_supervision_refusals_are_json78(configured, monkeypatch, capsys, state):
+    import fcntl
+
+    import closer_launcher as launcher
+
+    manifest, path, _root, _installed, profile = configured
+    root = Path(manifest["mechanism_contract"]["observation_root"])
+    monkeypatch.setattr(launcher, "pin_problems", lambda _manifest: [])
+    monkeypatch.setattr(launcher, "load_runtime", lambda _manifest: campaign)
+    args = [
+        "qualify-cli",
+        "--manifest",
+        str(path),
+        "--agent",
+        "codex",
+        "--profile-id",
+        profile,
+        "--timeout",
+        "2",
+        "--budget-seconds",
+        "9",
+    ]
+    lock = None
+    if state == "pending":
+        (root / "active.json").write_text(json.dumps({"status": "unknown"}))
+    elif state == "missing":
+        args = ["cli-supervision-status", "--manifest", str(path)]
+    elif state == "concurrent":
+        lock = (root / "supervisor.lock").open("a")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    else:
+        Path(next(iter(manifest["policy"]["toml_sha256"]))).write_text('status="PAUSED"\n')
+    try:
+        assert launcher.main(args) == 78
+        captured = capsys.readouterr()
+        value = json.loads(captured.out)
+        assert value["launcher"] == "refused" and value["problems"]
+        assert "Traceback" not in captured.err
+    finally:
+        if lock:
+            lock.close()

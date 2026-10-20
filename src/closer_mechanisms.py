@@ -20,6 +20,7 @@ import shlex
 import signal
 import stat
 import subprocess
+import sys
 import threading
 import time
 import tomllib
@@ -249,54 +250,195 @@ def _remaining(deadline: float | None) -> float:
     return remaining
 
 
-def _identity(pid: int, argv: list[str], *, deadline: float | None = None) -> dict:
+MAX_ARGV_BYTES = 1024 * 1024
+MAX_ARGUMENTS = 4096
+
+
+def _argv_digest(argv: list[str]) -> str:
+    return hashlib.sha256(b"".join(os.fsencode(a) + b"\0" for a in argv)).hexdigest()
+
+
+def _metadata(pid: int, deadline: float | None) -> dict:
     if type(pid) is not int or pid <= 1:
-        raise MechanismError("invalid supervised child PID")
+        raise MechanismError("invalid supervised PID")
     done = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "lstart=", "-o", "command="],
+        ["ps", "-p", str(pid), "-o", "ppid=", "-o", "lstart="],
         capture_output=True,
         text=True,
         timeout=_remaining(deadline),
         check=True,
     )
-    text = done.stdout.strip()
-    # ps lstart has five whitespace-separated fields on supported macOS/Linux.
-    parts = text.split(None, 5)
-    if len(parts) != 6 or parts[5] != " ".join(argv):
-        raise MechanismError("OS child command does not match exact no-effect launcher")
-    return {"pid": pid, "started": " ".join(parts[:5]), "argv": argv, "source": "os-ps"}
+    parts = done.stdout.strip().split()
+    if len(parts) != 6:
+        raise MechanismError("OS owned-process metadata unavailable")
+    return {"pid": pid, "parent_pid": int(parts[0]), "started": " ".join(parts[1:])}
+
+
+def _owned_chain(pid: int, deadline: float | None, *, owner: int | None = None) -> list[dict]:
+    """Prove ancestry using parent/start metadata BEFORE any argv request."""
+    owner = os.getpid() if owner is None else owner
+    rows = []
+    for _ in range(32):
+        row = _metadata(pid, deadline)
+        rows.append(row)
+        if row["parent_pid"] == owner:
+            return rows
+        if row["parent_pid"] <= 1 or any(r["pid"] == row["parent_pid"] for r in rows):
+            break
+        pid = row["parent_pid"]
+    raise MechanismError("process is not descended from this supervised submission")
+
+
+def _darwin_args_prefix(buffer, size: int) -> dict:
+    """Read exactly argc args; never inspect/hash/copy the trailing environment.
+
+    Apple's KERN_PROCARGS2 returns argc, executable path, alignment NULs, argv.
+    The selected executables have nonempty argv[0]. Empty subsequent args remain
+    distinct. Caller zeros the entire mutable OS buffer even on parse failure.
+    """
+    view = memoryview(buffer).cast("B")
+    if size < 5 or size > len(view):
+        raise MechanismError("invalid owned argv buffer size")
+    argc = int.from_bytes(view[:4], sys.byteorder, signed=True)
+    if not 1 <= argc <= MAX_ARGUMENTS:
+        raise MechanismError("invalid owned argument count")
+    pos = 4
+    while pos < size and view[pos] != 0:
+        pos += 1
+    while pos < size and view[pos] == 0:
+        pos += 1
+    hasher = hashlib.sha256()
+    for _ in range(argc):
+        start = pos
+        while pos < size and view[pos] != 0:
+            pos += 1
+        if pos >= size:
+            raise MechanismError("incomplete owned argument list")
+        hasher.update(view[start : pos + 1])
+        pos += 1
+    return {"argc": argc, "argv_sha256": hasher.hexdigest()}
+
+
+def _os_argv_proof(pid: int) -> dict:
+    """Called only inside the bounded trusted reader after owned-chain proof."""
+    if sys.platform.startswith("linux"):
+        with Path(f"/proc/{pid}/cmdline").open("rb") as file:
+            raw = file.read(MAX_ARGV_BYTES + 1)  # cmdline only; never environ.
+        if not raw or len(raw) > MAX_ARGV_BYTES or not raw.endswith(b"\0"):
+            raise MechanismError("owned argv missing, oversized or incomplete")
+        argc = raw.count(b"\0")
+        if not 1 <= argc <= MAX_ARGUMENTS:
+            raise MechanismError("owned argv count exceeds bound")
+        return {"argc": argc, "argv_sha256": hashlib.sha256(raw).hexdigest()}
+    if sys.platform != "darwin":
+        raise MechanismError("byte-exact owned argv API unsupported on this OS")
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    api = libc.sysctl
+    api.argtypes = [
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_size_t),
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+    ]
+    api.restype = ctypes.c_int
+    limit, length = ctypes.c_int(), ctypes.c_size_t(ctypes.sizeof(ctypes.c_int))
+    if api((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(limit), ctypes.byref(length), None, 0):
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+    if not 1 <= limit.value <= MAX_ARGV_BYTES:
+        raise MechanismError("kernel argv limit outside fixed reader bound")
+    buffer = ctypes.create_string_buffer(limit.value + 4)
+    length = ctypes.c_size_t(len(buffer))
+    try:
+        # CTL_KERN=1, KERN_PROCARGS2=49, verified in the macOS SDK sysctl.h.
+        if api((ctypes.c_int * 3)(1, 49, pid), 3, buffer, ctypes.byref(length), None, 0):
+            code = ctypes.get_errno()
+            raise OSError(code, os.strerror(code))
+        return _darwin_args_prefix(buffer, length.value)
+    finally:
+        # No .raw/full-buffer copy: extras remain opaque and are discarded.
+        ctypes.memset(ctypes.addressof(buffer), 0, len(buffer))
+
+
+def _argv_reader_main(pid: int, started: str, seconds: float) -> int:
+    deadline = time.monotonic() + min(5, seconds)
+    try:
+        # This reader's actual parent is the trusted supervisor, not caller JSON.
+        rows = _owned_chain(pid, deadline, owner=os.getppid())
+        before = rows[0]
+        if before["started"] != started:
+            raise MechanismError("owned process birth changed before argv read")
+        _remaining(deadline)
+        proof = _os_argv_proof(pid)
+        if _metadata(pid, deadline) != before:
+            raise MechanismError("owned process identity changed across argv read")
+        print(json.dumps({**proof, "pid": pid, "started": started}))
+        return 0
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(
+            json.dumps(
+                {
+                    "error": {
+                        "type": type(exc).__name__,
+                        "errno": getattr(exc, "errno", None),
+                        "reason": str(exc),
+                    }
+                }
+            )
+        )
+        return 78
+
+
+def _argv_proof(row: dict, deadline: float | None) -> dict:
+    seconds = _remaining(deadline)
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(Path(__file__).resolve()),
+            "--owned-argv",
+            str(row["pid"]),
+            row["started"],
+            str(seconds),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=seconds,
+    )
+    if len(done.stdout) > 4096:
+        raise MechanismError("owned argv reader returned oversized proof")
+    proof = json.loads(done.stdout)
+    if done.returncode != 0:
+        error = proof.get("error") or {}
+        if error.get("type") == "PermissionError":
+            raise PermissionError(error.get("errno"), error.get("reason"))
+        raise MechanismError(f"owned argv reader held: {error.get('type')}: {error.get('reason')}")
+    if proof.get("pid") != row["pid"] or proof.get("started") != row["started"]:
+        raise MechanismError("owned argv proof identity differs")
+    return {"argc": proof["argc"], "argv_sha256": proof["argv_sha256"]}
+
+
+def _identity(pid: int, argv: list[str], *, deadline: float | None = None) -> dict:
+    row = _owned_chain(pid, deadline)[0]
+    proof = _argv_proof(row, deadline)
+    if proof != {"argc": len(argv), "argv_sha256": _argv_digest(argv)}:
+        raise MechanismError("OS argv does not match exact no-effect launcher")
+    return {
+        "pid": pid,
+        "started": row["started"],
+        "argv": argv,
+        "argv_sha256": proof["argv_sha256"],
+        "source": "os-byte-argv",
+    }
 
 
 def _lineage(pid: int, *, deadline: float | None = None) -> list[dict]:
-    """Capture OS ancestry back to this supervisor; no session-store discovery."""
-    rows = []
-    for _ in range(32):
-        done = subprocess.run(
-            ["ps", "-ww", "-p", str(pid), "-o", "ppid=", "-o", "lstart=", "-o", "command="],
-            capture_output=True,
-            text=True,
-            timeout=_remaining(deadline),
-            check=True,
-        )
-        parts = done.stdout.strip().split(None, 6)
-        if len(parts) != 7:
-            raise MechanismError("OS provider ancestry unavailable")
-        parent = int(parts[0])
-        rows.append(
-            {
-                "pid": pid,
-                "parent_pid": parent,
-                "started": " ".join(parts[1:6]),
-                "command_sha256": hashlib.sha256(parts[6].encode()).hexdigest(),
-                "command": parts[6],
-            }
-        )
-        if parent == os.getpid():
-            return rows
-        if parent <= 1 or parent == pid:
-            break
-        pid = parent
-    raise MechanismError("launcher is not descended from this supervised submission")
+    rows = _owned_chain(pid, deadline)
+    return [{**row, **_argv_proof(row, deadline)} for row in rows]
 
 
 def _wait_terminal(identity: dict, deadline: float) -> None:
@@ -497,7 +639,14 @@ def _supervise_cli_locked(
                 ):
                     raise MechanismError("spawn observation differs from selected CLI invocation")
                 spawn_events.append(event)  # Trusted in-memory veto channel, never receipt input.
-                _write(directory / f"{role}-provider-spawn.json", dict(event))
+                _write(
+                    directory / f"{role}-provider-spawn.json",
+                    {k: v for k, v in event.items() if k not in {"provider_argv", "transport_argv"}}
+                    | {
+                        "provider_argv_sha256": _argv_digest(event["provider_argv"]),
+                        "transport_argv_sha256": _argv_digest(event["transport_argv"]),
+                    },
+                )
 
             def submit():
                 try:
@@ -531,7 +680,10 @@ def _supervise_cli_locked(
             identity = _identity(ready["pid"], argv, deadline=deadline)
             known_child = dict(identity)
             ancestry = _lineage(ready["pid"], deadline=deadline)
-            transport = _wait(directory / f"{role}-provider-spawn.json", deadline)
+            _wait(directory / f"{role}-provider-spawn.json", deadline)
+            if len(spawn_events) != 1:
+                raise MechanismError("launcher lacks one trusted transport observation")
+            transport = spawn_events[0]
             transport_rows = [
                 row
                 for row in ancestry
@@ -542,7 +694,10 @@ def _supervise_cli_locked(
             if not isinstance(expected_provider, list) or not expected_provider:
                 raise MechanismError("trusted transport lacks exact selected provider argv")
             provider_rows = [
-                row for row in ancestry if row["command"] == " ".join(expected_provider)
+                row
+                for row in ancestry
+                if row["argc"] == len(expected_provider)
+                and row["argv_sha256"] == _argv_digest(expected_provider)
             ]
             if len(transport_rows) != 1 or len(provider_rows) != 1:
                 raise MechanismError(
@@ -553,8 +708,7 @@ def _supervise_cli_locked(
             identity["transport_pid"] = transport["pid"]
             identity["provider_pid"] = provider_rows[0]["pid"]
             identity["provider_started"] = provider_rows[0]["started"]
-            identity["provider_argv_sha256"] = digest(expected_provider)
-            ancestry = [{k: v for k, v in row.items() if k != "command"} for row in ancestry]
+            identity["provider_argv_sha256"] = _argv_digest(expected_provider)
             if len(starts) != 1 or not starts[0].get("run_id") or starts[0].get("agent") != agent:
                 raise MechanismError("launcher has no bound actual CLI submission")
             identity["provider_run_id"] = starts[0]["run_id"]
@@ -567,7 +721,7 @@ def _supervise_cli_locked(
                 if journal.get("pid") != identity["pid"] or journal.get("nonce") != nonce:
                     raise MechanismError("handoff did not bind observed launcher")
                 if _identity(identity["pid"], argv, deadline=deadline) != {
-                    k: identity[k] for k in ("pid", "started", "argv", "source")
+                    k: identity[k] for k in ("pid", "started", "argv", "argv_sha256", "source")
                 }:
                     raise MechanismError("child identity changed before controlled crash")
                 child_signal_attempted = True
@@ -659,10 +813,11 @@ def _supervise_cli_locked(
         _write(active_path, {"nonce": nonce, "status": "terminal"})
         return record
     except Exception as exc:
+        cleanup_denied = cleanup_denied or isinstance(exc, PermissionError)
         # Cleanup is inside the immutable original budget, never a fresh attempt.
         # Only the exact observed no-effect child and its private transport group
         # can be signalled; unknown identity or a denial remains UNKNOWN.
-        if known_child is not None and not child_signal_attempted:
+        if known_child is not None and not child_signal_attempted and not cleanup_denied:
             child_signal_attempted = True
             event = {"target": "qualification-child", "pid": known_child["pid"]}
             try:
@@ -700,7 +855,9 @@ def _supervise_cli_locked(
             if thread.is_alive() and not cleanup_denied:
                 event = {"target": "transport-process-group"}
                 try:
-                    transport = _read(directory / f"{role}-provider-spawn.json")
+                    if len(spawn_events) != 1:
+                        raise MechanismError("cleanup lacks one trusted transport observation")
+                    transport = spawn_events[0]
                     pid = transport["pid"]
                     event["process_group"] = pid
                     matched = False
@@ -843,6 +1000,8 @@ def _selftest() -> int:
 if __name__ == "__main__":
     import sys
 
+    if len(sys.argv) == 5 and sys.argv[1] == "--owned-argv":
+        raise SystemExit(_argv_reader_main(int(sys.argv[2]), sys.argv[3], float(sys.argv[4])))
     if sys.argv[1:] == ["--selftest"]:
         raise SystemExit(_selftest())
     raise SystemExit("Use the pinned closer_launcher entrypoint")

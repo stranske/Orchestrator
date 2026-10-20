@@ -1220,7 +1220,7 @@ def run_worker(
     `target-delegate`: the unit is one real target, handed to `dispatcher.delegate` on the
     provider the router currently selects. Any other granularity is refused."""
     worker_id = Path(result).stem
-    result_mechanism = mechanism
+    result_mechanism = None
     module_dir = module_dir or Path(__file__).resolve().parent
 
     def finish(outcome, detail):
@@ -1254,6 +1254,8 @@ def run_worker(
     configured = doc.get("worker_config") or {}
     worker_policy = configured.get("policy") or {}
     actual_mechanism = configured.get("mechanism", "desktop-scheduler/v1")
+    if mechanism is not None and not runtime_manifest:
+        return finish("unavailable", "explicit worker mechanism requires pinned manifest")
     if runtime_manifest:
         try:
             pinned_worker = load_manifest(runtime_manifest)
