@@ -4,7 +4,8 @@ The dispatcher now integrates the staged coordinator. Default mode remains `lega
 Use `closer_dispatcher.py run --pipeline --coordinator-mode resource_scoped` with the
 complete `--coordinator-contract-pin` advertised by this version. The CLI rejects missing
 or incompatible pins. Scheduled launchers retain their default mode until supported
-promotion and desktop qualification; this source change does not enable a live lane.
+promotion and qualification for their explicit execution mechanism; source changes do not
+enable a live lane.
 
 ## Ownership and state
 
@@ -18,6 +19,15 @@ state document per canonical target. A target lease remains held across its work
 atomic state replacement rechecks the live lease, epoch, and original deadline plus commit
 grace immediately before replacement. Files and containing directories are fsynced.
 Disjoint targets do not share a whole-round JSON rewrite lock.
+
+Historical quarantine uses the narrowest verified conflict closure. Content-addressed
+snapshot and packet references bind the original PR, sources, branch and authorized
+execution workspace. A fully bound remote GitHub operation needs no synthetic filesystem
+scope; missing operation binding or an unverified local workspace retains the conservative
+repository fallback. Exact supported observation-cache records are reported separately only
+when their immutable packet/snapshot provenance and the preserving cache-writer contract
+prove that they are observations. Native operation fields or history cannot borrow that
+classification. Every original row and reservation remains unchanged.
 
 ## Effects and provider capacity
 
@@ -48,6 +58,16 @@ Scoped ACTION C names an immutable round receipt, bound to its per-target run ID
 deadlines. There is no latest-round fallback. Empty, missing, foreign, or fenced accounting is
 invalid. Raw and staged legacy stop checks include retained common reservations. These receipts
 validate accounting; they do not perform native helper cleanup.
+
+A terminal native round can separately prove containment without proving completion.
+Every unsettled admitted row must exactly match its immutable aggregate receipt and one
+independently regenerated quarantine item, including the original run, row hash and conflict
+keys. Every unadmitted target needs a positive pre-callback refusal. Unbounded census damage,
+missing rows or changed receipts refuse continuation. The native boundary also requires
+terminal B, the exact reviewed C65 cleanup result and no live lane. Future rounds recheck
+resource admission: the unknown target remains fenced while disjoint work may proceed.
+Global stop and acceptance remain false; no original unknown, deadline or advertisement is
+cleared.
 
 ## Evidence and remaining rollout limits
 

@@ -118,6 +118,10 @@ def mechanism(manifest: dict, requested: str | None = None) -> str:
             raise MechanismError("CLI qualification profile differs from approved provider")
         if "closer_mechanisms.py" not in (manifest.get("modules") or {}):
             raise MechanismError("mechanism reader is outside pinned package closure")
+    elif selected == NATIVE:
+        from closer_native_observer import contract as native_contract
+
+        native_contract(manifest)
     elif policy.get("schema") == POLICY:
         raise MechanismError("CLI policy cannot authorize another execution mechanism")
     return selected
@@ -393,14 +397,48 @@ def _argv_reader_main(pid: int, started: str, seconds: float) -> int:
         return 78
 
 
-def _argv_proof(row: dict, deadline: float | None) -> dict:
+def _ancestor_argv_reader_main(pid: int, started: str, seconds: float) -> int:
+    """Only this reader's trusted parent or its actual immediate wrapper parent.
+
+    Metadata proves that exact ancestry before the args-only query; never scan
+    other PIDs, environment, sessions, or credential stores.
+    """
+    deadline = time.monotonic() + min(5, seconds)
+    try:
+        parent = _metadata(os.getppid(), deadline)
+        if pid not in {parent["pid"], parent["parent_pid"]}:
+            raise MechanismError("native argv PID is outside immediate own ancestry")
+        before = _metadata(pid, deadline)
+        if before["started"] != started:
+            raise MechanismError("native ancestor birth changed")
+        proof = _os_argv_proof(pid)
+        if _metadata(pid, deadline) != before:
+            raise MechanismError("native ancestor changed across argv read")
+        print(json.dumps({**proof, "pid": pid, "started": started}))
+        return 0
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        print(
+            json.dumps(
+                {
+                    "error": {
+                        "type": type(exc).__name__,
+                        "errno": getattr(exc, "errno", None),
+                        "reason": str(exc),
+                    }
+                }
+            )
+        )
+        return 78
+
+
+def _argv_proof(row: dict, deadline: float | None, *, ancestor=False) -> dict:
     seconds = _remaining(deadline)
     done = subprocess.run(
         [
             sys.executable,
             "-I",
             str(Path(__file__).resolve()),
-            "--owned-argv",
+            "--ancestor-argv" if ancestor else "--owned-argv",
             str(row["pid"]),
             row["started"],
             str(seconds),
@@ -1008,6 +1046,10 @@ def _selftest() -> int:
 if __name__ == "__main__":
     import sys
 
+    if len(sys.argv) == 5 and sys.argv[1] == "--ancestor-argv":
+        raise SystemExit(
+            _ancestor_argv_reader_main(int(sys.argv[2]), sys.argv[3], float(sys.argv[4]))
+        )
     if len(sys.argv) == 5 and sys.argv[1] == "--owned-argv":
         raise SystemExit(_argv_reader_main(int(sys.argv[2]), sys.argv[3], float(sys.argv[4])))
     if sys.argv[1:] == ["--selftest"]:

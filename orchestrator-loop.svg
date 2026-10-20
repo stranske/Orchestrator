@@ -57,6 +57,7 @@
 <rect class="role" x="306" y="144" width="100" height="24" rx="4"/><text class="ct" x="356" y="160" text-anchor="middle">redirect (auto)</text>
 <rect class="rail" x="412" y="144" width="118" height="24" rx="4"/><text class="ct" x="471" y="160" text-anchor="middle">redirect apply (gated)</text>
 
+<g><title>Scoped closer quarantine admission rail</title><desc>The existing scoped coordinator retains hash-bound legacy and unknown resource evidence, fences bounded repository and PR/source/branch/worktree aliases before model and effect callbacks, and admits only disjoint bounded work. Unbounded corruption holds all work explicitly. Target leases and durable effect intents remain authoritative; named scoped completion never clears historical invalid-stop truth or accepts model output.</desc></g>
 <!-- stage 3 -->
 <rect class="stage" x="56" y="196" width="584" height="52" rx="8"/>
 <text class="th" x="68" y="227">Decide</text>
@@ -154,4 +155,5 @@ Measured recovery closes the drift issue; capabilities are never blocked or paus
 <text class="ts" x="68" y="735">λ=2/day · cap 4/UTC day · 21-day expiry · dispatch stays OFF</text>
 <text class="ts" x="68" y="753">coverage → two neutral judges + local_verify → winner ready PR; no synthesis</text>
 <path class="arrow" d="M56,724 L44,724 L44,290 L56,290" marker-end="url(#ah)"/>
+<g id="native-handoff-contract"><title>Native wrapper handoff capability</title><desc>Reviewed Cursor wrapper invokes pinned Runtime with distinct configured policy and owned process lifecycle proof. Desktop scheduler proof remains separate; exact admitted-domain continuation preserves historical quarantines and global stop false.</desc></g>
 </svg>

@@ -643,6 +643,10 @@ def _stage_audit_history(
 
 def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
     """Retain only facts needed to resume/reconcile across generations."""
+    if item.get("deferred_reason") == "scope_quarantined":
+        # A not-started proof binds the full inputs and the exact original row.
+        # Compacting it would destroy the only lineage permitting fresh admission.
+        return _bounded(item, limit=256 * 1024)
     keys = (
         "status",
         "stage",
@@ -664,6 +668,7 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "recovery_excluded",
         "known_completed_action",
         "carried",
+        "scope_proof",
     )
     carried = {key: item[key] for key in keys if key in item}
     results: dict[str, Any] = {}
@@ -2278,6 +2283,19 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, doc: Mapping[str, Any]) -> None:
+    if (
+        path.name == "state.json"
+        and path.parent.parent.name == "targets"
+        and path.parent.parent.parent.name.endswith(".scoped")
+    ):
+        # The census binds all source bytes; unrelated short shard commits must
+        # not invalidate every other target's admission under concurrent load.
+        with closer_resources.inventory_lock(path.parent.parent.parent, exclusive=True):
+            return _save_snapshot(path, doc)
+    return _save_snapshot(path, doc)
+
+
+def _save_snapshot(path: Path, doc: Mapping[str, Any]) -> None:
     fence = closer_resources.fence_for(path)
     if fence is not None:
         fence()  # scoped mode: a stale or expired lease holder must not commit
@@ -2737,6 +2755,8 @@ def _run_pipeline_impl(
                     # this fully proven native wait as provenance, not authority.
                     latest[old_target] = previous["targets"][old_target]
             carried = []
+            scope_origins = {}
+            scope_carry = {}
             for old_target, old_item in latest.items():
                 # An old non-action failure outside today's assignment remains
                 # in the immutable audit, not in today's work queue.
@@ -2747,6 +2767,30 @@ def _run_pipeline_impl(
                 ):
                     continue
                 item = _bounded(old_item)
+                if (
+                    old_target not in assignment
+                    and item.get("deferred_reason") == "scope_quarantined"
+                ):
+                    origins = [
+                        (name, old_run)
+                        for name, old_run in state["runs"].items()
+                        if old_run.get("targets", {}).get(old_target) == old_item
+                        and closer_resources.valid_scope_refusal(path, old_target, old_item, name)
+                    ]
+                    if len(origins) != 1:
+                        return {
+                            "schema": "closer-pipeline-receipt/v1",
+                            "authority": False,
+                            "status": "blocked",
+                            "reason": "scope_refusal_origin_unavailable",
+                            "targets": {},
+                            "continuation_required": True,
+                            "finished_at": now(),
+                        }
+                    origin_id, origin_run = origins[0]
+                    scope_origins[origin_id] = origin_run
+                    scope_carry[old_target] = item
+                    continue
                 if recovery_audit is not None and old_target in recovery_uncertain:
                     item.update(
                         status="uncertain",
@@ -2815,6 +2859,42 @@ def _run_pipeline_impl(
                     item.update(status="uncertain", deferred_next_trigger="reconcile_before_retry")
                 if old_target in assignment:
                     item.pop("recovery_excluded", None)
+                    if item.get("deferred_reason") == "scope_quarantined":
+                        origins = [
+                            (name, old_run)
+                            for name, old_run in state["runs"].items()
+                            if old_run.get("targets", {}).get(old_target) == old_item
+                            and closer_resources.valid_scope_refusal(
+                                path, old_target, old_item, name
+                            )
+                        ]
+                        if len(origins) != 1:
+                            return {
+                                "schema": "closer-pipeline-receipt/v1",
+                                "authority": False,
+                                "status": "blocked",
+                                "reason": "scope_refusal_origin_unavailable",
+                                "targets": {},
+                                "continuation_required": True,
+                                "finished_at": now(),
+                            }
+                        origin_id, origin_run = origins[0]
+                        scope_origins[origin_id] = origin_run
+                        run.setdefault("prior_scope_refusals", {})[old_target] = {
+                            "source_run_id": origin_id,
+                            "item_sha256": _digest(old_item),
+                            "scope_proof": old_item["scope_proof"],
+                        }
+                        # Project a fresh scheduling view only after proving
+                        # this exact callback never started. Retain its full
+                        # original run and proof, without rebinding either.
+                        for field in (
+                            "scope_proof",
+                            "deferred_reason",
+                            "deferred_next_trigger",
+                            "error",
+                        ):
+                            item.pop(field, None)
                     if item.get("status") not in {"uncertain", "failed"} or (
                         item.get("status") == "failed" and old_target not in recovery_quarantined
                     ):
@@ -2838,8 +2918,8 @@ def _run_pipeline_impl(
                 run["prior_stop"] = _bounded(prior_stop, limit=64 * 1024)
             # Keep only a small run history; unresolved targets are additionally
             # copied into the top-level carry ledger before old runs are trimmed.
-            state["runs"] = {run_id: run}
-            state["carry"] = {}
+            state["runs"] = {**scope_origins, run_id: run}
+            state["carry"] = scope_carry
         # A resumed invocation cannot silently extend its original budget.
         active_deadline = min(float(deadline), float(run["deadline"]))
         for target in target_list:
@@ -2957,7 +3037,9 @@ def _run_pipeline_impl(
                         raise ValueError("callback must return an object")
                     error = None
                 except Exception as exc:  # recorded as evidence, never acceptance
-                    if (
+                    if isinstance(exc, closer_resources.ScopeBlocked):
+                        value, error = {"_scope_not_started": exc.proof, "reason": str(exc)}, None
+                    elif (
                         stage == "prepare"
                         and round_deadline_exception is not None
                         and isinstance(exc, round_deadline_exception)
@@ -3003,6 +3085,24 @@ def _run_pipeline_impl(
                         )
                         return
                     item["metrics"].setdefault("stage_seconds", {})[stage] = elapsed
+                    if value.get("_scope_not_started"):
+                        # This typed signal is emitted only by the pre-callback
+                        # resource gate. No provider/effect was invoked; it cannot
+                        # discharge any historical outcome or authorize a retry.
+                        item.update(
+                            status="deferred",
+                            deferred_reason="scope_quarantined",
+                            deferred_next_trigger="reconcile_scope_before_retry",
+                            scope_proof=value["_scope_not_started"],
+                            error=value.get("reason"),
+                        )
+                        if stage == "reconcile":
+                            # A refused reconciliation proves nothing about the
+                            # earlier action. Keep that original unknown alive.
+                            item.update(
+                                status="uncertain", deferred_next_trigger="reconcile_before_retry"
+                            )
+                        return
                     if now() > active_deadline:
                         item["metrics"]["late_seconds"] = max(0.0, now() - active_deadline)
                     if value.get("_not_started_deadline") is True:
@@ -3539,6 +3639,9 @@ def _run_pipeline_impl(
                         _save_state_locked(path, state)
                         continue
                     item.update(status="running", work_key=key, last_scheduled=now())
+                    scope_lease = closer_resources.fence_identity(path)
+                    if scope_lease is not None:
+                        item["scope_lease"] = scope_lease
                     _save_state_locked(path, state)
 
                     def invoke(cb=callback, name=target, ctx=safe_context):
@@ -3771,6 +3874,7 @@ def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) 
             raise ValueError("targets must be unique when compared canonically")
         resource_keys = kwargs.pop("resource_keys", None)
         kwargs.pop("pool_lease", None)
+        kwargs.pop("quarantine_workspaces", None)
         now = kwargs.get("now", time.time)
         owner = f"legacy:{os.getpid()}:{threading.get_ident()}:{now()}"
         with contextlib.ExitStack() as gates:
@@ -4022,9 +4126,15 @@ def _validate_stop_legacy(
                 "pending_ci",
                 "github_capacity",
                 "validated_inner_wait",
+                "scope_quarantined",
             }
             if reason not in allowed or not isinstance(trigger, str) or not trigger:
                 reasons.append(f"unverified_deferral:{target}")
+            elif reason == "scope_quarantined" and not (
+                trigger == "reconcile_scope_before_retry"
+                and closer_resources.valid_scope_refusal(path, target, item, run_id)
+            ):
+                reasons.append(f"unverified_scope_refusal:{target}")
             elif reason == "deadline_exhausted" and now() < float(deadline):
                 reasons.append(f"premature_deadline_deferral:{target}")
             elif reason == "deadline_exhausted" and not _valid_deadline_evidence(

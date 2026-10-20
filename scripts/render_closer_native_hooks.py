@@ -196,7 +196,9 @@ def patch_prerun(original: bytes, *, bounded_round: bool = False) -> bytes:
 def patch_postrun(original: bytes, *, bounded_round: bool = False) -> bytes:
     text = original.decode("utf-8")
     if MARKER_START in text:
-        if bounded_round and "CLOSER_BOUNDED_NO_RELAY_V1" not in text:
+        if bounded_round and (
+            "CLOSER_BOUNDED_NO_RELAY_V1" not in text or "CLOSER_NAMED_ROUND_V1" not in text
+        ):
             _fail("bounded mode requires original canonical postrun input")
         return original
     matches = [anchor for anchor in POSTRUN_TRAP_ANCHORS if text.count(anchor) == 1]
@@ -227,12 +229,24 @@ if [[ "${CLOSER_POSTRUN_DEPENDENCIES_VALID:-0}" != "1" ]]; then
   echo "handoff-postrun: physical dependency pins changed; cleanup only" >&2
   exit 65
 fi
+# CLOSER_NAMED_ROUND_V1
+_closer_round_args=(--state "$CLOSER_ROUND_STATE" --assignment "${CLOSER_POSTRUN_ASSIGNMENT:?}")
+if [[ -n "${CLOSER_POSTRUN_ROUND_ID:-}" ]]; then
+  if [[ ! "$CLOSER_POSTRUN_ROUND_ID" =~ ^[0-9a-f]{16,64}$ ]]; then
+    echo "handoff-postrun: invalid named round; cleanup only" >&2
+    exit 65
+  fi
+  _closer_round_args+=(--round-id "$CLOSER_POSTRUN_ROUND_ID")
+elif [[ "${CLOSER_POSTRUN_REQUIRE_NAMED_ROUND:-0}" == "1" ]]; then
+  echo "handoff-postrun: terminal named receipt unavailable; cleanup only" >&2
+  exit 65
+fi
 """ + gate,
             1,
         )
         patched = patched.replace(
             invocation,
-            '"${CLOSER_POSTRUN_PYTHON:?}" "${CLOSER_POSTRUN_DISPATCHER:?}" validate-stop --state "$CLOSER_ROUND_STATE" --assignment "${CLOSER_POSTRUN_ASSIGNMENT:?}"',
+            '"${CLOSER_POSTRUN_PYTHON:?}" "${CLOSER_POSTRUN_DISPATCHER:?}" validate-stop "${_closer_round_args[@]}"',
             1,
         )
         patched = patched.replace(

@@ -17,10 +17,88 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from scripts import install_closer_campaign_hook as hook
 from test_closer_campaign import CAND, DIGEST, journal
+from test_closer_native_observer import scoped_receipt as scoped_receipt
 
 import closer_campaign as cc
 
 SRC = Path(cc.__file__).resolve().parent
+
+
+@pytest.mark.parametrize("detail", [{}, {"proof": None}, {"proof": []}, {"proof": {}}])
+def test_missing_or_malformed_continuation_proof_never_returns_pending(tmp_path, detail):
+    from types import SimpleNamespace
+
+    worker = dict(
+        worker_id="abcdef012345",
+        state="active",
+        target=cc.ROUND_UNIT,
+        claim_target="campaign:round",
+    )
+    doc = {"workers": [worker], "targets": {cc.ROUND_UNIT: "running"}, "worker_config": {}}
+    released = []
+
+    def update(mutate):
+        mutate(doc)
+        return doc
+
+    obj = SimpleNamespace(path=tmp_path / "campaign.json", update=update)
+    cc.write_result(
+        cc.result_path(obj.path, worker["worker_id"]),
+        worker["worker_id"],
+        cc.ROUND_UNIT,
+        "scoped_continuation",
+        json.dumps(detail),
+        mechanism="native-handoff/v1",
+    )
+    cc.reconcile(obj, release_claim=lambda *args: released.append(args))
+    assert worker["state"] == "terminal" and worker["outcome"] == "unknown"
+    assert doc["targets"][cc.ROUND_UNIT] == "reconcile" and len(released) == 1
+
+
+def test_temporary_lane_owner_defers_continuation_revalidation(scoped_receipt, tmp_path):
+    from types import SimpleNamespace
+
+    import closer_runtime_binding as binding
+
+    cfg, candidate, _verdict, calls = scoped_receipt
+    proof = binding.scoped_continuation_proof(cfg, candidate)
+    assert proof is not None
+    worker = dict(
+        worker_id="abcdef012345",
+        state="active",
+        target=cc.ROUND_UNIT,
+        claim_target="campaign:round",
+    )
+    doc = {"workers": [worker], "targets": {cc.ROUND_UNIT: "running"}, "worker_config": cfg}
+    released = []
+
+    def update(mutate):
+        mutate(doc)
+        return doc
+
+    obj = SimpleNamespace(path=tmp_path / "campaign.json", update=update)
+    result = cc.result_path(obj.path, worker["worker_id"])
+    cc.write_result(
+        result,
+        worker["worker_id"],
+        cc.ROUND_UNIT,
+        "scoped_continuation",
+        json.dumps({"proof": proof}),
+        mechanism="native-handoff/v1",
+    )
+    original = result.read_bytes()
+    lane = Path(cfg["handoff_dir"]) / ".lane-closer.lock"
+    lane.mkdir(parents=True)
+    before = len(calls)
+    cc.reconcile(obj, release_claim=lambda *args: released.append(args))
+    assert worker["state"] == "active" and "outcome" not in worker
+    assert doc["targets"][cc.ROUND_UNIT] == "running" and not released
+    assert len(calls) == before and result.read_bytes() == original
+    lane.rmdir()
+    cc.reconcile(obj, release_claim=lambda *args: released.append(args))
+    assert worker["state"] == "terminal" and worker["outcome"] == "scoped_continuation"
+    assert doc["targets"][cc.ROUND_UNIT] == "pending" and len(released) == 1
+    assert result.read_bytes() == original
 
 
 @pytest.fixture(autouse=True)
@@ -258,6 +336,7 @@ def pinned_dir(tmp_path, dispatcher="import sys\nif __name__ == '__main__': sys.
         "closer_campaign.py",
         "closer_runtime_binding.py",
         "closer_mechanisms.py",
+        "closer_native_observer.py",
         "closer_operational_capacity.py",
         "closer_native_lease.py",
         "closer_launcher.py",

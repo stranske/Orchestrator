@@ -51,6 +51,7 @@ MANIFEST_SCHEMA = 1
 CONTRACT = "closer-operation/v1"
 MAX_WORKERS_CAP = 4
 OUTCOMES = {"ok", "unavailable", "denied", "unknown"}
+WORKER_OUTCOMES = OUTCOMES | {"scoped_continuation"}
 RUNNER_PHASES = ("startup", "handoff", "crash_restart", "result_recording")
 _UNPROVEN_KINDS = {"unit_test", "fixture", "simulated"}
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -286,13 +287,48 @@ def reconcile(
                 if not isinstance(result, dict):
                     result = {}
                 outcome = result.get("outcome")
-                if outcome not in OUTCOMES:
+                if outcome not in WORKER_OUTCOMES:
                     outcome = "unknown"
+                if outcome == "scoped_continuation":
+                    from closer_runtime_binding import scoped_continuation_proof
+
+                    try:
+                        candidate = json.loads(result["detail"])["proof"]
+                    except (KeyError, TypeError, ValueError):
+                        candidate = None
+                    cfg = doc.get("worker_config") or {}
+                    if result.get("native_admission") is not None:
+                        from closer_native_observer import result_admission_config
+
+                        try:
+                            cfg = result_admission_config(
+                                cfg, result["native_admission"], state_path, doc, worker
+                            )
+                        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                            candidate = None
+                    if result.get("mechanism") == "native-handoff/v1" and isinstance(
+                        candidate, dict
+                    ):
+                        handoff = Path(
+                            cfg.get("handoff_dir")
+                            or os.environ.get("HANDOFF_DIR")
+                            or Path.home() / ".codex/handoff"
+                        )
+                        lane = handoff / ".lane-closer.lock"
+                        if lane.exists() or lane.is_symlink():
+                            continue  # Live ownership defers observation; it is not an outcome.
+                    if (
+                        result.get("mechanism") != "native-handoff/v1"
+                        or not isinstance(candidate, dict)
+                        or scoped_continuation_proof(cfg, candidate) != candidate
+                    ):
+                        outcome = "unknown"
                 worker.update(state="terminal", outcome=outcome, detail=result.get("detail"))
                 doc["targets"][worker["target"]] = {
                     "ok": "done",
                     "unknown": "reconcile",
                     "unavailable": "pending",
+                    "scoped_continuation": "pending",
                     "denied": "denied",
                 }[outcome]
                 if outcome == "denied":
@@ -1080,10 +1116,34 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         "--state",
         cfg["dispatch_state"],
         "--budget-seconds",
-        str(int(cfg.get("budget_seconds", 600))),
+        str(
+            int(
+                cfg.get("dispatch_budget_seconds", cfg.get("budget_seconds", 600))
+                if cfg.get("mechanism") == "native-handoff/v1"
+                and cfg.get("native_admission") is not None
+                else cfg.get("budget_seconds", 600)
+            )
+        ),
         "--max-workers",
         str(min(MAX_WORKERS_CAP, max(1, int(cfg.get("dispatch_workers", 1))))),
     ]
+    mode = cfg.get("coordinator_mode", "legacy")
+    if mode not in {"legacy", "resource_scoped"}:
+        raise ValueError("unsupported pinned coordinator mode")
+    if mode == "resource_scoped":
+        import closer_pipeline
+
+        pin = cfg.get("coordinator_contract_pin")
+        if pin != closer_pipeline.scoped_capability():
+            raise ValueError("scoped native dispatch requires the exact current coordinator pin")
+        command.extend(
+            [
+                "--coordinator-mode",
+                mode,
+                "--coordinator-contract-pin",
+                json.dumps(pin, sort_keys=True, allow_nan=False),
+            ]
+        )
     if cfg.get("apply"):
         command.extend(["--apply", "--workers", "--pipeline"])
         # New launch paths always opt in; absent binding holds instead of legacy fallback.
@@ -1122,6 +1182,7 @@ def write_result(
     detail: str,
     *,
     mechanism: str | None = None,
+    native_admission: dict[str, Any] | None = None,
 ) -> None:
     record = {
         "worker_id": worker_id,
@@ -1132,6 +1193,8 @@ def write_result(
     }
     if mechanism is not None:
         record["mechanism"] = mechanism
+    if native_admission is not None:
+        record["native_admission"] = native_admission
     _atomic_write(Path(path), record)
 
 
@@ -1169,6 +1232,15 @@ def delegate_target(
                 )
         except (KeyError, OSError, ValueError, RuntimeError):
             return "unavailable", "CLI delegate manifest is unavailable"
+    if cfg.get("mechanism") == "native-handoff/v1":
+        try:
+            pin = load_manifest(cfg["runtime_manifest"])
+            if cfg.get("policy") != pin.get("policy") or qualify(
+                pin, Path(cfg["runtime_manifest"]).parent
+            ):
+                return "unavailable", "native delegate pinned qualification/policy differs"
+        except (KeyError, OSError, ValueError, RuntimeError):
+            return "unavailable", "native delegate manifest is unavailable"
     spec = cfg.get("delegate") or {}
     if not TARGET.fullmatch(target) or not spec.get("lane") or not spec.get("prompt"):
         return "denied", "per-target granularity needs a real target and a delegate lane+prompt"
@@ -1221,10 +1293,19 @@ def run_worker(
     provider the router currently selects. Any other granularity is refused."""
     worker_id = Path(result).stem
     result_mechanism = None
+    worker_admission = None
     module_dir = module_dir or Path(__file__).resolve().parent
 
     def finish(outcome, detail):
-        write_result(result, worker_id, target, outcome, detail, mechanism=result_mechanism)
+        write_result(
+            result,
+            worker_id,
+            target,
+            outcome,
+            detail,
+            mechanism=result_mechanism,
+            native_admission=worker_admission,
+        )
         return outcome
 
     try:
@@ -1267,13 +1348,26 @@ def run_worker(
                 "mechanism", "desktop-scheduler/v1"
             ) != actual_mechanism:
                 return finish("unavailable", "worker mechanism differs from campaign")
-            if actual_mechanism == "cli-offload/v1" and configured.get(
+            if actual_mechanism in {"cli-offload/v1", "native-handoff/v1"} and configured.get(
                 "policy"
             ) != pinned_worker.get("policy"):
                 return finish(
                     "unavailable", "worker configured policy differs from pinned host policy"
                 )
-            if actual_mechanism == "cli-offload/v1" and qualify(
+            if actual_mechanism == "native-handoff/v1":
+                from closer_native_observer import accept_worker
+
+                worker_admission = accept_worker(
+                    pinned_worker,
+                    state=state,
+                    target=target,
+                    owner=owner,
+                    generation=generation,
+                    result=result,
+                    manifest_path=runtime_manifest,
+                    campaign_id=doc["campaign_id"],
+                )
+            if actual_mechanism in {"cli-offload/v1", "native-handoff/v1"} and qualify(
                 pinned_worker, Path(runtime_manifest).parent
             ):
                 return finish("unavailable", "worker execution mechanism is not qualified")
@@ -1293,6 +1387,13 @@ def run_worker(
     cfg = dict(doc.get("worker_config") or {})
     if runtime_manifest:
         cfg["runtime_manifest"] = runtime_manifest
+    if worker_admission is not None:
+        from closer_native_observer import admission_config
+
+        try:
+            cfg = admission_config(pinned_worker, cfg, worker_admission)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            return finish("unavailable", f"native original admission held: {exc}")
     if mode == "target-delegate":
         route = (route_fn or (lambda: select_route(cfg.get("capacity_json"))))()
         if agent is None or profile_id is None:
@@ -1990,13 +2091,20 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     understands the recorded state schema, and (4) the pinned Core loadable as an adapter.
     Any failure holds; nothing falls back to another action path."""
     problems = validate_manifest(manifest) + verify_modules(manifest)
-    from closer_mechanisms import CLI, DESKTOP, mechanism, qualification_problems
+    from closer_mechanisms import CLI, DESKTOP, MechanismError, mechanism, qualification_problems
 
-    selected = mechanism(manifest)
+    try:
+        selected = mechanism(manifest)
+    except MechanismError as exc:
+        return problems + [f"execution mechanism remains held: {exc}"]
     if selected == CLI:
         problems += qualification_problems(manifest)
+    elif selected == "native-handoff/v1":
+        from closer_native_observer import qualification_problems as native_qualification_problems
+
+        problems += native_qualification_problems(manifest)
     elif selected != DESKTOP:
-        problems.append("native handoff observer unsupported; mechanism remains held")
+        problems.append("unknown execution mechanism remains held")
     else:
         try:
             promotion = _load(str(Path(root) / "promotion.json"))
@@ -2047,6 +2155,11 @@ def tick(
         return [{"kind": "skipped", "reason": f"pin unusable: {exc}"}]
     from closer_runtime_binding import policy_for_mechanism as policy_problem
 
+    if execution_mechanism == "native-handoff/v1":
+        from closer_native_observer import entry_active
+
+        if not entry_active(manifest):
+            return [{"kind": "held", "reason": "native tick requires observed wrapper entry"}]
     policy = policy_problem(manifest.get("policy") or {}, mechanism=execution_mechanism)
     if policy:
         return [{"kind": "held", "reason": policy}]
@@ -2054,6 +2167,10 @@ def tick(
     if unqualified:  # before ANY effect, reconcile included: an unqualified pin is inert
         return [{"kind": "held", "reason": "version not qualified", "problems": unqualified}]
     py, module = manifest["runtime"]["python"], manifest["module_path"]
+    if execution_mechanism == "native-handoff/v1":
+        from closer_native_observer import contract as native_contract
+
+        py = str(native_contract(manifest)[2])
     report = []
     for path in sorted(Path(root).glob("*.campaign.json")):
         campaign = Campaign(path)
@@ -2079,7 +2196,9 @@ def tick(
                 }
             )
             continue
-        if execution_mechanism == "cli-offload/v1" and cfg.get("policy") != manifest.get("policy"):
+        if execution_mechanism in {"cli-offload/v1", "native-handoff/v1"} and cfg.get(
+            "policy"
+        ) != manifest.get("policy"):
             report.append(
                 {
                     "campaign": path.name,
@@ -2088,9 +2207,77 @@ def tick(
                 }
             )
             continue
-        capacity = capacity_json or cfg.get("capacity_json")
+        admission = None
+        if execution_mechanism == "native-handoff/v1":
+            from closer_native_observer import (
+                capacity_contract,
+                publish_admission,
+                rearm_on_assignment_change,
+            )
+
+            if capacity_contract(manifest) is not None:
+                # Fold only actual terminal results first. Unknown or live workers
+                # never receive a fresh report, assignment or execution window.
+                doc = reconcile(campaign, pid_alive=pid_alive)
+                try:
+                    doc = rearm_on_assignment_change(campaign, doc, manifest)
+                except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                    report.append(
+                        {
+                            "campaign": path.name,
+                            "kind": "held",
+                            "reason": f"native standing admission held: {exc}",
+                        }
+                    )
+                    continue
+                pending = next_action(doc, capacity_ok=True)
+                if pending.get("kind") != "launch":
+                    report.append({"campaign": path.name, **pending})
+                    continue
+                try:
+                    if capacity_json is not None:
+                        raise CampaignError(
+                            "native publication cannot use a caller report override"
+                        )
+                    admission = publish_admission(manifest, manifest_path, path, doc)
+                except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                    report.append(
+                        {
+                            "campaign": path.name,
+                            "kind": "held",
+                            "reason": f"native admission held: {exc}",
+                        }
+                    )
+                    continue
+        capacity = (
+            admission["report"]["path"]
+            if admission is not None
+            else capacity_json or cfg.get("capacity_json")
+        )
         route = route_fn(capacity)
         capacity_ok = bool(route.get("agent"))
+        if admission is not None and capacity_ok:
+            import execution_profiles
+
+            selected_id = route.get("profile_id")
+            selected_profile = (
+                execution_profiles.get_profile(selected_id)
+                if isinstance(selected_id, str)
+                else None
+            )
+            if (
+                route.get("profile_id") not in capacity_contract(manifest)["profile_ids"]
+                or not selected_profile
+                or selected_profile.get("agent") != route.get("agent")
+            ):
+                report.append(
+                    {
+                        "campaign": path.name,
+                        "kind": "held",
+                        "reason": "native capacity route outside pinned scope",
+                    }
+                )
+                continue
         if (
             execution_mechanism == "cli-offload/v1"
             and capacity_ok
@@ -2135,6 +2322,13 @@ def tick(
                 *extra,
             ]
 
+        def observed_launcher(argv, log_path):
+            if execution_mechanism == "native-handoff/v1":
+                from closer_native_observer import authorize_worker
+
+                authorize_worker(manifest, argv)
+            return launcher(argv, log_path)
+
         for _ in range(max_steps):
             if doc is None:
                 report.append(
@@ -2149,7 +2343,7 @@ def tick(
             action = step(
                 campaign,
                 worker_command=command,
-                launcher=launcher,
+                launcher=observed_launcher,
                 capacity_ok=capacity_ok,
                 release=release,
                 pid_alive=pid_alive,

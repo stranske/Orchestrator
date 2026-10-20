@@ -53,7 +53,15 @@ before retiring only matching advertisements. Historical records without causal
 binding and all uncertain operations remain held; no acceptance or global-stop
 authority is added. Interrupted action boundaries preserve original audit rows
 and project only to reconciliation; unsupported continuation facts and unresolved
-reservations continue to hold global admission.
+reservations retain the global invalid-stop verdict. Opt-in scoped continuation
+uses the existing target leases and alias locks with a read-only hash-bound
+quarantine census. Anchored incomplete items fence their repository and known
+PR/source/branch/configured-worktree aliases before model or effect callbacks;
+unbounded shared corruption remains an explicit global hold. Disjoint shards
+receive separate bounded windows while existing shard and legacy deadlines remain
+unchanged. Immutable pre-callback refusal evidence grants no acceptance or
+historical retirement authority. Named scoped completion and global historical
+stop validity remain separate facts.
 
 **Runtime ownership and the campaign layer (`src/closer_campaign.py`, 2026-10-19).** The Orchestrator
 owns the closer *runtime*: capacity routing, parallel bounded workers, handoffs, recovery, release
@@ -2493,3 +2501,5 @@ monitor supplies the same accepted, non-counterfactual edge classifier through
 cannot repair a missed admission deadline, and timely evidence remains creditable after it leaves
 the weekly view. Missing Brain evidence remains unmeasured. Reads are cached per Brain path,
 hour, and first-invocation binding; this change does not activate the installed mirror.
+
+Native wrapper capability: `closer_native_observer.py` implements the separately versioned native-handoff mechanism, with canonical configured pause policy, owned-process observations, signed durable worker handoffs, and no-effect qualification. It never substitutes wrapper provenance for Desktop scheduler events. The preview exporter and deployment contract are documented in `docs/CLOSER_NATIVE_HANDOFF.md`. Exact admitted-domain continuation retains global stop and acceptance as false.

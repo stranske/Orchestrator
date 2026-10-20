@@ -60,6 +60,21 @@ def events(directory):
     )
 
 
+def wait_for_model_gate(tmp_path, directory, target):
+    """Wait for returned preparation and a real scheduled model gate, before ACT."""
+    state = d._pipeline_state_path(tmp_path / "state", shadow=True)
+    shard = resources.shard_dir(resources.scoped_root(state), target) / "state.json"
+    limit = time.time() + 10
+    while time.time() < limit:
+        if "prepare" in events(directory) and shard.exists():
+            doc = json.loads(shard.read_text())
+            rows = [run["targets"].get(target, {}) for run in doc.get("runs", {}).values()]
+            if any(row.get("stage") in {"interpret", "exception", "act"} for row in rows):
+                return
+        time.sleep(0.01)
+    pytest.fail("returned preparation never reached the scoped model gate")
+
+
 def report(profile_ids):
     selected = [profiles.get_profile(p) for p in profile_ids]
     return {
@@ -254,16 +269,17 @@ def test_actual_entry_alias_collisions_hold_mutation_but_allow_prepare(tmp_path,
     aliases = {
         "pr": {"pr_target": "delivery/repo#7"},
         "source": {"source": "source/repo#88"},
-        "branch": {"branch": "shared-feature"},
+        "branch": {"branch": "shared-feature", "head_repository": "o/r"},
     }[collision]
     common = {"instrument_reservation": True, **aliases}
     first = start(tmp_path, "a", target="one/repo#1", hold="reservation", **common)
     wait(tmp_path / "a" / "reservation.entered")
     second = start(tmp_path, "b", target="two/repo#2", **common)
-    wait(tmp_path / "b" / "reservation.attempted")
-    assert "prepare" in events(tmp_path / "b")
-    assert "reservation_enter" not in events(tmp_path / "b")
-    (tmp_path / "a" / "release").touch()
+    try:
+        wait_for_model_gate(tmp_path, tmp_path / "b", "two/repo#2")
+        assert "reservation_enter" not in events(tmp_path / "b")
+    finally:
+        (tmp_path / "a" / "release").touch()
     assert finish(first)["targets"]["one/repo#1"]["status"] == "completed"
     receipt = finish(second)
     if "reservation_enter" in events(tmp_path / "b"):
@@ -272,7 +288,9 @@ def test_actual_entry_alias_collisions_hold_mutation_but_allow_prepare(tmp_path,
         assert next(x["at"] for x in a if x["event"] == "reservation_exit") <= next(
             x["at"] for x in b if x["event"] == "reservation_enter"
         )
-    assert receipt["targets"]["two/repo#2"]["status"] in {"completed", "uncertain"}
+    assert receipt["targets"]["two/repo#2"]["status"] in {"completed", "deferred"}
+    if receipt["targets"]["two/repo#2"]["status"] == "deferred":
+        assert receipt["targets"]["two/repo#2"]["scope_proof"]
 
 
 @pytest.mark.parametrize("crash", [False, True])
@@ -284,6 +302,7 @@ def test_actual_entry_unknown_action_keeps_alias_intents_after_return_or_crash(t
         crash_reservation=crash,
         uncertain_reservation=not crash,
         branch="shared-feature",
+        head_repository="o/r",
         target="one/repo#1",
     )
     if crash:
@@ -299,12 +318,18 @@ def test_actual_entry_unknown_action_keeps_alias_intents_after_return_or_crash(t
     # Returned uncertainty and process death both retain the cross-target branch fence.
     other = finish(
         start(
-            tmp_path, "b", instrument_reservation=True, target="two/repo#2", branch="shared-feature"
+            tmp_path,
+            "b",
+            instrument_reservation=True,
+            target="two/repo#2",
+            branch="shared-feature",
+            head_repository="o/r",
         )
     )
     assert "prepare" in events(tmp_path / "b")
     assert "reservation_enter" not in events(tmp_path / "b")
-    assert other["targets"]["two/repo#2"]["status"] == "uncertain"
+    assert other["targets"]["two/repo#2"]["status"] == "deferred"
+    assert other["targets"]["two/repo#2"]["scope_proof"]
     assert resources.unknown_reservations(root)["branch:o/r@shared-feature"] == "one/repo#1"
 
 
@@ -318,6 +343,7 @@ def test_first_use_alias_fence_is_shared_with_legacy_before_scoped_root(tmp_path
         instrument_reservation=True,
         hold="reservation",
         branch="shared-feature",
+        head_repository="o/r",
     )
     wait(tmp_path / "a" / "reservation.entered")
     root = resources.scoped_root(d._pipeline_state_path(tmp_path / "state", shadow=True))
@@ -329,14 +355,19 @@ def test_first_use_alias_fence_is_shared_with_legacy_before_scoped_root(tmp_path
         mode=mode,
         instrument_reservation=True,
         branch="shared-feature",
+        head_repository="o/r",
     )
-    if mode == "resource_scoped":
-        wait(tmp_path / "b" / "reservation.attempted")
-        assert "reservation_enter" not in events(tmp_path / "b")
-    (tmp_path / "a" / "release").touch()
+    try:
+        if mode == "resource_scoped":
+            wait_for_model_gate(tmp_path, tmp_path / "b", "two/repo#2")
+            assert "reservation_enter" not in events(tmp_path / "b")
+    finally:
+        (tmp_path / "a" / "release").touch()
     assert finish(first)["targets"]["one/repo#1"]["status"] == "completed"
     other = finish(second)
-    assert other["targets"]["two/repo#2"]["status"] in {"completed", "uncertain"}
+    assert other["targets"]["two/repo#2"]["status"] in {"completed", "deferred"}
+    if other["targets"]["two/repo#2"]["status"] == "deferred":
+        assert other["targets"]["two/repo#2"]["scope_proof"]
     if mode == "legacy":
         doc = json.loads(d._pipeline_state_path(tmp_path / "state", shadow=True).read_text())
         # Completed runs are intentionally compacted by the existing scheduler;

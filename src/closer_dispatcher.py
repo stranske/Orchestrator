@@ -2036,11 +2036,22 @@ def known_workspaces(targets):
         )
     )
     found = {}
+    try:
+        named = {}
+        for entry in root.iterdir():
+            named.setdefault(entry.name.casefold(), []).append(entry)
+    except OSError:
+        named = {}
     for repo in sorted({t.split("#")[0] for t in targets}):
         name = repo.split("/")[1]
-        for candidate in (
-            [root / "Workflows-steward", root / name] if name == "Workflows" else [root / name]
-        ):
+        names = ["Workflows-steward", name] if name.casefold() == "workflows" else [name]
+        candidates = []
+        for checkout_name in names:
+            matches = named.get(checkout_name.casefold(), [])
+            # Ambiguous case-sensitive checkouts cannot establish one canonical workspace.
+            if len(matches) == 1:
+                candidates.append(matches[0])
+        for candidate in candidates:
             if not candidate.is_dir():
                 continue
             try:
@@ -2053,11 +2064,11 @@ def known_workspaces(targets):
             except subprocess.TimeoutExpired:
                 continue
             remote = proc.stdout.strip().removesuffix(".git")
-            if proc.returncode == 0 and remote in {
-                f"https://github.com/{repo}",
-                f"git@github.com:{repo}",
+            if proc.returncode == 0 and remote.casefold() in {
+                f"https://github.com/{repo.casefold()}",
+                f"git@github.com:{repo.casefold()}",
             }:
-                found[repo] = str(candidate)
+                found[repo] = str(candidate.resolve())
                 break
     return found
 
@@ -2589,6 +2600,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         state_doc = json.loads(pipeline_path.read_text())
     except (OSError, ValueError):
         pass
+    if not isinstance(state_doc, dict):
+        state_doc = {}
+    scoped_history = {}
+    if getattr(args, "coordinator_mode", "legacy") == "resource_scoped":
+        import closer_resources
+
+        for target in targets:
+            source = (
+                closer_resources.shard_dir(closer_resources.scoped_root(pipeline_path), target)
+                / "state.json"
+            )
+            try:
+                old = json.loads(source.read_text())
+            except (OSError, ValueError):
+                continue
+            if isinstance(old, dict):
+                scoped_history[target] = old
     route_lock = _PIPELINE_ROUTE_CONDITION
     route_load = {}
     failed_low_profiles = set()
@@ -2596,9 +2624,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     drift_lock = threading.Lock()
     drift_claimed = False
     prior_drift = []
-    for old_run in (state_doc.get("runs", {}) or {}).values():
-        for old_item in (old_run.get("targets", {}) or {}).values():
-            result = (old_item.get("results") or {}).get("interpret") or {}
+    history_docs = (
+        list(scoped_history.values())
+        if getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
+        else [state_doc]
+    )
+    old_runs = [
+        run
+        for doc in history_docs
+        for run in (doc.get("runs", {}).values() if isinstance(doc.get("runs"), dict) else ())
+    ]
+    for old_run in old_runs:
+        old_targets = old_run.get("targets") if isinstance(old_run, dict) else None
+        for old_item in old_targets.values() if isinstance(old_targets, dict) else ():
+            old_results = old_item.get("results") if isinstance(old_item, dict) else None
+            result = old_results.get("interpret") if isinstance(old_results, dict) else None
+            if not isinstance(result, dict):
+                continue
             if result.get("drift_review_at"):
                 prior_drift.append(result)
     latest_drift = max(prior_drift, key=lambda x: x.get("drift_review_at", 0), default={})
@@ -2610,27 +2652,30 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     drift_candidate = min(audit_targets) if audit_targets else None
     audit_generation = int(time.time())
 
+    def previous_preparations(target):
+        history = (
+            scoped_history.get(target, {})
+            if getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
+            else state_doc
+        )
+        runs = history.get("runs", {})
+        for run in reversed(list(runs.values()) if isinstance(runs, dict) else []):
+            rows = run.get("targets") if isinstance(run, dict) else None
+            row = rows.get(target) if isinstance(rows, dict) else None
+            results = row.get("results") if isinstance(row, dict) else None
+            prep = results.get("prepare") if isinstance(results, dict) else None
+            if isinstance(prep, dict):
+                yield prep
+
     def previous_packet(target):
-        runs = state_doc.get("runs", {}) if isinstance(state_doc, dict) else {}
-        for run in reversed(list(runs.values())):
-            prep = (((run.get("targets") or {}).get(target) or {}).get("results") or {}).get(
-                "prepare", {}
-            )
-            packet_ref = prep.get("packet_ref", {})
-            try:
-                packet = json.loads(Path(packet_ref["path"]).read_text())
-            except (OSError, ValueError, KeyError, TypeError):
-                packet = None
-            if closer_evidence.validate_packet(packet):
+        for prep in previous_preparations(target):
+            packet = load_packet(prep)
+            if packet:
                 return packet
         return None
 
     def previous_snapshot(target):
-        runs = state_doc.get("runs", {}) if isinstance(state_doc, dict) else {}
-        for run in reversed(list(runs.values())):
-            prep = (((run.get("targets") or {}).get(target) or {}).get("results") or {}).get(
-                "prepare", {}
-            )
+        for prep in previous_preparations(target):
             snapshot, packet = full_snapshot(prep)
             if isinstance(snapshot, dict) and snapshot.get("target") == target and packet:
                 return snapshot
@@ -2971,11 +3016,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         packet = None
         snap = None
         cached = None
+        cache_state = (
+            context["action_state_path"]
+            if backend.local_first
+            and getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
+            else backend.state_path
+        )
         if backend.local_first:
             try:
                 import closer_change_feed
 
-                cached = closer_change_feed.read_cached(backend.state_path, target)
+                cached = closer_change_feed.read_cached(cache_state, target)
             except (OSError, ValueError, TimeoutError):
                 cached = None
             prior = previous_packet(target)
@@ -3208,7 +3259,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             import closer_change_feed
 
             closer_change_feed.record_snapshot(
-                backend.state_path,
+                cache_state,
                 target,
                 snap,
                 packet_ref=packet_ref,
@@ -4752,12 +4803,20 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": f"queue reconciliation failed: {type(exc).__name__}",
             }
 
+    quarantine_workspaces = {}
+    if getattr(args, "coordinator_mode", "legacy") == "resource_scoped":
+        import closer_quarantine
+
+        census = closer_quarantine.scope_snapshot(pipeline_path)
+        held_targets = [row["target"] for row in census["items"] if TARGET.fullmatch(row["target"])]
+        quarantine_workspaces = {**known_workspaces(held_targets), **backend.workspaces}
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
         coordinator_mode=getattr(args, "coordinator_mode", "legacy"),
         coordinator_contract_pin=getattr(args, "coordinator_contract_pin", None),
         resource_keys=resource_keys,
+        quarantine_workspaces=quarantine_workspaces,
         coordination_admission=getattr(args, "_coordination_admission", None),
         prepare=prepare,
         interpret=(
@@ -4930,7 +4989,12 @@ def _main_admitted(args, p, assignment_rows, targets):
 
     deadline = time.time() + args.budget_seconds + 300
     budget_admission = None
-    if args._coordination_admission.runnable and Path(args.state).exists():
+    if args.pipeline and args.coordinator_mode == "resource_scoped":
+        # A disjoint shard's bounded window is not a renewal of the shared
+        # historical round. Every callback separately proves resource admission;
+        # an existing shard still selects/preserves its own original deadline.
+        budget_admission = _scoped_budget_admission(args.state, deadline)
+    elif args._coordination_admission.runnable and Path(args.state).exists():
         try:
             previous_state = closer_queue._read_state(Path(args.state))
         except Exception as exc:
@@ -5106,6 +5170,21 @@ def _main_admitted(args, p, assignment_rows, targets):
             result.update(stop_valid=False, valid=False, unknown_reservations=unknown)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("stop_valid") else 78
+
+
+def _scoped_budget_admission(state_path, requested_deadline):
+    import closer_quarantine
+
+    snapshot = closer_quarantine.scope_snapshot(_pipeline_state_path(state_path))
+    return {
+        "reason": "scoped_callbacks_require_disjoint_proof",
+        "scope": "resource_scoped",
+        "requested_deadline": requested_deadline,
+        "selected_deadline": requested_deadline,
+        "legacy_round_renewed": False,
+        "legacy_stop_authority": False,
+        "snapshot": snapshot,
+    }
 
 
 if __name__ == "__main__":

@@ -321,11 +321,11 @@ def expected_host_launcher_command(
         "--root",
         str(rt),
     ]
-    from closer_mechanisms import CLI, mechanism
+    from closer_mechanisms import mechanism
 
     selected = mechanism(dict(manifest))
-    if selected == CLI:
-        command.extend(["--mechanism", CLI])
+    if selected != "desktop-scheduler/v1":
+        command.extend(["--mechanism", selected])
     return command
 
 
@@ -544,6 +544,8 @@ def plan_cli_run(
         return None, preflight
     from closer_mechanisms import CLI, mechanism
 
+    if mechanism(loaded) == "native-handoff/v1":
+        return None, ["native host capability requires its observed wrapper entry, not CLI offload"]
     if mechanism(loaded) == CLI and (
         _normalize_agent(agent) != loaded["mechanism_contract"]["agent"]
         or profile_id != loaded["mechanism_contract"]["profile_id"]

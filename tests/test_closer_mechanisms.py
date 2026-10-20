@@ -292,7 +292,7 @@ def test_child_cli_binding_is_in_closed_package_and_launch_command(configured):
     )
 
 
-def test_desktop_default_contract_is_unchanged_and_unknown_native_stays_held(
+def test_desktop_default_contract_is_unchanged_and_incomplete_native_stays_held(
     configured, monkeypatch
 ):
     manifest, *_ = configured
@@ -303,7 +303,7 @@ def test_desktop_default_contract_is_unchanged_and_unknown_native_stays_held(
     manifest["mechanism_contract"] = {"schema": mechanisms.CONTRACT, "mechanism": mechanisms.NATIVE}
     monkeypatch.setattr(binding, "CoreBundle", lambda _pin: object())
     assert any(
-        "native handoff observer unsupported" in p
+        "execution mechanism remains held: native wrapper/actor is not supported" in p
         for p in campaign.qualify(manifest, "/tmp/offline-no-promotion")
     )
 
