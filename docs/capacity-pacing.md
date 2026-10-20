@@ -299,11 +299,12 @@ previous success stamp, allowing for tick jitter and export duration.
 
 ## Relay decision identity and backlog (#825)
 
-The coordinator-owned relay must generate a unique token for each pacing decision,
+The coordinator-owned relay must generate a unique token for each pacing decision
+(`rate_incidents.generate_relay_decision_id()` → `<utc>-<pid>-<random>`),
 write `decision_id=<id>` in that decision's `relay-pacing.log` line, and pass the same
 value to `python3 src/rate_incidents.py record-lane-round --relay-decision-id <id>`
 alongside the existing agent, surface, lane, exit and output-file arguments. This
-repository supplies the importer and CLI; the coordinator updates
+repository supplies the generator, importer and CLI; the coordinator updates
 `~/.codex/bin/handoff-relay.sh` after merge.
 
 The round persists the token as `relay_decision_id` in its routing record's

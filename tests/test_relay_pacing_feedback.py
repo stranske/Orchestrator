@@ -1,6 +1,7 @@
 """Relay decisions earn capacity consumption only through observed, matching lane exits."""
 
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -11,6 +12,7 @@ import rate_incidents
 import value_chain_monitor as monitor
 
 NOW = 1792476000
+_DECISION_ID_RE = re.compile(r"^\d{8}T\d{6}Z-\d+-[0-9a-f]+$")
 
 
 def _line(ts=NOW - 60, *, chosen="claude_code", fallback="no", lane="opener", decision_id=None):
@@ -247,13 +249,32 @@ def test_incremental_join_keeps_preceding_exit_boundary(tmp_path, monkeypatch):
     assert (_counts()["acted_on"], _counts()["outcome"]) == (2, 2)
 
 
+def test_generate_relay_decision_id_matches_documented_shape():
+    when = datetime(2026, 10, 20, 13, 22, 56, tzinfo=timezone.utc)
+    token = rate_incidents.generate_relay_decision_id(when=when, pid=4242, random_hex="a1b2c3d4")
+    assert token == "20261020T132256Z-4242-a1b2c3d4"
+    assert _DECISION_ID_RE.fullmatch(token)
+    assert _DECISION_ID_RE.fullmatch(rate_incidents.generate_relay_decision_id())
+    with pytest.raises(ValueError, match="random_hex"):
+        rate_incidents.generate_relay_decision_id(random_hex="has space")
+
+
 @pytest.mark.parametrize("explicit", [True, False])
 def test_cli_id_selects_one_interleaved_decision(tmp_path, monkeypatch, capsys, explicit):
     log = _setup(tmp_path, monkeypatch)
+    opener_one = rate_incidents.generate_relay_decision_id(
+        when=datetime.fromtimestamp(NOW - 90, timezone.utc), pid=1, random_hex="aa01"
+    )
+    closer_one = rate_incidents.generate_relay_decision_id(
+        when=datetime.fromtimestamp(NOW - 80, timezone.utc), pid=2, random_hex="bb02"
+    )
+    opener_two = rate_incidents.generate_relay_decision_id(
+        when=datetime.fromtimestamp(NOW - 70, timezone.utc), pid=3, random_hex="cc03"
+    )
     log.write_text(
-        _line(NOW - 90, decision_id="opener-one" if explicit else None)
-        + _line(NOW - 80, chosen="cursor", lane="closer", decision_id="closer-one")
-        + (_line(NOW - 70, decision_id="opener-two") if explicit else "")
+        _line(NOW - 90, decision_id=opener_one if explicit else None)
+        + _line(NOW - 80, chosen="cursor", lane="closer", decision_id=closer_one)
+        + (_line(NOW - 70, decision_id=opener_two) if explicit else "")
     )
     tail = tmp_path / "tail"
     tail.write_text("finished")
@@ -273,7 +294,7 @@ def test_cli_id_selects_one_interleaved_decision(tmp_path, monkeypatch, capsys, 
         str(NOW),
     ]
     if explicit:
-        argv += ["--relay-decision-id", "opener-two"]
+        argv += ["--relay-decision-id", opener_two]
     assert rate_incidents.main(argv) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["relay_pacing"]["joined"] == 1
@@ -284,15 +305,15 @@ def test_cli_id_selects_one_interleaved_decision(tmp_path, monkeypatch, capsys, 
                 "SELECT payload_json FROM completion_events WHERE phase='outcome'"
             ).fetchone()[0]
         )["relay_pacing"]
-        assert outcome.get("decision_id") == ("opener-two" if explicit else None)
+        assert outcome.get("decision_id") == (opener_two if explicit else None)
     if explicit:
         # Same-second exits are distinct with IDs; no timing inference is needed.
         first = feedback.record_lane_round(
-            "claude", "opener", None, 0, "none", NOW, relay_decision_id="opener-one"
+            "claude", "opener", None, 0, "none", NOW, relay_decision_id=opener_one
         )
         assert first != result["decision_id"]
         feedback.record_lane_round(
-            "cursor", "closer", None, 0, "none", NOW, relay_decision_id="closer-one"
+            "cursor", "closer", None, 0, "none", NOW, relay_decision_id=closer_one
         )
         assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 3
     # Retrying the CLI does not create a second round or rewrite settled evidence.
@@ -425,6 +446,15 @@ def test_invalid_explicit_id_is_rejected(tmp_path, monkeypatch, bad_id):
         feedback.record_lane_round(
             "claude", "opener", None, 0, "none", NOW, relay_decision_id=bad_id
         )
+
+
+@pytest.mark.parametrize("bad_id", ["", "x" * 401])
+def test_importer_skips_invalid_decision_id_in_log(tmp_path, monkeypatch, bad_id):
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line(decision_id=bad_id))
+    feedback.record_lane_round("claude", "opener", None, 0, "none", NOW)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["decisions"] == 0
+    assert _counts()["acted_on"] == 0
 
 
 def test_backlog_without_any_exit_is_terminal_without_outcome(tmp_path, monkeypatch):

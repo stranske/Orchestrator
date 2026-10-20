@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import sys
@@ -156,6 +157,22 @@ def parse_relay_reset_at(text: str, *, now: int | None = None) -> int | None:
     except (ValueError, OverflowError, OSError):  # a date the platform clock cannot hold
         return None
     return reset_at if reset_at > int(now or time.time()) else None
+
+
+def generate_relay_decision_id(
+    *, when: datetime | None = None, pid: int | None = None, random_hex: str | None = None
+) -> str:
+    """Coordinator token shape for one pacing decision: ``<utc>-<pid>-<random>``.
+
+    Compact UTC (no ``:``) keeps the token a single log field. The importer and
+    ``record-lane-round --relay-decision-id`` accept any nonempty no-whitespace
+    token up to 400 characters; this helper is the documented production form.
+    """
+    stamp = (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    token = random_hex if random_hex is not None else secrets.token_hex(4)
+    if not token or any(char.isspace() for char in token) or len(token) > 32:
+        raise ValueError("random_hex must be a nonempty token of at most 32 characters")
+    return f"{stamp}-{pid if pid is not None else os.getpid()}-{token}"
 
 
 def record_lane_round(

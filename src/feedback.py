@@ -6503,7 +6503,8 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
             decision_id = "relay-pacing:" + hashlib.sha256(line.strip().encode()).hexdigest()[:24]
             relay_id = facts.get("decision_id")
             if relay_id is not None:
-                if not relay_id or len(relay_id) > 400:
+                # Match record_lane_round: reject empty, oversized, or whitespace tokens.
+                if not relay_id or len(relay_id) > 400 or any(char.isspace() for char in relay_id):
                     continue
                 decision_id = "relay-pacing:id:" + relay_id
             facts = {key: facts[key] for key in required}
