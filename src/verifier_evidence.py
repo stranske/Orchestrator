@@ -14,6 +14,44 @@ TRUSTED_AUTHORS = {"github-actions", "github-actions[bot]"}
 VALID_PROVIDER_VERDICTS = {"PASS", "CONCERNS", "FAIL", "NON_PASS"}
 
 
+def decision_matches_identity(decision: Any, repo: str, number: int, head: Any, merge: Any) -> bool:
+    """Validate a parsed marker's exact delivery identity and verdict semantics.
+
+    Author/comment provenance remains the responsibility of decision_from_pr;
+    this predicate never turns a diagnostic artifact into a trusted marker.
+    """
+    if (
+        not isinstance(decision, dict)
+        or type(number) is not int
+        or number < 1
+        or not SHA_RE.fullmatch(str(head))
+        or not SHA_RE.fullmatch(str(merge))
+        or decision.get("schema") != MARKER
+        or str(decision.get("repo") or "").lower() != repo.lower()
+        or str(decision.get("pr") or "") != str(number)
+        or decision.get("head_sha") != head
+        or decision.get("evaluated_sha") != merge
+    ):
+        return False
+    run, attempt = str(decision.get("run_id") or ""), str(decision.get("run_attempt") or "")
+    providers = decision.get("provider_verdicts")
+    if (
+        not run.isdigit()
+        or not attempt.isdigit()
+        or int(run) < 1
+        or int(attempt) < 1
+        or not isinstance(providers, list)
+        or not providers
+        or any(not isinstance(v, str) or v not in VALID_PROVIDER_VERDICTS for v in providers)
+        or type(decision.get("ci_failed")) is not bool
+    ):
+        return False
+    expected = (
+        "PASS" if not decision["ci_failed"] and all(v == "PASS" for v in providers) else "NON_PASS"
+    )
+    return decision.get("verdict") == expected
+
+
 def decision_from_pr(repo: str, pr: dict[str, Any]) -> dict[str, Any] | None:
     """Return the newest exact-identity decision from a trusted verifier comment."""
     number = pr.get("number")
@@ -41,32 +79,9 @@ def decision_from_pr(repo: str, pr: dict[str, Any]) -> dict[str, Any] | None:
                 decision = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(decision, dict) or decision.get("schema") != MARKER:
+            if not decision_matches_identity(decision, repo, number, head, merge):
                 continue
-            if str(decision.get("repo") or "").lower() != repo.lower():
-                continue
-            if str(decision.get("pr") or "") != str(number):
-                continue
-            if decision.get("head_sha") != head or decision.get("evaluated_sha") != merge:
-                continue
-            run, attempt = str(decision.get("run_id") or ""), str(decision.get("run_attempt") or "")
-            if not run.isdigit() or not attempt.isdigit() or int(run) < 1 or int(attempt) < 1:
-                continue
-            providers = decision.get("provider_verdicts")
-            if (
-                not isinstance(providers, list)
-                or not providers
-                or any(v not in VALID_PROVIDER_VERDICTS for v in providers)
-                or type(decision.get("ci_failed")) is not bool
-            ):
-                continue
-            expected = (
-                "PASS"
-                if not decision["ci_failed"] and all(v == "PASS" for v in providers)
-                else "NON_PASS"
-            )
-            if decision.get("verdict") != expected:
-                continue
+            run, attempt = str(decision["run_id"]), str(decision["run_attempt"])
             candidates.append((int(run), int(attempt), decision))
     if not candidates:
         return None

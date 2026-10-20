@@ -25,6 +25,18 @@ deduplication and the existing source-closure actor retain authority. Cheap outp
 is advisory and cannot become a trusted disposition. A separate pipeline receipt
 preserves any legacy queue state during migration.
 
+Before low or exception workers run, a deterministic evidence-readiness rail
+checks the retained packet, delivery identity, original sources and the raw inputs
+for the requested action. Known collection gaps become typed pending dependencies
+with their exact missing inputs and retry triggers. Missing and ambiguous delivery
+links remain distinct. A bounded resolver may identify a unique merged delivery
+head only by proving that it contains every other linked delivery merge; all
+candidates and exact ancestry evidence remain bound to the original source.
+The producer publishes an explicit ready or collection-failure result after
+assembling action-specific raw inputs. Packet integrity alone does not admit model work. Substantive current review and
+bound NON_PASS triage may use partial optional evidence; readiness grants no
+acceptance or action authority.
+
 Postrun validates assignment accounting and actual remaining budget before end-round
 or relay. No pass quota or one-complex-repository limit can authorize early stop.
 Unknown mutation outcomes reconcile before retry, source/review/head changes

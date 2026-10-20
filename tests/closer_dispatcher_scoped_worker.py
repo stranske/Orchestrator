@@ -194,6 +194,14 @@ def main():
         "manifest": {"packet_sha256": "d" * 64},
     }
     closer_evidence.validate_packet = lambda *_: False
+    # This process/pool fixture starts after semantic admission, which has its own real-packet tests.
+    closer_evidence.action_evidence_readiness = lambda *_a, **_k: {
+        "schema": "closer-action-evidence-readiness/v1",
+        "action": _a[2],
+        "ready": True,
+        "mode": "acceptance",
+        "gaps": [],
+    }
     closer_evidence.drift_sample = lambda *a, **kw: []
     # A shadow completion has no native action. Any accidental queue dispatch fails.
     import closer_queue
