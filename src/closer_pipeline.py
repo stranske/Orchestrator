@@ -1580,6 +1580,43 @@ def _valid_read_recovery_barrier(
     return False
 
 
+def _completed_prepare_capacity_observation(
+    previous: Mapping[str, Any], item: Any, run_id: str, now_value: float
+) -> bool:
+    """Bind a result-free read deferral to its terminal scheduling receipt only."""
+    if not isinstance(item, Mapping):
+        return False
+    summary = previous.get("receipt_summary")
+    resource = item.get("resource_evidence")
+    capacity = resource.get("github_capacity") if isinstance(resource, Mapping) else None
+    observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+    finished = summary.get("finished_at") if isinstance(summary, Mapping) else None
+    return (
+        item.get("status") == "deferred"
+        and item.get("stage") == "prepare"
+        and item.get("deferred_reason") == "github_capacity"
+        and item.get("results") == {}
+        and item.get("known_completed_action") is not True
+        and not item.get("provider_outcome_uncertain")
+        and item.get("recovery_barrier") is None
+        and isinstance(summary, Mapping)
+        and summary.get("schema") == "closer-pipeline-receipt/v1"
+        and summary.get("run_id") == run_id
+        and summary.get("deadline") == previous["deadline"]
+        and isinstance(finished, (int, float))
+        and not isinstance(finished, bool)
+        and math.isfinite(float(finished))
+        and float(previous["created"]) <= finished <= now_value
+        and isinstance(observed, (int, float))
+        and not isinstance(observed, bool)
+        and float(previous["created"]) <= observed <= min(finished, float(previous["deadline"]))
+        and isinstance(capacity, Mapping)
+        and _valid_github_capacity_evidence(resource, observed)
+        and item.get("deferred_next_trigger")
+        == f"retry_after_github_reset:{float(capacity['reset_at_epoch']):.3f}"
+    )
+
+
 def _expired_invalid_round_recovery(
     prior_stop: Mapping[str, Any],
     previous: Mapping[str, Any],
@@ -1617,7 +1654,17 @@ def _expired_invalid_round_recovery(
         or not math.isfinite(float(previous["created"]))
         or float(previous["created"]) > float(previous["deadline"])
         or not isinstance(previous.get("invalid_stop_history", []), list)
-        or (previous.get("receipt_summary") and not previous.get("invalid_stop_history"))
+        or (
+            previous.get("receipt_summary")
+            and not previous.get("invalid_stop_history")
+            and not (
+                rows
+                and all(
+                    _completed_prepare_capacity_observation(previous, item, run_id, now_value)
+                    for item in rows.values()
+                )
+            )
+        )
     ):
         return False, set(), set(), set(), set(), {}
 
@@ -1805,22 +1852,8 @@ def _expired_invalid_round_recovery(
                     resource.get("github_capacity") if isinstance(resource, Mapping) else None
                 )
                 observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
-                completed_unstarted_prepare = (
-                    isinstance(summary, Mapping)
-                    and summary.get("schema") == "closer-pipeline-receipt/v1"
-                    and summary.get("run_id") == run_id
-                    and summary.get("deadline") == previous["deadline"]
-                    and isinstance(finished_at, (int, float))
-                    and not isinstance(finished_at, bool)
-                    and math.isfinite(float(finished_at))
-                    and float(previous["created"]) <= finished_at <= now_value
-                    and isinstance(observed, (int, float))
-                    and not isinstance(observed, bool)
-                    and observed <= finished_at
-                    and no_action
-                    and not results
-                    and not item.get("provider_outcome_uncertain")
-                    and item.get("recovery_barrier") is None
+                completed_unstarted_prepare = _completed_prepare_capacity_observation(
+                    previous, item, run_id, now_value
                 )
                 if not (
                     (summary is None or completed_unstarted_prepare)

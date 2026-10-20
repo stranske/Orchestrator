@@ -109,11 +109,18 @@ def test_expired_no_action_prepare_is_fresh_admission_only(tmp_path, completed):
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize("history_shape", ["existing", "absent", "empty"])
 def test_public_restart_reprepares_without_provider_or_action_and_retains_old_invalid_stop(
     tmp_path,
+    history_shape,
 ):
     path = tmp_path / "pipeline.json"
     previous = prior_round(path)
+    if history_shape == "absent":
+        previous.pop("invalid_stop_history")
+    elif history_shape == "empty":
+        previous["invalid_stop_history"] = []
+    pipeline._save(path, {"schema": "closer-pipeline/v1", "runs": {RUN: previous}, "carry": {}})
     original = copy.deepcopy(previous)
     clock = [1500.0]
     prepared = []
@@ -249,3 +256,60 @@ def test_non_null_malformed_barrier_cannot_become_fresh_admission(tmp_path, barr
     previous["targets"][TARGET]["recovery_barrier"] = barrier
     pipeline._save(path, {"schema": "closer-pipeline/v1", "runs": {RUN: previous}, "carry": {}})
     assert not recover(path, previous)[0]
+
+
+@pytest.mark.parametrize("history_shape", ["absent", "empty"])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "completed_action",
+        "read_barrier",
+        "act_barrier",
+        "uncertain",
+        "foreign_receipt",
+        "bad_observation",
+        "wrong_trigger",
+        "unknown_reason",
+        "empty_rows",
+    ],
+)
+def test_first_completed_round_does_not_exempt_other_invalid_shapes(
+    tmp_path, history_shape, mutation
+):
+    path = tmp_path / "pipeline.json"
+    previous = prior_round(path)
+    if history_shape == "absent":
+        previous.pop("invalid_stop_history")
+    else:
+        previous["invalid_stop_history"] = []
+    row = previous["targets"][TARGET]
+    if mutation == "completed_action":
+        # A valid capacity row must not grant a mixed round a global exemption.
+        other = "owner/repo#completed-action"
+        previous["assignment"].append(other)
+        previous["targets"][other] = {
+            "status": "completed",
+            "stage": "act",
+            "results": {"act": {"status": "completed"}},
+        }
+    elif mutation == "read_barrier":
+        row["recovery_barrier"] = {}
+    elif mutation == "act_barrier":
+        row.update(status="failed", stage="act", recovery_barrier={"schema": "unknown"})
+        row["results"]["act"] = {"status": "blocked"}
+    elif mutation == "uncertain":
+        row["provider_outcome_uncertain"] = {"run_id": "unresolved"}
+    elif mutation == "foreign_receipt":
+        previous["receipt_summary"]["run_id"] = "foreign"
+    elif mutation == "bad_observation":
+        row["resource_evidence"]["github_capacity"]["observed_at"] = True
+    elif mutation == "wrong_trigger":
+        row["deferred_next_trigger"] = "retry_anyway"
+    elif mutation == "empty_rows":
+        previous["targets"] = {}
+        previous["assignment"] = []
+    pipeline._save(path, {"schema": "closer-pipeline/v1", "runs": {RUN: previous}, "carry": {}})
+    stop = pipeline.validate_stop(path, previous["assignment"], now=lambda: 1500.0)
+    if mutation == "unknown_reason":
+        stop["reasons"].append("unknown:must-remain-blocked")
+    assert not pipeline._expired_invalid_round_recovery(stop, previous, path, RUN, 1500.0)[0]
