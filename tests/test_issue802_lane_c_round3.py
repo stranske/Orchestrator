@@ -214,7 +214,8 @@ def test_ux_review_cross_repo_min_recurrence_filters(tmp_path, monkeypatch) -> N
                 (f"{app}:uxreview:1", app, "claude", 7.0, 1, verdict, now - 10),
             )
         c.commit()
-    # Two apps share the mode, but min_recurrence=3 drops it (line 962 continue).
+    assert len(ur.cross_repo_patterns(window_days=30, min_recurrence=2)) == 1
+    # The same visible rows are excluded only by the stricter threshold.
     assert ur.cross_repo_patterns(window_days=30, min_recurrence=3) == []
 
 

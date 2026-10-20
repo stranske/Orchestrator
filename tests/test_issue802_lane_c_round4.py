@@ -14,8 +14,6 @@ Unreachable without restructuring (documented in the PR body):
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 import exploration_backfill as eb
@@ -157,8 +155,8 @@ def test_exploration_backfill_selftest_restores_prior_handoff_dir(monkeypatch, t
 def test_ux_review_argparse_selftest_branch(monkeypatch) -> None:
     """Lines 1662–63: `if args.selftest` after the `"--selftest" in argv` short-circuit.
 
-    Production always hits the early return for a literal `--selftest` token. Reach the
-    argparse branch by omitting that token and stubbing parse_args.
+    An unambiguous abbreviated flag bypasses the literal-token early return and
+    exercises the real parser before invoking the isolated selftest stub.
     """
     called: list[str] = []
 
@@ -167,18 +165,6 @@ def test_ux_review_argparse_selftest_branch(monkeypatch) -> None:
 
     monkeypatch.setattr(ur, "_selftest", fake_selftest)
 
-    def fake_parse_args(self, argv=None):  # noqa: ANN001
-        return SimpleNamespace(
-            selftest=True,
-            backfill_panels=False,
-            apply=False,
-            bundle=None,
-            evaluators=None,
-            adversary="claude",
-            timeout=1500,
-        )
-
-    monkeypatch.setattr(ur.argparse.ArgumentParser, "parse_args", fake_parse_args)
-    # argv without the literal `--selftest` token so the early check does not return.
-    assert ur.main(["--bundle-skip"]) == 0
+    # Argparse accepts this unambiguous abbreviation, without the literal early token.
+    assert ur.main(["--selftes"]) == 0
     assert called == ["selftest"]

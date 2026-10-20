@@ -938,13 +938,13 @@ def test_exploration_backfill_build_plan_status_branches(monkeypatch) -> None:
         lambda *a, **k: {"agents": {}},
     )
     plan = eb.build_plan(require_direct_progress=True, max_jobs=1, trials=1)
-    assert plan["status"] in {
-        "blocked",
-        "waiting_for_direct_mode_progress",
-        "route_coverage_ready",
-        "needs_backlog_or_research_subjects",
-    }
-    assert "no missing route cells" in " ".join(plan["blockers"]) or plan["missing_cell_count"] == 0
+    assert plan["status"] == "blocked"
+    assert plan["missing_cell_count"] == 0
+    assert plan["blockers"] == [
+        "direct exploration mode outcome counts are not progressing yet",
+        "no missing route cells detected",
+    ]
+    assert plan["active_backfill_eligible"] is False
 
 
 def test_exploration_backfill_schedule_gates(monkeypatch, tmp_path) -> None:
@@ -964,20 +964,24 @@ def test_exploration_backfill_schedule_gates(monkeypatch, tmp_path) -> None:
         "blockers": [],
     }
     assert "requires" in eb.schedule_backfill(plan, confirm=False, env={})["error"]
-    assert eb.schedule_backfill(
-        {**plan, "active_backfill_eligible": False},
-        confirm=True,
-        env={eb.ENV_FLAG: "1"},
-    )["blocked"]
-    assert eb.schedule_backfill(plan, target="missing", confirm=True, env={eb.ENV_FLAG: "1"})[
-        "blocked"
-    ]
-    assert eb.schedule_backfill(
-        plan,
-        agents=["codex"],
-        confirm=True,
-        env={eb.ENV_FLAG: "1"},
-    )["blocked"]
+
+    def forbid_claim(*_args, **_kwargs):
+        pytest.fail("blocked scheduling must not acquire a claim")
+
+    monkeypatch.setattr(eb.claims, "claim", forbid_claim)
+    ineligible = eb.schedule_backfill(
+        {**plan, "active_backfill_eligible": False}, confirm=True, env={eb.ENV_FLAG: "1"}
+    )
+    assert ineligible["blocked"] is True
+    assert ineligible["reason"] == "backfill plan is not active-eligible"
+    unknown = eb.schedule_backfill(plan, target="missing", confirm=True, env={eb.ENV_FLAG: "1"})
+    assert unknown["blocked"] is True
+    assert unknown["reason"] == "requested target is not in planned_jobs"
+    single = eb.schedule_backfill(plan, agents=["codex"], confirm=True, env={eb.ENV_FLAG: "1"})
+    assert single["blocked"] is True
+    assert single["reason"] == (
+        "requested agents must be at least two agents from the planned backfill set"
+    )
 
     monkeypatch.setattr(eb.claims, "claim", lambda *a, **k: False)
     assert eb.schedule_backfill(plan, confirm=True, env={eb.ENV_FLAG: "1"})["reason"] == (
