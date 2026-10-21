@@ -3601,7 +3601,7 @@ def offload(
                 "run_id": run_id,
                 "log": str(logf),
             }
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as interruption:
             error = "interrupted by orchestrator"
             interrupted = {
                 "agent": agent,
@@ -3614,14 +3614,24 @@ def offload(
                 "cwd": str(run_cwd),
                 "process_cwd": str(proc_cwd),
             }
-            _retain_attempt_result(interrupted)
-            if cleanup_errors := _cleanup_result_artifacts():
-                interrupted["cleanup_errors"] = cleanup_errors
-            if attempt_receipt_callback is not None:
-                _notify_attempt(attempt_receipt_callback, interrupted)
-            _record_complete(exit_code=130, error=error)
-            with logf.open("a") as fh:
-                fh.write(f"[orchestrator] offload marked failed: {error}\n")
+            try:
+                _retain_attempt_result(interrupted)
+                if cleanup_errors := _cleanup_result_artifacts():
+                    interrupted["cleanup_errors"] = cleanup_errors
+                if attempt_receipt_callback is not None:
+                    _notify_attempt(attempt_receipt_callback, interrupted)
+                _record_complete(exit_code=130, error=error)
+                with logf.open("a") as fh:
+                    fh.write(f"[orchestrator] offload marked failed: {error}\n")
+            except _ProviderResultRetentionPending as pending:
+                # Cancellation remains cancellation even when result storage failed.
+                # Preserve the exact held receipt for caller reconciliation, never retry.
+                setattr(interruption, "held_result", pending.result)
+                raise interruption from pending
+            except Exception as completion_error:
+                # A callback/accounting/log error cannot consume operator cancellation.
+                setattr(interruption, "completion_error", type(completion_error).__name__)
+                raise interruption from completion_error
             raise
         finally:
             _cleanup_stream()
@@ -6003,13 +6013,32 @@ def main(argv: list[str]) -> int:
                 task_type=ns.task_type,
                 subject_id=ns.subject,
             )
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as interruption:
             out = {
                 "agent": ns.agent,
                 "exit": 130,
                 "output": "",
                 "error": "interrupted by orchestrator",
             }
+            held = getattr(interruption, "held_result", None)
+            if (
+                isinstance(held, dict)
+                and isinstance(held.get("run_id"), str)
+                and held["run_id"]
+                and held.get("outcome_status") == "uncertain"
+                and held.get("outcome_uncertain") is True
+                and held.get("retry_safe") is False
+                and held.get("exit") == 70
+                and held.get("raw_exit") == 130
+            ):
+                out.update(
+                    run_id=held["run_id"],
+                    held_result=held,
+                    raw_exit=130,
+                    outcome_status="uncertain",
+                    outcome_uncertain=True,
+                    retry_safe=False,
+                )
         print(out["output"] if out.get("output") else json.dumps(out, default=str))
         if out.get("error"):
             print(f"[orchestrator] offload error: {out['error']}", file=sys.stderr)

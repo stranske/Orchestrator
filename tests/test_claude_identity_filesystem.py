@@ -83,9 +83,13 @@ def _offload(
     profile_id=PROFILE,
     provider_argv=None,
     observed=False,
+    retries=0,
+    returncode=0,
+    stderr="",
+    provider_calls=None,
 ):
     profile = execution_profiles.get_profile(profile_id)
-    calls = []
+    calls = provider_calls if provider_calls is not None else []
     monkeypatch.setattr(adapters, "agent_workspace", lambda *a, **k: (workspace, None))
     monkeypatch.setattr(dispatcher, "_offload_prompt", lambda prompt, *a: prompt)
     monkeypatch.setattr(dispatcher, "_select_offload_profile", lambda *a: profile)
@@ -106,7 +110,7 @@ def _offload(
         calls.append((args, kwargs))
         if failure is not None:
             raise failure
-        return SimpleNamespace(returncode=0, stdout=output, stderr="")
+        return SimpleNamespace(returncode=returncode, stdout=output, stderr=stderr)
 
     monkeypatch.setattr(dispatcher.subprocess, "run", provider)
     if observed:
@@ -116,7 +120,7 @@ def _offload(
         "private fixture",
         cwd=str(workspace),
         profile_id=profile_id,
-        max_network_retries=0,
+        max_network_retries=retries,
         attempt_receipt_callback=callback,
         **({"process_started_callback": lambda event: None} if observed else {}),
     )
@@ -179,14 +183,14 @@ def _receipt(result):
 def test_unavailable_identity_is_named(tmp_path, monkeypatch):
     workspace = tmp_path / "work"
     directory = adapters._claude_project_dir(workspace)
-    original = Path.is_dir
+    original = Path.stat
 
-    def inaccessible(path):
+    def inaccessible(path, *args, **kwargs):
         if path == directory:
             raise PermissionError(errno.EACCES, "private fixture")
-        return original(path)
+        return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "is_dir", inaccessible)
+    monkeypatch.setattr(Path, "stat", inaccessible)
     probe = adapters.cli_reported_model("claude", workspace)
     assert probe["model"] is None
     assert probe["reason"] == "claude_transcript_probe_oserror:EACCES"
@@ -199,15 +203,14 @@ def test_valid_identity_and_disappearing_transcript(tmp_path, monkeypatch):
     transcript = directory / "own.jsonl"
     transcript.write_text(json.dumps({"message": {"model": "claude-actual"}}) + "\n")
     assert adapters.cli_reported_model("claude", workspace)["model"] == "claude-actual"
-    original = Path.glob
+    original = Path.open
 
-    def disappear(path, pattern):
-        found = list(original(path, pattern))
-        if path == directory:
+    def disappear(path, *args, **kwargs):
+        if path == transcript:
             transcript.unlink()
-        return iter(found)
+        return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "glob", disappear)
+    monkeypatch.setattr(Path, "open", disappear)
     probe = adapters.cli_reported_model("claude", workspace)
     assert probe["model"] is None
     assert probe["reason"] == "claude_transcript_probe_oserror:ENOENT"
@@ -351,7 +354,7 @@ def test_unreadable_transcript_keeps_model_unknown(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "open", unreadable)
     probe = adapters.cli_reported_model("claude", workspace)
     assert probe["model"] is None
-    assert probe["reason"] == "claude_transcript_named_no_real_model"
+    assert probe["reason"] == "claude_transcript_probe_oserror:EACCES"
 
 
 def test_missing_identity_and_programming_errors_are_distinct(tmp_path, monkeypatch):
@@ -519,7 +522,10 @@ def test_keyboard_interrupt_retained_before_callback_and_enrichment(long_workspa
 
 
 def test_keyboard_interrupt_retention_failure_is_held(long_workspace, monkeypatch):
+    attempts = []
+
     def unavailable(*args, **kwargs):
+        attempts.append(1)
         raise OSError(errno.ENOSPC, "private fixture")
 
     monkeypatch.setattr(dispatcher, "_retain_provider_result", unavailable)
@@ -527,8 +533,13 @@ def test_keyboard_interrupt_retention_failure_is_held(long_workspace, monkeypatc
     def forbidden(*args):
         pytest.fail("failed retention must not call completion callback")
 
-    result, calls = _offload(monkeypatch, long_workspace, forbidden, failure=KeyboardInterrupt())
-    assert len(calls) == 1 and result["raw_exit"] == 130 and result["exit"] == 70
+    interruption = KeyboardInterrupt()
+    calls = []
+    with pytest.raises(KeyboardInterrupt) as error:
+        _offload(monkeypatch, long_workspace, forbidden, failure=interruption, provider_calls=calls)
+    assert error.value is interruption
+    result = error.value.held_result
+    assert len(calls) == len(attempts) == 1 and result["raw_exit"] == 130 and result["exit"] == 70
     assert result["outcome_uncertain"] is True and result["retry_safe"] is False
     assert _attempt(result["run_id"])[0] == "started"
 
@@ -611,7 +622,12 @@ def test_interrupt_retention_failure_is_not_retried(long_workspace, monkeypatch)
         pytest.fail("retention failure must not reach callback or enrichment")
 
     monkeypatch.setattr(adapters, "cli_reported_model", forbidden)
-    result, calls = _offload(monkeypatch, long_workspace, forbidden, failure=KeyboardInterrupt())
+    interruption = KeyboardInterrupt()
+    calls = []
+    with pytest.raises(KeyboardInterrupt) as error:
+        _offload(monkeypatch, long_workspace, forbidden, failure=interruption, provider_calls=calls)
+    assert error.value is interruption
+    result = error.value.held_result
     assert len(attempts) == len(calls) == 1
     assert result["outcome_status"] == "uncertain" and result["raw_exit"] == 130
     assert result["retry_safe"] is False
@@ -745,3 +761,119 @@ def test_real_retention_barrier_reaches_closer_interpret_uncertainty(
 
     assert chosen == [PROFILE]
     assert calls == [("claude", PROFILE)]
+
+
+def test_actual_inaccessible_claude_directory_is_named(tmp_path):
+    workspace = tmp_path / "work"
+    directory = adapters._claude_project_dir(workspace)
+    directory.mkdir()
+    directory.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            with os.scandir(directory):
+                pass
+        probe = adapters.cli_reported_model("claude", workspace)
+        assert probe["model"] is None
+        assert probe["reason"] == "claude_transcript_probe_oserror:EACCES"
+    finally:
+        directory.chmod(0o700)
+
+
+def test_unreadable_newest_cannot_credit_older_model(tmp_path, monkeypatch):
+    workspace = tmp_path / "work"
+    directory = adapters._claude_project_dir(workspace)
+    directory.mkdir()
+    older = directory / "older.jsonl"
+    newest = directory / "newest.jsonl"
+    older.write_text(json.dumps({"model": "claude-older-real"}))
+    newest.write_text(json.dumps({"model": "claude-new-real"}))
+    os.utime(older, (100, 100))
+    os.utime(newest, (200, 200))
+    original = Path.open
+    opened = []
+
+    def unreadable(path, *args, **kwargs):
+        opened.append(path)
+        if path == newest:
+            raise PermissionError(errno.EACCES, "post-sort private read denial")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", unreadable)
+    probe = adapters.cli_reported_model("claude", workspace)
+    assert probe["model"] is None
+    assert probe["reason"] == "claude_transcript_probe_oserror:EACCES"
+    assert newest in opened and older not in opened
+
+
+def test_receipt_failure_blocks_actual_transient_retry(long_workspace, monkeypatch):
+    error_text = "connection reset by peer"
+    assert dispatcher._is_transient_network_failure("agent exited 1", "", error_text)
+    writes = []
+
+    def unavailable(*args, **kwargs):
+        writes.append(1)
+        raise OSError(errno.ENOSPC, "private fixture")
+
+    monkeypatch.setattr(dispatcher, "_retain_provider_result", unavailable)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("no callback, completion enrichment or retry backoff after failed receipt")
+
+    monkeypatch.setattr(adapters, "cli_reported_model", forbidden)
+    monkeypatch.setattr(dispatcher.time, "sleep", forbidden)
+    result, calls = _offload(
+        monkeypatch, long_workspace, forbidden, retries=2, returncode=1, stderr=error_text
+    )
+    assert len(calls) == len(writes) == 1
+    assert result["raw_exit"] == 1 and result["exit"] == 70
+    assert result["outcome_status"] == "uncertain" and result["retry_safe"] is False
+    assert _attempt(result["run_id"])[0] == "started"
+
+
+@pytest.mark.parametrize("boundary", ["callback", "identity"])
+def test_original_interrupt_survives_later_enrichment_error(long_workspace, monkeypatch, boundary):
+    interruption = KeyboardInterrupt()
+    callbacks = []
+
+    def callback(event):
+        callbacks.append(event)
+        if boundary == "callback":
+            raise RuntimeError("private callback error")
+
+    if boundary == "identity":
+
+        def broken(*args, **kwargs):
+            raise RuntimeError("private identity error")
+
+        monkeypatch.setattr(adapters, "cli_reported_model", broken)
+    with pytest.raises(KeyboardInterrupt) as error:
+        _offload(monkeypatch, long_workspace, callback, failure=interruption)
+    assert error.value is interruption
+    assert len(callbacks) == 1 and _receipt(callbacks[0])["exit"] == 130
+    assert _attempt(callbacks[0]["run_id"])[0] == "started"
+
+
+def test_cli_interrupt_preserves_attached_retention_identity(monkeypatch, capsys):
+    interruption = KeyboardInterrupt()
+    interruption.held_result = {
+        "agent": "claude",
+        "exit": 70,
+        "raw_exit": 130,
+        "output": "",
+        "error": "provider_result_retention_failed:OSError",
+        "run_id": "private-cancelled-run",
+        "outcome_status": "uncertain",
+        "outcome_uncertain": True,
+        "retry_safe": False,
+    }
+
+    def cancelled(*args, **kwargs):
+        raise interruption
+
+    monkeypatch.setattr(dispatcher, "offload", cancelled)
+    assert dispatcher.main(["offload", "--agent", "claude", "--prompt", "private"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["exit"] == 130
+    assert result["run_id"] == "private-cancelled-run"
+    assert result["held_result"] == interruption.held_result
+    assert result["outcome_uncertain"] is True and result["retry_safe"] is False

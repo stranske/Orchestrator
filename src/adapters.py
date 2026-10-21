@@ -23,6 +23,7 @@ import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1175,6 +1176,13 @@ def _models_in_jsonl(path: Path, *, limit_bytes: int = 4_000_000) -> list[str]:
     return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
 
 
+def _claude_models_in_jsonl(path: Path) -> list[str]:
+    """A failed read is identity uncertainty, never permission to credit an older log."""
+    with path.open("r", errors="ignore") as handle:
+        blob = handle.read(4_000_000)
+    return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
+
+
 def _codex_rollout_for(workspace: str | Path, started_ts: int | None, window_s: int) -> Path | None:
     """The rollout file whose session ran in `workspace`.
 
@@ -1424,13 +1432,26 @@ def cli_reported_model(
     if agent == "claude":
         try:
             directory = _claude_project_dir(workspace)
-            if not directory.is_dir():
+            try:
+                directory_stat = directory.stat()
+            except FileNotFoundError:
                 return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
-            newest = sorted(
-                directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
-            )
-            for path in newest[:4]:
-                model = _first_real_model(_models_in_jsonl(path))
+            if not stat.S_ISDIR(directory_stat.st_mode):
+                return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+            # Path.is_dir/glob suppress some OSErrors on supported Python versions.
+            # Explicit stat/scandir keeps denied/disappearing discovery unresolved.
+            with os.scandir(directory) as entries:
+                newest = sorted(
+                    (
+                        (Path(entry.path), entry.stat().st_mtime)
+                        for entry in entries
+                        if entry.name.endswith(".jsonl")
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+            for path, _mtime in newest[:4]:
+                model = _first_real_model(_claude_models_in_jsonl(path))
                 if model:
                     return {
                         "model": model,
