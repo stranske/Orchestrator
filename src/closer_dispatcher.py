@@ -6751,8 +6751,18 @@ def _main_admitted(args, p, assignment_rows, targets):
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
             selected_deadline = budget_admission.get("selected_deadline")
-            if _finite_number(selected_deadline) and selected_deadline <= time.time():
-                result.update(_expired_admission_diagnostics(_pipeline_state_path(args.state)))
+            if (
+                result.get("reason") == "admission_deadline_expired"
+                and _finite_number(selected_deadline)
+                and selected_deadline <= time.time()
+            ):
+                try:
+                    result.update(_expired_admission_diagnostics(_pipeline_state_path(args.state)))
+                except Exception as exc:
+                    # Diagnostics must not suppress the deferred receipt or exit 78.
+                    result["reservation_diagnostics_error"] = (
+                        f"{type(exc).__name__}: {str(exc)[:200]}"
+                    )
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
@@ -6834,6 +6844,8 @@ def _expired_admission_diagnostics(pipeline_path):
     """
     import closer_resources
 
+    # Match plan_legacy_reconciliation: absolute paths so drainable comparisons agree.
+    pipeline_path = Path(pipeline_path).absolute()
     root = closer_resources.scoped_root(pipeline_path)
     unknown = closer_resources.unknown_reservations(root)
     diagnostics = []

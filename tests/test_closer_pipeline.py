@@ -15,12 +15,19 @@ from closer_pipeline import run_pipeline, validate_stop
 
 def test_expired_deadline_reports_admission_expired_not_lock(tmp_path):
     path = tmp_path / "expired.json"
+    clock = {"now": 100.0}
     receipt = run_pipeline(
-        path, ["o/r#1"], **callbacks(), capacity_fn=lambda: {}, deadline=99, now=lambda: 100
+        path,
+        ["o/r#1"],
+        **callbacks(),
+        capacity_fn=lambda: {},
+        deadline=clock["now"] - 1,
+        now=lambda: clock["now"],
     )
     assert receipt["reason"] == "admission_deadline_expired"
-    assert receipt["deadline"] == 99
-    assert receipt["now"] == 100
+    assert receipt["reason"] != "coordinator_lock_unavailable"
+    assert receipt["deadline"] == clock["now"] - 1
+    assert receipt["now"] == clock["now"]
     assert receipt["authority"] is False
     assert receipt["targets"] == {}
     assert not path.exists()
