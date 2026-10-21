@@ -967,7 +967,10 @@ class GitHub:
         self.deadline = deadline
         self.api_fn = api_fn or gh_capacity.gh_run
 
-    def api(self, endpoint, *, method="GET", fields=None, resource="core"):
+    def read_text(self, endpoint):
+        return self.api(endpoint, _text=True)
+
+    def api(self, endpoint, *, method="GET", fields=None, resource="core", _text=False):
         remaining = self.deadline - time.time()
         if remaining < 2:
             raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
@@ -982,8 +985,17 @@ class GitHub:
         args = ["api", "--method", method, endpoint]
         for key, value in (fields or {}).items():
             args += ["-f", f"{key}={value}"]
-        rc, doc = self.api_fn(args, resource=resource, timeout_s=max(1, min(25, int(remaining))))
-        if rc or not isinstance(doc, (dict, list)) or (isinstance(doc, dict) and doc.get("errors")):
+        rc, doc = self.api_fn(
+            args,
+            resource=resource,
+            timeout_s=max(1, min(25, int(remaining))),
+            **({"raw_body": True} if _text else {}),
+        )
+        if (
+            rc
+            or not isinstance(doc, str if _text else (dict, list))
+            or (isinstance(doc, dict) and doc.get("errors"))
+        ):
             raise RuntimeError(f"GitHub outcome unknown: {method} {endpoint}: {str(doc)[:400]}")
         return doc
 
@@ -3087,7 +3099,17 @@ def _legacy_operation_dependency(state_path, target, snapshot):
 
 
 def collect_native_evidence(
-    snapshot, gh, retained_dir, *, previous=None, deadline, dispositions=None, action=None
+    snapshot,
+    gh,
+    retained_dir,
+    *,
+    previous=None,
+    deadline,
+    dispositions=None,
+    action=None,
+    refresh_sections=None,
+    supplemental_sections=None,
+    read_progress=None,
 ):
     """Collect with the production artifact and review bindings, without queue actions.
 
@@ -3095,6 +3117,11 @@ def collect_native_evidence(
     transport contract used by native PREPARE; an omitted binding is never
     represented as missing user evidence by a standalone invocation.
     """
+    if read_progress is not None:
+        original_gh = gh
+        gh = SimpleNamespace(
+            api=lambda endpoint, **kwargs: read_progress.api(original_gh.api, endpoint, **kwargs)
+        )
     snap = snapshot
     target = snap.get("target")
     if not isinstance(target, str) or not TARGET.fullmatch(target):
@@ -3111,7 +3138,7 @@ def collect_native_evidence(
             raise TimeoutError("artifact download deadline reached")
         throttle = gh_capacity.throttle("core", allow_wait_s=min(2, remaining))
         if throttle.get("action") == "defer":
-            raise RuntimeError("GitHub core capacity deferred artifact retrieval")
+            raise RoundCapacityDeferred(resource="core", throttle=throttle, observed_at=time.time())
 
         def binary_runner(command, *, capture_output=True, text=True, timeout=None):
             # Stream into a hard-capped buffer and kill the owned process group
@@ -3318,9 +3345,18 @@ def collect_native_evidence(
             "end_cursor": cursor,
         }
 
+    api = gh.api
+    if read_progress is not None:
+        original_fetch = artifact_fetch
+
+        def artifact_fetch(artifact, *, deadline, max_bytes):
+            return read_progress.artifact(
+                artifact, original_fetch, deadline=deadline, max_bytes=max_bytes
+            )
+
     return closer_evidence.collect_evidence(
         snap,
-        gh.api,
+        api,
         retained_dir,
         previous=previous,
         deadline=deadline,
@@ -3328,6 +3364,8 @@ def collect_native_evidence(
         artifact_fetch=artifact_fetch,
         review_threads_fetch=review_threads_fetch,
         action=action,
+        refresh_sections=refresh_sections,
+        supplemental_sections=supplemental_sections,
     )
 
 
@@ -3348,10 +3386,16 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snaps
     ):
         raise ValueError("data-only current request identity differs from packet")
     sections = packet["sections"]
+    required_sections = [
+        row.get("section")
+        for row in (readiness or {}).get("requirements", [])
+        if row.get("necessity") == "necessary" and row.get("section") in sections
+    ]
     names = list(
         dict.fromkeys(
             [
                 "source",
+                *required_sections,
                 "native_merge_verifier",
                 "diff_files",
                 "ci_artifacts",
@@ -3578,6 +3622,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     shadow = bool(args.shadow)
     pipeline_path = _pipeline_state_path(state_path, shadow=shadow)
     retained_dir = Path(str(state_path) + ".evidence")
+    import closer_evidence_recovery as recovery
+
+    recovery_store = recovery.RecoveryStore(retained_dir)
+    recovery_enabled = not shadow and (
+        finite_frontier is not None or getattr(args, "evidence_recovery", False)
+    )
     state_doc = {}
     try:
         state_doc = json.loads(pipeline_path.read_text())
@@ -3694,6 +3744,42 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if packet:
             snap["base"] = packet.get("base")
         return snap, packet
+
+    def effective_preparation(context):
+        original = context.get("prepare", {})
+        replacement = (context.get("interpret") or {}).get("recovered_prepare")
+        if replacement is None:
+            return original
+        if not isinstance(replacement, dict) or replacement.get("revision") != original.get(
+            "revision"
+        ):
+            raise ValueError("recovered preparation revision differs")
+        ref = replacement.get("snapshot_ref") or {}
+        try:
+            raw = Path(ref["path"]).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != ref.get("sha256"):
+                raise ValueError("recovered snapshot hash differs")
+            snap = json.loads(raw)
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError("recovered preparation snapshot is unavailable") from exc
+        packet = load_packet(replacement)
+        original_packet = load_packet(original)
+        expected = original.get("snapshot", {})
+        if (
+            not packet
+            or not original_packet
+            or any(snap.get(k) != expected.get(k) for k in ("target", "head", "revision"))
+            or packet.get("target") != snap.get("target")
+            or packet.get("head") != snap.get("head")
+            or packet.get("bindings", {}).get("source")
+            != closer_evidence._hash(snap.get("sources") or [])
+            or any(
+                packet["bindings"].get(k) != original_packet["bindings"].get(k)
+                for k in ("source", "reviews")
+            )
+        ):
+            raise ValueError("recovered preparation identity differs")
+        return replacement
 
     def packet_evidence_root(prep):
         # load_packet verifies this immutable manifest reference first. Match
@@ -4013,7 +4099,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # when independent IO workers overlap.
         gh = GitHub(deadline=float(context["deadline"]))
         packet = None
-        snap = None
+        snap = context.get("_recovery_snapshot")
         cached = None
         cache_state = (
             context["action_state_path"]
@@ -4021,7 +4107,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
             else backend.state_path
         )
-        if backend.local_first:
+        if backend.local_first and snap is None:
             try:
                 import closer_change_feed
 
@@ -4078,6 +4164,25 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snap = {**snap, "execution_workspace": workspace_binding}
         assignment_row = backend.assignment_rows.get(target, {})
 
+        recovery_latest = recovery_store.latest(snap) if recovery_enabled else {}
+        explicit_previous = context.get("_recovery_previous")
+        recovered_previous = (
+            load_packet(recovery_latest.get("prepare", {})) if recovery_latest else None
+        )
+        selective_previous = explicit_previous or recovered_previous
+        refresh_sections = (
+            context.get("_refresh_sections")
+            if explicit_previous
+            else (set() if recovered_previous else None)
+        )
+        recovery_requests = context.get("_recovery_requests", recovery_latest.get("requests", []))
+        supplemental_sections = context.get("_supplemental_sections")
+        if supplemental_sections is None and recovery_latest.get("observations"):
+            restored = recovery.restored_observations(recovery_latest, retained_dir)
+            if restored is not None:
+                supplemental_sections = {"requested_evidence": restored}
+        if selective_previous:
+            packet = None
         action, reason, eligible, trigger = backend.select(snap)
         if packet is not None and packet.get("collection_action") != action:
             packet = None
@@ -4086,7 +4191,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 snap,
                 gh,
                 retained_dir,
-                previous=previous_packet(target),
+                previous=selective_previous or previous_packet(target),
+                refresh_sections=refresh_sections,
+                supplemental_sections=supplemental_sections,
+                read_progress=(
+                    recovery.ReadProgress(
+                        retained_dir, snap, trigger=getattr(args, "evidence_retry_token", None)
+                    )
+                    if recovery_enabled
+                    else None
+                ),
                 deadline=time.monotonic() + max(1, float(context["deadline"]) - time.time()),
                 dispositions=backend.dispositions.get(target, {}),
                 action=action,
@@ -4152,6 +4266,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "truncated": section.get("truncated"),
             }
         return {
+            "recovery_requests": recovery_requests,
             "revision": snap["revision"],
             "identity": digest([target, snap.get("head"), snap.get("merge")]),
             "assignment_fingerprint": assignment_row.get("fingerprint"),
@@ -4243,6 +4358,214 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "authority": False,
         }
 
+    def finish_collection(
+        target, context, prep, snap, packet, screen, proposal, attempt_key, actual
+    ):
+        planned = recovery.validate_requests(proposal, snap, packet, screen)
+        requests_by_id = {r["id"]: r for r in prep.get("recovery_requests", [])}
+        requests_by_id.update({r["id"]: r for r in planned})
+        requests = list(requests_by_id.values())
+        causes = recovery.causes_from(proposal)
+        current_requirements = {r["id"]: r for r in screen.get("requirements", [])}
+        selected = [
+            r
+            for r in planned
+            if r["necessity"] == "necessary"
+            and not current_requirements.get(r["id"], {}).get("satisfied")
+        ]
+        if not causes:
+            causes = [
+                {
+                    "section": r["section"],
+                    "kind": "unknown",
+                    "reason": "No producer defect established from the retained observations",
+                }
+                for r in selected
+            ]
+        sections = {r["section"] for r in selected if r["section"] in recovery.SECTIONS}
+        refreshed = prep
+        new_packet = packet
+        new_screen = recovery.apply_requests(screen, requests, packet)
+        if selected:
+            gh = GitHub(deadline=float(context["deadline"]))
+            observed = (
+                gh.snapshot(target)
+                if sections.intersection({"source", "delivery_inventory"})
+                else snap
+            )
+            if observed.get("revision") != snap.get("revision"):
+                pending = evidence_pending(target, prep, screen)
+                pending["next_trigger"] = "fresh source/head/review revision enters a new frontier"
+                recovery_store.finish(
+                    snap,
+                    attempt_key,
+                    prep=prep,
+                    screen=screen,
+                    requests=requests,
+                    outcome="revision_changed",
+                    causes=causes,
+                )
+                return pending
+            supplemental = {}
+            log_rows = recovery.collect_job_logs(
+                gh,
+                snap,
+                selected,
+                retained_dir,
+                observe=lambda row: recovery_store.observe(
+                    snap,
+                    attempt_key,
+                    row,
+                    prep=prep,
+                    requests=requests,
+                    plan=proposal,
+                    actual=actual,
+                ),
+            )
+            if log_rows:
+                old_rows = (packet.get("sections", {}).get("requested_evidence") or {}).get(
+                    "content"
+                ) or []
+                by_id = {r["requirement_id"]: r for r in old_rows}
+                by_id.update({r["requirement_id"]: r for r in log_rows})
+                supplemental["requested_evidence"] = closer_evidence._section(
+                    (
+                        "complete"
+                        if all(r.get("status") == "complete" for r in by_id.values())
+                        else "partial"
+                    ),
+                    list(by_id.values()),
+                    provenance={
+                        "acceptance_authority": False,
+                        "collector": "gap-directed-native-reads/v1",
+                    },
+                )
+            refreshed = prepare(
+                target,
+                {
+                    **context,
+                    "_recovery_snapshot": observed,
+                    "_recovery_previous": packet,
+                    "_refresh_sections": sections,
+                    "_supplemental_sections": supplemental,
+                    "_recovery_requests": requests,
+                },
+            )
+            new_snap, new_packet = full_snapshot(refreshed)
+            new_screen = recovery.apply_requests(
+                closer_evidence.action_evidence_readiness(
+                    new_snap,
+                    new_packet,
+                    (refreshed.get("proposal") or {}).get("action"),
+                    retained_dir=packet_evidence_root(refreshed),
+                ),
+                requests,
+                new_packet,
+            )
+        new_screen["retry_trigger"] = screen.get("retry_trigger")
+        progressed = recovery.progress_fingerprint(
+            packet, set(sections) | {"requested_evidence"}
+        ) != recovery.progress_fingerprint(new_packet, set(sections) | {"requested_evidence"})
+        outcome = (
+            "recovered"
+            if new_screen.get("evaluation_ready")
+            else "partial_progress" if progressed else "no_progress"
+        )
+        recovery_store.finish(
+            snap,
+            attempt_key,
+            prep=refreshed,
+            screen=new_screen,
+            requests=requests,
+            outcome=outcome,
+            causes=causes,
+            plan=proposal,
+            actual={"run_id": actual.get("run_id")},
+        )
+        for defect in recovery.confirmed_defects(
+            packet, new_packet, causes, retained_dir=retained_dir
+        ):
+            recovery_store.defect(
+                defect,
+                {
+                    "target": target,
+                    "head": snap.get("head"),
+                    "revision": snap.get("revision"),
+                    "before": prep.get("packet_ref"),
+                    "subject_pr": new_packet.get("subject_pr"),
+                    "after": refreshed.get("packet_ref"),
+                    "requirements": selected,
+                },
+            )
+        if new_screen.get("evaluation_ready") and time.time() + 5 < float(context["deadline"]):
+            answer = interpret(target, {**context, "prepare": refreshed, "_recovery_done": True})
+            return {
+                **answer,
+                "recovered_prepare": answer.get("recovered_prepare", refreshed),
+                "evidence_recovery": {
+                    "outcome": outcome,
+                    "run_id": actual.get("run_id"),
+                    "authority": False,
+                },
+            }
+        pending = evidence_pending(target, refreshed, new_screen)
+        pending.update(
+            recovered_prepare=refreshed,
+            evidence_recovery={
+                "outcome": outcome,
+                "run_id": actual.get("run_id"),
+                "authority": False,
+            },
+        )
+        pending[
+            "next_trigger"
+        ] += "; retained progress is preserved; unchanged inputs require a new observation or explicit targeted retry"
+        return pending
+
+    def collect_or_defer(
+        target, context, prep, snap, packet, screen, proposal, attempt_key, actual
+    ):
+        try:
+            return finish_collection(
+                target, context, prep, snap, packet, screen, proposal, attempt_key, actual
+            )
+        except Exception as exc:
+            try:
+                known_requests = recovery.validate_requests(proposal, snap, packet, screen)
+            except (ValueError, TypeError, KeyError):
+                known_requests = prep.get("recovery_requests", [])
+            if closer_evidence._is_round_control_exception(exc):
+                recovery_store.finish(
+                    snap,
+                    attempt_key,
+                    prep=prep,
+                    screen=screen,
+                    requests=known_requests,
+                    outcome="read_deferred",
+                    causes=[],
+                    plan=proposal,
+                    actual={"run_id": actual.get("run_id")},
+                )
+                if isinstance(exc, RoundCapacityDeferred) and exc.reset_at_epoch is not None:
+                    recovery_store.defer_capacity(snap, attempt_key, exc.reset_at_epoch)
+                raise
+            recovery_store.finish(
+                snap,
+                attempt_key,
+                prep=prep,
+                screen=screen,
+                requests=known_requests,
+                outcome="read_or_plan_failure:" + type(exc).__name__,
+                causes=[],
+                plan=proposal if not isinstance(exc, ValueError) else None,
+                actual={"run_id": actual.get("run_id")},
+            )
+            pending = evidence_pending(target, prep, screen)
+            pending["next_trigger"] = (
+                "new scoped observation or explicit targeted retry; resolve the retained read/plan failure"
+            )
+            return pending
+
     def interpret(target, context):
         prep = context.get("prepare", {})
         snap = prep.get("snapshot", {})
@@ -4321,6 +4644,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             }
         prior_wait = durable_prior_inner_wait(target, prep, context)
         readiness = None
+        collection_mode = False
+        collection_attempt = None
         if prior_wait is None:
             readiness = closer_evidence.action_evidence_readiness(
                 admitted_snapshot,
@@ -4328,7 +4653,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 deterministic_action,
                 retained_dir=packet_evidence_root(prep),
             )
-            if not readiness["ready"] and not data_only:
+            if recovery_enabled:
+                readiness = recovery.apply_requests(
+                    readiness, prep.get("recovery_requests", []), raw_packet
+                )
+                readiness["retry_trigger"] = getattr(args, "evidence_retry_token", None)
+                collection_mode = not readiness.get("evaluation_ready", False)
+                if collection_mode and (
+                    context.get("_recovery_done")
+                    or recovery_store.blocked(admitted_snapshot, raw_packet, readiness)
+                ):
+                    pending = evidence_pending(target, prep, readiness)
+                    pending["next_trigger"] = (
+                        "new observation or explicit targeted retry; unchanged collection made no progress"
+                    )
+                    return pending
+            elif not readiness["ready"] and not data_only:
                 return evidence_pending(target, prep, readiness)
         admission = backend.campaign_admission(
             target, admitted_snapshot, max(0, min(120, int(context["deadline"] - time.time())))
@@ -4358,6 +4698,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "next_trigger": prior_wait["next_trigger"],
                 "inner_wait_proof": prior_wait,
             }
+        if collection_mode:
+            retained_plan = recovery_store.latest(admitted_snapshot)
+            pending_ids = {r["id"] for r in retained_plan.get("requests", [])}
+            if retained_plan.get("pending_plan") and {
+                r["id"] for r in recovery.required(readiness)
+            }.issubset(pending_ids):
+                retained_plan["pending_plan"] = {
+                    **retained_plan["pending_plan"],
+                    "evidence_requests": [
+                        r
+                        for r in retained_plan["pending_plan"].get("evidence_requests", [])
+                        if not r.get("requirement_id")
+                        or r["requirement_id"]
+                        in {x["id"] for x in readiness.get("requirements", [])}
+                    ],
+                }
+                attempt = recovery_store.begin(admitted_snapshot, raw_packet, readiness)
+                if attempt is not None:
+                    return collect_or_defer(
+                        target,
+                        context,
+                        prep,
+                        admitted_snapshot,
+                        raw_packet,
+                        readiness,
+                        retained_plan["pending_plan"],
+                        attempt,
+                        retained_plan.get("plan_actual") or {},
+                    )
         route, route_status = _pipeline_low_route(
             load=route_load,
             unavailable_profiles=failed_low_profiles,
@@ -4422,7 +4791,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         run_drift = False
         with drift_lock:
             nonlocal drift_claimed
-            if drift_due and not drift_claimed:
+            if drift_due and not drift_claimed and not collection_mode:
                 drift_claimed = True
                 run_drift = True
         drift_cases = packet.get("drift_sample", []) if isinstance(packet, dict) else []
@@ -4506,6 +4875,18 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 separators=(",", ":"),
             )[:9000]
         )
+        if recovery_enabled:
+            prompt = (
+                (
+                    recovery.COLLECTION_INSTRUCTIONS
+                    if collection_mode
+                    else "Classify every requested extra as necessary, useful, nice_to_have or possibly_useful. Use evidence_requests with a specific locator, question and original-criterion/current-finding basis for necessary extras. Optional requests are suggestions, never substantive_needs. "
+                )
+                + "\nEvidence requirements: "
+                + json.dumps(readiness)
+                + "\n"
+                + prompt
+            )
         if data_only:
             prompt = (
                 "TOOL-FREE ASSESSMENT: use only content_supplied=true sections and "
@@ -4553,6 +4934,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 raise closer_resources.FinitePoolUncertain(fence)
             return result
 
+        if collection_mode:
+            collection_attempt = recovery_store.begin(admitted_snapshot, raw_packet, readiness)
+            if collection_attempt is None:
+                return evidence_pending(target, prep, readiness)
         try:
             result, route = _execute_profile_route(
                 route,
@@ -4566,8 +4951,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 **({"data_only": True} if data_only else {}),
             )
         except AssessmentTransportUnavailable:
+            if collection_attempt:
+                recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")
             return assessment_transport_pending(target, prep.get("revision"))
         except closer_resources.ResourceBlocked:
+            if collection_attempt:
+                recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")
             return {
                 "status": "deferred",
                 "reason": "worker_capacity",
@@ -4745,6 +5134,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "auth" in str(failure.get(field, "")).lower()
                 for field in ("category", "subcategory")
             ):
+                if collection_attempt:
+                    recovery_store.retryable(
+                        admitted_snapshot, collection_attempt, "known_provider_failure"
+                    )
                 return {
                     "status": "deferred",
                     "reason": "provider_failure",
@@ -4755,6 +5148,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "authority": False,
                 }
             # Pool aliases were suppressed before selecting another qualified provider.
+            if collection_attempt:
+                recovery_store.retryable(
+                    admitted_snapshot, collection_attempt, "known_provider_failure"
+                )
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
@@ -4798,6 +5195,104 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if valid and (proposal.get("head") != snap.get("head") or proposal.get("target") != target):
             valid = False
             needs = ["objective_binding_mismatch"]
+        if recovery_enabled and collection_mode:
+            import closer_stage_feedback
+
+            closer_stage_feedback.record_stage(
+                result,
+                task_type="closer_interpret",
+                target=target,
+                head=snap.get("head"),
+                agent=route["agent"],
+                profile_id=route["profile_id"],
+                basis={"collection_requirements": readiness, "collection_plan": proposal},
+                elapsed_seconds=time.monotonic() - started,
+                parent_run_id=context.get("pipeline_run_id"),
+            )
+        if recovery_enabled and collection_mode:
+            if valid and proposal.get("base") != snap.get("base"):
+                valid = False
+            if not valid:
+                recovery_store.finish(
+                    admitted_snapshot,
+                    collection_attempt,
+                    prep=prep,
+                    screen=readiness,
+                    requests=prep.get("recovery_requests", []),
+                    outcome="invalid_collection_plan",
+                    causes=[],
+                )
+                pending = evidence_pending(target, prep, readiness)
+                pending["next_trigger"] = (
+                    "scoped source-owner resolution of invalid collection plan"
+                )
+                return pending
+            return collect_or_defer(
+                target,
+                context,
+                prep,
+                admitted_snapshot,
+                raw_packet,
+                readiness,
+                proposal,
+                collection_attempt,
+                result,
+            )
+        if (
+            recovery_enabled
+            and valid
+            and proposal.get("base") == snap.get("base")
+            and proposal.get("evidence_requests")
+        ):
+            try:
+                requests = recovery.validate_requests(
+                    proposal, admitted_snapshot, raw_packet, readiness
+                )
+            except (ValueError, TypeError, KeyError):
+                requests = []
+                proposal["evidence_request_validation"] = (
+                    "invalid requests confer no necessity; judge the available packet"
+                )
+            extra_screen = recovery.apply_requests(readiness, requests, raw_packet)
+            optional_reasons = {r["reason"] for r in requests if r["necessity"] != "necessary"}
+            needs = [n for n in needs if n not in optional_reasons]
+            proposal["substantive_needs"] = needs
+            if recovery.required(extra_screen):
+                if context.get("_recovery_done"):
+                    next_prep = {**prep, "recovery_requests": requests}
+                    next_attempt = recovery_store.begin(admitted_snapshot, raw_packet, extra_screen)
+                    if next_attempt:
+                        recovery_store.finish(
+                            admitted_snapshot,
+                            next_attempt,
+                            prep=next_prep,
+                            screen=extra_screen,
+                            requests=requests,
+                            outcome="next_required_request",
+                            causes=[],
+                            plan=proposal,
+                            actual={"run_id": result.get("run_id")},
+                        )
+                    pending = evidence_pending(target, next_prep, extra_screen)
+                    pending["recovered_prepare"] = next_prep
+                    pending["next_trigger"] = (
+                        "targeted retrieval of the newly identified necessary evidence"
+                    )
+                    return pending
+                attempt = recovery_store.begin(admitted_snapshot, raw_packet, extra_screen)
+                if attempt is None:
+                    return evidence_pending(target, prep, extra_screen)
+                return collect_or_defer(
+                    target,
+                    context,
+                    prep,
+                    admitted_snapshot,
+                    raw_packet,
+                    extra_screen,
+                    proposal,
+                    attempt,
+                    result,
+                )
         integration = {"status": "wait", "reason": "model result is not structurally complete"}
         if incomplete_assessment:
             # The process completed, but supplied no usable assessment. Keep the
@@ -4885,7 +5380,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     def exception(target, context):
         # Reuse the existing isolated Codex assessment path and all of its campaign,
         # shed-marker, workspace and no-retry guards. This is only for substantive need.
-        prep = context.get("prepare", {})
+        prep = effective_preparation(context)
         try:
             interpreted = full_interpretation(context.get("interpret", {}))
         except CompletedResponseReadError as error:
@@ -4897,7 +5392,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             (prep.get("proposal") or {}).get("action"),
             retained_dir=packet_evidence_root(prep),
         )
-        if not readiness["ready"]:
+        if not (
+            readiness.get("evaluation_ready", False) if recovery_enabled else readiness["ready"]
+        ):
             return evidence_pending(target, prep, readiness)
         if readiness["mode"] == "deterministic":
             return {
@@ -5093,7 +5590,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
 
     def action_backend(target, context):
         action_state = Path(context["action_state_path"])
-        prep = context.get("prepare", {})
+        prep = effective_preparation(context)
         snap, _packet = full_snapshot(prep)
         current = Closer(
             GitHub(deadline=float(context["deadline"])),
@@ -5920,6 +6417,18 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         round_deadline_exception=RoundDeadlineExhausted,
         round_capacity_exception=RoundCapacityDeferred,
     )
+    if recovery_enabled:
+
+        def reporting_api(endpoint, **kwargs):
+            # Reporting is independent of recovered-PR eligibility and owns only
+            # this request's existing GitHub timeout/capacity checks.
+            return GitHub(deadline=time.time() + min(120, float(request_timeout))).api(
+                endpoint, **kwargs
+            )
+
+        pipeline["upstream_evidence_reports"] = recovery.flush_defects(
+            recovery_store, reporting_api
+        )
     return pipeline
 
 
@@ -5936,6 +6445,10 @@ def main(argv=None):
     run.add_argument("--worker-timeout", type=int, default=120)
     run.add_argument("--apply", action="store_true")
     run.add_argument("--workers", action="store_true")
+    run.add_argument(
+        "--evidence-retry-token",
+        help="explicit new observation/event authorizing one targeted recovery retry",
+    )
     run.add_argument(
         "--runtime-manifest", help="private pinned Runtime/Core binding (new launchers)"
     )

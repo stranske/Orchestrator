@@ -280,7 +280,14 @@ def _ratelimit_row_from_headers(headers: dict, *, fallback_resource: str) -> dic
     }
 
 
-def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runner=subprocess.run):
+def gh_run(
+    args: list[str],
+    *,
+    resource: str = "core",
+    timeout_s: int = 30,
+    runner=subprocess.run,
+    raw_body: bool = False,
+):
     """Run a `gh api` call with header capture, feed the rate ledger from `x-ratelimit-*` for FREE,
     and return (returncode, parsed_body). `args` is the gh argv WITHOUT a leading 'gh'. Only `gh api`
     surfaces rate headers, so this is the per-call ledger feed for CORE/GRAPHQL work; SEARCH budget is
@@ -328,7 +335,9 @@ def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runn
     if row is not None:
         _append_ledger([row])
     parsed = None
-    if body:
+    if raw_body:
+        parsed = body
+    elif body:
         try:
             parsed = json.loads(body)
         except Exception:
@@ -902,6 +911,12 @@ def _selftest():
             ["api", "repos/o/r/commits"], resource="core", runner=lambda *a, **k: FakeApi()
         )
         assert rc == 0 and body == {"sha": "abc"}, (rc, body)
+        raw_rc, raw = gh_run(
+            ["api", "repos/o/r/actions/jobs/1/logs"],
+            runner=lambda *a, **k: FakeApi(),
+            raw_body=True,
+        )
+        assert raw_rc == 0 and isinstance(raw, str) and json.loads(raw) == {"sha": "abc"}, raw
         latest = _latest_ledger("core")
         assert latest["remaining"] == 4321 and latest["source"] == "call", latest
         # gh_run inserted --include after 'api'
