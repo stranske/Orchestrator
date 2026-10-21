@@ -5226,7 +5226,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 ("complete" if valid and drift_complete else "pending") if run_drift else "not_due"
             ),
             "producer_sha256": producer_sha,
-            "summary": proposal.get("drift_summary") if valid and run_drift else None,
+            "summary": None,
+            "summary_truncated": False,
         }
         if valid and run_drift:
             proposal["producer_audit"] = producer_audit
@@ -5374,7 +5375,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     return completed_retention_hold(
                         result, target, prep, context, error, route["agent"], route["profile_id"]
                     )
-        return {
+        interpreted_result = {
             **({"proposal_ref": proposal_ref} if proposal_ref else {}),
             "classification": proposal.get("classification") if valid else "uncertain",
             "substantive_needs": needs,
@@ -5397,7 +5398,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "run_id": result.get("run_id"),
             "producer_audit": producer_audit,
             "drift_review_at": time.time() if run_drift and valid and drift_complete else None,
-            "drift_review": proposal.get("drift_summary") if run_drift and valid else None,
+            "drift_review": None,
             "producer_sha256": producer_sha if run_drift and valid and drift_complete else None,
             "integration_status": integration.get("status"),
             "integration_reason": integration.get("reason"),
@@ -5412,6 +5413,29 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             ),
             "prior_provider_failures": list(low_profile_failures.values()),
         }
+        summary = proposal.get("drift_summary") if valid and run_drift else None
+        if isinstance(summary, str):
+            import closer_pipeline
+
+            # Budget the serialized value against the complete callback, including
+            # JSON escaping/UTF-8 and the inline proposal's shared audit object.
+            baseline = len(
+                json.dumps(interpreted_result, ensure_ascii=False, separators=(",", ":")).encode()
+            )
+            copies = 3 if valid and not proposal_ref else 2
+            allowance = max(0, closer_pipeline.CALLBACK_RESULT_BYTES - baseline) // copies + 4
+            lo, hi = 0, len(summary)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                size = len(json.dumps(summary[:mid], ensure_ascii=False).encode())
+                if size <= allowance:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            producer_audit["summary"] = summary[:lo]
+            producer_audit["summary_truncated"] = lo < len(summary)
+            interpreted_result["drift_review"] = summary[:lo]
+        return interpreted_result
 
     def exception(target, context):
         # Reuse the existing isolated Codex assessment path and all of its campaign,

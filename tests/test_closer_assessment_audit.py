@@ -99,7 +99,17 @@ def test_tool_free_audit_prompt_never_requests_file_commands(native_world, capsy
 
 
 @pytest.mark.parametrize(
-    "boundary", ["complete", "core_mismatch", "wrong_head", "bad_envelope", "bad_audit"]
+    "boundary",
+    [
+        "complete",
+        "core_mismatch",
+        "wrong_head",
+        "bad_envelope",
+        "bad_audit",
+        "bad_summary",
+        "huge_summary",
+        "inline_summary",
+    ],
 )
 def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkeypatch, boundary):
     callbacks, context, _, _ = recovery_callbacks(
@@ -121,6 +131,12 @@ def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkey
     }
     if boundary == "core_mismatch":
         response.update(drift_review_complete=False, drift_mismatches=["source:original_body"])
+    elif boundary == "bad_summary":
+        response.update(drift_review_complete=False, drift_summary={"not": "a string"})
+    elif boundary == "inline_summary":
+        response.update(drift_review_complete=False, drift_summary=("\n" * 7000))
+    elif boundary == "huge_summary":
+        response.update(drift_review_complete=False, drift_summary=('雪\n"' * 30000))
     elif boundary == "bad_audit":
         response["drift_mismatches"] = {"malformed": True}
     elif boundary == "wrong_head":
@@ -139,6 +155,17 @@ def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkey
     if boundary == "complete":
         assert result["producer_audit"]["status"] == "complete"
         assert result["drift_review_at"] and result["producer_sha256"] == "producer"
+    elif boundary in {"bad_summary", "huge_summary", "inline_summary"}:
+        import closer_pipeline
+
+        assert result["producer_audit"]["status"] == "pending"
+        assert result["drift_review"] == result["producer_audit"]["summary"]
+        assert result["drift_review"] is None or isinstance(result["drift_review"], str)
+        closer_pipeline._bounded(result, limit=closer_pipeline.CALLBACK_RESULT_BYTES)
+        if boundary == "inline_summary":
+            assert "proposal_ref" not in result
+            assert result["proposal"]["drift_summary"] == response["drift_summary"]
+            assert result["producer_audit"]["summary_truncated"] is True
     elif boundary == "bad_audit":
         assert feedback[-1]["structurally_invalid"] is False
         assert result["producer_audit"]["status"] == "pending"
@@ -146,6 +173,7 @@ def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkey
     elif boundary == "core_mismatch":
         assert "semantic_drift_mismatch:source:original_body" in result["substantive_needs"]
         assert result["producer_audit"]["status"] == "pending"
+        assert result["drift_review_at"] is None and result["producer_sha256"] is None
     else:
         assert feedback[-1]["structurally_invalid"] is True
         assert result["producer_audit"]["status"] == "pending"
