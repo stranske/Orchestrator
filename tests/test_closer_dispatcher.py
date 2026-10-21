@@ -1807,7 +1807,7 @@ def test_authored_meta_source_lineage_is_retained_without_closing_keyword(tmp_pa
     github, reads = _lineage_snapshot(monkeypatch, document, {"repos/o/r/issues/2": issue})
     current = github.snapshot(TARGET)
     assert current["sources"] == [
-        {"target": SOURCE, "body": issue["body"], "state": "open", "labels": ["needs-review"]}
+        adapter._request_source(SOURCE, issue, via="authored_issue_lineage")
     ]
     assert reads.count("repos/o/r/issues/2") == 1
     assert adapter.requirements(current["sources"][0]["body"]) == ["Preserve original assertion"]
@@ -1825,7 +1825,9 @@ def test_generated_related_issues_are_excluded_and_invalid_explicit_sources_fail
         "<!-- meta:source_issue:97 -->\n"
     )
     github, reads = _lineage_snapshot(monkeypatch, document, {})
-    assert github.snapshot(TARGET)["sources"] == []
+    observed = github.snapshot(TARGET)
+    assert observed["source_inventory"]["status"] == "no_linked_issue"
+    assert [source["target"] for source in observed["sources"]] == [TARGET]
     assert not any(path.endswith(("/99", "/98", "/97")) for path in reads)
     document["body"] = "<!-- meta:issue:2 -->\n" + document["body"]
     for invalid in ({}, {"number": 2, "pull_request": {}, "body": "A PR is not a source issue"}):
@@ -4302,3 +4304,155 @@ def test_scoped_native_operation_seam_rechecks_prepared_head_and_aliases(
         coordinator_contract_pin=None,
     )
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 330)
+
+
+@pytest.mark.parametrize("origin", ["<!-- workflow-source:local_request -->\n", ""])
+def test_no_linked_issue_retains_pr_authored_request_and_revision(tmp_path, monkeypatch, origin):
+    document = _graphql_pr()
+    document["closingIssuesReferences"]["nodes"] = []
+    document["title"] = "Stop Gate restarts on label events"
+    document["body"] = (
+        origin
+        + "Remove only `labeled` from `on.pull_request.types`. Preserve every other trigger.\n"
+        + "Refs stranske/Workflows#3983, stranske/Workflows#4082."
+    )
+    github, reads = _lineage_snapshot(monkeypatch, document, {})
+    current = github.snapshot(TARGET)
+    source = current["sources"][0]
+    assert source["target"] == TARGET and source["kind"] == "pr_request"
+    assert source["body"] == document["body"]
+    assert source["provenance"]["via"] == "github_pr_body"
+    assert source["title"] == document["title"]
+    assert source["provenance"]["url"] == "https://github.com/o/r/pull/7"
+    assert source["provenance"]["updated_at"] == document["updatedAt"]
+    assert (
+        source["provenance"]["body_sha256"] == hashlib.sha256(document["body"].encode()).hexdigest()
+    )
+    assert current["source_inventory"] == {
+        "status": "no_linked_issue",
+        "complete": True,
+        "linked_issue_targets": [],
+        "request_target": TARGET,
+    }
+    assert reads == ["repos/o/r/issues/7", "graphql"]
+    section = closer_evidence._source_section(current["sources"], tmp_path)
+    retained = section["content"][0]
+    assert retained["body"] == document["body"]
+    assert retained["provenance"] == source["provenance"]
+    assert retained["request_revision"] == source["request_revision"]
+    assert Path(retained["body_retained"]["path"]).read_text() == document["body"]
+    # Capture never rewrites free prose into invented acceptance criteria.
+    assert retained["requirements"] == []
+    assert not adapter.acceptance_ok(
+        current,
+        {
+            "reviewer": "test",
+            "head": HEAD,
+            "source_digest": adapter.source_digest(current["sources"]),
+        },
+    )
+    document["title"] = "Preserve every other trigger"
+    renamed = github.snapshot(TARGET)
+    assert renamed["sources"][0]["request_revision"] != source["request_revision"]
+    document["updatedAt"] = "2026-10-21T00:00:00Z"
+    changed = github.snapshot(TARGET)
+    assert changed["sources"][0]["request_revision"] != source["request_revision"]
+    assert changed["revision"] != current["revision"]
+
+
+@pytest.mark.parametrize("location", ["pr", "linked_issue", "authored_issue", "assigned_issue"])
+def test_omitted_request_body_is_not_an_empty_original(monkeypatch, location):
+    document = _graphql_pr()
+    issue = {"number": 2, "state": "open", "labels": []}
+    if location == "pr":
+        del document["body"]
+    elif location == "linked_issue":
+        del document["closingIssuesReferences"]["nodes"][0]["body"]
+    else:
+        document["closingIssuesReferences"]["nodes"] = []
+        document["body"] = "<!-- meta:issue:2 -->"
+    github, _ = _lineage_snapshot(monkeypatch, document, {"repos/o/r/issues/2": issue})
+    if location == "assigned_issue":
+        monkeypatch.setattr(github, "api", lambda *_a, **_k: issue)
+    with pytest.raises(adapter.CoreInformationError, match="body_transport_omission"):
+        github.snapshot(SOURCE if location == "assigned_issue" else TARGET)
+
+
+def test_null_body_is_explicit_empty_content_not_transport_omission(monkeypatch):
+    document = _graphql_pr()
+    document["closingIssuesReferences"]["nodes"] = []
+    document["body"] = None
+    github, _ = _lineage_snapshot(monkeypatch, document, {})
+    current = github.snapshot(TARGET)
+    assert current["sources"][0]["body"] == ""
+    assert current["source_inventory"]["status"] == "no_linked_issue"
+    assert not adapter.acceptance_ok(current, {})
+
+
+def test_wrong_pr_identity_refuses_before_request_capture(monkeypatch):
+    document = _graphql_pr()
+    document["number"] = 8
+    github, _ = _lineage_snapshot(monkeypatch, document, {})
+    with pytest.raises(adapter.CoreInformationError, match="identity_mismatch"):
+        github.snapshot(TARGET)
+
+
+def test_source_fetch_failure_never_becomes_no_linked_issue_and_can_be_retried(monkeypatch):
+    document = _graphql_pr()
+    document["closingIssuesReferences"]["nodes"] = []
+    document["body"] = "<!-- meta:issue:2 -->"
+    github, _ = _lineage_snapshot(monkeypatch, document, {})
+    original = github.api
+    failed = True
+
+    def fetch(endpoint, **kwargs):
+        if endpoint == "repos/o/r/issues/2":
+            if failed:
+                raise RuntimeError("GitHub outcome unknown: source read failed")
+            return {"number": 2, "body": "original request", "state": "open", "labels": []}
+        return original(endpoint, **kwargs)
+
+    monkeypatch.setattr(github, "api", fetch)
+    with pytest.raises(RuntimeError, match="source read failed"):
+        github.snapshot(TARGET)
+    failed = False
+    current = github.snapshot(TARGET)
+    assert current["source_inventory"]["status"] == "linked_issues"
+    assert current["sources"][0]["body"] == "original request"
+
+
+def test_pr_request_never_routes_to_issue_closure(tmp_path, monkeypatch):
+    current = snapshot(state="MERGED", verifier={"verdict": "PASS"})
+    current["sources"] = [
+        adapter._request_source(
+            TARGET,
+            {
+                "body": "## Tasks\n- Preserve behavior",
+                "state": "MERGED",
+                "labels": [],
+            },
+            kind="pr_request",
+            via="github_pr_body",
+        )
+    ]
+    monkeypatch.setattr(adapter, "acceptance_ok", lambda *_: True)
+    assert closer(tmp_path, current).select(current)[0] == "complete"
+    current["sources"].append({"target": SOURCE, "state": "open", "body": "issue"})
+    assert closer(tmp_path, current).select(current)[0] == "close_source"
+
+
+def test_request_revision_changes_invalidate_acceptance_without_body_changes(tmp_path):
+    current = snapshot()
+    issue = {
+        "body": current["sources"][0]["body"],
+        "title": "Preserve behavior",
+        "state": "open",
+        "labels": [],
+    }
+    current["sources"] = [adapter._request_source(SOURCE, issue, via="closingIssuesReferences")]
+    decision = integrated(tmp_path, current)
+    assert adapter.acceptance_ok(current, decision)
+    issue["title"] = "Preserve behavior and prevent duplicate writes"
+    current["sources"] = [adapter._request_source(SOURCE, issue, via="closingIssuesReferences")]
+    assert not adapter.acceptance_ok(current, decision)
+    assert adapter.source_digest(current["sources"]) != decision["source_digest"]

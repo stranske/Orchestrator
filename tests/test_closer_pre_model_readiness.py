@@ -1283,3 +1283,30 @@ def test_only_complete_retained_redaction_review_partial_is_assessable_without_c
     assert verdict["ready"] is (mutation == "valid"), verdict
     if mutation != "valid":
         assert verdict["gaps"]
+
+
+@pytest.mark.parametrize("mutation", ["displayed_title", "raw_title_ref"])
+def test_captured_title_is_bound_to_source_and_retained_bytes(tmp_path, mutation):
+    snap, packet = code_only_packet(tmp_path)
+    root = tmp_path / "code-only"
+    snap["sources"][0]["title"] = "Preserve original behavior"
+    packet["bindings"]["source"] = evidence._hash(snap["sources"])
+    packet["sections"]["source"] = evidence._source_section(snap["sources"], root)
+    reseal_section(packet, "source", root)
+    assert evidence.validate_packet(packet)
+    assert evidence.action_evidence_readiness(snap, packet, "collect_evidence", retained_dir=root)[
+        "ready"
+    ]
+    row = packet["sections"]["source"]["content"][0]
+    if mutation == "displayed_title":
+        row["title"] = "Different requirements"
+    else:
+        row["title_retained"] = {
+            **evidence._retain_bytes(root, b"Different retained title", "txt"),
+            "truncated": False,
+        }
+    reseal_section(packet, "source", root)
+    assert evidence.validate_packet(packet)
+    result = evidence.action_evidence_readiness(snap, packet, "collect_evidence", retained_dir=root)
+    assert not result["ready"]
+    assert "source:original_bodies_unavailable" in result["gaps"]

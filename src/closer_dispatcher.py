@@ -614,7 +614,20 @@ def assignment_dependency(path, target, *, expected_fingerprint=None):
 
 
 def source_digest(sources):
-    return digest([{"target": s["target"], "body": s["body"]} for s in sources])
+    return digest(
+        [
+            {
+                "target": source["target"],
+                "body": source["body"],
+                **(
+                    {"request_revision": source["request_revision"]}
+                    if "request_revision" in source
+                    else {}
+                ),
+            }
+            for source in sources
+        ]
+    )
 
 
 def requirements(body):
@@ -904,6 +917,51 @@ def resolve_delivery_candidates(repo, nodes, *, complete, compare):
     return inventory
 
 
+class CoreInformationError(RuntimeError):
+    """A failed read, never evidence that an issue has no requirements or links."""
+
+    def __init__(self, category, target):
+        self.category = category
+        self.target = target
+        super().__init__(f"core_information:{category}:{target}; refetch current GitHub object")
+
+
+def _request_source(target, obj, *, kind="issue", via):
+    # GitHub's explicit null body is empty authored content. An absent body key
+    # is a transport/schema omission and must not be converted into empty text.
+    if "body" not in obj or (obj["body"] is not None and not isinstance(obj["body"], str)):
+        raise CoreInformationError("body_transport_omission", target)
+    body = obj["body"] or ""
+    updated = obj.get("updatedAt", obj.get("updated_at"))
+    provenance = {
+        "kind": kind,
+        "via": via,
+        "url": "https://github.com/"
+        + target.replace("#", "/pull/" if kind == "pr_request" else "/issues/"),
+        "updated_at": updated,
+        "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+    }
+    return {
+        "target": target,
+        "body": body,
+        "state": obj["state"].lower(),
+        "labels": [
+            x["name"]
+            for x in (
+                obj["labels"]["nodes"]
+                if isinstance(obj.get("labels"), dict)
+                else obj.get("labels", [])
+            )
+        ],
+        "kind": kind,
+        "title": obj.get("title"),
+        "provenance": provenance,
+        "request_revision": digest(
+            {"target": target, "title": obj.get("title"), "body": body, "provenance": provenance}
+        ),
+    }
+
+
 class GitHub:
     def __init__(self, *, deadline, api_fn=None):
         self.deadline = deadline
@@ -935,6 +993,7 @@ class GitHub:
             raise ValueError("target excluded or malformed")
         issue = self.api(f"repos/{repo}/issues/{num}")
         if "pull_request" not in issue:
+            assigned_source = _request_source(target, issue, via="assigned_issue")
             owner, name = repo.split("/")
             query = (
                 "query {repository(owner:"
@@ -1009,12 +1068,7 @@ class GitHub:
                         reason="selected delivery revalidation failed",
                         error_type=type(exc).__name__,
                     )
-            source = {
-                "target": target,
-                "body": issue.get("body") or "",
-                "state": issue["state"],
-                "labels": [x["name"] for x in issue.get("labels", [])],
-            }
+            source = assigned_source
             return {
                 "target": target,
                 "kind": "issue",
@@ -1033,10 +1087,10 @@ class GitHub:
             }
         owner, name = repo.split("/")
         query = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-          number body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
+          number title body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
           labels(first:100){nodes{name} pageInfo{hasNextPage}}
           timelineItems(itemTypes:[LABELED_EVENT],last:100){nodes{... on LabeledEvent{id createdAt label{name}}} pageInfo{hasPreviousPage}}
-          closingIssuesReferences(first:100){nodes{number body state labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
+          closingIssuesReferences(first:100){nodes{number title body state updatedAt labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
             pageInfo{hasNextPage}}
           reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){nodes{body updatedAt}}}
             pageInfo{hasNextPage}}
@@ -1066,20 +1120,23 @@ class GitHub:
         doc = self.api("graphql", method="POST", fields={"query": query}, resource="graphql")
         pr = doc["data"]["repository"]["pullRequest"]
         if not pr:
-            raise RuntimeError("PR snapshot missing")
+            raise CoreInformationError("object_unavailable", target)
+        if pr.get("number") != int(num):
+            raise CoreInformationError("identity_mismatch", target)
+        if "body" not in pr or (pr["body"] is not None and not isinstance(pr["body"], str)):
+            raise CoreInformationError("body_transport_omission", target)
         for name in ("labels", "closingIssuesReferences", "reviewThreads"):
             if pr[name]["pageInfo"].get("hasNextPage"):
                 raise RuntimeError(
                     f"incomplete {name}; bounded inventory cannot authorize mutation"
                 )
         sources = [
-            {
-                "target": f"{s['repository']['nameWithOwner']}#{s['number']}",
-                "body": s.get("body") or "",
-                "state": s["state"].lower(),
-                "labels": [x["name"] for x in s["labels"]["nodes"]],
-            }
-            for s in pr["closingIssuesReferences"]["nodes"]
+            _request_source(
+                f"{source['repository']['nameWithOwner']}#{source['number']}",
+                source,
+                via="closingIssuesReferences",
+            )
+            for source in pr["closingIssuesReferences"]["nodes"]
         ]
         if not sources:
             # Reuse the existing explicit source-lineage reader on the authored
@@ -1098,13 +1155,20 @@ class GitHub:
                 if "pull_request" in source or source.get("number") != ref:
                     raise RuntimeError("explicit source lineage is not an issue")
                 sources.append(
-                    {
-                        "target": f"{repo}#{ref}",
-                        "body": source.get("body") or "",
-                        "state": source["state"],
-                        "labels": [x["name"] for x in source.get("labels", [])],
-                    }
+                    _request_source(f"{repo}#{ref}", source, via="authored_issue_lineage")
                 )
+        linked_issue_targets = [source["target"] for source in sources]
+        if not sources:
+            # No issue is a legitimate outcome of the complete linkage inventory.
+            # Retain the actual authored PR request, not a fabricated issue or a
+            # Tasks/AC rewrite. Unknown requirement grammar stays non-authorizing.
+            sources = [_request_source(target, pr, kind="pr_request", via="github_pr_body")]
+        source_inventory = {
+            "status": "linked_issues" if linked_issue_targets else "no_linked_issue",
+            "complete": True,
+            "linked_issue_targets": linked_issue_targets,
+            "request_target": sources[0]["target"] if not linked_issue_targets else None,
+        }
         if any(
             s["labels"]["pageInfo"].get("hasNextPage")
             for s in pr["closingIssuesReferences"]["nodes"]
@@ -1172,8 +1236,10 @@ class GitHub:
             "merge": (pr.get("mergeCommit") or {}).get("oid"),
             "merged_at": pr.get("mergedAt"),
             "body": pr["body"],
+            "title": pr.get("title"),
             "draft": pr["isDraft"],
             "sources": sources,
+            "source_inventory": source_inventory,
             "review_revision": review_revision,
             "active_threads": sum(not t["isResolved"] for t in threads),
             "threads": threads,
@@ -1443,6 +1509,9 @@ class Closer:
         if s["kind"] == "issue":
             return self.proposal(s, "collect_evidence", "link original source to verified delivery")
         if s["state"] == "MERGED":
+            issue_sources = [
+                source for source in s["sources"] if source.get("kind") != "pr_request"
+            ]
             ordinary_nonpass = decision.get("ordinary_nonpass")
             if (
                 s.get("verifier")
@@ -1482,15 +1551,15 @@ class Closer:
                 if (
                     acceptance_ok(s, decision)
                     and s["sources"]
-                    and all(x["state"] == "closed" for x in s["sources"])
+                    and all(x["state"] == "closed" for x in issue_sources)
                 ):
                     return (
                         "complete",
-                        "sources closed with retained acceptance evidence and merge-bound verifier PASS",
+                        "linked issues closed or absent, with retained acceptance evidence and merge-bound verifier PASS",
                         False,
                         None,
                     )
-                if acceptance_ok(s, decision) and any(x["state"] == "open" for x in s["sources"]):
+                if acceptance_ok(s, decision) and any(x["state"] == "open" for x in issue_sources):
                     return (
                         "close_source",
                         "merge-bound verifier PASS and complete acceptance evidence",
