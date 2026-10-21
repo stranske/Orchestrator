@@ -929,11 +929,7 @@ def flush_defects(store, api, *, improvement_lookup=None):
                         match = next(r for r in existing if r["number"] == candidate["dup_issue"])
                         text = match["body"].lower()
                         if (
-                            not (
-                                "collector bindings" in text
-                                and "native" in text
-                                and "standalone" in text
-                            )
+                            not (family.lower() in text and defect["component"].lower() in text)
                             and marker not in match["body"]
                         ):
                             results.append(

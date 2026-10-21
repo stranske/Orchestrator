@@ -245,7 +245,7 @@ class IssueAPI:
                     {
                         "number": 857,
                         "title": "Share closer collector bindings",
-                        "body": "Native and standalone collector bindings retain artifact/review inputs.",
+                        "body": "Native and standalone collector bindings: artifact-downloader-binding src/closer_dispatcher.py:collect_native_evidence.",
                         "html_url": "https://github.com/stranske/Orchestrator/pull/857",
                     }
                 ]
@@ -963,3 +963,28 @@ def test_necessary_extra_is_delivered_before_optional_context_can_consume_window
     assert list(context["sections"]).index("requested_evidence") < list(context["sections"]).index(
         "ci_artifacts"
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Repair native and standalone collector bindings for CSV delimiter detection.",
+        "collector bindings artifact-downloader-binding src/unrelated.py:collect_native_evidence",
+        "collector bindings review-pagination-binding src/closer_dispatcher.py:collect_native_evidence",
+    ],
+)
+def test_related_collector_wording_cannot_confirm_an_unrelated_root(tmp_path, body):
+    store, _defect = report_store(tmp_path)
+    api = IssueAPI(existing_pr=True)
+
+    def unrelated(endpoint, **kwargs):
+        answer = api(endpoint, **kwargs)
+        if endpoint.startswith("search/issues"):
+            for row in answer["items"]:
+                row["body"] = body
+        return answer
+
+    result = recovery.flush_defects(store, unrelated, improvement_lookup=no_improvements)
+    assert result[0]["status"] == "candidate_needs_root_confirmation"
+    assert not api.issues and not api.comments
+    assert not any(call[0] in {"POST", "PATCH"} for call in api.calls)
