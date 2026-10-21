@@ -3237,13 +3237,13 @@ def _run_pipeline_impl(
                     ):
                         throttle = getattr(exc, "throttle", None)
                         resource_name = getattr(exc, "resource", None)
-                        observed_at = getattr(exc, "observed_at", None)
+                        capacity_observed_at = getattr(exc, "observed_at", None)
                         reset_at = getattr(exc, "reset_at_epoch", None)
                         evidence = {
                             "github_capacity": {
                                 "throttle": throttle,
                                 "resource": resource_name,
-                                "observed_at": observed_at,
+                                "observed_at": capacity_observed_at,
                                 "reset_at_epoch": reset_at,
                             }
                         }
