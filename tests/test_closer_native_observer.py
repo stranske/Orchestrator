@@ -50,6 +50,11 @@ def host(tmp_path, monkeypatch):
         manifest_path=manifest_path,
         campaign_root=campaigns,
     )
+    # Reuse the manifest's already-computed closure; unpinned Python files must
+    # not make this synthetic host more permissive than its sealed runtime.
+    for module in modules.glob("*.py"):
+        if module.name not in manifest["modules"]:
+            module.unlink()
     wrapper = home / ".codex/bin/cursor-lane.sh"
     wrapper.parent.mkdir(parents=True)
     source = '#!/bin/bash\nset -euo pipefail\nLANE="${1:?}"\ncase "$LANE" in\ncloser|opener) ;;\n*) exit 2 ;;\nesac\n\nexport PATH="$HOME/.local/bin:$HOME/.cursor/bin:$PATH"\n'
@@ -611,6 +616,7 @@ def test_host_fixture_copies_runtime_closure_without_flat_mirror_payload(tmp_pat
     flat.mkdir()
     for name in names:
         shutil.copy2(source / name, flat / name)
+    (flat / "unrelated_top_level.py").write_text("raise AssertionError('not pinned')\n")
     (flat / "tests").mkdir()
     (flat / "tests/unrelated.py").write_text("raise AssertionError('not a Runtime module')\n")
     (flat / "docs").mkdir()

@@ -45,8 +45,10 @@ the CI job's disk quota. The retained local failed run had 724248 synthetic
 entries and about 19.5 GB of logical fixture data.
 
 The fixture now copies top-level Python modules, preserving the original checkout
-fixture's source module set in either layout. Manifest creation still discovers
-and seals the production runtime closure. The flat-layout regression executes
+fixture's source module set in either layout. Manifest creation discovers and
+seals the production runtime closure once; the fixture then removes Python files
+outside that manifest before any native entry can execute. The flat-layout
+regression includes an unrelated top-level Python file and nested payloads, executes
 the real fixture and verifies both module membership and the sealed manifest.
 Unrelated test/doc payloads are excluded.
 
