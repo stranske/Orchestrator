@@ -37,6 +37,7 @@
 #          or the tree's first writing load failed on the copy of the ledger
 #        2 NOTHING VERIFIED: SRC is not a checkout, or the scratch copy failed
 #        3 VOID: SRC changed while verify.py ran, so the verdict is about a tree nobody would copy
+#       78 storage admission/terminal retirement refused; inspect the private storage receipt
 # Env:   ORCH_SYNC_SCRIPT  the copy script (default ~/.codex/bin/orch-sync-mirror.sh)
 #        PYTHON            the interpreter for verify.py (default python3)
 #        ORCH_LOCAL_RUNTIME, ORCH_STATE_DIR, ORCH_CAPABILITIES_PATH, ORCH_FEEDBACK_DB
@@ -44,6 +45,9 @@
 #                          verify.py is handed the copies, never these
 #        VERIFY_BEFORE_SYNC_MAX_DIR_MB  largest state directory copied (default 50)
 #        VERIFY_BEFORE_SYNC_KEEP=1  keep the scratch directory and print its path
+#        ORCH_STORAGE_STATE_DIR  shared private admission state (default runtime/.storage-lifecycle)
+#        VERIFY_BEFORE_SYNC_PEAK_BYTES  larger producer forecast for expected temporary growth
+#        VERIFY_BEFORE_SYNC_OWNER_KEY  stable publication target key; excludes superseded candidates
 #        VERIFY_BEFORE_SYNC_TREE  the `tree:` label verify.py must print for a verdict (default
 #                          `EXEC MIRROR`, the owner's provisioned mirror). CI's exec-mirror job sets
 #                          `BARE EXEC MIRROR`: it runs this same script on a runner, with
@@ -98,6 +102,7 @@ statedir_src="${ORCH_STATE_DIR:-$real_home/.codex/orchestrator}"
 ledger_src="${ORCH_CAPABILITIES_PATH:-$runtime_src/capabilities.json}"
 brain_src="${ORCH_FEEDBACK_DB:-$runtime_src/feedback/orchestrator.db}"
 max_dir_mb="${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-50}"
+storage_state="${ORCH_STORAGE_STATE_DIR:-$runtime_src/.storage-lifecycle}"
 skipped_dirs=""
 expected_tree="${VERIFY_BEFORE_SYNC_TREE:-EXEC MIRROR}"
 # A scalar, not an array: an empty array under `set -u` is an unbound variable in bash 3.2.
@@ -125,6 +130,9 @@ copy_state() {
   [[ -d "$from" ]] || return 0
   for entry in "$from"/* "$from"/.[!.]*; do
     [[ -e "$entry" ]] || continue
+    # Admission receipts/claims are control metadata, never input state. Copying
+    # them into another managed run recursively reproduces cleanup evidence.
+    [[ "$entry" == "$storage_state" || "$(basename "$entry")" == ".storage-lifecycle" ]] && continue
     name="$(basename "$entry")"
     if [[ -f "$entry" ]]; then
       case "$name" in
@@ -227,7 +235,24 @@ fi
 head_short="$(git -C "$src" rev-parse --short HEAD)"
 dirty="$(git -C "$src" status --porcelain | wc -l | tr -d ' ')"
 
-if ! scratch="$(mktemp -d "${TMPDIR:-/tmp}/verify-before-sync.XXXXXX")"; then
+storage_helper="$src/src/storage_lifecycle.py"
+[[ -f "$storage_helper" ]] || storage_helper="$src/storage_lifecycle.py"
+if [[ "${ORCH_STORAGE_ENTRY_PID:-}" != "$$" ]]; then
+  [[ -f "$storage_helper" ]] || { fail "NOTHING VERIFIED: storage lifecycle helper missing from source"; exit 2; }
+  storage_args=(run --state-dir "$storage_state" --source "$src" --runtime "$runtime_src"
+    --state-source "$statedir_src" --temp-parent "${TMPDIR:-/tmp}" --max-dir-mb "$max_dir_mb"
+    --profile "$expected_tree" --peak-bytes "${VERIFY_BEFORE_SYNC_PEAK_BYTES:-0}")
+  # The 27 GiB strict local release floor is never lowered. CI's deliberately
+  # different BARE shape is not a local release and has no such host agreement.
+  [[ "$expected_tree" == "BARE EXEC MIRROR" ]] || storage_args+=(--local-strict)
+  verify_args=()
+  [[ -z "$snapshot_out" ]] || verify_args+=(--snapshot-out "$snapshot_out")
+  [[ -z "$digest_out" ]] || verify_args+=(--digest-out "$digest_out")
+  verify_args+=("$src")
+  exec "$python_bin" "$storage_helper" "${storage_args[@]}" -- bash "${BASH_SOURCE[0]}" "${verify_args[@]}"
+fi
+
+if ! scratch="$(mktemp -d "${VERIFY_BEFORE_SYNC_TMP_PARENT:-${TMPDIR:-/tmp}}/verify-before-sync.XXXXXX")"; then
   fail "NOTHING VERIFIED: could not create a scratch directory"
   exit 2
 fi
@@ -244,7 +269,7 @@ fi
 scratch="$scratch_real"
 if [[ "${VERIFY_BEFORE_SYNC_KEEP:-0}" == "1" ]]; then
   say "scratch directory kept: $scratch"
-else
+elif [[ -z "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
   trap 'rm -rf "$scratch"' EXIT
 fi
 mkdir -p "$scratch/home/.codex/orchestrator"
@@ -385,6 +410,9 @@ fi
 say "   $seed_line"
 
 say "== verify.py in the scratch mirror, on the state copy (HOME stays real for the installed CLIs)"
+if [[ -n "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
+  "$python_bin" "$storage_helper" staged --state-dir "$storage_state" --job "$ORCH_STORAGE_RUN_ID" || exit 2
+fi
 (cd "$scratch/mirror" && in_state_copy "$python_bin" verify.py ${floor_flag:+"$floor_flag"}) 2>&1 | tee "$scratch/verify.log"
 pipe_status=("${PIPESTATUS[@]}")
 rc=${pipe_status[0]}
