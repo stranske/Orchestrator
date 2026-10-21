@@ -126,7 +126,7 @@ def _inner_boundary(path, target):
     return {"path": str(inner), "sha256": sha}
 
 
-def _scope_proof(root, path, target, entry, row):
+def _scope_proof(root, path, target, entry, row, *, caller_path):
     expected_binding = {
         "state_path": str(path),
         "pipeline_run_id": entry["run_id"],
@@ -154,11 +154,33 @@ def _scope_proof(root, path, target, entry, row):
         proof, sha = _read(candidate)
         if isinstance(retained, dict) and sha != retained.get("sha256"):
             raise ValueError("scope_proof_digest_changed")
+        binding = proof.get("binding")
+        # Only this exact request can contribute a proof. An unrelated record's
+        # obsolete/aliased workspace must not poison the current target's plan.
+        if (
+            proof.get("schema") != "closer-scoped-admission/v1"
+            or proof.get("target") != target
+            or proof.get("stage") != row.get("stage")
+            or not isinstance(binding, dict)
+            or {key: value for key, value in binding.items() if key != "state_path"}
+            != {key: value for key, value in expected_binding.items() if key != "state_path"}
+        ):
+            continue
+        normalized_binding = None
+        if isinstance(binding, dict) and isinstance(binding.get("state_path"), str):
+            producer_path = Path(binding["state_path"])
+            # A relative producer path needs the same explicit caller context.
+            # Never guess an unavailable original working directory.
+            known_context = producer_path.is_absolute() or (
+                not Path(caller_path).is_absolute() and producer_path == Path(caller_path)
+            )
+            if known_context and _physical(producer_path) == path:
+                normalized_binding = {**binding, "state_path": str(path)}
         if (
             proof.get("schema") == "closer-scoped-admission/v1"
             and proof.get("target") == target
             and proof.get("stage") == row.get("stage")
-            and proof.get("binding") == expected_binding
+            and normalized_binding == expected_binding
             and proof.get("admitted") is False
             and proof.get("callback_started") is False
             and type(proof.get("observed_at")) in {int, float}
@@ -169,7 +191,9 @@ def _scope_proof(root, path, target, entry, row):
             <= row.get("stage_deadline", float("-inf"))
             and isinstance(proof.get("reason"), str)
             and proof["reason"]
-            and row.get("error") == "ScopeBlocked: " + proof["reason"]
+            # Match the finite coordinator's retained error format exactly;
+            # the full reason remains bound by the admission proof digest.
+            and row.get("error") == "ScopeBlocked: " + proof["reason"][:200]
             and proof.get("input_sha256")
             == _digest(
                 {
@@ -280,7 +304,7 @@ def plan(state_path, *, frontier, target, event):
     ):
         kind = "unstarted_prepare_pool"
     elif (row.get("error") or "").startswith("ScopeBlocked: "):
-        proof = _scope_proof(root, path, target, entry, row)
+        proof = _scope_proof(root, path, target, entry, row, caller_path=state_path)
         kind = "pre_callback_scope_refusal"
     else:
         raise ValueError("no_supported_unstarted_boundary")
@@ -361,7 +385,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                     row = _entry(state, frontier)["items"][target]
                     if record.get("status") == "prepared":
                         if _digest(row) == _digest(record.get("before")):
-                            fresh = plan(path, frontier=frontier, target=target, event=event)
+                            fresh = plan(state_path, frontier=frontier, target=target, event=event)
                             if fresh["plan_sha256"] != expected_plan_sha256:
                                 raise ValueError("prepared_reentry_inputs_changed")
                             state["frontiers"][frontier["frontier_id"]]["items"][target] = record[
@@ -375,7 +399,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                     elif record.get("status") != "applied":
                         raise ValueError("invalid_reentry_audit")
                     return {"status": "applied", "idempotent": True, "audit": str(audit)}
-                proposal = plan(path, frontier=frontier, target=target, event=event)
+                proposal = plan(state_path, frontier=frontier, target=target, event=event)
                 if proposal["plan_sha256"] != expected_plan_sha256:
                     raise ValueError("reentry_plan_changed")
                 state, _ = _read(path)
@@ -455,8 +479,10 @@ def ready(state_path, frontier, target, row):
         raise ValueError("invalid_reentry_ready_boundary")
     path = _physical(state_path)
     root = path.parent.parent.parent
-    identity = resources.fence_identity(path)
-    fence = resources.fence_for(path)
+    # The resource fence registry deliberately uses the lease's caller-form
+    # pathname; physical paths remain mandatory for filesystem/audit checks.
+    identity = resources.fence_identity(Path(state_path))
+    fence = resources.fence_for(Path(state_path))
     if identity is None or fence is None:
         raise ValueError("reentry_requires_live_production_lease")
     fence()

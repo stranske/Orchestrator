@@ -1,5 +1,6 @@
 """Re-entry changes one proven-unstarted scheduling boundary, never effect authority."""
 
+import copy
 import fcntl
 import json
 
@@ -46,7 +47,7 @@ def fixture(tmp_path, stage="prepare", status="held"):
         }
     entry = {
         "schema": "closer-pipeline-frontier/v2",
-        "finite_frontier": selected,
+        "finite_frontier": copy.deepcopy(selected),
         "run_id": pipeline._digest(["finite-frontier/v2", "frozen", "owner"])[:32],
         "items": {TARGET: row},
     }
@@ -231,7 +232,10 @@ def test_plan_cas_refuses_changed_inputs(tmp_path, which):
         lease.write_text(json.dumps(value))
     else:
         path.write_text(json.dumps(doc))
-    with pytest.raises(ValueError):
+    expected = (
+        "finite_frontier_identity_changed" if which == "descriptor" else "reentry_plan_changed"
+    )
+    with pytest.raises(ValueError, match=f"^{expected}$"):
         retry.apply(
             path,
             frontier=frontier,
@@ -589,3 +593,120 @@ def test_public_cli_holds_malformed_inner_status(tmp_path, capsys, status):
         == 78
     )
     assert json.loads(capsys.readouterr().out)["reason"] == "malformed_inner_status"
+
+
+def test_long_scope_reason_matches_exact_finite_error_truncation(tmp_path):
+    path, frontier, doc = fixture(tmp_path, "act", "unknown")
+    location, proof = scope_proof(path, doc)
+    reason = "workspace path:/" + "long-component/" * 24 + " overlaps another callback"
+    proof["reason"] = reason
+    location.write_text(json.dumps(proof))
+    doc = json.loads(path.read_text())
+    doc["frontiers"]["frozen"]["items"][TARGET]["error"] = "ScopeBlocked: " + reason[:200]
+    path.write_text(json.dumps(doc))
+    proposal = retry.plan(path, frontier=frontier, target=TARGET, event="long-path-owner-terminal")
+    assert proposal["kind"] == "pre_callback_scope_refusal"
+
+
+@pytest.mark.parametrize("reason", [[], {}, 123])
+def test_malformed_scope_reason_cannot_authorize_retry(tmp_path, capsys, reason):
+    path, frontier, doc = fixture(tmp_path, "act", "unknown")
+    location, proof = scope_proof(path, doc)
+    proof["reason"] = reason
+    location.write_text(json.dumps(proof))
+    frozen = tmp_path / "frontier.json"
+    frozen.write_text(json.dumps(frontier))
+    assert (
+        retry.main(
+            [
+                "--state",
+                str(path),
+                "--frontier",
+                str(frozen),
+                "--target",
+                TARGET,
+                "--event",
+                "event",
+            ]
+        )
+        == 78
+    )
+    assert (
+        json.loads(capsys.readouterr().out)["reason"]
+        == "missing_or_ambiguous_exact_pre_callback_proof"
+    )
+
+
+def test_ready_uses_relative_lease_fence_identity(tmp_path, monkeypatch):
+    path, frontier, _ = fixture(tmp_path)
+    apply(path, frontier)
+    monkeypatch.chdir(tmp_path)
+    relative = path.relative_to(tmp_path)
+    lease = resources.acquire(
+        relative.parent.parent.parent, TARGET, owner="relative-resume", finite_frontier=frontier
+    )
+    try:
+        with resources.fenced(lease):
+            assert retry.ready(relative, frontier, TARGET, read(path))
+    finally:
+        lease.release()
+
+
+def test_relative_producer_binding_matches_same_relative_call_context(tmp_path, monkeypatch):
+    path, frontier, doc = fixture(tmp_path, "act", "unknown")
+    location, proof = scope_proof(path, doc)
+    monkeypatch.chdir(tmp_path)
+    relative = path.relative_to(tmp_path)
+    proof["binding"]["state_path"] = str(relative)
+    location.write_text(json.dumps(proof))
+    proposal = retry.plan(
+        relative, frontier=frontier, target=TARGET, event="relative-original-context"
+    )
+    assert proposal["kind"] == "pre_callback_scope_refusal"
+    retry.apply(
+        relative,
+        frontier=frontier,
+        target=TARGET,
+        event="relative-original-context",
+        expected_plan_sha256=proposal["plan_sha256"],
+    )
+
+
+def test_relative_binding_with_unknown_original_cwd_is_rejected(tmp_path, monkeypatch):
+    path, frontier, doc = fixture(tmp_path, "act", "unknown")
+    location, proof = scope_proof(path, doc)
+    monkeypatch.chdir(tmp_path)
+    proof["binding"]["state_path"] = str(path.relative_to(tmp_path))
+    location.write_text(json.dumps(proof))
+    with pytest.raises(ValueError, match="missing_or_ambiguous_exact_pre_callback_proof"):
+        retry.plan(
+            path, frontier=frontier, target=TARGET, event="absolute-caller-has-no-relative-context"
+        )
+
+
+def test_aliased_producer_binding_is_never_normalized_away(tmp_path):
+    path, frontier, doc = fixture(tmp_path, "act", "unknown")
+    location, proof = scope_proof(path, doc)
+    alias = tmp_path / "alias"
+    alias.symlink_to(path.parent, target_is_directory=True)
+    proof["binding"]["state_path"] = str(alias / "state.json")
+    location.write_text(json.dumps(proof))
+    with pytest.raises(ValueError, match="aliased_path"):
+        retry.plan(path, frontier=frontier, target=TARGET, event="alias-not-authority")
+
+
+@pytest.mark.parametrize("foreign_field", ["target", "work_key"])
+def test_unrelated_aliased_proof_cannot_poison_exact_current_proof(tmp_path, foreign_field):
+    path, frontier, doc = fixture(tmp_path, "act", "unknown")
+    location, proof = scope_proof(path, doc)
+    foreign = copy.deepcopy(proof)
+    alias = tmp_path / "old-alias"
+    alias.symlink_to(path.parent, target_is_directory=True)
+    foreign["binding"]["state_path"] = str(alias / "state.json")
+    if foreign_field == "target":
+        foreign["target"] = "owner/other#2"
+    else:
+        foreign["binding"]["work_key"] = "prior-request"
+    (location.parent / "foreign.json").write_text(json.dumps(foreign))
+    proposal = retry.plan(path, frontier=frontier, target=TARGET, event="current-proof-only")
+    assert proposal["scope_proof"]["path"] == str(location)
