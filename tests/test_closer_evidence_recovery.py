@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -988,3 +989,144 @@ def test_related_collector_wording_cannot_confirm_an_unrelated_root(tmp_path, bo
     assert result[0]["status"] == "candidate_needs_root_confirmation"
     assert not api.issues and not api.comments
     assert not any(call[0] in {"POST", "PATCH"} for call in api.calls)
+
+
+@pytest.mark.parametrize("failure", ["routing", "deadline"])
+def test_assessment_failure_cannot_overwrite_successful_recovery(tmp_path, monkeypatch, failure):
+    import dispatcher as transport
+
+    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
+    target = context["prepare"]["snapshot"]["target"]
+    original = transport.offload
+
+    def fail_assessment(agent, prompt, **kwargs):
+        if "gap-directed second-pass" not in prompt:
+            if failure == "deadline":
+                raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
+            raise RuntimeError("low provider capacity snapshot is stale or unavailable")
+        return original(agent, prompt, **kwargs)
+
+    monkeypatch.setattr(transport, "offload", fail_assessment)
+    with pytest.raises((RuntimeError, dispatcher.RoundDeadlineExhausted)):
+        callbacks["interpret"](target, context)
+    records = list((tmp_path / "state.json.evidence" / "recovery").glob("*.json"))
+    latest = json.loads(records[0].read_text())["latest"]
+    assert latest["outcome"] == "recovered"
+    assert latest["prepare"]["packet_ref"] != context["prepare"]["packet_ref"]
+    monkeypatch.setattr(transport, "offload", original)
+    result = callbacks["interpret"](target, {**context, "prepare": latest["prepare"]})
+    assert result["classification"] == "uncertain"
+    assert len(calls) == 2 and refreshes == [{"diff_files"}]
+
+
+@pytest.mark.parametrize("failure", ["deadline", "capacity_without_reset"])
+def test_read_deferral_without_reset_resumes_saved_plan(tmp_path, monkeypatch, failure):
+    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
+    target = context["prepare"]["snapshot"]["target"]
+    original = dispatcher.collect_native_evidence
+
+    def deferred(*args, **kwargs):
+        if failure == "deadline":
+            raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
+        raise dispatcher.RoundCapacityDeferred(resource="core", throttle={}, observed_at=100)
+
+    monkeypatch.setattr(dispatcher, "collect_native_evidence", deferred)
+    with pytest.raises((dispatcher.RoundDeadlineExhausted, dispatcher.RoundCapacityDeferred)):
+        callbacks["interpret"](target, context)
+    monkeypatch.setattr(dispatcher, "collect_native_evidence", original)
+    result = callbacks["interpret"](target, context)
+    assert result["evidence_recovery"]["outcome"] == "recovered"
+    assert len(calls) == 2 and refreshes == [{"diff_files"}]
+
+
+def test_deadline_before_provider_start_is_retryable_but_uncertain_invocation_is_held(
+    tmp_path, monkeypatch
+):
+    callbacks, context, calls, _refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
+    target = context["prepare"]["snapshot"]["target"]
+    original = dispatcher._execute_profile_route
+    monkeypatch.setattr(
+        dispatcher,
+        "_execute_profile_route",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
+        ),
+    )
+    with pytest.raises(dispatcher.RoundDeadlineExhausted):
+        callbacks["interpret"](target, context)
+    assert not calls
+    monkeypatch.setattr(dispatcher, "_execute_profile_route", original)
+    result = callbacks["interpret"](target, context)
+    assert result["evidence_recovery"]["outcome"] == "recovered"
+
+
+def test_bounded_job_log_preserves_failure_tail_and_provenance(tmp_path):
+    snap, packet = code_only_packet(tmp_path)
+    requests = recovery.validate_requests(
+        {"evidence_requests": [log_request(snap)]}, snap, packet, {"requirements": []}
+    )
+    gh = LogGitHub(snap)
+    raw = "runner setup\n" * 5000 + "α failure assertion at final step token=secretvalue\n"
+    gh.read_text = lambda _endpoint: raw
+    row = recovery.collect_job_logs(gh, snap, requests, tmp_path)[0]
+    assert row["status"] == "partial" and row["retained_window"] == "tail"
+    assert "failure assertion at final step" in row["raw"] and "secretvalue" not in row["raw"]
+    assert len(row["raw"].encode()) <= evidence.MAX_TEXT_BYTES
+    assert row["raw_original_sha256"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert row["raw_original_bytes"] == len(raw.encode())
+
+
+@pytest.mark.parametrize("body", [None, 123, "missing"])
+def test_search_normalizes_explicit_null_but_rejects_malformed_bodies(tmp_path, body):
+    store, _defect = report_store(tmp_path)
+    api = IssueAPI()
+
+    def search(endpoint, **kwargs):
+        result = api(endpoint, **kwargs)
+        if "collector%20in%3Atitle%2Cbody" in endpoint:
+            row = {"number": 42, "title": "Unrelated collector"}
+            if body != "missing":
+                row["body"] = body
+            return {"items": [row], "total_count": 1, "incomplete_results": False}
+        return result
+
+    result = recovery.flush_defects(store, search, improvement_lookup=no_improvements)
+    assert result[0]["status"] == ("published" if body is None else "reporting_deferred")
+
+
+@pytest.mark.parametrize(
+    "prefix,marker,expected",
+    [
+        ("closer-evidence-root", "closer-evidence-root", 4),
+        ("closer-evidence-root", "adversarial-panel", None),
+        (None, "adversarial-panel", 4),
+    ],
+)
+def test_followup_marker_namespace_preserves_default_and_isolates_custom(prefix, marker, expected):
+    import adversarial
+
+    row = {"number": 4, "title": "Root defect", "body": f"<!-- {marker}:root -->"}
+
+    def run(_argv):
+        return SimpleNamespace(returncode=0, stdout=json.dumps([row]))
+
+    kwargs = {} if prefix is None else {"marker_prefix": prefix}
+    assert adversarial._find_followup(run, "o/r", "Root defect", "root", **kwargs) == expected
+
+
+def test_deadline_raised_after_provider_invocation_remains_held(tmp_path, monkeypatch):
+    import dispatcher as transport
+
+    callbacks, context, _calls, _refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
+    target = context["prepare"]["snapshot"]["target"]
+    started = []
+
+    def uncertain(*_args, **_kwargs):
+        started.append(True)
+        raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
+
+    monkeypatch.setattr(transport, "offload", uncertain)
+    with pytest.raises(dispatcher.RoundDeadlineExhausted):
+        callbacks["interpret"](target, context)
+    result = callbacks["interpret"](target, context)
+    assert result["status"] == "pending" and len(started) == 1

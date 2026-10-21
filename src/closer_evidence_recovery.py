@@ -635,7 +635,11 @@ def collect_job_logs(gh, snapshot, requests, root, *, observe=None):
             if not isinstance(raw, str):
                 raise ValueError("log transport did not preserve text")
             original_sha = hashlib.sha256(raw.encode()).hexdigest()
-            text, cut = closer_evidence._safe_text(raw)
+            encoded = raw.encode("utf-8", "replace")
+            cut = len(encoded) > closer_evidence.MAX_TEXT_BYTES
+            text = (
+                encoded[-closer_evidence.MAX_TEXT_BYTES :].decode("utf-8", "ignore") if cut else raw
+            )
             normalization_applied = text != raw
             text, redacted = closer_evidence._redact_credentials(text)
             ref = closer_evidence._retain_bytes(Path(root), text.encode(), "txt")
@@ -650,6 +654,7 @@ def collect_job_logs(gh, snapshot, requests, root, *, observe=None):
                 raw=text,
                 raw_retained=ref,
                 truncated=cut,
+                retained_window="tail" if cut else "complete",
                 redaction_applied=redacted,
                 url=f"https://github.com/{repo}/actions/runs/{run_id}/job/{job_id}",
             )
@@ -878,6 +883,15 @@ def flush_defects(store, api, *, improvement_lookup=None):
                         resource="search",
                     )
                     rows = answer.get("items") if isinstance(answer, dict) else None
+                    if isinstance(rows, list):
+                        rows = [
+                            (
+                                {**r, "body": ""}
+                                if isinstance(r, dict) and "body" in r and r["body"] is None
+                                else r
+                            )
+                            for r in rows
+                        ]
                     if (
                         not isinstance(rows, list)
                         or answer.get("incomplete_results") is not False

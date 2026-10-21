@@ -4498,15 +4498,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 },
             )
         if new_screen.get("evaluation_ready") and time.time() + 5 < float(context["deadline"]):
-            answer = interpret(target, {**context, "prepare": refreshed, "_recovery_done": True})
             return {
-                **answer,
-                "recovered_prepare": answer.get("recovered_prepare", refreshed),
-                "evidence_recovery": {
-                    "outcome": outcome,
-                    "run_id": actual.get("run_id"),
-                    "authority": False,
-                },
+                "_reenter_recovered": refreshed,
+                "_collection_outcome": outcome,
+                "_collection_run_id": actual.get("run_id"),
             }
         pending = evidence_pending(target, refreshed, new_screen)
         pending.update(
@@ -4526,7 +4521,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         target, context, prep, snap, packet, screen, proposal, attempt_key, actual
     ):
         try:
-            return finish_collection(
+            result = finish_collection(
                 target, context, prep, snap, packet, screen, proposal, attempt_key, actual
             )
         except Exception as exc:
@@ -4548,6 +4543,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 )
                 if isinstance(exc, RoundCapacityDeferred) and exc.reset_at_epoch is not None:
                     recovery_store.defer_capacity(snap, attempt_key, exc.reset_at_epoch)
+                else:
+                    recovery_store.retryable(snap, attempt_key, "not_started")
                 raise
             recovery_store.finish(
                 snap,
@@ -4565,6 +4562,20 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "new scoped observation or explicit targeted retry; resolve the retained read/plan failure"
             )
             return pending
+        # Assessment failure must not overwrite an already committed recovery.
+        if "_reenter_recovered" in result:
+            refreshed = result["_reenter_recovered"]
+            answer = interpret(target, {**context, "prepare": refreshed, "_recovery_done": True})
+            return {
+                **answer,
+                "recovered_prepare": answer.get("recovered_prepare", refreshed),
+                "evidence_recovery": {
+                    "outcome": result["_collection_outcome"],
+                    "run_id": result["_collection_run_id"],
+                    "authority": False,
+                },
+            }
+        return result
 
     def interpret(target, context):
         prep = context.get("prepare", {})
@@ -4900,12 +4911,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         started = time.monotonic()
         import closer_resources
 
+        provider_invocation_started = False
+
         def invoke_interpretation(chosen):
+            nonlocal provider_invocation_started
             remaining = float(context["deadline"]) - time.time()
             if finite_frontier is not None and remaining < 5:
                 raise RoundDeadlineExhausted(
                     deadline=context["deadline"], remaining_seconds=remaining
                 )
+            provider_invocation_started = True
             result = dispatcher.offload(
                 chosen["agent"],
                 prompt,
@@ -4950,6 +4965,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 frontier_target=target,
                 **({"data_only": True} if data_only else {}),
             )
+        except RoundDeadlineExhausted:
+            if collection_attempt and not provider_invocation_started:
+                recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")
+            raise
         except AssessmentTransportUnavailable:
             if collection_attempt:
                 recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")

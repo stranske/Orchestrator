@@ -29,7 +29,8 @@ one exact supported locator and a specific question tied to an original criterio
 (or its SHA256) or current finding ID. One job log can be necessary. A request for
 all artifacts cannot become globally mandatory. The native reader verifies the
 job's run, PR association and exact head before reading logs, retains raw bytes,
-and applies the existing redaction/truncation policy. A verified bounded partial
+and applies credential redaction and a bounded tail window for oversized logs,
+with the retained window explicit. A verified bounded partial
 log can support evaluation; its omissions remain explicit for the closer to judge.
 This is delivery for evaluation, not a claim that the question or criterion is
 already proved. Unsupported locators confer
@@ -63,8 +64,11 @@ cannot purchase another collection. Error wording, clocks and manifest churn are
 not progress. Actual new retained evidence, a changed source/check/review revision,
 a changed collector implementation, or an explicit `--evidence-retry-token`
 provides a new trigger. A known authoritative GitHub capacity reset resumes the
-saved completed plan, without another collection-model request. Unknown provider
-outcomes remain held under the existing controls.
+saved completed plan, without another collection-model request. Interrupted idempotent reads without reset metadata resume their saved plan in a
+new request under the existing throttle. A known pre-provider deadline is
+retryable; an invocation with an uncertain outcome remains held. Successful
+recovery is committed before assessment re-entry, so a later assessment failure
+cannot discard recovered sections.
 
 Existing request deadlines, process ownership, concurrency, capacity and hung-read
 protections remain. There is no added aggregate elapsed-work budget, all-artifact
