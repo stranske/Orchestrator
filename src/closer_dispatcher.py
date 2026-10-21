@@ -6864,10 +6864,12 @@ def _expired_admission_diagnostics(pipeline_path):
                     binding = (intent or {}).get("causal_binding") or {}
                     run_id = binding.get("pipeline_run_id")
                     if filename == "legacy-intent.json" and intent and run_id:
-                        key = (run_id, intent.get("owner"), intent.get("target"))
+                        raw_target = intent.get("target")
+                        plan_target = closer_resources.canonical_target(str(raw_target))
+                        key = (run_id, intent.get("owner"), plan_target)
                         if key not in plans:
                             plans[key] = closer_resources.plan_legacy_reconciliation(
-                                pipeline_path, run_id=key[0], owner=key[1], target=key[2]
+                                pipeline_path, run_id=key[0], owner=key[1], target=plan_target
                             )
                         plan = plans[key]
                         eligible = plan.get("eligible") is True and any(

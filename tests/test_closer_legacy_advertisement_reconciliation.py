@@ -126,6 +126,26 @@ def plan(seed):
     )
 
 
+def test_expired_admission_plans_with_canonical_assignment_target(seeded, monkeypatch):
+    import closer_dispatcher
+
+    calls = []
+
+    def record_plan(*_args, **kwargs):
+        calls.append(kwargs)
+        return {"eligible": False, "reasons": ["synthetic"], "advertisements": []}
+
+    monkeypatch.setattr(resources, "plan_legacy_reconciliation", record_plan)
+    mixed = "OWNER/Repo#31"
+    for ad in seeded["ads"]:
+        doc = json.loads(ad.read_bytes())
+        doc["target"] = mixed
+        resources._atomic_write(ad, doc)
+    closer_dispatcher._expired_admission_diagnostics(seeded["path"])
+    assert calls
+    assert calls[0]["target"] == resources.canonical_target(mixed)
+
+
 @pytest.mark.parametrize("corrupt", [False, True])
 def test_expired_admission_reports_exact_reconciliation_capacity(seeded, corrupt):
     import closer_dispatcher

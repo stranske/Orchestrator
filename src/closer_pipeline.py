@@ -2539,6 +2539,8 @@ def _run_pipeline_impl(
         raise ValueError("priority targets must belong to the current assignment")
     if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         raise ValueError("deadline must be an epoch timestamp")
+    if not math.isfinite(float(deadline)):
+        raise ValueError("deadline must be a finite epoch timestamp")
     bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in bounds.values()):
         raise ValueError("pool ceilings must be positive integers")

@@ -56,17 +56,41 @@ def test_deadline_expires_between_precheck_and_lock_attempt(tmp_path, monkeypatc
     assert not path.exists()
 
 
-def test_contended_lock_still_reports_lock_unavailable(tmp_path):
+def test_contended_lock_still_reports_lock_unavailable(tmp_path, monkeypatch):
+    import closer_pipeline as cp
+
+    logical_now = [1_000_000.0]
+
+    def advance_sleep(_duration):
+        logical_now[0] += 0.03
+
+    monkeypatch.setattr(cp.time, "sleep", advance_sleep)
     path = tmp_path / "contended.json"
     with path.with_name(path.name + ".runlock").open("a+") as holder:
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
         receipt = run_pipeline(
-            path, ["o/r#1"], **callbacks(), capacity_fn=lambda: {}, deadline=time.time() + 0.05
+            path,
+            ["o/r#1"],
+            **callbacks(),
+            capacity_fn=lambda: {},
+            deadline=logical_now[0] + 0.05,
+            now=lambda: logical_now[0],
         )
         assert receipt["reason"] == "coordinator_lock_unavailable"
         assert receipt["authority"] is False
         assert receipt["targets"] == {}
         assert not path.exists()
+
+
+def test_nan_deadline_is_rejected_before_admission_expiry(tmp_path):
+    with pytest.raises(ValueError, match="finite epoch timestamp"):
+        run_pipeline(
+            tmp_path / "nan-deadline.json",
+            ["o/r#1"],
+            **callbacks(),
+            capacity_fn=lambda: {},
+            deadline=float("nan"),
+        )
 
 
 class FakeRoundDeadlineExhausted(TimeoutError):
