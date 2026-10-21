@@ -157,6 +157,24 @@ def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monk
             }
         return api_base(endpoint, **kwargs)
 
+    transport_diagnostics = []
+    real_gh_run = gh_capacity.gh_run
+
+    def traced_gh_run(args, **kwargs):
+        runner = kwargs["runner"]
+
+        def traced_runner(*runner_args, **runner_kwargs):
+            try:
+                result = runner(*runner_args, **runner_kwargs)
+            except Exception as exc:
+                transport_diagnostics.append(f"{type(exc).__name__}: {exc}")
+                raise
+            transport_diagnostics.append(f"returncode={result.returncode}")
+            return result
+
+        return real_gh_run(args, **{**kwargs, "runner": traced_runner})
+
+    monkeypatch.setattr(gh_capacity, "gh_run", traced_gh_run)
     packet = dispatcher.collect_native_evidence(
         # This exercises successful owned-process/archive transport, not its
         # timeout boundary. Leave room for instrumented parallel CI scheduling;
@@ -168,7 +186,12 @@ def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monk
     )
     assert closer_evidence.validate_packet(packet)
     ci = packet["sections"]["ci_artifacts"]
-    diagnostic = json.dumps(ci, ensure_ascii=False, sort_keys=True, indent=2)
+    diagnostic = json.dumps(
+        {"section": ci, "transport": transport_diagnostics},
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+    )
     assert ci["status"] == "complete", diagnostic
     assert ci["content"]["retrieval_status"] == "complete", diagnostic
     # Retrieval is complete, while required-check topology is still unknown.

@@ -31,8 +31,11 @@ def host(tmp_path, monkeypatch):
     modules = tmp_path / "modules"
     source = Path(campaign.__file__).parent
     modules.mkdir(parents=True)
-    for name in campaign.module_closure(source, campaign.PINNED_MODULES):
-        shutil.copy2(source / name, modules / name)
+    # Match the original checkout fixture's Python module set in either layout.
+    # make_manifest still discovers/seals the production closure below; repeating
+    # that AST walk merely to copy the fixture adds seconds to every host case.
+    for module in source.glob("*.py"):
+        shutil.copy2(module, modules / module.name)
     observations = tmp_path / "native-observations"
     observations.mkdir(mode=0o700)
     campaigns = tmp_path / "campaigns"

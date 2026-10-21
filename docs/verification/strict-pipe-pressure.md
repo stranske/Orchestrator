@@ -44,9 +44,16 @@ tests and docs. Repeating that copy for native qualification cases exhausted
 the CI job's disk quota. The retained local failed run had 724248 synthetic
 entries and about 19.5 GB of logical fixture data.
 
-The fixture now copies `campaign.module_closure(source, campaign.PINNED_MODULES)`,
-the existing production runtime closure. Manifest creation still seals that
-closure. A regression builds a flat source containing unrelated test/doc payloads,
-executes the real fixture, and verifies both exact closure membership and the
-sealed manifest. This reduces repeated fixture payload without dropping runtime
-modules, changing qualification assertions, or reducing the release space guard.
+The fixture now copies top-level Python modules, preserving the original checkout
+fixture's source module set in either layout. Manifest creation still discovers
+and seals the production runtime closure. The flat-layout regression executes
+the real fixture and verifies both module membership and the sealed manifest.
+Unrelated test/doc payloads are excluded.
+
+Computing the production closure again merely to choose files duplicated an AST
+walk for every host fixture (1.7 seconds per host locally). The first corrected
+flat CI completed all 7886 pytest cases with zero failures and no quota error,
+but hit its unchanged 25-minute job deadline before finishing verification.
+Copying top-level Python files avoids that redundant walk while keeping every
+runtime module, the existing manifest closure proof, qualification assertions,
+and the release space guard. No timeout or assertion is relaxed.
