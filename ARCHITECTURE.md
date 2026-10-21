@@ -25,6 +25,32 @@ deduplication and the existing source-closure actor retain authority. Cheap outp
 is advisory and cannot become a trusted disposition. A separate pipeline receipt
 preserves any legacy queue state during migration.
 
+`collect_native_evidence` exposes the same capped artifact-download and complete
+review-pagination bindings used by PREPARE. Standalone collection therefore uses
+the production transport contract rather than treating omitted callbacks as
+missing task evidence. The sealed Runtime includes string-invoked merge and
+frontend-verification entrypoints plus their import dependencies; unavailable
+external browser helpers still refuse their checks.
+
+The exact registered finite scoped production callbacks use observation-purpose
+scope validation at target admission, PREPARE and INTERPRET. Historical possible
+effect overlap is retained as evidence rather than a pre-reasoning refusal;
+snapshot integrity/freshness, complete aliases, global corruption, live resource
+locks, ownership, pools and unresolved current-shard barriers still refuse unsafe
+admission. ACT, exception repair and reconciliation retain effect-purpose
+historical conflict checks. Generic and legacy callbacks do not receive this
+observation policy; no old UNKNOWN is cleared or replayed.
+
+Finite INTERPRET uses explicit `data_only=True`: a qualified Claude binary
+disables tools and customizations, receives self-contained validated packet content
+through the owned stdin transport, and retains normal profile, process and result
+evidence. Unsupported binaries/providers refuse this opt-in before provisioning;
+normal offloads are unchanged. Missing or contradictory evidence is assessment
+context, with explicit context omissions rather than a false inspection claim.
+Invalid or cross-target packets still refuse model admission. Deterministic
+wait/complete/verification decisions retain their existing native routes, and no
+model output grants acceptance or effect authority. Legacy readiness is unchanged.
+
 Before low or exception workers run, a deterministic evidence-readiness rail
 checks the retained packet, delivery identity, original sources and the raw inputs
 for the requested action. Known collection gaps become typed pending dependencies

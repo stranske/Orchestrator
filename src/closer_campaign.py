@@ -1762,6 +1762,10 @@ PINNED_MODULES = (
     "closer_release.py",
     "claims.py",
     "closer_dispatcher.py",
+    # Subprocess entrypoints are not Python imports. Root the existing terminal
+    # guard and runtime-AC UI helper so their imports are sealed by module_closure.
+    "merge_guard.py",
+    "frontend_verify.py",
 )
 
 

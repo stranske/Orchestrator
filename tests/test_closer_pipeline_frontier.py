@@ -11,12 +11,15 @@ import closer_queue
 from closer_frontier_policy import action_identity, make_frontier
 
 
-def _hold_pipeline_lock(path, ready):
+def _hold_pipeline_lock(path, ready, release=None):
     lock_path = str(path) + ".lock"
     with open(lock_path, "a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         ready.set()
-        time.sleep(0.5)
+        if release is None:
+            time.sleep(0.5)
+        else:
+            release.wait(timeout=5)
 
 
 def _frontier_with_timeout(target, timeout=0.1):
@@ -812,35 +815,42 @@ def test_finite_state_lock_timeout_after_action_intent_never_replays(tmp_path):
     frontier, timeout = _frontier_with_timeout(target)
     calls = []
     holder_ready = multiprocessing.Event()
+    holder_release = multiprocessing.Event()
     holder = None
 
     def act(*_args):
         nonlocal holder
         calls.append("act")
-        holder = multiprocessing.Process(target=_hold_pipeline_lock, args=(path, holder_ready))
+        holder = multiprocessing.Process(
+            target=_hold_pipeline_lock, args=(path, holder_ready, holder_release)
+        )
         holder.start()
         assert holder_ready.wait(timeout=2)
         return {"status": "completed", "target_complete": True}
 
-    started = time.monotonic()
-    receipt = cp._run_pipeline_finite(
-        path,
-        [target],
-        frontier_target=target,
-        finite_frontier=frontier,
-        request_timeout_seconds=timeout,
-        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
-        prepare=lambda _target, _ctx: {"revision": "rev-1"},
-        interpret=lambda _target, _ctx: {"substantive_needs": []},
-        exception=lambda _target, _ctx: {"route": "normal"},
-        act=act,
-        now=time.time,
-    )
-    elapsed = time.monotonic() - started
-    assert holder is not None
-    holder.join(timeout=2)
-    assert holder.exitcode == 0
-    assert elapsed < 0.4
+    try:
+        receipt = cp._run_pipeline_finite(
+            path,
+            [target],
+            frontier_target=target,
+            finite_frontier=frontier,
+            request_timeout_seconds=timeout,
+            capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+            prepare=lambda _target, _ctx: {"revision": "rev-1"},
+            interpret=lambda _target, _ctx: {"substantive_needs": []},
+            exception=lambda _target, _ctx: {"route": "normal"},
+            act=act,
+            now=time.time,
+        )
+        assert holder is not None
+        # Prove the request returns while the other process still owns the lock.
+        # A wall-clock cutoff also counts unrelated CI process scheduling delay.
+        assert holder.is_alive()
+    finally:
+        holder_release.set()
+        if holder is not None:
+            holder.join(timeout=2)
+    assert holder is not None and holder.exitcode == 0
     assert calls == ["act"]
     assert receipt["targets"][target]["status"] == "unknown"
     assert receipt["stop_valid"] is False

@@ -352,6 +352,14 @@ def pinned_dir(tmp_path, dispatcher="import sys\nif __name__ == '__main__': sys.
             "    return cc.run_dispatcher(command, timeout=cfg.get('worker_timeout', 120), apply=True, runner=runner)\n"
         )
     (d / "closer_dispatcher.py").write_text(dispatcher)
+    # This harness deliberately substitutes the dispatcher. Declare its helper
+    # roots too, but refuse to execute them; real packaged helpers are exercised
+    # by test_closer_packaged_merge_entry against the actual materialized tree.
+    for name in ("merge_guard.py", "frontend_verify.py"):
+        (d / name).write_text(
+            "if __name__ == '__main__':\n"
+            "    raise SystemExit('offline campaign fixture cannot execute native helpers')\n"
+        )
     return d
 
 
