@@ -1082,13 +1082,18 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
     return {**value, "snapshot_sha256": _digest(value)}
 
 
-def scope_problem(snapshot: dict, target: str, resource_keys) -> str | None:
+def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect") -> str | None:
     """Check complete prepared aliases; never interpret missing scope as disjoint.
 
     The integrator must prove inventory completeness from its retained prepared
     snapshot (including configured workspaces), not from this iterable alone.
+    Observation permits reasoning about historical overlap, not effects or a
+    replay of an unresolved target shard. Its caller must separately enforce the
+    production finite callback contract and hold the same live resource locks.
     """
     try:
+        if purpose not in {"effect", "observation"}:
+            return "invalid_scope_purpose"
         if (
             snapshot.get("schema") != SCHEMA
             or snapshot.get("snapshot_sha256")
@@ -1132,13 +1137,23 @@ def scope_problem(snapshot: dict, target: str, resource_keys) -> str | None:
         )
         if not mapped.issubset(keys):
             return "incomplete_resource_inventory"
+        if purpose == "observation":
+            from closer_resources import scoped_root, shard_dir
+
+            own_shard = str(
+                shard_dir(scoped_root(snapshot["state_path"]), canonical) / "state.json"
+            )
+            if any(item.get("source_path") == own_shard for item in snapshot["items"]):
+                return "unresolved_target_shard"
         for key in keys:
             kind, value = key.split(":", 1)
             if kind in {"pr", "issue", "branch"}:
                 linked_repo = value.split("#")[0] if kind != "branch" else value.split("@")[0]
                 if "repo:" + linked_repo not in keys:
                     return "incomplete_resource_inventory"
-            if any(resource_overlap(key, held) for held in snapshot["quarantine_keys"]):
+            if purpose == "effect" and any(
+                resource_overlap(key, held) for held in snapshot["quarantine_keys"]
+            ):
                 return "quarantined_resource:" + key
         return None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):

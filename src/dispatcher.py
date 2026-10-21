@@ -2780,6 +2780,7 @@ def offload(
     finite_frontier_id: str | None = None,
     finite_frontier_target: str | None = None,
     process_finished_callback=None,
+    data_only: bool = False,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2826,6 +2827,29 @@ def offload(
     subject. A registered `research_round` supplies its own subject and wins. With neither, the run
     stays unkeyed and its subject falls back to `offload:<cwd>`, which pools every run from one
     directory; that is a statement that nothing named the work, never a guess at it."""
+    # This opt-in is checked before any workspace, log, telemetry or provider work.
+    if type(data_only) is not bool:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": "data_only must be boolean",
+        }
+    if data_only:
+        problem = adapters.data_only_problem(agent, mode)
+        if problem is None and max_network_retries not in (None, 0):
+            problem = "data-only transport forbids automatic retries"
+        if problem:
+            return {
+                "agent": agent,
+                "exit": 2,
+                "output": "",
+                "run_id": None,
+                "error": problem,
+                "unsupported_assessment_tool_boundary": True,
+            }
+        max_network_retries = 0
     # KILL SWITCH. Added 2026-08-21 because the admission gate was literally right: nothing could
     # stop the fleet's most-used capability (~196 runs/week) without a code change. That is not
     # theoretical -- on 2026-08-08 the gemini model pin rotted and EVERY offload to that seat exited
@@ -2962,11 +2986,15 @@ def offload(
             "outcome_uncertain": False,
         }
     prepared_prompt = (
-        _offload_prompt(prompt, run_cwd, agent, timeout=timeout)
-        if request_deadline_mono is not None
-        else _offload_prompt(prompt, run_cwd, agent)
+        prompt
+        if data_only
+        else (
+            _offload_prompt(prompt, run_cwd, agent, timeout=timeout)
+            if request_deadline_mono is not None
+            else _offload_prompt(prompt, run_cwd, agent)
+        )
     )
-    if relocated:
+    if relocated and not data_only:
         prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
     profile = execution_profiles.get_profile(profile_id) if profile_id else automatic_profile
     if profile is None:
@@ -3010,7 +3038,7 @@ def offload(
     # out of bash's ``-lc`` argument and the provider's argv while leaving the established compact
     # print-mode transport untouched. Other adapters retain their qualified transport until their
     # own stdin protocol is covered by an equivalent regression.
-    prompt_via_stdin = (
+    prompt_via_stdin = data_only or (
         agent == "gemini"
         and len(prepared_prompt.encode("utf-8")) > GEMINI_STREAM_PROMPT_THRESHOLD_BYTES
     )
@@ -3027,6 +3055,7 @@ def offload(
             profile=profile,
             transport="offload",
             prompt_via_stdin=prompt_via_stdin,
+            **({"data_only": True} if data_only else {}),
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
@@ -3045,6 +3074,7 @@ def offload(
                 else None
             ),
             prompt_via_stdin=prompt_via_stdin,
+            **({"data_only": True} if data_only else {}),
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
@@ -3081,19 +3111,30 @@ def offload(
     wrapped = (
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )
-    stream_prompt = adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
-    if agent == "gemini":
+    stream_prompt = (
+        prepared_prompt
+        if data_only
+        else adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
+    )
+    if agent == "gemini" or data_only:
         content_bytes = prepared_prompt.encode("utf-8")
         transport_payload = stream_prompt if stream_prompt is not None else prepared_prompt
         transport_bytes = transport_payload.encode("utf-8")
         request_metadata = {
             "transport": (
-                "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
+                "claude-data-only-text-stdin"
+                if data_only
+                else "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
             ),
             "content_utf8_bytes": len(content_bytes),
             "content_sha256": hashlib.sha256(content_bytes).hexdigest(),
             "transport_utf8_bytes": len(transport_bytes),
             "transport_sha256": hashlib.sha256(transport_bytes).hexdigest(),
+            **(
+                {"data_only": True, "cli_sha256": adapters.DATA_ONLY_CLAUDE_SHA256}
+                if data_only
+                else {}
+            ),
         }
     else:
         request_metadata = None
@@ -3398,6 +3439,8 @@ def offload(
                 held["cleanup_errors"] = cleanup_errors
             raise _ProviderResultRetentionPending(held) from exc
 
+    data_only_cleanup_errors = []
+
     def _run_offload_attempt() -> dict:
         # `nonlocal`, because the model this attempt observes must reach `_record_complete` in the
         # ENCLOSING scope. Without it the assignment below made a local that the completion never
@@ -3408,13 +3451,37 @@ def offload(
         error: str | None
         attempt_stderr = ""
         stream_path: Path | None = None
+        stream_identity = None
 
         def _cleanup_stream() -> None:
             if stream_path is not None:
                 try:
                     stream_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except OSError as error:
+                    if data_only:
+                        # A failed unlink must not silently leave the input behind.
+                        # Scrub only our original regular inode; never a replacement.
+                        scrubbed = False
+                        try:
+                            fd = os.open(stream_path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                            try:
+                                info = os.fstat(fd)
+                                if (info.st_dev, info.st_ino) != stream_identity:
+                                    raise OSError("private input inode changed")
+                                os.ftruncate(fd, 0)
+                                os.fsync(fd)
+                                scrubbed = True
+                            finally:
+                                os.close(fd)
+                        except OSError:
+                            pass
+                        data_only_cleanup_errors.append(
+                            {
+                                "error": type(error).__name__,
+                                "input_scrubbed": scrubbed,
+                                "path": str(stream_path),
+                            }
+                        )
 
         try:
             attempt_wrapped = wrapped
@@ -3422,11 +3489,19 @@ def offload(
                 # mkstemp creates mode 0600. The shell only receives this controlled path as a
                 # redirection target, so prompt bytes never become shell syntax or argv bytes.
                 fd, raw_path = tempfile.mkstemp(
-                    prefix=f"offload-prompt.{agent}.", suffix=".ndjson", dir=DISPATCH_LOG_DIR
+                    prefix=f"offload-prompt.{agent}.",
+                    suffix=".txt" if data_only else ".ndjson",
+                    dir=DISPATCH_LOG_DIR,
                 )
                 stream_path = Path(raw_path)
+                info = os.fstat(fd)
+                stream_identity = (info.st_dev, info.st_ino)
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as prompt_file:
                     prompt_file.write(stream_prompt)
+            if data_only:
+                problem = adapters.data_only_problem(agent, mode)
+                if problem or adapters._data_only_claude_binary() != argv[0]:
+                    raise ValueError(problem or "data-only CLI identity changed before dispatch")
             if attempt_started_callback is not None:
                 _notify_attempt(attempt_started_callback, {"run_id": run_id, "agent": agent})
         except BaseException:
@@ -3559,7 +3634,7 @@ def offload(
                 ),
             }
             out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
-            if turn_uncertain:
+            if turn_uncertain or data_only:
                 out.update(
                     {
                         "outcome_status": "uncertain",
@@ -3614,6 +3689,13 @@ def offload(
                 "cwd": str(run_cwd),
                 "process_cwd": str(proc_cwd),
             }
+            if data_only:
+                interrupted.update(
+                    outcome_uncertain=True,
+                    outcome_status="uncertain",
+                    retry_safe=False,
+                    request_metadata=request_metadata,
+                )
             try:
                 _retain_attempt_result(interrupted)
                 if cleanup_errors := _cleanup_result_artifacts():
@@ -3727,7 +3809,7 @@ def offload(
             )
         # The large-prompt transport uses agy's matching NDJSON output. Preserve the existing
         # offload return contract by handing callers its final text response, as print mode does.
-        if prompt_via_stdin:
+        if prompt_via_stdin and agent == "gemini":
             response = adapters.gemini_stream_response(proc.stdout or "")
             proc = subprocess.CompletedProcess(
                 getattr(proc, "args", argv),
@@ -3769,7 +3851,7 @@ def offload(
         if raw_exit != 0:
             error = (
                 "Gemini stream has no final string response"
-                if prompt_via_stdin and response is None
+                if prompt_via_stdin and agent == "gemini" and response is None
                 else f"agent exited {raw_exit}"
             )
         else:
@@ -3844,6 +3926,17 @@ def offload(
         attempt_started = time.time()
         try:
             out = _run_offload_attempt()
+            if data_only:
+                out["request_metadata"] = request_metadata
+                if data_only_cleanup_errors:
+                    out.update(
+                        raw_exit=out.get("raw_exit", out.get("exit")),
+                        exit=70,
+                        error="data-only private input cleanup failed",
+                        cleanup_errors=data_only_cleanup_errors,
+                    )
+                if out.get("exit") != 0:
+                    out.update(outcome_uncertain=True, outcome_status="uncertain", retry_safe=False)
             _retain_attempt_result(out)
         except _ProviderResultRetentionPending as exc:
             # Provider effects already happened: no callback, enrichment or retry.

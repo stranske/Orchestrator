@@ -2330,8 +2330,13 @@ def run_scoped(
     def check_scope_locked(target, stage, keys, context=None, refusal=None):
         import closer_quarantine
 
+        purpose = (
+            "observation"
+            if finite_frontier is not None and stage in {"target_admission", "prepare", "interpret"}
+            else "effect"
+        )
         snapshot = closer_quarantine.scope_snapshot(state_path, workspaces=quarantine_workspaces)
-        problem = closer_quarantine.scope_problem(snapshot, target, keys)
+        problem = closer_quarantine.scope_problem(snapshot, target, keys, purpose=purpose)
         # Unrelated shards can commit while we hold our aliases. Retry only the
         # read-only census, never a callback, when that invalidates its hash.
         for _ in range(2):
@@ -2340,7 +2345,7 @@ def run_scoped(
             snapshot = closer_quarantine.scope_snapshot(
                 state_path, workspaces=quarantine_workspaces
             )
-            problem = closer_quarantine.scope_problem(snapshot, target, keys)
+            problem = closer_quarantine.scope_problem(snapshot, target, keys, purpose=purpose)
         problem = refusal or problem
         if (
             problem is None
@@ -2358,6 +2363,22 @@ def run_scoped(
             "round_id": round_id,
             "target": target,
             "stage": stage,
+            "purpose": purpose,
+            "historical_overlaps": {
+                "candidate_keys": sorted(
+                    key
+                    for key in keys
+                    if any(
+                        closer_quarantine.resource_overlap(key, held)
+                        for held in snapshot["quarantine_keys"]
+                    )
+                ),
+                "quarantine_keys": sorted(
+                    held
+                    for held in snapshot["quarantine_keys"]
+                    if any(closer_quarantine.resource_overlap(key, held) for key in keys)
+                ),
+            },
             "keys": keys,
             "snapshot": snapshot,
             "admitted": problem is None,

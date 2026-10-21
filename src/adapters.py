@@ -17,6 +17,7 @@ Simple/legible (design §11). `--selftest` validates command construction offlin
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import re
@@ -1798,6 +1799,71 @@ def apply_write_boundary(
     return [SANDBOX_EXEC, "-p", seatbelt_write_profile(protect, allow), *out]
 
 
+# The complete data-only controls below were inspected in this installed CLI's
+# embedded help. An upgrade must be requalified; unknown flags are not a tool fence.
+DATA_ONLY_CLAUDE_SHA256 = "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+
+
+def _data_only_claude_binary() -> str:
+    name = shutil.which("claude")
+    if not name:
+        raise ValueError("data-only Claude CLI is absent")
+    path = Path(name).resolve(strict=True)
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 256 * 1024 * 1024:
+        raise ValueError("data-only Claude CLI is not a bounded regular binary")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        remaining = before.st_size
+        while remaining:
+            chunk = stream.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                raise ValueError("data-only Claude CLI changed during qualification")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if stream.read(1):
+            raise ValueError("data-only Claude CLI changed during qualification")
+        opened = os.fstat(stream.fileno())
+    after = path.stat()
+
+    def identity(info):
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+        )
+
+    if (
+        identity(before) != identity(opened)
+        or identity(opened) != identity(after)
+        or digest.hexdigest() != DATA_ONLY_CLAUDE_SHA256
+    ):
+        raise ValueError("data-only Claude CLI controls are not qualified for this binary")
+    return str(path)
+
+
+def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
+    """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
+
+    Model/effort/profile authorization remains the caller's normal responsibility.
+    Unsupported here does not declare the provider unavailable for ordinary work.
+    """
+    if mode != "assess":
+        return "data-only transport requires explicit assess mode"
+    if agent != "claude":
+        return f"data-only tool boundary unsupported for {agent}"
+    try:
+        _data_only_claude_binary()
+    except (OSError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 def build_command(
     agent: str,
     prompt: str,
@@ -1814,6 +1880,7 @@ def build_command(
     prompt_via_stdin: bool = False,
     prompt_file: str | Path | None = None,
     write_roots: list[str] | None = None,
+    data_only: bool = False,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
 
@@ -1828,6 +1895,14 @@ def build_command(
     under workspace-write then also gets exactly the git paths that needs
     (`codex_worktree_git_roots`). Offloads are told never to commit, so they never pass it.
     """
+    data_only_binary = None
+    if data_only:
+        problem = data_only_problem(agent, mode)
+        if problem:
+            raise ValueError(problem)
+        if transport != "offload" or not prompt_via_stdin or prompt:
+            raise ValueError("data-only transport requires a self-contained stdin offload")
+        data_only_binary = _data_only_claude_binary()
     selected_profile = execution_profiles.get_profile(profile) if profile is not None else None
     if selected_profile:
         if selected_profile["agent"] != agent:
@@ -1902,7 +1977,28 @@ def build_command(
             cmd += ["--output-last-message", out_file]
         return cmd + [prompt]
     if agent == "claude":
-        cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions"]
+        cmd = (
+            [
+                data_only_binary,
+                "-p",
+                "--input-format",
+                "text",
+                "--safe-mode",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                '{"mcpServers":{}}',
+                "--setting-sources",
+                "",
+                "--settings",
+                '{"disableAllHooks":true}',
+                "--disable-slash-commands",
+                "--no-session-persistence",
+            ]
+            if data_only
+            else ["claude", "-p", prompt, "--dangerously-skip-permissions"]
+        )
         model = requested_model or _tier_model("claude", mode)
         if model:
             cmd += ["--model", model]

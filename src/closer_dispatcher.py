@@ -2482,7 +2482,9 @@ def _qualified_capacity(report, available_profiles):
     }
 
 
-def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=False):
+def _pipeline_low_route(
+    *, load=None, unavailable_profiles=None, with_status=False, data_only=False
+):
     """Choose a currently usable low-effort profile through the existing router."""
     load = load if load is not None else {}
     import execution_profiles
@@ -2498,6 +2500,7 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
         eligible = set()
         available_profiles = {}
         busy_unfailed_profile = False
+        unsupported_assessment = False
         for agent, row in report["agents"].items():
             # Vibe is approved for this bounded lane; Aider is explicitly not.
             # Keep this exclusion local to closer routing rather than changing
@@ -2521,6 +2524,12 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
                     for pool in p.get("capacity_pool_ids", [])
                 )
             ]
+            if data_only and profiles:
+                import adapters
+
+                if adapters.data_only_problem(agent, "assess"):
+                    unsupported_assessment = True
+                    profiles = []
             unfailed_profiles = profiles
             profiles = [
                 p
@@ -2535,7 +2544,15 @@ def _pipeline_low_route(*, load=None, unavailable_profiles=None, with_status=Fal
                 eligible.add(agent)
                 available_profiles[agent] = profiles
         if not eligible:
-            status = "busy" if busy_unfailed_profile else "exhausted"
+            status = (
+                "busy"
+                if busy_unfailed_profile
+                else (
+                    "unsupported_assessment_tool_boundary"
+                    if unsupported_assessment
+                    else "exhausted"
+                )
+            )
             return (None, status) if with_status else None
         pick = router.select_agent(
             "closer_interpret",
@@ -2678,6 +2695,27 @@ def _release_route_load(route, load):
         _PIPELINE_ROUTE_CONDITION.notify_all()
 
 
+class AssessmentTransportUnavailable(RuntimeError):
+    """No qualified tool-free transport, distinct from exhausted worker capacity."""
+
+
+def assessment_transport_pending(target, revision):
+    return {
+        "status": "pending",
+        "pending_kind": "external_event",
+        "next_trigger": "qualified data-only assessment transport becomes available",
+        "pending_evidence": {
+            "event_id": f"assessment-tool-boundary:{target}:{revision}",
+            "target": target,
+            "revision": revision,
+            "reason": "unsupported_assessment_tool_boundary",
+        },
+        "classification": "assessment_transport_unavailable",
+        "substantive_needs": [],
+        "authority": False,
+    }
+
+
 def _execute_profile_route(
     route,
     invoke,
@@ -2689,6 +2727,7 @@ def _execute_profile_route(
     repair=False,
     finite_frontier=None,
     frontier_target=None,
+    data_only=False,
 ):
     """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
 
@@ -2784,8 +2823,15 @@ def _execute_profile_route(
             load=load,
             unavailable_profiles=excluded,
             with_status=True,
-            **({"repair": repair} if lane != "low" else {}),
+            **({"repair": repair} if lane != "low" else {"data_only": True} if data_only else {}),
         )
+        if (
+            route is None
+            and lane == "low"
+            and data_only
+            and _status == "unsupported_assessment_tool_boundary"
+        ):
+            raise AssessmentTransportUnavailable(_status)
         if route and route["profile_id"] in excluded:
             _release_route_load(route, load)
             raise closer_resources.ResourceBlocked("router returned an excluded execution profile")
@@ -2948,6 +2994,303 @@ def _legacy_operation_dependency(state_path, target, snapshot):
             "reconcile it in the original closer queue"
         )
     return None
+
+
+def collect_native_evidence(
+    snapshot, gh, retained_dir, *, previous=None, deadline, dispositions=None, action=None
+):
+    """Collect with the production artifact and review bindings, without queue actions.
+
+    ``deadline`` is the caller's monotonic request deadline. This is the same
+    transport contract used by native PREPARE; an omitted binding is never
+    represented as missing user evidence by a standalone invocation.
+    """
+    snap = snapshot
+    target = snap.get("target")
+    if not isinstance(target, str) or not TARGET.fullmatch(target):
+        raise ValueError("native collection requires an exact target identity")
+
+    def artifact_fetch(artifact, *, deadline, max_bytes):
+        artifact_id = artifact.get("id") if isinstance(artifact, dict) else None
+        if not str(artifact_id or "").isdigit():
+            raise ValueError("artifact identity is invalid")
+        if int(artifact.get("size_in_bytes") or 0) > max_bytes:
+            raise ValueError("artifact exceeds configured archive byte cap")
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            raise TimeoutError("artifact download deadline reached")
+        throttle = gh_capacity.throttle("core", allow_wait_s=min(2, remaining))
+        if throttle.get("action") == "defer":
+            raise RuntimeError("GitHub core capacity deferred artifact retrieval")
+
+        def binary_runner(command, *, capture_output=True, text=True, timeout=None):
+            # Stream into a hard-capped buffer and kill the owned process group
+            # immediately if a lying/malformed artifact exceeds its allowance.
+            import closer_resources
+
+            try:
+                binding = closer_resources.finite_pool_current_binding()
+            except closer_resources.ResourceBlocked:
+                binding = None
+            try:
+                observation = None
+                if binding:
+                    observation = {
+                        "source": "trusted-artifact-runner/v1",
+                        "run_id": f"artifact-{time.monotonic_ns()}",
+                        "agent": "github",
+                        "profile_id": "github-artifact",
+                        "finite_frontier_id": binding["frontier_id"],
+                        "finite_frontier_target": binding["target"],
+                    }
+                    closer_resources.finite_pool_prepare_request(observation)
+                proc = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except BaseException:
+                if binding:
+                    closer_resources.finite_pool_no_start(observation)
+                raise
+            chunks, size = [], 0
+            try:
+                if binding:
+                    observation.update({"pid": proc.pid, "process_group": proc.pid})
+                    try:
+                        birth = subprocess.run(
+                            ["ps", "-p", str(proc.pid), "-o", "lstart="],
+                            capture_output=True,
+                            text=True,
+                            timeout=min(1, max(0.05, deadline - time.monotonic())),
+                            check=True,
+                        ).stdout.strip()
+                    except Exception:
+                        birth = ""
+                    if birth:
+                        observation["os_started"] = birth
+                        closer_resources.finite_pool_process_started(observation)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("artifact download deadline reached")
+                    ready, _, _ = select.select([proc.stdout.fileno()], [], [], remaining)
+                    if not ready:
+                        raise TimeoutError("artifact download deadline reached")
+                    # Use os.read after readiness. BufferedReader.read(n) can
+                    # continue waiting for n bytes after the pipe becomes quiet.
+                    chunk = os.read(proc.stdout.fileno(), min(65536, max_bytes + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError("artifact archive exceeds configured byte cap")
+                rc = proc.wait(timeout=max(0.05, min(5, deadline - time.monotonic())))
+                try:
+                    os.killpg(proc.pid, 0)
+                except ProcessLookupError:
+                    if observation:
+                        closer_resources.finite_pool_process_finished(observation)
+                else:
+                    raise RuntimeError("artifact transport descendants remained after completion")
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=0.25)
+                try:
+                    os.killpg(proc.pid, 0)
+                except ProcessLookupError:
+                    if observation:
+                        closer_resources.finite_pool_process_finished(observation)
+                except OSError:
+                    pass
+                else:
+                    # Leave the durable starting/uncertain reservation in place.
+                    pass
+                raise
+            finally:
+                if proc.stdout is not None:
+                    proc.stdout.close()
+            return SimpleNamespace(
+                returncode=rc, stdout=b"".join(chunks).decode("latin-1"), stderr=""
+            )
+
+        rc, body = gh_capacity.gh_run(
+            [
+                "api",
+                f"repos/{snap.get('pr_target', target).split('#', 1)[0]}/actions/artifacts/{artifact_id}/zip",
+            ],
+            resource="core",
+            timeout_s=max(1, min(25, int(remaining))),
+            runner=binary_runner,
+        )
+        if rc or not isinstance(body, str):
+            raise RuntimeError("artifact archive download failed")
+        data = body.encode("latin-1")
+        if len(data) > max_bytes:
+            raise ValueError("artifact archive exceeds configured byte cap")
+        return data
+
+    def review_threads_fetch(
+        snapshot, *, deadline, max_pages, max_threads, max_comments_per_thread
+    ):
+        review_target = snapshot.get("pr_target", target)
+        repo = review_target.split("#", 1)[0]
+        number = int(review_target.rsplit("#", 1)[1])
+        owner, name = repo.split("/", 1)
+        cursor = None
+        all_threads = []
+        complete = False
+        for _ in range(max_pages):
+            if time.monotonic() >= deadline:
+                break
+            after = ", after: " + json.dumps(cursor) if cursor else ""
+            query = (
+                "query { repository(owner:"
+                + json.dumps(owner)
+                + ",name:"
+                + json.dumps(name)
+                + ") { "
+                "pullRequest(number:" + str(number) + ") { reviewThreads(first:100" + after + ") { "
+                "nodes { id isResolved isOutdated comments(first:100) { nodes { id body createdAt updatedAt author { login } } "
+                "pageInfo { hasNextPage hasPreviousPage endCursor } } } pageInfo { hasNextPage endCursor } } } } }"
+            )
+            data = gh.api("graphql", method="POST", fields={"query": query}, resource="graphql")
+            connection = (
+                ((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+            ).get("reviewThreads") or {}
+            nodes = connection.get("nodes") or []
+            for node in nodes:
+                comments = node.get("comments") or {}
+                comment_cursor = (comments.get("pageInfo") or {}).get("endCursor")
+                while (
+                    (comments.get("pageInfo") or {}).get("hasNextPage")
+                    and comment_cursor
+                    and len(comments.get("nodes") or []) < max_comments_per_thread
+                ):
+                    if time.monotonic() >= deadline:
+                        break
+                    comment_query = (
+                        "query { repository(owner:"
+                        + json.dumps(owner)
+                        + ",name:"
+                        + json.dumps(name)
+                        + ") { "
+                        "pullRequest(number:"
+                        + str(number)
+                        + ") { reviewThreads(first:100) { nodes { id comments(first:100,after:"
+                        + json.dumps(comment_cursor)
+                        + ") { nodes { id body createdAt updatedAt author { login } } "
+                        "pageInfo { hasNextPage hasPreviousPage endCursor } } } } } } }"
+                    )
+                    comments_doc = gh.api(
+                        "graphql",
+                        method="POST",
+                        fields={"query": comment_query},
+                        resource="graphql",
+                    )
+                    fetched = (
+                        ((comments_doc.get("data") or {}).get("repository") or {}).get(
+                            "pullRequest"
+                        )
+                        or {}
+                    ).get("reviewThreads") or {}
+                    match = next(
+                        (x for x in fetched.get("nodes", []) if x.get("id") == node.get("id")),
+                        None,
+                    )
+                    # A thread-specific query is required for pagination; if GraphQL's
+                    # first thread differs, preserve partial status rather than guessing.
+                    if not match:
+                        break
+                    next_comments = match.get("comments") or {}
+                    comments["nodes"] = (comments.get("nodes") or []) + (
+                        next_comments.get("nodes") or []
+                    )
+                    comments["pageInfo"] = next_comments.get("pageInfo") or {}
+                    comment_cursor = comments["pageInfo"].get("endCursor")
+                node["comments"] = comments
+            all_threads.extend(nodes[: max(0, max_threads - len(all_threads))])
+            page = connection.get("pageInfo") or {}
+            cursor = page.get("endCursor")
+            if page.get("hasNextPage") is not True:
+                complete = True
+                break
+            if not cursor:
+                break
+        return {
+            "threads": all_threads,
+            "complete": complete,
+            "has_next_page": not complete,
+            "end_cursor": cursor,
+        }
+
+    return closer_evidence.collect_evidence(
+        snap,
+        gh.api,
+        retained_dir,
+        previous=previous,
+        deadline=deadline,
+        dispositions=dispositions or {},
+        artifact_fetch=artifact_fetch,
+        review_threads_fetch=review_threads_fetch,
+        action=action,
+    )
+
+
+def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024):
+    """Carry validated available content, with explicit omissions, to a no-tools model.
+
+    A retained reference is provenance, never permission to read a file or evidence
+    that omitted bytes were inspected. Missing/oversize content remains unknown.
+    """
+    if not closer_evidence.validate_packet(packet):
+        raise ValueError("data-only evidence packet is invalid")
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("data-only context byte limit is invalid")
+    sections = packet["sections"]
+    names = list(
+        dict.fromkeys(
+            [
+                "source",
+                "native_merge_verifier",
+                "diff_files",
+                "ci_artifacts",
+                "review_conversations",
+                *sorted(sections),
+            ]
+        )
+    )
+    result = {
+        "schema": "closer-data-only-context/v1",
+        "readiness": readiness,
+        "content_limit_bytes": max_bytes,
+        "sections": {},
+    }
+    remaining = max_bytes
+    for name in names:
+        section = sections.get(name)
+        if not isinstance(section, dict):
+            continue
+        content = section.get("content")
+        encoded = json.dumps(content, ensure_ascii=False, sort_keys=True).encode()
+        row = {
+            k: section.get(k)
+            for k in ("status", "reason", "sha256", "provenance", "retained", "truncated")
+        }
+        row["content_bytes"] = len(encoded)
+        if len(encoded) <= remaining:
+            row["content"] = content
+            row["content_supplied"] = True
+            remaining -= len(encoded)
+        else:
+            row["content_supplied"] = False
+            row["context_gap"] = "content exceeds remaining assessment context; not inspected"
+        result["sections"][name] = row
+    return result
 
 
 def _run_staged_pipeline(args, targets, backend, deadline):
@@ -3607,243 +3950,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snap = {**snap, "execution_workspace": workspace_binding}
         assignment_row = backend.assignment_rows.get(target, {})
 
-        def artifact_fetch(artifact, *, deadline, max_bytes):
-            artifact_id = artifact.get("id") if isinstance(artifact, dict) else None
-            if not str(artifact_id or "").isdigit():
-                raise ValueError("artifact identity is invalid")
-            if int(artifact.get("size_in_bytes") or 0) > max_bytes:
-                raise ValueError("artifact exceeds configured archive byte cap")
-            remaining = deadline - time.monotonic()
-            if remaining < 1:
-                raise TimeoutError("artifact download deadline reached")
-            throttle = gh_capacity.throttle("core", allow_wait_s=min(2, remaining))
-            if throttle.get("action") == "defer":
-                raise RuntimeError("GitHub core capacity deferred artifact retrieval")
-
-            def binary_runner(command, *, capture_output=True, text=True, timeout=None):
-                # Stream into a hard-capped buffer and kill the owned process group
-                # immediately if a lying/malformed artifact exceeds its allowance.
-                import closer_resources
-
-                try:
-                    binding = closer_resources.finite_pool_current_binding()
-                except closer_resources.ResourceBlocked:
-                    binding = None
-                try:
-                    observation = None
-                    if binding:
-                        observation = {
-                            "source": "trusted-artifact-runner/v1",
-                            "run_id": f"artifact-{time.monotonic_ns()}",
-                            "agent": "github",
-                            "profile_id": "github-artifact",
-                            "finite_frontier_id": binding["frontier_id"],
-                            "finite_frontier_target": binding["target"],
-                        }
-                        closer_resources.finite_pool_prepare_request(observation)
-                    proc = subprocess.Popen(
-                        command,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                    )
-                except BaseException:
-                    if binding:
-                        closer_resources.finite_pool_no_start(observation)
-                    raise
-                chunks, size = [], 0
-                try:
-                    if binding:
-                        observation.update({"pid": proc.pid, "process_group": proc.pid})
-                        try:
-                            birth = subprocess.run(
-                                ["ps", "-p", str(proc.pid), "-o", "lstart="],
-                                capture_output=True,
-                                text=True,
-                                timeout=min(1, max(0.05, deadline - time.monotonic())),
-                                check=True,
-                            ).stdout.strip()
-                        except Exception:
-                            birth = ""
-                        if birth:
-                            observation["os_started"] = birth
-                            closer_resources.finite_pool_process_started(observation)
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise TimeoutError("artifact download deadline reached")
-                        ready, _, _ = select.select([proc.stdout.fileno()], [], [], remaining)
-                        if not ready:
-                            raise TimeoutError("artifact download deadline reached")
-                        # Use os.read after readiness. BufferedReader.read(n) can
-                        # continue waiting for n bytes after the pipe becomes quiet.
-                        chunk = os.read(proc.stdout.fileno(), min(65536, max_bytes + 1 - size))
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                        size += len(chunk)
-                        if size > max_bytes:
-                            raise ValueError("artifact archive exceeds configured byte cap")
-                    rc = proc.wait(timeout=max(0.05, min(5, deadline - time.monotonic())))
-                    try:
-                        os.killpg(proc.pid, 0)
-                    except ProcessLookupError:
-                        if observation:
-                            closer_resources.finite_pool_process_finished(observation)
-                    else:
-                        raise RuntimeError(
-                            "artifact transport descendants remained after completion"
-                        )
-                except BaseException:
-                    with contextlib.suppress(OSError):
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        proc.wait(timeout=0.25)
-                    try:
-                        os.killpg(proc.pid, 0)
-                    except ProcessLookupError:
-                        if observation:
-                            closer_resources.finite_pool_process_finished(observation)
-                    except OSError:
-                        pass
-                    else:
-                        # Leave the durable starting/uncertain reservation in place.
-                        pass
-                    raise
-                finally:
-                    if proc.stdout is not None:
-                        proc.stdout.close()
-                return SimpleNamespace(
-                    returncode=rc, stdout=b"".join(chunks).decode("latin-1"), stderr=""
-                )
-
-            rc, body = gh_capacity.gh_run(
-                [
-                    "api",
-                    f"repos/{snap.get('pr_target', target).split('#', 1)[0]}/actions/artifacts/{artifact_id}/zip",
-                ],
-                resource="core",
-                timeout_s=max(1, min(25, int(remaining))),
-                runner=binary_runner,
-            )
-            if rc or not isinstance(body, str):
-                raise RuntimeError("artifact archive download failed")
-            data = body.encode("latin-1")
-            if len(data) > max_bytes:
-                raise ValueError("artifact archive exceeds configured byte cap")
-            return data
-
-        def review_threads_fetch(
-            snapshot, *, deadline, max_pages, max_threads, max_comments_per_thread
-        ):
-            review_target = snapshot.get("pr_target", target)
-            repo = review_target.split("#", 1)[0]
-            number = int(review_target.rsplit("#", 1)[1])
-            owner, name = repo.split("/", 1)
-            cursor = None
-            all_threads = []
-            complete = False
-            for _ in range(max_pages):
-                if time.monotonic() >= deadline:
-                    break
-                after = ", after: " + json.dumps(cursor) if cursor else ""
-                query = (
-                    "query { repository(owner:"
-                    + json.dumps(owner)
-                    + ",name:"
-                    + json.dumps(name)
-                    + ") { "
-                    "pullRequest(number:"
-                    + str(number)
-                    + ") { reviewThreads(first:100"
-                    + after
-                    + ") { "
-                    "nodes { id isResolved isOutdated comments(first:100) { nodes { id body createdAt updatedAt author { login } } "
-                    "pageInfo { hasNextPage hasPreviousPage endCursor } } } pageInfo { hasNextPage endCursor } } } } }"
-                )
-                data = gh.api("graphql", method="POST", fields={"query": query}, resource="graphql")
-                connection = (
-                    ((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
-                ).get("reviewThreads") or {}
-                nodes = connection.get("nodes") or []
-                for node in nodes:
-                    comments = node.get("comments") or {}
-                    comment_cursor = (comments.get("pageInfo") or {}).get("endCursor")
-                    while (
-                        (comments.get("pageInfo") or {}).get("hasNextPage")
-                        and comment_cursor
-                        and len(comments.get("nodes") or []) < max_comments_per_thread
-                    ):
-                        if time.monotonic() >= deadline:
-                            break
-                        comment_query = (
-                            "query { repository(owner:"
-                            + json.dumps(owner)
-                            + ",name:"
-                            + json.dumps(name)
-                            + ") { "
-                            "pullRequest(number:"
-                            + str(number)
-                            + ") { reviewThreads(first:100) { nodes { id comments(first:100,after:"
-                            + json.dumps(comment_cursor)
-                            + ") { nodes { id body createdAt updatedAt author { login } } "
-                            "pageInfo { hasNextPage hasPreviousPage endCursor } } } } } } }"
-                        )
-                        comments_doc = gh.api(
-                            "graphql",
-                            method="POST",
-                            fields={"query": comment_query},
-                            resource="graphql",
-                        )
-                        fetched = (
-                            ((comments_doc.get("data") or {}).get("repository") or {}).get(
-                                "pullRequest"
-                            )
-                            or {}
-                        ).get("reviewThreads") or {}
-                        match = next(
-                            (x for x in fetched.get("nodes", []) if x.get("id") == node.get("id")),
-                            None,
-                        )
-                        # A thread-specific query is required for pagination; if GraphQL's
-                        # first thread differs, preserve partial status rather than guessing.
-                        if not match:
-                            break
-                        next_comments = match.get("comments") or {}
-                        comments["nodes"] = (comments.get("nodes") or []) + (
-                            next_comments.get("nodes") or []
-                        )
-                        comments["pageInfo"] = next_comments.get("pageInfo") or {}
-                        comment_cursor = comments["pageInfo"].get("endCursor")
-                    node["comments"] = comments
-                all_threads.extend(nodes[: max(0, max_threads - len(all_threads))])
-                page = connection.get("pageInfo") or {}
-                cursor = page.get("endCursor")
-                if page.get("hasNextPage") is not True:
-                    complete = True
-                    break
-                if not cursor:
-                    break
-            return {
-                "threads": all_threads,
-                "complete": complete,
-                "has_next_page": not complete,
-                "end_cursor": cursor,
-            }
-
         action, reason, eligible, trigger = backend.select(snap)
         if packet is not None and packet.get("collection_action") != action:
             packet = None
         if packet is None:
-            packet = closer_evidence.collect_evidence(
+            packet = collect_native_evidence(
                 snap,
-                gh.api,
+                gh,
                 retained_dir,
                 previous=previous_packet(target),
                 deadline=time.monotonic() + max(1, float(context["deadline"]) - time.time()),
                 dispositions=backend.dispositions.get(target, {}),
-                artifact_fetch=artifact_fetch,
-                review_threads_fetch=review_threads_fetch,
                 action=action,
             )
         snapshot_bytes = json.dumps(
@@ -4014,6 +4131,13 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "content"
         ) or {}
         admitted_snapshot, _packet = full_snapshot(prep)
+        data_only = finite_frontier is not None
+        if data_only and (
+            raw_packet is None
+            or raw_packet.get("target") != target
+            or raw_packet.get("head") != admitted_snapshot.get("head")
+        ):
+            raise RuntimeError("data-only interpretation requires a valid exact-target packet")
         dependency = (
             assignment_dependency(
                 args.assignment, target, expected_fingerprint=prep.get("assignment_fingerprint")
@@ -4068,6 +4192,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "next_trigger": (prep.get("proposal") or {}).get("next_trigger"),
             }
         prior_wait = durable_prior_inner_wait(target, prep, context)
+        readiness = None
         if prior_wait is None:
             readiness = closer_evidence.action_evidence_readiness(
                 admitted_snapshot,
@@ -4075,7 +4200,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 deterministic_action,
                 retained_dir=packet_evidence_root(prep),
             )
-            if not readiness["ready"]:
+            if not readiness["ready"] and not data_only:
                 return evidence_pending(target, prep, readiness)
         admission = backend.campaign_admission(
             target, admitted_snapshot, max(0, min(120, int(context["deadline"] - time.time())))
@@ -4109,6 +4234,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             load=route_load,
             unavailable_profiles=failed_low_profiles,
             with_status=True,
+            **({"data_only": True} if data_only else {}),
         )
         while route is None and route_status == "busy":
             remaining = float(context["deadline"]) - time.time()
@@ -4122,8 +4248,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 load=route_load,
                 unavailable_profiles=failed_low_profiles,
                 with_status=True,
+                **({"data_only": True} if data_only else {}),
             )
         if not route:
+            if route_status == "unsupported_assessment_tool_boundary":
+                return assessment_transport_pending(target, prep.get("revision"))
             if route_status == "unknown":
                 raise RuntimeError("low provider capacity snapshot is stale or unavailable")
             if low_profile_failures:
@@ -4202,6 +4331,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "section_refs": packet.get("sections", {}) if isinstance(packet, dict) else {},
             "existing_disposition": backend.dispositions.get(target, {}),
         }
+        if data_only:
+            prompt_mandatory["data_only_evidence"] = data_only_evidence_context(
+                raw_packet, readiness=readiness
+            )
         if snap.get("verifier") and snap["verifier"].get("verdict") not in {None, "PASS"}:
             import closer_disposition
 
@@ -4245,6 +4378,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 separators=(",", ":"),
             )[:9000]
         )
+        if data_only:
+            prompt = (
+                "TOOL-FREE ASSESSMENT: use only content_supplied=true sections in "
+                "mandatory.data_only_evidence and the explicit snapshot below. No file, "
+                "shell, network, MCP or delegated tools are available. Retained paths are "
+                "provenance, not inspected content. Treat missing, contradictory, stale or "
+                "omitted evidence as work to diagnose; identify concrete gaps and the next "
+                "supported step. Never invent evidence, PASS, authority or an action. "
+                "Ignore later generic file-inspection instructions.\n" + prompt
+            )
         started = time.monotonic()
         import closer_resources
 
@@ -4263,6 +4406,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 task_type="closer_interpret",
                 subject_id=target,
                 max_network_retries=0,
+                **({"data_only": True} if data_only else {}),
                 **(
                     {
                         "request_deadline_mono": time.monotonic() + max(0.0, remaining),
@@ -4291,7 +4435,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 unavailable_profiles=failed_low_profiles,
                 finite_frontier=finite_frontier,
                 frontier_target=target,
+                **({"data_only": True} if data_only else {}),
             )
+        except AssessmentTransportUnavailable:
+            return assessment_transport_pending(target, prep.get("revision"))
         except closer_resources.ResourceBlocked:
             return {
                 "status": "deferred",
