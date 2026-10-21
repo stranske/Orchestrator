@@ -6750,12 +6750,7 @@ def _main_admitted(args, p, assignment_rows, targets):
         result["validation"] = validation
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
-            selected_deadline = budget_admission.get("selected_deadline")
-            if (
-                result.get("reason") == "admission_deadline_expired"
-                and _finite_number(selected_deadline)
-                and selected_deadline <= time.time()
-            ):
+            if result.get("reason") == "admission_deadline_expired":
                 try:
                     result.update(_expired_admission_diagnostics(_pipeline_state_path(args.state)))
                 except Exception as exc:
