@@ -487,6 +487,18 @@ def _action_evidence_readiness(
                 or row["body_retained"].get("sha256") != row.get("body_sha256")
                 or row["body_retained"].get("bytes") != len(row["body"].encode())
                 or row.get("body_retained", {}).get("truncated") is not False
+                or (
+                    "title" in source
+                    and (
+                        row.get("title") != (source.get("title") or "")
+                        or row.get("title_sha256")
+                        != hashlib.sha256(row["title"].encode()).hexdigest()
+                        or not _retained_ref_valid(row.get("title_retained"))
+                        or row["title_retained"].get("sha256") != row.get("title_sha256")
+                        or row["title_retained"].get("bytes") != len(row["title"].encode())
+                        or row["title_retained"].get("truncated") is not False
+                    )
+                )
                 for row, source in zip(rows, sources)
             )
         ):
