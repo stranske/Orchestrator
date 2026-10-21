@@ -916,6 +916,35 @@ def test_runtime_writes_after_transfer_survive_switch_and_retry(tmp_path, monkey
     assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"
 
 
+def test_authored_review_installs_beside_retained_runtime_reports(tmp_path):
+    """A second generation must not ship authored evidence into runtime report storage."""
+    snapshot = _snapshot(tmp_path)
+    mirror = tmp_path / "live mirror"
+    reports = mirror / "docs" / "reports"
+    reports.mkdir(parents=True)
+    report = reports / "issue_completion_dashboard.md"
+    report.write_text("operator report\n")
+    expected = installer.snapshot_digest(snapshot)
+    assert installer.install(snapshot, mirror, expected) == 0
+    assert reports.is_symlink()
+    retained = reports.resolve()
+
+    relative = Path("docs/reviews/issue-837-review-recovery.md")
+    authored = paths.REPO_ROOT / relative
+    assert authored.is_file(), "authored review evidence must stay outside runtime docs/reports"
+    (snapshot / relative).parent.mkdir(parents=True)
+    (snapshot / relative).write_bytes(authored.read_bytes())
+    manifest = snapshot / ".docs-shipped.txt"
+    manifest.write_text(manifest.read_text() + relative.as_posix() + "\n")
+    generation = installer.generation_token(mirror)
+    expected = installer.snapshot_digest(snapshot)
+    assert installer.install(snapshot, mirror, expected, expected_generation=generation) == 0
+    assert installer.snapshot_digest(mirror) == expected
+    assert (mirror / relative).read_bytes() == authored.read_bytes()
+    assert reports.resolve() == retained
+    assert report.read_text() == "operator report\n"
+
+
 def test_new_runtime_leaf_in_mixed_directory_survives_publication_and_retry(tmp_path, monkeypatch):
     """Runtime-only files created during publication in a mixed deployment/runtime tree."""
     snapshot = _snapshot(tmp_path)
