@@ -28,7 +28,9 @@ from pathlib import Path
 from typing import Any
 
 import cadence_registry
+import features as feature_registry
 import feedback
+import paths
 
 ORCH = Path(__file__).resolve().parent
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
@@ -36,7 +38,9 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 # that moves ORCH_LOCAL_RUNTIME must drop it, because an explicit path wins over that default.
 LEDGER_PATH_ENV = "ORCH_CAPABILITIES_PATH"
 REG = Path(os.environ.get(LEDGER_PATH_ENV, LOCAL_RUNTIME / "capabilities.json"))
-FEATURES_REG = Path(os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json"))
+FEATURES_REG = Path(
+    os.environ.get("ORCH_FEATURES_PATH", paths.runtime_state_path("experiments", "features.json"))
+)
 SCHEMA_VERSION = 1
 GATED_TTL_DAYS = 90
 # Kinds the COMPILER emits and `capability_targets` can bind/roll back at runtime. This set is a
@@ -1372,6 +1376,17 @@ def _write_ledger_unlocked(path: Path, capabilities: dict[str, dict[str, Any]]) 
             os.unlink(tmp_name)
 
 
+def _feature_snapshot(path: Path) -> tuple[dict, dict]:
+    value = feature_registry.load(path, create=False)
+    # Hash the parsed snapshot actually consumed; do not reread a possibly newer file.
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return value, {
+        "source_path": str(path),
+        "source_json_digest": hashlib.sha256(encoded).hexdigest(),
+        "source_kind": "registry_or_builtin_defaults",
+    }
+
+
 def migrate_features_to_capabilities(
     features_path: Path = FEATURES_REG,
     caps_path: Path = REG,
@@ -1380,9 +1395,7 @@ def migrate_features_to_capabilities(
 ) -> dict[str, Any]:
     """Conservatively migrate feature names without inferring activation."""
     ts = _now() if now is None else now
-    features: dict[str, Any] = {}
-    if features_path.exists():
-        features = json.loads(features_path.read_text())
+    features, source_evidence = _feature_snapshot(features_path)
     capabilities: dict[str, dict[str, Any]] = {}
     for name, feature in features.items():
         cap = _blank_capability(name)
@@ -1393,6 +1406,7 @@ def migrate_features_to_capabilities(
                 "timestamp": ts,
                 "type": "migrated",
                 "source": "experiments/features.json",
+                **source_evidence,
                 "legacy_maturity": feature.get("maturity"),
                 "activation_inferred": False,
             }
@@ -2301,9 +2315,7 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
         return _parse_ledger_cached(path, raw)["capabilities"]
     with _locked(path):
         if not path.exists():
-            features: dict[str, Any] = {}
-            if FEATURES_REG.exists():
-                features = json.loads(FEATURES_REG.read_text())
+            features, source_evidence = _feature_snapshot(FEATURES_REG)
             now = _now()
             capabilities: dict[str, dict[str, Any]] = {}
             for name, feature in features.items():
@@ -2311,7 +2323,12 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
                 cap["status"] = "generated" if feature.get("maturity") == "hardened" else "observed"
                 cap["entrypoint"] = feature.get("module")
                 cap["event_history"].append(
-                    {"timestamp": now, "type": "migrated", "activation_inferred": False}
+                    {
+                        "timestamp": now,
+                        "type": "migrated",
+                        "activation_inferred": False,
+                        **source_evidence,
+                    }
                 )
                 capabilities[name] = cap
             expiry = now + GATED_TTL_DAYS * 86400

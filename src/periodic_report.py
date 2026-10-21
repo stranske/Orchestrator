@@ -37,14 +37,18 @@ import keepalive_shadow
 import langsmith_fetch
 import model_profile_trial
 import model_profile_trial_bridge
+import paths
 import redirect_shadow
+import research_scheduler
 import research_subjects
 import router
 import runtime_ac_flow_monitor
 from relearn_report import _task_report, priors_from_route_table
 
 ORCH = Path(__file__).resolve().parent
-HYPOTHESES_JSON = ORCH / "experiments" / "hypotheses.json"
+HYPOTHESES_JSON = Path(
+    os.environ.get("ORCH_HYP_PATH", paths.runtime_state_path("experiments", "hypotheses.json"))
+)
 DEFAULT_STAGE2_PLAN_JSON = Path(
     os.environ.get(
         "ORCH_KEEPALIVE_STAGE2_PLAN_JSON",
@@ -1435,7 +1439,7 @@ def _evidence_summary(window_days: int, min_gap_recurrence: int) -> dict:
 def _hypothesis_summary(path: Path | None = None) -> dict:
     path = path or HYPOTHESES_JSON
     try:
-        raw_items = json.loads(path.read_text())
+        raw_items = research_scheduler.load_hypotheses(path)
     except (OSError, json.JSONDecodeError):
         raw_items = []
     status_counts: dict[str, int] = {}
