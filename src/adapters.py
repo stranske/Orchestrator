@@ -2345,11 +2345,16 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
     muse runs on the owner's SUBSCRIPTION LOGIN, and `META_API_KEY` always overrides that login, so
     it never reaches a muse process: a COPY of the effective environment (the process env when none
     was supplied) without the key. The caller's mapping is never mutated. Every other agent's
-    environment is returned exactly as given, including None (inherit). The detached wrapper in
+    environment is returned as given unless a validated storage job owns native TMPDIR. The detached wrapper in
     `dispatcher._agent_runtime_prelude` does the same for the offload and delegate paths.
     """
+    from storage_lifecycle import owned_agent_tmpdir
+
+    owned_tmp = owned_agent_tmpdir(agent, env)
     if agent != "muse":
-        return env
+        if owned_tmp is None:
+            return env
+        return {**(os.environ if env is None else env), "TMPDIR": str(owned_tmp)}
     scrubbed = dict(os.environ if env is None else env)
     scrubbed.pop("META_API_KEY", None)
     runtime = AGENT_RUNTIME / "muse"
@@ -2371,7 +2376,7 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
             "XDG_CONFIG_HOME": str(runtime / ".config"),
             "XDG_STATE_HOME": str(runtime / ".local/state"),
             "XDG_DATA_HOME": str(runtime / ".local/share"),
-            "TMPDIR": str(runtime / "tmp"),
+            "TMPDIR": str(owned_tmp if owned_tmp is not None else runtime / "tmp"),
         }
     )
     return scrubbed
@@ -2558,7 +2563,22 @@ def dispatch(
     that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
     refuse_broad_workspace(agent, cwd)
-    process_env = agent_subprocess_env(agent, env)
+    from storage_lifecycle import StorageBlocked
+
+    try:
+        process_env = agent_subprocess_env(agent, env)
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "mode": mode,
+            "exit": 2,
+            "changed_files": False,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     muse_prompt = muse_prompt_file(prompt) if agent == "muse" else None
     try:
         cmd = build_command(
@@ -3265,7 +3285,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
     finally:
         globals()["HOME"], globals()["AGENT_RUNTIME"] = _saved_muse_home, _saved_muse_runtime
-    assert agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
+    _vibe_env = agent_subprocess_env("vibe", None)
+    assert _vibe_env is None or (
+        os.environ.get("ORCH_STORAGE_RUN_ROOT")
+        and Path(_vibe_env["TMPDIR"]).is_relative_to(Path(os.environ["ORCH_STORAGE_RUN_ROOT"]))
+    ), "owned storage changes only native TMPDIR"
     import json as _mj
     import tempfile as _mt
 

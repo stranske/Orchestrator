@@ -164,3 +164,29 @@ retained failure state, permission remnants and fresh available-byte receipts.
 The focused tiny integration/concurrency tests cover those contracts; no live
 large verifier or runtime installation is performed by this implementation task.
 Keep tested, integrated-in-source, merged and installed states separate.
+
+## Native agent temporary output
+
+A child carrying the supervisor's `ORCH_STORAGE_RUN_ROOT`, `ORCH_STORAGE_RUN_ID`,
+`ORCH_STORAGE_OWNER_TOKEN` and explicit shared `ORCH_STORAGE_STATE_DIR` routes native
+`TMPDIR` to `<owned-root>/tmp/native-tmp/<agent>`. The shared ownership validator checks
+private physical directories, the owner marker, active reservation/token/inode/device
+binding and per-agent directory identity before launch. The explicit ledger remains
+the same when strict verification redirects its ordinary runtime/state into staging.
+
+Only TMPDIR moves. Existing XDG caches, configuration, authentication, generated GH
+guards, canonical packets, logs and retained offload worktrees keep their current
+paths. An absent job context preserves the previous behavior. A partial, changed,
+uncertain or aliased context produces a named no-start refusal; Closer keeps that
+as recoverable pending work rather than inventing an uncertain provider execution.
+The existing supervisor's terminal group/open-file checks and retirement own this
+scratch. This does not add orphan adoption, expiry, permission repair or cleanup of
+shared native runtime directories. Direct launchers must pass their actual admitted
+job markers; setting TMPDIR alone does not establish native storage ownership.
+
+Terminal receipts also record `terminal_owned_footprint`: logical bytes, allocated
+bytes, entry count and unique inode count measured during retirement's existing
+mandatory filesystem scan, with hardlinks counted once. This is the owned tree at
+terminal inspection, not its peak, an exclusive growth attribution or a physical
+reclamation claim. Fresh `available_after` remains the physical-space observation;
+permission remnants and failed retirement remain explicitly recorded.
