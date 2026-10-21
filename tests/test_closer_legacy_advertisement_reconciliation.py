@@ -137,13 +137,21 @@ def test_expired_admission_plans_with_canonical_assignment_target(seeded, monkey
 
     monkeypatch.setattr(resources, "plan_legacy_reconciliation", record_plan)
     mixed = "OWNER/Repo#31"
+    mixed_assignment = "OWNER/Repo#31"
+    with pipeline._locked(seeded["path"]):
+        state = pipeline._load(seeded["path"])
+        run = state["runs"][seeded["run_id"]]
+        run["assignment"] = [mixed_assignment, "owner/other#667"]
+        run["targets"][mixed_assignment] = run["targets"].pop(seeded["target"])
+        pipeline._save(seeded["path"], state)
+    seeded["target"] = mixed_assignment
     for ad in seeded["ads"]:
         doc = json.loads(ad.read_bytes())
         doc["target"] = mixed
         resources._atomic_write(ad, doc)
     closer_dispatcher._expired_admission_diagnostics(seeded["path"])
     assert calls
-    assert calls[0]["target"] == resources.canonical_target(mixed)
+    assert calls[0]["target"] == mixed_assignment
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
