@@ -218,6 +218,13 @@ def test_no_grant_outside_a_linked_worktree(layout, tmp_path):
     missing = tmp_path / "gone" / "worktrees" / "x"
     assert adapters.codex_worktree_git_roots(pointing_at("gone", f"gitdir: {missing}\n")) == []
 
+    # A damaged linked-worktree metadata file is not evidence that it is safe to grant Codex
+    # write access to any git directory.  Decode failure must therefore fail closed.
+    corrupt = tmp_path / "common" / "worktrees" / "corrupt"
+    corrupt.mkdir(parents=True)
+    (corrupt / "commondir").write_bytes(b"\xff\xfe\x00")
+    assert adapters.codex_worktree_git_roots(pointing_at("corrupt", f"gitdir: {corrupt}\n")) == []
+
 
 def test_a_relative_gitdir_pointer_resolves_against_the_worktree(layout):
     absolute = Path(layout.gitdir_as_written)
