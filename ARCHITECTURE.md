@@ -25,6 +25,14 @@ deduplication and the existing source-closure actor retain authority. Cheap outp
 is advisory and cannot become a trusted disposition. A separate pipeline receipt
 preserves any legacy queue state during migration.
 
+An explicit historical evaluation entry reuses those same PREPARE and INTERPRET
+closures with a hash-pinned batch and original history as untrusted input. The
+`closer_evaluation.py` rail writes fresh advisory stage receipts while structurally
+omitting action, repair and reconciliation callbacks. It preserves provider
+accounting, shared capacity pools, permits, pauses and owned request boundaries;
+its results grant neither acceptance nor historical-fence release authority. See
+[historical evaluation](docs/CLOSER_HISTORICAL_EVALUATION.md).
+
 Before low or exception workers run, a deterministic evidence-readiness rail
 checks the retained packet, delivery identity, original sources and the raw inputs
 for the requested action. Known collection gaps become typed pending dependencies

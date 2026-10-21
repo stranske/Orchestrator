@@ -129,6 +129,11 @@ offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
 
 ## Important functionality (what actually runs, grouped by job)
 
+The local closer has an explicit [historical evaluation mode](docs/CLOSER_HISTORICAL_EVALUATION.md)
+that feeds pinned task and run evidence through its existing preparation and
+interpretation stages. It writes advisory receipts with action callbacks disabled;
+normal provider guards and historical uncertainty remain effective.
+
 Local `dispatcher.py delegate --review-loop` adds an independent review after the
 implementation writer exits. It checks local claims and every native reservation
 across PR heads, reviews the issue's Tasks/Acceptance Criteria and gate-clearing
