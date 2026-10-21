@@ -6,6 +6,7 @@ import sys
 import time
 
 import pytest
+from test_closer_reasoning_boundary import native_world as native_world
 
 import closer_dispatcher as dispatcher
 import closer_pipeline as pipeline
@@ -350,3 +351,174 @@ def test_bounded_run_reaps_child_when_start_publication_fails(tmp_path, monkeypa
     record = json.loads((root / "pools/github-api/slot-0.json").read_text())
     assert record["status"] == "resolved"
     assert record["resolution"] == "process_group_absent"
+
+
+def test_public_finite_reentry_reuses_packet_and_reaches_native_interpret(
+    native_world, monkeypatch, capsys
+):
+    """Public CLI -> real held row -> public CAS re-entry -> same production callbacks."""
+    import copy
+
+    import adapters
+
+    w = native_world
+    target = w.snapshot["target"]
+    monkeypatch.setattr(adapters, "data_only_problem", lambda *_: "fixture CLI absent")
+    assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
+    capsys.readouterr()
+    shard = resources.shard_dir(resources.scoped_root(w.ledger), target) / "state.json"
+    original_state = json.loads(shard.read_text())
+    original = original_state["frontiers"][w.frontier["frontier_id"]]["items"][target]
+    assert original["status"] == "held" and original["stage"] == "interpret"
+    assert original["results"]["interpret"]["classification"] == "assessment_transport_unavailable"
+    prepared = copy.deepcopy(original["results"]["prepare"])
+    packet = prepared["packet_ref"]
+    from pathlib import Path
+
+    packet_bytes = Path(packet["path"]).read_bytes()
+    assert w.events["provider"] == w.events["effect"] == 0
+    frontier_file = w.root / "frozen-frontier.json"
+    frontier_file.write_text(json.dumps(w.frontier))
+    monkeypatch.setattr(
+        adapters,
+        "data_only_problem",
+        lambda agent, mode="assess": (
+            None if agent == "claude" and mode == "assess" else "unsupported"
+        ),
+    )
+    monkeypatch.setattr(adapters, "_data_only_claude_binary", lambda: str(w.root / "qualified-cli"))
+    retry_args = [
+        "finite-reentry",
+        "--state",
+        str(shard),
+        "--frontier",
+        str(frontier_file),
+        "--target",
+        target,
+        "--event",
+        "qualified-installed-assessment-transport",
+    ]
+    assert dispatcher.main(retry_args) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["stage"] == "interpret" and plan["kind"] == "qualified_assessment_transport"
+    apply_args = retry_args + ["--apply", "--expected-plan-sha256", plan["plan_sha256"]]
+    assert dispatcher.main(apply_args) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["status"] == "applied"
+    reopened = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][
+        target
+    ]
+    assert reopened["status"] == "held" and reopened["stage"] == "interpret"
+    assert reopened["stage_status"] == "queued" and reopened["reentry_ready"]
+    assert reopened["results"]["prepare"] == prepared
+    assert reopened["reentry_history"][0]["previous"] == original
+    assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert w.events["prepare"] == 1, result
+    assert w.events["provider"] == 1, result  # Actual native interpret invokes external transport.
+    assert w.events["effect"] == 0  # Existing historical advertisement remains authoritative.
+    after = json.loads(shard.read_text())
+    entry = after["frontiers"][w.frontier["frontier_id"]]
+    assert entry["finite_frontier"] == w.frontier
+    assert entry["items"][target]["results"]["prepare"] == prepared
+    assert (
+        entry["items"][target]["results"]["interpret"]["classification"]
+        != "assessment_transport_unavailable"
+    )
+    assert Path(packet["path"]).read_bytes() == packet_bytes
+    assert all(path.read_bytes() == raw for path, raw in w.originals.items())
+    # A no-start re-entry cannot make a later unknown effect retryable or replay it.
+    assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
+    capsys.readouterr()
+    assert w.events["provider"] == 1 and w.events["effect"] == 0
+
+
+def test_public_finite_max_workers_caps_actual_target_executor(native_world, monkeypatch, capsys):
+    import concurrent.futures
+    import copy
+
+    import adapters
+
+    w = native_world
+    targets = (w.snapshot["target"], "owner/repo#13")
+    args, _frontier, _assignment = command(w.root, targets)
+    args[args.index("--state") + 1] = str(w.raw)
+
+    def observed(_self, target):
+        assert target in targets
+        snapshot = copy.deepcopy(w.snapshot)
+        snapshot["target"] = target
+        return snapshot
+
+    monkeypatch.setattr(dispatcher.GitHub, "snapshot", observed)
+    monkeypatch.setattr(adapters, "data_only_problem", lambda *_: "fixture CLI absent")
+    actual = concurrent.futures.ThreadPoolExecutor
+    observed_ceilings = []
+
+    class RecordedExecutor(actual):
+        def __init__(self, *a, **kw):
+            observed_ceilings.append(kw.get("max_workers", a[0] if a else None))
+            super().__init__(*a, **kw)
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", RecordedExecutor)
+    assert dispatcher.main(args + ["--max-workers", "1"]) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert observed_ceilings == [1], result
+    assert set(result["targets"]) == set(targets)
+    assert all(
+        row["results"]["interpret"]["classification"] == "assessment_transport_unavailable"
+        for row in result["targets"].values()
+    )
+    assert w.events["provider"] == w.events["effect"] == 0
+    assert all(path.read_bytes() == raw for path, raw in w.originals.items())
+
+
+def test_public_finite_reentry_refuses_unknown_effect_and_never_replays(
+    native_world, monkeypatch, capsys
+):
+    import closer_queue
+
+    w = native_world
+    target = w.snapshot["target"]
+    # This self-owned test advertisement is the only alias overlap. Preserve all
+    # actual historical ledger bytes; removing its fixture copy allows the normal
+    # guarded ACT callback to reach the simulated external queue transport.
+    w.ad.unlink()
+    calls = []
+
+    def uncertain_queue(*_a, **_kw):
+        calls.append("possibly-started-effect")
+        raise TimeoutError("synthetic external effect result was lost")
+
+    monkeypatch.setattr(closer_queue, "run_round", uncertain_queue)
+    assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
+    capsys.readouterr()
+    assert calls == ["possibly-started-effect"]
+    shard = resources.shard_dir(resources.scoped_root(w.ledger), target) / "state.json"
+    row = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][target]
+    assert row["status"] == "unknown" and row["stage"] == "act"
+    frozen = w.root / "unknown-effect-frontier.json"
+    frozen.write_text(json.dumps(w.frontier))
+    assert (
+        dispatcher.main(
+            [
+                "finite-reentry",
+                "--state",
+                str(shard),
+                "--frontier",
+                str(frozen),
+                "--target",
+                target,
+                "--event",
+                "operator-wants-retry",
+            ]
+        )
+        == 78
+    )
+    refused = json.loads(capsys.readouterr().out)
+    assert refused["status"] == "held"
+    assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
+    capsys.readouterr()
+    assert calls == ["possibly-started-effect"]
+    assert w.events["provider"] == 1
+    assert all(path.read_bytes() == raw for path, raw in w.originals.items() if path != w.ad)

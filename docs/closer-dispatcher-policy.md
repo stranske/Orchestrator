@@ -242,3 +242,27 @@ also enforces that same absolute deadline if its supervisor exits. A timeout or
 unproved outcome retains the original operation's uncertainty fence; it does
 not authorize another attempt. HTTP status and rate-limit classification remain
 bound to the pinned Core implementation.
+
+A recovered prelaunch failure can re-enter the **same frozen frontier** through
+`closer_dispatcher.py finite-reentry`. First pass `--state` (the exact target
+shard `state.json`), `--frontier` (the original descriptor file), `--target` and
+an explicit `--event` describing the observed recovery. Inspect the returned
+plan, then repeat those arguments with `--apply --expected-plan-sha256 <digest>`.
+Finally rerun the original public `run` command with its unchanged frontier and
+canonical queue. This records scheduling progress; it does not evaluate a PR.
+
+Re-entry accepts only an unstarted preparation pool refusal, a qualified
+assessment transport replacing the named transport refusal, or an exact retained
+scope-admission proof that the callback never started. The plan binds the row,
+lease, original descriptor, retained proof and absence of any contradictory
+inner-queue operation. Apply takes the existing target/run/inventory/state locks,
+checks those bindings again, and retains a recoverable before/after audit. Active
+owners, uncertain providers/effects, changed inputs and repeated unchanged failure
+boundaries remain blocked. No history, sibling state or global fence is removed.
+
+A proven pre-callback action refusal becomes a no-effect scope hold; it does not
+become an action-ready row. The historical scope still requires its own supported
+reconciliation. Paused repositories remain paused. The existing `--max-workers`
+now also bounds concurrent scoped targets, preventing a nominally serial run from
+starting several callbacks against the same canonical workspace while retaining
+all lane ceilings and request timeouts.
