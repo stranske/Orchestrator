@@ -155,6 +155,8 @@ if [[ "$mode" == identity ]]; then source_path="$1"; [[ -d "$source_path" ]]; pr
 [[ -z "${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-}" ]]
 [[ -z "${VERIFY_BEFORE_SYNC_TREE:-}" ]]
 [[ -z "${VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG:-}" ]]
+[[ "${VERIFY_BEFORE_SYNC_OWNER_KEY:-}" == "$EXPECTED_STORAGE_OWNER" ]]
+[[ "${ORCH_STORAGE_STATE_DIR:-}" == "$EXPECTED_STORAGE_LEDGER" ]]
 [[ "$1" == "--snapshot-out" ]]; snapshot="$2"; shift 2
 [[ "$1" == "--digest-out" ]]; digest="$2"; shift 2
 source_path="$1"
@@ -246,6 +248,12 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
     journal = ReleaseRecord(tmp_path / "release.json")
     monkeypatch.setenv("GENERATION_STATE", str(generation_state))
     monkeypatch.setenv("SOURCE_FINGERPRINT", "e" * 40)
+    monkeypatch.setenv(
+        "EXPECTED_STORAGE_OWNER", "publication:" + str(mirror.parent.resolve() / mirror.name)
+    )
+    shared = (extra_env or {}).get("ORCH_STORAGE_STATE_DIR", str(tmp_path / "shared-storage"))
+    monkeypatch.setenv("ORCH_STORAGE_STATE_DIR", shared)
+    monkeypatch.setenv("EXPECTED_STORAGE_LEDGER", shared)
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
     result = journal.verify_and_install(
@@ -271,6 +279,7 @@ def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(
         extra_env={
             "VERIFY_BEFORE_SYNC_MAX_DIR_MB": "500",
             "VERIFY_BEFORE_SYNC_TREE": "BARE EXEC MIRROR",
+            "VERIFY_BEFORE_SYNC_OWNER_KEY": "wrong-per-candidate-key",
         },
     )
     assert result["stage"] == "installed"
@@ -278,6 +287,38 @@ def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(
     assert result["installed_generation"] == GENERATION
     assert journal.read()["verification"]["snapshot_digest"] == DIGEST
     assert (mirror / "payload").read_text() == "candidate payload"
+
+
+def test_storage_publication_scope_is_stable_across_generations_and_journal_owners(
+    tmp_path, monkeypatch
+):
+    import sys
+
+    from closer_release import _verification_env
+
+    mirror = tmp_path / "mirror"
+    one = tmp_path / "generation-one"
+    two = tmp_path / "generation-two"
+    one.mkdir()
+    two.mkdir()
+    mirror.symlink_to(one, target_is_directory=True)
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    monkeypatch.delenv("ORCH_STORAGE_STATE_DIR", raising=False)
+    monkeypatch.setenv("VERIFY_BEFORE_SYNC_OWNER_KEY", "per-candidate")
+    first = _verification_env(Path(sys.executable), mirror)
+    mirror.unlink()
+    mirror.symlink_to(two, target_is_directory=True)
+    second = _verification_env(Path(sys.executable), mirror)
+    assert (
+        first["VERIFY_BEFORE_SYNC_OWNER_KEY"]
+        == second["VERIFY_BEFORE_SYNC_OWNER_KEY"]
+        == "publication:" + str(mirror)
+    )
+    assert (
+        first["ORCH_STORAGE_STATE_DIR"]
+        == second["ORCH_STORAGE_STATE_DIR"]
+        == str(tmp_path / "runtime/.storage-lifecycle")
+    )
 
 
 def test_verify_and_install_fails_closed_when_competing_publisher_wins(tmp_path, monkeypatch):

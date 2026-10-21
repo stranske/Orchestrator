@@ -477,7 +477,12 @@ SNAPSHOT="$STAGE_ROOT/mirror"
 DIGEST_RECEIPT="$STAGE_ROOT/verified-payload.sha256"
 echo
 echo "== verdict BEFORE the live copy, from a scratch mirror of $SRC"
-if ! bash "$PRE" --snapshot-out "$SNAPSHOT" --digest-out "$DIGEST_RECEIPT" "$SRC"; then
+# Same shared byte ledger and stable logical publication key as closer_release.py.
+# Reconcile legacy verifiers explicitly before using this cooperating protocol.
+STORAGE_LEDGER="${ORCH_STORAGE_STATE_DIR:-${ORCH_LOCAL_RUNTIME:-$HOME/.codex/orchestrator}/.storage-lifecycle}"
+PUBLICATION_KEY="$(python3 -I -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]).expanduser().absolute(); print("publication:" + str(p.parent.resolve() / p.name))' "$MIRROR")" || exit 3
+if ! ORCH_STORAGE_STATE_DIR="$STORAGE_LEDGER" VERIFY_BEFORE_SYNC_OWNER_KEY="$PUBLICATION_KEY" \
+  bash "$PRE" --snapshot-out "$SNAPSHOT" --digest-out "$DIGEST_RECEIPT" "$SRC"; then
   echo >&2
   echo "NOT SYNCED: the live mirror still runs the code it ran before this command." >&2
   print_unverified_override
