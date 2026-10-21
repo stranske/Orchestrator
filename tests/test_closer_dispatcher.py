@@ -4322,7 +4322,7 @@ def test_no_linked_issue_retains_pr_authored_request_and_revision(tmp_path, monk
     assert source["target"] == TARGET and source["kind"] == "pr_request"
     assert source["body"] == document["body"]
     assert source["provenance"]["via"] == "github_pr_body"
-    assert source["provenance"]["title"] == document["title"]
+    assert source["title"] == document["title"]
     assert source["provenance"]["url"] == "https://github.com/o/r/pull/7"
     assert source["provenance"]["updated_at"] == document["updatedAt"]
     assert (
@@ -4439,3 +4439,20 @@ def test_pr_request_never_routes_to_issue_closure(tmp_path, monkeypatch):
     assert closer(tmp_path, current).select(current)[0] == "complete"
     current["sources"].append({"target": SOURCE, "state": "open", "body": "issue"})
     assert closer(tmp_path, current).select(current)[0] == "close_source"
+
+
+def test_request_revision_changes_invalidate_acceptance_without_body_changes(tmp_path):
+    current = snapshot()
+    issue = {
+        "body": current["sources"][0]["body"],
+        "title": "Preserve behavior",
+        "state": "open",
+        "labels": [],
+    }
+    current["sources"] = [adapter._request_source(SOURCE, issue, via="closingIssuesReferences")]
+    decision = integrated(tmp_path, current)
+    assert adapter.acceptance_ok(current, decision)
+    issue["title"] = "Preserve behavior and prevent duplicate writes"
+    current["sources"] = [adapter._request_source(SOURCE, issue, via="closingIssuesReferences")]
+    assert not adapter.acceptance_ok(current, decision)
+    assert adapter.source_digest(current["sources"]) != decision["source_digest"]

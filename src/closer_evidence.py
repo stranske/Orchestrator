@@ -722,27 +722,43 @@ def _source_section(sources: list, root: Path) -> dict:
         body, redacted = _redact_credentials(body)
         retained_bytes = body.encode("utf-8", "replace")[:MAX_TEXT_BYTES]
         ref = _retain_bytes(root, retained_bytes, "txt")
-        credential_signal = redacted or _has_credential_pattern(body)
+        original_title = str(source.get("title") or "")
+        title, title_cut = _safe_text(original_title)
+        title, title_redacted = _redact_credentials(title)
+        title_bytes = original_title.encode("utf-8", "replace")
+        title_ref = _retain_bytes(root, title.encode("utf-8", "replace")[:MAX_TEXT_BYTES], "txt")
+        credential_signal = (
+            redacted
+            or title_redacted
+            or _has_credential_pattern(body)
+            or _has_credential_pattern(title)
+        )
         rows.append(
             {
                 "target": source.get("target"),
                 "kind": source.get("kind", "issue"),
                 "provenance": source.get("provenance"),
                 "request_revision": source.get("request_revision"),
+                "title": title,
+                "title_sha256": hashlib.sha256(title_bytes).hexdigest(),
+                "title_retained": {
+                    **title_ref,
+                    "truncated": title_cut or len(title_bytes) > MAX_TEXT_BYTES,
+                },
                 "body": body,
                 "body_sha256": hashlib.sha256(original_bytes).hexdigest(),
                 "body_retained": {**ref, "truncated": cut or len(original_bytes) > MAX_TEXT_BYTES},
                 "requirements": _requirements(body),
                 "state": source.get("state"),
                 "labels": source.get("labels", [])[:100],
-                "truncated": cut,
+                "truncated": cut or title_cut,
                 "credential_pattern_present": credential_signal,
-                "redaction_applied": redacted,
+                "redaction_applied": redacted or title_redacted,
                 "text_is_untrusted": True,
             }
         )
-        truncated_any |= cut
-        redacted_any |= redacted
+        truncated_any |= cut or title_cut
+        redacted_any |= redacted or title_redacted
     status = "truncated" if truncated_any else "partial" if redacted_any else "complete"
     return _section(
         status,

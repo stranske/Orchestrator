@@ -23,7 +23,9 @@ or authorize merge, verification dispatch, or issue closure.
 - Every newly captured source records the available title, GitHub URL, acquisition path, body SHA256,
   available GitHub update timestamp, and request revision. Packet source rows
   retain that provenance alongside the exact body file. The existing snapshot
-  revision and packet source digest bind the complete inventory. Old retained
+  revision and packet source digest bind the complete inventory. Acceptance source
+  digests also bind the captured request revision, so title/revision changes cannot
+  reuse prior acceptance. Titles use the same redaction/truncation boundary as bodies. Old retained
   packets/history are not rewritten.
 
 ## Failure boundaries

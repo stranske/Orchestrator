@@ -614,7 +614,20 @@ def assignment_dependency(path, target, *, expected_fingerprint=None):
 
 
 def source_digest(sources):
-    return digest([{"target": s["target"], "body": s["body"]} for s in sources])
+    return digest(
+        [
+            {
+                "target": source["target"],
+                "body": source["body"],
+                **(
+                    {"request_revision": source["request_revision"]}
+                    if "request_revision" in source
+                    else {}
+                ),
+            }
+            for source in sources
+        ]
+    )
 
 
 def requirements(body):
@@ -927,7 +940,6 @@ def _request_source(target, obj, *, kind="issue", via):
         + target.replace("#", "/pull/" if kind == "pr_request" else "/issues/"),
         "updated_at": updated,
         "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
-        "title": obj.get("title"),
     }
     return {
         "target": target,
@@ -942,8 +954,11 @@ def _request_source(target, obj, *, kind="issue", via):
             )
         ],
         "kind": kind,
+        "title": obj.get("title"),
         "provenance": provenance,
-        "request_revision": digest({"target": target, "body": body, "provenance": provenance}),
+        "request_revision": digest(
+            {"target": target, "title": obj.get("title"), "body": body, "provenance": provenance}
+        ),
     }
 
 
