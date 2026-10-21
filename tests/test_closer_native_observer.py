@@ -29,9 +29,13 @@ def host(tmp_path, monkeypatch):
         path.write_text('status = "ACTIVE"\n')
         pins[str(path)] = native._hash(path)
     modules = tmp_path / "modules"
-    shutil.copytree(
-        Path(campaign.__file__).parent, modules, ignore=shutil.ignore_patterns("__pycache__")
-    )
+    source = Path(campaign.__file__).parent
+    modules.mkdir(parents=True)
+    # Match the original checkout fixture's Python module set in either layout.
+    # make_manifest still discovers/seals the production closure below; repeating
+    # that AST walk merely to copy the fixture adds seconds to every host case.
+    for module in source.glob("*.py"):
+        shutil.copy2(module, modules / module.name)
     observations = tmp_path / "native-observations"
     observations.mkdir(mode=0o700)
     campaigns = tmp_path / "campaigns"
@@ -46,6 +50,11 @@ def host(tmp_path, monkeypatch):
         manifest_path=manifest_path,
         campaign_root=campaigns,
     )
+    # Reuse the manifest's already-computed closure; unpinned Python files must
+    # not make this synthetic host more permissive than its sealed runtime.
+    for module in modules.glob("*.py"):
+        if module.name not in manifest["modules"]:
+            module.unlink()
     wrapper = home / ".codex/bin/cursor-lane.sh"
     wrapper.parent.mkdir(parents=True)
     source = '#!/bin/bash\nset -euo pipefail\nLANE="${1:?}"\ncase "$LANE" in\ncloser|opener) ;;\n*) exit 2 ;;\nesac\n\nexport PATH="$HOME/.local/bin:$HOME/.cursor/bin:$PATH"\n'
@@ -598,3 +607,22 @@ def test_preview_uses_pinned_launcher_and_interpreter_not_runtime_alias(host, tm
     assert output.read_text().count(expected) == 1
     assert str(alias / "closer_launcher.py") in output.read_text()
     assert str(runtime_alias) not in output.read_text()
+
+
+def test_host_fixture_copies_runtime_closure_without_flat_mirror_payload(tmp_path, monkeypatch):
+    source = Path(campaign.__file__).parent
+    names = campaign.module_closure(source, campaign.PINNED_MODULES)
+    flat = tmp_path / "flat-source"
+    flat.mkdir()
+    for name in names:
+        shutil.copy2(source / name, flat / name)
+    (flat / "unrelated_top_level.py").write_text("raise AssertionError('not pinned')\n")
+    (flat / "tests").mkdir()
+    (flat / "tests/unrelated.py").write_text("raise AssertionError('not a Runtime module')\n")
+    (flat / "docs").mkdir()
+    (flat / "docs/payload.txt").write_text("unrelated flat mirror payload\n")
+    monkeypatch.setattr(campaign, "__file__", str(flat / "closer_campaign.py"))
+    manifest, _path, _wrapper = host.__wrapped__(tmp_path / "native-host", monkeypatch)
+    modules = Path(manifest["module_path"]).parent
+    assert {p.name for p in modules.iterdir()} == set(names)
+    assert campaign.verify_modules(manifest) == []

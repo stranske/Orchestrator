@@ -736,6 +736,8 @@ def watch(
             write_record(state_dir, record)
 
     def say(line: str) -> None:
+        # A blocked/failed log consumer must not hide the already observed drain.
+        save()
         print(line, file=out)
         out.flush()
 
