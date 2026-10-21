@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import threading
@@ -10,6 +11,55 @@ import pytest
 import closer_pipeline
 import closer_queue
 from closer_pipeline import run_pipeline, validate_stop
+
+
+def test_expired_deadline_reports_admission_expired_not_lock(tmp_path):
+    path = tmp_path / "expired.json"
+    receipt = run_pipeline(
+        path, ["o/r#1"], **callbacks(), capacity_fn=lambda: {}, deadline=99, now=lambda: 100
+    )
+    assert receipt["reason"] == "admission_deadline_expired"
+    assert receipt["deadline"] == 99
+    assert receipt["now"] == 100
+    assert receipt["authority"] is False
+    assert receipt["targets"] == {}
+    assert not path.exists()
+    assert not path.with_name(path.name + ".runlock").exists()
+
+
+def test_deadline_expires_between_precheck_and_lock_attempt(tmp_path, monkeypatch):
+    path = tmp_path / "expired-before-attempt.json"
+    observed = iter([99, 100, 101])
+
+    def no_lock_attempt(*args):
+        pytest.fail("no flock attempt is allowed after the deadline")
+
+    monkeypatch.setattr(fcntl, "flock", no_lock_attempt)
+    receipt = closer_pipeline._run_pipeline_impl(
+        path,
+        ["o/r#1"],
+        **callbacks(),
+        capacity_fn=lambda: {},
+        deadline=100,
+        now=lambda: next(observed),
+    )
+    assert receipt["reason"] == "admission_deadline_expired"
+    assert receipt["deadline"] == 100
+    assert receipt["now"] == 101
+    assert not path.exists()
+
+
+def test_contended_lock_still_reports_lock_unavailable(tmp_path):
+    path = tmp_path / "contended.json"
+    with path.with_name(path.name + ".runlock").open("a+") as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        receipt = run_pipeline(
+            path, ["o/r#1"], **callbacks(), capacity_fn=lambda: {}, deadline=time.time() + 0.05
+        )
+        assert receipt["reason"] == "coordinator_lock_unavailable"
+        assert receipt["authority"] is False
+        assert receipt["targets"] == {}
+        assert not path.exists()
 
 
 class FakeRoundDeadlineExhausted(TimeoutError):

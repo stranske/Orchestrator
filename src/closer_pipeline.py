@@ -2551,26 +2551,43 @@ def _run_pipeline_impl(
     if reconcile is not None:
         callbacks["reconcile"] = (reconcile, "io")
     assignment = sorted(target_list)
+    observed_at = now()
+    if float(deadline) <= observed_at:
+        return {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": False,
+            "status": "deferred",
+            "reason": "admission_deadline_expired",
+            "deadline": float(deadline),
+            "now": observed_at,
+            "continuation_required": True,
+            "finished_at": observed_at,
+            "targets": {},
+        }
     run_guard = path.with_name(path.name + ".runlock")
     run_guard.parent.mkdir(parents=True, exist_ok=True)
     run_lock = run_guard.open("a+")
     acquired = False
+    contended = False
     while now() < float(deadline):
         try:
             fcntl.flock(run_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             acquired = True
             break
         except BlockingIOError:
+            contended = True
             time.sleep(min(0.025, max(0.0, float(deadline) - now())))
     if not acquired:
         run_lock.close()
+        observed_at = now()
         return {
             "schema": "closer-pipeline-receipt/v1",
             "authority": False,
             "status": "deferred",
-            "reason": "coordinator_lock_unavailable",
+            "reason": "coordinator_lock_unavailable" if contended else "admission_deadline_expired",
+            **({} if contended else {"deadline": float(deadline), "now": observed_at}),
             "continuation_required": True,
-            "finished_at": now(),
+            "finished_at": observed_at,
             "targets": {},
         }
     if _run_lock_ref is not None:

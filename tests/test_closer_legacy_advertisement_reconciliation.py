@@ -126,6 +126,27 @@ def plan(seed):
     )
 
 
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_expired_admission_reports_exact_reconciliation_capacity(seeded, corrupt):
+    import closer_dispatcher
+
+    if corrupt:
+        native = json.loads(seeded["native_path"].read_bytes())
+        native["items"][seeded["target"]]["operation_history"] = [{"unknown": True}]
+        seeded["native_path"].write_text(json.dumps(native))
+    before = {p: p.read_bytes() for p in seeded["path"].parent.rglob("*") if p.is_file()}
+    receipt = closer_dispatcher._expired_admission_diagnostics(seeded["path"])
+    assert receipt["blocking_reservations"] == len(seeded["ads"])
+    assert receipt["drainable_reservations"] == (0 if corrupt else len(seeded["ads"]))
+    assert receipt["deadlock"] is corrupt
+    if corrupt:
+        assert all(
+            row["reasons"] == ["native_no_operation_wait_proof_mismatch"]
+            for row in receipt["reservation_recovery"]
+        )
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
 def apply(seed, value):
     return resources.apply_legacy_reconciliation(
         seed["path"],

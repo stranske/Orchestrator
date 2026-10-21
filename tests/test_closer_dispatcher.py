@@ -4061,6 +4061,66 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     )
 
 
+def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypatch, capsys):
+    import closer_resources
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "uncertain"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    with closer_resources.legacy_reserve(
+        closer_resources.scoped_root(pipeline_path),
+        ["pr:" + TARGET],
+        target=TARGET,
+        owner="original-owner",
+        deadline=time.time() + 5,
+        causal_binding={"pipeline_run_id": "prior"},
+    ):
+        pass
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter, "_run_staged_pipeline", lambda *_: {"reason": "admission_deadline_expired"}
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 78
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["budget_admission"]["selected_deadline"] == state["round"]["deadline"]
+    assert receipt["blocking_reservations"] == 1
+    assert receipt["drainable_reservations"] == 0
+    assert receipt["deadlock"] is True
+    assert receipt["reservation_recovery"][0]["recovery_path"] == "plan_legacy_reconciliation"
+    assert receipt["reservation_recovery"][0]["reasons"]
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
 @pytest.mark.parametrize(
     "case",
     [
