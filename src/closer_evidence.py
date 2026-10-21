@@ -726,6 +726,9 @@ def _source_section(sources: list, root: Path) -> dict:
         rows.append(
             {
                 "target": source.get("target"),
+                "kind": source.get("kind", "issue"),
+                "provenance": source.get("provenance"),
+                "request_revision": source.get("request_revision"),
                 "body": body,
                 "body_sha256": hashlib.sha256(original_bytes).hexdigest(),
                 "body_retained": {**ref, "truncated": cut or len(original_bytes) > MAX_TEXT_BYTES},
