@@ -244,7 +244,7 @@ if [[ "${ORCH_STORAGE_ENTRY_PID:-}" != "$$" ]]; then
     --profile "$expected_tree" --peak-bytes "${VERIFY_BEFORE_SYNC_PEAK_BYTES:-0}")
   # The 27 GiB strict local release floor is never lowered. CI's deliberately
   # different BARE shape is not a local release and has no such host agreement.
-  [[ "$expected_tree" == "BARE EXEC MIRROR" ]] || storage_args+=(--local-strict)
+  [[ "$expected_tree" == "BARE EXEC MIRROR" && "${CI:-}" == "true" ]] || storage_args+=(--local-strict)
   verify_args=()
   [[ -z "$snapshot_out" ]] || verify_args+=(--snapshot-out "$snapshot_out")
   [[ -z "$digest_out" ]] || verify_args+=(--digest-out "$digest_out")

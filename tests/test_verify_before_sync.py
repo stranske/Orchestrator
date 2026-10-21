@@ -255,6 +255,7 @@ raise SystemExit(module.main())
         world,
         PYTHON=sys.executable,
         VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR",
+        CI="true",
         FAKE_TREE="BARE EXEC MIRROR",
         FAKE_VERIFY_RC=str(code),
     )
@@ -271,6 +272,27 @@ raise SystemExit(module.main())
     else:
         assert saved["status"] == "fixtures_retired_failure_retained"
         assert Path(record["verify_runtime"]).is_dir()
+
+
+@pytest.mark.parametrize("ci,expected_floor", [("", 27 * 1024**3), ("true", 0)])
+def test_bare_label_alone_does_not_bypass_local_launch_floor(world, ci, expected_floor):
+    implementation = str(paths.MODULE_DIR / "storage_lifecycle.py")
+    helper = world["src"] / "storage_lifecycle.py"
+    helper.write_text(f"""import importlib.util, functools
+spec = importlib.util.spec_from_file_location("real_storage", {implementation!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.run_job = functools.partial(module.run_job, free=lambda _: 0)
+raise SystemExit(module.main())
+""")
+    _git(world["src"], "add", "-A")
+    _git(world["src"], "commit", "-qm", "admission-only fixture")
+    result, record = _run(
+        world, PYTHON=sys.executable, CI=ci, VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR"
+    )
+    assert result.returncode != 0
+    assert f'"floor_bytes": {expected_floor}' in result.stderr
+    assert not record  # Never starts the copier or verifier.
 
 
 def test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched(world):
