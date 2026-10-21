@@ -36,3 +36,17 @@ The failed strict journal/log, focused reproduction XML and input provenance
 remain retained outside synthetic pytest fixture trees. No whole-suite retry is
 justified until this repair is reviewed and the normal 27 GiB space admission
 passes again. Native publication is separate from this repair.
+
+The first PR CI run exposed a separate flat-distribution fixture amplification:
+`test_closer_native_observer.host` copied the parent of `closer_campaign.py`.
+In a checkout that is `src/`; in the shipped flat distribution it also contains
+tests and docs. Repeating that copy for native qualification cases exhausted
+the CI job's disk quota. The retained local failed run had 724248 synthetic
+entries and about 19.5 GB of logical fixture data.
+
+The fixture now copies `campaign.module_closure(source, campaign.PINNED_MODULES)`,
+the existing production runtime closure. Manifest creation still seals that
+closure. A regression builds a flat source containing unrelated test/doc payloads,
+executes the real fixture, and verifies both exact closure membership and the
+sealed manifest. This reduces repeated fixture payload without dropping runtime
+modules, changing qualification assertions, or reducing the release space guard.

@@ -29,9 +29,10 @@ def host(tmp_path, monkeypatch):
         path.write_text('status = "ACTIVE"\n')
         pins[str(path)] = native._hash(path)
     modules = tmp_path / "modules"
-    shutil.copytree(
-        Path(campaign.__file__).parent, modules, ignore=shutil.ignore_patterns("__pycache__")
-    )
+    source = Path(campaign.__file__).parent
+    modules.mkdir(parents=True)
+    for name in campaign.module_closure(source, campaign.PINNED_MODULES):
+        shutil.copy2(source / name, modules / name)
     observations = tmp_path / "native-observations"
     observations.mkdir(mode=0o700)
     campaigns = tmp_path / "campaigns"
@@ -598,3 +599,21 @@ def test_preview_uses_pinned_launcher_and_interpreter_not_runtime_alias(host, tm
     assert output.read_text().count(expected) == 1
     assert str(alias / "closer_launcher.py") in output.read_text()
     assert str(runtime_alias) not in output.read_text()
+
+
+def test_host_fixture_copies_runtime_closure_without_flat_mirror_payload(tmp_path, monkeypatch):
+    source = Path(campaign.__file__).parent
+    names = campaign.module_closure(source, campaign.PINNED_MODULES)
+    flat = tmp_path / "flat-source"
+    flat.mkdir()
+    for name in names:
+        shutil.copy2(source / name, flat / name)
+    (flat / "tests").mkdir()
+    (flat / "tests/unrelated.py").write_text("raise AssertionError('not a Runtime module')\n")
+    (flat / "docs").mkdir()
+    (flat / "docs/payload.txt").write_text("unrelated flat mirror payload\n")
+    monkeypatch.setattr(campaign, "__file__", str(flat / "closer_campaign.py"))
+    manifest, _path, _wrapper = host.__wrapped__(tmp_path / "native-host", monkeypatch)
+    modules = Path(manifest["module_path"]).parent
+    assert {p.name for p in modules.iterdir()} == set(names)
+    assert campaign.verify_modules(manifest) == []
