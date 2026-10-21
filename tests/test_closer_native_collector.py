@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import os
 import sys
 import time
@@ -157,11 +158,31 @@ def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monk
         return api_base(endpoint, **kwargs)
 
     packet = dispatcher.collect_native_evidence(
-        snapshot(), SimpleNamespace(api=api), tmp_path / "retained", deadline=time.monotonic() + 10
+        # This exercises successful owned-process/archive transport, not its
+        # timeout boundary. Leave room for instrumented parallel CI scheduling;
+        # the collector still receives one unchanged absolute deadline.
+        snapshot(),
+        SimpleNamespace(api=api),
+        tmp_path / "retained",
+        deadline=time.monotonic() + 30,
     )
     assert closer_evidence.validate_packet(packet)
     ci = packet["sections"]["ci_artifacts"]
-    assert ci["status"] == "complete", ci
+    diagnostic = json.dumps(ci, ensure_ascii=False, sort_keys=True, indent=2)
+    assert ci["status"] == "complete", diagnostic
+    assert ci["content"]["retrieval_status"] == "complete", diagnostic
+    # Retrieval is complete, while required-check topology is still unknown.
+    assert ci["content"]["proof_status"] == "partial", diagnostic
+    artifact = ci["content"]["artifacts"][0]
+    assert artifact["status"] == "complete", diagnostic
+    assert artifact["id"] == 8 and artifact["run_id"] == 7, diagnostic
+    assert artifact["run_attempt"] == 1 and artifact["head_sha"] == HEAD, diagnostic
+    assert artifact["archive"]["sha256"] == hashlib.sha256(archive_bytes).hexdigest(), diagnostic
+    junit = next(receipt for receipt in artifact["receipts"] if receipt["kind"] == "junit")
+    assert (
+        junit["raw"]["sha256"]
+        == hashlib.sha256(b'<testsuite tests="1"><testcase name="one"/></testsuite>').hexdigest()
+    ), diagnostic
     retained = list((tmp_path / "retained").rglob("*"))
     assert any(
         p.is_file() and p.read_bytes() == b'<testsuite tests="1"><testcase name="one"/></testsuite>'

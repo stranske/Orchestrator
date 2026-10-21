@@ -15,11 +15,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+from scripts import install_closer_campaign_hook as hook
 from test_closer_campaign import CAND, DIGEST, journal
 from test_closer_native_observer import scoped_receipt as scoped_receipt
 
 import closer_campaign as cc
-from scripts import install_closer_campaign_hook as hook
 
 SRC = Path(cc.__file__).resolve().parent
 

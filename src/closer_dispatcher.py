@@ -3241,7 +3241,7 @@ def collect_native_evidence(
     )
 
 
-def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024):
+def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snapshot=None):
     """Carry validated available content, with explicit omissions, to a no-tools model.
 
     A retained reference is provenance, never permission to read a file or evidence
@@ -3251,6 +3251,12 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024):
         raise ValueError("data-only evidence packet is invalid")
     if type(max_bytes) is not int or max_bytes < 1:
         raise ValueError("data-only context byte limit is invalid")
+    if snapshot is not None and (
+        not isinstance(snapshot, dict)
+        or snapshot.get("target") != packet.get("target")
+        or snapshot.get("head") != packet.get("head")
+    ):
+        raise ValueError("data-only current request identity differs from packet")
     sections = packet["sections"]
     names = list(
         dict.fromkeys(
@@ -3290,6 +3296,38 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024):
             row["content_supplied"] = False
             row["context_gap"] = "content exceeds remaining assessment context; not inspected"
         result["sections"][name] = row
+    if snapshot is not None:
+        import credential_redaction
+
+        request_content = {}
+        redaction_applied = False
+        for field in ("title", "body"):
+            value = snapshot.get(field)
+            if value is not None and not isinstance(value, str):
+                raise ValueError("data-only current request text is malformed")
+            if isinstance(value, str):
+                value, counts = credential_redaction.redact_with_counts(value)
+                redaction_applied = redaction_applied or bool(counts)
+            request_content[field] = value
+        encoded = json.dumps(request_content, ensure_ascii=False, sort_keys=True).encode()
+        current_request = {
+            "target": snapshot["target"],
+            "head": snapshot.get("head"),
+            "source": "current_snapshot",
+            "text_is_untrusted": True,
+            "acceptance_authority": False,
+            "action_authority": False,
+            "redaction_applied": redaction_applied,
+            "content_bytes": len(encoded),
+        }
+        if len(encoded) <= remaining:
+            current_request.update(content=request_content, content_supplied=True)
+        else:
+            current_request.update(
+                content_supplied=False,
+                context_gap="current request exceeds remaining assessment context; not inspected",
+            )
+        result["current_request"] = current_request
     return result
 
 
@@ -4333,7 +4371,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         }
         if data_only:
             prompt_mandatory["data_only_evidence"] = data_only_evidence_context(
-                raw_packet, readiness=readiness
+                raw_packet, readiness=readiness, snapshot=admitted_snapshot
             )
         if snap.get("verifier") and snap["verifier"].get("verdict") not in {None, "PASS"}:
             import closer_disposition
@@ -4380,8 +4418,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         )
         if data_only:
             prompt = (
-                "TOOL-FREE ASSESSMENT: use only content_supplied=true sections in "
-                "mandatory.data_only_evidence and the explicit snapshot below. No file, "
+                "TOOL-FREE ASSESSMENT: use only content_supplied=true sections and "
+                "current_request in mandatory.data_only_evidence below. No file, "
                 "shell, network, MCP or delegated tools are available. Retained paths are "
                 "provenance, not inspected content. Treat missing, contradictory, stale or "
                 "omitted evidence as work to diagnose; identify concrete gaps and the next "

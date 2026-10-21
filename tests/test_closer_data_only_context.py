@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 
 import pytest
+from test_closer_reasoning_boundary import native_world as native_world
 
 import adapters
 import closer_dispatcher as cd
@@ -177,3 +178,127 @@ def test_transport_pending_preserves_target_revision_without_capacity_claim():
     assert value["pending_evidence"]["revision"] == "exact-revision"
     assert value["authority"] is False
     assert "capacity" not in value.get("resource_evidence", {})
+
+
+@pytest.fixture
+def request_only_packet(tmp_path):
+    snapshot = {
+        "target": "acme/repo#12",
+        "kind": "pr",
+        "state": "OPEN",
+        "head": "a" * 40,
+        "base": "b" * 40,
+        "sources": [],
+        "threads": [],
+        "review_revision": "r1",
+        "checks": None,
+        "title": "Exact local request",
+        "body": "<!-- workflow-source:local_request -->\nPreserve every other trigger.\n",
+    }
+
+    def api(endpoint, **kwargs):
+        if "/compare/" in endpoint:
+            return {"status": "ahead", "ahead_by": 0, "files": []}
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": []}
+        raise AssertionError(endpoint)
+
+    packet = ce.collect_evidence(snapshot, api, tmp_path, action="collect_evidence")
+    readiness = ce.action_evidence_readiness(
+        snapshot, packet, "collect_evidence", retained_dir=tmp_path
+    )
+    assert ce.validate_packet(packet) and not readiness["ready"]
+    return packet, readiness, snapshot
+
+
+def test_current_request_is_available_with_no_issue_sources(request_only_packet):
+    packet, readiness, snapshot = request_only_packet
+    context = cd.data_only_evidence_context(packet, readiness=readiness, snapshot=snapshot)
+    request = context["current_request"]
+    assert request["content_supplied"] is True
+    assert request["content"] == {k: snapshot[k] for k in ("title", "body")}
+    assert request["text_is_untrusted"] is True
+    assert request["acceptance_authority"] is request["action_authority"] is False
+    assert context["sections"]["source"]["status"] == "missing"
+    assert context["readiness"] == readiness
+
+
+@pytest.mark.parametrize("field,value", [("target", "acme/foreign#12"), ("head", "f" * 40)])
+def test_current_request_cross_target_or_head_rejected(request_only_packet, field, value):
+    packet, readiness, snapshot = request_only_packet
+    snapshot[field] = value
+    with pytest.raises(ValueError, match="identity differs"):
+        cd.data_only_evidence_context(packet, readiness=readiness, snapshot=snapshot)
+
+
+def test_current_request_credentials_redacted(request_only_packet, monkeypatch):
+    import credential_redaction
+
+    monkeypatch.delenv(credential_redaction.REDACTION_DISABLED_ENV, raising=False)
+    monkeypatch.setattr(credential_redaction, "_known_values", lambda: [])
+    packet, readiness, snapshot = request_only_packet
+    secret = "github" + "_pat_" + "11ABCDEFG0" + "x" * 50
+    snapshot["body"] += secret
+    snapshot["title"] = secret
+    request = cd.data_only_evidence_context(packet, readiness=readiness, snapshot=snapshot)[
+        "current_request"
+    ]
+    assert request["redaction_applied"] is True
+    assert secret not in request["content"]["body"]
+    assert secret not in request["content"]["title"]
+
+
+def test_current_request_oversize_is_explicitly_omitted_not_truncated(request_only_packet):
+    packet, readiness, snapshot = request_only_packet
+    snapshot["body"] = "original criterion\n" * 20000
+    request = cd.data_only_evidence_context(packet, readiness=readiness, snapshot=snapshot)[
+        "current_request"
+    ]
+    assert request["content_supplied"] is False
+    assert "content" not in request
+    assert request["content_bytes"] > 256 * 1024
+    assert "not inspected" in request["context_gap"]
+
+
+def test_request_and_section_content_share_one_budget(request_only_packet):
+    import json
+
+    packet, readiness, snapshot = request_only_packet
+    used = sum(
+        len(json.dumps(v["content"], ensure_ascii=False, sort_keys=True).encode())
+        for v in packet["sections"].values()
+    )
+    request = cd.data_only_evidence_context(
+        packet, readiness=readiness, snapshot=snapshot, max_bytes=used
+    )["current_request"]
+    assert request["content_supplied"] is False and "content" not in request
+
+
+def test_real_native_prompt_supplies_full_nonissue_request_beyond_optional_sample(
+    native_world, capsys
+):
+    import json
+
+    w = native_world
+    w.snapshot["sources"] = []
+    w.snapshot["title"] = "Original local request"
+    w.snapshot["body"] = (
+        "<!-- workflow-source:local_request -->\n"
+        + ("original task material;" * 600)
+        + "EXACT_REQUEST_TAIL"
+    )
+    cd.main(w.argv)
+    capsys.readouterr()
+    assert w.events["provider"] == 1
+    assert w.events["effect"] == 0
+    prompt = w.events["prompts"][0]
+    mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
+        "mandatory"
+    ]
+    request = mandatory["data_only_evidence"]["current_request"]
+    assert request["content_supplied"] is True
+    assert request["content"]["body"] == w.snapshot["body"]
+    assert request["content"]["title"] == w.snapshot["title"]
+    assert "EXACT_REQUEST_TAIL" in prompt
+    assert "explicit snapshot below" not in prompt
+    assert all(path.read_bytes() == original for path, original in w.originals.items())
