@@ -4102,6 +4102,12 @@ def _run_pipeline_finite(
                         "metrics": {"requests": 0},
                     },
                 )
+                if item.get("reentry_ready") is not None:
+                    import closer_finite_reentry
+
+                    closer_finite_reentry.ready(path, frontier, target, item)
+                    item.pop("reentry_ready")
+                    item.update(status="pending", stage_status="queued")
                 if item.get("stage_status") == "running":
                     item.update(
                         status="unknown",
@@ -4242,6 +4248,8 @@ def _run_pipeline_finite(
                                 else "operator_review"
                             ),
                         )
+                        if isinstance(exc, closer_resources.ScopeBlocked):
+                            current["scope_refusal"] = dict(exc.proof)
 
                     mutate_frontier(fail, request_deadline=window["deadline"])
                     continue

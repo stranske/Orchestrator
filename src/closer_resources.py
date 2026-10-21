@@ -2232,6 +2232,7 @@ def run_scoped(
     max_io_workers: int = 4,
     max_low_workers: int = 2,
     max_exception_workers: int = 1,
+    max_target_workers: int | None = None,
     round_deadline_exception=None,
     round_capacity_exception=None,
     resource_keys=None,
@@ -2289,6 +2290,12 @@ def run_scoped(
     bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in bounds.values()):
         raise ValueError("pool ceilings must be positive integers")
+    if max_target_workers is not None and (
+        isinstance(max_target_workers, bool)
+        or not isinstance(max_target_workers, int)
+        or max_target_workers < 1
+    ):
+        raise ValueError("target worker ceiling must be a positive integer")
     if resource_keys is not None and not callable(resource_keys):
         raise ValueError("resource_keys must be callable")
 
@@ -2651,6 +2658,8 @@ def run_scoped(
 
     ordered = sorted(raw_list, key=lambda t: (t not in priority, t))
     threads = max(1, min(len(ordered), sum(bounds.values())))
+    if max_target_workers is not None:
+        threads = min(threads, max_target_workers)
     with ThreadPoolExecutor(max_workers=threads) as pool:
         list(pool.map(work, ordered))
     finished = now()

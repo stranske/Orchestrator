@@ -6433,6 +6433,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         max_io_workers=4,
         max_low_workers=min(2, args.max_workers),
         max_exception_workers=1,
+        **(
+            {"max_target_workers": args.max_workers}
+            if getattr(args, "coordinator_mode", "legacy") == "resource_scoped"
+            else {}
+        ),
         round_deadline_exception=RoundDeadlineExhausted,
         round_capacity_exception=RoundCapacityDeferred,
     )
@@ -6494,9 +6499,36 @@ def main(argv=None):
     validate.add_argument("--assignment")
     validate.add_argument("--shadow", action="store_true")
     validate.add_argument("--round-id", help="exact resource-scoped ACTION C round receipt")
+    reentry = sub.add_parser(
+        "finite-reentry", help="plan/apply one proven-unstarted finite request"
+    )
+    reentry.add_argument("--state", required=True, help="exact target shard state.json")
+    reentry.add_argument("--frontier", required=True, help="frozen finite-frontier/v2 JSON file")
+    reentry.add_argument("--target", required=True)
+    reentry.add_argument("--event", required=True)
+    reentry.add_argument("--apply", action="store_true")
+    reentry.add_argument("--expected-plan-sha256")
     args = p.parse_args(argv)
     import closer_queue
 
+    if args.command == "finite-reentry":
+        import closer_finite_reentry
+
+        reentry_args = [
+            "--state",
+            args.state,
+            "--frontier",
+            args.frontier,
+            "--target",
+            args.target,
+            "--event",
+            args.event,
+        ]
+        if args.apply:
+            reentry_args.append("--apply")
+        if args.expected_plan_sha256:
+            reentry_args.extend(["--expected-plan-sha256", args.expected_plan_sha256])
+        return closer_finite_reentry.main(reentry_args)
     if args.command == "validate-stop":
         targets = targets_from_assignment(args.assignment) if args.assignment else None
         pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
