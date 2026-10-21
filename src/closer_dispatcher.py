@@ -5222,7 +5222,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # contract. Missing audit tools/content must not discard usable findings
         # or typed requests before the existing recovery and action guards.
         producer_audit = {
-            "status": ("complete" if valid and drift_complete else "pending") if run_drift else "not_due",
+            "status": (
+                ("complete" if valid and drift_complete else "pending") if run_drift else "not_due"
+            ),
             "producer_sha256": producer_sha,
             "summary": proposal.get("drift_summary") if valid and run_drift else None,
         }
