@@ -16,6 +16,7 @@ Simple/legible (design §11). `--selftest` validates command construction offlin
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -1421,19 +1422,28 @@ def cli_reported_model(
             "reason": None,
         }
     if agent == "claude":
-        directory = _claude_project_dir(workspace)
-        if not directory.is_dir():
-            return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
-        newest = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for path in newest[:4]:
-            model = _first_real_model(_models_in_jsonl(path))
-            if model:
-                return {
-                    "model": model,
-                    "cli_version": None,
-                    "source": str(path),
-                    "reason": None,
-                }
+        try:
+            directory = _claude_project_dir(workspace)
+            if not directory.is_dir():
+                return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+            newest = sorted(
+                directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
+            for path in newest[:4]:
+                model = _first_real_model(_models_in_jsonl(path))
+                if model:
+                    return {
+                        "model": model,
+                        "cli_version": None,
+                        "source": str(path),
+                        "reason": None,
+                    }
+        except OSError as exc:
+            # Identity enrichment must remain unresolved when its store cannot be read,
+            # including a valid cwd whose encoded Claude key exceeds NAME_MAX.
+            # Never substitute a requested model or a neighbouring workspace.
+            reason = errno.errorcode.get(exc.errno or 0, "UNKNOWN")
+            return {**blank, "reason": f"claude_transcript_probe_oserror:{reason}"}
         return {**blank, "reason": "claude_transcript_named_no_real_model"}
     return {**blank, "reason": f"no_cli_identity_reader_for_agent:{agent}"}
 
