@@ -135,19 +135,24 @@ def test_langsmith_direct_fetch_errors_and_cli_modes(
         client=BadClient(), projects=["a"], since_hours=1
     )
     assert records == [] and errors == ["a: offline"]
-    monkeypatch.setattr(
-        langsmith_direct,
-        "fetch_and_ingest",
-        lambda **kw: {
-            "dry_run": True,
+    seen = {}
+
+    def fake_fetch_and_ingest(**kwargs):
+        seen.update(kwargs)
+        return {
+            "dry_run": kwargs["dry_run"],
             "records_built": 0,
             "with_cost": 0,
             "errors": [],
             "ingest": {},
-        },
-    )
+        }
+
+    monkeypatch.setattr(langsmith_direct, "fetch_and_ingest", fake_fetch_and_ingest)
     assert langsmith_direct.main(["--dry-run", "--json", "--project", "p", "--all-time"]) == 0
     assert json.loads(capsys.readouterr().out)["dry_run"] is True
+    assert seen["dry_run"] is True
+    assert list(seen["projects"]) == ["p"]
+    assert seen["since_hours"] is None
 
 
 def test_langsmith_key_client_host_parse_and_print(
@@ -233,7 +238,9 @@ def test_langsmith_stdlib_pagination_empty_and_project_miss(
             return _Response([])
         if request.method == "GET" and "/sessions" in request.full_url:
             return _Response([{"id": "pid"}])
-        if b'"cursor"' in (request.data or b""):
+        body = json.loads(request.data) if request.data else {}
+        if "cursor" in body:
+            assert body["cursor"] == "page-2"
             return _Response({"runs": [{"id": "r2"}], "cursors": {}})
         if request.full_url.endswith("/runs/query"):
             return _Response(
