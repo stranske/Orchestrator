@@ -2327,6 +2327,7 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
                         "timestamp": now,
                         "type": "migrated",
                         "activation_inferred": False,
+                        "legacy_maturity": feature.get("maturity"),
                         **source_evidence,
                     }
                 )

@@ -28,6 +28,15 @@ REG = Path(
     os.environ.get("ORCH_FEATURES_PATH", paths.runtime_state_path("experiments", "features.json"))
 )
 LADDER = ["ad-hoc", "reused", "hardened"]
+# Historical capability migrations consumed "new" as observed, never active.
+# Keep that stored value intact; only maturity comparisons project it to ad-hoc.
+LEGACY_MATURITIES = {"new": "ad-hoc"}
+
+
+def _maturity(item: dict) -> str:
+    value = item.get("maturity", "ad-hoc")
+    return LEGACY_MATURITIES.get(value, value)
+
 
 # Seeded with what already emerged building this system — honest current state.
 SEED = {
@@ -161,7 +170,7 @@ def _validate_registry(reg: Any) -> None:
     for name, item in reg.items():
         if not isinstance(name, str) or not isinstance(item, dict):
             raise ValueError("feature records must be named objects")
-        if "maturity" in item and item["maturity"] not in LADDER:
+        if "maturity" in item and item["maturity"] not in (*LADDER, *LEGACY_MATURITIES):
             raise ValueError("unsupported feature maturity")
         if "uses" in item and (
             not isinstance(item["uses"], list)
@@ -262,7 +271,7 @@ def record_use(
         if where not in f["uses"]:
             f["uses"].append(where)
         f["count"] = len(f["uses"])
-        if f["maturity"] == "ad-hoc" and f["count"] >= 2:
+        if _maturity(f) == "ad-hoc" and f["count"] >= 2:
             f["maturity"] = "reused"
         if maturity:
             f["maturity"] = maturity
@@ -279,9 +288,9 @@ def promotion_candidates(path: Path = REG, *, create: bool = False) -> list:
     """Features used >=3 times but not yet hardened into a selftested module — the rule of three firing."""
     reg = _read_registry(path, create=create)
     return [
-        {"name": n, "count": f["count"], "problem": f["problem"]}
+        {"name": n, "count": f.get("count", 0), "problem": f.get("problem", "")}
         for n, f in reg.items()
-        if f["maturity"] != "hardened" and f["count"] >= 3
+        if _maturity(f) != "hardened" and f.get("count", 0) >= 3
     ]
 
 
@@ -301,7 +310,7 @@ def summary(path: Path = REG, *, create: bool = False) -> dict:
     reg = _read_registry(path, create=create)
     counts = {m: 0 for m in LADDER}
     for item in reg.values():
-        maturity = item.get("maturity", "ad-hoc")
+        maturity = _maturity(item)
         counts[maturity] = counts.get(maturity, 0) + 1
     candidates = promotion_candidates(path, create=create)
     lifecycle: dict[str, Any] = {
@@ -492,9 +501,12 @@ def main(argv):
                 print(f"  - {c['name']} (used {c['count']}x): {c['problem']}")
         return 0
     reg = load()
-    for name, f in sorted(reg.items(), key=lambda kv: LADDER.index(kv[1]["maturity"])):
+    for name, f in sorted(reg.items(), key=lambda kv: LADDER.index(_maturity(kv[1]))):
         mod = f.get("module") or "(inline)"
-        print(f"  {f['maturity']:9} x{f['count']:<2} {name:20} {mod:24} — {f['problem']}")
+        print(
+            f"  {f.get('maturity', 'ad-hoc'):9} x{f.get('count', 0):<2} "
+            f"{name:20} {mod:24} — {f.get('problem', '')}"
+        )
     cands = promotion_candidates()
     if cands:
         print("\nPROMOTION CANDIDATES (rule of three):")
