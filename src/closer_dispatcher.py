@@ -927,6 +927,7 @@ def _request_source(target, obj, *, kind="issue", via):
         + target.replace("#", "/pull/" if kind == "pr_request" else "/issues/"),
         "updated_at": updated,
         "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "title": obj.get("title"),
     }
     return {
         "target": target,
@@ -1071,10 +1072,10 @@ class GitHub:
             }
         owner, name = repo.split("/")
         query = """query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
-          number body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
+          number title body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
           labels(first:100){nodes{name} pageInfo{hasNextPage}}
           timelineItems(itemTypes:[LABELED_EVENT],last:100){nodes{... on LabeledEvent{id createdAt label{name}}} pageInfo{hasPreviousPage}}
-          closingIssuesReferences(first:100){nodes{number body state updatedAt labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
+          closingIssuesReferences(first:100){nodes{number title body state updatedAt labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
             pageInfo{hasNextPage}}
           reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){nodes{body updatedAt}}}
             pageInfo{hasNextPage}}
@@ -1220,6 +1221,7 @@ class GitHub:
             "merge": (pr.get("mergeCommit") or {}).get("oid"),
             "merged_at": pr.get("mergedAt"),
             "body": pr["body"],
+            "title": pr.get("title"),
             "draft": pr["isDraft"],
             "sources": sources,
             "source_inventory": source_inventory,

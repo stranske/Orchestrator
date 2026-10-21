@@ -4310,6 +4310,7 @@ def test_scoped_native_operation_seam_rechecks_prepared_head_and_aliases(
 def test_no_linked_issue_retains_pr_authored_request_and_revision(tmp_path, monkeypatch, origin):
     document = _graphql_pr()
     document["closingIssuesReferences"]["nodes"] = []
+    document["title"] = "Stop Gate restarts on label events"
     document["body"] = (
         origin
         + "Remove only `labeled` from `on.pull_request.types`. Preserve every other trigger.\n"
@@ -4321,6 +4322,7 @@ def test_no_linked_issue_retains_pr_authored_request_and_revision(tmp_path, monk
     assert source["target"] == TARGET and source["kind"] == "pr_request"
     assert source["body"] == document["body"]
     assert source["provenance"]["via"] == "github_pr_body"
+    assert source["provenance"]["title"] == document["title"]
     assert source["provenance"]["url"] == "https://github.com/o/r/pull/7"
     assert source["provenance"]["updated_at"] == document["updatedAt"]
     assert (
@@ -4349,6 +4351,9 @@ def test_no_linked_issue_retains_pr_authored_request_and_revision(tmp_path, monk
             "source_digest": adapter.source_digest(current["sources"]),
         },
     )
+    document["title"] = "Preserve every other trigger"
+    renamed = github.snapshot(TARGET)
+    assert renamed["sources"][0]["request_revision"] != source["request_revision"]
     document["updatedAt"] = "2026-10-21T00:00:00Z"
     changed = github.snapshot(TARGET)
     assert changed["sources"][0]["request_revision"] != source["request_revision"]

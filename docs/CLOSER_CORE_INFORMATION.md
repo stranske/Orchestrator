@@ -20,7 +20,7 @@ or authorize merge, verification dispatch, or issue closure.
   `Refs` are context, not invented source-issue requirements. The captured body
   is the current GitHub representation, not an independently recovered original
   chat transcript or a claim about an earlier body revision.
-- Every newly captured source records a GitHub URL, acquisition path, body SHA256,
+- Every newly captured source records the available title, GitHub URL, acquisition path, body SHA256,
   available GitHub update timestamp, and request revision. Packet source rows
   retain that provenance alongside the exact body file. The existing snapshot
   revision and packet source digest bind the complete inventory. Old retained
