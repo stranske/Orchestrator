@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -380,7 +381,7 @@ def idle(root: Path) -> None:
 
 def retire(
     root: Path, identity: tuple[int, int], token: str, probe: Callable[[Path], None] = idle
-) -> None:
+) -> list[str]:
     current = root.lstat()
     if root.is_symlink() or (current.st_dev, current.st_ino) != identity:
         raise StorageBlocked("owned directory identity changed")
@@ -410,7 +411,23 @@ def retire(
     moved = quarantine.lstat()
     if (moved.st_dev, moved.st_ino) != identity or quarantine.is_symlink():
         raise StorageBlocked("retirement identity changed; retained without deletion")
-    shutil.rmtree(quarantine)
+    preserved: list[str] = []
+
+    def preserve_denied(_operation: Any, path: str, error: BaseException) -> None:
+        if isinstance(error, PermissionError):
+            preserved.append(path)
+            return  # Never retry, chmod, or force a permission-denied entry.
+        if isinstance(error, OSError) and error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+            if any(Path(item).is_relative_to(path) for item in preserved):
+                return  # Its recorded preserved child makes this ancestor nonempty.
+        raise error
+
+    shutil.rmtree(quarantine, onexc=preserve_denied)
+    if preserved:
+        # Keep a recovery identity on the residual container after writable
+        # siblings were retired. All denied entries remain exactly where reported.
+        write_json(quarantine / "owner.json", {"token": token, "preserved_paths": preserved})
+    return preserved
 
 
 def identity(command: list[str]) -> str:
@@ -567,8 +584,13 @@ def run_job(
                 probe(path)
                 no_writers = True
 
-            retire(target, target_id, token, checked_idle)
-            receipt["status"] = "retired" if rc == 0 else "fixtures_retired_failure_retained"
+            preserved = retire(target, target_id, token, checked_idle)
+            receipt["preserved_permission_paths"] = preserved
+            receipt["status"] = (
+                ("retired_with_permission_remnants" if preserved else "retired")
+                if rc == 0
+                else "fixtures_retired_failure_retained"
+            )
         else:
             receipt["status"] = "retained_requested" if stable else "retained_source_changed"
         manager.finish(job, receipt, terminal=True)

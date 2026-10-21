@@ -269,7 +269,7 @@ def test_failed_or_interrupted_cleanup_preserves_remnant_and_does_not_retry(
 ):
     calls = []
 
-    def fail(path):
+    def fail(path, **_kwargs):
         calls.append(path)
         raise error("cleanup refused/interrupted")
 
@@ -524,3 +524,44 @@ def test_replacement_during_activity_probe_is_never_renamed(tmp_path):
     with pytest.raises(storage.StorageBlocked, match="ownership changed"):
         storage.retire(root, (original.st_dev, original.st_ino), "owner", replace)
     assert root.is_dir() and not root.with_name(root.name + ".retiring").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the readonly filesystem fixture")
+def test_readonly_fixture_is_preserved_while_writable_siblings_are_retired(tmp_path):
+    root = tmp_path / "owned"
+    root.mkdir()
+    blocked = root / "readonly"
+    blocked.mkdir()
+    (blocked / "tool.sh").write_bytes(b"preserve")
+    (root / "bulk").mkdir()
+    (root / "bulk/payload").write_bytes(b"disposable")
+    storage.write_json(root / "owner.json", {"token": "owner"})
+    original = root.stat()
+    blocked.chmod(0o555)  # Only this newly-created synthetic fixture.
+    residual = root.with_name(root.name + ".retiring")
+    try:
+        paths = storage.retire(root, (original.st_dev, original.st_ino), "owner", lambda _: None)
+        assert paths and str(residual / "readonly/tool.sh") in paths
+        assert not (residual / "bulk").exists()
+        assert (residual / "readonly/tool.sh").read_bytes() == b"preserve"
+        assert (residual / "readonly").stat().st_mode & 0o777 == 0o555
+        assert json.loads((residual / "owner.json").read_text())["token"] == "owner"
+    finally:
+        # Test teardown only; production retirement never changes permissions.
+        if (residual / "readonly").exists():
+            (residual / "readonly").chmod(0o755)
+
+
+def test_unexpected_removal_failure_is_not_silenced(tmp_path, monkeypatch):
+    root = tmp_path / "owned"
+    root.mkdir()
+    storage.write_json(root / "owner.json", {"token": "owner"})
+    original = root.stat()
+
+    def fail(path, *, onexc):
+        onexc(os.unlink, str(path / "unknown"), OSError(5, "unexpected IO failure"))
+
+    fail.avoids_symlink_attacks = True
+    monkeypatch.setattr(storage.shutil, "rmtree", fail)
+    with pytest.raises(OSError, match="unexpected IO"):
+        storage.retire(root, (original.st_dev, original.st_ino), "owner", lambda _: None)

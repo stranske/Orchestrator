@@ -89,6 +89,12 @@ symlink-safe deletion. Nested filesystems refuse retirement. The original source
 and published artifacts are retained, so disposable copies/fixtures can be
 recreated; no full cleanup archive duplicates them.
 
+Intentional read-only fixtures do not stop independent writable siblings from
+being retired. Permission-denied entries and their nonempty ancestors remain in
+the named `.retiring` container with an owner marker and exact receipt paths.
+No denied entry is retried and no permissions are changed. Unexpected I/O errors
+still stop retirement and preserve the remnant for inspection.
+
 A failed verifier retires only its owned child `tmp` fixture scope. Its staging
 tree, full verification log and state copy remain: the live input may have changed
 and a failure may need those exact bytes. These retained failure records require
