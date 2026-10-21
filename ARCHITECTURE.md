@@ -65,6 +65,19 @@ acceptance or action authority. Stable source transformations require typed seni
 resolution preserving original criteria. Redacted review bodies require complete
 pagination, no truncation and verified retained displayed bytes.
 
+The finite closer extends this same rail with action-specific necessity levels
+and `evaluation_ready`: enough input to evaluate, not pre-certified acceptance.
+Missing necessary inputs invoke a gap-directed collection task on the existing
+low route; selected native sections refresh, raw progress is retained, and the
+same screen returns recovered work to ordinary closer judgment. Optional extras
+cannot block. A durable read journal suppresses unchanged no-progress collection
+and resumes saved plans after authoritative capacity resets. Confirmed collector
+root causes are batched through existing duplicate/search/filing primitives after
+processing; upstream reporting never gates a recovered PR. See
+[`docs/CLOSER_EVIDENCE_RECOVERY.md`](docs/CLOSER_EVIDENCE_RECOVERY.md). This adds no
+parallel evaluator, aggregate runtime cutoff, action authority or historical
+queue migration.
+
 Postrun validates assignment accounting and actual remaining budget before end-round
 or relay. No pass quota or one-complex-repository limit can authorize early stop.
 Unknown mutation outcomes reconcile before retry, source/review/head changes

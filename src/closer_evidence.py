@@ -358,7 +358,10 @@ def action_evidence_readiness(
     snapshot: Any, packet: Any, action: Any, *, retained_dir: str | Path | None = None
 ) -> dict:
     try:
-        return _action_evidence_readiness(snapshot, packet, action, retained_dir=retained_dir)
+        verdict = _action_evidence_readiness(snapshot, packet, action, retained_dir=retained_dir)
+        from closer_evidence_recovery import classify_requirements
+
+        return classify_requirements(verdict, snapshot, packet, retained_dir=retained_dir)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, IndexError):
         return {
             "schema": "closer-action-evidence-readiness/v1",
@@ -614,7 +617,17 @@ def readiness_summary(readiness: dict, *, packet_ref=None, inventory_ref=None) -
     """Bound callback metadata; immutable packet/section refs retain all proof."""
     summary = {
         key: readiness[key]
-        for key in ("schema", "ready", "action", "mode", "gaps", "section_reasons", "dependency")
+        for key in (
+            "schema",
+            "ready",
+            "evaluation_ready",
+            "requirements",
+            "action",
+            "mode",
+            "gaps",
+            "section_reasons",
+            "dependency",
+        )
         if key in readiness
     }
     summary.update(packet_ref=packet_ref, inventory_ref=inventory_ref)
@@ -2317,6 +2330,8 @@ def collect_evidence(
     artifact_fetch=None,
     review_threads_fetch=None,
     action: str | None = None,
+    refresh_sections: set[str] | None = None,
+    supplemental_sections: dict | None = None,
 ) -> dict:
     """Create an incremental evidence packet.
 
@@ -2371,6 +2386,31 @@ def collect_evidence(
                 return None
         return section if _retained_section_valid(section, allow_partial=allow_partial) else None
 
+    def preserved(name):
+        if (
+            refresh_sections is None
+            or name in refresh_sections
+            or not prior_ok
+            or prior_packet is None
+        ):
+            return None
+        if prior_packet.get("capture_revision") != snapshot.get("revision"):
+            return None
+        binding_name, binding = (
+            {
+                "source": ("source", _hash(sources)),
+                "review_conversations": ("reviews", _hash(snapshot.get("review_revision"))),
+            }
+        ).get(name, ("identity", expected_identity))
+        if prior_packet["bindings"].get(binding_name) != binding:
+            return None
+        section = prior_packet["sections"].get(name)
+        # A verified missing/partial observation is progress too. Keep its raw
+        # section and failure reason until an explicit requirement selects it.
+        if not isinstance(section, dict) or not _retained_section_payload_valid(section):
+            return None
+        return section
+
     cached_source = prior_section("source", "source", _hash(sources), allow_partial=True)
     cached_diff = prior_section("diff_files", "identity", expected_identity)
     if cached_diff:
@@ -2413,15 +2453,22 @@ def collect_evidence(
         "collect_evidence",
         "disposition",
     }
-    native_section = (
+    native_section = preserved("native_merge_verifier") or (
         _native_verifier_section(snapshot, api, deadline, root, artifact_fetch, shared_budget)
         if native_first
         else None
     )
     sections = {
-        "source": cached_source or _source_section(sources, root),
-        "diff_files": cached_diff or _diff_section(snapshot, api, deadline, root),
-        "review_conversations": cached_reviews
+        "source": preserved("source") or cached_source or _source_section(sources, root),
+        "diff_files": preserved("diff_files")
+        or (None if refresh_sections and "diff_files" in refresh_sections else cached_diff)
+        or _diff_section(snapshot, api, deadline, root),
+        "review_conversations": preserved("review_conversations")
+        or (
+            None
+            if refresh_sections and "review_conversations" in refresh_sections
+            else cached_reviews
+        )
         or _review_section(snapshot, review_threads_fetch, deadline, root),
         "prior_dispositions": _section(
             "complete" if dispositions else "missing",
@@ -2438,7 +2485,8 @@ def collect_evidence(
             },
             reason=None if snapshot.get("checks") is not None else "no current-head check rollup",
         ),
-        "ci_artifacts": _artifact_section(
+        "ci_artifacts": preserved("ci_artifacts")
+        or _artifact_section(
             snapshot,
             api,
             deadline,
@@ -2459,6 +2507,19 @@ def collect_evidence(
             )
         ),
     }
+    if (
+        prior_ok
+        and prior_packet
+        and prior_packet.get("capture_revision") == snapshot.get("revision")
+    ):
+        for name in ("requested_evidence",):
+            prior_extra = prior_packet["sections"].get(name)
+            if isinstance(prior_extra, dict) and _retained_section_payload_valid(prior_extra):
+                sections[name] = prior_extra
+    for name, section in (supplemental_sections or {}).items():
+        if name != "requested_evidence" or not isinstance(section, dict):
+            raise ValueError("unsupported supplemental collection section")
+        sections[name] = section
     inventory = snapshot.get("delivery_links")
     if inventory is not None:
         sections["delivery_inventory"] = _section(
@@ -2532,6 +2593,7 @@ def collect_evidence(
         "section_digests": {k: v["sha256"] for k, v in sections.items()},
         "history": [],
         "collection_action": action,
+        "capture_revision": snapshot.get("revision"),
     }
     packet["semantic_cache_key"] = _semantic_cache_key(packet)
     packet = update_packet(previous, packet)
