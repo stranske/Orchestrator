@@ -336,6 +336,11 @@ jobs:
 
       - name: Build the flat copy with the sync's copy contract and verify it there
         env:
+          # Keep scratch mirrors, pytest temps and verdict writes off /tmp: that volume
+          # hits EDQUOTA (errno 122) on this job while the suite is otherwise green.
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
           ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
           ORCH_SYNC_SCRIPT: ${{ github.workspace }}/scripts/build_exec_mirror.sh
