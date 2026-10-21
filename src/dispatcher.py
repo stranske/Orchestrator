@@ -52,6 +52,98 @@ class _CompletionPersistencePending(RuntimeError):
         self.completion = completion
 
 
+class _ProviderResultRetentionPending(RuntimeError):
+    """One actual invocation could not establish its durable result receipt."""
+
+    def __init__(self, result: dict):
+        super().__init__("provider result retention is pending; do not repeat invocation")
+        self.result = result
+
+
+def _retain_provider_result(
+    log_file: Path,
+    result: dict,
+    *,
+    profile_id: str | None,
+    attempt: int,
+    started_at: float,
+    completed_at: float,
+    run_cwd: Path,
+    process_cwd: Path,
+) -> Path:
+    """Create an immutable per-invocation result before exception-prone enrichment.
+
+    This receipt proves observed transport facts, never resolved model identity.
+    The explicit redaction opt-out keeps its existing return/log semantics, but
+    does not authorize another copy of unmasked free text in this new receipt.
+    """
+    original = json.dumps(result, sort_keys=True).encode()
+    disabled = credential_redaction.disabled()
+    receipt = {
+        "schema": "offload-provider-result/v1",
+        "run_id": result["run_id"],
+        "agent": result["agent"],
+        "profile_id": profile_id,
+        "cwd": str(run_cwd),
+        "process_cwd": str(process_cwd),
+        "log": str(log_file),
+        "attempt": attempt,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "exit": result["exit"],
+        "raw_exit": result.get("raw_exit", result["exit"]),
+        "outcome_uncertain": result.get("outcome_uncertain") is True,
+        "full_result_retained": not disabled,
+        "provider_result_sha256": hashlib.sha256(original).hexdigest(),
+    }
+    if disabled:
+        receipt.update(
+            retention_kind="bound_metadata_only",
+            omitted_free_text=True,
+            reason="credential_redaction_disabled",
+        )
+    else:
+        # Redact every string, including nested provider metadata. This is the
+        # existing redaction policy; no new credential source is consulted.
+        def masked(value):
+            if isinstance(value, str):
+                return credential_redaction.redact(value)
+            if isinstance(value, dict):
+                return {key: masked(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [masked(item) for item in value]
+            return value
+
+        receipt["result"] = masked(result)
+        receipt["retention_kind"] = "redacted_provider_result"
+        receipt["retained_result_sha256"] = hashlib.sha256(
+            json.dumps(receipt["result"], sort_keys=True).encode()
+        ).hexdigest()
+    raw = json.dumps(receipt, sort_keys=True).encode()
+    destination = log_file.with_suffix(f".provider-result-{attempt}.json")
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=".provider-result-", dir=log_file.parent)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # link is create-only. A collision is a barrier, never an overwrite.
+        os.link(temporary, destination)
+        directory = os.open(log_file.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            # A private temporary orphan is recoverable. Cleanup must never
+            # shadow either the original write failure or a committed receipt.
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+    return destination
+
+
 def _persist_profile_completion(write, run_id: str, **fields) -> None:
     """Retry only one idempotent UPDATE, never a provider or completion ledger append."""
     deadline = time.monotonic() + 2.0
@@ -3260,6 +3352,52 @@ def offload(
 
     attempt_stderr = ""
 
+    def _cleanup_result_artifacts() -> list[str]:
+        # New retention barriers still owe the existing prompt removal/log scrub.
+        # Cleanup failures must not erase the provider's original uncertain result.
+        errors = []
+        if muse_prompt is not None:
+            try:
+                muse_prompt.unlink(missing_ok=True)
+            except OSError as exc:
+                errors.append("muse_prompt:" + type(exc).__name__)
+        if agy_log is not None:
+            try:
+                scrub = credential_redaction.scrub_file(agy_log)
+                if scrub.get("status") in {"error", "too_large"}:
+                    errors.append("agy_log:" + str(scrub["status"]))
+            except OSError as exc:
+                errors.append("agy_log:" + type(exc).__name__)
+        return errors
+
+    def _retain_attempt_result(result: dict) -> None:
+        try:
+            _retain_provider_result(
+                logf,
+                result,
+                profile_id=effective_profile_id,
+                attempt=attempt,
+                started_at=attempt_started,
+                completed_at=time.time(),
+                run_cwd=run_cwd,
+                process_cwd=proc_cwd,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            actual_exit = result.get("raw_exit", result.get("exit"))
+            held = {
+                **result,
+                "exit": 70,
+                "raw_exit": actual_exit,
+                "provider_completed": actual_exit == 0 and not result.get("outcome_uncertain"),
+                "outcome_uncertain": True,
+                "outcome_status": "uncertain",
+                "retry_safe": False,
+                "error": "provider_result_retention_failed:" + type(exc).__name__,
+            }
+            if cleanup_errors := _cleanup_result_artifacts():
+                held["cleanup_errors"] = cleanup_errors
+            raise _ProviderResultRetentionPending(held) from exc
+
     def _run_offload_attempt() -> dict:
         # `nonlocal`, because the model this attempt observes must reach `_record_complete` in the
         # ENCLOSING scope. Without it the assignment below made a local that the completion never
@@ -3463,28 +3601,37 @@ def offload(
                 "run_id": run_id,
                 "log": str(logf),
             }
-        except KeyboardInterrupt:
-            if muse_prompt is not None:
-                muse_prompt.unlink(missing_ok=True)
+        except KeyboardInterrupt as interruption:
             error = "interrupted by orchestrator"
-            if attempt_receipt_callback is not None:
-                _notify_attempt(
-                    attempt_receipt_callback,
-                    {
-                        "agent": agent,
-                        "exit": 130,
-                        "output": "",
-                        "error": error,
-                        "run_id": run_id,
-                        "model": model,
-                        "log": str(logf),
-                        "cwd": str(run_cwd),
-                        "process_cwd": str(proc_cwd),
-                    },
-                )
-            _record_complete(exit_code=130, error=error)
-            with logf.open("a") as fh:
-                fh.write(f"[orchestrator] offload marked failed: {error}\n")
+            interrupted = {
+                "agent": agent,
+                "exit": 130,
+                "output": "",
+                "error": error,
+                "run_id": run_id,
+                "model": model,
+                "log": str(logf),
+                "cwd": str(run_cwd),
+                "process_cwd": str(proc_cwd),
+            }
+            try:
+                _retain_attempt_result(interrupted)
+                if cleanup_errors := _cleanup_result_artifacts():
+                    interrupted["cleanup_errors"] = cleanup_errors
+                if attempt_receipt_callback is not None:
+                    _notify_attempt(attempt_receipt_callback, interrupted)
+                _record_complete(exit_code=130, error=error)
+                with logf.open("a") as fh:
+                    fh.write(f"[orchestrator] offload marked failed: {error}\n")
+            except _ProviderResultRetentionPending as pending:
+                # Cancellation remains cancellation even when result storage failed.
+                # Preserve the exact held receipt for caller reconciliation, never retry.
+                setattr(interruption, "held_result", pending.result)
+                raise interruption from pending
+            except Exception as completion_error:
+                # A callback/accounting/log error cannot consume operator cancellation.
+                setattr(interruption, "completion_error", type(completion_error).__name__)
+                raise interruption from completion_error
             raise
         finally:
             _cleanup_stream()
@@ -3695,7 +3842,12 @@ def offload(
     for attempt in range(1, max_network_retries + 2):
         attempts = attempt
         attempt_started = time.time()
-        out = _run_offload_attempt()
+        try:
+            out = _run_offload_attempt()
+            _retain_attempt_result(out)
+        except _ProviderResultRetentionPending as exc:
+            # Provider effects already happened: no callback, enrichment or retry.
+            return exc.result
         attempt_ended = time.time()
         # Receipt consumers that reserve an external spend boundary must see
         # every actual invocation before retry, ledger completion, Brain or
@@ -5861,13 +6013,32 @@ def main(argv: list[str]) -> int:
                 task_type=ns.task_type,
                 subject_id=ns.subject,
             )
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as interruption:
             out = {
                 "agent": ns.agent,
                 "exit": 130,
                 "output": "",
                 "error": "interrupted by orchestrator",
             }
+            held = getattr(interruption, "held_result", None)
+            if (
+                isinstance(held, dict)
+                and isinstance(held.get("run_id"), str)
+                and held["run_id"]
+                and held.get("outcome_status") == "uncertain"
+                and held.get("outcome_uncertain") is True
+                and held.get("retry_safe") is False
+                and held.get("exit") == 70
+                and held.get("raw_exit") == 130
+            ):
+                out.update(
+                    run_id=held["run_id"],
+                    held_result=held,
+                    raw_exit=130,
+                    outcome_status="uncertain",
+                    outcome_uncertain=True,
+                    retry_safe=False,
+                )
         print(out["output"] if out.get("output") else json.dumps(out, default=str))
         if out.get("error"):
             print(f"[orchestrator] offload error: {out['error']}", file=sys.stderr)
