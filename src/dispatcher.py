@@ -32,7 +32,7 @@ import tempfile
 import time
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import adapters
 import claims
@@ -42,6 +42,10 @@ import feedback
 import provision
 import repo_knowledge
 import worktree_git
+
+
+class _DataOnlyCommandOptions(TypedDict, total=False):
+    data_only: bool
 
 
 class _CompletionPersistencePending(RuntimeError):
@@ -3046,6 +3050,7 @@ def offload(
     # Refuse missing login before allocating a private prompt or recording a started invocation.
     muse_prelude = _agent_runtime_prelude(agent) if agent == "muse" else None
     muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
+    data_only_options: _DataOnlyCommandOptions = {"data_only": True} if data_only else {}
     argv = (
         adapters.build_command(
             agent,
@@ -3055,7 +3060,7 @@ def offload(
             profile=profile,
             transport="offload",
             prompt_via_stdin=prompt_via_stdin,
-            **({"data_only": True} if data_only else {}),
+            **data_only_options,
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
@@ -3074,7 +3079,7 @@ def offload(
                 else None
             ),
             prompt_via_stdin=prompt_via_stdin,
-            **({"data_only": True} if data_only else {}),
+            **data_only_options,
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )

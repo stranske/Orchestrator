@@ -31,7 +31,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import execution_profiles
 import worktree_git
@@ -1979,7 +1979,8 @@ def build_command(
     if agent == "claude":
         cmd = (
             [
-                data_only_binary,
+                # The data_only branch above qualified and assigned this path.
+                cast(str, data_only_binary),
                 "-p",
                 "--input-format",
                 "text",
