@@ -66,6 +66,7 @@ def footprint(
     stop_after: int | None = None,
     deduplicate: bool = True,
     allocated_limit: bool = False,
+    reject_links: bool = False,
 ) -> JSON:
     """Metadata only, no symlink traversal; deduplicate hardlinks within this estimate.
 
@@ -78,6 +79,10 @@ def footprint(
     while pending:
         entry = pending.pop()
         value = entry.lstat()
+        if reject_links and stat.S_ISLNK(value.st_mode):
+            raise StorageBlocked(
+                "copied state contains a symlink; isolation needs an explicit copy plan"
+            )
         key = (value.st_dev, value.st_ino)
         if deduplicate and key in seen:
             continue
@@ -95,10 +100,10 @@ def footprint(
     return {"allocated": allocated, "logical": logical, "over_limit": False}
 
 
-def copy_bytes(path: Path) -> int:
+def copy_bytes(path: Path, *, reject_links: bool = False) -> int:
     # Plain cp may materialize every hardlink and shared/sparse extent. Inventory
     # deduplication must not understate that prospective allocation.
-    value = footprint(path, deduplicate=False)
+    value = footprint(path, deduplicate=False, reject_links=reject_links)
     return max(value["allocated"], value["logical"])
 
 
@@ -175,7 +180,7 @@ def staging_bytes(
                 entry, stop_after=maximum if entry.is_dir() else None, allocated_limit=True
             )
             if not value["over_limit"]:
-                subtotal += copy_bytes(entry)
+                subtotal += copy_bytes(entry, reject_links=True)
         return subtotal
 
     for root in dict.fromkeys((runtime, state)):
@@ -467,15 +472,12 @@ def run_job(
     source_command = ["bash", args.command[1], "--identity", str(args.source)]
     before = identity(source_command)
     owner_key = os.environ.get("VERIFY_BEFORE_SYNC_OWNER_KEY")
-    scope = hashlib.sha256(
-        json.dumps(
-            [
-                str(args.runtime.resolve()),
-                args.profile,
-                ["release", owner_key] if owner_key else ["source", before],
-            ]
-        ).encode()
-    ).hexdigest()
+    claim = (
+        ["publication", owner_key]
+        if owner_key
+        else ["source", str(args.runtime.resolve()), args.profile, before]
+    )
+    scope = hashlib.sha256(json.dumps(claim).encode()).hexdigest()
     admitted = manager.admit(job, args.profile, forecast, peak, owner_token=token, scope=scope)
     # A shared byte ledger admits one aggregate demand under one lock. This separate
     # per-job lock remains held through the child, evidence retention and cleanup.

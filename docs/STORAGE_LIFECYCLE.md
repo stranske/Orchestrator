@@ -60,9 +60,10 @@ mistaking an inherited environment variable for its own admission.
 
 An atomic source/profile/runtime claim also prevents two supervisors from
 verifying identical input simultaneously, even with ample space. Release
-coordinators should set `VERIFY_BEFORE_SYNC_OWNER_KEY` to their existing stable
+coordinators set `VERIFY_BEFORE_SYNC_OWNER_KEY` to their stable
 publication target key: this additionally excludes a superseded candidate for
-that same publication scope. Independent keys still run concurrently when their
+that same publication scope, including different runtime inputs or tree profiles.
+Independent keys still run concurrently when their
 aggregate byte plan fits. Claims survive uncertain termination and never expire.
 This is not a global lane hold, nor does it prove that a legacy launcher which
 does not participate stopped. Coordinators must still reconcile those writers.
@@ -128,3 +129,38 @@ source changes, failed runs, inspection denial, interrupted supervisors/cleanup,
 successor directories, aliases, sparse/shared allocation, peak forecasts and actual
 free-byte reporting. They use tiny private fixtures, not the release suite or live
 cleanup.
+
+## Integration and deployment acceptance
+
+Repository entry points are wired, not merely given a helper:
+
+- `ReleaseRecord.verify_and_install` passes the shared `ORCH_STORAGE_STATE_DIR`
+  and derives `publication:<logical mirror path>` from the publication target.
+  The final generation symlink is not resolved, so the key stays stable across
+  installed generations, candidates, journal files and lane owners.
+- The executable sync-wrapper source in `docs/MIRROR_SYNC_PATCH.md` derives the
+  same key and shared ledger. Its extracted-wrapper integration tests assert
+  those environment values. The source is not the installed native wrapper.
+- Direct nonpublication `verify_before_sync.sh` calls share the default ledger
+  and source claim. An explicit ledger override must be agreed by all launchers;
+  separate ledgers cannot coordinate physical demand or publication ownership.
+
+Activation requires the release coordinator to inventory the actual cooperating
+launchers, install this reviewed source through the normal verified release, and
+confirm that each invokes this wrapper with the agreed ledger and publication
+key. Ad hoc project release drivers and older installed wrappers are legacy
+until updated and witnessed. Helper availability alone is not fleet adoption.
+
+Before activation, reconcile every known legacy invocation using its actual
+source/candidate, journal, PID/group terminal receipt and fresh handle evidence.
+Keep uncertain writers and their data; elapsed time and a new ledger claim are
+not terminal proof. This is an explicit ownership handoff for the publication
+target, not a new global lane hold. The frozen active release is outside this PR.
+
+Deployment acceptance must witness two changed candidates for one publication
+key refusing overlap before the copier starts, while an independent target can
+be admitted when its byte plan fits. Then witness terminal success/failure,
+retained failure state, permission remnants and fresh available-byte receipts.
+The focused tiny integration/concurrency tests cover those contracts; no live
+large verifier or runtime installation is performed by this implementation task.
+Keep tested, integrated-in-source, merged and installed states separate.

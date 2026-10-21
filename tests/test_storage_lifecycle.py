@@ -169,6 +169,18 @@ def test_nested_custom_control_cannot_recursively_enter_a_state_copy(tmp_path):
         storage.staging_bytes(source, runtime, runtime, 2**20, exclude=control)
 
 
+def test_nested_state_alias_cannot_point_a_verifier_back_at_live_data(tmp_path):
+    source, runtime = tmp_path / "source", tmp_path / "runtime"
+    source.mkdir()
+    (runtime / "copied").mkdir(parents=True)
+    outside = tmp_path / "live-data"
+    outside.write_bytes(b"preserve")
+    (runtime / "copied/alias").symlink_to(outside)
+    with pytest.raises(storage.StorageBlocked, match="copied state contains a symlink"):
+        storage.staging_bytes(source, runtime, runtime, 2**20)
+    assert outside.read_bytes() == b"preserve"
+
+
 @pytest.fixture
 def job(tmp_path):
     source = tmp_path / "source"
@@ -462,6 +474,9 @@ def test_release_key_blocks_changed_candidate_but_not_independent_owner(job, mon
             probe=lambda _: (_ for _ in ()).throw(PermissionError()),
         )
     (job.source / "identity").write_text("successor")
+    job.runtime = job.temp_parent / "different-runtime"
+    job.runtime.mkdir()
+    job.profile = "different-shape"
     with pytest.raises(storage.StorageBlocked, match="already claimed"):
         storage.run_job(job, free=lambda _: storage.GIB, probe=lambda _: None)
     monkeypatch.setenv("VERIFY_BEFORE_SYNC_OWNER_KEY", "publication-B")
