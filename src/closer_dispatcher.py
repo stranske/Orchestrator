@@ -4865,12 +4865,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "senior coordinator disposition. "
             + NONPASS_ACCOUNTING_CONTRACT
             + (
-                "Run the due bounded semantic-drift audit against each supplied sample and raw section reference; return drift_review_complete:true only when every sample was inspected, drift_mismatches (array of exact case/section IDs), and drift_summary. "
+                "Run the due bounded semantic-drift audit against supplied sample content; retained references alone are not inspected content. Return drift_review_complete:true only when every sample was inspected, otherwise false with exact unavailable sections. Return drift_mismatches (array of confirmed exact case/section IDs) and drift_summary. An incomplete producer audit does not invalidate the per-PR assessment or make optional evidence necessary. "
                 if run_drift
                 else "Set drift_mismatches to an empty array. "
             )
-            + "Inspect retained files with read-only commands such as python3 -c; shell heredocs may require forbidden temporary-file writes. Do not create files or widen permissions. If inspection cannot finish, identify the exact unavailable sections and failed command. "
-            "Compare bounded drift sample cases against their referenced raw packet sections; "
+            + (
+                "Inspect only supplied inline content; do not open retained paths. "
+                if data_only
+                else "Inspect retained files with read-only commands such as python3 -c; shell heredocs may require forbidden temporary-file writes. Do not create files or widen permissions. If inspection cannot finish, identify the exact unavailable sections and failed command. "
+            )
+            + "Compare bounded drift sample cases against their supplied raw packet sections; "
             "report semantic mismatches in substantive_needs with exact affected section/finding IDs. "
             "Return decision rows only when every original source body and criterion is explicitly covered. Each PASS row must bind to the precise current source/run/attempt provenance. Never cite this manifest as proof. Preserve NON_PASS raw verdicts.\n"
             + json.dumps({"mandatory": prompt_mandatory}, ensure_ascii=False, separators=(",", ":"))
@@ -4891,7 +4895,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 (
                     recovery.COLLECTION_INSTRUCTIONS
                     if collection_mode
-                    else "Classify every requested extra as necessary, useful, nice_to_have or possibly_useful. Use evidence_requests with a specific locator, question and original-criterion/current-finding basis for necessary extras. Optional requests are suggestions, never substantive_needs. "
+                    else "Classify every requested extra as necessary, useful, nice_to_have or possibly_useful. Each evidence_requests entry needs a bounded reason. Select an existing rail with requirement_id and necessity, or request one exact job log with locator:{kind:job_log,job_id:<exact positive integer>}, question and basis:{source:<exact source target>,criterion:<verbatim original criterion>} or basis:{finding_id:<supplied current finding ID>}. Do not invent job IDs or use free-form locators/bases. Unsupported retrieval needs remain findings/substantive_needs for coordinator judgment. Optional suggestions may use section without locator; never put them in substantive_needs. "
                 )
                 + "\nEvidence requirements: "
                 + json.dumps(readiness)
@@ -5191,8 +5195,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and isinstance(proposal.get("drift_summary"), str)
             and bool(proposal.get("drift_summary", "").strip())
         )
-        if valid and not drift_complete:
-            valid = False
         needs = (
             proposal.get("substantive_needs", [])
             if valid
@@ -5205,6 +5207,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             ]
         )
         mismatches = proposal.get("drift_mismatches", []) if valid else []
+        if not isinstance(mismatches, list):
+            mismatches = []
         if valid and run_drift and mismatches:
             needs = list(needs) + [
                 "semantic_drift_mismatch:" + str(x)[:200] for x in mismatches[:10]
@@ -5214,6 +5218,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if valid and (proposal.get("head") != snap.get("head") or proposal.get("target") != target):
             valid = False
             needs = ["objective_binding_mismatch"]
+        # Producer-audit completion is independent of the current PR's response
+        # contract. Missing audit tools/content must not discard usable findings
+        # or typed requests before the existing recovery and action guards.
+        producer_audit = {
+            "status": ("complete" if valid and drift_complete else "pending") if run_drift else "not_due",
+            "producer_sha256": producer_sha,
+            "summary": proposal.get("drift_summary") if valid and run_drift else None,
+        }
+        if valid and run_drift:
+            proposal["producer_audit"] = producer_audit
         if recovery_enabled and collection_mode:
             import closer_stage_feedback
 
@@ -5379,9 +5393,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             },
             "authority": False,
             "run_id": result.get("run_id"),
+            "producer_audit": producer_audit,
             "drift_review_at": time.time() if run_drift and valid and drift_complete else None,
             "drift_review": proposal.get("drift_summary") if run_drift and valid else None,
-            "producer_sha256": producer_sha if run_drift and valid else None,
+            "producer_sha256": producer_sha if run_drift and valid and drift_complete else None,
             "integration_status": integration.get("status"),
             "integration_reason": integration.get("reason"),
             "raw_findings": integration.get("raw_findings", [])[:20],
