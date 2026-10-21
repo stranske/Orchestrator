@@ -4235,6 +4235,9 @@ def _run_pipeline_finite(
                         else "held"
                     )
                     error_text = f"{type(exc).__name__}: {str(exc)[:200]}"
+                    scope_refusal = (
+                        dict(exc.proof) if isinstance(exc, closer_resources.ScopeBlocked) else None
+                    )
 
                     def fail(entry):
                         current = entry["items"][target]
@@ -4248,8 +4251,8 @@ def _run_pipeline_finite(
                                 else "operator_review"
                             ),
                         )
-                        if isinstance(exc, closer_resources.ScopeBlocked):
-                            current["scope_refusal"] = dict(exc.proof)
+                        if scope_refusal is not None:
+                            current["scope_refusal"] = scope_refusal
 
                     mutate_frontier(fail, request_deadline=window["deadline"])
                     continue
