@@ -302,3 +302,159 @@ def test_real_native_prompt_supplies_full_nonissue_request_beyond_optional_sampl
     assert "EXACT_REQUEST_TAIL" in prompt
     assert "explicit snapshot below" not in prompt
     assert all(path.read_bytes() == original for path, original in w.originals.items())
+
+
+def assessment_capacity(monkeypatch, obstruction):
+    claude = execution_profiles.get_profile("claude-sonnet-5-5-low")
+    gemini = execution_profiles.get_profile("gemini-4-argon-low")
+    selected = [claude, gemini]
+    report = {
+        "agents": {profile["agent"]: {"state": "ok"} for profile in selected},
+        "profiles": {profile["profile_id"]: {"state": "ok"} for profile in selected},
+        "pools": {
+            pool: {"state": "ok"} for profile in selected for pool in profile["capacity_pool_ids"]
+        },
+    }
+    load = {}
+    if obstruction == "agent":
+        report["agents"]["claude"]["state"] = "exhausted"
+    elif obstruction == "profile":
+        report["profiles"][claude["profile_id"]]["state"] = "exhausted"
+    elif obstruction == "pool":
+        report["pools"][claude["capacity_pool_ids"][0]]["state"] = "exhausted"
+    elif obstruction == "busy":
+        load["pool:" + claude["capacity_pool_ids"][0]] = 1
+    monkeypatch.setattr(cd, "_fresh_capacity_report", lambda: report)
+    monkeypatch.setattr(
+        adapters,
+        "data_only_problem",
+        lambda agent, *_: (
+            None
+            if agent == "claude" and obstruction != "transport"
+            else "unsupported tool boundary"
+        ),
+    )
+    return report, load, claude
+
+
+@pytest.mark.parametrize(
+    "obstruction,expected",
+    [
+        ("agent", "exhausted"),
+        ("profile", "exhausted"),
+        ("pool", "exhausted"),
+        ("busy", "busy"),
+        ("transport", "unsupported_assessment_tool_boundary"),
+    ],
+)
+def test_qualified_transport_capacity_is_not_hidden_by_healthy_unsupported_agent(
+    monkeypatch, obstruction, expected
+):
+    _report, load, _profile = assessment_capacity(monkeypatch, obstruction)
+    route, status = cd._pipeline_low_route(load=load, with_status=True, data_only=True)
+    assert route is None and status == expected
+
+
+def test_real_fallback_capacity_classification_keeps_qualified_transport(monkeypatch, tmp_path):
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path))
+    _report, _load, profile = assessment_capacity(monkeypatch, "agent")
+    route = {
+        "agent": "claude",
+        "profile_id": profile["profile_id"],
+        "pools": profile["capacity_pool_ids"],
+    }
+
+    @contextmanager
+    def busy(*_a, **_kw):
+        raise cr.ResourceBlocked("actual selected pool became busy")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(cr, "pool_slot", busy)
+    with pytest.raises(cr.ResourceBlocked) as stopped:
+        cd._execute_profile_route(
+            route,
+            lambda *_: pytest.fail("provider invoked"),
+            lane="low",
+            load={},
+            deadline=1e20,
+            data_only=True,
+        )
+    assert not isinstance(stopped.value, cd.AssessmentTransportUnavailable)
+
+
+def test_native_interpret_capacity_exhaustion_retains_capacity_recheck(native_world, capsys):
+    import json
+
+    w = native_world
+    claude = execution_profiles.get_profile("claude-sonnet-5-5-low")
+    gemini = execution_profiles.get_profile("gemini-4-argon-low")
+    w.report["agents"]["claude"]["state"] = "exhausted"
+    w.report["agents"]["gemini"] = {"state": "ok"}
+    w.report["profiles"][gemini["profile_id"]] = {"state": "ok"}
+    for pool in gemini["capacity_pool_ids"]:
+        w.report["pools"][pool] = {"state": "ok"}
+    cd.main(w.argv)
+    capsys.readouterr()
+    shard = cr.shard_dir(cr.scoped_root(w.ledger), w.snapshot["target"]) / "state.json"
+    row = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][
+        w.snapshot["target"]
+    ]
+    result = row["results"]["interpret"]
+    assert result["classification"] == "capacity_deferred"
+    assert result["next_trigger"] == "capacity_recheck"
+    assert result["reason"] == "worker_capacity"
+    assert w.events["provider"] == w.events["effect"] == 0
+    assert claude["agent"] == "claude"
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_native_interpret_maps_only_proven_no_spawn_transport_refusal(
+    native_world, capsys, monkeypatch, uncertain
+):
+    import json
+
+    w = native_world
+    calls = []
+
+    def refused(*_a, **_kw):
+        calls.append("offload")
+        return {
+            "agent": "claude",
+            "exit": 70 if uncertain else 2,
+            "output": "",
+            "run_id": "synthetic-no-spawn-refusal",
+            "error": "qualification changed",
+            "process_started": False,
+            "unsupported_assessment_tool_boundary": True,
+            "outcome_uncertain": uncertain,
+            **({"outcome_status": "uncertain", "retry_safe": False} if uncertain else {}),
+        }
+
+    monkeypatch.setattr(dispatcher, "offload", refused)
+    cd.main(w.argv)
+    capsys.readouterr()
+    shard = cr.shard_dir(cr.scoped_root(w.ledger), w.snapshot["target"]) / "state.json"
+    row = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][
+        w.snapshot["target"]
+    ]
+    result = row["results"]["interpret"]
+    assert calls == ["offload"] and w.events["effect"] == 0
+    if uncertain:
+        assert result["classification"] == "provider_outcome_uncertain"
+        assert row["status"] == "unknown"
+    else:
+        assert result["classification"] == "assessment_transport_unavailable"
+        assert (
+            result["pending_evidence"]["transport_refusal"]["run_id"]
+            == "synthetic-no-spawn-refusal"
+        )
+        assert (
+            result["next_trigger"] == "qualified data-only assessment transport becomes available"
+        )
+        assert result["authority"] is False
+        profile_slots = list(
+            (w.root / "private-handoff" / "closer-profile-execution" / "pools").rglob("slot-0.json")
+        )
+        assert profile_slots
+        assert all(json.loads(path.read_text())["status"] == "resolved" for path in profile_slots)
+    assert all(path.read_bytes() == raw for path, raw in w.originals.items())

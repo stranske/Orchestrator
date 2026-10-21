@@ -2851,6 +2851,8 @@ def offload(
                 "output": "",
                 "run_id": None,
                 "error": problem,
+                "process_started": False,
+                "outcome_uncertain": False,
                 "unsupported_assessment_tool_boundary": True,
             }
         max_network_retries = 0
@@ -3504,9 +3506,32 @@ def offload(
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as prompt_file:
                     prompt_file.write(stream_prompt)
             if data_only:
-                problem = adapters.data_only_problem(agent, mode)
-                if problem or adapters._data_only_claude_binary() != argv[0]:
-                    raise ValueError(problem or "data-only CLI identity changed before dispatch")
+                try:
+                    problem = adapters.data_only_problem(agent, mode)
+                    if not problem and adapters._data_only_claude_binary() != argv[0]:
+                        problem = "data-only CLI identity changed before dispatch"
+                except (OSError, ValueError) as exc:
+                    problem = f"{type(exc).__name__}: {exc}"
+                if problem:
+                    # The start ledger already exists, but no process callback
+                    # or spawn occurred. Return through normal result retention
+                    # and completion rather than leaving a stranded start row.
+                    _cleanup_stream()
+                    return {
+                        "agent": agent,
+                        "exit": 2,
+                        "output": "",
+                        "error": problem,
+                        "run_id": run_id,
+                        "model": model,
+                        "log": str(logf),
+                        "cwd": str(run_cwd),
+                        "process_cwd": str(proc_cwd),
+                        "request_metadata": request_metadata,
+                        "process_started": False,
+                        "outcome_uncertain": False,
+                        "unsupported_assessment_tool_boundary": True,
+                    }
             if attempt_started_callback is not None:
                 _notify_attempt(attempt_started_callback, {"run_id": run_id, "agent": agent})
         except BaseException:
@@ -3940,7 +3965,11 @@ def offload(
                         error="data-only private input cleanup failed",
                         cleanup_errors=data_only_cleanup_errors,
                     )
-                if out.get("exit") != 0:
+                if out.get("exit") != 0 and not (
+                    out.get("exit") == 2
+                    and out.get("process_started") is False
+                    and out.get("unsupported_assessment_tool_boundary") is True
+                ):
                     out.update(outcome_uncertain=True, outcome_status="uncertain", retry_safe=False)
             _retain_attempt_result(out)
         except _ProviderResultRetentionPending as exc:

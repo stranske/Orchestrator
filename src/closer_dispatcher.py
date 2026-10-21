@@ -2501,12 +2501,22 @@ def _pipeline_low_route(
         available_profiles = {}
         busy_unfailed_profile = False
         unsupported_assessment = False
+        qualified_assessment = False
         for agent, row in report["agents"].items():
             # Vibe is approved for this bounded lane; Aider is explicitly not.
             # Keep this exclusion local to closer routing rather than changing
             # the shared profile registry used by other workflows.
             if str(agent).casefold() == "aider":
                 continue
+            assessment_problem = None
+            if data_only:
+                import adapters
+
+                # Tool confinement is independent of the current quota or pool
+                # reading. A qualified but exhausted seat still needs capacity.
+                assessment_problem = adapters.data_only_problem(agent, "assess")
+                qualified_assessment |= assessment_problem is None
+                unsupported_assessment |= assessment_problem is not None
             if row.get("state") not in {"ok", "warn"}:
                 continue
             profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
@@ -2525,9 +2535,7 @@ def _pipeline_low_route(
                 )
             ]
             if data_only and profiles:
-                import adapters
-
-                if adapters.data_only_problem(agent, "assess"):
+                if assessment_problem:
                     unsupported_assessment = True
                     profiles = []
             unfailed_profiles = profiles
@@ -2549,7 +2557,7 @@ def _pipeline_low_route(
                 if busy_unfailed_profile
                 else (
                     "unsupported_assessment_tool_boundary"
-                    if unsupported_assessment
+                    if unsupported_assessment and not qualified_assessment
                     else "exhausted"
                 )
             )
@@ -2806,7 +2814,20 @@ def _execute_profile_route(
                     )
                 # Do not catch provider failures: execution happened, and unknown costs stay unknown.
                 invoked = True
-                return invoke(route), route
+                result = invoke(route)
+                if (
+                    finite_frontier is not None
+                    and isinstance(result, Mapping)
+                    and result.get("unsupported_assessment_tool_boundary") is True
+                    and result.get("process_started") is False
+                    and result.get("exit") == 2
+                    and result.get("outcome_uncertain") is False
+                ):
+                    # This refusal preceded every process-start callback. Close
+                    # only current still-unbound reservations while slots remain
+                    # held; bound or uncertain process records are never cleared.
+                    closer_resources.finite_pool_no_start()
+                return result, route
         except closer_resources.ResourceBlocked:
             if invoked:
                 raise
@@ -4507,6 +4528,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             basis=prep,
             capacity_context=route.get("capacity"),
         )
+        if (
+            data_only
+            and result.get("unsupported_assessment_tool_boundary") is True
+            and result.get("process_started") is False
+            and result.get("exit") == 2
+            and result.get("outcome_uncertain") is False
+        ):
+            pending = assessment_transport_pending(target, prep.get("revision"))
+            pending["pending_evidence"]["transport_refusal"] = result
+            return pending
         output = str(result.get("output") or "")
         if result.get("outcome_uncertain") is True or result.get("retry_safe") is False:
             if (

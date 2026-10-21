@@ -225,22 +225,84 @@ def test_observed_process_ownership_callbacks_preserved(box, monkeypatch):
     assert not list((root / "logs").glob("offload-prompt.*"))
 
 
-def test_final_binary_check_prevents_spawn_after_log_claim(box, monkeypatch):
+@pytest.mark.parametrize("failure", ["changed", "missing", "oserror"])
+def test_final_binary_check_prevents_spawn_and_closes_started_run(box, monkeypatch, failure):
     root, cli, capture = box
     claim = dispatcher._claim_offload_log
+    qualified_binary = adapters._data_only_claude_binary
+    claimed = False
+    events, receipts, started = [], [], []
 
     def changed(agent):
+        nonlocal claimed
         result = claim(agent)
-        cli.write_text(cli.read_text() + "\n# raced update\n")
+        claimed = True
+        if failure == "changed":
+            cli.write_text(cli.read_text() + "\n# raced update\n")
+        elif failure == "missing":
+            cli.unlink()
         return result
 
+    def binary():
+        if claimed and failure == "oserror":
+            raise PermissionError("synthetic final binary read refused")
+        return qualified_binary()
+
     monkeypatch.setattr(dispatcher, "_claim_offload_log", changed)
-    with pytest.raises(ValueError, match="not qualified"):
-        dispatcher.offload(
-            "claude", "self-contained input", cwd=str(root), mode="assess", data_only=True
-        )
+    monkeypatch.setattr(adapters, "_data_only_claude_binary", binary)
+    monkeypatch.setattr(adapters, "record_ledger", lambda *a, **k: events.append((a, k)))
+    monkeypatch.setattr(dispatcher.feedback, "record_run", lambda *a, **k: started.append(a[0]))
+    monkeypatch.setattr(
+        dispatcher.subprocess, "run", lambda *a, **k: pytest.fail("refused binary spawned")
+    )
+    out = dispatcher.offload(
+        "claude",
+        "self-contained private input",
+        cwd=str(root),
+        mode="assess",
+        data_only=True,
+        attempt_receipt_callback=lambda value: receipts.append(dict(value)),
+        process_starting_callback=lambda *_: pytest.fail("refusal announced a process"),
+        process_started_callback=lambda *_: pytest.fail("refusal started a process"),
+    )
+    assert out["exit"] == 2 and out["process_started"] is False
+    assert out["unsupported_assessment_tool_boundary"] is True
+    assert out["outcome_uncertain"] is False
+    assert out["attempts"] == 1 and not out.get("retried")
+    assert [value["event"] for _, value in events] == ["start", "complete"]
+    assert all(value["run_id"] == out["run_id"] for _, value in events)
+    assert events[1][1]["exit"] == 2 and started == [out["run_id"]]
+    assert len(receipts) == 1 and receipts[0]["run_id"] == out["run_id"]
     assert not capture.exists()
     assert not list((root / "logs").glob("offload-prompt.*"))
+    retained = json.loads(next((root / "logs").glob("*.provider-result-*.json")).read_text())
+    assert retained["run_id"] == out["run_id"] and retained["result"]["process_started"] is False
+    assert retained["result"]["exit"] == 2
+    assert "self-contained private input" not in Path(out["log"]).read_text()
+
+
+@pytest.mark.parametrize("error", [ValueError("callback refused"), OSError("callback refused")])
+def test_non_binary_callback_failure_is_not_converted_to_refusal(box, monkeypatch, error):
+    root, _, capture = box
+    events = []
+    monkeypatch.setattr(adapters, "record_ledger", lambda *a, **k: events.append(k["event"]))
+
+    def callback(_):
+        raise error
+
+    with pytest.raises(type(error), match="callback refused"):
+        dispatcher.offload(
+            "claude",
+            "input",
+            cwd=str(root),
+            mode="assess",
+            data_only=True,
+            attempt_started_callback=callback,
+        )
+    assert events == ["start"]
+    assert not capture.exists()
+    assert not list((root / "logs").glob("offload-prompt.*"))
+    assert not list((root / "logs").glob("*.provider-result-*.json"))
 
 
 def test_input_unlink_failure_scrubs_and_holds_actual_result(box, monkeypatch):
@@ -307,3 +369,55 @@ def test_opt_in_does_not_shift_existing_positional_parameters():
         "process_finished_callback",
         "data_only",
     ]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PermissionError("synthetic denied binary"), FileNotFoundError("synthetic absent binary")],
+)
+def test_initial_binary_oserror_is_no_start_without_ledger(box, monkeypatch, error):
+    root, _, capture = box
+    events = []
+
+    def unavailable():
+        raise error
+
+    monkeypatch.setattr(adapters, "_data_only_claude_binary", unavailable)
+    monkeypatch.setattr(adapters, "record_ledger", lambda *a, **k: events.append(k))
+    result = dispatcher.offload(
+        "claude", "private input", cwd=str(root), mode="assess", data_only=True
+    )
+    assert result["exit"] == 2 and result["process_started"] is False
+    assert result["run_id"] is None and result["outcome_uncertain"] is False
+    assert events == [] and not capture.exists()
+    assert not (root / "logs").exists()
+
+
+def test_no_spawn_refusal_retention_failure_stays_uncertain_without_retry(box, monkeypatch):
+    root, cli, capture = box
+    original_claim = dispatcher._claim_offload_log
+    events = []
+
+    def changed(agent):
+        result = original_claim(agent)
+        cli.write_text(cli.read_text() + "\n# changed before spawn\n")
+        return result
+
+    def unavailable_retention(*_a, **_kw):
+        raise OSError("synthetic result store unavailable")
+
+    monkeypatch.setattr(dispatcher, "_claim_offload_log", changed)
+    monkeypatch.setattr(dispatcher, "_retain_provider_result", unavailable_retention)
+    monkeypatch.setattr(adapters, "record_ledger", lambda *a, **k: events.append(k))
+    monkeypatch.setattr(
+        dispatcher.subprocess, "run", lambda *a, **k: pytest.fail("refused binary spawned")
+    )
+    result = dispatcher.offload(
+        "claude", "private input", cwd=str(root), mode="assess", data_only=True
+    )
+    assert result["exit"] == 70 and result["raw_exit"] == 2
+    assert result["process_started"] is False and result["outcome_uncertain"] is True
+    assert result["retry_safe"] is False and result["run_id"]
+    assert [event["event"] for event in events] == ["start"]
+    assert events[0]["run_id"] == result["run_id"]
+    assert not capture.exists() and not list((root / "logs").glob("offload-prompt.*"))
