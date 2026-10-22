@@ -83,15 +83,74 @@ def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
     with pytest.raises(ValueError):
         sentinel.relative_to(owned.resolve())
 
+    open_attempts: list[Path] = []
+
     def forbid_sqlite_open(*, timeout: float = 5.0):
+        open_attempts.append(Path(feedback.DB_PATH).expanduser().resolve())
         raise AssertionError("SQLite open attempted before containment check")
 
     monkeypatch.setitem(globals(), "_REAL_FEEDBACK_CONN", forbid_sqlite_open)
     monkeypatch.setattr(feedback, "DB_PATH", sentinel)
     with pytest.raises(AssertionError, match="outside owned test root"):
         feedback._conn()
+    assert open_attempts == [], "containment must reject before any SQLite open"
     assert not sentinel.exists()
     assert not sentinel.parent.joinpath(f"{sentinel.name}-journal").exists()
+
+
+def test_isolation_binding_deliberate_break_and_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Safe break/restore: without ownership, opener-spy fires; with it, reject before open.
+
+    Never opens a real runtime database — the spy replaces SQLite and the sentinel lives under
+    tmp_path only.
+    """
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    sentinel = (tmp_path / OUT_OF_BOUND_SENTINEL_NAME).resolve()
+    monkeypatch.setattr(feedback, "DB_PATH", sentinel)
+    open_attempts: list[Path] = []
+
+    def opener_spy(*, timeout: float = 5.0):
+        open_attempts.append(Path(feedback.DB_PATH).expanduser().resolve())
+        raise AssertionError("SQLite open attempted before containment check")
+
+    # BREAK: remove the ownership binding; opener-spy must fire (no real SQLite).
+    monkeypatch.setitem(globals(), "_REAL_FEEDBACK_CONN", opener_spy)
+    monkeypatch.setattr(
+        feedback,
+        "_conn",
+        lambda *, timeout=5.0: _REAL_FEEDBACK_CONN(timeout=timeout),
+    )
+    with pytest.raises(AssertionError, match="SQLite open attempted before containment check"):
+        feedback._conn()
+    assert open_attempts == [sentinel]
+    assert not sentinel.exists()
+
+    # The named containment expectation ("outside owned test root") fails while unbound.
+    open_attempts.clear()
+    unbound_failed = False
+    try:
+        with pytest.raises(AssertionError, match="outside owned test root"):
+            feedback._conn()
+    except AssertionError:
+        unbound_failed = True
+    assert unbound_failed, "containment regression must fail when isolation binding is removed"
+    assert open_attempts == [sentinel]
+    assert not sentinel.exists()
+
+    # RESTORE: ownership check rejects the sentinel before the opener-spy runs.
+    open_attempts.clear()
+    monkeypatch.setattr(
+        feedback,
+        "_conn",
+        lambda *, timeout=5.0: _guarded_feedback_conn(owned, timeout=timeout),
+    )
+    with pytest.raises(AssertionError, match="outside owned test root"):
+        feedback._conn()
+    assert open_attempts == []
+    assert not sentinel.exists()
 
 
 def test_cross_repo_validation_rejects_malformed_plans_and_cli_stays_read_only(
@@ -211,7 +270,7 @@ def test_cross_repo_barriers_and_rollout_dependencies_are_deterministic() -> Non
 
 
 def test_research_scheduler_conservatively_handles_unavailable_or_invalid_evidence(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
         research_scheduler.feedback,
@@ -224,12 +283,22 @@ def test_research_scheduler_conservatively_handles_unavailable_or_invalid_eviden
         "implement", ["codex"], weights=[{"agent": "codex", "n_obs": "bad"}]
     ) == {"codex": 0}
     assert research_scheduler.data_hunger("implement", []) == 0.0
-    assert (
-        research_scheduler._agent_acquisition_scores(
-            "implement", ["codex"], n_obs={"codex": "bad"}
-        )["codex"]
-        >= 0
+    # Controlled temp SQLite (fixture-owned): real _agent_acquisition_scores, not a stub.
+    owned_scores = research_scheduler._agent_acquisition_scores(
+        "implement", ["codex"], n_obs={"codex": "bad"}
     )
+    assert owned_scores["codex"] >= 0
+    assert Path(feedback.DB_PATH).resolve().is_relative_to((tmp_path / "owned").resolve())
+
+    # Intentional offline connection failure at the _conn boundary (still not a stub).
+    def offline_conn(*, timeout: float = 5.0):
+        raise OSError("feedback offline for issue853 isolation proof")
+
+    monkeypatch.setattr(feedback, "_conn", offline_conn)
+    offline_scores = research_scheduler._agent_acquisition_scores(
+        "implement", ["codex"], n_obs={"codex": 0}
+    )
+    assert offline_scores["codex"] >= 0
     with pytest.raises(ValueError, match="identified"):
         research_scheduler._validate_hypotheses([{}])
     with pytest.raises(ValueError, match="duplicate"):
