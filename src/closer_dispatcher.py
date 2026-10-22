@@ -1770,7 +1770,7 @@ class Closer:
                         "--expected-head",
                         fresh["head"],
                         "--confirm-merge",
-                        "--defer-advisory-until-verification",
+                        "--skip-immediate-advisory",
                         *(["--remote-only"] if operation.get("native_remote_only") is True else []),
                     ],
                     timeout=timeout,

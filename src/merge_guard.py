@@ -456,7 +456,7 @@ def guarded_merge(
     delete_branch: bool = False,
     expected_head: str | None = None,
     confirm_merge: bool = False,
-    defer_advisory_until_verification: bool = False,
+    skip_immediate_advisory: bool = False,
     remote_only: bool = False,
     env: dict | None = None,
     spec_dir: str | Path | None = None,
@@ -473,7 +473,7 @@ def guarded_merge(
     review_loop_fn=None,
 ) -> dict[str, Any]:
     dry_run = not confirm_merge
-    defer_advisory_until_verification = defer_advisory_until_verification or remote_only
+    skip_immediate_advisory = skip_immediate_advisory or remote_only
     if confirm_merge and not expected_head:
         return {
             "target": target,
@@ -541,10 +541,10 @@ def guarded_merge(
     # Advisory, after every deterministic gate has passed, so no panel is paid for a PR that
     # cannot merge. Nothing it returns, and nothing it raises, may block or stop this merge.
     panel: dict[str, Any]
-    if defer_advisory_until_verification:
+    if skip_immediate_advisory:
         panel = {
-            "status": "deferred_until_verification",
-            "detail": "Advisory review deferred to the existing merge-bound verifier evaluation.",
+            "status": "not_requested",
+            "detail": "Optional immediate panel not requested; Closer uses the bound verifier and post-response acceptance path.",
             "acceptance_authority": False,
         }
     else:
@@ -555,7 +555,7 @@ def guarded_merge(
         except Exception as exc:
             panel = {"status": "error", "error": str(exc)[:500]}
     result["adversarial_review"] = panel
-    if not defer_advisory_until_verification:
+    if not skip_immediate_advisory:
         try:
             adjudication = (adjudicate_fn or adjudicate_disagreement)(
                 target, gate_result.get("gate"), panel, env=env, dry_run=dry_run
@@ -615,7 +615,7 @@ def guarded_merge(
     import adversarial
 
     if (
-        not defer_advisory_until_verification
+        not skip_immediate_advisory
         and adversarial.review_enabled(env)
         and panel.get("status")
         in {
@@ -1073,14 +1073,14 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--confirm-merge", action="store_true", help="actually run gh pr merge")
     parser.add_argument(
-        "--defer-advisory-until-verification",
+        "--skip-immediate-advisory",
         action="store_true",
-        help="defer advisory panel and adjudication to the existing verifier evaluation",
+        help="skip the optional immediate panel; required runtime acceptance and merge guards remain",
     )
     parser.add_argument(
         "--remote-only",
         action="store_true",
-        help="refuse local runtime-AC execution and defer advisory work; recheck before merge",
+        help="refuse local runtime-AC execution and skip optional immediate advisory; recheck before merge",
     )
     parser.add_argument(
         "--require-runtime-ac",
@@ -1104,7 +1104,7 @@ def main(argv: list[str]) -> int:
         delete_branch=args.delete_branch,
         expected_head=args.expected_head,
         confirm_merge=args.confirm_merge,
-        defer_advisory_until_verification=args.defer_advisory_until_verification,
+        skip_immediate_advisory=args.skip_immediate_advisory,
         remote_only=args.remote_only,
         require_runtime_ac=args.require_runtime_ac,
     )

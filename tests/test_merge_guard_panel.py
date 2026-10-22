@@ -73,7 +73,7 @@ def _merge(
     head=HEAD,
     merges=None,
     spawned=None,
-    defer_advisory_until_verification=False,
+    skip_immediate_advisory=False,
 ):
     merges = [] if merges is None else merges
     spawned = [] if spawned is None else spawned
@@ -95,7 +95,7 @@ def _merge(
         "o/r#41",
         expected_head=head,
         confirm_merge=head is not None,
-        defer_advisory_until_verification=defer_advisory_until_verification,
+        skip_immediate_advisory=skip_immediate_advisory,
         env=env,
         metadata_fn=_meta,
         gate_fn=lambda item, **kwargs: None,
@@ -331,20 +331,22 @@ def test_disabled_panel_never_schedules_cached_blocker(brain):
     assert "post_merge" not in out["adversarial_review"]
 
 
-def test_closer_defers_high_stakes_panel_and_adjudication_until_verifier(brain, monkeypatch):
+def test_closer_explicitly_skips_optional_immediate_panel_without_acceptance_authority(
+    brain, monkeypatch
+):
     def forbidden(*args, **kwargs):
         pytest.fail("deferred advisory work was invoked")
 
     monkeypatch.setattr(merge_guard, "adversarial_review_status", forbidden)
     monkeypatch.setattr(merge_guard, "adjudicate_disagreement", forbidden)
     merges, spawned = [], []
-    out = _merge(merges=merges, spawned=spawned, defer_advisory_until_verification=True)
+    out = _merge(merges=merges, spawned=spawned, skip_immediate_advisory=True)
     assert out["merge_executed"] is True and out["blocked"] is False
     assert len(merges) == 1 and spawned == []
     panel = out["adversarial_review"]
-    assert panel["status"] == "deferred_until_verification"
+    assert panel["status"] == "not_requested"
     assert panel["acceptance_authority"] is False and "verdict" not in panel
-    assert "verifier evaluation" in panel["detail"]
+    assert "bound verifier and post-response acceptance" in panel["detail"]
     assert "adjudication" not in out
     assert "--match-head-commit" in merges[0] and HEAD in merges[0]
 
@@ -365,7 +367,7 @@ def test_advisory_deferral_preserves_objective_merge_refusals(brain, boundary):
         "o/r#41",
         expected_head=None if boundary == "missing_head" else HEAD,
         confirm_merge=True,
-        defer_advisory_until_verification=True,
+        skip_immediate_advisory=True,
         metadata_fn=_meta,
         gate_fn=lambda *args, **kwargs: (
             {"status": "executed", "verdict": "FAIL", "blocks": True}
@@ -379,24 +381,21 @@ def test_advisory_deferral_preserves_objective_merge_refusals(brain, boundary):
             "reason": "review floor pending",
         },
         merge_fn=lambda *args, **kwargs: pytest.fail("merge bypassed objective refusal"),
-        spawn_fn=lambda *args, **kwargs: pytest.fail("spawned deferred advisory"),
+        spawn_fn=lambda *args, **kwargs: pytest.fail("spawned optional immediate advisory"),
     )
     assert out["blocked"] is True and out["merge_executed"] is False
 
 
-def test_advisory_deferral_cli_is_explicit_and_defaults_off(monkeypatch, capsys):
+def test_immediate_advisory_opt_out_cli_is_explicit_and_defaults_off(monkeypatch, capsys):
     received = []
     monkeypatch.setattr(
         merge_guard,
         "guarded_merge",
         lambda *args, **kwargs: received.append(kwargs) or {"blocked": False},
     )
-    assert (
-        merge_guard.main(["o/r#41", "--expected-head", HEAD, "--defer-advisory-until-verification"])
-        == 0
-    )
+    assert merge_guard.main(["o/r#41", "--expected-head", HEAD, "--skip-immediate-advisory"]) == 0
     assert merge_guard.main(["o/r#41", "--expected-head", HEAD]) == 0
-    assert [row["defer_advisory_until_verification"] for row in received] == [True, False]
+    assert [row["skip_immediate_advisory"] for row in received] == [True, False]
 
 
 @pytest.mark.parametrize(
@@ -457,7 +456,7 @@ def test_remote_only_keeps_exact_head_guard_and_never_runs_local_advisory(brain)
     assert len(metadata_calls) == 2
     assert out["remote_only_guard_final"]["remote_only"] is True
     assert "--match-head-commit" in merges[0] and HEAD in merges[0]
-    assert out["adversarial_review"]["status"] == "deferred_until_verification"
+    assert out["adversarial_review"]["status"] == "not_requested"
 
 
 @pytest.mark.parametrize(

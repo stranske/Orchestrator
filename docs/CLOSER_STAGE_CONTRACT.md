@@ -10,9 +10,11 @@ or acceptance headings.
 The merge guard re-reads current GitHub state, required checks and all review
 thread pages, observes the review floor and pins the mutation to the expected
 head. A Closer merge is deterministic and does not ask the low-cost evidence
-interpreter to certify acceptance. Merge-time advisory acceptance is deferred to
-the existing verification-response path; other merge-guard callers retain their
-existing defaults.
+interpreter to certify acceptance. Closer opts out of the optional immediate adversarial panel: the bound verifier
+and existing post-response agents perform acceptance evaluation. This does not
+promise a later invocation of that extra panel. The explicit adversarial panel
+and its BLOCKED follow-up API remain available; other merge-guard callers retain
+their existing defaults. Required runtime acceptance gates remain mandatory.
 
 For finite runs, a confirmed merge can produce one causal singleton successor
 for `post_merge_verify`. The successor uses normal PREPARE, canonical assignment,

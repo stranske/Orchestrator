@@ -436,6 +436,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                         deferred_next_trigger="reconcile_scope_before_retry",
                     )
                     row.pop("reentry_ready", None)
+                    row["scope_proof"] = proposal["scope_proof"]
                     row["resource_evidence"] = {
                         "scope_refusal": proposal["scope_proof"],
                         "confirmed_not_started": True,

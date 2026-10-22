@@ -145,9 +145,9 @@ def test_cli_cross_process_same_profile_pool_never_overlaps(tmp_path):
     common = tmp_path / "common"
     common.mkdir()
     (common / "capacity.json").write_text(json.dumps(report(["gemini-3.8-flash-low"])))
-    first = start(tmp_path, "a", shadow=False, hold="offload")
+    first = start(tmp_path, "a", shadow=False, hold="offload", postverify=True)
     wait(tmp_path / "a" / "offload.entered")
-    second = finish(start(tmp_path, "b", shadow=False, target="other/repo#2"))
+    second = finish(start(tmp_path, "b", shadow=False, target="other/repo#2", postverify=True))
     assert "prepare" in events(tmp_path / "b")
     assert "offload_enter" not in events(tmp_path / "b")
     assert second["targets"]["other/repo#2"]["status"] != "completed"
@@ -493,7 +493,7 @@ def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
     (common / "capacity.json").write_text(
         json.dumps(report(["codex-6-luna-low", "gemini-3.8-flash-low", "gemini-4-argon-low"]))
     )
-    receipt = finish(start(tmp_path, "a", shadow=False, failure=failure))
+    receipt = finish(start(tmp_path, "a", shadow=False, failure=failure, postverify=True))
     rows = [json.loads(x) for x in (tmp_path / "a" / "events.jsonl").read_text().splitlines()]
     calls = [x["profile"] for x in rows if x["event"] == "offload_enter"]
     assert len(calls) == expected_calls

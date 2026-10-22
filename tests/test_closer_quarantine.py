@@ -720,3 +720,116 @@ def test_native_remote_effect_cannot_narrow_malformed_operation_history(tmp_path
     assert quarantine.scope_problem(
         scope, "owner/held#9", keys("owner/held#9"), purpose="remote_effect"
     )
+
+
+@pytest.mark.parametrize(
+    "binding,linked",
+    [
+        ({"pr_target": "owner/held#9"}, "pr:owner/held#9"),
+        ({"source_targets": ["owner/source#3"]}, "issue:owner/source#3"),
+        (
+            {"head_repository": "owner/held", "head_branch": "old-shared"},
+            "branch:owner/held@old-shared",
+        ),
+    ],
+)
+@pytest.mark.parametrize("location", ["operation", "history"])
+def test_native_remote_effect_preserves_unresolved_historical_binding_aliases(
+    tmp_path, binding, linked, location
+):
+    operation = {"status": "unknown", "binding": binding}
+    row = {"status": "uncertain", "stage": "act"}
+    row["operation" if location == "operation" else "operation_history"] = (
+        operation if location == "operation" else [operation]
+    )
+    path = ledger(tmp_path, row)
+    scope = quarantine.scope_snapshot(path)
+    assert linked in scope["quarantine_keys"]
+    aliases = keys("owner/held#9") + [linked]
+    if linked.startswith("issue:"):
+        aliases.append("repo:owner/source")
+    assert quarantine.scope_problem(scope, "owner/held#9", aliases, purpose="remote_effect")
+    assert (
+        quarantine.scope_problem(
+            scope, "owner/held#10", keys("owner/held#10"), purpose="remote_effect"
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("binding", [None, [], {"source_targets": {}}, {"pr_target": None}])
+def test_native_remote_effect_cannot_narrow_malformed_declared_binding(tmp_path, binding):
+    path = ledger(
+        tmp_path,
+        {
+            "status": "uncertain",
+            "stage": "act",
+            "operation_history": [{"status": "unknown", "binding": binding}],
+        },
+    )
+    scope = quarantine.scope_snapshot(path)
+    assert quarantine.scope_problem(
+        scope, "owner/held#9", keys("owner/held#9"), purpose="remote_effect"
+    )
+
+
+@pytest.mark.parametrize("malformed", ["history", "binding"])
+def test_malformed_intent_preserves_final_linked_repository_and_workspace_fallback(
+    tmp_path, malformed
+):
+    shared = tmp_path / "linked-shared"
+    shared.mkdir()
+    row = {
+        "status": "uncertain",
+        "stage": "act",
+        "results": {
+            "prepare": {
+                "snapshot": {"target": "owner/held#1", "sources": [{"target": "owner/linked#3"}]}
+            }
+        },
+    }
+    if malformed == "history":
+        row["operation_history"] = None
+    else:
+        row["operation_history"] = [{"status": "unknown", "binding": []}]
+    path = ledger(tmp_path, row)
+    scope = quarantine.scope_snapshot(path, workspaces={"owner/linked": str(shared)})
+    item = scope["items"][0]
+    assert {"repo:owner/linked", "worktree:" + str(shared)}.issubset(item["explicit_original_keys"])
+    assert quarantine.scope_problem(
+        scope,
+        "owner/linked#9",
+        keys("owner/linked#9") + ["worktree:" + str(shared)],
+        purpose="remote_effect",
+    )
+
+
+def test_malformed_raw_queue_history_preserves_later_claim_alias_expansion(tmp_path):
+    path = ledger(tmp_path)
+    raw = Path(str(path)[: -len(".pipeline.json")])
+    shared = tmp_path / "later-shared"
+    shared.mkdir()
+    write(
+        raw,
+        {
+            "schema": "closer-queue/v1",
+            "round": {},
+            "items": {
+                "owner/held#1": {
+                    "status": "uncertain",
+                    "operation_history": None,
+                    "claim_targets": ["owner/linked#3"],
+                }
+            },
+        },
+    )
+    scope = quarantine.scope_snapshot(path, workspaces={"owner/linked": str(shared)})
+    item = next(item for item in scope["items"] if item["run_id"] == "native_queue")
+    assert item["remote_scope_narrowable"] is False
+    assert "worktree:" + str(shared) in item["keys"]
+    assert quarantine.scope_problem(
+        scope,
+        "owner/linked#9",
+        keys("owner/linked#9") + ["worktree:" + str(shared)],
+        purpose="remote_effect",
+    )

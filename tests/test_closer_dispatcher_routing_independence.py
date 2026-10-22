@@ -342,7 +342,21 @@ class TestInterpretationCapacityDeferral:
         import closer_pipeline
         import closer_resources
 
-        fake_gh = FakeGitHub(snapshot())
+        postverify = snapshot()
+        postverify.update(state="MERGED", merge="d" * 40)
+        postverify["verifier"] = {
+            "schema": "verifier-corpus-decision/v1",
+            "verdict": "PASS",
+            "repo": TARGET.split("#")[0],
+            "pr": int(TARGET.split("#")[1]),
+            "head_sha": postverify["head"],
+            "evaluated_sha": postverify["merge"],
+            "run_id": 34,
+            "run_attempt": 1,
+            "provider_verdicts": ["PASS"],
+            "ci_failed": False,
+        }
+        fake_gh = FakeGitHub(postverify)
         backend = adapter.Closer(fake_gh, state_path=tmp_path / "state.json")
         # This case begins after admission; never depend on the host's controller.
         monkeypatch.setattr(backend, "campaign_admission", lambda *_args: {"allowed": True})

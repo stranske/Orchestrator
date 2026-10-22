@@ -877,3 +877,31 @@ def test_exception_apply_refuses_changed_assessment_after_plan(tmp_path):
             expected_plan_sha256=proposal["plan_sha256"],
         )
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("stage", ["act", "exception"])
+def test_hold_only_reentry_proof_reaches_native_validator_and_carry(tmp_path, stage):
+    import closer_quarantine
+
+    path, frontier, doc = fixture(tmp_path, stage, "unknown")
+    row = doc["frontiers"]["frozen"]["items"][TARGET]
+    row["results"] = {"interpret": {"actual": {"run_id": "retained-assessment", "exit": 0}}}
+    location, proof = scope_proof(path, doc)
+    # Full native admission payload, including the real census integrity digest.
+    proof["snapshot"] = closer_quarantine.scope_snapshot(path)
+    proof["legacy_stop_authority"] = False
+    location.write_text(json.dumps(proof))
+    proof_bytes = location.read_bytes()
+    proposal, _ = apply(path, frontier, "retain-native-proof")
+    reconciled = read(path)
+    run_id = doc["frontiers"]["frozen"]["run_id"]
+    assert resources.valid_scope_refusal(path, TARGET, reconciled, run_id)
+    carried = pipeline._carry_item(reconciled)
+    assert resources.valid_scope_refusal(path, TARGET, carried, run_id)
+    assert carried["scope_proof"] == proposal["scope_proof"]
+    assert carried["scope_proof"] == reconciled["resource_evidence"]["scope_refusal"]
+    assert carried["status"] == "held" and "reentry_ready" not in carried
+    assert carried["results"] == row["results"]
+    assert location.read_bytes() == proof_bytes
+    location.write_text(json.dumps({**proof, "callback_started": True}))
+    assert not resources.valid_scope_refusal(path, TARGET, carried, run_id)

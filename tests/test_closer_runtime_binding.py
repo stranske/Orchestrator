@@ -478,11 +478,11 @@ def test_real_merge_caller_keeps_native_guard_and_ac_hardblock(
     gh = SimpleNamespace(snapshot=lambda t: snap, deadline=time.time() + 60)
     calls = []
 
+    guard_result = {"merge_executed": False, "blocked": True, "reason": "runtime AC gate blocked"}
+
     def run(argv, **kwargs):
         calls.append(argv)
-        return subprocess.CompletedProcess(
-            argv, 0, stdout='{"merge_executed": true, "blocked": false}'
-        )
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(guard_result))
 
     backend = cd.Closer(
         gh, state_path=tmp_path / "s", apply=True, runtime_binding=binding, run_fn=run
@@ -491,13 +491,17 @@ def test_real_merge_caller_keeps_native_guard_and_ac_hardblock(
     monkeypatch.setattr(cd, "acceptance_ok", lambda *a: False)
     op = {"owner": "one", "deadline": time.time() + 20}
     result = backend.execute("o/r#1", "merge", snap, op)
-    assert result["native_result"]["reason"] == "acceptance evidence changed" and not calls
-    # A different exact target can proceed, with the unchanged guard CLI.
-    monkeypatch.setattr(cd, "acceptance_ok", lambda *a: True)
+    assert result["native_result"]["status"] == "blocked"
+    assert result["native_result"]["result"]["reason"] == "runtime AC gate blocked"
+    assert len(calls) == 1
+    # Final acceptance is not a premerge gate; the real native guard still is.
+    # A different exact target can proceed only through that same exact-head guard.
+    guard_result.update(merge_executed=True, blocked=False, reason=None)
     assert backend.execute("o/r#2", "merge", snap, op)["status"] == "unknown"
     # Native success without independent readback remains fenced.
     assert Path(calls[0][1]).name == "merge_guard.py"
-    assert calls[0][-3:] == ["--expected-head", "a" * 40, "--confirm-merge"]
+    assert calls[0][3:6] == ["--expected-head", "a" * 40, "--confirm-merge"]
+    assert calls[0][6:] == ["--skip-immediate-advisory"]
 
 
 def test_remote_outage_and_local_store_never_confer_effect_authority(bundle, policy, monkeypatch):

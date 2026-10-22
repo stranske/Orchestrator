@@ -503,13 +503,14 @@ class _Census:
                     if snapshot.get(name):
                         keys.add(_key("worktree:" + snapshot[name]))
         explicit_original_keys = set()
+        narrowable = True
         if isinstance(row, dict):
             # Explicit ORIGINAL intent keys remain fences even when a verified
             # remote operation excludes additional filesystem inference.
             history = row.get("operation_history", [])
             if not isinstance(history, list) or any(not isinstance(op, dict) for op in history):
                 # Unreadable prior intent cannot qualify for narrowed remote scope.
-                explicit_original_keys.update(keys)
+                narrowable = False
                 history = []
             unresolved = [
                 op
@@ -521,12 +522,34 @@ class _Census:
                     for value in record.get("resource_keys") or []:
                         explicit_original_keys.add(_key(value))
                         keys.add(_key(value))
+                    binding = record.get("binding")
+                    if "binding" in record and not isinstance(binding, dict):
+                        narrowable = False
+                    if isinstance(binding, dict):
+                        if ("pr_target" in binding and not binding.get("pr_target")) or (
+                            "source_targets" in binding
+                            and not isinstance(binding["source_targets"], list)
+                        ):
+                            narrowable = False
+                            continue
+                        if binding.get("pr_target"):
+                            keys.add("pr:" + _target(binding["pr_target"]))
+                        for source_target in binding.get("source_targets") or []:
+                            keys.add("issue:" + _target(source_target))
+                        if binding.get("head_repository") and binding.get("head_branch"):
+                            keys.add(
+                                _key(
+                                    f"branch:{binding['head_repository']}@{binding['head_branch']}"
+                                )
+                            )
         if closure == "repository_fallback":
             for key in list(keys):
                 kind, value = key.split(":", 1)
                 if kind in {"pr", "issue", "branch"}:
                     keys.add("repo:" + value.split("@")[0].split("#")[0])
             keys.update(self.mapped_keys(target, keys))
+        if not narrowable:
+            explicit_original_keys.update(keys)
         self.keys.update(keys)
         self.items.append(
             {
@@ -541,6 +564,7 @@ class _Census:
                 "closure_proof": closure_proof,
                 "closure_reason": closure_reason,
                 "explicit_original_keys": sorted(explicit_original_keys),
+                "remote_scope_narrowable": narrowable,
             }
         )
         if len(self.items) > MAX_ENTRIES:
@@ -1170,7 +1194,9 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
                 for item in snapshot["items"]:
                     item_keys = set(item.get("keys", []))
                     recorded.update(item_keys)
-                    if item.get("closure") == "repository_fallback":
+                    if item.get("closure") == "repository_fallback" and item.get(
+                        "remote_scope_narrowable", True
+                    ):
                         # Inferred broad fallback is not a demonstrated dependency
                         # on an unrelated native GitHub effect. Original declared
                         # intents and all known target/source/branch aliases remain.
