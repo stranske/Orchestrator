@@ -503,8 +503,11 @@ def test_cli_staged_pipeline_deadline_uses_nested_valid_queue_receipt(
 def test_green_ci_or_model_ready_is_not_acceptance(tmp_path, decision):
     current = snapshot()
     backend = closer(tmp_path, current, dispositions={TARGET: decision})
+    # A model's ready flag still cannot grant final source acceptance. It also
+    # must not force final acceptance proof ahead of an otherwise guarded merge.
+    assert adapter.acceptance_ok(current, decision) is False
     action, _, eligible, _ = backend.select(current)
-    assert action == "collect_evidence" and not eligible
+    assert action == "merge" and eligible
 
 
 def test_integrated_current_source_evidence_can_admit_guarded_merge(tmp_path):
@@ -675,7 +678,11 @@ def assert_nonpass_accounting_prompt_contract(prompt):
 
 
 def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
-    current = snapshot()
+    current = snapshot(
+        state="MERGED",
+        merge=MERGE,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
     calls = []
     _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
@@ -764,9 +771,12 @@ def test_merge_calls_existing_guard_with_exact_head_and_bounded_timeout(tmp_path
             returncode=0, stdout=json.dumps({"merge_executed": True, "blocked": False})
         )
 
-    backend = closer(
-        tmp_path, current, apply=True, dispositions={TARGET: integrated(tmp_path, current)}
+    # Free-form original requests do not need invented Tasks/AC headings or
+    # final acceptance rows before the native merge guard can evaluate the PR.
+    current = snapshot(
+        sources=[{"target": SOURCE, "body": "Fix the displayed total.", "state": "open"}]
     )
+    backend = closer(tmp_path, current, apply=True)
     backend.run_fn = fake_run
     assert backend.execute(TARGET, "merge", current, operation())["status"] == "completed"
     command, kwargs = calls[0]
@@ -1532,7 +1542,9 @@ def _seed_exception_capacity(
     )
 
 
-def _private_worker(tmp_path, monkeypatch, *, decision=None, result=None, real_admission=False):
+def _private_worker(
+    tmp_path, monkeypatch, *, decision=None, result=None, real_admission=False, current=None
+):
     calls = []
     if real_admission:
         pass
@@ -1556,7 +1568,7 @@ def _private_worker(tmp_path, monkeypatch, *, decision=None, result=None, real_a
     monkeypatch.setattr(adapter.subprocess, "run", mapped_git)
     backend = closer(
         tmp_path,
-        snapshot(),
+        current or snapshot(),
         apply=True,
         workers=True,
         workspaces={"o/r": str(tmp_path)},
@@ -1605,17 +1617,30 @@ def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
     "failure", ["quota exceeded", "unsupported model", "authentication failed"]
 )
 def test_generic_error_does_not_hide_provider_failure_in_output(tmp_path, monkeypatch, failure):
+    current = snapshot(
+        state="MERGED",
+        merge=MERGE,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
     backend, calls = _private_worker(
-        tmp_path, monkeypatch, result={"exit": 1, "error": "worker failed", "output": failure}
+        tmp_path,
+        monkeypatch,
+        result={"exit": 1, "error": "worker failed", "output": failure},
+        current=current,
     )
     assert (
-        backend.worker(TARGET, "collect_evidence", snapshot(), operation("collect_evidence"))[
-            "status"
-        ]
+        backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))["status"]
         == "failed"
     )
     assert backend.workers_unavailable
-    action, _, eligible, _ = backend.select(snapshot(target="o/r#8"))
+    action, _, eligible, _ = backend.select(
+        snapshot(
+            target="o/r#8",
+            state="MERGED",
+            merge=MERGE,
+            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+        )
+    )
     assert action == "collect_evidence" and not eligible
     assert len(calls) == 1
 
@@ -1723,8 +1748,12 @@ def test_pending_advisory_survives_restart_without_another_luna_call(tmp_path, m
 
 
 def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(tmp_path, monkeypatch):
-    backend, calls = _private_worker(tmp_path, monkeypatch)
-    current = snapshot()
+    current = snapshot(
+        state="MERGED",
+        merge=MERGE,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
+    backend, calls = _private_worker(tmp_path, monkeypatch, current=current)
     original_binding = backend.observe(TARGET)["operation_binding"]
     op = operation("collect_evidence")
     backend.worker(TARGET, "collect_evidence", current, op)
@@ -1740,13 +1769,13 @@ def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(tmp_pat
         assert backend.observe(TARGET)["requires_coordinator"], field
     backend.dispositions[TARGET] = ack
     assert not backend.observe(TARGET)["requires_coordinator"]
-    assert backend.select(current)[0] != "merge"
+    assert backend.select(current)[0] == "collect_evidence"
     assert not adapter.acceptance_ok(current, ack)
     assert len(calls) == 1
     observed = backend.observe(TARGET)
     assert observed["operation_binding"] == original_binding
     backend.dispositions[TARGET] = {**integrated(tmp_path, current), **ack}
-    assert backend.select(current)[0] == "merge"
+    assert backend.select(current)[0] == "close_source"
     assert backend.gh.calls == [] and len(calls) == 1
     backend.dispositions[TARGET][
         "followup_task"
@@ -2065,7 +2094,15 @@ def test_only_proven_non_ci_waits_become_pipeline_continuations(
 
 @pytest.mark.parametrize("case", ["malformed_worker", "source_hold"])
 def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkeypatch, case):
-    current = snapshot(labels=["agents:paused"]) if case == "source_hold" else snapshot()
+    current = (
+        snapshot(labels=["agents:paused"])
+        if case == "source_hold"
+        else snapshot(
+            state="MERGED",
+            merge=MERGE,
+            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+        )
+    )
     monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
     pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
     action_path = (
@@ -2584,7 +2621,11 @@ def test_fresh_inner_wait_revision_change_reprepares_before_valid_wait(tmp_path,
 
 
 def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp_path, monkeypatch):
-    current = snapshot()
+    current = snapshot(
+        state="MERGED",
+        merge=MERGE,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
     monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
     pipeline_path = adapter._pipeline_state_path(tmp_path / "state.json")
     action_path = (
@@ -2687,7 +2728,12 @@ def test_same_head_inner_wait_requires_fresh_admission_and_matching_producer(tmp
         changed_producer = {**old_context, "prepare": {**old_prepare, "producer_sha256": "3" * 64}}
         producer_interpret = callbacks["interpret"](TARGET, changed_producer)
         assert producer_interpret["classification"] == "evidence_pending"
-        changed = snapshot(head="b" * 40)
+        changed = snapshot(
+            state="MERGED",
+            merge=MERGE,
+            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+            head="b" * 40,
+        )
         changed_context = {
             **old_context,
             "revision": changed["revision"],
@@ -2842,7 +2888,12 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
     import dispatcher
     import execution_profiles
 
-    current = snapshot(base="c" * 40)
+    current = snapshot(
+        state="MERGED",
+        merge=MERGE,
+        base="c" * 40,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
     packet = {
         "schema": "closer-evidence/v1",
         "target": TARGET,
@@ -3133,9 +3184,12 @@ def test_low_proposal_accepts_only_one_complete_json_document():
     assert adapter._parse_low_proposal(f"```json\n{json.dumps(wrong)}\n```") == wrong
 
 
+@pytest.mark.parametrize(
+    "premerge", [True, False], ids=["premerge-no-model", "postverify-bound-receipt"]
+)
 @pytest.mark.parametrize("fenced", [False, True], ids=["plain-json", "single-json-fence"])
 def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
-    tmp_path, monkeypatch, fenced
+    tmp_path, monkeypatch, fenced, premerge
 ):
     stub_action_readiness_for_transport_test(monkeypatch)
     from subprocess import CompletedProcess
@@ -3144,7 +3198,16 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
     import closer_evidence
     import dispatcher
 
-    current = snapshot(base="c" * 40, verifier={"verdict": "NON_PASS", "run_id": "native-run"})
+    current = (
+        snapshot(base="c" * 40)
+        if premerge
+        else snapshot(
+            state="MERGED",
+            merge=MERGE,
+            base="c" * 40,
+            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+        )
+    )
     raw = tmp_path / "receipt.xml"
     raw.write_text("<testsuite tests='1'><testcase name='pass'/></testsuite>")
     ref = {"path": str(raw), "sha256": hashlib.sha256(raw.read_bytes()).hexdigest()}
@@ -3257,7 +3320,17 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
             "raw_findings": [],
         },
     )
-    guarded = []
+    guarded, closed = [], []
+
+    def close_sources(current_backend, target, captured, **_kwargs):
+        assert not premerge
+        assert captured["state"] == "MERGED" and captured["merge"] == MERGE
+        assert captured["verifier"]["evaluated_sha"] == MERGE
+        assert adapter.acceptance_ok(captured, current_backend.dispositions[target])
+        closed.append((target, captured["head"]))
+        return {"status": "completed"}
+
+    monkeypatch.setattr(adapter.Closer, "close_sources", close_sources)
 
     def run_guard(command, *, timeout):
         guarded.append((command, timeout))
@@ -3280,7 +3353,7 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
             target,
             observed["action"],
             observed,
-            {"deadline": deadline, "id": "fake-queue-operation"},
+            {"deadline": deadline, "id": "fake-queue-operation", "owner": "inert-test-queue"},
         )
         return {
             "stop_valid": True,
@@ -3303,7 +3376,11 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
         interpreted = kwargs["interpret"](
             TARGET, {"prepare": prepared, "deadline": time.time() + 60}
         )
-        assert interpreted["actual"]["run_id"] == "real-run-1"
+        if premerge:
+            assert interpreted["classification"] == "deterministic_merge"
+            assert "actual" not in interpreted
+        else:
+            assert interpreted["actual"]["run_id"] == "real-run-1"
         action = kwargs["act"](
             TARGET,
             {
@@ -3321,16 +3398,21 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
     assert result["targets"][TARGET]["status"] in {"completed", "pending", "deferred"}
-    assert len(prompts) == 1
-    mandatory = prompts[0].split(
-        "Bounded packet samples (optional; refs above are authoritative):", 1
-    )[0]
-    prepared_ref = tmp_path / "state.json.evidence" / "manifests" / "packet.json"
-    assert prepared_ref.is_file()
-    assert str(prepared_ref) in mandatory
-    nonpass_ids = closer_disposition.pending_nonpass_findings(current, packet)
-    assert nonpass_ids[0]["finding_id"] in mandatory
-    assert guarded and guarded[0][0][1].endswith("merge_guard.py")
+    if premerge:
+        assert prompts == [] and closed == []
+        assert guarded and guarded[0][0][1].endswith("merge_guard.py")
+        command = guarded[0][0]
+        assert command[command.index("--expected-head") + 1] == HEAD
+        assert "--confirm-merge" in command
+    else:
+        assert len(prompts) == 1 and not guarded
+        assert closed == [(TARGET, HEAD)]
+        mandatory = prompts[0].split(
+            "Bounded packet samples (optional; refs above are authoritative):", 1
+        )[0]
+        prepared_ref = tmp_path / "state.json.evidence" / "manifests" / "packet.json"
+        assert prepared_ref.is_file() and str(prepared_ref) in mandatory
+        assert adapter.evidence_file_ok(ref)
     assert not worker_calls
 
 

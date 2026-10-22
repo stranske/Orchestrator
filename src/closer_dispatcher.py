@@ -684,6 +684,55 @@ def acceptance_ok(snapshot, decision):
     )
 
 
+def _native_remote_footprint(snapshot, action):
+    """Positive capability for native effects that never use a product checkout."""
+    if action in {"post_merge_verify", "initiate_verify", "respond_review"}:
+        return True
+    if action != "merge":
+        return False
+    import merge_guard
+
+    labels = list(snapshot.get("labels") or [])
+    for source in snapshot.get("sources") or []:
+        labels.extend(source.get("labels") or [])
+    return (
+        merge_guard.remote_only_footprint(
+            snapshot.get("pr_target") or snapshot["target"], {"labels": labels}
+        ).get("remote_only")
+        is True
+    )
+
+
+def _remote_only_effect(target, context):
+    """Recheck a producer-bound native capability, never a model's suggestion."""
+    prep = context.get("prepare") or {}
+    contract = prep.get("native_effect_contract")
+    if not isinstance(contract, dict):
+        return False
+    ref = prep.get("snapshot_ref") or {}
+    try:
+        raw = Path(ref["path"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != ref.get("sha256"):
+            return False
+        snap = json.loads(raw)
+        action = (prep.get("proposal") or {}).get("action")
+        expected = {
+            "kind": "native_remote_only",
+            "target": target,
+            "revision": context.get("revision"),
+            "head": snap.get("head"),
+            "action": action,
+        }
+        return (
+            contract == expected
+            and snap.get("target") == target
+            and snap.get("revision") == prep.get("revision") == context.get("revision")
+            and _native_remote_footprint(snap, action)
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def bounded_run(command, *, timeout):
     """Bound the entire owned process group, retaining ambiguous writes for reconciliation."""
     import closer_resources
@@ -1624,15 +1673,14 @@ class Closer:
                 False,
                 "check conclusion change",
             )
-        if acceptance_ok(s, decision):
-            return (
-                "merge",
-                "complete current-head acceptance evidence; live merge guard still required",
-                True,
-                None,
-            )
-        return self.proposal(
-            s, "collect_evidence", "collect full Tasks/AC evidence; green CI is insufficient"
+        # Merge readiness and final source acceptance are different stages.
+        # The live merge guard owns required checks, review floor and runtime gates.
+        # Original Tasks/AC proof is assessed against the post-merge verifier result.
+        return (
+            "merge",
+            "current-head merge prerequisites observed; live merge guard still required",
+            True,
+            None,
         )
 
     def proposal(self, snapshot, action, reason):
@@ -1709,8 +1757,6 @@ class Closer:
             if action in {"initiate_verify", "post_merge_verify"}:
                 return self.initiate_verify(pr_target, fresh)
             if action == "merge":
-                if not acceptance_ok(fresh, self.dispositions.get(target)):
-                    return {"status": "blocked", "reason": "acceptance evidence changed"}
                 import paths
 
                 # The existing guard remains the sole terminal merge path. Bound its process;
@@ -1724,6 +1770,8 @@ class Closer:
                         "--expected-head",
                         fresh["head"],
                         "--confirm-merge",
+                        "--defer-advisory-until-verification",
+                        *(["--remote-only"] if operation.get("native_remote_only") is True else []),
                     ],
                     timeout=timeout,
                 )
@@ -4209,7 +4257,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if selective_previous:
             packet = None
         action, reason, eligible, trigger = backend.select(snap)
-        if packet is not None and packet.get("collection_action") != action:
+        if packet is not None and packet.get("collection_action") != action and action != "merge":
             packet = None
         if packet is None:
             packet = collect_native_evidence(
@@ -4291,6 +4339,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "truncated": section.get("truncated"),
             }
         return {
+            "native_effect_contract": (
+                {
+                    "kind": "native_remote_only",
+                    "target": target,
+                    "revision": snap["revision"],
+                    "head": snap.get("head"),
+                    "action": action,
+                }
+                if _native_remote_footprint(snap, action)
+                else None
+            ),
             "recovery_requests": recovery_requests,
             "revision": snap["revision"],
             "identity": digest([target, snap.get("head"), snap.get("merge")]),
@@ -4667,7 +4726,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "authority": False,
                 "next_trigger": "merge-bound verifier terminal receipt for confirmed label event",
             }
-        if deterministic_action in {"complete", "wait", "post_merge_verify"}:
+        if deterministic_action in {"complete", "wait", "merge", "post_merge_verify"}:
             # These states already have an explicit dispatcher route. The guarded
             # action queue will refresh and re-evaluate them; a model cannot add
             # authority to a closed item, pending CI wait, or verifier invocation.
@@ -5725,6 +5784,20 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 return current
         if (
             isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_merge"
+            and interpreted.get("authority") is False
+            and interpreted.get("substantive_needs") == []
+            and (prep.get("proposal") or {}).get("action") == "merge"
+            and snap.get("target") == target
+            and snap.get("revision") == prep.get("revision") == context.get("revision")
+            and snap.get("kind") == "pr"
+            and snap.get("state") == "OPEN"
+        ):
+            native_action, _reason, native_eligible, _trigger = current.select(snap)
+            if native_action == "merge" and native_eligible is True:
+                return current
+        if (
+            isinstance(interpreted, dict)
             and interpreted.get("classification") == "deterministic_post_merge_verify"
             and interpreted.get("authority") is False
             and interpreted.get("substantive_needs") == []
@@ -5929,6 +6002,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     raise closer_resources.ResourceBlocked(
                         "actual operation changed prepared head/resource bindings"
                     )
+                if (context.get("prepare") or {}).get("native_effect_contract"):
+                    if not _remote_only_effect(name, context):
+                        raise closer_resources.ResourceBlocked(
+                            "prepared native effect footprint changed"
+                        )
+                    operation = {**operation, "native_remote_only": True}
                 return current.execute(name, action, observed, operation)
 
             execute = execute_bound
@@ -6716,6 +6795,171 @@ def main(argv=None):
         return _main_admitted(args, p, assignment_rows, targets)
 
 
+def _run_merge_verification_successors(args, backend, result, targets):
+    """Continue only a confirmed merge into the existing verification action.
+
+    Each child re-enters normal PREPARE, target leases, queue and effect guards.
+    Verification response evaluation remains the ordinary post-verifier path.
+    """
+    import copy
+    import fcntl
+
+    import closer_pipeline
+    import closer_resources
+    import closer_stage_continuation
+
+    predecessor = getattr(args, "finite_frontier", None)
+    if predecessor is None or args.shadow or args.coordinator_mode != "resource_scoped":
+        return result
+    root_path = _pipeline_state_path(args.state)
+    root = closer_resources.scoped_root(root_path)
+    continuations = {}
+    failures = []
+    for target in targets:
+        child_started = False
+        shard = closer_resources.shard_dir(root, target) / "state.json"
+        try:
+            document = closer_pipeline._load(shard)
+            entry = (document.get("frontiers") or {}).get(predecessor["frontier_id"], {})
+            item = (entry.get("items") or {}).get(target, {})
+            if not (
+                item.get("stage") == "act"
+                and item.get("stage_status") == "completed"
+                and item.get("deferred_next_trigger") == "new_frontier_required"
+            ):
+                continue
+            act = (item.get("results") or {}).get("act") or {}
+            receipt = act.get("queue_receipt") or {}
+            actions = {
+                row.get("action")
+                for row in receipt.get("accounting", [])
+                if row.get("target") == target
+            }
+            # Accounting may already describe the next observation; the helper
+            # validates the exact ORIGINAL completed operation below.
+            if not actions:
+                continue
+            action_path = (
+                shard.parent / f"{shard.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+            )
+            import closer_queue
+
+            qstate = closer_queue.state_for_frontier(
+                closer_queue._read_state(action_path),
+                predecessor["frontier_id"],
+                expected_policy=predecessor,
+            )
+            qitem = ((qstate or {}).get("items") or {}).get(target, {})
+            op = qitem.get("operation") or {}
+            if op.get("action") != "merge" or op.get("status") != "completed":
+                continue
+            dependency = assignment_dependency(
+                args.assignment,
+                target,
+                expected_fingerprint=backend.assignment_rows.get(target, {}).get("fingerprint"),
+            )
+            if dependency:
+                continuations[target] = {"status": "held", "reason": dependency}
+                continue
+            backend.gh.deadline = time.time() + args.request_timeout_seconds
+            backend.local_first = False
+            observation = backend.observe(target)
+            observation["observed_at"] = time.time()
+            if observation.get("state") != "MERGED" or observation.get("head") != op.get(
+                "binding", {}
+            ).get("head"):
+                continuations[target] = {
+                    "status": "held",
+                    "reason": "fresh merged identity unavailable or changed",
+                }
+                continue
+            if (
+                observation.get("action") != "post_merge_verify"
+                or observation.get("eligible") is not True
+            ):
+                continuations[target] = {
+                    "status": "observed",
+                    "action": observation.get("action"),
+                    "reason": observation.get("reason"),
+                    "next_trigger": observation.get("next_trigger"),
+                    "head": observation.get("head"),
+                    "merge": observation.get("merge"),
+                }
+                continue
+            canonical = assignment_rows_from_file(args.assignment)
+
+            def admission():
+                live = False
+                with (shard.parent / "lease.lock").open("a+") as probe:
+                    try:
+                        fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                    except BlockingIOError:
+                        live = True
+                dependency = assignment_dependency(
+                    args.assignment,
+                    target,
+                    expected_fingerprint=canonical[target].get("fingerprint"),
+                )
+                return {
+                    "paused": observation.get("eligible") is not True,
+                    "dependency": dependency,
+                    "live_owner": live,
+                }
+
+            child = closer_stage_continuation.create_successor(
+                shard,
+                action_path,
+                predecessor=predecessor,
+                target=target,
+                observation=observation,
+                canonical_path=args.assignment,
+                canonical_row=canonical[target],
+                admission=admission,
+            )
+            following = copy.copy(args)
+            following.finite_frontier = child["finite_frontier"]
+            child_started = True
+            native = _run_staged_pipeline(following, child["execution_targets"], backend, None)
+            checked = closer_pipeline.validate_stop_scoped(
+                root_path, native.get("round_id"), [target]
+            )
+            native["validation"] = checked
+            continuations[target] = {
+                "status": "verification_successor",
+                "lineage": child,
+                "native_result": native,
+            }
+            if checked.get("valid") is not True:
+                failures.append(target)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            # Preserve the confirmed merge separately. Once a child started,
+            # reconcile ITS durable state; never repeat the predecessor effect.
+            continuations[target] = {
+                "status": "unknown" if child_started else "held",
+                "reason": f"verification continuation: {error}",
+                "continuation_required": True,
+                "next_trigger": (
+                    "reconcile verification successor"
+                    if child_started
+                    else "fresh scoped verification observation"
+                ),
+            }
+            failures.append(target)
+    if continuations:
+        result["merge_verification_successors"] = continuations
+    if failures:
+        result["predecessor_validation"] = copy.deepcopy(result.get("validation", {}))
+        result["validation"] = {
+            **result.get("validation", {}),
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "successor_failures": failures,
+        }
+    return result
+
+
 def _main_admitted(args, p, assignment_rows, targets):
     import closer_queue
 
@@ -6856,6 +7100,9 @@ def _main_admitted(args, p, assignment_rows, targets):
                 _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
             )
         result["validation"] = validation
+        if validation.get("valid") is True and args.pipeline:
+            result = _run_merge_verification_successors(args, backend, result, targets)
+            validation = result["validation"]
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
             if result.get("reason") == "admission_deadline_expired":

@@ -502,12 +502,24 @@ class _Census:
                 for name in ("workspace", "worktree"):
                     if snapshot.get(name):
                         keys.add(_key("worktree:" + snapshot[name]))
+        explicit_original_keys = set()
         if isinstance(row, dict):
             # Explicit ORIGINAL intent keys remain fences even when a verified
             # remote operation excludes additional filesystem inference.
-            for record in (row, row.get("operation")):
+            history = row.get("operation_history", [])
+            if not isinstance(history, list) or any(not isinstance(op, dict) for op in history):
+                # Unreadable prior intent cannot qualify for narrowed remote scope.
+                explicit_original_keys.update(keys)
+                history = []
+            unresolved = [
+                op
+                for op in history
+                if op.get("status") not in {"completed", "confirmed_not_started", "abandoned"}
+            ]
+            for record in (row, row.get("operation"), *unresolved):
                 if isinstance(record, dict):
                     for value in record.get("resource_keys") or []:
+                        explicit_original_keys.add(_key(value))
                         keys.add(_key(value))
         if closure == "repository_fallback":
             for key in list(keys):
@@ -528,6 +540,7 @@ class _Census:
                 "closure": closure,
                 "closure_proof": closure_proof,
                 "closure_reason": closure_reason,
+                "explicit_original_keys": sorted(explicit_original_keys),
             }
         )
         if len(self.items) > MAX_ENTRIES:
@@ -1092,7 +1105,7 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
     production finite callback contract and hold the same live resource locks.
     """
     try:
-        if purpose not in {"effect", "observation"}:
+        if purpose not in {"effect", "observation", "remote_effect"}:
             return "invalid_scope_purpose"
         if (
             snapshot.get("schema") != SCHEMA
@@ -1151,8 +1164,27 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
                 linked_repo = value.split("#")[0] if kind != "branch" else value.split("@")[0]
                 if "repo:" + linked_repo not in keys:
                     return "incomplete_resource_inventory"
-            if purpose == "effect" and any(
-                resource_overlap(key, held) for held in snapshot["quarantine_keys"]
+            held_keys = set(snapshot["quarantine_keys"])
+            if purpose == "remote_effect":
+                recorded, retained = set(), set()
+                for item in snapshot["items"]:
+                    item_keys = set(item.get("keys", []))
+                    recorded.update(item_keys)
+                    if item.get("closure") == "repository_fallback":
+                        # Inferred broad fallback is not a demonstrated dependency
+                        # on an unrelated native GitHub effect. Original declared
+                        # intents and all known target/source/branch aliases remain.
+                        explicit = set(item.get("explicit_original_keys", []))
+                        item_keys = {
+                            held
+                            for held in item_keys
+                            if held in explicit or not held.startswith(("repo:", "worktree:"))
+                        }
+                    retained.update(item_keys)
+                # Never drop reservations/keys not accounted for by these rows.
+                held_keys = (held_keys - recorded) | retained
+            if purpose in {"effect", "remote_effect"} and any(
+                resource_overlap(key, held) for held in held_keys
             ):
                 return "quarantined_resource:" + key
         return None

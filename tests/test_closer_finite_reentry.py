@@ -2,7 +2,9 @@
 
 import copy
 import fcntl
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -710,3 +712,168 @@ def test_unrelated_aliased_proof_cannot_poison_exact_current_proof(tmp_path, for
     (location.parent / "foreign.json").write_text(json.dumps(foreign))
     proposal = retry.plan(path, frontier=frontier, target=TARGET, event="current-proof-only")
     assert proposal["scope_proof"]["path"] == str(location)
+
+
+def exception_refusal_fixture(tmp_path):
+    path, frontier, doc = fixture(tmp_path, "exception", "unknown")
+    row = doc["frontiers"]["frozen"]["items"][TARGET]
+    row["results"] = {
+        "prepare": {
+            "revision": "rev",
+            "packet_ref": {"path": "retained-packet", "sha256": "a" * 64},
+        },
+        "interpret": {
+            "classification": "uncertain",
+            "substantive_needs": ["Original criterion needs judgment"],
+            "actual": {"run_id": "offload:claude:retained", "exit": 0},
+            "proposal": {"findings": [{"summary": "Retained finding"}]},
+        },
+    }
+    row["stage_results"] = {"interpret": "retained-stage-result"}
+    location, proof = scope_proof(path, doc)
+    row["scope_refusal"] = {
+        "path": str(location),
+        "sha256": hashlib.sha256(location.read_bytes()).hexdigest(),
+    }
+    path.write_text(json.dumps(doc))
+    return path, frontier, doc, location
+
+
+def test_exception_pre_callback_reconciliation_is_hold_only_and_preserves_assessment(tmp_path):
+    path, frontier, doc, location = exception_refusal_fixture(tmp_path)
+    before = copy.deepcopy(read(path))
+    proof_bytes = location.read_bytes()
+    foreign = path.parent.parent.parent / "reservations/historical/intent.json"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text('{"owner":"foreign","status":"unknown"}')
+    foreign_bytes = foreign.read_bytes()
+    proposal, result = apply(path, frontier, "classify-no-start-exception")
+    row = read(path)
+    assert proposal["stage"] == "exception" and proposal["kind"] == "pre_callback_scope_refusal"
+    assert row["status"] == "held" and row["stage"] == "exception"
+    assert row["stage_status"] == "completed" and "reentry_ready" not in row
+    assert row["resource_evidence"]["confirmed_not_started"] is True
+    assert row["results"] == before["results"] and row["stage_results"] == before["stage_results"]
+    assert row["reentry_history"][-1]["previous"] == before
+    audit = Path(result["audit"])
+    audit_bytes = audit.read_bytes()
+    assert json.loads(audit_bytes)["before"] == before
+    assert location.read_bytes() == proof_bytes and foreign.read_bytes() == foreign_bytes
+    repeated = retry.apply(
+        path,
+        frontier=frontier,
+        target=TARGET,
+        event="classify-no-start-exception",
+        expected_plan_sha256=proposal["plan_sha256"],
+    )
+    assert repeated["idempotent"] and audit.read_bytes() == audit_bytes
+    assert json.loads(path.read_text())["runs"] == doc["runs"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing",
+        "callback_started",
+        "old_time",
+        "binding",
+        "input",
+        "operation",
+        "exception_result",
+        "provider_unknown",
+    ],
+)
+def test_exception_reconciliation_rejects_unproven_or_started_callbacks(tmp_path, change):
+    path, frontier, doc, location = exception_refusal_fixture(tmp_path)
+    row = doc["frontiers"]["frozen"]["items"][TARGET]
+    proof = json.loads(location.read_text())
+    if change == "missing":
+        location.unlink()
+    elif change == "callback_started":
+        proof["callback_started"] = True
+    elif change == "old_time":
+        proof["observed_at"] = 99
+    elif change == "binding":
+        proof["binding"]["work_key"] = "stale-request"
+    elif change == "input":
+        proof["input_sha256"] = "wrong"
+    elif change == "operation":
+        inner = path.parent / "state.actions" / (pipeline._digest(TARGET) + ".json")
+        inner.parent.mkdir()
+        inner.write_text(
+            json.dumps(
+                {
+                    "schema": "closer-queue/v1",
+                    "items": {TARGET: {"operation": {"status": "submitted"}}},
+                }
+            )
+        )
+    elif change == "exception_result":
+        row["results"]["exception"] = {"actual": {"run_id": "started-senior", "exit": 0}}
+        proof["input_sha256"] = retry._digest(row["results"])
+    elif change == "provider_unknown":
+        row["provider_outcome_uncertain"] = True
+    if change != "missing":
+        location.write_text(json.dumps(proof))
+        row["scope_refusal"]["sha256"] = hashlib.sha256(location.read_bytes()).hexdigest()
+    path.write_text(json.dumps(doc))
+    before = path.read_bytes()
+    with pytest.raises((ValueError, OSError)):
+        retry.plan(path, frontier=frontier, target=TARGET, event="event")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("when", ["before_state", "after_state"])
+def test_exception_hold_only_audit_recovers_interrupted_state_write(tmp_path, monkeypatch, when):
+    path, frontier, _, _ = exception_refusal_fixture(tmp_path)
+    before = copy.deepcopy(read(path))
+    proposal = retry.plan(path, frontier=frontier, target=TARGET, event="classify")
+    real_save = pipeline._save_snapshot
+
+    def interrupted(*args):
+        if when == "after_state":
+            real_save(*args)
+        raise OSError("injected interrupted state write")
+
+    monkeypatch.setattr(pipeline, "_save_snapshot", interrupted)
+    with pytest.raises(OSError, match="interrupted"):
+        retry.apply(
+            path,
+            frontier=frontier,
+            target=TARGET,
+            event="classify",
+            expected_plan_sha256=proposal["plan_sha256"],
+        )
+    monkeypatch.setattr(pipeline, "_save_snapshot", real_save)
+    resumed = retry.apply(
+        path,
+        frontier=frontier,
+        target=TARGET,
+        event="classify",
+        expected_plan_sha256=proposal["plan_sha256"],
+    )
+    assert resumed["idempotent"]
+    row = read(path)
+    assert row["status"] == "held" and row["stage_status"] == "completed"
+    assert "reentry_ready" not in row and "exception" not in row["results"]
+    assert row["results"] == before["results"]
+    assert row["reentry_history"][-1]["previous"] == before
+
+
+def test_exception_apply_refuses_changed_assessment_after_plan(tmp_path):
+    path, frontier, doc, _ = exception_refusal_fixture(tmp_path)
+    proposal = retry.plan(path, frontier=frontier, target=TARGET, event="classify")
+    doc["frontiers"]["frozen"]["items"][TARGET]["results"]["interpret"]["actual"][
+        "run_id"
+    ] = "different"
+    path.write_text(json.dumps(doc))
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="missing_or_ambiguous"):
+        retry.apply(
+            path,
+            frontier=frontier,
+            target=TARGET,
+            event="classify",
+            expected_plan_sha256=proposal["plan_sha256"],
+        )
+    assert path.read_bytes() == before
