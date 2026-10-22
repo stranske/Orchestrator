@@ -713,6 +713,8 @@ def history_world(world, monkeypatch):
     w.pages = []
     w.fail_page = None
     w.downloads = []
+    w.on_fetch = None
+    w.on_page = None
 
     def api(endpoint, **kwargs):
         if kwargs.get("method") == "POST":
@@ -722,6 +724,8 @@ def history_world(world, monkeypatch):
                 return {"total_count": 0, "workflow_runs": []}
             page = int(endpoint.rsplit("&page=", 1)[-1]) if "&page=" in endpoint else 1
             w.pages.append(page)
+            if w.on_page is not None:
+                w.on_page(page)
             if w.fail_page == page:
                 raise native.RoundCapacityDeferred(
                     resource="core",
@@ -754,6 +758,8 @@ def history_world(world, monkeypatch):
     def fetch(a, **_k):
         rid = a["workflow_run"]["id"]
         w.downloads.append(rid)
+        if w.on_fetch is not None:
+            w.on_fetch(rid)
         return w.archives[rid]
 
     w.backend.gh.api = api
@@ -814,18 +820,20 @@ def test_retained_foreign_archive_never_hides_changed_server_identity(history_wo
     )
 
 
-def test_history_page_capacity_preserves_reset_and_prior_acquisition_progress(history_world):
+def test_history_page_capacity_preserves_reset_and_history_progress_without_acquisition(
+    history_world,
+):
     w = history_world
     w.populate(101, linked=True)
-    # One acquired foreign corpus on page one is retained before the page-two refusal.
+    # Page-one coverage is retained before the page-two refusal; no archive starts.
     w.runs[0].update(event="workflow_dispatch", pull_requests=[])
     w.fail_page = 2
     result = w.backend.initiate_verify(TARGET, w.snapshot)
     assert result["verifier_resource_wait"]["cause"] == "capacity_deferred" and not w.posts
-    assert w.downloads == [w.runs[0]["id"]]
+    assert not w.downloads
     assert result["verifier_resource_wait"]["control"]["reset_at_epoch"] == 1792640060
     assert any(
-        r["endpoint"].startswith("archive:")
+        r["endpoint"].endswith("runs?per_page=100")
         for r in result["verifier_resource_wait"]["observations"]
     )
     validate(result, w.snapshot)
@@ -847,3 +855,39 @@ def test_enrichment_omits_duplicate_core_snapshot_and_retains_no_poll_json(world
     assert set(world.backend.verifier_archive_root.rglob("*")) == before
     world.backend.initiate_verify(TARGET, world.snapshot)
     assert len(snapshots) == 1 and len(world.posts) == 1
+
+
+def test_history_pages_finish_before_archive_fetch_can_shift_busy_run_inventory(history_world):
+    w = history_world
+    w.populate(101, linked=True)
+    w.runs[0].update(event="workflow_dispatch", pull_requests=[])
+    pages_at_fetch = []
+
+    def concurrent_foreign_run(_rid):
+        pages_at_fetch.append(list(w.pages))
+        incoming = copy.deepcopy(w.runs[1])
+        incoming.update(id=9000, created_at="2026-10-22T01:00:00Z")
+        w.runs.insert(0, incoming)
+
+    w.on_fetch = concurrent_foreign_run
+    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert result["status"] == "completed" and len(w.posts) == 1, result
+    assert pages_at_fetch == [[1, 2]]
+    assert w.pages == [1, 2] and len(w.downloads) == 1
+
+
+def test_history_change_during_page_reads_remains_incomplete_and_starts_no_archive(history_world):
+    w = history_world
+    w.populate(101, linked=True)
+
+    def changed_page(page):
+        if page == 2:
+            incoming = copy.deepcopy(w.runs[0])
+            incoming.update(id=9000, created_at="2026-10-22T01:00:00Z")
+            w.runs.insert(0, incoming)
+
+    w.on_page = changed_page
+    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert result["verifier_resource_wait"]["cause"] == "history_incomplete"
+    assert w.pages == [1, 2] and not w.downloads and not w.posts
+    validate(result, w.snapshot)

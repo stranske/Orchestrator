@@ -1995,7 +1995,10 @@ class Closer:
                 0, getattr(gh, "deadline", time.time() + 30) - time.time()
             )
             acquisitions = {"remaining": 8}
-            for run in boundary.history_runs(repo, merge_time, read):
+            # Establish pagination coverage before archive latency can shift pages.
+            # The reader's real deadline/capacity and consistency guards still apply.
+            candidates = list(boundary.history_runs(repo, merge_time, read))
+            for run in candidates:
                 if time.monotonic() >= deadline:
                     raise RoundDeadlineExhausted(
                         deadline=gh.deadline, remaining_seconds=gh.deadline - time.time()

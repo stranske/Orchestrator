@@ -1019,3 +1019,53 @@ def test_direct_delivery_hold_inventory_must_be_observed(labels):
     else:
         assert result["rows"][0]["execution_state"] == "held"
         assert result["failures"][0]["reason"] == "delivery_hold_inventory_unavailable"
+
+
+@pytest.mark.parametrize("known_owner", ["orphan", None])
+def test_malformed_ownership_keeps_prior_locator_and_independent_carry(known_owner):
+    import json
+
+    router = actual_controller_functions(rendered=True)
+    router.QUERY = (
+        "query{search{nodes{... on PullRequest{number repository{nameWithOwner} headRefOid body}}}}"
+    )
+    good = "owner/repo#14"
+    requested = []
+
+    def read(argv, **kwargs):
+        requested.append(argv[-1])
+        node = {
+            "__typename": "PullRequest",
+            "number": 14,
+            "repository": {"nameWithOwner": "owner/repo"},
+            "state": "MERGED",
+            "headRefOid": HEAD,
+            "mergeCommit": {"oid": MERGE},
+            "labels": {"nodes": []},
+        }
+        return 0, json.dumps({"data": {"repository": {"issueOrPullRequest": node}}}), ""
+
+    router.inventory.run = read
+    state = {
+        "targets": {TARGET: {"head": HEAD, "delivery_owner": known_owner}},
+        "delivery_ownership": {TARGET: "invalid"},
+        "delivery_continuity": {good: {"target": good, "owner": "orphan"}},
+    }
+    result = continuity.prepare_controller(
+        router, state, {"nodes": []}, 10, {}, (set(), set(), set())
+    )
+    assert requested == ["number=14"]
+    assert result["carry"][TARGET]["provenance"]["kind"] == "prior_controller_owner"
+    assert (
+        result["carry"][TARGET]["last_failure"]["reason"]
+        == "malformed_persisted_delivery_ownership"
+    )
+    assert result["failures"][0]["requirement"] and result["failures"][0]["next_trigger"]
+    assert (
+        next(row for row in result["rows"] if row["target"] == good)["execution_state"] == "active"
+    )
+    bad = [row for row in result["rows"] if row["target"] == TARGET]
+    assert bool(bad) is (known_owner is not None)
+    if bad:
+        assert bad[0]["execution_state"] == "held"
+    assert state["delivery_ownership"][TARGET] == "invalid"

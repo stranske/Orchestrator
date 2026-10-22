@@ -236,6 +236,7 @@ def prepare_controller(
     into the same state by its owner; this API never imports a task cohort.
     """
     seeds = []
+    seed_failures = {}
     prior = state.get("targets") or {}
     ownership = state.get("delivery_ownership") or {}
     if not isinstance(prior, Mapping) or not isinstance(ownership, Mapping):
@@ -245,6 +246,31 @@ def prepare_controller(
             continue
         owned = ownership.get(target) or {}
         if not isinstance(owned, Mapping):
+            if (
+                isinstance(target, str)
+                and TARGET.fullmatch(target)
+                and SHA.fullmatch(str(row.get("head", "")))
+            ):
+                seed_failures[target] = {
+                    "target": target,
+                    "reason": "malformed_persisted_delivery_ownership",
+                    "status": "unresolved",
+                    "observed_at": now,
+                    "requirement": "typed persisted delivery ownership for retained locator",
+                    "next_trigger": "scoped ownership repair or fresh normal owner disposition",
+                }
+                owner = row.get("delivery_owner")
+                seeds.append(
+                    {
+                        "target": target,
+                        "pr_target": row.get("pr_target"),
+                        "owner": owner if isinstance(owner, str) and owner in LANES else None,
+                        "provenance": {
+                            "kind": "prior_controller_owner",
+                            "fingerprint": row.get("fingerprint"),
+                        },
+                    }
+                )
             continue
         owner = owned.get("owner") or row.get("delivery_owner")
         if isinstance(owner, str) and owner in LANES and SHA.fullmatch(str(row.get("head", ""))):
@@ -345,6 +371,8 @@ def prepare_controller(
         return {n["name"] for n in nodes}
 
     def observe(target: str) -> dict:
+        if target in seed_failures:
+            raise ValueError(seed_failures[target]["reason"])
         source = read_node(target)
         subject = target
         node = source
@@ -491,6 +519,15 @@ def prepare_controller(
 
     result = plan(carry, seeds, observe=observe, policy=policy, now=now, ownership_hints=ownership)
     result["carry"].update(deferred)
+    # Seed validation is independent of plan's observation failures, including
+    # targets deferred to ordinary open routing. Never overwrite either class.
+    result["failures"] = list(seed_failures.values()) + [
+        failure for failure in result["failures"] if failure["target"] not in seed_failures
+    ]
+    for target, failure in seed_failures.items():
+        locator = result["carry"].get(target)
+        if isinstance(locator, dict):
+            locator["last_failure"] = failure
     return result
 
 
