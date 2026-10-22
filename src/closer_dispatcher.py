@@ -3036,7 +3036,9 @@ def _workspace_snapshot_binding(target, workspaces, bindings):
     }
 
 
-def _prepared_resource_keys(target, prep, snapshot, workspaces, *, workspace_bindings=None):
+def _prepared_resource_keys(
+    target, prep, snapshot, workspaces, *, workspace_bindings=None, infer_workspace=True
+):
     """Bind mutation aliases to retained prepared evidence and authorized workspace mapping.
 
     These keys confer no authority. The native queue still refreshes actual head, assignment,
@@ -3072,7 +3074,7 @@ def _prepared_resource_keys(target, prep, snapshot, workspaces, *, workspace_bin
             raise closer_resources.ResourceBlocked("prepared source identity is missing")
         keys.append("issue:" + source["target"])
     workspace = selected_workspace(workspaces, target)
-    if workspace:
+    if workspace and infer_workspace:
         keys.append("worktree:" + str(Path(workspace).resolve()))
     return keys
 
@@ -3122,7 +3124,7 @@ def _pipeline_capacity():
     return {"io": io_capacity, "low": min(4, len(low_pools)), "exception": exception}
 
 
-def _legacy_operation_dependency(state_path, target, snapshot):
+def _legacy_operation_dependency(state_path, target, snapshot, *, remote_only=False):
     """Return only a proven in-flight legacy operation; never migrate its action."""
     import closer_queue
 
@@ -3138,7 +3140,8 @@ def _legacy_operation_dependency(state_path, target, snapshot):
     aliases.update(x.get("target") for x in snapshot.get("sources", []) if isinstance(x, dict))
     aliases.add(snapshot.get("pr_target"))
     aliases.discard(None)
-    repos = {value.split("#", 1)[0].lower() for value in aliases if isinstance(value, str)}
+    aliases = {value.lower() for value in aliases if isinstance(value, str)}
+    repos = {value.split("#", 1)[0] for value in aliases}
     items = legacy.get("items", {}) if isinstance(legacy, dict) else {}
     if not isinstance(items, dict):
         return None
@@ -3147,12 +3150,20 @@ def _legacy_operation_dependency(state_path, target, snapshot):
             continue
         operation = item.get("operation") or {}
         op_repos = {str(r).lower() for r in operation.get("repo_keys", [])}
-        if operation.get("status") not in closer_queue.PENDING_OPERATION_STATES or (
-            old_target not in aliases and not op_repos.intersection(repos)
-        ):
-            if item.get("requires_coordinator") and (
-                old_target in aliases or bool(op_repos.intersection(repos))
-            ):
+        binding = operation.get("binding") or {}
+        known_targets = {str(old_target).lower()}
+        known_targets.update(str(value).lower() for value in operation.get("claim_targets", []))
+        if isinstance(binding, dict):
+            known_targets.update(str(value).lower() for value in binding.get("source_targets", []))
+            if binding.get("pr_target"):
+                known_targets.add(str(binding["pr_target"]).lower())
+        # A qualified GitHub-only effect does not consume the repository checkout.
+        # Repository membership alone is not a causal dependency on another PR.
+        relevant = bool(known_targets.intersection(aliases)) or (
+            not remote_only and bool(op_repos.intersection(repos))
+        )
+        if operation.get("status") not in closer_queue.PENDING_OPERATION_STATES or not relevant:
+            if item.get("requires_coordinator") and relevant:
                 raise RuntimeError(
                     "legacy private result needs its existing coordinator integration"
                 )
@@ -3648,10 +3659,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 and event.get("kind") == "action_advanced"
                 and event.get("target") == target
                 and event.get("action") == operation.get("action")
-                and event.get("revision") == row.get("revision")
+                and isinstance(event.get("revision"), str)
+                and event["revision"]
+                and event["revision"] != operation.get("revision")
                 for event in events
             )
-            if not (submitted and advanced):
+            # The queue may refresh metadata again after the first action
+            # transition. Its validated final row need not repeat that first
+            # revision; the exact completed operation and both causal events do.
+            if (operation.get("action") == "merge" and row.get("action") == "merge") or not (
+                submitted and advanced
+            ):
                 return None
             progress_key = digest(
                 {
@@ -3882,6 +3900,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snapshot,
             backend.workspaces,
             workspace_bindings=getattr(backend, "workspace_bindings", None),
+            infer_workspace=not _remote_only_effect(target, context),
         )
 
     def completed_retention_hold(
@@ -5959,7 +5978,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "next_trigger": interpreted.get("next_trigger") or "capacity_recheck",
                 "resource_evidence": evidence,
             }
-        prep_snapshot = context.get("prepare", {}).get("snapshot", {})
+        prep_snapshot, _packet = full_snapshot(context.get("prepare") or {})
         dependency = (
             assignment_dependency(
                 args.assignment,
@@ -5971,7 +5990,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         )
         if dependency:
             return dependency
-        dependency = _legacy_operation_dependency(state_path, target, prep_snapshot)
+        dependency = _legacy_operation_dependency(
+            state_path, target, prep_snapshot, remote_only=_remote_only_effect(target, context)
+        )
         if dependency:
             return dependency
         try:
@@ -5991,11 +6012,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             def execute_bound(name, action, observed, operation):
                 import closer_resources
 
+                remote_only = _remote_only_effect(name, context)
+                if (context.get("prepare") or {}).get("native_effect_contract") and (
+                    not remote_only or not _native_remote_footprint(observed, action)
+                ):
+                    raise closer_resources.ResourceBlocked("actual native effect footprint changed")
                 actual = _prepared_resource_keys(
                     name,
                     {"revision": observed.get("revision")},
                     observed,
                     backend.workspaces,
+                    infer_workspace=not remote_only,
                 )
                 if observed.get("head") != prepared_full.get("head") or not set(actual).issubset(
                     reserved_keys
@@ -6344,11 +6371,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     def reconcile_action(target, context):
         def legacy_barrier():
             prepared = context.get("prepare")
-            snapshot = prepared.get("snapshot") if isinstance(prepared, dict) else None
+            snapshot, _packet = (
+                full_snapshot(prepared) if isinstance(prepared, dict) else (None, None)
+            )
             if not isinstance(snapshot, dict):
                 return {"outcome": "unknown", "reason": "legacy dependency snapshot is missing"}
             try:
-                dependency = _legacy_operation_dependency(state_path, target, snapshot)
+                dependency = _legacy_operation_dependency(
+                    state_path, target, snapshot, remote_only=_remote_only_effect(target, context)
+                )
             except RuntimeError as exc:
                 return {"outcome": "unknown", "reason": str(exc)[:500]}
             if dependency:
@@ -6664,6 +6695,10 @@ def main(argv=None):
     reentry.add_argument("--event", required=True)
     reentry.add_argument("--apply", action="store_true")
     reentry.add_argument("--expected-plan-sha256")
+    reentry.add_argument(
+        "--source-receipts-json",
+        help="hashed terminal lifecycle and verified installation receipts",
+    )
     args = p.parse_args(argv)
     import closer_queue
 
@@ -6684,6 +6719,8 @@ def main(argv=None):
             reentry_args.append("--apply")
         if args.expected_plan_sha256:
             reentry_args.extend(["--expected-plan-sha256", args.expected_plan_sha256])
+        if args.source_receipts_json:
+            reentry_args.extend(["--source-receipts-json", args.source_receipts_json])
         return closer_finite_reentry.main(reentry_args)
     if args.command == "validate-stop":
         targets = targets_from_assignment(args.assignment) if args.assignment else None

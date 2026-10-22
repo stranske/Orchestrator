@@ -1163,14 +1163,18 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
         repo = canonical.split("#")[0]
         if not ({"pr:" + canonical, "issue:" + canonical} & keys) or "repo:" + repo not in keys:
             return "incomplete_resource_inventory"
-        mapped = current_workspace_keys(
-            canonical,
-            keys,
-            {
-                "schema": WORKSPACE_SCHEMA,
-                "historical": snapshot["workspaces"],
-                "execution": snapshot.get("execution_workspaces", {}),
-            },
+        mapped = (
+            set()
+            if purpose == "remote_effect"
+            else current_workspace_keys(
+                canonical,
+                keys,
+                {
+                    "schema": WORKSPACE_SCHEMA,
+                    "historical": snapshot["workspaces"],
+                    "execution": snapshot.get("execution_workspaces", {}),
+                },
+            )
         )
         if not mapped.issubset(keys):
             return "incomplete_resource_inventory"

@@ -20,6 +20,14 @@ import closer_resources as resources
 from closer_frontier_policy import validate_frontier
 
 SCHEMA = "closer-finite-reentry/v1"
+# Versioned source contract: these exact legacy refusals precede the inner queue.
+PRE_QUEUE_CANDIDATE = "15e35271e5005fe47288e600e2d0876f7de0f7c8"
+PRE_QUEUE_SOURCE_SHA256 = "8b6295ba8065255b085a6952ec8dc405e1a98cc8f8dd8e97c2b25632a475975d"
+PRE_QUEUE_ERRORS = frozenset(
+    f"RuntimeError: legacy {status} operation lacks external-run or live-owner proof; "
+    "reconcile it in the original closer queue"
+    for status in ("submitted", "running", "uncertain")
+)
 
 
 def _digest(value):
@@ -126,7 +134,7 @@ def _inner_boundary(path, target):
     return {"path": str(inner), "sha256": sha}
 
 
-def _scope_proof(root, path, target, entry, row, *, caller_path):
+def _scope_proof(root, path, target, entry, row, *, caller_path, admitted=False):
     expected_binding = {
         "state_path": str(path),
         "pipeline_run_id": entry["run_id"],
@@ -181,19 +189,28 @@ def _scope_proof(root, path, target, entry, row, *, caller_path):
             and proof.get("target") == target
             and proof.get("stage") == row.get("stage")
             and normalized_binding == expected_binding
-            and proof.get("admitted") is False
+            and proof.get("admitted") is admitted
+            # The producer persists this admission snapshot before invocation;
+            # even admitted=True retains callback_started=False. It alone does
+            # not prove no effect; admitted mode requires the full source chain.
             and proof.get("callback_started") is False
+            and (not admitted or proof.get("purpose") == "remote_effect")
             and type(proof.get("observed_at")) in {int, float}
             and type(row.get("stage_started_at")) in {int, float}
             and type(row.get("stage_deadline")) in {int, float}
             and row.get("stage_started_at", float("inf"))
             <= proof["observed_at"]
             <= row.get("stage_deadline", float("-inf"))
-            and isinstance(proof.get("reason"), str)
-            and proof["reason"]
-            # Match the finite coordinator's retained error format exactly;
-            # the full reason remains bound by the admission proof digest.
-            and row.get("error") == "ScopeBlocked: " + proof["reason"][:200]
+            and (
+                (admitted and proof.get("reason") is None)
+                or (
+                    not admitted
+                    and isinstance(proof.get("reason"), str)
+                    and proof["reason"]
+                    # Match the coordinator's exact retained error format.
+                    and row.get("error") == "ScopeBlocked: " + proof["reason"][:200]
+                )
+            )
             and proof.get("input_sha256")
             == _digest(
                 {
@@ -209,7 +226,157 @@ def _scope_proof(root, path, target, entry, row, *, caller_path):
     return candidates[0]
 
 
-def plan(state_path, *, frontier, target, event):
+def _receipt(ref):
+    if (
+        not isinstance(ref, dict)
+        or set(ref) != {"path", "sha256"}
+        or not isinstance(ref.get("path"), str)
+        or not ref["path"]
+        or not isinstance(ref.get("sha256"), str)
+        or len(ref["sha256"]) != 64
+    ):
+        raise ValueError("exact_source_receipt_required")
+    value, digest = _read(ref["path"])
+    if digest != ref["sha256"]:
+        raise ValueError("source_receipt_digest_changed")
+    return value
+
+
+def _snapshot_digest(directory):
+    # Load only the currently shipped installer, never receipt-selected code.
+    base = Path(__file__).resolve().parent
+    locations = [
+        base / "scripts/install_verified_snapshot.py",
+        base.parent / "scripts/install_verified_snapshot.py",
+    ]
+    script = next((path for path in locations if path.is_file()), None)
+    if script is None:
+        raise ValueError("trusted_snapshot_installer_unavailable")
+    script = _physical(script)
+    # Execute the shipped module without importlib's optional bytecode-cache
+    # writes: read-only reconciliation must not mutate an installed generation.
+    namespace = {"__file__": str(script), "__name__": "_reentry_trusted_installer"}
+    exec(compile(script.read_bytes(), str(script), "exec"), namespace)
+    return namespace["snapshot_digest"](directory)
+
+
+def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts):
+    if not isinstance(receipts, dict) or set(receipts) != {"lifecycle", "installation"}:
+        raise ValueError("native_pre_queue_source_receipts_required")
+    lifecycle = _receipt(receipts["lifecycle"])
+    installation = _receipt(receipts["installation"])
+    source = lifecycle.get("source_identity")
+    verification = installation.get("verification")
+    if (
+        lifecycle.get("schema") != "direct-finite-storage/v2"
+        or lifecycle.get("status") != "retired"
+        or type(lifecycle.get("exit_code")) is not int
+        or lifecycle["exit_code"] != 78
+        or not isinstance(source, dict)
+        or source.get("frontier") != frontier
+        or installation.get("stage") != "installed"
+        or installation.get("candidate_sha") != PRE_QUEUE_CANDIDATE
+        or not isinstance(verification, dict)
+        or verification.get("verified") is not True
+        or type(verification.get("exit_code")) is not int
+        or verification["exit_code"] != 0
+        or not isinstance(source.get("installed_generation"), str)
+        or not source["installed_generation"].startswith("generation-v1:")
+        or source["installed_generation"] != installation.get("installed_generation")
+    ):
+        raise ValueError("unproven_terminal_native_source")
+    if not isinstance(source.get("qualified_module"), str):
+        raise ValueError("missing_native_source_module")
+    module = _physical(source["qualified_module"])
+    if (
+        module.name != "closer_dispatcher.py"
+        or not module.is_file()
+        or module.stat().st_size > 2 * 1024 * 1024
+        or hashlib.sha256(module.read_bytes()).hexdigest() != PRE_QUEUE_SOURCE_SHA256
+    ):
+        raise ValueError("unsupported_native_pre_queue_source")
+    if _snapshot_digest(module.parent) != verification.get("snapshot_digest"):
+        raise ValueError("native_package_differs_from_verified_installation")
+    stdout = _receipt(
+        {"path": lifecycle.get("native_stdout"), "sha256": lifecycle.get("stdout_sha256")}
+    )
+    if (
+        stdout.get("finite_frontier") != frontier
+        or not isinstance(stdout.get("run_ids"), dict)
+        or not isinstance(stdout.get("targets"), dict)
+        or stdout["run_ids"].get(target) != entry["run_id"]
+        or stdout["targets"].get(target) != row
+    ):
+        raise ValueError("native_stdout_does_not_bind_original_row")
+    expected_lease = {
+        "target": resources.canonical_target(target),
+        "owner": lease["owner"],
+        "epoch": lease["epoch"],
+    }
+    results = row["results"]
+    prep, interpretation = results.get("prepare", {}), results.get("interpret", {})
+    snapshot = _receipt(prep.get("snapshot_ref"))
+    contract = {
+        "kind": "native_remote_only",
+        "target": target,
+        "revision": row.get("revision"),
+        "head": snapshot.get("head"),
+        "action": "merge",
+    }
+    if (
+        row.get("status") != "unknown"
+        or row.get("stage") != "act"
+        or row.get("error") not in PRE_QUEUE_ERRORS
+        or row.get("scope_lease") != expected_lease
+        or "act" in results
+        or "exception" in results
+        or frontier["bindings"][target]["revision"] != row.get("revision")
+        or snapshot.get("target") != target
+        or snapshot.get("revision") != row.get("revision")
+        or not isinstance(snapshot.get("head"), str)
+        or len(snapshot["head"]) != 40
+        or prep.get("revision") != row.get("revision")
+        or prep.get("identity") != row.get("identity")
+        or prep.get("native_effect_contract") != contract
+        or not isinstance(prep.get("proposal"), dict)
+        or prep["proposal"].get("action") != "merge"
+        or interpretation.get("classification") != "deterministic_merge"
+        or interpretation.get("authority") is not False
+        or interpretation.get("substantive_needs") != []
+    ):
+        raise ValueError("native_pre_queue_boundary_not_proven")
+    return copy.deepcopy(receipts)
+
+
+def _retire_native_boundary(root, path, target, frontier, record):
+    if record["plan"].get("kind") != "native_pre_queue_refusal":
+        return
+    state, _ = _read(path)
+    if _digest(_entry(state, frontier)["items"][target]) != record["after_sha256"]:
+        raise ValueError("reconciled_row_changed_before_retirement")
+    if not resources._release_known_shard_boundary(
+        root,
+        path,
+        target,
+        owner=record["before"]["scope_lease"]["owner"],
+        now=time.time,
+        run_id=state["frontiers"][frontier["frontier_id"]]["run_id"],
+        finite_frontier=frontier,
+    ):
+        raise ValueError("known_native_boundary_retirement_pending")
+    # The release helper can skip a contested/unreadable intent. A durable
+    # terminal row is not evidence that every original-owner intent retired.
+    for base in resources._reservation_bases(root):
+        for directory in sorted(base.iterdir()) if base.is_dir() else []:
+            intent = resources._read_intent(directory / "intent.json")
+            if intent is not None and (
+                intent.get("owner") == record["before"]["scope_lease"]["owner"]
+                and intent.get("target") == resources.canonical_target(target)
+            ):
+                raise ValueError("known_native_boundary_retirement_pending")
+
+
+def plan(state_path, *, frontier, target, event, source_receipts=None):
     """Read-only plan. A trigger is explicit evidence, never new action authority."""
     path = _physical(state_path)
     root = _physical(path.parent.parent.parent)
@@ -303,6 +470,12 @@ def plan(state_path, *, frontier, target, event):
         and row.get("error") == "ResourceBlocked: no io pool slot before the deadline"
     ):
         kind = "unstarted_prepare_pool"
+    elif row.get("error") in PRE_QUEUE_ERRORS:
+        source_receipts = _native_pre_queue_source(
+            path, frontier, target, entry, row, lease, source_receipts
+        )
+        proof = _scope_proof(root, path, target, entry, row, caller_path=state_path, admitted=True)
+        kind = "native_pre_queue_refusal"
     elif (row.get("error") or "").startswith("ScopeBlocked: "):
         proof = _scope_proof(root, path, target, entry, row, caller_path=state_path)
         kind = "pre_callback_scope_refusal"
@@ -344,6 +517,8 @@ def plan(state_path, *, frontier, target, event):
         "acceptance_authority": False,
         "global_stop_authority": False,
     }
+    if kind == "native_pre_queue_refusal":
+        result["source_receipts"] = source_receipts
     return {**result, "plan_sha256": _digest(result)}
 
 
@@ -361,7 +536,7 @@ def _exclusive(path):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def apply(state_path, *, frontier, target, event, expected_plan_sha256):
+def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_receipts=None):
     """CAS one target under existing target/run/inventory/state ownership locks."""
     path = _physical(state_path)
     frontier = validate_frontier(frontier)
@@ -387,7 +562,13 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                     row = _entry(state, frontier)["items"][target]
                     if record.get("status") == "prepared":
                         if _digest(row) == _digest(record.get("before")):
-                            fresh = plan(state_path, frontier=frontier, target=target, event=event)
+                            fresh = plan(
+                                state_path,
+                                frontier=frontier,
+                                target=target,
+                                event=event,
+                                source_receipts=source_receipts,
+                            )
                             if fresh["plan_sha256"] != expected_plan_sha256:
                                 raise ValueError("prepared_reentry_inputs_changed")
                             state["frontiers"][frontier["frontier_id"]]["items"][target] = record[
@@ -400,8 +581,15 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                         resources._atomic_write(audit, record)
                     elif record.get("status") != "applied":
                         raise ValueError("invalid_reentry_audit")
+                    _retire_native_boundary(root, path, target, frontier, record)
                     return {"status": "applied", "idempotent": True, "audit": str(audit)}
-                proposal = plan(state_path, frontier=frontier, target=target, event=event)
+                proposal = plan(
+                    state_path,
+                    frontier=frontier,
+                    target=target,
+                    event=event,
+                    source_receipts=source_receipts,
+                )
                 if proposal["plan_sha256"] != expected_plan_sha256:
                     raise ValueError("reentry_plan_changed")
                 state, _ = _read(path)
@@ -441,6 +629,18 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                         "scope_refusal": proposal["scope_proof"],
                         "confirmed_not_started": True,
                     }
+                    if proposal["kind"] == "native_pre_queue_refusal":
+                        # ACT was entered. Only the inner operation is proven
+                        # absent; never relabel its admitted callback as unstarted.
+                        row.update(
+                            deferred_reason="native_pre_queue_refusal",
+                            deferred_next_trigger="reconcile_legacy_dependency_before_retry",
+                        )
+                        row["resource_evidence"] = {
+                            "pre_queue_admission": proposal["scope_proof"],
+                            "source_receipts": proposal["source_receipts"],
+                            "confirmed_no_effect": True,
+                        }
                 else:
                     # Keep a known no-effect boundary until the normal target
                     # admission and new lease succeed. A bare pending row would
@@ -463,6 +663,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                 pipeline._save_snapshot(path, state)
                 record["status"] = "applied"
                 resources._atomic_write(audit, record)
+                _retire_native_boundary(root, path, target, frontier, record)
                 return {
                     "status": "applied",
                     "idempotent": False,
@@ -525,12 +726,17 @@ def main(argv=None):
     parser.add_argument("--event", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expected-plan-sha256")
+    parser.add_argument(
+        "--source-receipts-json", help="hash-bound native lifecycle/installation refs JSON"
+    )
     args = parser.parse_args(argv)
     if args.apply and not args.expected_plan_sha256:
         parser.error("--apply requires --expected-plan-sha256")
     try:
         frontier, _ = _read(args.frontier)
         common = {"frontier": frontier, "target": args.target, "event": args.event}
+        if args.source_receipts_json:
+            common["source_receipts"], _ = _read(args.source_receipts_json)
         result = (
             apply(args.state, **common, expected_plan_sha256=args.expected_plan_sha256)
             if args.apply

@@ -260,6 +260,25 @@ checks those bindings again, and retains a recoverable before/after audit. Activ
 owners, uncertain providers/effects, changed inputs and repeated unchanged failure
 boundaries remain blocked. No history, sibling state or global fence is removed.
 
+A terminal native ACT refusal before the inner queue has a separate, versioned
+reconciliation contract. For the supported producer version, pass
+`--source-receipts-json <file>` containing `lifecycle` and `installation` references,
+each with `path` and `sha256`. The helper checks the verified original package,
+terminal lifecycle, exact retained stdout row, admitted callback proof, frozen
+merge inputs, and absence of any inner operation. An error string alone is not
+proof. Apply preserves the original admitted callback and its before/after audit,
+records a no-effect hold, and retires only that operation's owned reservations
+through the existing lifecycle. It never replays the old action. A fresh frontier
+must pass normal current checks before an effect can occur.
+
+Qualified native GitHub-only actions reserve their explicit PR, source and branch
+aliases without inferring a checkout dependency from repository membership.
+Local actions and explicit workspace claims retain workspace exclusion. Related
+uncertain operations and real shared resources still block; an unrelated legacy
+PR in the same repository does not. A completed merge's verified causal queue
+transition creates the bound verification successor even if a later metadata
+refresh changes its final accounting revision.
+
 A proven pre-callback action refusal becomes a no-effect scope hold; it does not
 become an action-ready row. The historical scope still requires its own supported
 reconciliation. Paused repositories remain paused. The existing `--max-workers`

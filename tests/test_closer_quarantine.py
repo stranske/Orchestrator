@@ -833,3 +833,30 @@ def test_malformed_raw_queue_history_preserves_later_claim_alias_expansion(tmp_p
         keys("owner/linked#9") + ["worktree:" + str(shared)],
         purpose="remote_effect",
     )
+
+
+def test_remote_inventory_does_not_require_unused_mapped_workspace(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    path = ledger(tmp_path, {"status": "uncertain", "stage": "act"})
+    snapshot = quarantine.scope_snapshot(path, workspaces={"owner/held": str(shared)})
+    remote_keys = keys("owner/held#9")
+    assert quarantine.scope_problem(snapshot, "owner/held#9", remote_keys) == (
+        "incomplete_resource_inventory"
+    )
+    assert (
+        quarantine.scope_problem(snapshot, "owner/held#9", remote_keys, purpose="remote_effect")
+        is None
+    )
+
+
+def test_remote_inventory_keeps_explicit_workspace_overlap(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    workspace = "worktree:" + str(shared)
+    path = ledger(tmp_path)
+    ad(path, workspace)
+    snapshot = quarantine.scope_snapshot(path, workspaces={"owner/healthy": str(shared)})
+    assert quarantine.scope_problem(
+        snapshot, "owner/healthy#2", keys() + [workspace], purpose="remote_effect"
+    ).startswith("quarantined_resource:")
