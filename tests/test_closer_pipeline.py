@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import threading
@@ -10,6 +11,86 @@ import pytest
 import closer_pipeline
 import closer_queue
 from closer_pipeline import run_pipeline, validate_stop
+
+
+def test_expired_deadline_reports_admission_expired_not_lock(tmp_path):
+    path = tmp_path / "expired.json"
+    clock = {"now": 100.0}
+    receipt = run_pipeline(
+        path,
+        ["o/r#1"],
+        **callbacks(),
+        capacity_fn=lambda: {},
+        deadline=clock["now"] - 1,
+        now=lambda: clock["now"],
+    )
+    assert receipt["reason"] == "admission_deadline_expired"
+    assert receipt["reason"] != "coordinator_lock_unavailable"
+    assert receipt["deadline"] == clock["now"] - 1
+    assert receipt["now"] == clock["now"]
+    assert receipt["authority"] is False
+    assert receipt["targets"] == {}
+    assert not path.exists()
+    assert not path.with_name(path.name + ".runlock").exists()
+
+
+def test_deadline_expires_between_precheck_and_lock_attempt(tmp_path, monkeypatch):
+    path = tmp_path / "expired-before-attempt.json"
+    observed = iter([99, 100, 101])
+
+    def no_lock_attempt(*args):
+        pytest.fail("no flock attempt is allowed after the deadline")
+
+    monkeypatch.setattr(fcntl, "flock", no_lock_attempt)
+    receipt = closer_pipeline._run_pipeline_impl(
+        path,
+        ["o/r#1"],
+        **callbacks(),
+        capacity_fn=lambda: {},
+        deadline=100,
+        now=lambda: next(observed),
+    )
+    assert receipt["reason"] == "admission_deadline_expired"
+    assert receipt["deadline"] == 100
+    assert receipt["now"] == 101
+    assert not path.exists()
+
+
+def test_contended_lock_still_reports_lock_unavailable(tmp_path, monkeypatch):
+    import closer_pipeline as cp
+
+    logical_now = [1_000_000.0]
+
+    def advance_sleep(_duration):
+        logical_now[0] += 0.03
+
+    monkeypatch.setattr(cp.time, "sleep", advance_sleep)
+    path = tmp_path / "contended.json"
+    with path.with_name(path.name + ".runlock").open("a+") as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        receipt = run_pipeline(
+            path,
+            ["o/r#1"],
+            **callbacks(),
+            capacity_fn=lambda: {},
+            deadline=logical_now[0] + 0.05,
+            now=lambda: logical_now[0],
+        )
+        assert receipt["reason"] == "coordinator_lock_unavailable"
+        assert receipt["authority"] is False
+        assert receipt["targets"] == {}
+        assert not path.exists()
+
+
+def test_nan_deadline_is_rejected_before_admission_expiry(tmp_path):
+    with pytest.raises(ValueError, match="finite epoch timestamp"):
+        run_pipeline(
+            tmp_path / "nan-deadline.json",
+            ["o/r#1"],
+            **callbacks(),
+            capacity_fn=lambda: {},
+            deadline=float("nan"),
+        )
 
 
 class FakeRoundDeadlineExhausted(TimeoutError):

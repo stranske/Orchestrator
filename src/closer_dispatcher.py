@@ -6858,6 +6858,14 @@ def _main_admitted(args, p, assignment_rows, targets):
         result["validation"] = validation
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
+            if result.get("reason") == "admission_deadline_expired":
+                try:
+                    result.update(_expired_admission_diagnostics(_pipeline_state_path(args.state)))
+                except Exception as exc:
+                    # Diagnostics must not suppress the deferred receipt or exit 78.
+                    result["reservation_diagnostics_error"] = (
+                        f"{type(exc).__name__}: {str(exc)[:200]}"
+                    )
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
@@ -6929,6 +6937,83 @@ def _main_admitted(args, p, assignment_rows, targets):
             result.update(stop_valid=False, valid=False, unknown_reservations=unknown)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("stop_valid") else 78
+
+
+def _expired_admission_diagnostics(pipeline_path):
+    """Explain retained resource advertisements without adopting or releasing them.
+
+    Drainable means an existing read-only reconciliation plan admits the exact
+    advertisement. Applying it still requires its original locks and byte checks.
+    """
+    import closer_resources
+
+    # Match plan_legacy_reconciliation: absolute paths so drainable comparisons agree.
+    pipeline_path = Path(pipeline_path).absolute()
+    root = closer_resources.scoped_root(pipeline_path)
+    unknown = closer_resources.unknown_reservations(root)
+    diagnostics = []
+    drainable = set()
+    plans = {}
+    for base in closer_resources._reservation_bases(root):
+        for directory in sorted(base.iterdir()) if base.is_dir() else []:
+            for filename in ("intent.json", "legacy-intent.json"):
+                path = directory / filename
+                if not path.exists():
+                    continue
+                reasons = ["no_supported_recovery_path"]
+                eligible = False
+                try:
+                    intent = closer_resources._read_intent(path)
+                    binding = (intent or {}).get("causal_binding") or {}
+                    run_id = binding.get("pipeline_run_id")
+                    if filename == "legacy-intent.json" and intent and run_id:
+                        raw_target = intent.get("target")
+                        plan_target = closer_resources.legacy_plan_target_for_intent(
+                            pipeline_path, run_id=run_id, intent_target=raw_target
+                        )
+                        key = (run_id, intent.get("owner"), plan_target)
+                        if key not in plans:
+                            plans[key] = closer_resources.plan_legacy_reconciliation(
+                                pipeline_path, run_id=key[0], owner=key[1], target=plan_target
+                            )
+                        plan = plans[key]
+                        eligible = plan.get("eligible") is True and any(
+                            row.get("path") == str(path) for row in plan.get("advertisements", [])
+                        )
+                        reasons = plan.get("reasons") or ([] if eligible else reasons)
+                    elif filename == "legacy-intent.json":
+                        reasons = ["missing_causal_run_binding"]
+                    if eligible:
+                        drainable.add(str(path))
+                    diagnostics.append(
+                        {
+                            "path": str(path),
+                            "target": (intent or {}).get("target"),
+                            "recovery_path": (
+                                "plan_legacy_reconciliation"
+                                if filename == "legacy-intent.json"
+                                else "none"
+                            ),
+                            "drainable": eligible,
+                            "reasons": reasons,
+                        }
+                    )
+                except (
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    closer_resources.ResourceBlocked,
+                ) as exc:
+                    diagnostics.append(
+                        {"path": str(path), "drainable": False, "reasons": [str(exc)]}
+                    )
+    return {
+        "blocking_reservations": len(unknown),
+        "drainable_reservations": len(drainable),
+        "deadlock": bool(unknown) and not drainable,
+        "reservation_recovery": diagnostics,
+    }
 
 
 def _scoped_budget_admission(state_path, requested_deadline):

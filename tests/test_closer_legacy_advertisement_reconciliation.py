@@ -126,6 +126,55 @@ def plan(seed):
     )
 
 
+def test_expired_admission_plans_with_canonical_assignment_target(seeded, monkeypatch):
+    import closer_dispatcher
+
+    calls = []
+
+    def record_plan(*_args, **kwargs):
+        calls.append(kwargs)
+        return {"eligible": False, "reasons": ["synthetic"], "advertisements": []}
+
+    monkeypatch.setattr(resources, "plan_legacy_reconciliation", record_plan)
+    mixed = "OWNER/Repo#31"
+    mixed_assignment = "OWNER/Repo#31"
+    with pipeline._locked(seeded["path"]):
+        state = pipeline._load(seeded["path"])
+        run = state["runs"][seeded["run_id"]]
+        run["assignment"] = [mixed_assignment, "owner/other#667"]
+        run["targets"][mixed_assignment] = run["targets"].pop(seeded["target"])
+        pipeline._save(seeded["path"], state)
+    seeded["target"] = mixed_assignment
+    for ad in seeded["ads"]:
+        doc = json.loads(ad.read_bytes())
+        doc["target"] = mixed
+        resources._atomic_write(ad, doc)
+    closer_dispatcher._expired_admission_diagnostics(seeded["path"])
+    assert calls
+    assert calls[0]["target"] == mixed_assignment
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_expired_admission_reports_exact_reconciliation_capacity(seeded, corrupt):
+    import closer_dispatcher
+
+    if corrupt:
+        native = json.loads(seeded["native_path"].read_bytes())
+        native["items"][seeded["target"]]["operation_history"] = [{"unknown": True}]
+        seeded["native_path"].write_text(json.dumps(native))
+    before = {p: p.read_bytes() for p in seeded["path"].parent.rglob("*") if p.is_file()}
+    receipt = closer_dispatcher._expired_admission_diagnostics(seeded["path"])
+    assert receipt["blocking_reservations"] == len(seeded["ads"])
+    assert receipt["drainable_reservations"] == (0 if corrupt else len(seeded["ads"]))
+    assert receipt["deadlock"] is corrupt
+    if corrupt:
+        assert all(
+            row["reasons"] == ["native_no_operation_wait_proof_mismatch"]
+            for row in receipt["reservation_recovery"]
+        )
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
 def apply(seed, value):
     return resources.apply_legacy_reconciliation(
         seed["path"],

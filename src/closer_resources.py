@@ -2847,6 +2847,26 @@ def _no_operation_wait(path, target, row):
     return native_path, raw
 
 
+def legacy_plan_target_for_intent(state_path, *, run_id, intent_target):
+    """Map an intent target to the exact original run assignment string."""
+    path = Path(state_path).absolute()
+    import closer_pipeline as pipeline
+
+    _, state = _reconciliation_record(path)
+    if state.get("schema") != pipeline.SCHEMA:
+        raise ValueError("unsupported_pipeline_schema")
+    run = state["runs"][run_id]
+    wanted = canonical_target(str(intent_target))
+    for assigned in run["assignment"]:
+        try:
+            if canonical_target(assigned) == wanted:
+                return assigned
+        except ValueError:
+            if assigned == intent_target:
+                return assigned
+    raise ValueError("target_not_in_original_run")
+
+
 def plan_legacy_reconciliation(state_path, *, run_id, owner, target):
     """Read-only plan; historical advertisements lacking causal IDs remain held.
 

@@ -2539,6 +2539,8 @@ def _run_pipeline_impl(
         raise ValueError("priority targets must belong to the current assignment")
     if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         raise ValueError("deadline must be an epoch timestamp")
+    if not math.isfinite(float(deadline)):
+        raise ValueError("deadline must be a finite epoch timestamp")
     bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in bounds.values()):
         raise ValueError("pool ceilings must be positive integers")
@@ -2551,26 +2553,43 @@ def _run_pipeline_impl(
     if reconcile is not None:
         callbacks["reconcile"] = (reconcile, "io")
     assignment = sorted(target_list)
+    observed_at = now()
+    if float(deadline) <= observed_at:
+        return {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": False,
+            "status": "deferred",
+            "reason": "admission_deadline_expired",
+            "deadline": float(deadline),
+            "now": observed_at,
+            "continuation_required": True,
+            "finished_at": observed_at,
+            "targets": {},
+        }
     run_guard = path.with_name(path.name + ".runlock")
     run_guard.parent.mkdir(parents=True, exist_ok=True)
     run_lock = run_guard.open("a+")
     acquired = False
+    contended = False
     while now() < float(deadline):
         try:
             fcntl.flock(run_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             acquired = True
             break
         except BlockingIOError:
+            contended = True
             time.sleep(min(0.025, max(0.0, float(deadline) - now())))
     if not acquired:
         run_lock.close()
+        observed_at = now()
         return {
             "schema": "closer-pipeline-receipt/v1",
             "authority": False,
             "status": "deferred",
-            "reason": "coordinator_lock_unavailable",
+            "reason": "coordinator_lock_unavailable" if contended else "admission_deadline_expired",
+            **({} if contended else {"deadline": float(deadline), "now": observed_at}),
             "continuation_required": True,
-            "finished_at": now(),
+            "finished_at": observed_at,
             "targets": {},
         }
     if _run_lock_ref is not None:
@@ -3220,13 +3239,13 @@ def _run_pipeline_impl(
                     ):
                         throttle = getattr(exc, "throttle", None)
                         resource_name = getattr(exc, "resource", None)
-                        observed_at = getattr(exc, "observed_at", None)
+                        capacity_observed_at = getattr(exc, "observed_at", None)
                         reset_at = getattr(exc, "reset_at_epoch", None)
                         evidence = {
                             "github_capacity": {
                                 "throttle": throttle,
                                 "resource": resource_name,
-                                "observed_at": observed_at,
+                                "observed_at": capacity_observed_at,
                                 "reset_at_epoch": reset_at,
                             }
                         }
