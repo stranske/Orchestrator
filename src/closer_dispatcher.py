@@ -6998,6 +6998,24 @@ def _run_merge_verification_successors(args, backend, result, targets):
     return result
 
 
+def _successor_caller_admitted(args, validation):
+    """Selected finite completion may advance without clearing foreign history."""
+    if not args.pipeline:
+        return False
+    if validation.get("valid") is True:
+        return True
+    retained = validation.get("historical_quarantine")
+    return (
+        getattr(args, "finite_frontier", None) is not None
+        and args.coordinator_mode == "resource_scoped"
+        and not args.shadow
+        and validation.get("scoped_completion_valid") is True
+        and validation.get("admitted_domain_valid") is True
+        and isinstance(retained, dict)
+        and retained.get("global_reasons") == []
+    )
+
+
 def _main_admitted(args, p, assignment_rows, targets):
     import closer_queue
 
@@ -7138,7 +7156,7 @@ def _main_admitted(args, p, assignment_rows, targets):
                 _pipeline_state_path(args.state, shadow=args.shadow), assignment_targets=targets
             )
         result["validation"] = validation
-        if validation.get("valid") is True and args.pipeline:
+        if _successor_caller_admitted(args, validation):
             result = _run_merge_verification_successors(args, backend, result, targets)
             validation = result["validation"]
         if budget_admission is not None:
