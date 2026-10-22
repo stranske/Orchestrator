@@ -284,21 +284,37 @@ def test_research_scheduler_conservatively_handles_unavailable_or_invalid_eviden
     ) == {"codex": 0}
     assert research_scheduler.data_hunger("implement", []) == 0.0
     # Controlled temp SQLite (fixture-owned): real _agent_acquisition_scores, not a stub.
+    owned_paths: list[Path] = []
+    owned_conn = feedback._conn
+
+    def record_owned_conn(*, timeout: float = 5.0):
+        db = owned_conn(timeout=timeout)
+        owned_paths.append(Path(db.execute("PRAGMA database_list").fetchone()[2]).resolve())
+        return db
+
+    monkeypatch.setattr(feedback, "_conn", record_owned_conn)
     owned_scores = research_scheduler._agent_acquisition_scores(
         "implement", ["codex"], n_obs={"codex": "bad"}
     )
     assert owned_scores["codex"] >= 0
-    assert Path(feedback.DB_PATH).resolve().is_relative_to((tmp_path / "owned").resolve())
+    expected_db = Path(feedback.DB_PATH).resolve()
+    assert expected_db.is_relative_to((tmp_path / "owned").resolve())
+    assert owned_paths and all(path == expected_db for path in owned_paths)
 
     # Intentional offline connection failure at the _conn boundary (still not a stub).
+    offline_attempts: list[float] = []
+
     def offline_conn(*, timeout: float = 5.0):
+        offline_attempts.append(timeout)
         raise OSError("feedback offline for issue853 isolation proof")
 
     monkeypatch.setattr(feedback, "_conn", offline_conn)
     offline_scores = research_scheduler._agent_acquisition_scores(
-        "implement", ["codex"], n_obs={"codex": 0}
+        "implement", ["codex"], n_obs={"codex": research_scheduler.DATA_HUNGER_THRESHOLD + 1}
     )
-    assert offline_scores["codex"] >= 0
+    assert offline_attempts
+    # No data deficit remains; storage failure must supply conservative staleness pressure.
+    assert offline_scores["codex"] == 1.0
     with pytest.raises(ValueError, match="identified"):
         research_scheduler._validate_hypotheses([{}])
     with pytest.raises(ValueError, match="duplicate"):
