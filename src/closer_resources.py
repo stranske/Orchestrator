@@ -1030,7 +1030,7 @@ def _check_workspace_intents(root, keys, *, legacy_owner=None, target=None):
                 raise ResourceBlocked(f"workspace {key[9:]} carries an unresolved effect")
 
 
-def _scope_keys(target, context, resource_keys, workspaces=None):
+def _scope_keys(target, context, resource_keys, workspaces=None, *, infer_workspaces=True):
     keys = default_resource_keys(target)
     if resource_keys is not None:
         extra = resource_keys(target, context)
@@ -1046,7 +1046,8 @@ def _scope_keys(target, context, resource_keys, workspaces=None):
             normalized.add(normalize_key("repo:" + value.split("#")[0].split("@")[0]))
     import closer_quarantine
 
-    normalized.update(closer_quarantine.current_workspace_keys(target, normalized, workspaces))
+    if infer_workspaces:
+        normalized.update(closer_quarantine.current_workspace_keys(target, normalized, workspaces))
     return sorted(normalized)
 
 
@@ -2334,6 +2335,14 @@ def run_scoped(
         with inventory_lock(root, deadline=request_deadline, now=now):
             return check_scope_locked(target, stage, keys, context, refusal)
 
+    def remote_act(target, context):
+        # Finite entry already requires the exact registered production callbacks.
+        # Revalidate both before reservation and under inventory/resource locks.
+        if finite_frontier is None:
+            return False
+        capability = getattr(act, "__globals__", {}).get("_remote_only_effect")
+        return callable(capability) and capability(target, context) is True
+
     def check_scope_locked(target, stage, keys, context=None, refusal=None):
         import closer_quarantine
 
@@ -2342,12 +2351,8 @@ def run_scoped(
             if finite_frontier is not None and stage in {"target_admission", "prepare", "interpret"}
             else "effect"
         )
-        if finite_frontier is not None and stage == "act" and context is not None:
-            # Finite callbacks are registered production-dispatcher functions.
-            # Only its revalidated native capability can narrow historical scope.
-            capability = getattr(act, "__globals__", {}).get("_remote_only_effect")
-            if callable(capability) and capability(target, context) is True:
-                purpose = "remote_effect"
+        if stage == "act" and context is not None and remote_act(target, context):
+            purpose = "remote_effect"
         snapshot = closer_quarantine.scope_snapshot(state_path, workspaces=quarantine_workspaces)
         problem = closer_quarantine.scope_problem(snapshot, target, keys, purpose=purpose)
         # Unrelated shards can commit while we hold our aliases. Retry only the
@@ -2496,7 +2501,13 @@ def run_scoped(
         return call
 
     def guarded_act(target, ctx):
-        keys = _scope_keys(target, ctx, resource_keys, quarantine_workspaces)
+        keys = _scope_keys(
+            target,
+            ctx,
+            resource_keys,
+            quarantine_workspaces,
+            infer_workspaces=not remote_act(target, ctx),
+        )
         with contextlib.ExitStack() as stack:
             try:
                 stack.enter_context(

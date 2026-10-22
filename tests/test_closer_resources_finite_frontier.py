@@ -10,6 +10,7 @@ from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import pytest
+from test_closer_reasoning_boundary import native_world as native_world
 
 import closer_pipeline as pipeline
 import closer_quarantine as quarantine
@@ -921,3 +922,177 @@ def test_birth_probe_failure_keeps_starting_fence_until_exact_group_absence(tmp_
     record = json.loads((root / "pools" / "io" / "slot-0.json").read_text())
     assert record["status"] == "resolved"
     assert record["run_id"] == request["run_id"]
+
+
+@pytest.fixture
+def remote_act_world(native_world, monkeypatch):
+    """Authentic registered finite CLI; only external queue effects are synthetic."""
+    from test_closer_quarantine_integration import advertisement
+    from test_closer_reasoning_boundary import TARGET
+
+    import closer_dispatcher as native
+    import closer_queue
+
+    w = native_world
+    w.ad.unlink()
+    w.snapshot.update(state="OPEN", merge=None, verifier=None)
+    shared = w.root / "shared-workspace"
+    shared.mkdir()
+    monkeypatch.setattr(native, "known_workspaces", lambda _targets: {"owner/repo": str(shared)})
+    retained = advertisement(w.ledger, "worktree:" + str(shared), target="owner/repo#850")
+    w.retained = retained
+    w.retained_bytes = retained.read_bytes()
+    w.reserved = []
+
+    def queue_boundary(*_args, **_kwargs):
+        w.events["effect"] += 1
+        root = resources.scoped_root(w.ledger)
+        w.reserved = [
+            json.loads(path.read_text())["key"]
+            for path in resources._reservation_base(root).glob("*/intent.json")
+        ]
+        return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
+
+    monkeypatch.setattr(closer_queue, "run_round", queue_boundary)
+    return w
+
+
+def test_registered_remote_act_avoids_unrelated_workspace_intent(remote_act_world, capsys):
+    import closer_dispatcher as native
+
+    w = remote_act_world
+    # Compose both real refusals: an unrelated old legacy review operation and
+    # a newer retained workspace intent. Neither owns this remote PR's aliases.
+    legacy = json.loads(w.raw.read_text())
+    legacy["items"]["owner/repo#667"] = {
+        "status": "unknown",
+        "operation": {"status": "submitted", "repo_keys": ["owner/repo"]},
+    }
+    w.raw.write_text(json.dumps(legacy))
+    legacy_bytes = w.raw.read_bytes()
+    result = native.main(w.argv)
+    receipt = json.loads(capsys.readouterr().out)
+    assert w.events["effect"] == 1, receipt
+    # Historical unresolved targets keep the aggregate stop invalid even when
+    # this exact selected target completes. They are not cleared by admission.
+    assert result == 78, receipt
+    row = json.loads(
+        (
+            resources.shard_dir(resources.scoped_root(w.ledger), "owner/repo#12") / "state.json"
+        ).read_text()
+    )["frontiers"][w.frontier["frontier_id"]]["items"]["owner/repo#12"]
+    assert row["status"] == "completed", row
+    assert row["results"]["act"]["target_complete"] is True
+    assert w.raw.read_bytes() == legacy_bytes
+    assert w.events["provider"] == 0
+    assert w.reserved
+    assert not any(key.startswith("worktree:") for key in w.reserved)
+    assert "pr:owner/repo#12" in w.reserved
+    assert "issue:owner/repo#2" in w.reserved
+    assert "branch:owner/repo@feature" in w.reserved
+    assert w.retained.read_bytes() == w.retained_bytes
+
+
+@pytest.mark.parametrize(
+    "alias", ["pr:owner/repo#12", "issue:owner/repo#2", "branch:owner/repo@feature"]
+)
+def test_registered_remote_act_keeps_exact_alias_intents(remote_act_world, capsys, alias):
+    from test_closer_quarantine_integration import advertisement
+
+    import closer_dispatcher as native
+
+    w = remote_act_world
+    retained = advertisement(w.ledger, alias, target="owner/repo#99")
+    original = retained.read_bytes()
+    assert native.main(w.argv) == 78
+    receipt = json.loads(capsys.readouterr().out)
+    assert w.events["effect"] == 0, receipt
+    proofs = [
+        json.loads(path.read_text())
+        for path in resources.scoped_root(w.ledger).glob("scope-admissions/*/*.json")
+    ]
+    act_proofs = [p for p in proofs if p.get("stage") == "act"]
+    assert act_proofs and act_proofs[-1]["purpose"] == "remote_effect", proofs
+    assert act_proofs[-1]["reason"].endswith(alias), act_proofs
+    assert retained.read_bytes() == original
+    assert w.retained.read_bytes() == w.retained_bytes
+
+
+def test_registered_unqualified_act_retains_workspace_refusal(
+    remote_act_world, monkeypatch, capsys
+):
+    import closer_dispatcher as native
+
+    w = remote_act_world
+    monkeypatch.setattr(native, "_native_remote_footprint", lambda *_: False)
+    assert native.main(w.argv) == 78
+    receipt = json.loads(capsys.readouterr().out)
+    assert w.events["effect"] == 0, receipt
+    assert w.retained.read_bytes() == w.retained_bytes
+
+
+@pytest.mark.parametrize("change", ["snapshot", "contract", "spec"])
+def test_remote_capability_downgrade_before_locked_admission_fails_closed(
+    remote_act_world, monkeypatch, capsys, change
+):
+    from test_closer_reasoning_boundary import TARGET
+
+    import closer_dispatcher as native
+
+    w = remote_act_world
+    original = resources.mutation_reservation
+    changed = []
+
+    @contextmanager
+    def changed_boundary(state_path, target, context, *args, **kwargs):
+        assert native._remote_only_effect(target, context) is True
+        if change == "snapshot":
+            ref = context["prepare"]["snapshot_ref"]
+            Path(ref["path"]).write_text("{}")  # Actual retained-byte digest drift.
+        elif change == "contract":
+            context["prepare"]["native_effect_contract"]["head"] = "c" * 40
+        else:
+            import runtime_ac_gate
+
+            spec = runtime_ac_gate.spec_path(target)
+            spec.parent.mkdir(parents=True, exist_ok=True)
+            spec.write_text("{}")  # A newly present runtime-AC spec changes the footprint.
+        changed.append(target)
+        with original(state_path, target, context, *args, **kwargs):
+            yield
+
+    monkeypatch.setattr(resources, "mutation_reservation", changed_boundary)
+    assert native.main(w.argv) == 78
+    receipt = json.loads(capsys.readouterr().out)
+    assert changed == [TARGET], receipt
+    assert w.events["effect"] == 0
+    proofs = [
+        json.loads(path.read_text())
+        for path in resources.scoped_root(w.ledger).glob("scope-admissions/*/*.json")
+    ]
+    act_proofs = [p for p in proofs if p.get("stage") == "act"]
+    assert act_proofs and act_proofs[-1]["purpose"] == "effect", proofs
+    assert act_proofs[-1]["reason"] == "incomplete_resource_inventory"
+    assert not list(
+        resources._reservation_base(resources.scoped_root(w.ledger)).glob("*/intent.json")
+    )
+    assert w.retained.read_bytes() == w.retained_bytes
+
+
+def test_scope_keys_remote_omits_only_inferred_workspace(tmp_path):
+    workspace = tmp_path / "mapped"
+    explicit = tmp_path / "explicit"
+    workspace.mkdir()
+    explicit.mkdir()
+    keys = resources._scope_keys(
+        "owner/repo#1",
+        {},
+        lambda *_: ["worktree:" + str(explicit)],
+        {"owner/repo": str(workspace)},
+        infer_workspaces=False,
+    )
+    assert "worktree:" + str(explicit) in keys
+    assert "worktree:" + str(workspace) not in keys
+    assert "worktree:" + str(workspace) in resources._scope_keys(
+        "owner/repo#1", {}, lambda *_: [], {"owner/repo": str(workspace)}
+    )
