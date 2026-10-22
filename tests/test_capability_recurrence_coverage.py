@@ -56,6 +56,88 @@ def test_tick_env_failure_messages_keep_tree_and_machine_causes_distinct():
     assert "ENVIRONMENT, not the tree" in machine
 
 
+def test_tick_env_retries_only_machine_failures_and_labels_the_result(monkeypatch):
+    """A transient shell failure must not be reported as a missing prologue."""
+    calls = []
+
+    def flaky_attempt():
+        calls.append(True)
+        if len(calls) == 1:
+            return {}, {"reason": "timeout", "detail": "busy"}
+        return {"ORCH_FIXTURE": "1"}, {"reason": "ok", "keys": 1}
+
+    monkeypatch.setattr(recurrence, "_tick_env_attempt", flaky_attempt)
+    monkeypatch.setattr(recurrence, "TICK_ENV_BACKOFF", 0)
+    monkeypatch.setattr(recurrence, "_TICK_ENV", None)
+    monkeypatch.setattr(recurrence, "_TICK_ENV_DIAG", None)
+    assert recurrence.tick_env(refresh=True, log=False) == {"ORCH_FIXTURE": "1"}
+    assert recurrence.tick_env_status(log=False)["retried"] == 1
+
+    calls.clear()
+
+    def no_exports_attempt():
+        calls.append(True)
+        return {}, {"reason": "no_orch_keys", "keys": 0}
+
+    monkeypatch.setattr(recurrence, "_tick_env_attempt", no_exports_attempt)
+    assert recurrence.tick_env(refresh=True, log=False) == {}
+    assert len(calls) == 1
+    assert recurrence.tick_env_status(log=False)["outcome"] == "defect"
+
+
+def test_tick_values_and_predicate_flags_keep_unknown_distinct_from_unset(monkeypatch):
+    monkeypatch.setattr(recurrence, "tick_env", lambda: {"ORCH_FLAG": "1"})
+    monkeypatch.setattr(recurrence, "_TICK_ENV_DIAG", {"outcome": "ok"})
+    assert recurrence.as_the_tick_sees_it("ORCH_FLAG") == ("1", "tick")
+    assert recurrence.as_the_tick_sees_it("ORCH_MISSING") == (None, "unset")
+    assert recurrence._predicate_flag("ORCH_FLAG")["fires"] is True
+
+    monkeypatch.setattr(recurrence, "tick_env", lambda: {})
+    monkeypatch.setattr(
+        recurrence, "_TICK_ENV_DIAG", {"reason": "timeout", "outcome": "environment"}
+    )
+    assert recurrence.as_the_tick_sees_it("ORCH_MISSING") == (None, "tick-unresolved:timeout")
+    assert recurrence.tick_value_unknown("tick-unresolved:timeout")
+    assert not recurrence.tick_value_unknown("unset")
+
+
+def test_external_caller_and_format_report_cover_present_and_missing_caller(monkeypatch):
+    import capability_activation_audit as audit
+
+    monkeypatch.setattr(audit, "external_caller", lambda _cap: None)
+    missing = recurrence._external_caller_state("docs-drift-fix-agent")
+    assert missing["fires"] is False and missing["external_blocker"] is True
+    monkeypatch.setattr(audit, "external_caller", lambda _cap: {"exists": True, "path": "x"})
+    assert recurrence._external_caller_state("docs-drift-fix-agent")["fires"] is True
+
+    report = {
+        "total": 2,
+        "would_fire": 1,
+        "would_miss": 1,
+        "rows": [
+            {
+                "capability": "routing",
+                "kind": "classify",
+                "fires": False,
+                "source": "s",
+                "labels": [],
+                "expected": "x",
+                "actual": "y",
+            },
+            {
+                "capability": "risk",
+                "kind": "high_stakes",
+                "fires": True,
+                "source": "s",
+                "reason": "risk:major",
+            },
+        ],
+    }
+    rendered = recurrence.format_report(report)
+    assert "expected task_type=x" in rendered
+    assert "risk" in rendered and "risk:major" in rendered
+
+
 def test_predicate_checks_turn_missing_dependencies_into_nonfiring_rows(monkeypatch):
     """A recurrence report remains readable when an optional local subsystem is unavailable."""
     import builtins
