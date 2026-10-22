@@ -81,3 +81,8 @@ The merge screen counts current unresolved review threads, matching the exact-he
 merge guard. Outdated thread data remains in the evidence packet, but its presence
 alone does not route an otherwise green PR back to review. Current unresolved
 threads, required check failures, conflicts and explicit pauses remain blockers.
+
+A generic `needs-human` label is not itself a decision or an explicit pause.
+Normal evaluation continues unless a current scoped owner disposition, assignment
+hold or explicit pause applies. For a source-target invocation, that disposition
+lookup includes the actual delivery PR as well as the source identities.

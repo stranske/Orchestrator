@@ -1541,7 +1541,11 @@ class Closer:
     def select(self, s):
         target = s["target"]
         blockers = self.blocker_fn() if self.blocker_fn else self.blockers
-        aliases = [target] + [x["target"] for x in s.get("sources", [])]
+        aliases = list(
+            dict.fromkeys(
+                [target, s.get("pr_target", target)] + [x["target"] for x in s.get("sources", [])]
+            )
+        )
         for alias in aliases:
             if alias in blockers:
                 b = blockers[alias]
@@ -1578,7 +1582,6 @@ class Closer:
                 "agent:paused",
                 "do-not-merge",
                 "hold",
-                "needs-human",
             }
         }
         if holds:

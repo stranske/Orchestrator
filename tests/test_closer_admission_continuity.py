@@ -694,3 +694,64 @@ def test_enrollment_state_and_provenance_reads_have_explicit_bounds(tmp_path, mo
         stream.truncate(128 * 1024 * 1024)
     with pytest.raises(ValueError, match="provenance.*bound"):
         continuity.plan_enrollment(state, candidates)
+
+
+# Retained normal production classify contract (source e7bf8a31), no effects.
+_NORMAL_CLASSIFY_SOURCE = 'def classify(pr, held, challenge, retry, now):\n    target = f"{inventory.repo(pr)}#{pr[\'number\']}"\n    sig = signals(pr)\n    attention = bool(set(inventory.labels(pr)) & {"agent:needs-attention", "autofix:escalated"})\n    if target in held:\n        return "held", "Confirmed human gate or unexpired scoped blocker", sig\n    if target in challenge or target in retry:\n        return "escalator", "Challenge unverified human claim or recover expired blocker", sig\n    draft_hold = pr.get("isDraft") and re.search(r"keep this pr.*draft|hold:|keep.*draft and unmerged", pr.get("body", ""), re.I)\n    if draft_hold and not sig["threads"]:\n        return "held", "Explicit draft hold; source evaluation prerequisites remain with their owner", sig\n    if pr.get("isDraft") and not attention:\n        return "held", "Draft retained until readiness or attention changes", sig\n    if not inventory.is_release_pr(pr) and inventory.is_generated_or_durable_pr(pr):\n        return "held", "Durable generated publication", sig\n    lane = "maintenance" if inventory.maintenance_category(pr) or maintenance.repair_policy(target, maintenance.budget.summary()) else (\n        "orphan" if inventory.is_release_pr(pr) or not inventory.is_issue_linked_pr(pr) else "closer")\n    if sig["failed"] or sig["threads"] or sig["incomplete"] or attention or pr.get("mergeStateStatus") == "DIRTY":\n        return lane, ("Classify existing failures against this shipment; deliver unaffected work and hand off incidental findings; no automatic source repair" if lane == "maintenance" else "Repair failed checks, conflicts, review debt, or diagnose incomplete evidence"), sig\n    pushed = inventory.parse_iso(sig["pushed_at"] or "")\n    if pushed is not None and now - pushed < 7 * 60:\n        return "waiting", "Await exact-head review floor; Luna rechecks readiness", sig\n    if sig["pending"]:\n        return "waiting", "Await checks; Luna observes completion", sig\n    return lane, "Inspect exact-head gates and merge, close, or record a concrete blocker", sig'
+
+
+@pytest.mark.parametrize(
+    "label,confirmed,expected",
+    [
+        ("needs-human", False, "active"),
+        ("needs-human", True, "held"),
+        ("hold", False, "held"),
+        ("do-not-merge", False, "held"),
+        ("agents:paused", False, "held"),
+    ],
+)
+def test_normal_controller_machine_human_label_is_not_confirmed_human_hold(
+    label, confirmed, expected
+):
+    import json
+    import re
+
+    router = actual_controller_functions(rendered=True)
+    namespace = router.build_routes.__globals__
+    router.inventory.is_release_pr = lambda node: False
+    router.inventory.is_generated_or_durable_pr = lambda node: False
+    router.inventory.maintenance_category = lambda node: False
+    router.inventory.is_issue_linked_pr = lambda node: True
+    namespace.update(
+        re=re,
+        maintenance=SimpleNamespace(
+            repair_policy=lambda *args: None, budget=SimpleNamespace(summary=lambda: {})
+        ),
+    )
+    exec(compile(_NORMAL_CLASSIFY_SOURCE, "normal-production-classify", "exec"), namespace)
+    namespace["pr_owner"] = lambda node: "closer"
+    router.pr_owner = namespace["pr_owner"]
+    node = {
+        "__typename": "PullRequest",
+        "number": 12,
+        "repository": {"nameWithOwner": "owner/repo"},
+        "state": "MERGED",
+        "headRefOid": HEAD,
+        "mergeCommit": {"oid": MERGE},
+        "body": "Issue-linked original request",
+        "labels": {"nodes": [{"name": label}]},
+    }
+    router.QUERY = (
+        "query{search{nodes{... on PullRequest{number repository{nameWithOwner} headRefOid body}}}}"
+    )
+    router.inventory.run = lambda *a, **kw: (
+        0,
+        json.dumps({"data": {"repository": {"issueOrPullRequest": node}}}),
+        "",
+    )
+    state = {"targets": {TARGET: {"head": HEAD, "delivery_owner": "closer"}}}
+    result = continuity.prepare_controller(
+        router, state, {"nodes": []}, 10, {}, ({TARGET} if confirmed else set(), set(), set())
+    )
+    assert result["rows"][0]["execution_state"] == expected
+    assert result["rows"][0]["lane"] == "closer"

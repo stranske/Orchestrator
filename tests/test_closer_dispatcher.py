@@ -571,6 +571,43 @@ def test_pause_label_blocks_automatic_completion(tmp_path, where):
     assert backend.select(current)[0] == "wait"
 
 
+@pytest.mark.parametrize(
+    "state,labels,expected",
+    [
+        ("OPEN", ["needs-human"], "merge"),
+        ("MERGED", ["needs-human", "verify:compare"], "collect_evidence"),
+    ],
+)
+def test_generic_needs_human_label_is_not_a_scoped_decision(tmp_path, state, labels, expected):
+    current = snapshot(state=state, labels=labels, merge=MERGE if state == "MERGED" else None)
+    backend = closer(tmp_path, current)
+    assert backend.select(current)[0] == expected
+
+
+def test_generic_needs_human_preserves_actual_owner_blocker(tmp_path):
+    current = snapshot(labels=["needs-human"])
+    backend = closer(
+        tmp_path,
+        current,
+        blockers={TARGET: {"reason": "owner confirmed required human input"}},
+    )
+    selected = backend.select(current)
+    assert selected[0] == "wait"
+    assert "scoped owner blocker " + TARGET in selected[1]
+
+
+def test_source_alias_preserves_actual_delivery_owner_blocker(tmp_path):
+    current = snapshot(target=SOURCE, pr_target=TARGET)
+    backend = closer(
+        tmp_path,
+        current,
+        blockers={TARGET: {"reason": "owner confirmed required human input"}},
+    )
+    selected = backend.select(current)
+    assert selected[0] == "wait"
+    assert "scoped owner blocker " + TARGET in selected[1]
+
+
 def test_unparsed_normative_acceptance_prose_cannot_disappear(tmp_path):
     current = snapshot()
     current["sources"][0][

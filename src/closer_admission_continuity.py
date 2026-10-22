@@ -417,7 +417,6 @@ def prepare_controller(
                 "agent:paused",
                 "do-not-merge",
                 "hold",
-                "needs-human",
             }
         )
         return {
