@@ -4707,6 +4707,19 @@ def _run_pipeline_finite(
                                             if isinstance(evidence, Mapping) and field
                                             else None
                                         )
+                                        wait_proof = None
+                                        if (
+                                            kind == "external_event"
+                                            and row.get("reason") == "verifier_resource_wait"
+                                        ):
+                                            wait_state = closer_queue.state_for_frontier(
+                                                closer_queue._read_state(Path(action_state_path)),
+                                                frontier["frontier_id"],
+                                                expected_policy=frontier,
+                                            )
+                                            wait_proof = closer_queue.verifier_resource_wait_proof(
+                                                wait_state["items"][target].get("operation"), target
+                                            )
                                         valid_identifier = (
                                             type(identifier) is int and identifier > 0
                                             if kind == "ci"
@@ -4732,6 +4745,22 @@ def _run_pipeline_finite(
                                                     and row.get("action") == "collect_evidence"
                                                     and row.get("reason")
                                                     == "collect terminal or unattributed verifier evidence; do not rerun"
+                                                )
+                                                or (
+                                                    kind == "external_event"
+                                                    and row.get("reason")
+                                                    == "verifier_resource_wait"
+                                                    and row.get("operation_status")
+                                                    == "resource_wait"
+                                                    and wait_proof is not None
+                                                    and evidence.get("event_id")
+                                                    == closer_queue.verifier_resource_wait_event(
+                                                        wait_proof
+                                                    )
+                                                    and evidence.get("blocking_run")
+                                                    == wait_proof["blocking_run"]
+                                                    and evidence.get("head") == wait_proof["head"]
+                                                    and evidence.get("merge") == wait_proof["merge"]
                                                 )
                                             )
                                         )

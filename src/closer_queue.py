@@ -54,6 +54,7 @@ RESOURCE_DEFERRALS = frozenset(
         "pass_limit",
         "finite_frontier_identity_mismatch",
         "observation_failed",
+        "verifier_resource_wait",
     }
 )
 DEFAULT_RECEIPT_RESERVE_SECONDS = 15.0
@@ -64,6 +65,115 @@ MAX_CALLBACK_JSON_BYTES = 128 * 1024
 
 class QueueStateError(ValueError):
     """The durable queue is malformed or incompatible; fail closed."""
+
+
+def _native_verify_wait_executor(execute):
+    """Only the existing native adapter/registered ACT may assert this boundary."""
+    import sys
+
+    import closer_dispatcher
+    import closer_pipeline
+    import gh_capacity
+
+    function = getattr(execute, "__func__", execute)
+    namespace = getattr(function, "__globals__", {})
+    trusted = [vars(closer_dispatcher)]
+    main = sys.modules.get("__main__")
+    if (
+        main is not None
+        and getattr(main, "__file__", None)
+        and Path(main.__file__).resolve() == Path(closer_dispatcher.__file__).resolve()
+    ):
+        trusted.append(vars(main))
+    if not any(namespace is actual for actual in trusted):
+        return False
+    native_class = namespace.get("Closer")
+    current = getattr(execute, "__self__", None)
+    if current is None:
+        code = getattr(function, "__code__", None)
+        if not any(
+            getattr(act, "__globals__", None) is namespace
+            and any(value is code for value in getattr(act, "__code__").co_consts)
+            and getattr(code, "co_qualname", "")
+            == "_run_staged_pipeline.<locals>.act.<locals>.execute_bound"
+            for act in closer_pipeline._FINITE_DISPATCHER_CALLBACKS
+            if getattr(act, "__code__", None) is not None
+        ):
+            return False
+        closure = dict(zip(function.__code__.co_freevars, function.__closure__ or ()))
+        current = closure.get("current")
+        current = current.cell_contents if current is not None else None
+    elif native_class is None or function is not native_class.execute:
+        return False
+    return (
+        native_class is not None
+        and type(current) is native_class
+        and Path(namespace.get("__file__", "")).name == "closer_dispatcher.py"
+        and current.offload_fn is None
+        and current.run_fn is namespace.get("bounded_run")
+        and current.gh.api_fn is gh_capacity.gh_run
+        and current.runtime_binding is None
+        and not current.require_runtime_binding
+    )
+
+
+def verifier_resource_wait_proof(operation, target):
+    """Validate retained native pre-POST proof; no verdict or effect authority."""
+    import re
+
+    try:
+        proof = operation["result"]["verifier_resource_wait"]
+        value = {k: v for k, v in proof.items() if k != "sha256"}
+        binding = operation["binding"]
+        run = proof["blocking_run"]
+        subject = binding.get("pr_target", target)
+        repo, number = subject.rsplit("#", 1)
+        linked = run["pull_requests"]
+        if (
+            operation.get("status") != "resource_wait"
+            or operation.get("action") not in {"post_merge_verify", "initiate_verify"}
+            or proof.get("schema") != "closer-verifier-prewrite-wait/v1"
+            or proof.get("boundary") != "before_verify_label_post"
+            or proof.get("sha256") != _digest(value)
+            or proof.get("target") != target
+            or proof.get("subject_pr") != subject
+            or proof.get("revision") != operation.get("revision")
+            or proof.get("head") != binding.get("head")
+            or not re.fullmatch("[0-9a-f]{40}", proof["head"])
+            or proof.get("merge") != binding.get("merge")
+            or not re.fullmatch("[0-9a-f]{40}", proof["merge"])
+            or type(run.get("id")) is not int
+            or run["id"] < 1
+            or type(run.get("run_attempt")) is not int
+            or run["run_attempt"] < 1
+            or run.get("path") != ".github/workflows/agents-verifier.yml"
+            or run.get("event") not in {"workflow_dispatch", "pull_request_target"}
+            or run.get("status") not in {"queued", "in_progress", "waiting", "requested", "pending"}
+            or run.get("conclusion") is not None
+            or run.get("repository", {}).get("full_name", "").lower() != repo.lower()
+            or not re.fullmatch("[0-9a-f]{40}", run.get("head_sha", ""))
+            or not isinstance(linked, list)
+            or any(not isinstance(p, dict) or type(p.get("number")) is not int for p in linked)
+            or (linked and int(number) not in [p["number"] for p in linked])
+            or proof.get("endpoint")
+            != f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100&status={run['status']}"
+            or type(proof.get("observed_at")) not in {int, float}
+            or not math.isfinite(proof["observed_at"])
+            or type(operation.get("invoked_at")) not in {int, float}
+            or not operation["invoked_at"]
+            <= proof["observed_at"]
+            <= operation.get("completed_at", 0)
+        ):
+            return None
+        return proof
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def verifier_resource_wait_event(proof):
+    run = proof["blocking_run"]
+    repo = proof["subject_pr"].split("#")[0]
+    return f"github-verifier-resource:{repo}:{run['id']}:attempt:{run['run_attempt']}:terminal"
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -566,7 +676,19 @@ def _validate_data(
             reasons.append(f"eligible_without_resource_reason:{target}")
             continue
         # A scheduler cannot declare a made-up capacity or holder conflict.
-        if reason == "worker_capacity":
+        if reason == "verifier_resource_wait":
+            item = items.get(target, {})
+            operation = item.get("operation") if isinstance(item, dict) else None
+            proof = verifier_resource_wait_proof(operation, target)
+            if (
+                proof is None
+                or not isinstance(operation, dict)
+                or row.get("operation_id") != operation.get("id")
+                or row.get("revision") != proof.get("revision")
+                or trigger != verifier_resource_wait_event(proof)
+            ):
+                reasons.append(f"unverified_verifier_resource_wait:{target}")
+        elif reason == "worker_capacity":
             max_workers = round_state.get("max_workers", 0)
             active, _ = _active_operations(items)
             if not isinstance(max_workers, int) or max_workers <= 0 or len(active) < max_workers:
@@ -1290,6 +1412,14 @@ def run_round(
                     operation.get("next_trigger", "reconcile_operation"),
                 )
                 stalled.add(target)
+            elif operation.get("status") == "resource_wait":
+                proof = verifier_resource_wait_proof(operation, target)
+                if proof is None:
+                    operation["status"] = "uncertain"
+                    _defer(item, "operation_uncertain", "reconcile_invalid_resource_wait")
+                else:
+                    _defer(item, "verifier_resource_wait", verifier_resource_wait_event(proof))
+                stalled.add(target)
             elif operation.get("status") == "failed":
                 _defer(
                     item,
@@ -1603,6 +1733,7 @@ def run_round(
                         "deferred",
                         "stale",
                         "not_started",
+                        "resource_wait",
                     }:
                         raise ValueError("execute returned an unsupported operation status")
                     stored_result = {
@@ -1615,7 +1746,15 @@ def run_round(
                     op["status"] = result_status
                     op["next_trigger"] = result.get("next_trigger")
                     item["operation"] = op
-                    if result_status == "completed":
+                    if result_status == "resource_wait":
+                        op["completed_at"] = float(now())
+                        proof = verifier_resource_wait_proof(op, target)
+                        if not _native_verify_wait_executor(execute) or proof is None:
+                            raise ValueError("untrusted_native_verifier_prewrite_wait")
+                        op["next_trigger"] = verifier_resource_wait_event(proof)
+                        _defer(item, "verifier_resource_wait", op["next_trigger"])
+                        stalled.add(target)
+                    elif result_status == "completed":
                         op["completed_at"] = float(now())
                         if not budget_available_at_start or not budget_available():
                             item["observation_freshness"] = "cached_budget_exhausted"

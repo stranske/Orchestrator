@@ -605,9 +605,24 @@ def test_existing_active_verifier_is_reused_without_duplicate_request(tmp_path):
     )
     backend.gh.responses[("GET", endpoint)] = {
         "total_count": 1,
-        "workflow_runs": [{"id": 99, "status": "in_progress", "pull_requests": [{"number": 7}]}],
+        "workflow_runs": [
+            {
+                "id": 99,
+                "status": "in_progress",
+                "pull_requests": [{"number": 7}],
+                "run_attempt": 1,
+                "head_sha": current["head"],
+                "conclusion": None,
+                "path": ".github/workflows/agents-verifier.yml",
+                "event": "pull_request_target",
+                "repository": {"full_name": "o/r"},
+            }
+        ],
     }
-    assert backend.initiate_verify(TARGET, current)["status"] == "deferred"
+    result = backend.initiate_verify(TARGET, current)
+    assert result["status"] == "resource_wait"
+    assert result["verifier_resource_wait"]["target"] == TARGET
+    assert result["verifier_resource_wait"]["blocking_run"]["id"] == 99
     assert all(method == "GET" for method, _, _ in backend.gh.calls)
 
 
