@@ -5978,7 +5978,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "next_trigger": interpreted.get("next_trigger") or "capacity_recheck",
                 "resource_evidence": evidence,
             }
-        prep_snapshot = context.get("prepare", {}).get("snapshot", {})
+        prep_snapshot, _packet = full_snapshot(context.get("prepare") or {})
         dependency = (
             assignment_dependency(
                 args.assignment,
@@ -6371,7 +6371,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     def reconcile_action(target, context):
         def legacy_barrier():
             prepared = context.get("prepare")
-            snapshot = prepared.get("snapshot") if isinstance(prepared, dict) else None
+            snapshot, _packet = (
+                full_snapshot(prepared) if isinstance(prepared, dict) else (None, None)
+            )
             if not isinstance(snapshot, dict):
                 return {"outcome": "unknown", "reason": "legacy dependency snapshot is missing"}
             try:

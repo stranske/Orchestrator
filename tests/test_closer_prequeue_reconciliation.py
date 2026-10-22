@@ -134,6 +134,17 @@ def test_native_prequeue_terminalizes_and_retires_only_original_owner(boundary):
     root = path.parent.parent.parent
     own = resources._key_dir(root, "pr:" + TARGET) / "intent.json"
     foreign = resources._key_dir(root, "branch:owner/repo@foreign") / "intent.json"
+    sibling = resources._key_dir(root, "pr:owner/repo#99") / "intent.json"
+    write(
+        sibling,
+        {
+            "key": "pr:owner/repo#99",
+            "target": "owner/repo#99",
+            "owner": "terminal",
+            "state": "unknown",
+        },
+    )
+    original_sibling = sibling.read_bytes()
     write(own, {"key": "pr:" + TARGET, "target": TARGET, "owner": "terminal", "state": "unknown"})
     write(
         foreign,
@@ -158,14 +169,26 @@ def test_native_prequeue_terminalizes_and_retires_only_original_owner(boundary):
     assert row["results"] == doc["frontiers"]["frozen"]["items"][TARGET]["results"]
     assert row["reentry_history"][0]["previous"] == doc["frontiers"]["frozen"]["items"][TARGET]
     assert not own.exists() and foreign.read_bytes() == original_foreign
+    assert sibling.read_bytes() == original_sibling
     assert apply(boundary, proposal)["idempotent"] is True
+    assert foreign.read_bytes() == original_foreign
+    assert sibling.read_bytes() == original_sibling
 
 
 @pytest.mark.parametrize(
-    "change",
-    ["missing", "source", "stdout", "installation", "live", "operation", "provider", "spoof"],
+    ("change", "refusal"),
+    [
+        ("missing", "native_pre_queue_source_receipts_required"),
+        ("source", "unsupported_native_pre_queue_source"),
+        ("stdout", "source_receipt_digest_changed"),
+        ("installation", "unproven_terminal_native_source"),
+        ("live", "unproven_terminal_native_source"),
+        ("operation", "inner_operation_requires_reconciliation"),
+        ("provider", "unresolved_provider_or_recovery_boundary"),
+        ("spoof", "no_supported_unstarted_boundary"),
+    ],
 )
-def test_unproven_prequeue_boundary_stays_unknown(boundary, change):
+def test_unproven_prequeue_boundary_stays_unknown(boundary, change, refusal):
     path, _frontier, doc, receipts, module = boundary
     row = doc["frontiers"]["frozen"]["items"][TARGET]
     if change == "missing":
@@ -200,7 +223,7 @@ def test_unproven_prequeue_boundary_stays_unknown(boundary, change):
         row["error"] = "RuntimeError: an unrelated failure"
         write(path, doc)
     before = path.read_bytes()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=rf"^{refusal}$"):
         plan(boundary)
     assert path.read_bytes() == before
 

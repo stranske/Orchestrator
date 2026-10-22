@@ -3,6 +3,7 @@
 import json
 
 import pytest
+from test_closer_reasoning_boundary import native_world as native_world
 
 import closer_dispatcher as dispatcher
 
@@ -94,3 +95,53 @@ def test_corrupt_legacy_queue_never_qualifies_as_absent(tmp_path):
     with pytest.raises(RuntimeError, match="cannot be safely reconciled"):
         dispatcher._legacy_operation_dependency(path, TARGET, snapshot(), remote_only=True)
     assert path.read_text() == "{"
+
+
+@pytest.mark.parametrize("stage", ["act", "reconcile"])
+def test_registered_legacy_barriers_receive_full_source_snapshot(native_world, monkeypatch, stage):
+    import hashlib
+
+    import closer_pipeline as pipeline
+
+    world = native_world
+    captured = {}
+
+    class CapturedCallbacks(Exception):
+        pass
+
+    def capture(callbacks):
+        captured.update(callbacks)
+        raise CapturedCallbacks
+
+    monkeypatch.setattr(pipeline, "_register_dispatcher_finite_callbacks", capture)
+    with pytest.raises(CapturedCallbacks):
+        dispatcher.main(world.argv)
+    snapshot = {**world.snapshot, "pr_target": world.snapshot["target"]}
+    retained = world.root / "full-alias-snapshot.json"
+    retained.write_text(json.dumps(snapshot))
+    compact = {key: snapshot[key] for key in ("target", "revision", "head")}
+    assert "sources" not in compact and "pr_target" not in compact
+    context = {
+        "prepare": {
+            "revision": snapshot["revision"],
+            "snapshot": compact,
+            "snapshot_ref": {
+                "path": str(retained),
+                "sha256": hashlib.sha256(retained.read_bytes()).hexdigest(),
+            },
+        },
+        "action_state_path": str(world.root / "never-created-action-state.json"),
+    }
+    seen = []
+
+    def dependency(_state, target, observed, **_kwargs):
+        seen.append(observed)
+        assert target == snapshot["target"]
+        return {"status": "pending", "reason": "related private result"}
+
+    monkeypatch.setattr(dispatcher, "_legacy_operation_dependency", dependency)
+    captured[stage](snapshot["target"], context)
+    assert len(seen) == 1
+    assert seen[0]["sources"] == snapshot["sources"]
+    assert seen[0]["pr_target"] == snapshot["pr_target"]
+    assert world.events["effect"] == world.events["provider"] == 0

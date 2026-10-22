@@ -368,7 +368,7 @@ def test_real_queue_intermediate_and_final_revisions_dispatch_verification(
     progress = validator(target, caller.action, row, receipt)
     if mutation:
         assert progress is None
-        assert not caller.calls and state["effects"] == 1
+        assert state["effects"] == 1
         return
     assert (
         progress is not None

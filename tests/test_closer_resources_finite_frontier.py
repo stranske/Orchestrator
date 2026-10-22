@@ -944,13 +944,48 @@ def remote_act_world(native_world, monkeypatch):
     w.retained_bytes = retained.read_bytes()
     w.reserved = []
 
-    def queue_boundary(*_args, **_kwargs):
+    w.execute_mutation = None
+    w.queue_execute_calls = 0
+    w.guard_commands = []
+
+    def guard_effect(command, *, timeout):
+        from types import SimpleNamespace
+
+        assert Path(command[1]).name == "merge_guard.py" and command[2] == TARGET
+        assert "--confirm-merge" in command and "--remote-only" in command
+        assert timeout > 0
+        w.guard_commands.append(command)
         w.events["effect"] += 1
+        return SimpleNamespace(
+            returncode=0, stdout=json.dumps({"merge_executed": True, "blocked": False})
+        )
+
+    monkeypatch.setattr(native, "bounded_run", guard_effect)
+
+    def queue_boundary(_path, targets, observe, execute, **_kwargs):
+        assert targets == [TARGET]
         root = resources.scoped_root(w.ledger)
         w.reserved = [
             json.loads(path.read_text())["key"]
             for path in resources._reservation_base(root).glob("*/intent.json")
         ]
+        observed = observe(TARGET)
+        action = "merge"
+        if w.execute_mutation == "head":
+            observed["head"] = "c" * 40
+        elif w.execute_mutation == "footprint":
+            action = "repair"  # Actual callback no longer has the prepared remote-only footprint.
+        elif w.execute_mutation == "source_alias":
+            observed["sources"] = [*observed.get("sources", []), {"target": "owner/repo#999"}]
+        operation = {
+            "id": "inert-owned-merge",
+            "owner": "inert-queue",
+            "deadline": time.time() + 30,
+            "finite_frontier": w.frontier,
+        }
+        w.queue_execute_calls += 1
+        result = execute(TARGET, action, observed, operation)
+        assert result["status"] == "completed", result
         return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
 
     monkeypatch.setattr(closer_queue, "run_round", queue_boundary)
@@ -973,6 +1008,7 @@ def test_registered_remote_act_avoids_unrelated_workspace_intent(remote_act_worl
     result = native.main(w.argv)
     receipt = json.loads(capsys.readouterr().out)
     assert w.events["effect"] == 1, receipt
+    assert w.queue_execute_calls == 1 and len(w.guard_commands) == 1
     # Historical unresolved targets keep the aggregate stop invalid even when
     # this exact selected target completes. They are not cleared by admission.
     assert result == 78, receipt
@@ -1015,6 +1051,31 @@ def test_registered_remote_act_keeps_exact_alias_intents(remote_act_world, capsy
     assert act_proofs and act_proofs[-1]["purpose"] == "remote_effect", proofs
     assert act_proofs[-1]["reason"].endswith(alias), act_proofs
     assert retained.read_bytes() == original
+    assert w.retained.read_bytes() == w.retained_bytes
+
+
+@pytest.mark.parametrize("change", ["head", "footprint", "source_alias"])
+def test_registered_execute_bound_rejects_actual_binding_drift(remote_act_world, capsys, change):
+    import closer_dispatcher as native
+
+    w = remote_act_world
+    w.execute_mutation = change
+    assert native.main(w.argv) == 78
+    receipt = json.loads(capsys.readouterr().out)
+    assert w.queue_execute_calls == 1, receipt
+    assert w.events["effect"] == 0 and not w.guard_commands, receipt
+    row = json.loads(
+        (
+            resources.shard_dir(resources.scoped_root(w.ledger), "owner/repo#12") / "state.json"
+        ).read_text()
+    )["frontiers"][w.frontier["frontier_id"]]["items"]["owner/repo#12"]
+    expected = (
+        "actual native effect footprint changed"
+        if change == "footprint"
+        else "actual operation changed prepared head/resource bindings"
+    )
+    assert expected in row["error"], row
+    assert w.events["provider"] == 0
     assert w.retained.read_bytes() == w.retained_bytes
 
 
