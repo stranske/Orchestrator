@@ -1,12 +1,12 @@
 {
   "capacity": {
     "aider": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "state": "ok",
       "window": "daily"
     },
     "claude": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "pacing": {
         "allowed_fraction": null,
         "burn_per_day": null,
@@ -24,18 +24,18 @@
         "source": "claude-desktop:plan-usage-history.json:u.sd",
         "stale": true,
         "state": "unknown",
-        "ts": 1792524013.286,
+        "ts": 1792614842.817,
         "used_fraction": 0.33
       },
       "state": "ok",
       "window": "5h+weekly"
     },
     "codex": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "pacing": {
-        "allowed_fraction": 0.1975906580934922,
-        "burn_per_day": null,
-        "burn_rate_per_day": null,
+        "allowed_fraction": 0.25490571830520237,
+        "burn_per_day": 0.3217869171514082,
+        "burn_rate_per_day": 0.3217869171514082,
         "effective_reserve": 0.0,
         "fyi": [
           "pool codex: would consume oldest-expiring reset expires=1793299636 (expiry source=codex-app-server)"
@@ -43,8 +43,8 @@
         "measurement": "measured",
         "period_end": 1793082724.0,
         "period_start": 1792477924.0,
-        "projected_fraction": null,
-        "reason": "codex: u=0.49 vs g(e)+\u03b4=0.30; \u0169=unmeasured; span_h=6.000; warn; w_p_prev\u2192w_p=1.000\u21921.000; clears in fresh samples or schedule advancing or on reset",
+        "projected_fraction": 2.2983311432559828,
+        "reason": "codex: \u0169=2.30 vs 1-r_eff=1.00; span_h=6.000; warn; w_p_prev\u2192w_p=1.000\u21921.000; clears in ~96.8h at current burn or on reset",
         "reset_expiries": [
           1793299636,
           1794007196
@@ -54,29 +54,29 @@
         "source": "codex-rollout:rate_limits.primary",
         "stale": false,
         "state": "warn",
-        "ts": 1792597277.116,
-        "used_fraction": 0.49
+        "ts": 1792632089.037,
+        "used_fraction": 0.62
       },
       "state": "warn",
       "window": "5h"
     },
     "cursor": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "state": "ok",
       "window": "monthly"
     },
     "gemini": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "state": "shed",
       "window": "5h+weekly"
     },
     "muse": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "state": "ok",
       "window": "5h+weekly"
     },
     "vibe": {
-      "observed_at": 1792597431,
+      "observed_at": 1792632094,
       "state": "ok",
       "window": "subscription"
     }
@@ -87,7 +87,7 @@
     "inputs": {
       "budget": {
         "claude": null,
-        "codex": 0.51,
+        "codex": null,
         "cursor": null,
         "gemini": null,
         "vibe": null
@@ -119,14 +119,12 @@
       "cost_source_by_agent": {
         "claude": {
           "imputed": [],
-          "reason": "agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h)",
+          "reason": "agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h)",
           "source": null
         },
         "codex": {
-          "allowed_fraction": 0.1975906580934922,
           "imputed": [],
-          "over_reserve": false,
-          "reason": "agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid",
+          "reason": "agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h)",
           "source": null
         },
         "cursor": {
@@ -150,7 +148,7 @@
         "review": null,
         "testgen": null
       },
-      "pacing_observed_at": 1792597431.0,
+      "pacing_observed_at": 1792632094.0,
       "period_end": null,
       "period_end_source": "earliest fully measured agent period_end",
       "pool_by_agent": {
@@ -179,8 +177,8 @@
     },
     "mu": {},
     "reasons": [
-      "claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h)",
-      "codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid",
+      "claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h)",
+      "codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h)",
       "cursor: pools[cursor-subscription].pacing missing: pacing unmeasured",
       "gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured",
       "no quality cells with n_obs >= 20",
@@ -194,26 +192,26 @@
     "challengers": {
       "codemod": "gemini",
       "cross_repo": "gemini",
-      "implement": "codex",
+      "implement": "gemini",
       "mechanical": "codex",
-      "review": "codex",
-      "testgen": "cursor"
+      "review": "gemini",
+      "testgen": "gemini"
     },
-    "mode": "thompson-hybrid",
-    "policy_version": "route-exploration/v1:ef68868e537aad47413f15e66968b5d2452b21d599566fca2e1af92d5d51bdae",
+    "mode": "epsilon-greedy",
+    "policy_version": "route-exploration/v1:06b49532f7d4592b9701363215dd16882504bb3568f1c6fce27a9594aaf7e717",
     "rate": 0.2,
     "rate_source": "env",
-    "week_start": 1792022400
+    "week_start": 1792627200
   },
-  "generated_at": "2026-10-21T15:43:54Z",
+  "generated_at": "2026-10-22T01:21:29Z",
   "min_observations": 20,
   "reserve": {
     "implement": [
       {
         "agent": "claude",
         "comparative_rank": null,
-        "comparative_reason": "agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h)",
-        "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+        "comparative_reason": "agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h)",
+        "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
         "n_obs": 466,
         "posterior": 0.7664395676598946,
         "success_rate": 0.7731330767119748
@@ -223,8 +221,8 @@
       {
         "agent": "claude",
         "comparative_rank": null,
-        "comparative_reason": "agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h)",
-        "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+        "comparative_reason": "agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h)",
+        "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
         "n_obs": 153,
         "posterior": 0.5496094111338601,
         "success_rate": 0.5710239621642846
@@ -249,7 +247,7 @@
           "agent": "cursor",
           "comparative_rank": null,
           "comparative_reason": "pools[cursor-subscription].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 446,
           "posterior": 0.775924985819305,
           "success_rate": 0.7871209678005147
@@ -258,7 +256,7 @@
           "agent": "vibe",
           "comparative_rank": null,
           "comparative_reason": "pools[vibe-subscription].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 137,
           "posterior": 0.640674870008807,
           "success_rate": 0.6857522900191689
@@ -266,8 +264,8 @@
         {
           "agent": "codex",
           "comparative_rank": null,
-          "comparative_reason": "agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_reason": "agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h)",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 1308,
           "posterior": 0.6121883108767668,
           "success_rate": 0.6116975352519018
@@ -276,7 +274,7 @@
           "agent": "gemini",
           "comparative_rank": null,
           "comparative_reason": "pools[gemini-prepaid].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 101,
           "posterior": 0.5611841907919384,
           "success_rate": 0.5518718781117873
@@ -294,7 +292,7 @@
           "agent": "cursor",
           "comparative_rank": null,
           "comparative_reason": "pools[cursor-subscription].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 341,
           "posterior": 0.7375084930788876,
           "success_rate": 0.744345971054454
@@ -302,8 +300,8 @@
         {
           "agent": "codex",
           "comparative_rank": null,
-          "comparative_reason": "agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_reason": "agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h)",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 287,
           "posterior": 0.6991112709250091,
           "success_rate": 0.7166518830682396
@@ -312,7 +310,7 @@
           "agent": "vibe",
           "comparative_rank": null,
           "comparative_reason": "pools[vibe-subscription].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 145,
           "posterior": 0.6322635215096435,
           "success_rate": 0.6406744328403172
@@ -321,7 +319,7 @@
           "agent": "gemini",
           "comparative_rank": null,
           "comparative_reason": "pools[gemini-prepaid].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 120,
           "posterior": 0.5506220515096579,
           "success_rate": 0.5509433043830991
@@ -334,8 +332,8 @@
         {
           "agent": "codex",
           "comparative_rank": null,
-          "comparative_reason": "agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_reason": "agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h)",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 58,
           "posterior": 0.8184288638786945,
           "success_rate": 0.9210440890806938
@@ -344,7 +342,7 @@
           "agent": "vibe",
           "comparative_rank": null,
           "comparative_reason": "pools[vibe-subscription].pacing missing: pacing unmeasured",
-          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 20.4h; threshold 0.5h); codex: agents[codex].pacing: burn_effective_per_hour/burn_rate_per_day/burn_per_day unmeasured or invalid; cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
+          "comparative_status": "inputs_unmeasured: claude: agents[claude].pacing: stale=true; pacing stale (age 4.8h; threshold 0.5h); codex: agents[codex].pacing: timestamp in the future (age -0.0h; threshold 0.5h); cursor: pools[cursor-subscription].pacing missing: pacing unmeasured; gemini: pools[gemini-prepaid].pacing missing: pacing unmeasured; no quality cells with n_obs >= 20; vibe: pools[vibe-subscription].pacing missing: pacing unmeasured",
           "n_obs": 20,
           "posterior": 0.6610371059026164,
           "success_rate": 0.9783333333333333
