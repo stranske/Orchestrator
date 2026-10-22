@@ -580,3 +580,29 @@ def test_unexpected_removal_failure_is_not_silenced(tmp_path, monkeypatch):
     monkeypatch.setattr(storage.shutil, "rmtree", fail)
     with pytest.raises(OSError, match="unexpected IO"):
         storage.retire(root, (original.st_dev, original.st_ino), "owner", lambda _: None)
+
+
+def test_retirement_measures_owned_footprint_in_existing_scan(tmp_path, monkeypatch):
+    root = tmp_path / "owned"
+    root.mkdir()
+    storage.write_json(root / "owner.json", {"token": "owner"})
+    (root / "payload").write_bytes(b"x" * 4096)
+    os.link(root / "payload", root / "same-payload")
+    expected_logical = (root / "owner.json").stat().st_size + 4096
+    identity = (root.stat().st_dev, root.stat().st_ino)
+    scan = storage.os.walk
+    scans = []
+
+    def observed(*args, **kwargs):
+        scans.append(args[0])
+        return scan(*args, **kwargs)
+
+    monkeypatch.setattr(storage.os, "walk", observed)
+    measured = {}
+    assert storage.retire(root, identity, "owner", lambda _: None, measurement=measured) == []
+    assert scans == [root]
+    assert measured["entries"] == 4 and measured["unique_inodes"] == 3
+    assert measured["logical_bytes"] == expected_logical
+    assert measured["allocated_bytes"] >= 0
+    assert "not peak growth or physical reclaimed" in measured["observation"]
+    assert not root.exists()

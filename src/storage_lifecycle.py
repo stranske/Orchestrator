@@ -11,6 +11,7 @@ import contextlib
 import errno
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -36,6 +37,155 @@ JSON = dict[str, Any]
 
 class StorageBlocked(RuntimeError):
     pass
+
+
+def owned_agent_tmpdir(agent: str, env: dict | None = None) -> Path | None:
+    """Route only native temporary output into a positively owned active job.
+
+    No context preserves the historical default. A partial/invalid claim refuses
+    before provider launch; it never converts shared caches or credentials into
+    disposable storage. This validator grants no retirement or action authority.
+    """
+    supplied = os.environ if env is None else env
+    names = ("ORCH_STORAGE_RUN_ROOT", "ORCH_STORAGE_RUN_ID", "ORCH_STORAGE_OWNER_TOKEN")
+    if not any(name in supplied for name in names):
+        return None
+    if (
+        not isinstance(agent, str)
+        or not agent
+        or len(agent) > 32
+        or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in agent)
+    ):
+        raise StorageBlocked("invalid native temporary agent identity")
+    if any(
+        not isinstance(supplied.get(name), str) or not supplied[name]
+        for name in (*names, "ORCH_STORAGE_STATE_DIR")
+    ):
+        raise StorageBlocked("incomplete owned storage context")
+    root = Path(supplied[names[0]])
+    control = Path(supplied["ORCH_STORAGE_STATE_DIR"])
+    job, token = supplied[names[1]], supplied[names[2]]
+    if not job.isalnum() or len(job) > 64 or len(token) > 256:
+        raise StorageBlocked("invalid owned storage context identity")
+
+    def private_directory(path):
+        if not path.is_absolute() or path.resolve() != path:
+            raise StorageBlocked("aliased owned storage directory")
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            os.close(fd)
+            raise StorageBlocked("owned storage directory must remain private")
+        return fd, info
+
+    def read_record(fd, name, maximum):
+        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(handle, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                raise StorageBlocked("owned storage marker must remain private")
+            raw = stream.read(maximum + 1)
+        if len(raw) > maximum:
+            raise StorageBlocked("owned storage marker exceeds bound")
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise StorageBlocked("invalid owned storage marker")
+        return result
+
+    try:
+        root_fd, root_info = private_directory(root)
+        try:
+            marker = read_record(root_fd, "owner.json", 4096)
+            if (
+                marker.get("job") != job
+                or not isinstance(marker.get("token"), str)
+                or not hmac.compare_digest(marker["token"], token)
+            ):
+                raise StorageBlocked("owned storage marker identity differs")
+            control_fd, _ = private_directory(control)
+            try:
+                lock_fd = os.open(
+                    "lock", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=control_fd
+                )
+                try:
+                    lock_info = os.fstat(lock_fd)
+                    if (
+                        not stat.S_ISREG(lock_info.st_mode)
+                        or lock_info.st_uid != os.getuid()
+                        or stat.S_IMODE(lock_info.st_mode) != 0o600
+                    ):
+                        raise StorageBlocked("owned storage ledger lock must remain private")
+                    fcntl.flock(lock_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    record = read_record(control_fd, "reservations.json", 8 * 1024 * 1024)
+                finally:
+                    os.close(lock_fd)
+            finally:
+                os.close(control_fd)
+            row = record.get("jobs", {}).get(job)
+            if (
+                not isinstance(row, dict)
+                or row.get("status") not in {"admitted", "staged"}
+                or row.get("root") != str(root)
+                or row.get("root_identity") != [root_info.st_dev, root_info.st_ino]
+                or row.get("volume_device") != root_info.st_dev
+                or row.get("owner_token_sha256") != hashlib.sha256(token.encode()).hexdigest()
+            ):
+                raise StorageBlocked("owned storage reservation differs or is uncertain")
+            parent_fd = root_fd
+            opened = []
+            validated = []
+            selected_path = root
+            try:
+                for part in ("tmp", "native-tmp", agent):
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=parent_fd)
+                    except FileExistsError:
+                        pass
+                    fd = os.open(
+                        part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+                    )
+                    opened.append(fd)
+                    info = os.fstat(fd)
+                    if (
+                        info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) != 0o700
+                        or info.st_dev != root_info.st_dev
+                    ):
+                        raise StorageBlocked(
+                            "native temporary directory ownership or filesystem differs"
+                        )
+                    selected_path = selected_path / part
+                    validated.append((selected_path, (info.st_dev, info.st_ino)))
+                    parent_fd = fd
+                for path, identity in validated:
+                    info = path.lstat()
+                    if (
+                        stat.S_ISLNK(info.st_mode)
+                        or (info.st_dev, info.st_ino) != identity
+                        or info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) != 0o700
+                    ):
+                        raise StorageBlocked("native temporary directory changed during validation")
+                current = root.stat(follow_symlinks=False)
+                if root.is_symlink() or (current.st_dev, current.st_ino) != (
+                    root_info.st_dev,
+                    root_info.st_ino,
+                ):
+                    raise StorageBlocked("owned storage root changed during validation")
+            finally:
+                for fd in reversed(opened):
+                    os.close(fd)
+        finally:
+            os.close(root_fd)
+        return root / "tmp" / "native-tmp" / agent
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        raise StorageBlocked(
+            "owned native temporary routing refused: " + type(error).__name__
+        ) from error
 
 
 def available(path: Path) -> int:
@@ -385,7 +535,12 @@ def idle(root: Path) -> None:
 
 
 def retire(
-    root: Path, identity: tuple[int, int], token: str, probe: Callable[[Path], None] = idle
+    root: Path,
+    identity: tuple[int, int],
+    token: str,
+    probe: Callable[[Path], None] = idle,
+    *,
+    measurement: JSON | None = None,
 ) -> list[str]:
     current = root.lstat()
     if root.is_symlink() or (current.st_dev, current.st_ino) != identity:
@@ -398,9 +553,31 @@ def retire(
     # symlinks; use Python's descriptor-relative implementation rather than shell rm.
     if not shutil.rmtree.avoids_symlink_attacks:
         raise StorageBlocked("descriptor-relative retirement unavailable")
+    # Measure during the mandatory ownership/filesystem scan, never another walk.
+    entries, allocated, logical = 1, current.st_blocks * 512, 0
+    seen = {(current.st_dev, current.st_ino)}
     for directory, dirs, files in os.walk(root, followlinks=False):
-        if any((Path(directory) / name).lstat().st_dev != current.st_dev for name in dirs + files):
-            raise StorageBlocked("nested filesystem is not retirement authority")
+        for name in dirs + files:
+            info = (Path(directory) / name).lstat()
+            if info.st_dev != current.st_dev:
+                raise StorageBlocked("nested filesystem is not retirement authority")
+            entries += 1
+            key = (info.st_dev, info.st_ino)
+            if key not in seen:
+                seen.add(key)
+                allocated += info.st_blocks * 512
+                if stat.S_ISREG(info.st_mode):
+                    logical += info.st_size
+    if measurement is not None:
+        measurement.update(
+            {
+                "entries": entries,
+                "unique_inodes": len(seen),
+                "allocated_bytes": allocated,
+                "logical_bytes": logical,
+                "observation": "terminal owned-tree metadata; hardlinks deduplicated; not peak growth or physical reclaimed bytes",
+            }
+        )
     final = root.lstat()
     if (
         root.is_symlink()
@@ -503,7 +680,7 @@ def run_job(
         root_id = (root.stat().st_dev, root.stat().st_ino)
         write_json(root / "owner.json", {"job": job, "token": token})
         manager.bind(job, root=str(root), root_identity=list(root_id))
-        (root / "tmp").mkdir()
+        (root / "tmp").mkdir(mode=0o700)
         tmp_attributes = (root / "tmp").stat()
         tmp_id = (tmp_attributes.st_dev, tmp_attributes.st_ino)
         write_json(root / "tmp" / "owner.json", {"job": job, "token": token})
@@ -586,7 +763,14 @@ def run_job(
                 probe(path)
                 no_writers = True
 
-            preserved = retire(target, target_id, token, checked_idle)
+            receipt["terminal_owned_footprint"] = {}
+            preserved = retire(
+                target,
+                target_id,
+                token,
+                checked_idle,
+                measurement=receipt["terminal_owned_footprint"],
+            )
             receipt["preserved_permission_paths"] = preserved
             receipt["status"] = (
                 ("retired_with_permission_remnants" if preserved else "retired")

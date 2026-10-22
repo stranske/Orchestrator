@@ -1082,6 +1082,9 @@ def _gh_guard_exports() -> list[str]:
 
 def _agent_runtime_prelude(agent: str) -> str:
     """Shell exports for the child agent only; run this inside a subshell."""
+    from storage_lifecycle import owned_agent_tmpdir
+
+    owned_tmp = owned_agent_tmpdir(agent)
     base = _ensure_agent_runtime(agent)
     exports = [
         f"export ORCH_REAL_HOME={shlex.quote(str(REAL_HOME))}",
@@ -1089,7 +1092,7 @@ def _agent_runtime_prelude(agent: str) -> str:
         f"export XDG_CACHE_HOME={shlex.quote(str(base / '.cache'))}",
         f"export XDG_CONFIG_HOME={shlex.quote(str(base / '.config'))}",
         f"export XDG_DATA_HOME={shlex.quote(str(base / '.local/share'))}",
-        f"export TMPDIR={shlex.quote(str(base / 'tmp'))}",
+        f"export TMPDIR={shlex.quote(str(owned_tmp if owned_tmp is not None else base / 'tmp'))}",
     ]
     # gh honours XDG_CONFIG_HOME, so the redirect above hid its hosts file from every agent whose
     # dispatcher exported neither GH_CONFIG_DIR nor GH_TOKEN (a delegate or offload started from a
@@ -1237,6 +1240,19 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
              assignment is skipped, claim is freed by the caller) rather than crashing the tick.
     """
     agent, mode = assignment["agent"], assignment.get("mode")
+    from storage_lifecycle import StorageBlocked, owned_agent_tmpdir
+
+    try:
+        owned_agent_tmpdir(agent)
+    except StorageBlocked as exc:
+        return {
+            "error": str(exc),
+            "agent": agent,
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     target, task_type = assignment["target"], assignment["task_type"]
     lane = assignment.get("lane") or "opener"
     branch = None
@@ -1387,7 +1403,17 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # so a plain `. file` would set a shell var the child agent never inherits (the auth failure
     # the first demo hit). set -a around the source exports CURSOR_API_KEY / tokens to the agent.
     auth_prelude = _auth_prelude(agent)
-    agent_prelude = _agent_runtime_prelude(agent)
+    try:
+        agent_prelude = _agent_runtime_prelude(agent)
+    except StorageBlocked as exc:
+        return {
+            "error": str(exc),
+            "agent": agent,
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     # _net_hygiene_prelude lives INSIDE the agent subshell (release runs outside it, on the real env).
     wrapped = (
         f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)})"
@@ -2870,6 +2896,22 @@ def offload(
             "exit": None,
             "run_id": None,
         }
+    from storage_lifecycle import StorageBlocked, owned_agent_tmpdir
+
+    try:
+        owned_agent_tmpdir(agent)
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     if mode is None:
         # Offloads are advisory READS, but this defaulted to 'full' for years — so a codex offload
         # burned Sol (flagship) and a gemini offload burned 3.1 Pro, contradicting the "runs a
@@ -3050,7 +3092,20 @@ def offload(
     )
     command_prompt = "" if prompt_via_stdin else prepared_prompt
     # Refuse missing login before allocating a private prompt or recording a started invocation.
-    muse_prelude = _agent_runtime_prelude(agent) if agent == "muse" else None
+    try:
+        muse_prelude = _agent_runtime_prelude(agent) if agent == "muse" else None
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
     data_only_options: _DataOnlyCommandOptions = {"data_only": True} if data_only else {}
     argv = (
@@ -3114,7 +3169,22 @@ def offload(
         except Exception as exc:
             return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
     auth_prelude = _auth_prelude(agent)
-    agent_prelude = muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
+    try:
+        agent_prelude = muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
+    except StorageBlocked as exc:
+        if muse_prompt is not None:
+            muse_prompt.unlink(missing_ok=True)
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     wrapped = (
         f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
     )

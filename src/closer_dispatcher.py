@@ -2805,6 +2805,25 @@ def assessment_transport_pending(target, revision):
     }
 
 
+def storage_context_pending(target, revision, refusal):
+    """A trusted prelaunch refusal is recoverable; it is never model uncertainty."""
+    return {
+        "status": "pending",
+        "pending_kind": "external_event",
+        "next_trigger": "reconcile_owned_storage_context",
+        "pending_evidence": {
+            "event_id": f"owned-storage-context:{target}:{revision}",
+            "target": target,
+            "revision": revision,
+            "reason": "owned_storage_context_refused",
+            "refusal": refusal,
+        },
+        "classification": "storage_context_unavailable",
+        "substantive_needs": [],
+        "authority": False,
+    }
+
+
 def _execute_profile_route(
     route,
     invoke,
@@ -2899,7 +2918,13 @@ def _execute_profile_route(
                 if (
                     finite_frontier is not None
                     and isinstance(result, Mapping)
-                    and result.get("unsupported_assessment_tool_boundary") is True
+                    and (
+                        result.get("unsupported_assessment_tool_boundary") is True
+                        or (
+                            result.get("storage_context_refused") is True
+                            and result.get("run_id") is None
+                        )
+                    )
                     and result.get("process_started") is False
                     and result.get("exit") == 2
                     and result.get("outcome_uncertain") is False
@@ -5019,6 +5044,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             pending = assessment_transport_pending(target, prep.get("revision"))
             pending["pending_evidence"]["transport_refusal"] = result
             return pending
+        if (
+            result.get("storage_context_refused") is True
+            and result.get("process_started") is False
+            and result.get("exit") == 2
+            and result.get("outcome_uncertain") is False
+            and result.get("run_id") is None
+        ):
+            if collection_attempt:
+                recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")
+            return storage_context_pending(target, prep.get("revision"), result)
         output = str(result.get("output") or "")
         if result.get("outcome_uncertain") is True or result.get("retry_safe") is False:
             if (
