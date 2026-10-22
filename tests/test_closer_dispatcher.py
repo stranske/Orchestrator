@@ -589,17 +589,22 @@ def test_mutated_retained_artifact_invalidates_acceptance(tmp_path):
     assert not adapter.acceptance_ok(current, decision)
 
 
-def test_unresolved_outdated_thread_needs_review_before_merge_selection(tmp_path):
+def test_outdated_thread_is_retained_without_premerge_review_requirement(tmp_path):
     current = snapshot(
-        active_threads=1, threads=[{"id": "thread", "isResolved": False, "isOutdated": True}]
+        active_threads=0, threads=[{"id": "thread", "isResolved": False, "isOutdated": True}]
     )
-    backend = closer(tmp_path, current, dispositions={TARGET: integrated(tmp_path, current)})
-    assert backend.select(current)[0] == "review"
+    backend = closer(tmp_path, current)
+    assert backend.select(current)[0] == "merge"
+    assert current["threads"][0]["isResolved"] is False
 
 
 def test_existing_active_verifier_is_reused_without_duplicate_request(tmp_path):
     current = snapshot(state="MERGED", merge=MERGE)
     backend = closer(tmp_path, current, apply=True)
+    # Earlier status inventories are complete, rather than FakeGitHub's unknown {}.
+    backend.gh.responses[
+        ("GET", "repos/o/r/actions/workflows/agents-verifier.yml/runs?per_page=100&status=queued")
+    ] = {"total_count": 0, "workflow_runs": []}
     endpoint = (
         "repos/o/r/actions/workflows/agents-verifier.yml/runs?per_page=100&status=in_progress"
     )
@@ -1228,10 +1233,34 @@ def test_staged_action_waits_on_pr_linked_active_run_without_provider_or_label(
     assert backend.gh.calls == []
 
 
-def test_actual_snapshot_counts_outdated_unresolved_threads(monkeypatch):
+@pytest.mark.parametrize(
+    "threads,checks,expected_action,expected_active",
+    [
+        ([{"id": "old", "isResolved": False, "isOutdated": True}], "SUCCESS", "merge", 0),
+        ([{"id": "old", "isResolved": False, "isOutdated": True}], "FAILURE", "repair", 0),
+        ([{"id": "current", "isResolved": False, "isOutdated": False}], "SUCCESS", "review", 1),
+        (
+            [
+                {"id": "old", "isResolved": False, "isOutdated": True},
+                {"id": "resolved", "isResolved": True, "isOutdated": False},
+                {"id": "current", "isResolved": False, "isOutdated": False},
+            ],
+            "SUCCESS",
+            "review",
+            1,
+        ),
+    ],
+)
+def test_current_review_boundary_uses_same_thread_rule_as_merge_guard(
+    monkeypatch, tmp_path, threads, checks, expected_action, expected_active
+):
     document = _graphql_pr()
-    document["reviewThreads"]["nodes"] = [{"id": "old", "isResolved": False, "isOutdated": True}]
-    assert _snapshot_from_document(monkeypatch, document)["active_threads"] == 1
+    document["reviewThreads"]["nodes"] = threads
+    document["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"] = checks
+    current = _snapshot_from_document(monkeypatch, document)
+    assert current["threads"] == threads  # Outdated findings remain available for investigation.
+    assert current["active_threads"] == expected_active
+    assert closer(tmp_path, current).select(current)[0] == expected_action
 
 
 @pytest.mark.parametrize("connection", ["labels", "closingIssuesReferences", "reviewThreads"])

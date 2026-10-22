@@ -1,11 +1,13 @@
 """Native verifier prewrite resource waits are known no-effect, not owned runs."""
 
 import copy
+import hashlib
 import json
 
 import pytest
 from test_closer_merge_successor_integration import public_merge_world as public_merge_world
 from test_closer_reasoning_boundary import native_world as native_world
+from test_closer_verifier_attribution import archive
 
 import closer_dispatcher as native
 import closer_resources as resources
@@ -28,6 +30,8 @@ def waiting_world(public_merge_world, monkeypatch):
     }
     transport = native.gh_capacity.gh_run
     w.inventory_requests = []
+    corpus = archive()
+    monkeypatch.setattr(native, "native_artifact_fetcher", lambda _: lambda *_a, **_k: corpus)
 
     def api(args, **kwargs):
         endpoint = args[3]
@@ -38,6 +42,20 @@ def waiting_world(public_merge_world, monkeypatch):
             if "&status=" not in endpoint:
                 return 0, {"total_count": 1, "workflow_runs": [copy.deepcopy(w.blocking_run)]}
             return 0, {"total_count": 0, "workflow_runs": []}
+        if endpoint.endswith("/actions/runs/99/artifacts?per_page=100"):
+            return 0, {
+                "total_count": 1,
+                "artifacts": [
+                    {
+                        "id": 7,
+                        "name": "comparison-results-99",
+                        "expired": False,
+                        "size_in_bytes": len(corpus),
+                        "digest": "sha256:" + hashlib.sha256(corpus).hexdigest(),
+                        "workflow_run": {"id": 99, "head_sha": w.blocking_run["head_sha"]},
+                    }
+                ],
+            }
         if endpoint.endswith("/actions/runs/99"):
             return 0, copy.deepcopy(w.blocking_run)
         return transport(args, **kwargs)
@@ -82,7 +100,12 @@ def test_unchanged_frontier_waits_then_terminal_event_fresh_frontier_verifies_on
     inventory_reads = len(w.inventory_requests)
     assert native.main(w.argv) == 78
     capsys.readouterr()
-    assert len(w.inventory_requests) == inventory_reads
+    # Fresh completed-merge next-stage observation checks active capacity only;
+    # the retained child does not rerun or collect artifacts without a new trigger.
+    assert w.inventory_requests[inventory_reads:] == [
+        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=queued",
+        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=in_progress",
+    ]
     assert not w.verifies and len(w.merges) == 1
     w.blocking_run.update(status="completed", conclusion="success")
     # The next campaign is causally bound to a real external terminal read,
@@ -139,7 +162,11 @@ def test_incomplete_active_inventory_never_authorizes_write(waiting_world, monke
     row = result["merge_verification_successors"]["owner/repo#12"]["native_result"]["targets"][
         "owner/repo#12"
     ]
-    assert row["status"] == "unknown" and not w.verifies, row
+    assert row["status"] == "held" and "error" not in row and not w.verifies, row
+    assert (
+        row["results"]["act"]["pending_evidence"]["collection_cause"]
+        == "active_inventory_incomplete"
+    )
 
 
 def test_timeout_after_label_post_remains_uncertain(public_merge_world, monkeypatch, capsys):

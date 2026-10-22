@@ -1907,12 +1907,33 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
 
 
 def _native_diagnostic_section(
-    snapshot, api, deadline, root, artifact_fetch, download_budget, *, known_run=None
+    snapshot,
+    api,
+    deadline,
+    root,
+    artifact_fetch,
+    download_budget,
+    *,
+    known_run=None,
+    semantic_reference=None,
 ):
     """Retain existing exact-delivery corpus without inventing a trusted verdict."""
     target = _subject_target(snapshot)
     repo, _, number = target.partition("#")
     head, merge = snapshot.get("head"), snapshot.get("merge")
+    import closer_verifier_boundary as boundary
+
+    semantic_bound = (
+        isinstance(semantic_reference, dict)
+        and isinstance(known_run, dict)
+        and semantic_reference.get("subject_pr") == target
+        and semantic_reference.get("head") == head
+        and semantic_reference.get("merge") == merge
+        and isinstance(semantic_reference.get("archive_digest"), str)
+        and re.fullmatch("[0-9a-f]{64}", semantic_reference["archive_digest"]) is not None
+        and boundary.logical_run(known_run)
+        == boundary.logical_run(semantic_reference.get("run", {}))
+    )
     content: dict[str, Any] = {
         "evidence_type": "native-verifier-diagnostic",
         "acceptance_authority": False,
@@ -1953,7 +1974,11 @@ def _native_diagnostic_section(
         rows = doc.get("workflow_runs")
         if not isinstance(rows, list):
             return _section("unknown", content, reason="native diagnostic run inventory malformed")
-        candidates = [row for row in rows if isinstance(row, dict) and row.get("head_sha") == head]
+        candidates = [
+            row
+            for row in rows
+            if isinstance(row, dict) and (semantic_bound or row.get("head_sha") == head)
+        ]
         if len(candidates) > 3 or doc.get("total_count", len(rows)) > len(rows):
             return _section(
                 "unknown", content, reason="native diagnostic run inventory bound exceeded"
@@ -1969,7 +1994,9 @@ def _native_diagnostic_section(
             actual_repo = str((run.get("repository") or {}).get("full_name") or "")
             if (
                 str(run.get("id")) != run_id
-                or run.get("head_sha") != head
+                or (not semantic_bound and run.get("head_sha") != head)
+                or not isinstance(run.get("head_sha"), str)
+                or not SHA.fullmatch(run["head_sha"])
                 or actual_repo.lower() != repo.lower()
                 or run.get("path") != ".github/workflows/agents-verifier.yml"
                 or run.get("event") not in {"workflow_dispatch", "pull_request_target"}
@@ -2018,7 +2045,7 @@ def _native_diagnostic_section(
                 continue
             artifact = matches[0]
             if (
-                artifact.get("expired")
+                (artifact.get("expired") and not semantic_bound)
                 or time.monotonic() >= deadline
                 or budget["archives_remaining"] <= 0
                 or budget["bytes_remaining"] <= 0
@@ -2037,6 +2064,14 @@ def _native_diagnostic_section(
                 raise ValueError("native diagnostic archive byte cap exceeded")
             budget["archives_remaining"] -= 1
             budget["bytes_remaining"] -= len(archive)
+            if (
+                semantic_bound
+                and hashlib.sha256(archive).hexdigest() != semantic_reference["archive_digest"]
+            ):
+                content["unavailable"].append(
+                    {"run_id": run_id, "reason": "semantic archive digest changed"}
+                )
+                continue
             archive_ref = _retain_bytes(root, archive, "zip")
             parsed = _native_manifest_from_archive(archive, root)
             bound = [
@@ -2056,7 +2091,7 @@ def _native_diagnostic_section(
                     "observed_run_attempt": run["run_attempt"],
                     "artifact_run_attempt": None,
                     "artifact_attempt_status": "unknown",
-                    "head_sha": head,
+                    "head_sha": run["head_sha"],
                     "evaluated_sha": merge,
                     "archive": archive_ref,
                     "identity_bound": len(bound) == 1,
@@ -2090,12 +2125,67 @@ def _native_verifier_section(
     root: Path,
     artifact_fetch=None,
     download_budget: dict | None = None,
+    *,
+    native_archive_root=None,
 ) -> dict:
     """Collect exact merge-bound verifier input only for a trusted NON_PASS marker."""
     marker = snapshot.get("verifier")
     target = _subject_target(snapshot)
     repo, _, number = target.partition("#")
     merge, head = snapshot.get("merge"), snapshot.get("head")
+    reference = snapshot.get("native_diagnostic_reference")
+    if isinstance(reference, dict) and not marker:
+        import closer_verifier_boundary as boundary
+
+        try:
+            expected = reference["run"]
+            run = api(f"repos/{repo}/actions/runs/{expected['id']}")
+            if (
+                reference.get("subject_pr") != target
+                or reference.get("head") != head
+                or reference.get("merge") != merge
+                or boundary.logical_run(run) != boundary.logical_run(expected)
+            ):
+                return _section(
+                    "unknown", reason="native diagnostic reference changed before collection"
+                )
+            reads: list[dict[str, Any]] = []
+            relation, requirement = boundary.attribute(
+                run,
+                snapshot,
+                api,
+                artifact_fetch,
+                Path(native_archive_root) if native_archive_root is not None else root,
+                deadline=deadline,
+                reads=reads,
+            )
+            archive_read: dict[str, Any] = next(
+                (r for r in reversed(reads) if r["endpoint"].startswith("archive:")), {}
+            )
+            if relation != "same" or not archive_read.get("endpoint", "").endswith(
+                "sha256:" + str(reference.get("archive_digest"))
+            ):
+                return _section(
+                    "unknown",
+                    {"retained_reads": reads},
+                    reason=requirement or "native diagnostic archive changed",
+                )
+            return _native_diagnostic_section(
+                snapshot,
+                api,
+                deadline,
+                root,
+                artifact_fetch,
+                download_budget,
+                known_run=run,
+                semantic_reference=reference,
+            )
+        except Exception as exc:
+            if _is_round_control_exception(exc):
+                raise
+            return _section(
+                "unknown", reason=f"native diagnostic reference unavailable: {type(exc).__name__}"
+            )
     if (
         not isinstance(marker, dict)
         or marker.get("schema") != "verifier-corpus-decision/v1"
@@ -2338,6 +2428,7 @@ def collect_evidence(
     action: str | None = None,
     refresh_sections: set[str] | None = None,
     supplemental_sections: dict | None = None,
+    native_archive_root: str | Path | None = None,
 ) -> dict:
     """Create an incremental evidence packet.
 
@@ -2460,7 +2551,15 @@ def collect_evidence(
         "disposition",
     }
     native_section = preserved("native_merge_verifier") or (
-        _native_verifier_section(snapshot, api, deadline, root, artifact_fetch, shared_budget)
+        _native_verifier_section(
+            snapshot,
+            api,
+            deadline,
+            root,
+            artifact_fetch,
+            shared_budget,
+            native_archive_root=native_archive_root,
+        )
         if native_first
         else None
     )
@@ -2509,7 +2608,13 @@ def collect_evidence(
             native_section
             if native_section is not None
             else _native_verifier_section(
-                snapshot, api, deadline, root, artifact_fetch, shared_budget
+                snapshot,
+                api,
+                deadline,
+                root,
+                artifact_fetch,
+                shared_budget,
+                native_archive_root=native_archive_root,
             )
         ),
     }

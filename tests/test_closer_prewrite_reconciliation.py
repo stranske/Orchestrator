@@ -370,3 +370,172 @@ def test_prewrite_intent_and_terminal_receipt_are_exact(prewrite, change):
     write(inner, q)
     with pytest.raises(ValueError, match="^native_prewrite_intent_receipt_not_proven$"):
         plan(prewrite)
+
+
+TERMINAL_CANDIDATE = "8f31a1d1136cb8d27fe2b4bce0eab9a9b4c75a3e"
+SUBJECT = "owner/repo#848"
+TERMINAL_REASON = "collect existing verifier result before spending again"
+
+
+@pytest.fixture
+def terminal_prewrite(prewrite, monkeypatch):
+    path, frontier, doc, receipts, module, inner = prewrite
+    row = doc["frontiers"]["frozen"]["items"][TARGET]
+    prep = row["results"]["prepare"]
+    snapshot = retry._receipt(prep["snapshot_ref"])
+    snapshot.update(
+        pr_target=SUBJECT,
+        kind="pr",
+        state="MERGED",
+        sources=[{"target": TARGET, "kind": "issue", "body": "Original request", "state": "open"}],
+    )
+    prep["snapshot_ref"] = write(Path(prep["snapshot_ref"]["path"]), snapshot)
+    # Production PREPARE also carries a reduced summary lacking subject/merge.
+    # Only the hash-bound full snapshot may supply those fields.
+    prep["snapshot"] = {"target": TARGET, "kind": "pr", "head": "a" * 40}
+    q = json.loads(inner.read_text())
+    operation = q["frontiers"]["frozen"]["items"][TARGET]["operation"]
+    operation["binding"]["pr_target"] = SUBJECT
+    operation["result"] = {"reason": TERMINAL_REASON, "run_id": 39672760878}
+    write(inner, q)
+    source = "def act():\n    return {'status': 'deferred', 'reason': 'collect existing verifier result before spending again', 'run_id': 39672760878}\n    raise AssertionError('POST must not run')\n"
+    namespace = {}
+    exec(compile(source, "closer_dispatcher.py", "exec"), namespace)
+    assert namespace["act"]()["status"] == "deferred"
+    module.write_text(source)
+    for filename, constant in {
+        "closer_dispatcher.py": "PREWRITE_TERMINAL_SOURCE_SHA256",
+        "closer_queue.py": "PREWRITE_TERMINAL_QUEUE_SHA256",
+        "closer_pipeline.py": "PREWRITE_TERMINAL_PIPELINE_SHA256",
+    }.items():
+        monkeypatch.setattr(
+            retry,
+            constant,
+            hashlib.sha256((module.parent / filename).read_bytes()).hexdigest(),
+            raising=False,
+        )
+    installation = retry._receipt(receipts["installation"])
+    installation["candidate_sha"] = TERMINAL_CANDIDATE
+    installation["verification"]["snapshot_digest"] = retry._snapshot_digest(module.parent)
+    receipts["installation"] = write(Path(receipts["installation"]["path"]), installation)
+    proof_path = next((path.parent.parent.parent / "scope-admissions").glob("*/*.json"))
+    proof = json.loads(proof_path.read_text())
+    proof["input_sha256"] = retry._digest(row["results"])
+    write(proof_path, proof)
+    write(path, doc)
+    lifecycle = retry._receipt(receipts["lifecycle"])
+    stdout = retry._receipt(
+        {"path": lifecycle["native_stdout"], "sha256": lifecycle["stdout_sha256"]}
+    )
+    stdout["targets"][TARGET] = copy.deepcopy(row)
+    lifecycle["stdout_sha256"] = write(Path(lifecycle["native_stdout"]), stdout)["sha256"]
+    receipts["lifecycle"] = write(Path(receipts["lifecycle"]["path"]), lifecycle)
+    return path, frontier, doc, receipts, module, inner
+
+
+def test_terminal_result_alias_public_classification_never_replays(terminal_prewrite):
+    path, _frontier, doc, _receipts, _module, inner = terminal_prewrite
+    retained = inner.read_bytes()
+    proposal = plan(terminal_prewrite)
+    assert proposal["kind"] == "native_prewrite_verifier_refusal"
+    assert apply(terminal_prewrite, proposal)["status"] == "applied"
+    row = read(path)
+    assert row["status"] == "held" and row["stage_status"] == "completed"
+    assert row["resource_evidence"]["confirmed_no_effect"] is True
+    assert "reentry_ready" not in row and "act" not in row["results"]
+    assert inner.read_bytes() == retained
+    assert row["results"] == doc["frontiers"]["frozen"]["items"][TARGET]["results"]
+    assert (
+        row["deferred_next_trigger"]
+        == f"github-verifier-result:{SUBJECT}:39672760878:identity-reconciled"
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "source",
+        "queue",
+        "pipeline",
+        "generation",
+        "candidate",
+        "subject",
+        "source_association",
+        "result",
+        "postwrite",
+        "receipt",
+        "owner",
+        "foreign_uncertain",
+    ],
+)
+def test_terminal_result_refusal_requires_exact_complete_proof(terminal_prewrite, change):
+    path, _frontier, _doc, receipts, module, inner = terminal_prewrite
+    before = path.read_bytes()
+    q = json.loads(inner.read_text())
+    bucket = q["frontiers"]["frozen"]
+    op = bucket["items"][TARGET]["operation"]
+    if change in {"source", "queue", "pipeline"}:
+        name = {
+            "source": "closer_dispatcher.py",
+            "queue": "closer_queue.py",
+            "pipeline": "closer_pipeline.py",
+        }[change]
+        (module.parent / name).write_text("# source changed after qualification\n")
+    elif change in {"generation", "candidate"}:
+        install = retry._receipt(receipts["installation"])
+        install["installed_generation" if change == "generation" else "candidate_sha"] = "foreign"
+        receipts["installation"] = write(Path(receipts["installation"]["path"]), install)
+    elif change == "subject":
+        op["binding"]["pr_target"] = "owner/repo#999"
+    elif change == "source_association":
+        row = read(path)
+        ref = row["results"]["prepare"]["snapshot_ref"]
+        snapshot = retry._receipt(ref)
+        snapshot["sources"] = []
+        # Mutating the retained snapshot cannot retain its content-addressed proof.
+        Path(ref["path"]).write_text(json.dumps(snapshot))
+    elif change == "result":
+        op["result"]["reason"] = "verification state changed; reuse existing request"
+    elif change == "postwrite":
+        op.update(status="uncertain", outcome="timeout")
+        op["result"]["label_posted"] = True
+    elif change == "receipt":
+        bucket["round"]["receipt"]["accounting"][0]["operation_id"] = "foreign"
+    elif change == "owner":
+        bucket["round"]["owner"] = "foreign"
+    else:
+        q["frontiers"]["historical"]["operation"].update(status="unknown", outcome_uncertain=True)
+    if change in {"subject", "result", "postwrite", "receipt", "owner", "foreign_uncertain"}:
+        write(inner, q)
+    retained_inner = inner.read_bytes()
+    with pytest.raises(ValueError):
+        plan(terminal_prewrite)
+    assert path.read_bytes() == before
+    assert inner.read_bytes() == retained_inner
+
+
+def test_new_source_cannot_reclassify_old_active_reason(terminal_prewrite):
+    _path, _frontier, _doc, _receipts, _module, inner = terminal_prewrite
+    q = json.loads(inner.read_text())
+    q["frontiers"]["frozen"]["items"][TARGET]["operation"]["result"][
+        "reason"
+    ] = "existing or unattributable active verifier run"
+    write(inner, q)
+    with pytest.raises(ValueError, match="native_prewrite_inner_boundary_not_proven"):
+        plan(terminal_prewrite)
+
+
+def test_terminal_result_plan_is_cas_bound_and_idempotent(terminal_prewrite):
+    path, _frontier, _doc, _receipts, _module, inner = terminal_prewrite
+    proposal = plan(terminal_prewrite)
+    original = inner.read_bytes()
+    q = json.loads(original)
+    q["frontiers"]["frozen"]["items"][TARGET]["operation"]["result"]["run_id"] += 1
+    write(inner, q)
+    with pytest.raises(ValueError, match="reentry_plan_changed"):
+        apply(terminal_prewrite, proposal)
+    assert read(path)["status"] == "unknown"
+    inner.write_bytes(original)
+    assert apply(terminal_prewrite, proposal)["status"] == "applied"
+    assert apply(terminal_prewrite, proposal)["idempotent"] is True
+    assert inner.read_bytes() == original
