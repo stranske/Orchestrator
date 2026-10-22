@@ -83,9 +83,13 @@ def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
     with pytest.raises(ValueError):
         sentinel.relative_to(owned.resolve())
 
+    def forbid_sqlite_open(*, timeout: float = 5.0):
+        raise AssertionError("SQLite open attempted before containment check")
+
+    monkeypatch.setitem(globals(), "_REAL_FEEDBACK_CONN", forbid_sqlite_open)
     monkeypatch.setattr(feedback, "DB_PATH", sentinel)
     with pytest.raises(AssertionError, match="outside owned test root"):
-        _assert_feedback_path_owned(owned)
+        feedback._conn()
     assert not sentinel.exists()
     assert not sentinel.parent.joinpath(f"{sentinel.name}-journal").exists()
 
