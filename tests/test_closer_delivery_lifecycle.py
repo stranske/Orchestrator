@@ -214,7 +214,9 @@ class OfflineDelivery:
             self.refresh()
             return SimpleNamespace(returncode=0, stdout=json.dumps(result))
         assert command[1].endswith("merge_guard.py")
-        assert command[2:] == [TARGET, "--expected-head", HEAD, "--confirm-merge"]
+        assert command[2] == TARGET
+        assert command[2:6] == [TARGET, "--expected-head", HEAD, "--confirm-merge"]
+        assert set(command[6:]) == {"--skip-immediate-advisory", "--remote-only"}
         assert 0 < timeout <= 600
         self.guard_calls.append(command)
         self.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
@@ -338,7 +340,7 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     delivery = OfflineDelivery(tmp_path, monkeypatch)
     result = delivery.run()
     assert len(delivery.guard_calls) == 1, result
-    assert delivery.provider_calls
+    assert not delivery.provider_calls  # Objective premerge path never calls a model.
     assert delivery.current["state"] == "MERGED"
     assert "verify:compare" in delivery.current["labels"]
     assert closer_pipeline.validate_stop(
@@ -394,6 +396,8 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
 @pytest.mark.parametrize("barrier", ["wrong_attempt", "changed_head", "provider_uncertain"])
 def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypatch, barrier):
     delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
+    delivery.supply_native_pass(monkeypatch)
     if barrier == "wrong_attempt":
         delivery.invalid_proof = True
     elif barrier == "provider_uncertain":
@@ -410,7 +414,8 @@ def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypat
         monkeypatch.setattr(dispatcher, "offload", head_changes_after_assessment)
     result = delivery.run()
     assert not delivery.guard_calls, result
-    assert delivery.current["state"] == "OPEN"
+    assert delivery.current["state"] == "MERGED"
+    assert not delivery.closure_calls
     state = delivery.state()
     serialized = json.dumps(state)
     if barrier == "wrong_attempt":
@@ -429,7 +434,7 @@ def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypat
         assert len(inner_paths) == 1
         inner = json.loads(inner_paths[0].read_text())
         assert inner["items"][TARGET]["evidence"]["head"] == "e" * 40
-        assert inner["items"][TARGET]["action"] != "merge"
+        assert inner["items"][TARGET]["action"] != "close_source"
 
 
 def test_unknown_merge_transport_outcome_is_durable_and_never_repeated(tmp_path, monkeypatch):

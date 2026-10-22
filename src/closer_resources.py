@@ -2342,6 +2342,12 @@ def run_scoped(
             if finite_frontier is not None and stage in {"target_admission", "prepare", "interpret"}
             else "effect"
         )
+        if finite_frontier is not None and stage == "act" and context is not None:
+            # Finite callbacks are registered production-dispatcher functions.
+            # Only its revalidated native capability can narrow historical scope.
+            capability = getattr(act, "__globals__", {}).get("_remote_only_effect")
+            if callable(capability) and capability(target, context) is True:
+                purpose = "remote_effect"
         snapshot = closer_quarantine.scope_snapshot(state_path, workspaces=quarantine_workspaces)
         problem = closer_quarantine.scope_problem(snapshot, target, keys, purpose=purpose)
         # Unrelated shards can commit while we hold our aliases. Retry only the

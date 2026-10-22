@@ -109,7 +109,38 @@ def test_native_collector_preserves_incomplete_review_status(tmp_path):
     assert packet["sections"]["review_conversations"]["status"] != "complete"
 
 
-def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monkeypatch):
+@pytest.mark.parametrize("high_fd", [False, True], ids=["normal-fd", "high-fd"])
+def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monkeypatch, high_fd):
+    duplicated_stdout = []
+    if high_fd:
+        fcntl = pytest.importorskip("fcntl")
+        resource = pytest.importorskip("resource")
+        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if soft_limit != resource.RLIM_INFINITY and soft_limit <= 1024:
+            pytest.skip("existing descriptor limit does not permit FD_SETSIZE regression")
+        real_popen = dispatcher.subprocess.Popen
+
+        def high_stdout_popen(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            if kwargs.get("stdout") == dispatcher.subprocess.PIPE:
+                original = proc.stdout
+                high = None
+                try:
+                    high = fcntl.fcntl(original.fileno(), fcntl.F_DUPFD, 1024)
+                    original.close()
+                    proc.stdout = os.fdopen(high, "rb")
+                except BaseException:
+                    if high is not None:
+                        os.close(high)
+                    original.close()
+                    proc.kill()
+                    proc.wait()
+                    raise
+                duplicated_stdout.append((high, proc.stdout))
+            return proc
+
+        monkeypatch.setattr(dispatcher.subprocess, "Popen", high_stdout_popen)
+
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as z:
         z.writestr("junit.xml", '<testsuite tests="1"><testcase name="one"/></testsuite>')
@@ -192,6 +223,10 @@ def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monk
         sort_keys=True,
         indent=2,
     )
+    if high_fd:
+        assert duplicated_stdout, "real owned artifact child did not exercise a high descriptor"
+        assert all(fd >= 1024 for fd, _ in duplicated_stdout)
+        assert all(pipe.closed for _, pipe in duplicated_stdout), "owned high descriptors leaked"
     assert ci["status"] == "complete", diagnostic
     assert ci["content"]["retrieval_status"] == "complete", diagnostic
     # Retrieval is complete, while required-check topology is still unknown.
@@ -212,6 +247,77 @@ def test_native_collector_downloads_real_capped_transport_archive(tmp_path, monk
         for p in retained
     )
     assert hashlib.sha256(path.read_bytes()).digest() == hashlib.sha256(archive_bytes).digest()
+
+
+@pytest.mark.parametrize("failure", ["overflow", "deadline"])
+def test_native_artifact_transport_failure_closes_owned_child(tmp_path, monkeypatch, failure):
+    cli = tmp_path / "gh"
+    cli.write_text(
+        f"#!{sys.executable}\n"
+        "import sys,time\n"
+        + (
+            "sys.stdout.buffer.write(b'x' * 4096);sys.stdout.buffer.flush()\n"
+            if failure == "overflow"
+            else ""
+        )
+        + "time.sleep(30)\n"
+    )
+    cli.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(gh_capacity, "GH_LEDGER", tmp_path / "rate.ndjson")
+    monkeypatch.setattr(gh_capacity, "throttle", lambda *_a, **_k: {"action": "proceed"})
+    children = []
+    real_popen = dispatcher.subprocess.Popen
+
+    def tracked_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        children.append(proc)
+        return proc
+
+    monkeypatch.setattr(dispatcher.subprocess, "Popen", tracked_popen)
+
+    def exercise_artifact(_snapshot, _api, _retained, **kwargs):
+        deadline = kwargs["deadline"]
+        # Small explicit per-artifact allowance exercises actual streaming refusal,
+        # not a fake collector status or an enormous fixture.
+        return kwargs["artifact_fetch"](
+            {"id": 8, "size_in_bytes": 1}, deadline=deadline, max_bytes=32
+        )
+
+    failures = []
+    real_gh_run = gh_capacity.gh_run
+
+    def traced_gh_run(args, **kwargs):
+        runner = kwargs["runner"]
+
+        def traced_runner(*runner_args, **runner_kwargs):
+            try:
+                return runner(*runner_args, **runner_kwargs)
+            except Exception as error:
+                failures.append(error)
+                raise
+
+        return real_gh_run(args, **{**kwargs, "runner": traced_runner})
+
+    monkeypatch.setattr(gh_capacity, "gh_run", traced_gh_run)
+    monkeypatch.setattr(closer_evidence, "collect_evidence", exercise_artifact)
+    expected = ValueError if failure == "overflow" else TimeoutError
+    message = "byte cap" if failure == "overflow" else "deadline"
+    with pytest.raises(RuntimeError, match="artifact archive download failed"):
+        dispatcher.collect_native_evidence(
+            snapshot(),
+            SimpleNamespace(api=api_base),
+            tmp_path / "retained",
+            deadline=time.monotonic() + (30 if failure == "overflow" else 1.5),
+        )
+    assert len(failures) == 1
+    assert isinstance(failures[0], expected) and message in str(failures[0])
+    assert len(children) == 1
+    child = children[0]
+    assert child.poll() is not None, "owned child must be reaped after transport failure"
+    assert child.stdout.closed, "owned stdout must close on transport failure"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(child.pid, 0)
 
 
 @pytest.mark.parametrize("target", [None, "acme/repo", "foreign", 12])

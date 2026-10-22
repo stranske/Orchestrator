@@ -7,13 +7,27 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_closer_delivery_lifecycle import OfflineDelivery
+from test_closer_delivery_lifecycle import OfflineDelivery as _OfflineDelivery
 from test_closer_disposition import TARGET
 
 import closer_dispatcher as adapter
 import closer_pipeline
 import dispatcher
 import execution_profiles
+
+
+class OfflineDelivery(_OfflineDelivery):
+    """These parser/transport units assess post-verifier acceptance, not premerge."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        super().__init__(tmp_path, monkeypatch)
+        self.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
+        self.refresh()
+        # Parse a trusted bot marker through the native verifier validator; the
+        # retained original criteria still require real current-head proof below.
+        self.supply_native_pass(monkeypatch)
+        assert self.current["verifier"]["evaluated_sha"] == self.current["merge"]
+        assert self.backend.dispositions == {}
 
 
 def install_strong_capacity(monkeypatch):
@@ -428,7 +442,8 @@ def test_batch_large_low_and_strong_cross_full_pipeline_with_proofs_loaded_again
     receipt = delivery.run()
     assert strong_calls == [1], json.dumps(receipt)
     assert validated == ["accepted", "accepted"]  # Callback and action independently validate.
-    assert len(delivery.guard_calls) == 1, receipt
+    assert delivery.guard_calls == [], receipt
+    assert len(delivery.closure_calls) == 1 and delivery.closure_calls[0]["closed"] == 1
     item = receipt["targets"][TARGET]
     assert not item.get("error"), item
     assert captured["interpret"][0]["proposal_ref"]

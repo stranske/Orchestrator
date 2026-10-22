@@ -135,6 +135,47 @@ def source_issue_labels(closing: list[str], *, run_fn=subprocess.run) -> dict:
     return {"labels": sorted(set(labels))}
 
 
+def remote_only_footprint(
+    target: str,
+    metadata: Mapping[str, Any],
+    *,
+    env: Mapping[str, Any] | None = None,
+    spec_dir: str | Path | None = None,
+    require_runtime_ac: bool = False,
+) -> dict[str, Any]:
+    """Conservative local classification; the active guard repeats it on live metadata.
+
+    This does not run or waive runtime checks and grants no merge authority.
+    """
+    labels = list(metadata.get("labels") or [])
+    if require_runtime_ac:
+        labels.append("runtime-ac")
+    item = {
+        "target": target,
+        "lane": "closer",
+        "labels": labels,
+        "source_labels": list(metadata.get("source_labels") or []),
+        "title": metadata.get("title") or "",
+    }
+    path = runtime_ac_gate.spec_path(target, spec_dir=spec_dir, env=env)
+    try:
+        required = runtime_ac_gate.required(item, path)
+        spec_hash = runtime_ac_gate.spec_sha256(path) if path.exists() else None
+        unreadable = path.is_symlink() or (path.exists() and spec_hash is None)
+    except (OSError, ValueError, TypeError, AttributeError):
+        required, spec_hash, unreadable = True, None, True
+    blocked = bool(metadata.get("error")) or required or unreadable
+    return {
+        "remote_only": not blocked,
+        "blocked": blocked,
+        "reason": "footprint_requires_local_runtime_ac" if blocked else None,
+        "runtime_ac_required": required,
+        "spec_path": str(path),
+        "spec_sha256": spec_hash,
+        "acceptance_authority": False,
+    }
+
+
 def evaluate_merge_gate(
     target: str,
     *,
@@ -142,6 +183,7 @@ def evaluate_merge_gate(
     env: dict | None = None,
     spec_dir: str | Path | None = None,
     require_runtime_ac: bool = False,
+    remote_only: bool = False,
     metadata_fn=pr_metadata,
     gate_fn=runtime_ac_gate.gate_status,
 ) -> dict[str, Any]:
@@ -171,8 +213,26 @@ def evaluate_merge_gate(
         "labels": labels,
         "title": meta.get("title") or "",
     }
-    gate = gate_fn(item, dry_run=dry_run, env=env, spec_dir=spec_dir)
+    footprint = None
+    if remote_only:
+        footprint = remote_only_footprint(
+            target, meta, env=env, spec_dir=spec_dir, require_runtime_ac=require_runtime_ac
+        )
+        if footprint["blocked"]:
+            return {
+                **base,
+                "blocked": True,
+                "reason": footprint["reason"],
+                "remote_only_guard": footprint,
+            }
+        # Never invoke a command-capable runtime gate in this positive footprint.
+        # A concurrently appearing required spec is refused at final revalidation.
+        gate = None
+    else:
+        gate = gate_fn(item, dry_run=dry_run, env=env, spec_dir=spec_dir)
     result = {**base, "gate": gate}
+    if footprint is not None:
+        result["remote_only_guard"] = footprint
     if gate is None:
         return result
     if gate.get("blocks"):
@@ -396,6 +456,8 @@ def guarded_merge(
     delete_branch: bool = False,
     expected_head: str | None = None,
     confirm_merge: bool = False,
+    skip_immediate_advisory: bool = False,
+    remote_only: bool = False,
     env: dict | None = None,
     spec_dir: str | Path | None = None,
     require_runtime_ac: bool = False,
@@ -411,6 +473,7 @@ def guarded_merge(
     review_loop_fn=None,
 ) -> dict[str, Any]:
     dry_run = not confirm_merge
+    skip_immediate_advisory = skip_immediate_advisory or remote_only
     if confirm_merge and not expected_head:
         return {
             "target": target,
@@ -441,6 +504,7 @@ def guarded_merge(
         env=env,
         spec_dir=spec_dir,
         require_runtime_ac=require_runtime_ac,
+        remote_only=remote_only,
         metadata_fn=metadata_fn,
         gate_fn=gate_fn,
     )
@@ -476,21 +540,30 @@ def guarded_merge(
         return {**result, "blocked": True, "reason": loop_gate.get("reason", "review loop pending")}
     # Advisory, after every deterministic gate has passed, so no panel is paid for a PR that
     # cannot merge. Nothing it returns, and nothing it raises, may block or stop this merge.
-    try:
-        panel = (panel_fn or adversarial_review_status)(
-            target, gate_result["metadata"], head=expected_head, env=env
-        )
-    except Exception as exc:
-        panel = {"status": "error", "error": str(exc)[:500]}
+    panel: dict[str, Any]
+    if skip_immediate_advisory:
+        panel = {
+            "status": "not_requested",
+            "detail": "Optional immediate panel not requested; Closer uses the bound verifier and post-response acceptance path.",
+            "acceptance_authority": False,
+        }
+    else:
+        try:
+            panel = (panel_fn or adversarial_review_status)(
+                target, gate_result["metadata"], head=expected_head, env=env
+            )
+        except Exception as exc:
+            panel = {"status": "error", "error": str(exc)[:500]}
     result["adversarial_review"] = panel
-    try:
-        adjudication = (adjudicate_fn or adjudicate_disagreement)(
-            target, gate_result.get("gate"), panel, env=env, dry_run=dry_run
-        )
-    except Exception as exc:
-        adjudication = {"error": str(exc)[:500]}
-    if adjudication is not None:
-        result["adjudication"] = adjudication
+    if not skip_immediate_advisory:
+        try:
+            adjudication = (adjudicate_fn or adjudicate_disagreement)(
+                target, gate_result.get("gate"), panel, env=env, dry_run=dry_run
+            )
+        except Exception as exc:
+            adjudication = {"error": str(exc)[:500]}
+        if adjudication is not None:
+            result["adjudication"] = adjudication
     if dry_run:
         return result
 
@@ -506,6 +579,20 @@ def guarded_merge(
     result["review_loop_final"] = loop_gate
     if loop_gate.get("required") and not loop_gate.get("eligible"):
         return {**result, "blocked": True, "reason": loop_gate.get("reason", "review loop pending")}
+
+    if remote_only:
+        final_meta = metadata_fn(target)
+        final_footprint = remote_only_footprint(
+            target, final_meta, env=env, spec_dir=spec_dir, require_runtime_ac=require_runtime_ac
+        )
+        result["remote_only_guard_final"] = final_footprint
+        initial_footprint = result["remote_only_guard"]
+        if final_footprint["blocked"] or any(
+            final_footprint[key] != initial_footprint[key] for key in ("spec_path", "spec_sha256")
+        ):
+            return {**result, "blocked": True, "reason": "footprint_requires_local_runtime_ac"}
+        if str(final_meta.get("state") or "").upper() != "OPEN" or final_meta.get("is_draft"):
+            return {**result, "blocked": True, "reason": "remote-only PR metadata changed"}
 
     merge = merge_fn(cmd, capture_output=True, text=True)
     result["merge_executed"] = True
@@ -527,10 +614,15 @@ def guarded_merge(
         spawn_fn = _no_spawn
     import adversarial
 
-    if adversarial.review_enabled(env) and panel.get("status") in {
-        "deferred_to_post_merge",
-        "reused",
-    }:
+    if (
+        not skip_immediate_advisory
+        and adversarial.review_enabled(env)
+        and panel.get("status")
+        in {
+            "deferred_to_post_merge",
+            "reused",
+        }
+    ):
         # After the merge and outside it: the detached job judges the merged head (or reuses the
         # verdict already recorded for it) and, on BLOCKED, files the follow-up. Never blocks.
         # A PR-head PASS is advisory evidence, never a substitute for the actual merge commit.
@@ -981,6 +1073,16 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--confirm-merge", action="store_true", help="actually run gh pr merge")
     parser.add_argument(
+        "--skip-immediate-advisory",
+        action="store_true",
+        help="skip the optional immediate panel; required runtime acceptance and merge guards remain",
+    )
+    parser.add_argument(
+        "--remote-only",
+        action="store_true",
+        help="refuse local runtime-AC execution and skip optional immediate advisory; recheck before merge",
+    )
+    parser.add_argument(
         "--require-runtime-ac",
         action="store_true",
         help="force a runtime AC gate even without a runtime-ac label or spec",
@@ -1002,6 +1104,8 @@ def main(argv: list[str]) -> int:
         delete_branch=args.delete_branch,
         expected_head=args.expected_head,
         confirm_merge=args.confirm_merge,
+        skip_immediate_advisory=args.skip_immediate_advisory,
+        remote_only=args.remote_only,
         require_runtime_ac=args.require_runtime_ac,
     )
     print(json.dumps(result, indent=2, default=str))

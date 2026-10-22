@@ -448,6 +448,7 @@ def test_public_finite_max_workers_caps_actual_target_executor(native_world, mon
         assert target in targets
         snapshot = copy.deepcopy(w.snapshot)
         snapshot["target"] = target
+        snapshot["verifier"]["pr"] = int(target.split("#")[1])
         return snapshot
 
     monkeypatch.setattr(dispatcher.GitHub, "snapshot", observed)

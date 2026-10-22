@@ -354,14 +354,29 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True):
 
     runtime.no_live_state_or_provider.__wrapped__(monkeypatch, tmp_path)
     snap, packet, *_ = proofs.fixture(tmp_path)
+    # Recovery here serves post-verification acceptance, not the deterministic
+    # merge path for an OPEN green PR. A bound PASS still needs source judgment.
     snap.update(
-        state="OPEN",
+        state="MERGED",
+        merge="d" * 40,
         active_threads=0,
         draft=False,
         labels=[],
         mergeable="MERGEABLE",
         verifier_history_complete=True,
     )
+    snap["verifier"] = {
+        "schema": "verifier-corpus-decision/v1",
+        "verdict": "PASS",
+        "repo": "owner/repo",
+        "pr": 12,
+        "head_sha": snap["head"],
+        "evaluated_sha": snap["merge"],
+        "run_id": 34,
+        "run_attempt": 1,
+        "provider_verdicts": ["PASS"],
+        "ci_failed": False,
+    }
     original_files = copy.deepcopy(packet["sections"]["diff_files"]["content"]["files"])
     if initial_missing:
         for name in ("diff_files", "ci_artifacts"):

@@ -508,6 +508,12 @@ def _action_evidence_readiness(
             gaps.append("source:original_bodies_unavailable")
     if gaps:
         return verdict
+    if action == "merge":
+        # Only identity and preserved original request are packet prerequisites.
+        # Objective live merge checks remain in the native selector/merge guard;
+        # post-verification acceptance proof is not a pre-merge evidence rail.
+        verdict.update(ready=True, mode="deterministic")
+        return verdict
     if action in {"review", "respond_review"}:
         verdict["mode"] = "review"
         if packet["bindings"].get("reviews") != _hash(snapshot.get("review_revision")):

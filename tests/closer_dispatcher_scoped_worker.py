@@ -75,6 +75,20 @@ def main():
                 "draft": False,
                 "verifier": None,
             }
+            if spec.get("postverify"):
+                result.update(state="MERGED", merge="d" * 40)
+                result["verifier"] = {
+                    "schema": "verifier-corpus-decision/v1",
+                    "verdict": "PASS",
+                    "repo": name.split("#")[0],
+                    "pr": int(name.split("#")[1]),
+                    "head_sha": result["head"],
+                    "evaluated_sha": result["merge"],
+                    "run_id": 34,
+                    "run_attempt": 1,
+                    "provider_verdicts": ["PASS"],
+                    "ci_failed": False,
+                }
             if spec.get("pr_target"):
                 result["pr_target"] = spec["pr_target"]
             result["revision"] = d.digest(result)

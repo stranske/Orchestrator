@@ -308,8 +308,10 @@ def plan(state_path, *, frontier, target, event):
         kind = "pre_callback_scope_refusal"
     else:
         raise ValueError("no_supported_unstarted_boundary")
-    if stage not in {"prepare", "interpret", "act"}:
+    if stage not in {"prepare", "interpret", "act", "exception"}:
         raise ValueError("unsupported_retry_stage")
+    if stage == "exception" and "exception" in results:
+        raise ValueError("exception_callback_result_requires_reconciliation")
     inner = _inner_boundary(path, target)
     trigger_fingerprint = _digest(
         {
@@ -424,7 +426,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                 row.pop("error", None)
                 row.pop("deferred_next_trigger", None)
                 row.pop("scope_refusal", None)
-                if proposal["stage"] == "act":
+                if proposal["stage"] in {"act", "exception"}:
                     # No effect occurred, but the real historical scope is still
                     # unavailable. Reconciliation cannot turn that into readiness.
                     row.update(
@@ -433,6 +435,8 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256):
                         deferred_reason="scope_quarantined",
                         deferred_next_trigger="reconcile_scope_before_retry",
                     )
+                    row.pop("reentry_ready", None)
+                    row["scope_proof"] = proposal["scope_proof"]
                     row["resource_evidence"] = {
                         "scope_refusal": proposal["scope_proof"],
                         "confirmed_not_started": True,
