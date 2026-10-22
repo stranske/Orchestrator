@@ -62,6 +62,42 @@ def _register_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
     launcher = caller.f_back
     main_admitted = dispatcher_globals.get("_main_admitted")
     backend = caller.f_locals.get("backend")
+    successor = dispatcher_globals.get("_run_merge_verification_successors")
+    if (
+        launcher is not None
+        and successor is not None
+        and launcher.f_code is successor.__code__
+        and launcher.f_globals is dispatcher_globals
+    ):
+        # Only the existing CLI-owned causal successor may reuse this backend.
+        # A similarly named function or caller-provided opt-in confers no trust.
+        parent = launcher.f_back
+        original_args = launcher.f_locals.get("args")
+        following = launcher.f_locals.get("following")
+        child = launcher.f_locals.get("child")
+        driver_args = caller.f_locals.get("args")
+        if (
+            parent is None
+            or main_admitted is None
+            or parent.f_code is not main_admitted.__code__
+            or parent.f_globals is not dispatcher_globals
+            or parent.f_locals.get("backend") is not backend
+            or launcher.f_locals.get("backend") is not backend
+            or original_args is not parent.f_locals.get("args")
+            or following is None
+            or following is not driver_args
+            or not isinstance(child, dict)
+            or caller.f_locals.get("finite_frontier") != child.get("finite_frontier")
+            or caller.f_locals.get("targets") != child.get("execution_targets")
+            or getattr(original_args, "finite_frontier", None)
+            != launcher.f_locals.get("predecessor")
+            or {key: value for key, value in vars(following).items() if key != "finite_frontier"}
+            != {
+                key: value for key, value in vars(original_args).items() if key != "finite_frontier"
+            }
+        ):
+            raise ValueError("finite successor requires the exact CLI-owned child/backend")
+        launcher = parent
     if (
         launcher is None
         or main_admitted is None
