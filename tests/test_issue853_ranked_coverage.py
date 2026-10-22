@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sqlite3
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -18,11 +19,12 @@ import gh_capacity
 import research_scheduler
 
 _REAL_FEEDBACK_CONN = feedback._conn
+_REAL_SQLITE_CONNECT = sqlite3.connect
 OUT_OF_BOUND_SENTINEL_NAME = "issue853-out-of-bound-sentinel.db"
 
 
-def _assert_feedback_path_owned(owned_root: Path) -> None:
-    selected = Path(feedback.DB_PATH).expanduser().resolve()
+def _assert_database_path_owned(database: str | Path, owned_root: Path) -> None:
+    selected = Path(database).expanduser().resolve()
     try:
         selected.relative_to(owned_root.resolve())
     except ValueError:
@@ -32,8 +34,13 @@ def _assert_feedback_path_owned(owned_root: Path) -> None:
 
 
 def _guarded_feedback_conn(owned_root: Path, *, timeout: float = 5.0):
-    _assert_feedback_path_owned(owned_root)
+    _assert_database_path_owned(feedback.DB_PATH, owned_root)
     return _REAL_FEEDBACK_CONN(timeout=timeout)
+
+
+def _guarded_sqlite_connect(owned_root: Path, database, *args, **kwargs):
+    _assert_database_path_owned(database, owned_root)
+    return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +54,11 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
     monkeypatch.setenv(feedback.DB_PATH_ENV, str(db))
     monkeypatch.setattr(feedback, "DB_PATH", db)
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda database, *args, **kwargs: _guarded_sqlite_connect(owned, database, *args, **kwargs),
+    )
     monkeypatch.setattr(
         feedback,
         "_conn",
@@ -96,6 +108,32 @@ def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
     assert open_attempts == [], "containment must reject before any SQLite open"
     assert not sentinel.exists()
     assert not sentinel.parent.joinpath(f"{sentinel.name}-journal").exists()
+
+
+@pytest.mark.parametrize("via_feedback_factory", [False, True])
+def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, via_feedback_factory: bool
+) -> None:
+    """Check the actual connect argument even when the feedback wrapper is bypassed."""
+    sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    driver_attempts: list[Path] = []
+
+    def forbid_driver(database, *args, **kwargs):
+        driver_attempts.append(Path(database))
+        raise AssertionError("SQLite driver reached before containment check")
+
+    monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", forbid_driver)
+    with pytest.raises(AssertionError, match="outside owned test root"):
+        if via_feedback_factory:
+            monkeypatch.setattr(feedback, "DB_PATH", sentinel)
+            _REAL_FEEDBACK_CONN()
+        else:
+            # DB_PATH remains owned; containment must inspect the connect argument itself.
+            assert Path(feedback.DB_PATH).is_relative_to(tmp_path / "owned")
+            sqlite3.connect(database=str(sentinel))
+    assert driver_attempts == []
+    assert not sentinel.exists()
+    assert not sentinel.with_name(f"{sentinel.name}-journal").exists()
 
 
 def test_isolation_binding_deliberate_break_and_restore(
