@@ -118,7 +118,7 @@ def observation(endpoint, value=None, *, error=None, root=None):
     }
     if root is not None and error is None:
         result["raw"] = evidence._retain_bytes(
-            root, json.dumps(value, sort_keys=True).encode(), "json"
+            root, json.dumps(logical(value), sort_keys=True).encode(), "json"
         )
     return result
 
@@ -289,8 +289,20 @@ def unique_members(pairs):
     return result
 
 
-def attribute(run, snapshot, api, artifact_fetch, root: Path, *, deadline, reads):
+def attribute(
+    run,
+    snapshot,
+    api,
+    artifact_fetch,
+    root: Path,
+    *,
+    deadline,
+    reads,
+    acquisition_budget=None,
+    retain_reads=True,
+):
     """Only an intact native capture may prove a different PR's manual run."""
+    read_root = root if retain_reads else None
     subject = snapshot.get("pr_target") or snapshot["target"]
     repo, number = subject.rsplit("#", 1)
     rid = run.get("id")
@@ -309,7 +321,7 @@ def attribute(run, snapshot, api, artifact_fetch, root: Path, *, deadline, reads
     endpoint = f"repos/{repo}/actions/runs/{rid}/artifacts?per_page=100"
     try:
         inventory = api(endpoint)
-        reads.append(observation(endpoint, inventory, root=root))
+        reads.append(observation(endpoint, inventory, root=read_root))
         rows = inventory.get("artifacts")
         if (
             not isinstance(rows, list)
@@ -349,6 +361,13 @@ def attribute(run, snapshot, api, artifact_fetch, root: Path, *, deadline, reads
         else:
             if a.get("expired"):
                 return "pending", f"verified retained archive for expired run {rid}"
+            if acquisition_budget is not None:
+                if acquisition_budget["remaining"] <= 0:
+                    return (
+                        "pending",
+                        "continue verifier attribution after retained acquisition progress",
+                    )
+                acquisition_budget["remaining"] -= 1
             data = artifact_fetch(a, deadline=deadline, max_bytes=evidence.MAX_ARCHIVE_BYTES)
         if (
             not isinstance(data, bytes)
@@ -361,8 +380,32 @@ def attribute(run, snapshot, api, artifact_fetch, root: Path, *, deadline, reads
         reads.append(
             observation(
                 f'archive:{a["id"]}:{expected}',
-                {"archive": archive_ref, "manifests": parsed},
-                root=root,
+                {
+                    "archive": archive_ref,
+                    "manifests": [
+                        {
+                            "manifest": {
+                                k: r["manifest"].get(k)
+                                for k in (
+                                    "schema",
+                                    "capture_kind",
+                                    "repository",
+                                    "pr",
+                                    "merge_sha",
+                                    "source_run_id",
+                                    "source_run_attempt",
+                                    "context_sha256",
+                                    "diff_sha256",
+                                    "diff_summary_sha256",
+                                )
+                            },
+                            "raw": r["raw"],
+                            "omissions": r.get("omissions", []),
+                        }
+                        for r in parsed
+                    ],
+                },
+                root=read_root,
             )
         )
         if len(parsed) != 1:
@@ -446,3 +489,56 @@ def cached_archive(root, sha):
     if len(data) > evidence.MAX_ARCHIVE_BYTES or hashlib.sha256(data).hexdigest() != sha:
         raise ValueError("retained verifier archive digest mismatch")
     return data
+
+
+class HistoryIncomplete(ValueError):
+    """The current server page cannot establish relevant history coverage."""
+
+
+def history_runs(repo, merge_time, read):
+    """Walk the existing unfiltered REST history until the merge cutoff."""
+    page = 1
+    seen = set()
+    consumed = 0
+    expected_total = None
+    oldest = None
+    while True:
+        endpoint = f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100"
+        if page > 1:
+            endpoint += f"&page={page}"
+        doc = read(endpoint)
+        rows = doc.get("workflow_runs")
+        total = doc.get("total_count")
+        if (
+            not isinstance(rows, list)
+            or len(rows) > 100
+            or type(total) is not int
+            or total < 0
+            or total < consumed + len(rows)
+            or (expected_total is not None and total != expected_total)
+        ):
+            raise HistoryIncomplete("consistent complete verifier history pages")
+        expected_total = total
+        try:
+            times = [timestamp(r["created_at"]) for r in rows]
+        except (ValueError, TypeError, KeyError):
+            raise HistoryIncomplete("complete verifier run timestamps") from None
+        if times != sorted(times, reverse=True) or (
+            oldest is not None and times and max(times) > oldest
+        ):
+            raise HistoryIncomplete("stable newest-first verifier history pages")
+        if not rows and consumed < total:
+            raise HistoryIncomplete("nonempty remaining verifier history page")
+        for run, created in zip(rows, times, strict=True):
+            key = (run.get("id"), run.get("run_attempt"))
+            if key in seen:
+                raise HistoryIncomplete("nonrepeating verifier history pages")
+            seen.add(key)
+            if created < merge_time:
+                return
+            yield run
+        consumed += len(rows)
+        if consumed >= total:
+            return
+        oldest = min(times) if times else oldest
+        page += 1

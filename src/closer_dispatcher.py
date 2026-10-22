@@ -1873,7 +1873,7 @@ class Closer:
             return self.runtime_binding.execute(target, action, fresh, operation, native_effect)
         return native_effect()  # deployed legacy invocation retains its native guards
 
-    def _verification_preflight(self, target, snapshot, *, gh=None):
+    def _verification_preflight(self, target, snapshot, *, gh=None, check_current=True):
         gh = gh or self.gh
         if snapshot["state"] != "MERGED" or not SHA.fullmatch(str(snapshot.get("merge"))):
             return {"status": "blocked", "reason": "verification requires exact merged commit"}
@@ -1886,7 +1886,9 @@ class Closer:
 
         def read(endpoint):
             value = gh.api(endpoint)
-            reads.append(boundary.observation(endpoint, value, root=root))
+            reads.append(
+                boundary.observation(endpoint, value, root=root if check_current else None)
+            )
             return value
 
         def preflight():
@@ -1978,12 +1980,8 @@ class Closer:
                         "next_trigger": closer_queue.verifier_resource_wait_event(proof),
                     }
 
-            endpoint = f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100"
-            recent = read(endpoint)
-            rows = recent.get("workflow_runs")
-            merged_at = snapshot.get("merged_at")
             try:
-                merge_time = boundary.timestamp(merged_at)
+                merge_time = boundary.timestamp(snapshot.get("merged_at"))
             except (ValueError, TypeError):
                 return boundary.pending(
                     snapshot,
@@ -1992,67 +1990,28 @@ class Closer:
                     reads,
                     ["authoritative merge time to bound verifier history"],
                 )
-            if (
-                not isinstance(rows, list)
-                or type(recent.get("total_count")) is not int
-                or any(
-                    not isinstance(run, dict) or not isinstance(run.get("created_at"), str)
-                    for run in rows
-                )
-            ):
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "history_incomplete",
-                    reads,
-                    ["complete relevant verifier history"],
-                )
-            try:
-                times = [boundary.timestamp(run["created_at"]) for run in rows]
-            except (ValueError, TypeError):
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "history_incomplete",
-                    reads,
-                    ["complete verifier run timestamps"],
-                )
-            if recent["total_count"] < len(rows):
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "history_incomplete",
-                    reads,
-                    ["consistent verifier history inventory"],
-                )
-            if recent["total_count"] > len(rows) and (not times or min(times) >= merge_time):
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "history_incomplete",
-                    reads,
-                    ["complete relevant verifier history"],
-                )
-            candidates = [
-                run
-                for run, created in zip(rows, times, strict=True)
-                if created >= merge_time and not boundary.explicitly_foreign(run, target)
-            ]
-            if len(candidates) > 8:
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "attribution_pending",
-                    reads,
-                    ["bounded targeted attribution of relevant verifier runs"],
-                )
             fetch = native_artifact_fetcher(snapshot)
             deadline = time.monotonic() + max(
                 0, getattr(gh, "deadline", time.time() + 30) - time.time()
             )
-            for run in candidates:
+            acquisitions = {"remaining": 8}
+            for run in boundary.history_runs(repo, merge_time, read):
+                if time.monotonic() >= deadline:
+                    raise RoundDeadlineExhausted(
+                        deadline=gh.deadline, remaining_seconds=gh.deadline - time.time()
+                    )
+                if boundary.explicitly_foreign(run, target):
+                    continue
                 relation, requirement = boundary.attribute(
-                    run, snapshot, gh.api, fetch, root, deadline=deadline, reads=reads
+                    run,
+                    snapshot,
+                    gh.api,
+                    fetch,
+                    root,
+                    deadline=deadline,
+                    reads=reads,
+                    acquisition_budget=acquisitions,
+                    retain_reads=check_current,
                 )
                 if relation == "foreign":
                     continue
@@ -2092,22 +2051,32 @@ class Closer:
                         {"number": p["number"]} for p in run["pull_requests"]
                     ]
                 return result
-            current = gh.snapshot(snapshot["target"])
-            reads.append(boundary.observation("snapshot:" + snapshot["target"], current, root=root))
-            if current["revision"] != snapshot["revision"] or "verify:compare" in current["labels"]:
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "state_changed",
-                    reads,
-                    ["fresh native re-screen of changed revision or existing verification request"],
+            if check_current:
+                current = gh.snapshot(snapshot["target"])
+                reads.append(
+                    boundary.observation("snapshot:" + snapshot["target"], current, root=root)
                 )
+                if (
+                    current["revision"] != snapshot["revision"]
+                    or "verify:compare" in current["labels"]
+                ):
+                    return boundary.pending(
+                        snapshot,
+                        target,
+                        "state_changed",
+                        reads,
+                        [
+                            "fresh native re-screen of changed revision or existing verification request"
+                        ],
+                    )
             return None
 
         try:
             result = preflight()
         except Exception as exc:
             reads.append(boundary.observation("verifier-prewrite-read", error=exc))
+            if isinstance(exc, boundary.HistoryIncomplete):
+                return boundary.pending(snapshot, target, "history_incomplete", reads, [str(exc)])
             if isinstance(exc, RoundCapacityDeferred):
                 return boundary.pending(
                     snapshot,
@@ -2160,7 +2129,7 @@ class Closer:
             return snapshot
         try:
             result = self._verification_preflight(
-                snapshot.get("pr_target", snapshot["target"]), snapshot, gh=gh
+                snapshot.get("pr_target", snapshot["target"]), snapshot, gh=gh, check_current=False
             )
         except Exception as exc:
             return {**snapshot, "verifier_attribution_pending": {"error_type": type(exc).__name__}}

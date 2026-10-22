@@ -44,15 +44,17 @@ def _continuity_held(state, reason):
     ownership_state = ownership_state if isinstance(ownership_state, dict) else {{}}
     if isinstance(carry, dict):
         for target, row in targets.items():
-            if isinstance(row, dict) and row.get("head") and row.get("delivery_owner") in {{"closer", "orphan", "maintenance"}}:
+            if isinstance(row, dict) and row.get("head") and isinstance(row.get("delivery_owner"), str) and row.get("delivery_owner") in {{"closer", "orphan", "maintenance"}}:
                 carry.setdefault(target, {{"target": target, "pr_target": row.get("pr_target"), "owner": row["delivery_owner"]}})
     rows, ownership = [], {{}}
     for target, raw in (carry.items() if isinstance(carry, dict) else []):
         old = raw if isinstance(raw, dict) else {{}}
         known = ownership_state.get(target, {{}})
         known = known if isinstance(known, dict) else {{}}
-        owner = old.get("owner") or known.get("owner")
-        if isinstance(target, str) and "#" in target and owner in {{"closer", "orphan", "maintenance"}}:
+        owner = old.get("owner")
+        if not isinstance(owner, str):
+            owner = known.get("owner")
+        if isinstance(target, str) and "#" in target and isinstance(owner, str) and owner in {{"closer", "orphan", "maintenance"}}:
             rows.append({{"target": target, "lane": owner, "delivery_owner": owner,
                          "execution_state": "held", "action": "Continuity integrity wait: " + reason}})
             ownership[target] = {{"owner": owner, "state": "held", "via": [], "action": rows[-1]["action"]}}
@@ -80,7 +82,7 @@ def _continuity_held(state, reason):
                     __import__(__name__), state, prs, now, terminal, (held, challenge, retry))
                 warnings.extend("Delivery continuity " + failure["target"] + ": " + failure["reason"]
                                 for failure in continuity.get("failures", []))
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as exc:
                 warnings.append("Delivery continuity held: " + str(exc))
                 continuity = _continuity_held(state, str(exc))
 """ + PRE,
@@ -90,7 +92,7 @@ def _continuity_held(state, reason):
         """        if not errors and continuity is not None:
             try:
                 _continuity_module().merge_plan(continuity, routes, observations, ownership, waits)
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as exc:
                 warnings.append("Delivery continuity held: " + str(exc))
                 continuity = _continuity_held(state, str(exc))
                 for row in continuity["rows"]:
@@ -104,6 +106,8 @@ def _continuity_held(state, reason):
         SAVE,
         """            if continuity is not None:
                 state["delivery_continuity"] = continuity["carry"]
+                state["delivery_continuity_failures"] = continuity.get(
+                    "failures", state.get("delivery_continuity_failures", []))
 """ + SAVE,
     )
     compile(source, "<rendered-demand-router>", "exec")

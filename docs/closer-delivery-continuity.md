@@ -56,6 +56,12 @@ required merely to establish identity. Contradictory or incomplete identity is a
 explicit recoverable read requirement; positively identified foreign runs do not
 block the subject's verification request.
 
+History reads follow the existing workflow endpoint through the merge-time cutoff.
+An acquisition limit bounds new archive downloads per observation; verified retained
+archives preserve progress on the next observation. Incomplete or unstable pages
+remain recoverable reads. Repeated observations retain archive provenance without
+writing another copy of unchanged polling payloads.
+
 A proven same-delivery result returns to the existing evidence collection path.
 Collection seals diagnostic evidence; it does not fabricate PASS, source
 acceptance, a merge result, or a completed verification response judgment. Server

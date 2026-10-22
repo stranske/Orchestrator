@@ -617,19 +617,20 @@ def _native_prewrite_inner(path, frontier, target, row, *, contract):
                 inspect(child)
 
     inspect(doc)
-    return {
+    boundary = {
         "path": str(inner),
         "sha256": sha,
         "operation_id": op["id"],
         "operation_sha256": _digest(op),
-        "subject_pr": subject,
-        "source_contract": contract["candidate"],
         "next_trigger": (
             f"github-verifier-result:{subject}:{op['result']['run_id']}:identity-reconciled"
             if contract["source_alias"]
             else f"github-verifier-resource:{target.split('#')[0]}:{op['result']['run_id']}:terminal"
         ),
     }
+    if contract["source_alias"]:
+        boundary.update(subject_pr=subject, source_contract=contract["candidate"])
+    return boundary
 
 
 def _retire_native_boundary(root, path, target, frontier, record):

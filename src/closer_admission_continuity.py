@@ -57,6 +57,7 @@ def plan(
     observe: Callable[[str], Mapping[str, Any]],
     policy: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
     now: float,
+    ownership_hints: Mapping[str, Any] | None = None,
 ) -> dict:
     """Reobserve exact locators. Old ownership never authorizes a current effect.
 
@@ -70,9 +71,52 @@ def plan(
         if isinstance(target, str) and TARGET.fullmatch(target):
             candidates.setdefault(target, copy.deepcopy(seed))
     rows, ownership, retained, retired, failures = [], {}, {}, [], []
-    for target, old in sorted(candidates.items()):
-        if not TARGET.fullmatch(target) or not isinstance(old, dict):
-            raise ValueError("malformed continuity locator")
+
+    def failed(target, old, reason):
+        failure = {
+            "target": str(target),
+            "reason": reason,
+            "status": "unresolved",
+            "observed_at": now,
+            "requirement": "fresh authoritative delivery identity, owner and holds",
+            "next_trigger": "fresh complete source/PR observation or scoped owner disposition",
+        }
+        # Malformed scalar bytes remain exactly retained; diagnostics are a
+        # separate field in the SAME controller state, never an executable row.
+        retained[target] = {**old, "last_failure": failure} if isinstance(old, dict) else old
+        failures.append(failure)
+        known = (ownership_hints or {}).get(target)
+        known = known if isinstance(known, Mapping) else {}
+        owner = old.get("owner") if isinstance(old, dict) else None
+        if not isinstance(owner, str):
+            owner = known.get("owner")
+        if (
+            isinstance(target, str)
+            and TARGET.fullmatch(target)
+            and isinstance(owner, str)
+            and owner in LANES
+        ):
+            row = {
+                "target": target,
+                "lane": owner,
+                "delivery_owner": owner,
+                "execution_state": "held",
+                "action": "Reobserve delivery continuity: " + reason,
+                "eligibility_reason": "delivery_continuity_unresolved",
+                "observed_at": now,
+            }
+            rows.append(row)
+            ownership[target] = {
+                "owner": owner,
+                "state": "held",
+                "action": row["action"],
+                "via": [],
+            }
+
+    for target, old in sorted(candidates.items(), key=lambda pair: str(pair[0])):
+        if not isinstance(target, str) or not TARGET.fullmatch(target) or not isinstance(old, dict):
+            failed(target, old, "malformed_continuity_locator")
+            continue
         try:
             fresh = dict(observe(target))
             subject = fresh.get("pr_target")
@@ -89,7 +133,7 @@ def plan(
                 raise ValueError("fresh delivery identity/association incomplete or changed")
             decision = dict(policy(target, fresh))
             owner = decision.get("owner")
-            if owner not in LANES:
+            if not isinstance(owner, str) or owner not in LANES:
                 raise ValueError("current owner removed or unsupported")
             resolution = fresh.get("final_resolution")
             if (
@@ -148,36 +192,8 @@ def plan(
                 "verifier_material_epoch": fresh.get("verifier_material_epoch"),
                 "diagnostic_coverage": decision.get("diagnostic_coverage"),
             }
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-            # Keep exact prior locator, not active authority, on incomplete reads.
-            retained[target] = {
-                **old,
-                "last_failure": {
-                    "reason": str(exc),
-                    "observed_at": now,
-                    "requirement": "fresh authoritative delivery identity, owner and holds",
-                    "next_trigger": "fresh complete source/PR observation or scoped owner disposition",
-                },
-            }
-            owner = old.get("owner")
-            if owner in LANES:
-                row = {
-                    "target": target,
-                    "lane": owner,
-                    "delivery_owner": owner,
-                    "execution_state": "held",
-                    "action": "Reobserve delivery continuity: " + str(exc),
-                    "eligibility_reason": "delivery_continuity_unresolved",
-                    "observed_at": now,
-                }
-                rows.append(row)
-                ownership[target] = {
-                    "owner": owner,
-                    "state": "held",
-                    "action": row["action"],
-                    "via": [],
-                }
-            failures.append({"target": target, "reason": str(exc), "status": "unresolved"})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as exc:
+            failed(target, old, str(exc))
     return {
         "rows": rows,
         "ownership": ownership,
@@ -220,11 +236,18 @@ def prepare_controller(
     into the same state by its owner; this API never imports a task cohort.
     """
     seeds = []
-    prior = state.get("targets", {})
-    ownership = state.get("delivery_ownership", {})
+    prior = state.get("targets") or {}
+    ownership = state.get("delivery_ownership") or {}
+    if not isinstance(prior, Mapping) or not isinstance(ownership, Mapping):
+        raise ValueError("malformed persisted controller ownership")
     for target, row in prior.items():
-        owner = ownership.get(target, {}).get("owner") or row.get("delivery_owner")
-        if owner in LANES and SHA.fullmatch(str(row.get("head", ""))):
+        if not isinstance(row, Mapping):
+            continue
+        owned = ownership.get(target) or {}
+        if not isinstance(owned, Mapping):
+            continue
+        owner = owned.get("owner") or row.get("delivery_owner")
+        if isinstance(owner, str) and owner in LANES and SHA.fullmatch(str(row.get("head", ""))):
             seeds.append(
                 {
                     "target": target,
@@ -242,7 +265,7 @@ def prepare_controller(
     for node in prs.get("nodes", []):
         target = f"{router.inventory.repo(node)}#{node['number']}"
         owner = router.pr_owner(node)
-        if owner in LANES:
+        if isinstance(owner, str) and owner in LANES:
             carry.setdefault(
                 target,
                 {
@@ -312,6 +335,15 @@ def prepare_controller(
     locators = {**{s["target"]: s for s in seeds}, **carry}
     source_holds = {}
 
+    def source_labels(source: dict, role: str = "source") -> set[str]:
+        labels = source.get("labels")
+        nodes = labels.get("nodes") if isinstance(labels, Mapping) else None
+        if not isinstance(nodes, list) or any(
+            not isinstance(n, Mapping) or not isinstance(n.get("name"), str) for n in nodes
+        ):
+            raise ValueError(role + "_hold_inventory_unavailable")
+        return {n["name"] for n in nodes}
+
     def observe(target: str) -> dict:
         source = read_node(target)
         subject = target
@@ -328,17 +360,16 @@ def prepare_controller(
                 f"{router.inventory.repo(n)}#{n['number']}".lower() for n in links
             }:
                 raise ValueError("current source/delivery association is absent or ambiguous")
-            source_holds[target] = {n["name"] for n in source.get("labels", {}).get("nodes", [])}
+            source_holds[target] = source_labels(source)
         if node.get("__typename") != "PullRequest":
             raise ValueError("delivery object is not a pull request")
+        delivery_labels = source_labels(node, "delivery")
+        source_holds.setdefault(target, set()).update(delivery_labels)
         linked = node.get("closingIssuesReferences") or {}
         if (linked.get("pageInfo") or {}).get("hasNextPage"):
             raise ValueError("linked source hold inventory incomplete")
-        source_holds.setdefault(target, set()).update(
-            label["name"]
-            for source_node in linked.get("nodes", [])
-            for label in (source_node.get("labels") or {}).get("nodes", [])
-        )
+        for source_node in linked.get("nodes", []):
+            source_holds.setdefault(target, set()).update(source_labels(source_node))
         old = locators[target]
         baseline = old.get("verifier_material")
         material = dict(baseline or {})
@@ -379,20 +410,25 @@ def prepare_controller(
     def policy(target: str, fresh: Mapping[str, Any]) -> dict:
         node = nodes[target]
         subject = f"{router.inventory.repo(node)}#{node['number']}"
-        local_state, local_terminal = state, terminal or {}
+        local_state = state
+        local_terminal = copy.deepcopy(terminal or {})
+        coverage = local_terminal.get("coverage_json") or {}
+        if not isinstance(coverage, Mapping):
+            coverage = {}
+        local_terminal["coverage_json"] = dict(coverage)
         if subject != target:
             local_state = copy.deepcopy(state)
             if target in local_state.get("targets", {}):
                 local_state["targets"][subject] = local_state["targets"][target]
-            local_terminal = copy.deepcopy(terminal or {})
-            coverage = local_terminal.get("coverage_json", {})
+            coverage = local_terminal["coverage_json"]
             if target in coverage:
                 coverage[subject] = coverage[target]
             if local_terminal.get("selected_target") == target:
                 local_terminal["selected_target"] = subject
         retained_coverage = locators[target].get("diagnostic_coverage")
-        if isinstance(retained_coverage, dict) and subject not in local_terminal.get(
-            "coverage_json", {}
+        if (
+            isinstance(retained_coverage, dict)
+            and local_terminal["coverage_json"].get(subject) is None
         ):
             local_terminal = copy.deepcopy(local_terminal)
             local_terminal.setdefault("coverage_json", {})[subject] = retained_coverage
@@ -406,9 +442,7 @@ def prepare_controller(
         reason = normal.get("action")
         owner = router.pr_owner(node)
         ordinary_route = any(row.get("target") == subject for row in normal_routes.get(owner, []))
-        labels = source_holds.get(target, set()) | {
-            n["name"] for n in node.get("labels", {}).get("nodes", [])
-        }
+        labels = source_holds.get(target, set())
         paused = bool(
             labels
             & {
@@ -440,7 +474,7 @@ def prepare_controller(
             },
             "diagnostic_coverage": {
                 k: v
-                for k, v in local_terminal.get("coverage_json", {}).get(subject, {}).items()
+                for k, v in (local_terminal["coverage_json"].get(subject) or {}).items()
                 if k
                 in {
                     "head",
@@ -455,7 +489,7 @@ def prepare_controller(
             "reason": "Current source/PR hold" if paused else reason,
         }
 
-    result = plan(carry, seeds, observe=observe, policy=policy, now=now)
+    result = plan(carry, seeds, observe=observe, policy=policy, now=now, ownership_hints=ownership)
     result["carry"].update(deferred)
     return result
 

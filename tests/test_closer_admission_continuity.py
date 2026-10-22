@@ -152,6 +152,7 @@ def test_controller_adapter_uses_fresh_exact_query_and_normal_orphan_owner():
     seen = []
     node = {
         "__typename": "PullRequest",
+        "labels": {"nodes": []},
         "number": 12,
         "repository": {"nameWithOwner": "owner/repo"},
         "state": "MERGED",
@@ -346,6 +347,7 @@ def test_actual_controller_coverage_parks_continuity_and_body_change_reenters():
     router = actual_controller_functions()
     node = {
         "__typename": "PullRequest",
+        "labels": {"nodes": []},
         "number": 12,
         "repository": {"nameWithOwner": "owner/repo"},
         "state": "MERGED",
@@ -389,6 +391,7 @@ def test_rendered_actual_controller_report_wakes_but_discussion_and_source_pause
     router = actual_controller_functions(rendered=True)
     node = {
         "__typename": "PullRequest",
+        "labels": {"nodes": []},
         "number": 12,
         "repository": {"nameWithOwner": "owner/repo"},
         "state": "MERGED",
@@ -475,7 +478,9 @@ def test_rendered_integrity_failure_parks_own_carry_without_global_error(tmp_pat
 
     module = tmp_path / "module.py"
     module.write_text("# valid pin at render time\n")
-    original = (Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt").read_text()
+    original = (
+        Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt"
+    ).read_text()
     rendered = renderer().render(original, module, hashlib.sha256(module.read_bytes()).hexdigest())
     tree = ast.parse(rendered)
     helper = [
@@ -499,8 +504,18 @@ def test_rendered_integrity_failure_parks_own_carry_without_global_error(tmp_pat
     )
 
 
+@pytest.mark.parametrize(
+    "helper_failure,good_carried,bad_owner",
+    [
+        (False, False, False),
+        (True, False, False),
+        (False, True, False),
+        (False, True, True),
+        (True, True, True),
+    ],
+)
 def test_actual_rendered_main_malformed_carry_keeps_unrelated_open_assignment(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, helper_failure, good_carried, bad_owner
 ):
     import argparse
     import ast
@@ -512,7 +527,14 @@ def test_actual_rendered_main_malformed_carry_keeps_unrelated_open_assignment(
     import types
 
     module_path = Path(continuity.__file__)
-    contract = (Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt").read_text()
+    if helper_failure:
+        module_path = tmp_path / "attribute-failure-helper.py"
+        module_path.write_text(
+            "def prepare_controller(*args):\n    raise AttributeError('malformed record')\n"
+        )
+    contract = (
+        Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt"
+    ).read_text()
     rendered = renderer().render(
         contract, module_path, hashlib.sha256(module_path.read_bytes()).hexdigest()
     )
@@ -527,6 +549,15 @@ def test_actual_rendered_main_malformed_carry_keeps_unrelated_open_assignment(
         "targets": {},
         "delivery_ownership": {TARGET: {"owner": "orphan"}},
     }
+    if bad_owner:
+        state["delivery_continuity"][TARGET] = {"owner": ["bad"]}
+        state["targets"][TARGET] = {"head": HEAD, "delivery_owner": ["bad"]}
+        state["delivery_ownership"][TARGET] = {"owner": ["bad"]}
+    if good_carried:
+        state["delivery_continuity"]["owner/repo#14"] = {
+            "target": "owner/repo#14",
+            "owner": "orphan",
+        }
     saved = {}
     lanes = {name: None for name in ["opener", "closer", "orphan", "escalator", "maintenance"]}
     actual = {
@@ -537,6 +568,27 @@ def test_actual_rendered_main_malformed_carry_keeps_unrelated_open_assignment(
         repo=lambda n: n["repository"]["nameWithOwner"],
         ROOT=root.parent,
         labels=lambda node: [],
+        run=lambda *a, **kw: (
+            0,
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issueOrPullRequest": {
+                                "__typename": "PullRequest",
+                                "labels": {"nodes": []},
+                                "number": 14,
+                                "repository": {"nameWithOwner": "owner/repo"},
+                                "state": "MERGED",
+                                "headRefOid": HEAD,
+                                "mergeCommit": {"oid": MERGE},
+                            }
+                        }
+                    }
+                }
+            ),
+            "",
+        ),
         scoped_blocker_states=lambda: (set(), set(), set()),
         parse_iso=lambda value: None,
         iso_now=lambda: "2026-10-22T00:00:00Z",
@@ -589,10 +641,19 @@ def test_actual_rendered_main_malformed_carry_keeps_unrelated_open_assignment(
     assert fake.main([]) == 0
     assert saved["demand-plan.json"]["errors"] == []
     assert saved["demand-plan.json"]["warnings"]
-    assert [r["target"] for r in saved["orphan-assignment.json"]["targets"]] == [open_target]
-    assert saved["demand-state.json"]["delivery_continuity"][TARGET] == 7
+    expected = (
+        {open_target, "owner/repo#14"} if good_carried and not helper_failure else {open_target}
+    )
+    assert {r["target"] for r in saved["orphan-assignment.json"]["targets"]} == expected
+    if good_carried and not helper_failure:
+        failure = saved["demand-state.json"]["delivery_continuity_failures"][0]
+        assert failure["target"] == TARGET and failure["requirement"] and failure["next_trigger"]
+    retained = saved["demand-state.json"]["delivery_continuity"][TARGET]
+    assert retained["owner"] == ["bad"] if bad_owner else retained == 7
     held = saved["demand-plan.json"]["waiting"]
-    assert any(r["target"] == TARGET and r["execution_state"] == "held" for r in held)
+    assert (
+        any(r["target"] == TARGET and r["execution_state"] == "held" for r in held) is not bad_owner
+    )
 
 
 @pytest.mark.parametrize("which", ["challenge", "retry", "diagnosed_escalator"])
@@ -610,6 +671,7 @@ def test_source_alias_never_reroutes_challenged_or_ignored_delivery_owner(which)
     }
     node = {
         "__typename": "PullRequest",
+        "labels": {"nodes": []},
         "number": 12,
         "repository": {"nameWithOwner": "owner/repo"},
         "state": "MERGED",
@@ -755,3 +817,205 @@ def test_normal_controller_machine_human_label_is_not_confirmed_human_hold(
     )
     assert result["rows"][0]["execution_state"] == expected
     assert result["rows"][0]["lane"] == "closer"
+
+
+def test_null_coverage_uses_normal_controller_empty_entry_semantics():
+    import json
+
+    router = actual_controller_functions(rendered=True)
+    node = {
+        "__typename": "PullRequest",
+        "labels": {"nodes": []},
+        "number": 12,
+        "repository": {"nameWithOwner": "owner/repo"},
+        "state": "MERGED",
+        "headRefOid": HEAD,
+        "mergeCommit": {"oid": MERGE},
+    }
+    router.QUERY = (
+        "query{search{nodes{... on PullRequest{number repository{nameWithOwner} headRefOid}}}}"
+    )
+    router.inventory.run = lambda *a, **kw: (
+        0,
+        json.dumps({"data": {"repository": {"issueOrPullRequest": node}}}),
+        "",
+    )
+    router.inventory.scoped_blocker_states = lambda: (set(), set(), set())
+    state = {"targets": {TARGET: {"head": HEAD, "delivery_owner": "orphan"}}}
+    result = continuity.prepare_controller(
+        router, state, {"nodes": []}, 10, {"coverage_json": {TARGET: None}}
+    )
+    assert result["rows"][0]["execution_state"] == "active"
+    assert result["carry"][TARGET]["diagnostic_coverage"] == {}
+
+
+@pytest.mark.parametrize("malformed_prior", [False, True])
+@pytest.mark.parametrize(
+    "labels", [None, {}, {"nodes": None}, {"nodes": [{"name": None}]}, {"nodes": []}]
+)
+def test_nullable_source_labels_and_persisted_rows_stay_item_scoped(malformed_prior, labels):
+    import json
+
+    router = actual_controller_functions(rendered=True)
+    source_target = "owner/repo#11"
+    source = {
+        "__typename": "Issue",
+        "number": 11,
+        "repository": {"nameWithOwner": "owner/repo"},
+        "state": "CLOSED",
+        "labels": labels,
+    }
+    node = {
+        "__typename": "PullRequest",
+        "labels": {"nodes": []},
+        "number": 12,
+        "repository": {"nameWithOwner": "owner/repo"},
+        "state": "MERGED",
+        "headRefOid": HEAD,
+        "mergeCommit": {"oid": MERGE},
+        "closingIssuesReferences": {"nodes": [source]},
+        "body": "original request",
+    }
+    router.QUERY = (
+        "query{search{nodes{... on PullRequest{number repository{nameWithOwner} headRefOid body}}}}"
+    )
+    router.inventory.run = lambda argv, **kw: (
+        0,
+        json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "issueOrPullRequest": source if argv[-1] == "number=11" else node
+                    }
+                }
+            }
+        ),
+        "",
+    )
+    state = {
+        "delivery_continuity": {
+            source_target: {"target": source_target, "pr_target": TARGET, "owner": "orphan"}
+        },
+        "targets": {
+            source_target: None if malformed_prior else {"head": HEAD, "delivery_owner": "orphan"},
+            "owner/repo#99": 7,
+        },
+        "delivery_ownership": {source_target: None},
+    }
+    result = continuity.prepare_controller(
+        router, state, {"nodes": []}, 10, {}, (set(), set(), set())
+    )
+    assert result["rows"][0]["target"] == source_target
+    unavailable = labels != {"nodes": []}
+    assert result["rows"][0]["execution_state"] == (
+        "held" if malformed_prior or unavailable else "active"
+    )
+    if malformed_prior or unavailable:
+        assert result["failures"][0]["target"] == source_target
+        assert result["carry"][source_target]["last_failure"]["next_trigger"]
+    if unavailable:
+        assert result["failures"][0]["reason"] == "source_hold_inventory_unavailable"
+
+
+def test_attribute_error_during_one_observation_keeps_other_owner_eligible():
+    other = "owner/repo#13"
+
+    def observe(target):
+        if target == TARGET:
+            raise AttributeError("malformed optional observation")
+        return snapshot(target=other, pr_target=other)
+
+    result = continuity.plan(
+        {TARGET: {"owner": "orphan"}, other: {"owner": "orphan"}},
+        [],
+        observe=observe,
+        policy=lambda *a: {"owner": "orphan", "held": False, "dependency": None},
+        now=10,
+    )
+    assert {r["target"]: r["execution_state"] for r in result["rows"]} == {
+        TARGET: "held",
+        other: "active",
+    }
+
+
+def test_bad_carried_scalar_does_not_park_good_carried_merged_delivery():
+    good = "owner/repo#13"
+    observed = []
+
+    def observe(target):
+        observed.append(target)
+        return snapshot(target=target, pr_target=target)
+
+    result = continuity.plan(
+        {TARGET: 7, good: {"target": good, "owner": "orphan"}},
+        [],
+        observe=observe,
+        policy=lambda *a: {"owner": "orphan", "held": False, "dependency": None},
+        now=10,
+    )
+    assert observed == [good]
+    assert result["carry"][TARGET] == 7
+    assert result["rows"][0]["target"] == good and result["rows"][0]["execution_state"] == "active"
+    assert result["failures"][0]["target"] == TARGET
+    assert result["failures"][0]["requirement"] and result["failures"][0]["next_trigger"]
+
+
+@pytest.mark.parametrize(
+    "bad_target,hint,held",
+    [
+        (TARGET, {"owner": "orphan"}, True),
+        (TARGET, None, False),
+        ("invalid-target", {"owner": "orphan"}, False),
+    ],
+)
+def test_malformed_locator_hold_requires_real_owner_and_valid_target(bad_target, hint, held):
+    good = "owner/repo#13"
+    result = continuity.plan(
+        {bad_target: 7, good: {"owner": "orphan"}},
+        [],
+        observe=lambda target: snapshot(target=target, pr_target=target),
+        policy=lambda *a: {"owner": "orphan", "held": False, "dependency": None},
+        now=10,
+        ownership_hints={bad_target: hint},
+    )
+    assert result["carry"][bad_target] == 7
+    assert {row["target"] for row in result["rows"] if row["execution_state"] == "held"} == (
+        {bad_target} if held else set()
+    )
+    assert any(
+        row["target"] == good and row["execution_state"] == "active" for row in result["rows"]
+    )
+
+
+@pytest.mark.parametrize("labels", [None, {}, {"nodes": []}])
+def test_direct_delivery_hold_inventory_must_be_observed(labels):
+    import json
+
+    router = actual_controller_functions(rendered=True)
+    router.QUERY = (
+        "query{search{nodes{... on PullRequest{number repository{nameWithOwner} headRefOid body}}}}"
+    )
+    node = {
+        "__typename": "PullRequest",
+        "number": 12,
+        "repository": {"nameWithOwner": "owner/repo"},
+        "state": "MERGED",
+        "headRefOid": HEAD,
+        "mergeCommit": {"oid": MERGE},
+        "labels": labels,
+    }
+    router.inventory.run = lambda *args, **kwargs: (
+        0,
+        json.dumps({"data": {"repository": {"issueOrPullRequest": node}}}),
+        "",
+    )
+    state = {"delivery_continuity": {TARGET: {"target": TARGET, "owner": "orphan"}}}
+    result = continuity.prepare_controller(
+        router, state, {"nodes": []}, 10, {}, (set(), set(), set())
+    )
+    if labels == {"nodes": []}:
+        assert result["rows"][0]["execution_state"] == "active"
+        assert result["failures"] == []
+    else:
+        assert result["rows"][0]["execution_state"] == "held"
+        assert result["failures"][0]["reason"] == "delivery_hold_inventory_unavailable"

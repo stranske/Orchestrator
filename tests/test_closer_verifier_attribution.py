@@ -31,7 +31,7 @@ def archive(
     runid=99,
     manifest_only=False,
     duplicate_key=False,
-    duplicate_manifest=False
+    duplicate_manifest=False,
 ):
     files = {
         "verifier-context.md": b"full retained original requirements",
@@ -702,3 +702,148 @@ def test_normal_diagnostic_collector_revalidates_reference_not_boolean_permissio
     assert section["status"] == "unknown"
     assert not (section.get("content") or {}).get("artifacts")
     assert not world.posts
+
+
+@pytest.fixture
+def history_world(world, monkeypatch):
+    w = world
+    original = w.backend.gh.api
+    w.runs = []
+    w.archives = {}
+    w.pages = []
+    w.fail_page = None
+    w.downloads = []
+
+    def api(endpoint, **kwargs):
+        if kwargs.get("method") == "POST":
+            return original(endpoint, **kwargs)
+        if "/actions/workflows/agents-verifier.yml/runs?" in endpoint:
+            if "&status=" in endpoint:
+                return {"total_count": 0, "workflow_runs": []}
+            page = int(endpoint.rsplit("&page=", 1)[-1]) if "&page=" in endpoint else 1
+            w.pages.append(page)
+            if w.fail_page == page:
+                raise native.RoundCapacityDeferred(
+                    resource="core",
+                    throttle={"action": "defer", "reset_in_s": 60},
+                    observed_at=1792640000,
+                )
+            return {
+                "total_count": len(w.runs),
+                "workflow_runs": w.runs[(page - 1) * 100 : page * 100],
+            }
+        if endpoint.endswith("/artifacts?per_page=100"):
+            rid = int(endpoint.split("/runs/")[1].split("/")[0])
+            data = w.archives[rid]
+            run = next(r for r in w.runs if r["id"] == rid)
+            return {
+                "total_count": 1,
+                "artifacts": [
+                    {
+                        "id": rid * 10,
+                        "name": f"comparison-results-{rid}",
+                        "expired": False,
+                        "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
+                        "size_in_bytes": len(data),
+                        "workflow_run": {"id": rid, "head_sha": run["head_sha"]},
+                    }
+                ],
+            }
+        return original(endpoint, **kwargs)
+
+    def fetch(a, **_k):
+        rid = a["workflow_run"]["id"]
+        w.downloads.append(rid)
+        return w.archives[rid]
+
+    w.backend.gh.api = api
+    monkeypatch.setattr(native, "native_artifact_fetcher", lambda _: fetch)
+
+    def populate(count, *, linked=False):
+        for i in range(count):
+            run = copy.deepcopy(w.run)
+            run["id"] = 1000 + i
+            if linked:
+                run.update(event="pull_request_target", pull_requests=[{"number": 858}])
+            w.runs.append(run)
+            w.archives[run["id"]] = archive(runid=run["id"])
+
+    w.populate = populate
+    return w
+
+
+def test_nine_cold_foreign_runs_progress_eight_then_one_without_permanent_window(history_world):
+    w = history_world
+    w.populate(9)
+    first = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert first["status"] == "resource_wait" and len(w.downloads) == 8 and not w.posts
+    assert first["verifier_resource_wait"]["requirements"] == [
+        "continue verifier attribution after retained acquisition progress"
+    ]
+    validate(first, w.snapshot)
+    second = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert second["status"] == "completed" and len(w.downloads) == 9 and len(w.posts) == 1
+    assert len(set(w.downloads)) == 9
+
+
+def test_history_pagination_finds_same_delivery_after_first_hundred_foreign_runs(history_world):
+    w = history_world
+    w.populate(125, linked=True)
+    w.runs[-1].update(event="workflow_dispatch", pull_requests=[])
+    rid = w.runs[-1]["id"]
+    w.archives[rid] = archive(12, MERGE, runid=rid)
+    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert result["verifier_resource_wait"]["cause"] == "existing_delivery"
+    assert w.pages == [1, 2] and w.downloads == [rid] and not w.posts
+
+
+@pytest.mark.parametrize("change", ["attempt", "digest"])
+def test_retained_foreign_archive_never_hides_changed_server_identity(history_world, change):
+    w = history_world
+    w.populate(9)
+    assert w.backend.initiate_verify(TARGET, w.snapshot)["status"] == "resource_wait"
+    run = w.runs[0]
+    if change == "attempt":
+        run["run_attempt"] = 2
+    else:
+        w.archives[run["id"]] = archive(12, MERGE, runid=run["id"])
+    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert result["status"] == "resource_wait" and not w.posts
+    assert result["verifier_resource_wait"]["cause"] == (
+        "attribution_pending" if change == "attempt" else "existing_delivery"
+    )
+
+
+def test_history_page_capacity_preserves_reset_and_prior_acquisition_progress(history_world):
+    w = history_world
+    w.populate(101, linked=True)
+    # One acquired foreign corpus on page one is retained before the page-two refusal.
+    w.runs[0].update(event="workflow_dispatch", pull_requests=[])
+    w.fail_page = 2
+    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    assert result["verifier_resource_wait"]["cause"] == "capacity_deferred" and not w.posts
+    assert w.downloads == [w.runs[0]["id"]]
+    assert result["verifier_resource_wait"]["control"]["reset_at_epoch"] == 1792640060
+    assert any(
+        r["endpoint"].startswith("archive:")
+        for r in result["verifier_resource_wait"]["observations"]
+    )
+    validate(result, w.snapshot)
+
+
+def test_enrichment_omits_duplicate_core_snapshot_and_retains_no_poll_json(world):
+    world.run["created_at"] = "2026-10-20T00:00:00Z"
+    snapshots = []
+
+    def snapshot(_):
+        snapshots.append(1)
+        return copy.deepcopy(world.current)
+
+    world.backend.gh.snapshot = snapshot
+    before = set(world.backend.verifier_archive_root.rglob("*"))
+    for _ in range(3):
+        assert world.backend.verification_snapshot(world.snapshot) == world.snapshot
+    assert not snapshots
+    assert set(world.backend.verifier_archive_root.rglob("*")) == before
+    world.backend.initiate_verify(TARGET, world.snapshot)
+    assert len(snapshots) == 1 and len(world.posts) == 1
