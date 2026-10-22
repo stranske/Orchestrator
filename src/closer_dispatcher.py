@@ -16,7 +16,7 @@ import json
 import math
 import os
 import re
-import select
+import selectors
 import signal
 import stat
 import subprocess
@@ -3261,22 +3261,23 @@ def collect_native_evidence(
                     if birth:
                         observation["os_started"] = birth
                         closer_resources.finite_pool_process_started(observation)
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("artifact download deadline reached")
-                    ready, _, _ = select.select([proc.stdout.fileno()], [], [], remaining)
-                    if not ready:
-                        raise TimeoutError("artifact download deadline reached")
-                    # Use os.read after readiness. BufferedReader.read(n) can
-                    # continue waiting for n bytes after the pipe becomes quiet.
-                    chunk = os.read(proc.stdout.fileno(), min(65536, max_bytes + 1 - size))
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise ValueError("artifact archive exceeds configured byte cap")
+                with selectors.DefaultSelector() as reader:
+                    reader.register(proc.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("artifact download deadline reached")
+                        if not reader.select(remaining):
+                            raise TimeoutError("artifact download deadline reached")
+                        # Use os.read after readiness. BufferedReader.read(n) can
+                        # continue waiting for n bytes after the pipe becomes quiet.
+                        chunk = os.read(proc.stdout.fileno(), min(65536, max_bytes + 1 - size))
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        size += len(chunk)
+                        if size > max_bytes:
+                            raise ValueError("artifact archive exceeds configured byte cap")
                 rc = proc.wait(timeout=max(0.05, min(5, deadline - time.monotonic())))
                 try:
                     os.killpg(proc.pid, 0)
