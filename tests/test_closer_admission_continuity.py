@@ -295,7 +295,7 @@ def actual_controller_functions(*, rendered=False):
     import datetime
     import json
 
-    source = (Path(__file__).parent / "fixtures/continuity_controller_contract.py").read_text()
+    source = (Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt").read_text()
     if rendered:
         module = Path(continuity.__file__)
         source = renderer().render(source, module, hashlib.sha256(module.read_bytes()).hexdigest())
@@ -475,7 +475,7 @@ def test_rendered_integrity_failure_parks_own_carry_without_global_error(tmp_pat
 
     module = tmp_path / "module.py"
     module.write_text("# valid pin at render time\n")
-    original = (Path(__file__).parent / "fixtures/continuity_controller_contract.py").read_text()
+    original = (Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt").read_text()
     rendered = renderer().render(original, module, hashlib.sha256(module.read_bytes()).hexdigest())
     tree = ast.parse(rendered)
     helper = [
@@ -512,7 +512,7 @@ def test_actual_rendered_main_malformed_carry_keeps_unrelated_open_assignment(
     import types
 
     module_path = Path(continuity.__file__)
-    contract = (Path(__file__).parent / "fixtures/continuity_controller_contract.py").read_text()
+    contract = (Path(__file__).parent / "fixtures/continuity_controller_contract.py.txt").read_text()
     rendered = renderer().render(
         contract, module_path, hashlib.sha256(module_path.read_bytes()).hexdigest()
     )
