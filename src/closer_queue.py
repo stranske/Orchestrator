@@ -121,6 +121,15 @@ def verifier_resource_wait_proof(operation, target):
     """Validate retained native pre-POST proof; no verdict or effect authority."""
     import re
 
+    import closer_verifier_boundary
+
+    if isinstance(operation, dict) and isinstance(operation.get("result"), dict):
+        candidate = operation["result"].get("verifier_resource_wait")
+        if (
+            isinstance(candidate, dict)
+            and candidate.get("schema") == closer_verifier_boundary.SCHEMA
+        ):
+            return closer_verifier_boundary.validate(operation, target)
     try:
         proof = operation["result"]["verifier_resource_wait"]
         value = {k: v for k, v in proof.items() if k != "sha256"}
@@ -171,6 +180,10 @@ def verifier_resource_wait_proof(operation, target):
 
 
 def verifier_resource_wait_event(proof):
+    import closer_verifier_boundary
+
+    if proof.get("schema") == closer_verifier_boundary.SCHEMA:
+        return closer_verifier_boundary.event(proof)
     run = proof["blocking_run"]
     repo = proof["subject_pr"].split("#")[0]
     return f"github-verifier-resource:{repo}:{run['id']}:attempt:{run['run_attempt']}:terminal"

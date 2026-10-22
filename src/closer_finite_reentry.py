@@ -27,6 +27,13 @@ PREWRITE_CANDIDATE = "6eee61c574408b0a278518b5fda13c45ff2eecee"
 PREWRITE_SOURCE_SHA256 = "925ae7e6458d45ef08548bf70589d08b1cbd744f93c13cd44a444c83db011068"
 PREWRITE_QUEUE_SHA256 = "e82a41e1e5bf9ed88ac50841a8bcc75c08c82e78f14d1058afbfb5873d8216b3"
 PREWRITE_PIPELINE_SHA256 = "e4f5a14d3acd3b0c822c5e182342f05411ecb3c9ce6022c672764da2528d09f1"
+# Second immutable legacy return contract: terminal unlinked manual-run refusal.
+PREWRITE_TERMINAL_CANDIDATE = "8f31a1d1136cb8d27fe2b4bce0eab9a9b4c75a3e"
+PREWRITE_TERMINAL_SOURCE_SHA256 = "087b04a3c9db6f72e2586d7ef104710295c9cacb1886c6c4c874b7ed67ef3dc8"
+PREWRITE_TERMINAL_QUEUE_SHA256 = "982e77c188cd938bbf00d0f25bf8962799fa6cf0bda3ba1b99f41098abf6164d"
+PREWRITE_TERMINAL_PIPELINE_SHA256 = (
+    "a1c69515a1947bd9a0a705ac69543a180aa1db98d7c3120c2026639da0c8b7a0"
+)
 PREWRITE_ERROR = "RuntimeError: inner closer queue did not prove a valid continuation boundary"
 PRE_QUEUE_ERRORS = frozenset(
     f"RuntimeError: legacy {status} operation lacks external-run or live-owner proof; "
@@ -265,6 +272,30 @@ def _snapshot_digest(directory):
     return namespace["snapshot_digest"](directory)
 
 
+def _prewrite_contract(candidate):
+    # Resolve constants at call time so short, byte-pinned fixtures exercise the
+    # same production proof chain without cloning a distribution.
+    if candidate == PREWRITE_CANDIDATE:
+        return {
+            "candidate": PREWRITE_CANDIDATE,
+            "source": PREWRITE_SOURCE_SHA256,
+            "queue": PREWRITE_QUEUE_SHA256,
+            "pipeline": PREWRITE_PIPELINE_SHA256,
+            "reason": "existing or unattributable active verifier run",
+            "source_alias": False,
+        }
+    if candidate == PREWRITE_TERMINAL_CANDIDATE:
+        return {
+            "candidate": PREWRITE_TERMINAL_CANDIDATE,
+            "source": PREWRITE_TERMINAL_SOURCE_SHA256,
+            "queue": PREWRITE_TERMINAL_QUEUE_SHA256,
+            "pipeline": PREWRITE_TERMINAL_PIPELINE_SHA256,
+            "reason": "collect existing verifier result before spending again",
+            "source_alias": True,
+        }
+    raise ValueError("unproven_terminal_native_source")
+
+
 def _native_pre_queue_source(
     path, frontier, target, entry, row, lease, receipts, *, prewrite=False
 ):
@@ -274,6 +305,7 @@ def _native_pre_queue_source(
     installation = _receipt(receipts["installation"])
     source = lifecycle.get("source_identity")
     verification = installation.get("verification")
+    contract = _prewrite_contract(installation.get("candidate_sha")) if prewrite else None
     if (
         lifecycle.get("schema") != "direct-finite-storage/v2"
         or lifecycle.get("status") != "retired"
@@ -283,7 +315,7 @@ def _native_pre_queue_source(
         or source.get("frontier") != frontier
         or installation.get("stage") != "installed"
         or installation.get("candidate_sha")
-        != (PREWRITE_CANDIDATE if prewrite else PRE_QUEUE_CANDIDATE)
+        != (contract["candidate"] if prewrite else PRE_QUEUE_CANDIDATE)
         or not isinstance(verification, dict)
         or verification.get("verified") is not True
         or type(verification.get("exit_code")) is not int
@@ -301,13 +333,13 @@ def _native_pre_queue_source(
         or not module.is_file()
         or module.stat().st_size > 2 * 1024 * 1024
         or hashlib.sha256(module.read_bytes()).hexdigest()
-        != (PREWRITE_SOURCE_SHA256 if prewrite else PRE_QUEUE_SOURCE_SHA256)
+        != (contract["source"] if prewrite else PRE_QUEUE_SOURCE_SHA256)
     ):
         raise ValueError("unsupported_native_pre_queue_source")
     if prewrite:
         for name, expected in {
-            "closer_queue.py": PREWRITE_QUEUE_SHA256,
-            "closer_pipeline.py": PREWRITE_PIPELINE_SHA256,
+            "closer_queue.py": contract["queue"],
+            "closer_pipeline.py": contract["pipeline"],
         }.items():
             selected = _physical(module.parent / name)
             if (
@@ -425,7 +457,7 @@ def _native_prewrite_command(lifecycle, frontier):
         raise ValueError("unsupported_native_prewrite_command")
 
 
-def _native_prewrite_inner(path, frontier, target, row):
+def _native_prewrite_inner(path, frontier, target, row, *, contract):
     """One exact returned prewrite refusal; unrelated history is never consumed."""
     inner = path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json"
     doc, sha = _read(inner)
@@ -438,6 +470,32 @@ def _native_prewrite_inner(path, frontier, target, row):
     prep = row["results"]["prepare"]
     snapshot = _receipt(prep["snapshot_ref"])
     binding = op.get("binding") if isinstance(op, dict) else None
+    subject = target
+    if contract["source_alias"]:
+        subject = snapshot.get("pr_target") or target
+        try:
+            resources.canonical_target(subject)
+            match = resources._TARGET_RE.fullmatch(subject)
+            if not match or int(match.group(3)) <= 0:
+                raise ValueError("not a GitHub PR identity")
+            if snapshot.get("kind") != "pr" or snapshot.get("state") != "MERGED":
+                raise ValueError("not an exact merged PR snapshot")
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("native_prewrite_subject_association_not_proven") from None
+        if subject != target and not (
+            snapshot.get("kind") == "pr"
+            and snapshot.get("state") == "MERGED"
+            and isinstance(snapshot.get("sources"), list)
+            and any(
+                isinstance(source, dict)
+                and source.get("target") == target
+                and source.get("kind") != "pr_request"
+                and isinstance(source.get("body"), str)
+                and source["body"].strip()
+                for source in snapshot["sources"]
+            )
+        ):
+            raise ValueError("native_prewrite_subject_association_not_proven")
     if (
         doc.get("schema") != "closer-queue/v1"
         or not isinstance(bucket, dict)
@@ -457,10 +515,10 @@ def _native_prewrite_inner(path, frontier, target, row):
         or not isinstance(op.get("id"), str)
         or not op["id"]
         or set(op.get("result", {})) != {"reason", "run_id"}
-        or op["result"].get("reason") != "existing or unattributable active verifier run"
+        or op["result"].get("reason") != contract["reason"]
         or type(op["result"].get("run_id")) is not int
         or op["result"]["run_id"] <= 0
-        or binding.get("pr_target") != target
+        or binding.get("pr_target") != subject
         or binding.get("head") != snapshot.get("head")
         or binding.get("merge") != snapshot.get("merge")
         or not isinstance(snapshot.get("merge"), str)
@@ -559,13 +617,20 @@ def _native_prewrite_inner(path, frontier, target, row):
                 inspect(child)
 
     inspect(doc)
-    return {
+    boundary = {
         "path": str(inner),
         "sha256": sha,
         "operation_id": op["id"],
         "operation_sha256": _digest(op),
-        "next_trigger": f"github-verifier-resource:{target.split('#')[0]}:{op['result']['run_id']}:terminal",
+        "next_trigger": (
+            f"github-verifier-result:{subject}:{op['result']['run_id']}:identity-reconciled"
+            if contract["source_alias"]
+            else f"github-verifier-resource:{target.split('#')[0]}:{op['result']['run_id']}:terminal"
+        ),
     }
+    if contract["source_alias"]:
+        boundary.update(subject_pr=subject, source_contract=contract["candidate"])
+    return boundary
 
 
 def _retire_native_boundary(root, path, target, frontier, record):
@@ -719,7 +784,13 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
     if stage == "exception" and "exception" in results:
         raise ValueError("exception_callback_result_requires_reconciliation")
     inner = (
-        _native_prewrite_inner(path, frontier, target, row)
+        _native_prewrite_inner(
+            path,
+            frontier,
+            target,
+            row,
+            contract=_prewrite_contract(_receipt(source_receipts["installation"])["candidate_sha"]),
+        )
         if kind == "native_prewrite_verifier_refusal"
         else _inner_boundary(path, target)
     )

@@ -1315,7 +1315,9 @@ class GitHub:
             "sources": sources,
             "source_inventory": source_inventory,
             "review_revision": review_revision,
-            "active_threads": sum(not t["isResolved"] for t in threads),
+            "active_threads": sum(
+                not t["isResolved"] and not t.get("isOutdated", False) for t in threads
+            ),
             "threads": threads,
             "checks": checks,
             "pending_check_run_ids": pending_check_run_ids,
@@ -1386,6 +1388,9 @@ class Closer:
     ):
         self.gh = github
         self.state_path = Path(state_path)
+        self.verifier_archive_root = (
+            Path(str(self.state_path) + ".evidence") / "verifier-attribution"
+        )
         self.dispositions = dispositions or {}
         self.apply = apply
         self.workers = workers
@@ -1427,6 +1432,7 @@ class Closer:
                     s = self._local_snapshot(target)
                     if s is None:
                         raise
+            s = self.verification_snapshot(s)
             pending = self.integration_pending(target, s)
             action, reason, eligible, trigger = self.select(s)
             if s.get("_local_cached") and action == "complete":
@@ -1456,6 +1462,11 @@ class Closer:
                     "pr_target": s.get("pr_target", target),
                     "source_targets": [x["target"] for x in s.get("sources", [])],
                     "review_revision": s.get("review_revision"),
+                    **(
+                        {"native_diagnostic_reference": s["native_diagnostic_reference"]}
+                        if s.get("native_diagnostic_reference")
+                        else {}
+                    ),
                     "disposition_digest": digest(
                         {
                             k: self.dispositions.get(target, {}).get(k)
@@ -1530,7 +1541,11 @@ class Closer:
     def select(self, s):
         target = s["target"]
         blockers = self.blocker_fn() if self.blocker_fn else self.blockers
-        aliases = [target] + [x["target"] for x in s.get("sources", [])]
+        aliases = list(
+            dict.fromkeys(
+                [target, s.get("pr_target", target)] + [x["target"] for x in s.get("sources", [])]
+            )
+        )
         for alias in aliases:
             if alias in blockers:
                 b = blockers[alias]
@@ -1567,7 +1582,6 @@ class Closer:
                 "agent:paused",
                 "do-not-merge",
                 "hold",
-                "needs-human",
             }
         }
         if holds:
@@ -1642,6 +1656,12 @@ class Closer:
                     )
                 return self.proposal(
                     s, "collect_evidence", "collect original source acceptance evidence"
+                )
+            if s.get("native_diagnostic_reference"):
+                return self.proposal(
+                    s,
+                    "collect_evidence",
+                    "collect terminal or unattributed verifier evidence; do not rerun",
                 )
             if "verify:compare" in s["labels"]:
                 active = [r for r in s.get("verifier_runs", []) if r.get("status") != "completed"]
@@ -1744,7 +1764,7 @@ class Closer:
             fresh = snapshot
         else:
             try:
-                fresh = self.gh.snapshot(target)
+                fresh = self.verification_snapshot(self.gh.snapshot(target))
             except Exception as exc:
                 # This read precedes every remote mutation, so the operation is
                 # known not to have started. Preserve its durable intent for retry.
@@ -1758,6 +1778,14 @@ class Closer:
                 "status": "stale",
                 "reason": "source/review/head changed; reassess",
                 "next_trigger": "fresh observation",
+            }
+        if snapshot.get("native_diagnostic_reference") is not None and digest(
+            snapshot.get("native_diagnostic_reference")
+        ) != digest(fresh.get("native_diagnostic_reference")):
+            return {
+                "status": "not_started",
+                "reason": "native diagnostic run reference changed before action",
+                "next_trigger": "fresh native verifier observation",
             }
         current_action, reason, eligible, trigger = self.select(fresh)
         if not eligible or current_action != action:
@@ -1845,27 +1873,56 @@ class Closer:
             return self.runtime_binding.execute(target, action, fresh, operation, native_effect)
         return native_effect()  # deployed legacy invocation retains its native guards
 
-    def initiate_verify(self, target, snapshot):
+    def _verification_preflight(self, target, snapshot, *, gh=None, check_current=True):
+        gh = gh or self.gh
         if snapshot["state"] != "MERGED" or not SHA.fullmatch(str(snapshot.get("merge"))):
             return {"status": "blocked", "reason": "verification requires exact merged commit"}
-        repo, number = target.split("#")
-        # Existing label addition is an idempotent mechanical transition. Never remove/re-add
-        # or manually rerun here. Unattributable active manual runs conservatively defer.
-        for status in ("queued", "in_progress", "waiting", "requested", "pending"):
-            runs = self.gh.api(
-                f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100&status={status}"
-            )
-            rows = runs.get("workflow_runs", [])
-            if runs.get("total_count", 0) > len(rows):
-                return {
-                    "status": "blocked",
-                    "reason": "active verifier inventory incomplete; inspect before dispatch",
-                }
-            for run in rows:
-                linked = [p.get("number") for p in run.get("pull_requests", [])]
-                if int(number) in linked or not linked:
-                    import closer_queue
+        import closer_queue
+        import closer_verifier_boundary as boundary
 
+        repo, number = target.split("#")
+        root = self.verifier_archive_root
+        reads = []
+
+        def read(endpoint):
+            value = gh.api(endpoint)
+            reads.append(
+                boundary.observation(endpoint, value, root=root if check_current else None)
+            )
+            return value
+
+        def preflight():
+            # Active runs remain a capacity exclusion, independently of attribution.
+            for status in ("queued", "in_progress", "waiting", "requested", "pending"):
+                endpoint = f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100&status={status}"
+                runs = read(endpoint)
+                rows = runs.get("workflow_runs")
+                if (
+                    not isinstance(rows, list)
+                    or type(runs.get("total_count")) is not int
+                    or runs["total_count"] != len(rows)
+                ):
+                    return boundary.pending(
+                        snapshot,
+                        target,
+                        "active_inventory_incomplete",
+                        reads,
+                        ["complete active verifier inventory before dispatch"],
+                    )
+                for run in rows:
+                    linked = run.get("pull_requests") if isinstance(run, dict) else None
+                    if not isinstance(linked, list) or any(
+                        not isinstance(p, dict) or type(p.get("number")) is not int for p in linked
+                    ):
+                        return boundary.pending(
+                            snapshot,
+                            target,
+                            "active_identity_incomplete",
+                            reads,
+                            ["complete active verifier identity before dispatch"],
+                        )
+                    if linked and int(number) not in [p["number"] for p in linked]:
+                        continue
                     proof = {
                         "schema": "closer-verifier-prewrite-wait/v1",
                         "boundary": "before_verify_label_post",
@@ -1909,46 +1966,189 @@ class Closer:
                         closer_queue.verifier_resource_wait_proof(observation, snapshot["target"])
                         is None
                     ):
-                        return {
-                            "status": "blocked",
-                            "reason": "active verifier identity incomplete; inspect before dispatch",
-                        }
+                        return boundary.pending(
+                            snapshot,
+                            target,
+                            "active_identity_incomplete",
+                            reads,
+                            ["complete active verifier identity before dispatch"],
+                        )
                     return {
                         "status": "resource_wait",
                         "reason": "verifier_resource_wait",
                         "verifier_resource_wait": proof,
                         "next_trigger": closer_queue.verifier_resource_wait_event(proof),
                     }
-        recent = self.gh.api(
-            f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100"
-        )
-        rows = recent.get("workflow_runs", [])
-        merged_at = snapshot.get("merged_at")
-        if not merged_at:
-            return {
-                "status": "blocked",
-                "reason": "merge time unknown; cannot bound verifier history",
-            }
-        if recent.get("total_count", 0) > len(rows) and (
-            not rows or min(r.get("created_at", "") for r in rows) >= merged_at
+
+            try:
+                merge_time = boundary.timestamp(snapshot.get("merged_at"))
+            except (ValueError, TypeError):
+                return boundary.pending(
+                    snapshot,
+                    target,
+                    "merge_time_missing",
+                    reads,
+                    ["authoritative merge time to bound verifier history"],
+                )
+            fetch = native_artifact_fetcher(snapshot)
+            deadline = time.monotonic() + max(
+                0, getattr(gh, "deadline", time.time() + 30) - time.time()
+            )
+            acquisitions = {"remaining": 8}
+            # Establish pagination coverage before archive latency can shift pages.
+            # The reader's real deadline/capacity and consistency guards still apply.
+            candidates = list(boundary.history_runs(repo, merge_time, read))
+            for run in candidates:
+                if time.monotonic() >= deadline:
+                    raise RoundDeadlineExhausted(
+                        deadline=gh.deadline, remaining_seconds=gh.deadline - time.time()
+                    )
+                if boundary.explicitly_foreign(run, target):
+                    continue
+                relation, requirement = boundary.attribute(
+                    run,
+                    snapshot,
+                    gh.api,
+                    fetch,
+                    root,
+                    deadline=deadline,
+                    reads=reads,
+                    acquisition_budget=acquisitions,
+                    retain_reads=check_current,
+                )
+                if relation == "foreign":
+                    continue
+                cause = {"same": "existing_delivery", "mismatch": "delivery_revision_mismatch"}.get(
+                    relation, "attribution_pending"
+                )
+                result = boundary.pending(snapshot, target, cause, reads, [requirement])
+                if relation == "same":
+                    archive_observation = next(
+                        r for r in reversed(reads) if r["endpoint"].startswith("archive:")
+                    )
+                    result["native_diagnostic_reference"] = {
+                        "run": {
+                            k: run.get(k)
+                            for k in (
+                                "id",
+                                "run_attempt",
+                                "head_sha",
+                                "status",
+                                "conclusion",
+                                "path",
+                                "event",
+                                "pull_requests",
+                                "repository",
+                                "created_at",
+                            )
+                        },
+                        "archive_digest": archive_observation["endpoint"].rsplit("sha256:", 1)[-1],
+                        "subject_pr": target,
+                        "head": snapshot["head"],
+                        "merge": snapshot["merge"],
+                    }
+                    result["native_diagnostic_reference"]["run"]["repository"] = {
+                        "full_name": run["repository"]["full_name"]
+                    }
+                    result["native_diagnostic_reference"]["run"]["pull_requests"] = [
+                        {"number": p["number"]} for p in run["pull_requests"]
+                    ]
+                return result
+            if check_current:
+                current = gh.snapshot(snapshot["target"])
+                reads.append(
+                    boundary.observation("snapshot:" + snapshot["target"], current, root=root)
+                )
+                if (
+                    current["revision"] != snapshot["revision"]
+                    or "verify:compare" in current["labels"]
+                ):
+                    return boundary.pending(
+                        snapshot,
+                        target,
+                        "state_changed",
+                        reads,
+                        [
+                            "fresh native re-screen of changed revision or existing verification request"
+                        ],
+                    )
+            return None
+
+        try:
+            result = preflight()
+        except Exception as exc:
+            reads.append(boundary.observation("verifier-prewrite-read", error=exc))
+            if isinstance(exc, boundary.HistoryIncomplete):
+                return boundary.pending(snapshot, target, "history_incomplete", reads, [str(exc)])
+            if isinstance(exc, RoundCapacityDeferred):
+                return boundary.pending(
+                    snapshot,
+                    target,
+                    "capacity_deferred",
+                    reads,
+                    ["authoritative GitHub capacity reset or recovery before retry"],
+                    control={
+                        "kind": "capacity",
+                        "resource": exc.resource,
+                        "throttle": exc.throttle,
+                        "observed_at": exc.observed_at,
+                        "reset_at_epoch": exc.reset_at_epoch,
+                    },
+                )
+            if isinstance(exc, RoundDeadlineExhausted):
+                return boundary.pending(
+                    snapshot,
+                    target,
+                    "request_deadline",
+                    reads,
+                    ["fresh owned request after the exhausted read deadline"],
+                    control={
+                        "kind": "request_deadline",
+                        "deadline": exc.deadline,
+                        "remaining_seconds": exc.remaining_seconds,
+                    },
+                )
+            if closer_evidence._is_round_control_exception(exc):
+                raise
+            return boundary.pending(
+                snapshot,
+                target,
+                "read_unavailable",
+                reads,
+                ["retry retained verifier read after transport/resource recovery"],
+            )
+        if result is not None:
+            return result
+        return None
+
+    def verification_snapshot(self, snapshot, *, gh=None):
+        """Optional identity enrichment never replaces the core GitHub observation."""
+        if (
+            snapshot.get("state") != "MERGED"
+            or snapshot.get("verifier")
+            or "verify:compare" in snapshot.get("labels", [])
+            or snapshot.get("_local_cached")
         ):
-            return {"status": "blocked", "reason": "relevant verifier history incomplete"}
-        for run in rows:
-            if run.get("created_at", "") < merged_at:
-                continue
-            linked = [p.get("number") for p in run.get("pull_requests", [])]
-            if int(number) in linked or (not linked and run.get("event") == "workflow_dispatch"):
-                return {
-                    "status": "deferred",
-                    "reason": "collect existing verifier result before spending again",
-                    "run_id": run.get("id"),
-                }
-        current = self.gh.snapshot(snapshot["target"])
-        if current["revision"] != snapshot["revision"] or "verify:compare" in current["labels"]:
+            return snapshot
+        try:
+            result = self._verification_preflight(
+                snapshot.get("pr_target", snapshot["target"]), snapshot, gh=gh, check_current=False
+            )
+        except Exception as exc:
+            return {**snapshot, "verifier_attribution_pending": {"error_type": type(exc).__name__}}
+        if result is not None and result.get("native_diagnostic_reference"):
             return {
-                "status": "deferred",
-                "reason": "verification state changed; reuse existing request",
+                **snapshot,
+                "native_diagnostic_reference": result["native_diagnostic_reference"],
             }
+        return snapshot
+
+    def initiate_verify(self, target, snapshot):
+        result = self._verification_preflight(target, snapshot)
+        if result is not None:
+            return result
+        repo, number = target.split("#")
+        # Nothing catches the POST: a timeout/exception here remains UNKNOWN.
         self.gh.api(
             f"repos/{repo}/issues/{number}/labels",
             method="POST",
@@ -3245,34 +3445,9 @@ def _legacy_operation_dependency(state_path, target, snapshot, *, remote_only=Fa
     return None
 
 
-def collect_native_evidence(
-    snapshot,
-    gh,
-    retained_dir,
-    *,
-    previous=None,
-    deadline,
-    dispositions=None,
-    action=None,
-    refresh_sections=None,
-    supplemental_sections=None,
-    read_progress=None,
-):
-    """Collect with the production artifact and review bindings, without queue actions.
-
-    ``deadline`` is the caller's monotonic request deadline. This is the same
-    transport contract used by native PREPARE; an omitted binding is never
-    represented as missing user evidence by a standalone invocation.
-    """
-    if read_progress is not None:
-        original_gh = gh
-        gh = SimpleNamespace(
-            api=lambda endpoint, **kwargs: read_progress.api(original_gh.api, endpoint, **kwargs)
-        )
-    snap = snapshot
-    target = snap.get("target")
-    if not isinstance(target, str) or not TARGET.fullmatch(target):
-        raise ValueError("native collection requires an exact target identity")
+def native_artifact_fetcher(snapshot):
+    """Share the existing bounded native archive transport with attribution reads."""
+    snap, target = snapshot, snapshot["target"]
 
     def artifact_fetch(artifact, *, deadline, max_bytes):
         artifact_id = artifact.get("id") if isinstance(artifact, dict) else None
@@ -3399,6 +3574,58 @@ def collect_native_evidence(
             raise ValueError("artifact archive exceeds configured byte cap")
         return data
 
+    return artifact_fetch
+
+
+def collect_native_evidence(
+    snapshot,
+    gh,
+    retained_dir,
+    *,
+    previous=None,
+    deadline,
+    dispositions=None,
+    action=None,
+    refresh_sections=None,
+    supplemental_sections=None,
+    read_progress=None,
+    verifier_archive_root=None,
+):
+    """Collect with the production artifact and review bindings, without queue actions.
+
+    ``deadline`` is the caller's monotonic request deadline. This is the same
+    transport contract used by native PREPARE; an omitted binding is never
+    represented as missing user evidence by a standalone invocation.
+    """
+    if read_progress is not None:
+        original_gh = gh
+        gh = SimpleNamespace(
+            api=lambda endpoint, **kwargs: read_progress.api(original_gh.api, endpoint, **kwargs)
+        )
+    snap = snapshot
+    target = snap.get("target")
+    if not isinstance(target, str) or not TARGET.fullmatch(target):
+        raise ValueError("native collection requires an exact target identity")
+
+    artifact_fetch = native_artifact_fetcher(snapshot)
+    if verifier_archive_root is not None:
+        import closer_verifier_boundary
+
+        uncached_fetch = artifact_fetch
+
+        def artifact_fetch(artifact, *, deadline, max_bytes):
+            digest_value = str(artifact.get("digest", ""))
+            data = closer_verifier_boundary.cached_archive(
+                verifier_archive_root, digest_value.removeprefix("sha256:")
+            )
+            if data is not None:
+                if len(data) > max_bytes:
+                    raise ValueError("cached archive exceeds current request cap")
+                return data
+            if artifact.get("expired"):
+                raise ValueError("expired verifier archive has no verified retained copy")
+            return uncached_fetch(artifact, deadline=deadline, max_bytes=max_bytes)
+
     def review_threads_fetch(
         snapshot, *, deadline, max_pages, max_threads, max_comments_per_thread
     ):
@@ -3514,6 +3741,7 @@ def collect_native_evidence(
         action=action,
         refresh_sections=refresh_sections,
         supplemental_sections=supplemental_sections,
+        native_archive_root=verifier_archive_root,
     )
 
 
@@ -4312,6 +4540,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     pass
         if snap is None:
             snap = gh.snapshot(target)
+        snap = backend.verification_snapshot(snap, gh=gh)
         workspace_binding = _workspace_snapshot_binding(
             target, backend.workspaces, getattr(backend, "workspace_bindings", None)
         )
@@ -4360,6 +4589,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 deadline=time.monotonic() + max(1, float(context["deadline"]) - time.time()),
                 dispositions=backend.dispositions.get(target, {}),
                 action=action,
+                verifier_archive_root=backend.verifier_archive_root,
             )
         snapshot_bytes = json.dumps(
             snap, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -5848,6 +6078,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             runtime_binding=backend.runtime_binding,
             require_runtime_binding=backend.require_runtime_binding,
         )
+        current.verifier_archive_root = backend.verifier_archive_root
         if finite_frontier is not None:
             current.finite_frontier = finite_frontier
         interpreted = full_interpretation(context.get("interpret", {}))
@@ -6140,6 +6371,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         "merge": proof["merge"],
                         "observed_revision": row.get("revision"),
                         "blocking_run": proof["blocking_run"],
+                        "collection_requirements": proof.get("requirements"),
+                        "collection_cause": proof.get("cause"),
+                        "retained_reads": proof.get("observations"),
+                        "read_control": proof.get("control"),
                     },
                     "queue_receipt": receipt,
                 }
