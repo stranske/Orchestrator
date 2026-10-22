@@ -221,7 +221,15 @@ def _finite_queue_operation(item, frontier, target):
         or not isinstance(operation.get("id"), str)
         or not operation.get("id")
         or operation.get("status")
-        not in {"submitted", "running", "uncertain", "confirmed_not_started", "completed", "failed"}
+        not in {
+            "submitted",
+            "running",
+            "uncertain",
+            "confirmed_not_started",
+            "completed",
+            "failed",
+            "resource_wait",
+        }
         or not isinstance(operation.get("action"), str)
         or not operation.get("action")
         or not isinstance(operation.get("revision"), str)
@@ -239,6 +247,11 @@ def _finite_queue_operation(item, frontier, target):
         raise ValueError("finite queue operation record is corrupt") from None
     if action_id != binding.get("action_id"):
         raise ValueError("finite queue operation binding differs from frontier")
+    if operation.get("status") == "resource_wait":
+        import closer_queue
+
+        if closer_queue.verifier_resource_wait_proof(operation, target) is None:
+            raise ValueError("finite native resource wait proof is corrupt")
     return operation
 
 
@@ -1851,10 +1864,60 @@ class Closer:
             for run in rows:
                 linked = [p.get("number") for p in run.get("pull_requests", [])]
                 if int(number) in linked or not linked:
+                    import closer_queue
+
+                    proof = {
+                        "schema": "closer-verifier-prewrite-wait/v1",
+                        "boundary": "before_verify_label_post",
+                        "target": snapshot["target"],
+                        "subject_pr": target,
+                        "revision": snapshot["revision"],
+                        "head": snapshot["head"],
+                        "merge": snapshot["merge"],
+                        "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100&status={status}",
+                        "observed_at": time.time(),
+                        "blocking_run": {
+                            key: run.get(key)
+                            for key in (
+                                "id",
+                                "run_attempt",
+                                "head_sha",
+                                "status",
+                                "conclusion",
+                                "path",
+                                "event",
+                                "pull_requests",
+                                "repository",
+                            )
+                        },
+                    }
+                    proof["sha256"] = closer_queue._digest(proof)
+                    observation = {
+                        "status": "resource_wait",
+                        "action": "post_merge_verify",
+                        "revision": snapshot["revision"],
+                        "binding": {
+                            "pr_target": target,
+                            "head": snapshot["head"],
+                            "merge": snapshot["merge"],
+                        },
+                        "invoked_at": proof["observed_at"],
+                        "completed_at": proof["observed_at"],
+                        "result": {"verifier_resource_wait": proof},
+                    }
+                    if (
+                        closer_queue.verifier_resource_wait_proof(observation, snapshot["target"])
+                        is None
+                    ):
+                        return {
+                            "status": "blocked",
+                            "reason": "active verifier identity incomplete; inspect before dispatch",
+                        }
                     return {
-                        "status": "deferred",
-                        "reason": "existing or unattributable active verifier run",
-                        "run_id": run.get("id"),
+                        "status": "resource_wait",
+                        "reason": "verifier_resource_wait",
+                        "verifier_resource_wait": proof,
+                        "next_trigger": closer_queue.verifier_resource_wait_event(proof),
                     }
         recent = self.gh.api(
             f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100"
@@ -6061,6 +6124,25 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             # an invented external event. The outer ledger records this as uncertain
             # and must reconcile against the durable inner queue.
             raise RuntimeError("inner closer queue did not prove a valid continuation boundary")
+        if row.get("reason") == "verifier_resource_wait":
+            inner = queue_item_readback(action_state, target)
+            proof = closer_queue.verifier_resource_wait_proof(inner.get("operation"), target)
+            if proof is not None:
+                return {
+                    "status": "pending",
+                    "pending_kind": "external_event",
+                    "reason": "verifier_resource_wait",
+                    "next_trigger": closer_queue.verifier_resource_wait_event(proof),
+                    "pending_evidence": {
+                        "event_id": closer_queue.verifier_resource_wait_event(proof),
+                        "target": target,
+                        "head": proof["head"],
+                        "merge": proof["merge"],
+                        "observed_revision": row.get("revision"),
+                        "blocking_run": proof["blocking_run"],
+                    },
+                    "queue_receipt": receipt,
+                }
         if finite_frontier is not None:
             progress = verified_finite_partial_progress(target, action_state, row, receipt)
             if progress is not None:

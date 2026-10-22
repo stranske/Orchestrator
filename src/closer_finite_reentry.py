@@ -23,6 +23,11 @@ SCHEMA = "closer-finite-reentry/v1"
 # Versioned source contract: these exact legacy refusals precede the inner queue.
 PRE_QUEUE_CANDIDATE = "15e35271e5005fe47288e600e2d0876f7de0f7c8"
 PRE_QUEUE_SOURCE_SHA256 = "8b6295ba8065255b085a6952ec8dc405e1a98cc8f8dd8e97c2b25632a475975d"
+PREWRITE_CANDIDATE = "6eee61c574408b0a278518b5fda13c45ff2eecee"
+PREWRITE_SOURCE_SHA256 = "925ae7e6458d45ef08548bf70589d08b1cbd744f93c13cd44a444c83db011068"
+PREWRITE_QUEUE_SHA256 = "e82a41e1e5bf9ed88ac50841a8bcc75c08c82e78f14d1058afbfb5873d8216b3"
+PREWRITE_PIPELINE_SHA256 = "e4f5a14d3acd3b0c822c5e182342f05411ecb3c9ce6022c672764da2528d09f1"
+PREWRITE_ERROR = "RuntimeError: inner closer queue did not prove a valid continuation boundary"
 PRE_QUEUE_ERRORS = frozenset(
     f"RuntimeError: legacy {status} operation lacks external-run or live-owner proof; "
     "reconcile it in the original closer queue"
@@ -260,7 +265,9 @@ def _snapshot_digest(directory):
     return namespace["snapshot_digest"](directory)
 
 
-def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts):
+def _native_pre_queue_source(
+    path, frontier, target, entry, row, lease, receipts, *, prewrite=False
+):
     if not isinstance(receipts, dict) or set(receipts) != {"lifecycle", "installation"}:
         raise ValueError("native_pre_queue_source_receipts_required")
     lifecycle = _receipt(receipts["lifecycle"])
@@ -275,7 +282,8 @@ def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts
         or not isinstance(source, dict)
         or source.get("frontier") != frontier
         or installation.get("stage") != "installed"
-        or installation.get("candidate_sha") != PRE_QUEUE_CANDIDATE
+        or installation.get("candidate_sha")
+        != (PREWRITE_CANDIDATE if prewrite else PRE_QUEUE_CANDIDATE)
         or not isinstance(verification, dict)
         or verification.get("verified") is not True
         or type(verification.get("exit_code")) is not int
@@ -292,9 +300,21 @@ def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts
         module.name != "closer_dispatcher.py"
         or not module.is_file()
         or module.stat().st_size > 2 * 1024 * 1024
-        or hashlib.sha256(module.read_bytes()).hexdigest() != PRE_QUEUE_SOURCE_SHA256
+        or hashlib.sha256(module.read_bytes()).hexdigest()
+        != (PREWRITE_SOURCE_SHA256 if prewrite else PRE_QUEUE_SOURCE_SHA256)
     ):
         raise ValueError("unsupported_native_pre_queue_source")
+    if prewrite:
+        for name, expected in {
+            "closer_queue.py": PREWRITE_QUEUE_SHA256,
+            "closer_pipeline.py": PREWRITE_PIPELINE_SHA256,
+        }.items():
+            selected = _physical(module.parent / name)
+            if (
+                not selected.is_file()
+                or hashlib.sha256(selected.read_bytes()).hexdigest() != expected
+            ):
+                raise ValueError("unsupported_native_prewrite_consumer_source")
     if _snapshot_digest(module.parent) != verification.get("snapshot_digest"):
         raise ValueError("native_package_differs_from_verified_installation")
     stdout = _receipt(
@@ -308,6 +328,8 @@ def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts
         or stdout["targets"].get(target) != row
     ):
         raise ValueError("native_stdout_does_not_bind_original_row")
+    if prewrite:
+        _native_prewrite_command(lifecycle, frontier)
     expected_lease = {
         "target": resources.canonical_target(target),
         "owner": lease["owner"],
@@ -321,12 +343,16 @@ def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts
         "target": target,
         "revision": row.get("revision"),
         "head": snapshot.get("head"),
-        "action": "merge",
+        "action": "post_merge_verify" if prewrite else "merge",
     }
     if (
         row.get("status") != "unknown"
         or row.get("stage") != "act"
-        or row.get("error") not in PRE_QUEUE_ERRORS
+        or (
+            row.get("error") != PREWRITE_ERROR
+            if prewrite
+            else row.get("error") not in PRE_QUEUE_ERRORS
+        )
         or row.get("scope_lease") != expected_lease
         or "act" in results
         or "exception" in results
@@ -339,8 +365,9 @@ def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts
         or prep.get("identity") != row.get("identity")
         or prep.get("native_effect_contract") != contract
         or not isinstance(prep.get("proposal"), dict)
-        or prep["proposal"].get("action") != "merge"
-        or interpretation.get("classification") != "deterministic_merge"
+        or prep["proposal"].get("action") != contract["action"]
+        or interpretation.get("classification")
+        != ("deterministic_post_merge_verify" if prewrite else "deterministic_merge")
         or interpretation.get("authority") is not False
         or interpretation.get("substantive_needs") != []
     ):
@@ -348,12 +375,212 @@ def _native_pre_queue_source(path, frontier, target, entry, row, lease, receipts
     return copy.deepcopy(receipts)
 
 
+def _native_prewrite_command(lifecycle, frontier):
+    """Only the pinned native CLI route can attest this legacy return branch."""
+    source = lifecycle["source_identity"]
+    argv = source.get("logical_command")
+    if (
+        not isinstance(argv, list)
+        or not all(isinstance(arg, str) for arg in argv)
+        or len(argv) < 3
+        or Path(argv[1]).name != "closer_dispatcher.py"
+        or argv[2] != "run"
+        or hashlib.sha256(
+            json.dumps([argv[0], source["qualified_module"], *argv[2:]]).encode()
+        ).hexdigest()
+        != lifecycle.get("argv_sha256")
+    ):
+        raise ValueError("unproven_native_prewrite_command")
+    switches = {"--pipeline", "--apply", "--workers"}
+    values = {
+        "--assignment",
+        "--state",
+        "--finite-frontier-json",
+        "--request-timeout-seconds",
+        "--coordinator-mode",
+        "--coordinator-contract-pin",
+        "--max-workers",
+    }
+    parsed = {}
+    index = 3
+    while index < len(argv):
+        flag = argv[index]
+        if flag in parsed or flag not in switches | values:
+            raise ValueError("unsupported_native_prewrite_command")
+        if flag in switches:
+            parsed[flag] = True
+            index += 1
+        else:
+            if index + 1 >= len(argv):
+                raise ValueError("unsupported_native_prewrite_command")
+            parsed[flag] = argv[index + 1]
+            index += 2
+    if (
+        set(parsed) != switches | values
+        or parsed["--coordinator-mode"] != "resource_scoped"
+        or parsed["--max-workers"] != "1"
+        or json.loads(parsed["--finite-frontier-json"]) != frontier
+        or not isinstance(json.loads(parsed["--coordinator-contract-pin"]), dict)
+    ):
+        raise ValueError("unsupported_native_prewrite_command")
+
+
+def _native_prewrite_inner(path, frontier, target, row):
+    """One exact returned prewrite refusal; unrelated history is never consumed."""
+    inner = path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json"
+    doc, sha = _read(inner)
+    buckets = doc.get("frontiers")
+    bucket = buckets.get(frontier["frontier_id"]) if isinstance(buckets, dict) else None
+    items = bucket.get("items") if isinstance(bucket, dict) else None
+    item = items.get(target) if isinstance(items, dict) else None
+    round_state = bucket.get("round") if isinstance(bucket, dict) else None
+    op = item.get("operation") if isinstance(item, dict) else None
+    prep = row["results"]["prepare"]
+    snapshot = _receipt(prep["snapshot_ref"])
+    binding = op.get("binding") if isinstance(op, dict) else None
+    if (
+        doc.get("schema") != "closer-queue/v1"
+        or not isinstance(bucket, dict)
+        or bucket.get("policy") != frontier
+        or not isinstance(item, dict)
+        or not isinstance(op, dict)
+        or not isinstance(binding, dict)
+        or not isinstance(op.get("result"), dict)
+        or not isinstance(round_state, dict)
+        or item.get("operation_history") != []
+        or op.get("status") != "failed"
+        or op.get("outcome") != "deferred"
+        or op.get("action") != "post_merge_verify"
+        or op.get("finite_frontier") != frontier
+        or op.get("revision") != row.get("revision")
+        or op.get("attempts") != 1
+        or not isinstance(op.get("id"), str)
+        or not op["id"]
+        or set(op.get("result", {})) != {"reason", "run_id"}
+        or op["result"].get("reason") != "existing or unattributable active verifier run"
+        or type(op["result"].get("run_id")) is not int
+        or op["result"]["run_id"] <= 0
+        or binding.get("pr_target") != target
+        or binding.get("head") != snapshot.get("head")
+        or binding.get("merge") != snapshot.get("merge")
+        or not isinstance(snapshot.get("merge"), str)
+        or len(snapshot["merge"]) != 40
+        or item.get("revision") != row.get("revision")
+        or item.get("deferred_reason") != "operation_failed"
+        or round_state.get("status") != "finished"
+        or round_state.get("finite_frontier") != frontier
+        or round_state.get("frontier_target") != target
+        or type(op.get("invoked_at")) not in {int, float}
+        or type(op.get("elapsed_seconds")) not in {int, float}
+        or not (
+            row["stage_started_at"]
+            <= op["invoked_at"]
+            <= op["invoked_at"] + op["elapsed_seconds"]
+            <= row["stage_deadline"]
+        )
+    ):
+        raise ValueError("native_prewrite_inner_boundary_not_proven")
+
+    receipt = round_state.get("receipt")
+    events = round_state.get("events")
+    submitted = (
+        [
+            event
+            for event in events
+            if isinstance(event, dict) and event.get("kind") == "operation_submitted"
+        ]
+        if isinstance(events, list)
+        else []
+    )
+    if (
+        type(op.get("attempts")) is not int
+        or not isinstance(op.get("owner"), str)
+        or op["owner"] != item.get("owner")
+        or op["owner"] != round_state.get("owner")
+        or type(op.get("submitted_at")) not in {int, float}
+        or type(op.get("request_started_at")) not in {int, float}
+        or not (
+            row["stage_started_at"]
+            <= op["submitted_at"]
+            <= op["request_started_at"]
+            <= op["invoked_at"]
+        )
+        or len(submitted) != 1
+        or submitted[0].get("target") != target
+        or submitted[0].get("action") != "post_merge_verify"
+        or submitted[0].get("operation_id") != op["id"]
+        or not isinstance(receipt, dict)
+        or receipt.get("valid") is not False
+        or receipt.get("stop_valid") is not False
+        or receipt.get("reasons") != ["eligible_without_resource_reason:" + target]
+        or type(receipt.get("finished_at")) not in {int, float}
+        or not (
+            op["invoked_at"] + op["elapsed_seconds"]
+            <= receipt["finished_at"]
+            <= row["stage_deadline"]
+        )
+        or receipt.get("accounting")
+        != [
+            {
+                "target": target,
+                "action": "post_merge_verify",
+                "eligible": True,
+                "next_trigger": "inspect_operation_failure",
+                "observation_freshness": "fresh",
+                "operation_id": op["id"],
+                "operation_status": "failed",
+                "reason": "operation_failed",
+                "requires_coordinator": False,
+                "revision": row["revision"],
+                "status": "deferred",
+            }
+        ]
+    ):
+        raise ValueError("native_prewrite_intent_receipt_not_proven")
+
+    # Even a matching result must not mask a provider/write uncertainty marker
+    # anywhere in this queue. Other frontier effects remain untouched.
+    def inspect(value):
+        if isinstance(value, dict):
+            if any(
+                value.get(key)
+                for key in (
+                    "provider_outcome_uncertain",
+                    "recovery_barrier",
+                    "outcome_uncertain",
+                    "error_type",
+                )
+            ) or value.get("status") in ("unknown", "uncertain", "running", "submitted"):
+                raise ValueError("inner_operation_requires_reconciliation")
+            for child in value.values():
+                inspect(child)
+        elif isinstance(value, list):
+            for child in value:
+                inspect(child)
+
+    inspect(doc)
+    return {
+        "path": str(inner),
+        "sha256": sha,
+        "operation_id": op["id"],
+        "operation_sha256": _digest(op),
+        "next_trigger": f"github-verifier-resource:{target.split('#')[0]}:{op['result']['run_id']}:terminal",
+    }
+
+
 def _retire_native_boundary(root, path, target, frontier, record):
-    if record["plan"].get("kind") != "native_pre_queue_refusal":
+    if record["plan"].get("kind") not in {
+        "native_pre_queue_refusal",
+        "native_prewrite_verifier_refusal",
+    }:
         return
     state, _ = _read(path)
     if _digest(_entry(state, frontier)["items"][target]) != record["after_sha256"]:
         raise ValueError("reconciled_row_changed_before_retirement")
+    if record["plan"].get("kind") == "native_prewrite_verifier_refusal":
+        inner = record["plan"]["inner_boundary"]
+        if _read(inner["path"])[1] != inner["sha256"]:
+            raise ValueError("reconciled_inner_queue_changed_before_retirement")
     if not resources._release_known_shard_boundary(
         root,
         path,
@@ -470,6 +697,12 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
         and row.get("error") == "ResourceBlocked: no io pool slot before the deadline"
     ):
         kind = "unstarted_prepare_pool"
+    elif row.get("error") == PREWRITE_ERROR:
+        source_receipts = _native_pre_queue_source(
+            path, frontier, target, entry, row, lease, source_receipts, prewrite=True
+        )
+        proof = _scope_proof(root, path, target, entry, row, caller_path=state_path, admitted=True)
+        kind = "native_prewrite_verifier_refusal"
     elif row.get("error") in PRE_QUEUE_ERRORS:
         source_receipts = _native_pre_queue_source(
             path, frontier, target, entry, row, lease, source_receipts
@@ -485,7 +718,11 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
         raise ValueError("unsupported_retry_stage")
     if stage == "exception" and "exception" in results:
         raise ValueError("exception_callback_result_requires_reconciliation")
-    inner = _inner_boundary(path, target)
+    inner = (
+        _native_prewrite_inner(path, frontier, target, row)
+        if kind == "native_prewrite_verifier_refusal"
+        else _inner_boundary(path, target)
+    )
     trigger_fingerprint = _digest(
         {
             "kind": kind,
@@ -517,7 +754,7 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
         "acceptance_authority": False,
         "global_stop_authority": False,
     }
-    if kind == "native_pre_queue_refusal":
+    if kind in {"native_pre_queue_refusal", "native_prewrite_verifier_refusal"}:
         result["source_receipts"] = source_receipts
     return {**result, "plan_sha256": _digest(result)}
 
@@ -639,6 +876,20 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                         row["resource_evidence"] = {
                             "pre_queue_admission": proposal["scope_proof"],
                             "source_receipts": proposal["source_receipts"],
+                            "confirmed_no_effect": True,
+                        }
+                    elif proposal["kind"] == "native_prewrite_verifier_refusal":
+                        # The callback ran and returned before POST. Preserve the
+                        # original failed inner operation byte for byte; this is
+                        # terminal classification, never a retry permission.
+                        row.update(
+                            deferred_reason="native_prewrite_verifier_refusal",
+                            deferred_next_trigger=proposal["inner_boundary"]["next_trigger"],
+                        )
+                        row["resource_evidence"] = {
+                            "prewrite_admission": proposal["scope_proof"],
+                            "source_receipts": proposal["source_receipts"],
+                            "inner_boundary": proposal["inner_boundary"],
                             "confirmed_no_effect": True,
                         }
                 else:
