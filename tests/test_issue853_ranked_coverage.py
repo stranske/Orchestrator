@@ -3,13 +3,91 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 import cross_repo_lane
+import dispatcher
 import epic_lane
+import feedback
+import gh_capacity
 import research_scheduler
+
+_REAL_FEEDBACK_CONN = feedback._conn
+OUT_OF_BOUND_SENTINEL_NAME = "issue853-out-of-bound-sentinel.db"
+
+
+def _assert_feedback_path_owned(owned_root: Path) -> None:
+    selected = Path(feedback.DB_PATH).expanduser().resolve()
+    try:
+        selected.relative_to(owned_root.resolve())
+    except ValueError:
+        raise AssertionError(
+            f"feedback DB {selected} is outside owned test root {owned_root.resolve()}"
+        ) from None
+
+
+def _guarded_feedback_conn(owned_root: Path, *, timeout: float = 5.0):
+    _assert_feedback_path_owned(owned_root)
+    return _REAL_FEEDBACK_CONN(timeout=timeout)
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep #853 tests off the live Brain and block process/network/agent side effects."""
+    owned = tmp_path / "owned"
+    state = owned / "state"
+    runtime = owned / "runtime"
+    db = runtime / "feedback" / "orchestrator.db"
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.setenv(feedback.DB_PATH_ENV, str(db))
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    monkeypatch.setattr(
+        feedback,
+        "_conn",
+        lambda *, timeout=5.0: _guarded_feedback_conn(owned, timeout=timeout),
+    )
+    attempted: list[object] = []
+
+    def forbidden(*args, **kwargs):
+        attempted.append((args, kwargs))
+        raise AssertionError(
+            "issue #853 coverage test started an external process, agent, or network call"
+        )
+
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, forbidden)
+    for name in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, name, forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(gh_capacity, "gh_run", forbidden)
+    monkeypatch.setattr(dispatcher, "delegate", forbidden)
+    monkeypatch.setattr(dispatcher, "offload", forbidden)
+    yield
+    assert attempted == []
+
+
+def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Named regression: refuse sentinel paths outside the owned root before SQLite opens."""
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    sentinel = (tmp_path / OUT_OF_BOUND_SENTINEL_NAME).resolve()
+    assert sentinel.parent == tmp_path.resolve()
+    with pytest.raises(ValueError):
+        sentinel.relative_to(owned.resolve())
+
+    monkeypatch.setattr(feedback, "DB_PATH", sentinel)
+    with pytest.raises(AssertionError, match="outside owned test root"):
+        _assert_feedback_path_owned(owned)
+    assert not sentinel.exists()
+    assert not sentinel.parent.joinpath(f"{sentinel.name}-journal").exists()
 
 
 def test_cross_repo_validation_rejects_malformed_plans_and_cli_stays_read_only(
