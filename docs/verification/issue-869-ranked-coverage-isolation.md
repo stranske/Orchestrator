@@ -222,3 +222,47 @@ commit, blocker comment, and `needs-human` label with "MCP tool call requires ap
 but approval policy is never". No remote mutation succeeded. The test change and these
 notes remain uncommitted. Final PR verification: #872 is open with `draft=false` at
 `9271f4392e7dd5333683c7c63f8374857a8b7b09`.
+
+## Fresh-outcome assertion follow-up (2026-10-23)
+
+Reconciled commits through `09146fc` with PR #872: all eight checkboxes remain checked;
+the PR is open and ready for review. The preceding sibling-prefix change and notes
+were subsequently committed in `09146fc`.
+
+The owned-database scheduler assertion now also seeds and commits a fresh outcome,
+freezes the clock, and supplies observations above the data-hunger threshold. It
+requires a zero acquisition score and connections only to the owned temporary DB.
+This distinguishes successful SQLite reads from conservative query-error fallbacks;
+the malformed-evidence and offline-failure assertions remain exercised.
+
+Using `/tmp/orch872-validation-venv/bin/python`, with pytest and Black installed
+offline from existing cached wheels:
+
+- `-m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 34 passed
+  before and after the change.
+- Safe deliberate query break: temporarily replaced the evaluation timestamp column
+  with a nonexistent column and ran the same module with
+  `-k conservatively_handles_unavailable_or_invalid_evidence -m "not slow" --tb=short`.
+  The new assertion failed (`1.0 != 0.0`): 1 failed, 33 deselected. Restored the
+  scheduler byte-for-byte in `finally`; the standalone module then passed all 34 tests.
+  Existing module guards restricted all SQLite opens to its owned temporary root.
+- Relevant neighbors (`tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`)
+  after restoration: 60 passed, 99 subtests passed. Only this neighbor command used
+  temporary `ORCH_STATE_DIR`, `ORCH_LOCAL_RUNTIME`, and `ORCH_FEEDBACK_DB` overrides.
+- The targeted module command with `--cov=src/research_scheduler
+  --cov-report=term-missing -m "not slow"` exited 4 because pytest-cov is unavailable.
+  No new coverage percentage or uncovered-unit gain is claimed; historical CI
+  provenance and partial-round limitations remain as recorded above.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed unchanged.
+  Black's sequential checker verified all 645 discovered files and populated its
+  cache after the worker notification loop stalled. The required ordinary command,
+  `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-validation-black-cache black
+  --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`, then
+  exited 0: 645 files unchanged. `git diff --check` also passed.
+
+Publication remains blocked for this follow-up: `git add` could not create
+`.git/index.lock` on the read-only filesystem. Automatic approval review rejected
+the GitHub source-file commit, blocker comment, and `needs-human` label with
+"MCP tool call requires approval, but approval policy is never". No remote
+mutation succeeded; this follow-up's test and verification notes remain uncommitted.

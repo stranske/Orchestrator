@@ -498,6 +498,26 @@ def test_research_scheduler_conservatively_handles_unavailable_or_invalid_eviden
     assert expected_db.is_relative_to((tmp_path / "owned").resolve())
     assert owned_paths and all(path == expected_db for path in owned_paths)
 
+    # Fresh evidence must be read successfully, rather than hidden by a full data deficit
+    # or the scheduler's conservative fallback after a swallowed database error.
+    now = 2_000_000_000
+    monkeypatch.setattr(research_scheduler.time, "time", lambda: now)
+    db = owned_conn()
+    try:
+        db.execute(
+            "INSERT INTO runs (run_id, ts, task_type, agent) VALUES (?, ?, ?, ?)",
+            ("issue853-fresh", now, "implement", "codex"),
+        )
+        db.execute("INSERT INTO outcomes (run_id) VALUES (?)", ("issue853-fresh",))
+        db.commit()
+    finally:
+        db.close()
+    owned_paths.clear()
+    assert research_scheduler._agent_acquisition_scores(
+        "implement", ["codex"], n_obs={"codex": research_scheduler.DATA_HUNGER_THRESHOLD + 1}
+    ) == {"codex": 0.0}
+    assert owned_paths and all(path == expected_db for path in owned_paths)
+
     # Intentional offline connection failure at the _conn boundary (still not a stub).
     offline_attempts: list[float] = []
 
