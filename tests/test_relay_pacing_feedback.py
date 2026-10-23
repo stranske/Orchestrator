@@ -233,7 +233,7 @@ def test_mixed_relay_and_durable_edges_share_combined_success_scope(tmp_path, mo
     assert row["success_scope"] == ("completed lane rounds (exit=0) and durable-delivery successes")
     text = "\n".join(monitor.format_lines({"rows": [row]}))
     assert "durable-delivery successes" in text
-    assert "relay_acted_on 1" in text
+    assert "joins 0 / demand unmeasured" in text
 
     # An exit=0 relay round adds a second success beside the durable edge.
     log.write_text(log.read_text() + _line(ts=NOW - 30, chosen="muse", decision_id="ok-round"))
@@ -1029,3 +1029,73 @@ def test_pick_agent_non_relay_candidate_keeps_success(monkeypatch, capsys):
     decision = json.loads(raw)
     assert "log_fields" not in decision
     assert decision["candidates"][0]["agent"] == "gemini"
+
+
+def test_relay_pass_excludes_retired_demand_and_pre_cutoff_joins(tmp_path, monkeypatch):
+    log = _setup(tmp_path, monkeypatch)
+    cutoff = feedback.RELAY_PACING_BACKLOG_CUTOFF
+    # One historical join, two retired orphans, and two joinable decisions.
+    log.write_text(
+        _line(cutoff - 90, decision_id="old-joined")
+        + _line(cutoff - 60)
+        + _line(cutoff - 30)
+        + _line(cutoff, decision_id="at-cutoff")
+        + _line(cutoff + 30, decision_id="after-cutoff")
+    )
+    for stamp, decision_id in (
+        (cutoff - 80, "old-joined"),
+        (cutoff + 10, "at-cutoff"),
+        (cutoff + 40, "after-cutoff"),
+    ):
+        feedback.record_lane_round(
+            "claude", "opener", None, 0, "none", stamp, relay_decision_id=decision_id
+        )
+    check = monitor.RELAY_PASS_CHECK_TS + 1
+    ingested = feedback.ingest_relay_pacing(log, now=check)
+    assert ingested["joined"] == 3
+    assert ingested["unjoined"] == 2
+    ledger = tmp_path / "capabilities.json"
+    capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
+    inputs = monitor.collect_inputs(
+        now=check, gh_fn=lambda _: (True, "{}", ""), repos=[], db=feedback.DB_PATH
+    )
+    row = monitor.report(now=check, path=ledger, env={}, inputs=inputs)["rows"][0]
+    assert row["situation_count"] == 5
+    assert row["relay_acted_on"] == 3
+    result = row["relay_pass"]
+    assert result["demand"] == 2
+    assert result["relay_acted_on"] == 2
+    assert result["acted_on_floor"] == 2
+    assert result["retired_unjoinable"] == 2
+    assert result["status"] == "pass"
+    text = "\n".join(monitor.format_lines({"rows": [row]}))
+    assert "joins 2 / demand 2 (floor 2; retired_unjoinable 2 excluded)" in text
+
+
+def test_relay_pass_zero_demand_fails_after_check_date():
+    result = monitor.relay_pass_number(
+        {"situation_count": 0, "relay_acted_on": 0, "usable": 0, "outcome": 0},
+        now=monitor.RELAY_PASS_CHECK_TS + 1,
+    )
+    assert result["demand"] == 0
+    assert result["acted_on_floor"] == 0
+    assert (result["status"], result["reason"]) == ("fail", "demand 0 on check date")
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_relay_pass_unread_log_prints_unmeasured(tmp_path, monkeypatch, unreadable):
+    log = _setup(tmp_path, monkeypatch)
+    if unreadable:
+        log.write_bytes(b"\xff")
+    ledger = tmp_path / "capabilities.json"
+    capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
+    check = monitor.RELAY_PASS_CHECK_TS + 1
+    inputs = monitor.collect_inputs(
+        now=check, gh_fn=lambda _: (True, "{}", ""), repos=[], db=feedback.DB_PATH
+    )
+    row = monitor.report(now=check, path=ledger, env={}, inputs=inputs)["rows"][0]
+    assert row["relay_pass"]["demand"] is None
+    assert row["relay_pass"]["status"] == "unmeasured"
+    detail = next(line for line in monitor.format_lines({"rows": [row]}) if "relay pass" in line)
+    assert "demand unmeasured" in detail
+    assert "demand None" not in detail

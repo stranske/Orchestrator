@@ -176,15 +176,22 @@ def _relay_situations(inputs: dict[str, Any]) -> int | None:
     return inputs.get("relay_decision_count")
 
 
-def _relay_decision_population(log: Path, start: int, end: int) -> int | None:
-    """Independent demand: valid distinct log decisions, including unjoined rounds."""
+def _relay_decisions(log: Path, end: int) -> dict[str, tuple[int, dict[str, Any]]] | None:
+    """Independent decisions; None means the source could not be read."""
     try:
         if not log.is_file():
             return None
-        decisions = feedback.read_relay_pacing_decisions(log, end=end)
+        return feedback.read_relay_pacing_decisions(log, end=end)
     except (OSError, UnicodeError):
         return None
-    return sum(start <= stamp <= end for stamp, _ in decisions.values())
+
+
+def _relay_decision_population(log: Path, start: int, end: int) -> int | None:
+    """Independent demand: valid distinct log decisions, including unjoined rounds."""
+    decisions = _relay_decisions(log, end)
+    return (
+        None if decisions is None else sum(start <= stamp <= end for stamp, _ in decisions.values())
+    )
 
 
 def _relay_usable(inputs: dict[str, Any], start: int, end: int) -> int | None:
@@ -223,11 +230,33 @@ def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
     """#812 weekly criterion: relay joins cover log demand within ±5%.
 
     Compares version-exact relay joins to independent log demand, not the row's total
-    `acted_on` (which may include durable-delivery edges). Before the check date the
+    `acted_on` (which may include durable-delivery edges). Both populations start at
+    feedback.RELAY_PACING_BACKLOG_CUTOFF, using the source decision timestamp for
+    joins; retired legacy orphans are displayed separately. Before the check date the
     status is `pending`; missing demand or join counts stay `unmeasured`.
     """
     demand = row.get("situation_count")
     relay_acted = row.get("relay_acted_on")
+    retired_unjoinable = None
+    if "relay_decisions" in row:
+        decisions = row["relay_decisions"]
+        joins = row["relay_joined_edges"]
+        start = max(now - WINDOW_DAYS * 86400, feedback.RELAY_PACING_BACKLOG_CUTOFF)
+        demand = (
+            None
+            if decisions is None
+            else sum(start <= stamp <= now for stamp, _ in decisions.values())
+        )
+        relay_acted = (
+            None if joins is None else sum(start <= e["relay_decision_ts"] <= now for e in joins)
+        )
+        if decisions is not None and joins is not None:
+            joined_ids = {e["source_run_id"] for e in joins}
+            retired_unjoinable = sum(
+                now - WINDOW_DAYS * 86400 <= stamp < feedback.RELAY_PACING_BACKLOG_CUTOFF
+                and decision_id not in joined_ids
+                for decision_id, (stamp, _) in decisions.items()
+            )
     usable = row.get("usable")
     outcome = row.get("outcome")
     success = row.get("outcome_success")
@@ -235,6 +264,7 @@ def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
         "check_date": RELAY_PASS_CHECK_LABEL,
         "tolerance": RELAY_PASS_TOLERANCE,
         "demand": demand,
+        "retired_unjoinable": retired_unjoinable,
         "relay_acted_on": relay_acted,
         "acted_on_floor": None,
         "usable": usable,
@@ -609,6 +639,7 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "r.role_name AS target_role_name, r.mode AS target_mode, "
                 "r.pr_number AS target_pr_number, "
                 "r.routing_metadata AS target_routing_metadata, "
+                "source_ce.created_ts AS relay_decision_ts, "
                 "CASE WHEN ce.producer='feedback.relay_pacing' "
                 "AND ce.validation_status='accepted' AND ce.created_ts<=? "
                 "AND ce.run_id=ie.target_run_id "
@@ -620,6 +651,7 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
                 "LEFT JOIN completion_events ce ON ce.event_id = ie.target_event_id "
+                "LEFT JOIN completion_events source_ce ON source_ce.event_id = ie.source_event_id "
                 "WHERE ie.created_ts BETWEEN ? AND ?",
                 (now, since, now),
             ):
@@ -712,15 +744,20 @@ def collect_inputs(
     relay_log: Path | None = None,
 ) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
-    inputs["relay_decision_count"] = _relay_decision_population(
+    inputs["relay_decisions"] = _relay_decisions(
         relay_log
         or Path(
             os.environ.get(
                 "HANDOFF_PACING_LOG", str(Path.home() / ".codex/handoff/relay-pacing.log")
             )
         ),
-        now - WINDOW_DAYS * 86400,
         now,
+    )
+    decisions = inputs["relay_decisions"]
+    inputs["relay_decision_count"] = (
+        None
+        if decisions is None
+        else sum(now - WINDOW_DAYS * 86400 <= stamp <= now for stamp, _ in decisions.values())
     )
     if inputs["relay_decision_count"] is None:
         inputs["errors"].append("relay pacing population unavailable (decision log unread)")
@@ -814,7 +851,16 @@ def report(
             counts["relay_acted_on"] = (
                 None if own_edges is None else len(_relay_joined_edges(own_edges))
             )
-            counts["relay_pass"] = relay_pass_number(counts, now=now)
+            counts["relay_pass"] = relay_pass_number(
+                {
+                    **counts,
+                    "relay_decisions": inputs.get("relay_decisions"),
+                    "relay_joined_edges": (
+                        None if own_edges is None else _relay_joined_edges(own_edges)
+                    ),
+                },
+                now=now,
+            )
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).
@@ -876,10 +922,16 @@ def format_lines(section: dict) -> list[str]:
         if isinstance(relay_pass, Mapping):
             floor = relay_pass.get("acted_on_floor")
             floor_s = "unmeasured" if floor is None else str(floor)
+            demand_s = relay_pass.get("demand")
+            if demand_s is None:
+                demand_s = "unmeasured"
+            retired = relay_pass.get("retired_unjoinable")
+            retired_s = "unmeasured" if retired is None else str(retired)
             lines.append(
                 f"    relay pass ({relay_pass.get('check_date')}): {relay_pass.get('status')}; "
-                f"demand {relay_pass.get('demand')}; relay_acted_on {relay_pass.get('relay_acted_on')} "
-                f"(floor {floor_s}); {relay_pass.get('reason')}"
+                f"joins {relay_pass.get('relay_acted_on')} / demand {demand_s} "
+                f"(floor {floor_s}; retired_unjoinable {retired_s} excluded); "
+                f"{relay_pass.get('reason')}"
             )
     # One legend line per label that appears, so a count is never printed without its meaning.
     lines.extend(
