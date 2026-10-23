@@ -3810,6 +3810,25 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snaps
         "content_limit_bytes": max_bytes,
         "sections": {},
     }
+    meaning_gaps = (readiness or {}).get("unresolved_title_meaning")
+    if isinstance(meaning_gaps, list) and any(
+        isinstance(gap, dict) and "transform" in gap for gap in meaning_gaps
+    ):
+        result["readiness"] = {
+            **readiness,
+            "unresolved_title_meaning": [
+                (
+                    {key: value for key, value in gap.items() if key != "transform"}
+                    if isinstance(gap, dict)
+                    else gap
+                )
+                for gap in meaning_gaps
+            ],
+        }
+        result["readiness_projection"] = {
+            "omitted_optional_fields": ["unresolved_title_meaning[].transform"],
+            "reason": "title audit retained in the full readiness record and source packet",
+        }
     remaining = max_bytes
     for name in names:
         section = sections.get(name)

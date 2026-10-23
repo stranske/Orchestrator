@@ -230,6 +230,51 @@ def test_quota_wait_preserves_accounting_for_a_meaningful_retry_trigger(tmp_path
     assert result.value.accounting["prospective_bytes"] > 100
 
 
+def test_model_context_omits_title_audit_from_readiness_without_losing_meaning_gap(tmp_path):
+    from test_closer_pre_model_readiness import code_only_packet, reseal_section
+
+    import closer_dispatcher
+
+    snapshot, packet = code_only_packet(tmp_path)
+    snapshot["sources"][0]["title"] = "API token: synthetic-private-value"
+    packet["bindings"]["source"] = evidence._hash(snapshot["sources"])
+    packet["sections"]["source"] = evidence._source_section(
+        snapshot["sources"], tmp_path / "evidence"
+    )
+    reseal_section(packet, "source", tmp_path / "evidence")
+    readiness = evidence.action_evidence_readiness(
+        snapshot, packet, "merge", retained_dir=tmp_path / "evidence"
+    )
+    assert readiness["ready"] is True
+    before_packet, before_readiness = copy.deepcopy(packet), copy.deepcopy(readiness)
+    audit = readiness["unresolved_title_meaning"][0]["transform"]
+    context = closer_dispatcher.data_only_evidence_context(packet, readiness=readiness)
+    projected = context["readiness"]["unresolved_title_meaning"][0]
+    assert projected == {
+        key: value
+        for key, value in readiness["unresolved_title_meaning"][0].items()
+        if key != "transform"
+    }
+    assert projected["gap"] == "source:title_meaning_unavailable"
+    assert projected["necessity"] == "useful" and projected["acceptance_authority"] is False
+    assert context["readiness_projection"]["omitted_optional_fields"] == [
+        "unresolved_title_meaning[].transform"
+    ]
+    encoded = json.dumps(context, sort_keys=True)
+    assert json.dumps(audit, sort_keys=True) not in encoded
+
+    def contains_audit(value):
+        if isinstance(value, dict):
+            return bool({"transform", "title_transform"} & value.keys()) or any(
+                contains_audit(field) for field in value.values()
+            )
+        return isinstance(value, list) and any(contains_audit(field) for field in value)
+
+    assert not contains_audit(context)
+    assert packet == before_packet and readiness == before_readiness
+    assert evidence.validate_packet(packet)
+
+
 def test_interrupted_exact_pending_publication_can_resume_under_same_lock(tmp_path):
     value = store(tmp_path)
     data = b"resume exact bytes"
