@@ -4679,3 +4679,355 @@ def test_request_revision_changes_invalidate_acceptance_without_body_changes(tmp
     current["sources"] = [adapter._request_source(SOURCE, issue, via="closingIssuesReferences")]
     assert not adapter.acceptance_ok(current, decision)
     assert adapter.source_digest(current["sources"]) != decision["source_digest"]
+
+
+def _dead_owner_reservations(tmp_path):
+    import closer_resources as resources
+
+    path = tmp_path / "pipeline.json"
+    path.write_text('{"operations":{"original":"unknown"}}')
+    root = resources.scoped_root(path)
+    for kind, filename, owner in [
+        ("pr", "intent.json", "99999999:123:original"),
+        ("issue", "legacy-intent.json", "legacy"),
+    ]:
+        key = kind + ":" + TARGET.lower()
+        directory = resources._key_dir(root, key)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "lock").touch()
+        resources._atomic_write(
+            directory / filename,
+            {
+                "key": key,
+                "target": TARGET.lower(),
+                "owner": owner,
+                "state": "unknown" if kind == "pr" else "legacy_executor",
+                "at": 1,
+            },
+        )
+    return path, root
+
+
+def _terminal_observation(target):
+    return {
+        "snapshot": {
+            "target": target,
+            "kind": "pr",
+            "state": "MERGED",
+            "revision": "remote-r1",
+            "head": "a" * 40,
+            "merge": "b" * 40,
+            "observed_at": time.time(),
+        },
+        "native_writer": {"terminal": True, "evidence": []},
+    }
+
+
+def test_dead_owner_reservations_become_drainable(tmp_path, monkeypatch):
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    original_ledger = path.read_bytes()
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*intent.json")}
+    calls = []
+
+    def observe(target):
+        calls.append(target)
+        return _terminal_observation(target)
+
+    monkeypatch.setattr(resources, "_terminal_remote_observation", observe)
+    report = adapter._expired_admission_diagnostics(path)
+    assert report["blocking_reservations"] == report["drainable_reservations"] == 2
+    assert report["deadlock"] is False
+    assert all(x["drainable"] for x in report["reservation_recovery"])
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET)
+    result = resources.apply_terminal_reconciliation(
+        path, target=TARGET, expected_plan_sha256=plan["plan_sha256"]
+    )
+    assert len(calls) == 3  # diagnostics, plan, fresh apply; never a cached observation
+    assert resources.unknown_reservations(root) == {}
+    assert path.read_bytes() == original_ledger  # original UNKNOWN still refuses effect retry
+    audit = json.loads(Path(result["audit_path"]).read_text())
+    assert audit["observation"]["snapshot"]["merge"] == "b" * 40
+    import hashlib
+
+    for row, retired in zip(audit["advertisements"], result["retired"]):
+        assert Path(retired).read_bytes() == before[Path(row["path"])]
+        assert hashlib.sha256(Path(retired).read_bytes()).hexdigest() == row["sha256"]
+    assert not result["acceptance_authority"]
+    assert not result["global_stop_authority"]
+    assert not result["effect_retry_authority"]
+
+
+def test_live_owner_reservation_stays_blocking(tmp_path, monkeypatch):
+    import os
+
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    core = next(tmp_path.rglob("intent.json"))
+    value = json.loads(core.read_text())
+    value["owner"] = f"{os.getpid()}:123:original"
+    resources._atomic_write(core, value)
+    monkeypatch.setattr(
+        resources,
+        "_terminal_remote_observation",
+        lambda _: pytest.fail("live owner must refuse before remote reads"),
+    )
+    before = resources.unknown_reservations(root)
+    report = adapter._expired_admission_diagnostics(path)
+    assert report["drainable_reservations"] == 0
+    assert report["deadlock"] is True
+    assert report["reservation_reason_counts"]["owner_still_alive"] == 2
+    assert resources.unknown_reservations(root) == before
+
+
+@pytest.mark.parametrize(
+    "failure", ["remote", "native", "changed", "lock", "group", "malformed_owner", "alias"]
+)
+def test_terminal_reconciliation_retains_unknown_when_evidence_fails(
+    tmp_path, monkeypatch, failure
+):
+    import fcntl
+    import os
+
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = resources.unknown_reservations(root)
+    observe = _terminal_observation
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET, observe=observe)
+    assert plan["eligible"]
+    lock = None
+    if failure == "remote":
+
+        def observe(_):
+            raise RuntimeError("remote unavailable")
+
+    elif failure == "native":
+
+        def observe(target):
+            return {**_terminal_observation(target), "native_writer": {"terminal": False}}
+
+    elif failure == "changed":
+
+        def observe(target):
+            value = _terminal_observation(target)
+            value["snapshot"]["revision"] = "new remote revision"
+            return value
+
+    elif failure == "lock":
+        lock = next(tmp_path.rglob("intent.json")).parent.joinpath("lock").open("r+")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif failure == "group":
+        monkeypatch.setattr(os, "killpg", lambda *_: None)
+    elif failure == "malformed_owner":
+        core = next(tmp_path.rglob("intent.json"))
+        value = json.loads(core.read_text())
+        value["owner"] = "unknown"
+        resources._atomic_write(core, value)
+    elif failure == "alias":
+        core = next(tmp_path.rglob("intent.json"))
+        saved = tmp_path / "saved-intent"
+        saved.write_bytes(core.read_bytes())
+        core.unlink()
+        core.symlink_to(saved)
+    try:
+        with pytest.raises((resources.ResourceBlocked, RuntimeError, ValueError)):
+            resources.apply_terminal_reconciliation(
+                path, target=TARGET, expected_plan_sha256=plan["plan_sha256"], observe=observe
+            )
+        assert resources.unknown_reservations(root) == before
+        assert not list(tmp_path.rglob("*.retired"))
+    finally:
+        if lock:
+            lock.close()
+
+
+def test_legacy_reservation_refuses_unbound_new_intent(tmp_path):
+    import closer_resources as resources
+
+    root = resources.scoped_root(tmp_path / "pipeline")
+    with pytest.raises(resources.ResourceBlocked, match="requires_causal_binding"):
+        with resources.legacy_reserve(
+            root, ["pr:" + TARGET], target=TARGET, owner="legacy", deadline=time.time() + 2
+        ):
+            pytest.fail("unbound writer admitted")
+    assert resources.unknown_reservations(root) == {}
+
+
+@pytest.mark.parametrize("kind", ["pr", "issue"])
+def test_terminal_reconciliation_uses_live_snapshot_and_native_gate(monkeypatch, kind):
+    import closer_resources as resources
+    import review_writer_gate
+
+    reads = []
+    native = []
+    snap = _terminal_observation(TARGET)["snapshot"]
+    if kind == "issue":
+        snap = {
+            **snap,
+            "kind": "issue",
+            "pr_target": "o/r#44",
+            "delivery_links": {"complete": True, "status": "resolved", "candidates": ["o/r#44"]},
+        }
+
+    class GitHub:
+        def __init__(self, *, deadline):
+            assert deadline > time.time()
+
+        def snapshot(self, target):
+            reads.append(target)
+            return snap
+
+        def api(self, endpoint):
+            assert "/timeline?" in endpoint
+            return []
+
+    monkeypatch.setattr(adapter, "GitHub", GitHub)
+
+    def terminal(repo, number, call):
+        native.append((repo, number, callable(call)))
+        return {"terminal": True, "evidence": ["all-head proof"]}
+
+    monkeypatch.setattr(review_writer_gate, "writer_terminality", terminal)
+    result = resources._terminal_remote_observation(TARGET)
+    assert reads == [TARGET]
+    expected = (
+        ("o/r", 44, True)
+        if kind == "issue"
+        else (TARGET.split("#")[0], int(TARGET.split("#")[1]), True)
+    )
+    assert native == [expected]
+    assert result["native_writer"]["evidence"] == ["all-head proof"]
+
+
+def test_terminal_reconciliation_incomplete_remote_inventory_cannot_drain(tmp_path, monkeypatch):
+    import closer_resources as resources
+    import review_writer_gate
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = resources.unknown_reservations(root)
+    snap = {
+        **_terminal_observation(TARGET)["snapshot"],
+        "kind": "issue",
+        "delivery_links": {"complete": False, "status": "failed"},
+    }
+    monkeypatch.setattr(adapter, "GitHub", lambda **_: SimpleNamespace(snapshot=lambda _: snap))
+    monkeypatch.setattr(
+        review_writer_gate, "writer_terminality", lambda *_: pytest.fail("incomplete inventory")
+    )
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET)
+    assert plan["eligible"] is False
+    assert plan["reasons"] == ["delivery_inventory_incomplete"]
+    assert resources.unknown_reservations(root) == before
+
+
+@pytest.mark.parametrize("mutation", ["intent", "owner", "malformed", "native"])
+def test_terminal_observation_cannot_outlive_local_owner_proof(tmp_path, mutation):
+    import os
+
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = resources.unknown_reservations(root)
+
+    def observe(target):
+        if mutation == "malformed":
+            return {"snapshot": [], "native_writer": []}
+        if mutation == "native":
+            return {"snapshot": _terminal_observation(target)["snapshot"], "native_writer": None}
+        intent = next(tmp_path.rglob("intent.json"))
+        value = json.loads(intent.read_text())
+        value["owner" if mutation == "owner" else "at"] = (
+            f"{os.getpid()}:123:revived" if mutation == "owner" else 2
+        )
+        intent.write_text(json.dumps(value))
+        return _terminal_observation(target)
+
+    report = resources.plan_terminal_reconciliation(path, target=TARGET, observe=observe)
+    assert not report["eligible"]
+    assert resources.unknown_reservations(root).keys() == before.keys()
+    assert not list(tmp_path.rglob("*.retired"))
+
+
+def test_terminal_source_inventory_checks_unmerged_referenced_pr(monkeypatch):
+    import closer_resources as resources
+    import review_writer_gate
+
+    snap = {
+        **_terminal_observation(TARGET)["snapshot"],
+        "kind": "issue",
+        "delivery_links": {"complete": True, "candidates": ["o/r#40"]},
+    }
+    queried = []
+
+    def api(endpoint):
+        assert "/timeline?" in endpoint
+        return [
+            {
+                "event": "cross-referenced",
+                "source": {
+                    "issue": {
+                        "url": "https://api.github.com/repos/o/r/issues/44",
+                        "pull_request": {},
+                    }
+                },
+            }
+        ]
+
+    monkeypatch.setattr(
+        adapter, "GitHub", lambda **_: SimpleNamespace(snapshot=lambda _: snap, api=api)
+    )
+
+    def terminal(repo, number, call):
+        queried.append(number)
+        return {"terminal": number != 44, "reason": "pending unmerged writer", "evidence": []}
+
+    monkeypatch.setattr(review_writer_gate, "writer_terminality", terminal)
+    with pytest.raises(resources.ResourceBlocked, match="pending unmerged writer"):
+        resources._terminal_remote_observation(TARGET)
+    assert queried == [40, 44]
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_terminal_native_receipt_cannot_hide_other_provider_writer(monkeypatch, malformed):
+    import closer_resources as resources
+    import review_writer_gate
+
+    snap = _terminal_observation(TARGET)["snapshot"]
+
+    def api(endpoint):
+        assert "/jobs?" in endpoint
+        return {
+            "jobs": (
+                [None]
+                if malformed
+                else [
+                    {
+                        "name": "Keepalive / Run Claude",
+                        "status": "in_progress",
+                        "steps": [
+                            {"name": "Run Claude", "status": "completed"},
+                            {"name": "Commit and push changes", "status": "in_progress"},
+                        ],
+                    }
+                ]
+            )
+        }
+
+    monkeypatch.setattr(
+        adapter, "GitHub", lambda **_: SimpleNamespace(snapshot=lambda _: snap, api=api)
+    )
+
+    def terminal(repo, number, call):
+        # Even a matching completed Codex receipt must inspect the attempt's
+        # other admitted implementation provider before retirement is possible.
+        call("repos/o/r/actions/runs/1/attempts/1/jobs?per_page=100&page=1")
+        return {"terminal": True, "evidence": ["completed Codex"]}
+
+    monkeypatch.setattr(review_writer_gate, "writer_terminality", terminal)
+    with pytest.raises(
+        resources.ResourceBlocked, match="implementation_.*(malformed|not_terminal)"
+    ):
+        resources._terminal_remote_observation(TARGET)

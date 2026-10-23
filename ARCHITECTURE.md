@@ -85,6 +85,16 @@ invalidate prior evidence, and verifier requests are deduplicated. Source closur
 composes the separately owned supervisor actor when deployed and explicitly enabled;
 this coordinator does not enable it. Deployment uses the existing mirror sync and
 canonical local prompt renderers, preserving demand scheduling and safety gates.
+The same resource rail offers explicit terminal-owner reconciliation for historical
+unbound advertisements and Core intents. It probes the recorded process and
+process group, holds original ledger/resource locks, re-reads remote target state
+and all-head native writer evidence, and compares exact intent/observation bytes
+before a durable audit and atomic retirement. Diagnostics expose eligible plans
+and per-reason counts; they never apply them. The original operation/pipeline
+UNKNOWN, admission deadline, acceptance and effect-retry barriers remain intact.
+New legacy advertisements require a pipeline or native-operation causal binding.
+No new coordinator, role, activation flag or live-state migration is introduced.
+
 The resource rail records causal run/revision/identity/work-key bindings before
 staged-pipeline legacy actions. Exact-plan reconciliation independently validates a completed
 no-operation evidence wait under the original locks and archives its evidence

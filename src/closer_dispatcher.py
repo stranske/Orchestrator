@@ -7601,7 +7601,15 @@ def _main_admitted(args, p, assignment_rows, targets):
                 ),
             ]
             with closer_resources.legacy_reserve(
-                root, keys, target=target, owner=owner, deadline=deadline
+                root,
+                keys,
+                target=target,
+                owner=owner,
+                deadline=deadline,
+                causal_binding={
+                    "native_state_path": str(args.state),
+                    "operation_id": operation["id"],
+                },
             ):
                 return backend.execute(target, action, observed, operation)
 
@@ -7644,6 +7652,8 @@ def _expired_admission_diagnostics(pipeline_path):
     diagnostics = []
     drainable = set()
     plans = {}
+    terminal_plans = {}
+    reason_counts = {}
     for base in closer_resources._reservation_bases(root):
         for directory in sorted(base.iterdir()) if base.is_dir() else []:
             for filename in ("intent.json", "legacy-intent.json"):
@@ -7673,17 +7683,33 @@ def _expired_admission_diagnostics(pipeline_path):
                         reasons = plan.get("reasons") or ([] if eligible else reasons)
                     elif filename == "legacy-intent.json":
                         reasons = ["missing_causal_run_binding"]
+                    recovery_path = (
+                        "plan_legacy_reconciliation" if filename == "legacy-intent.json" else "none"
+                    )
+                    if not eligible and intent and (filename == "intent.json" or not run_id):
+                        target = intent.get("target")
+                        if target not in terminal_plans:
+                            terminal_plans[target] = closer_resources.plan_terminal_reconciliation(
+                                pipeline_path, target=target
+                            )
+                        terminal_plan = terminal_plans[target]
+                        if terminal_plan.get("eligible") is True:
+                            eligible = any(
+                                row["path"] == str(path) for row in terminal_plan["advertisements"]
+                            )
+                            recovery_path = "plan_terminal_reconciliation"
+                            reasons = []
+                        else:
+                            reasons = sorted(set(reasons + terminal_plan.get("reasons", [])))
+                    for reason in reasons:
+                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
                     if eligible:
                         drainable.add(str(path))
                     diagnostics.append(
                         {
                             "path": str(path),
                             "target": (intent or {}).get("target"),
-                            "recovery_path": (
-                                "plan_legacy_reconciliation"
-                                if filename == "legacy-intent.json"
-                                else "none"
-                            ),
+                            "recovery_path": recovery_path,
                             "drainable": eligible,
                             "reasons": reasons,
                         }
@@ -7703,6 +7729,7 @@ def _expired_admission_diagnostics(pipeline_path):
         "drainable_reservations": len(drainable),
         "deadlock": bool(unknown) and not drainable,
         "reservation_recovery": diagnostics,
+        "reservation_reason_counts": dict(sorted(reason_counts.items())),
     }
 
 

@@ -1168,6 +1168,11 @@ def legacy_reserve(root, keys, *, target, owner, deadline, now=time.time, causal
     including scoped ones, cannot enter. A crash or invalid stop retains the advertisement.
     Core intents are never adopted, including those with the same target/owner.
     """
+    if not isinstance(causal_binding, dict) or not (
+        causal_binding.get("pipeline_run_id")
+        or (causal_binding.get("native_state_path") and causal_binding.get("operation_id"))
+    ):
+        raise ResourceBlocked("legacy_reservation_requires_causal_binding")
     held = []
     ordered = sorted({normalize_key(k) for k in keys})
     hierarchy = contextlib.ExitStack()
@@ -3093,6 +3098,292 @@ def apply_legacy_reconciliation(state_path, *, run_id, owner, target, expected_p
         }
 
 
+TERMINAL_RECONCILIATION_SCHEMA = "closer-terminal-owner-reconciliation/v1"
+
+
+def _terminal_owner(intent, filename):
+    """Absence, never age, proves a recorded local owner terminal."""
+    owner = intent.get("owner")
+    if filename == "legacy-intent.json" and owner == "legacy":
+        return  # Historical legacy records have only the original lock identity.
+    match = re.fullmatch(r"(?:(?:raw-)?legacy:)?([1-9][0-9]*):.+", str(owner))
+    if not match:
+        raise ResourceBlocked("owner_identity_unknown")
+    pid = int(match.group(1))
+    for probe, identity in ((os.kill, pid), (os.killpg, intent.get("process_group", pid))):
+        if type(identity) is not int or identity <= 0:
+            raise ResourceBlocked("owner_process_group_unknown")
+        try:
+            probe(identity, 0)
+        except ProcessLookupError:
+            continue
+        except OSError as exc:
+            raise ResourceBlocked("owner_liveness_unknown") from exc
+        raise ResourceBlocked("owner_still_alive")
+
+
+@contextlib.contextmanager
+def _terminal_locks(state_path, advertisements):
+    # A dead coordinator may have surviving children. Hold both original ledger
+    # locks and every resource lock throughout the fresh observation and CAS.
+    paths = {state_path.with_name(state_path.name + suffix) for suffix in (".lock", ".runlock")}
+    paths.update(Path(row["path"]).parent / "lock" for row in advertisements)
+    with contextlib.ExitStack() as stack:
+        for path in sorted(paths):
+            if path.is_symlink():
+                raise ResourceBlocked("aliased_reconciliation_lock")
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            handle = stack.enter_context(os.fdopen(fd, "r+"))
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ResourceBlocked("live_reconciliation_holder") from exc
+        yield
+
+
+def _terminal_advertisements(state_path, target):
+    rows = []
+    for base in _reservation_bases(scoped_root(state_path)):
+        if base.is_symlink() or base.parent.is_symlink():
+            raise ResourceBlocked("aliased_reservation_base")
+        for directory in sorted(base.iterdir()) if base.is_dir() else []:
+            for filename in ("intent.json", "legacy-intent.json"):
+                path = directory / filename
+                if not path.exists():
+                    continue
+                raw, intent = _reconciliation_record(path)
+                if canonical_target(intent.get("target")) != target:
+                    continue
+                key = intent.get("key")
+                if (
+                    normalize_key(key) != key
+                    or key.split(":", 1)[0] not in DURABLE_KINDS
+                    or directory.name != hashlib.sha256(key.encode()).hexdigest()[:24]
+                    or directory.is_symlink()
+                    or intent.get("state") not in {"in_flight", "unknown", "legacy_executor"}
+                ):
+                    raise ResourceBlocked("advertisement_identity_mismatch")
+                _terminal_owner(intent, filename)
+                rows.append(
+                    {
+                        "path": str(path),
+                        "bytes": raw.decode(),
+                        "key": key,
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                    }
+                )
+    if not rows:
+        raise ResourceBlocked("no_matching_advertisements")
+    return rows
+
+
+def _terminal_remote_observation(target):
+    # Reuse the production snapshot and all-head native writer rail. Source
+    # issues also need every referenced PR, including open/unmerged deliveries.
+    import closer_dispatcher
+    import review_writer_gate
+
+    github = closer_dispatcher.GitHub(deadline=time.time() + 120)
+    snapshot = github.snapshot(target)
+    pr_target = snapshot.get("pr_target") or (target if snapshot.get("kind") == "pr" else None)
+    inventory = snapshot.get("delivery_links")
+    targets = {pr_target} if pr_target else set()
+    if inventory is not None or snapshot.get("kind") == "issue":
+        if not isinstance(inventory, dict) or inventory.get("complete") is not True:
+            raise ResourceBlocked("delivery_inventory_incomplete")
+        candidates = inventory.get("candidates")
+        if not isinstance(candidates, list):
+            raise ResourceBlocked("delivery_inventory_malformed")
+        targets.update(candidates)
+        repo, number = target.split("#")
+        timeline = review_writer_gate._pages(
+            github.api, f"repos/{repo}/issues/{number}/timeline?per_page=100"
+        )
+        for event in timeline:
+            if not isinstance(event, dict):
+                raise ResourceBlocked("delivery_timeline_malformed")
+            if event.get("event") != "cross-referenced":
+                continue
+            source = event.get("source")
+            if not isinstance(source, dict) or not isinstance(source.get("issue"), dict):
+                raise ResourceBlocked("delivery_timeline_malformed")
+            issue = source["issue"]
+            if "pull_request" not in issue:
+                continue
+            match = re.fullmatch(
+                r"https://api\.github\.com/repos/([\w.-]+/[\w.-]+)/issues/([1-9][0-9]*)",
+                str(issue.get("url")),
+            )
+            if not match:
+                raise ResourceBlocked("delivery_timeline_malformed")
+            targets.add(f"{match[1]}#{match[2]}")
+    proofs = []
+
+    def native_api(endpoint):
+        value = github.api(endpoint)
+        if "/jobs?" not in endpoint:
+            return value
+        if not isinstance(value, dict) or not isinstance(value.get("jobs"), list):
+            raise ResourceBlocked("implementation_jobs_malformed")
+        for job in value["jobs"]:
+            if not isinstance(job, dict):
+                raise ResourceBlocked("implementation_jobs_malformed")
+            steps = job.get("steps", [])
+            if not isinstance(steps, list) or any(not isinstance(s, dict) for s in steps):
+                raise ResourceBlocked("implementation_steps_malformed")
+            implementation = [
+                s
+                for s in steps
+                if re.fullmatch(r"Run (Codex|Claude|Cursor|Muse|Gemini|Vibe)", str(s.get("name")))
+                or s.get("name") == "Commit and push changes"
+            ]
+            named = re.search(
+                r"\brun (codex|claude|cursor|muse|gemini|vibe)\b", str(job.get("name")), re.I
+            )
+            if (implementation or named) and (
+                job.get("status") != "completed"
+                or any(s.get("status") != "completed" for s in implementation)
+            ):
+                raise ResourceBlocked("implementation_writer_not_terminal")
+        return value
+
+    for linked in sorted(targets):
+        if not isinstance(linked, str) or not closer_dispatcher.TARGET.fullmatch(linked):
+            raise ResourceBlocked("delivery_target_malformed")
+        repo, number = linked.split("#")
+        if repo.lower() in closer_dispatcher.EXCLUDED:
+            raise ResourceBlocked("delivery_target_excluded")
+        proof = review_writer_gate.writer_terminality(repo, int(number), native_api)
+        if proof.get("terminal") is not True:
+            raise ResourceBlocked("native_writer_not_terminal:" + str(proof.get("reason")))
+        proofs.append({"target": linked, **proof})
+    proof = {
+        "terminal": True,
+        "evidence": [row for item in proofs for row in item.get("evidence", [])],
+        "targets": proofs,
+    }
+    return {"snapshot": snapshot, "native_writer": proof}
+
+
+def _terminal_plan(state_path, target, advertisements, observe):
+    observation = observe(target)
+    if _terminal_advertisements(state_path, target) != advertisements:
+        raise ResourceBlocked("advertisement_changed_during_observation")
+    if not isinstance(observation, dict):
+        raise ResourceBlocked("remote_observation_malformed")
+    snapshot = observation.get("snapshot", {})
+    if not isinstance(snapshot, dict) or not isinstance(observation.get("native_writer"), dict):
+        raise ResourceBlocked("remote_observation_malformed")
+    if (
+        canonical_target(snapshot.get("target")) != target
+        or snapshot.get("kind") not in {"pr", "issue"}
+        or snapshot.get("state") not in {"OPEN", "CLOSED", "MERGED"}
+        or not snapshot.get("revision")
+        or snapshot.get("revision") == "unknown"
+        or snapshot.get("_local_cached")
+        or observation.get("native_writer", {}).get("terminal") is not True
+    ):
+        raise ResourceBlocked("remote_observation_unknown")
+    # observed_at is transport freshness, not a remote-state revision. Apply
+    # obtains a NEW observation under locks and compares the actual stable bytes.
+    observation = {
+        **observation,
+        "snapshot": {k: v for k, v in snapshot.items() if k != "observed_at"},
+    }
+    content = {
+        "schema": TERMINAL_RECONCILIATION_SCHEMA,
+        "state_path": str(state_path),
+        "target": target,
+        "advertisements": advertisements,
+        "observation": observation,
+        "eligible": True,
+        "acceptance_authority": False,
+        "global_stop_authority": False,
+        "effect_retry_authority": False,
+        "reasons": [],
+    }
+    return {**content, "plan_sha256": _reconciliation_digest(content)}
+
+
+def plan_terminal_reconciliation(state_path, *, target, observe=None):
+    """Read-only remote reconciliation plan for terminal local owners.
+
+    This retires resource advertisements, not operations or pipeline history.
+    Unknown effects retain their original operation ledger and retry barriers.
+    No acceptance, global stop or continuation authority is inferred.
+    """
+    path, target = Path(state_path).absolute(), canonical_target(target)
+    try:
+        rows = _terminal_advertisements(path, target)
+        with _terminal_locks(path, rows):
+            if _terminal_advertisements(path, target) != rows:
+                raise ResourceBlocked("advertisement_changed_under_locks")
+            return _terminal_plan(path, target, rows, observe or _terminal_remote_observation)
+    except (OSError, ValueError, TypeError, AttributeError, ResourceBlocked, RuntimeError) as exc:
+        return {
+            "schema": TERMINAL_RECONCILIATION_SCHEMA,
+            "eligible": False,
+            "advertisements": [],
+            "reasons": [str(exc)],
+            "acceptance_authority": False,
+            "global_stop_authority": False,
+            "effect_retry_authority": False,
+        }
+
+
+def apply_terminal_reconciliation(state_path, *, target, expected_plan_sha256, observe=None):
+    """Fresh observation + exact-byte CAS; archive each intent before retirement.
+
+    There is no automatic effect retry. A partial archive is conservative: plan
+    remaining advertisements afresh; the original audit and retired bytes survive.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_plan_sha256):
+        raise ResourceBlocked("invalid_reconciliation_audit_identity")
+    path, target = Path(state_path).absolute(), canonical_target(target)
+    rows = _terminal_advertisements(path, target)
+    with _terminal_locks(path, rows):
+        if _terminal_advertisements(path, target) != rows:
+            raise ResourceBlocked("advertisement_changed_under_locks")
+        current = _terminal_plan(path, target, rows, observe or _terminal_remote_observation)
+        if current["plan_sha256"] != expected_plan_sha256:
+            raise ResourceBlocked("reconciliation_plan_changed")
+        audit_dir = _reservation_base(scoped_root(path)).parent / "reconciliation-audit"
+        if audit_dir.is_symlink():
+            raise ResourceBlocked("aliased_reconciliation_audit")
+        audit_dir.mkdir(exist_ok=True)
+        audit_path = audit_dir / f"{expected_plan_sha256}.json"
+        encoded = (
+            json.dumps({**current, "observed_at": time.time()}, sort_keys=True, indent=2) + "\n"
+        ).encode()
+        # One immutable write before ANY original intent is moved.
+        fd = os.open(audit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _fsync_dir(audit_dir)
+        retired = []
+        for index, row in enumerate(rows):
+            source = Path(row["path"])
+            if _reconciliation_bytes(source) != row["bytes"].encode():
+                raise ResourceBlocked("advertisement_changed_before_retirement")
+            destination = audit_dir / f"{expected_plan_sha256}-{index}.retired"
+            if destination.exists() or destination.is_symlink():
+                raise ResourceBlocked("retirement_destination_exists")
+            os.rename(source, destination)
+            _fsync_dir(source.parent)
+            _fsync_dir(audit_dir)
+            retired.append(str(destination))
+        return {
+            "status": "retired",
+            "audit_path": str(audit_path),
+            "retired": retired,
+            "acceptance_authority": False,
+            "global_stop_authority": False,
+            "effect_retry_authority": False,
+        }
+
+
 def _reconciliation_main(argv=None):
     import argparse
 
@@ -3100,8 +3391,9 @@ def _reconciliation_main(argv=None):
         description="Plan exact no-operation legacy advertisement reconciliation"
     )
     parser.add_argument("--state", required=True)
-    parser.add_argument("--run-id", required=True)
-    parser.add_argument("--owner", required=True)
+    parser.add_argument("--run-id")
+    parser.add_argument("--terminal-owner", action="store_true")
+    parser.add_argument("--owner")
     parser.add_argument("--target", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expected-plan-sha256")
@@ -3109,6 +3401,18 @@ def _reconciliation_main(argv=None):
     if args.apply and not args.expected_plan_sha256:
         parser.error("--apply requires --expected-plan-sha256")
     try:
+        if args.terminal_owner:
+            result = (
+                apply_terminal_reconciliation(
+                    args.state, target=args.target, expected_plan_sha256=args.expected_plan_sha256
+                )
+                if args.apply
+                else plan_terminal_reconciliation(args.state, target=args.target)
+            )
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result.get("eligible", result.get("status") == "retired") else 78
+        if not args.run_id or not args.owner:
+            parser.error("legacy reconciliation requires --run-id and --owner")
         common = {"run_id": args.run_id, "owner": args.owner, "target": args.target}
         result = (
             apply_legacy_reconciliation(
