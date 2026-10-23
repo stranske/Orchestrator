@@ -30,6 +30,19 @@
   "runtime_acceptance": {
     "due": "2026-10-27",
     "state": "pending",
-    "next": "Inspect switch_review windowed-capacity-policy usable count and numeric relay weights after source delivery; separate success-producer concerns per source issue."
+    "weights_half": {
+      "state": "code-complete",
+      "mechanism": "rate_incidents.relay_log_fields_from_decision + capacity pick-agent log_fields; prefers top-level routing_weight so Cursor pacing=None still emits cursor:1",
+      "verified": [
+        "test_neutral_cursor_log_fields_emit_numeric_weights",
+        "test_pick_agent_emits_log_fields_for_neutral_cursor",
+        "test_unmeasured_cursor_is_neutral_not_legacy (fields bridge)"
+      ]
+    },
+    "usable_half": {
+      "state": "pending-2026-10-27",
+      "caveat": "usable still counts production success events at HEAD; #888 changes that to accepted relay decisions. If N stays 0 after delivery, file success-producer separately per source issue."
+    },
+    "next": "On 2026-10-27: switch_review windowed-capacity-policy usable N>0 and live relay-pacing.log weights= numeric for Cursor candidates after mirror sync."
   }
 }

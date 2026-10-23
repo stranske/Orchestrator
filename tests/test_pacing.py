@@ -271,6 +271,8 @@ def test_shed_still_loses_to_ok_with_neutral_cursor():
 
 
 def test_unmeasured_cursor_is_neutral_not_legacy():
+    import rate_incidents
+
     cap = cap_for(codex="warn", cw=0.8)
     cap["agents"]["cursor"] = dict(state="ok")
     original = copy.deepcopy(cap)
@@ -292,6 +294,10 @@ def test_unmeasured_cursor_is_neutral_not_legacy():
     assert cursor["pacing"] is None
     assert "cursor" not in router.PACING_POOLS
     assert cap == original
+    # Relay log token must stay numeric even when Cursor has no nested pacing reading.
+    fields = rate_incidents.relay_log_fields_from_decision(decision, candidates="codex,cursor")
+    assert fields["weights"] == "codex:0.8,cursor:1"
+    assert "unknown" not in fields["weights"]
 
 
 def test_unmeasured_cursor_is_sampled_beside_ok_codex():

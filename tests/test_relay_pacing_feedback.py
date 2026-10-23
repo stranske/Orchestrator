@@ -267,6 +267,87 @@ def test_cli_generate_relay_decision_id_prints_one_token(capsys):
     assert len(token) <= feedback.RELAY_DECISION_ID_MAX_CHARS
 
 
+def test_neutral_cursor_log_fields_emit_numeric_weights(capsys, monkeypatch):
+    """#891: Cursor with pacing absent still yields numeric weights= for the relay log."""
+    decision = {
+        "policy": "posterior*pacing",
+        "candidates": [
+            {
+                "agent": "cursor",
+                "state": "ok",
+                "routing_weight": 1.0,
+                "pacing": None,
+                "reason": "subscription ok",
+            },
+            {
+                "agent": "codex",
+                "state": "warn",
+                "routing_weight": 0.8,
+                "pacing": {"state": "warn", "routing_weight": 0.8},
+            },
+        ],
+    }
+    fields = rate_incidents.relay_log_fields_from_decision(decision, candidates="codex,cursor")
+    assert fields["weights"] == "codex:0.8,cursor:1"
+    assert "unknown" not in fields["weights"]
+    assert fields["states"] == "codex:warn,cursor:ok"
+    assert fields["policy"] == "posterior*pacing"
+
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(decision)))
+    assert rate_incidents.main(["format-relay-pacing-fields", "--candidates", "codex,cursor"]) == 0
+    printed = json.loads(capsys.readouterr().out.strip())
+    assert printed == fields
+
+
+def test_pick_agent_emits_log_fields_for_neutral_cursor(monkeypatch, capsys):
+    """pick-agent stderr carries log_fields so the host relay need not dig nested pacing."""
+    import capacity
+    import router
+
+    snapshot = {
+        "agents": {
+            "codex": {
+                "state": "warn",
+                "pacing": {"state": "warn", "routing_weight": 0.8},
+            },
+            "cursor": {"state": "ok"},
+        }
+    }
+    monkeypatch.setattr(capacity, "build", lambda: snapshot)
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    assert (
+        capacity.main(["pick-agent", "--candidates", "codex,cursor", "--task-type", "implement"])
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.out.strip() in {"codex", "cursor"}
+    decision = json.loads(captured.err.strip())
+    assert decision["policy"] == "posterior*pacing"
+    assert decision["log_fields"]["weights"] == "codex:0.8,cursor:1"
+    assert "unknown" not in decision["log_fields"]["weights"]
+
+
+def test_pick_agent_non_relay_candidate_keeps_success(monkeypatch, capsys):
+    """Relay-only log formatting cannot fail a valid general router pick."""
+    import capacity
+    import router
+
+    monkeypatch.setattr(capacity, "build", lambda: {"agents": {"gemini": {"state": "ok"}}})
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    monkeypatch.setattr(router, "select_agent", lambda *args, **kwargs: {"agent": "gemini"})
+    assert capacity.main(["pick-agent", "--candidates", "gemini"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "gemini"
+    diagnostic, raw = captured.err.splitlines()
+    assert "Relay log fields unavailable" in diagnostic
+    assert "supported agents" in diagnostic
+    decision = json.loads(raw)
+    assert "log_fields" not in decision
+    assert decision["candidates"][0]["agent"] == "gemini"
+
+
 def test_append_relay_pacing_decision_writes_joinable_line(tmp_path, monkeypatch, capsys):
     log = _setup(tmp_path, monkeypatch)
     when = datetime.fromtimestamp(NOW - 30, timezone.utc)

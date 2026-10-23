@@ -1455,6 +1455,17 @@ def main(argv):
                 for agent in args.candidates.split(",")
             ],
         }
+        # Host relay must use these tokens (not nested pacing alone): #891's neutral
+        # Cursor puts routing_weight on the candidate while pacing is absent.
+        import rate_incidents
+
+        try:
+            decision["log_fields"] = rate_incidents.relay_log_fields_from_decision(
+                decision, candidates=args.candidates
+            )
+        except ValueError as exc:
+            # Log formatting must not turn a valid non-relay selection into failure.
+            print(f"Relay log fields unavailable: {exc}", file=sys.stderr)
         print(json.dumps(decision), file=sys.stderr)
         return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)
