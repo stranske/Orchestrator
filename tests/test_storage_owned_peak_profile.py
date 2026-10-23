@@ -818,3 +818,197 @@ def test_malformed_archive_inventory_is_fixed_code_only(tmp_path, monkeypatch):
     reason = {}
     assert storage._archived_producers_match(tmp_path, reason=reason) is False
     assert reason == {"reason": "archived_inventory_malformed"}
+
+
+def cache_sample(value):
+    return {
+        "schema": storage.OWNED_SAMPLE_CONTRACT,
+        "complete_samples": 1,
+        "failed_samples": 0,
+        "allocated_highwater_bytes": value,
+    }
+
+
+def cache_learn(m, c, job, value, **kwargs):
+    m.admit(job, "verify", 0, 25, owner_token="owner", measurement_contract=c)
+    finish(m, job, cache_sample(value), **kwargs)
+
+
+def cache_state(m):
+    return json.loads((m.directory / "reservations.json").read_text())
+
+
+def test_owned_hot_cache_bounded_and_exact_evicted_contract_recovered(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "OWNED_CACHE_LIMIT", 2)
+    m = manager(tmp_path)
+    cs = [contract(tmp_path, str(n)) for n in range(3)]
+    for n, c in enumerate(cs):
+        cache_learn(m, c, str(n), 80 + n)
+    assert len(cache_state(m)["owned_measurements"]) == 2
+    assert cs[0]["sha256"] not in cache_state(m)["owned_measurements"]
+    assert len(list((m.directory / "owned-summaries").glob("*.json"))) == 3
+    assert (
+        m.admit("reuse", "verify", 0, 25, owner_token="owner", measurement_contract=cs[0])["peak"]
+        == 80
+    )
+    assert len(cache_state(m)["owned_measurements"]) == 2
+
+
+def test_recency_survives_sorted_reload_and_preserves_concurrent_charges(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "OWNED_CACHE_LIMIT", 2)
+    m = manager(tmp_path)
+    cs = [contract(tmp_path, str(n)) for n in range(3)]
+    cache_learn(m, cs[0], "first", 80)
+    cache_learn(m, cs[1], "second", 90)
+    m = manager(tmp_path)  # Reload sorted JSON; dict order is not recency.
+    m.admit("active", "verify", 0, 25, owner_token="owner", measurement_contract=cs[0])
+    m.finish("active", {}, terminal=False)
+    before = cache_state(m)["jobs"]["active"]
+    cache_learn(m, cs[2], "third", 100)
+    data = cache_state(m)
+    assert cs[1]["sha256"] not in data["owned_measurements"]
+    assert cs[0]["sha256"] in data["owned_measurements"]
+    assert data["jobs"]["active"] == before
+    assert data["peaks"] == {}
+
+
+def test_legacy_oversized_cache_archived_before_eviction_without_history_scan(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(storage, "OWNED_CACHE_LIMIT", 2)
+    m = manager(tmp_path)
+    cs = [contract(tmp_path, str(n)) for n in range(4)]
+    records = {
+        c["sha256"]: {"contract": c, "allocated_highwater_bytes": 70 + n} for n, c in enumerate(cs)
+    }
+    storage.write_json(
+        m.directory / "reservations.json",
+        {
+            "jobs": {"old": {"remaining": 30, "status": "uncertain"}},
+            "peaks": {"other": 120},
+            "owned_measurements": records,
+        },
+    )
+    with m.locked():
+        pass
+    data = cache_state(m)
+    assert len(data["owned_measurements"]) == 2
+    assert data["jobs"] == {"old": {"remaining": 30, "status": "uncertain"}}
+    assert data["peaks"] == {"other": 120}
+    for key in records.keys() - data["owned_measurements"].keys():
+        summary = m._read_summary(key, records[key]["contract"])
+        assert summary["witness"]["kind"] == "legacy_record"
+        assert summary["record"] == records[key]
+
+
+def test_durable_max_survives_ledger_failure_and_same_job_smaller_retry(tmp_path, monkeypatch):
+    m = manager(tmp_path)
+    c = contract(tmp_path)
+    cache_learn(m, c, "old", 80)
+    m.admit("crash", "verify", 0, 25, owner_token="owner", measurement_contract=c)
+    writer = storage.write_json
+
+    def fail_ledger(path, value):
+        if path.name == "reservations.json":
+            raise OSError("simulated ledger failure")
+        return writer(path, value)
+
+    monkeypatch.setattr(storage, "write_json", fail_ledger)
+    with pytest.raises(OSError, match="simulated ledger"):
+        finish(m, "crash", cache_sample(150))
+    assert cache_state(m)["owned_measurements"][c["sha256"]]["allocated_highwater_bytes"] == 80
+    monkeypatch.setattr(storage, "write_json", writer)
+    finish(m, "crash", cache_sample(50))
+    summary = m._read_summary(c["sha256"], c)
+    assert summary["record"]["allocated_highwater_bytes"] == 150
+    assert summary["witness"]["receipt"]["owned_highwater"]["allocated_highwater_bytes"] == 150
+    ordinary = json.loads((m.directory / "receipts" / "crash.json").read_text())
+    assert ordinary["owned_highwater"]["allocated_highwater_bytes"] == 50
+    assert (
+        m.admit("reuse", "verify", 0, 25, owner_token="owner", measurement_contract=c)["peak"]
+        == 150
+    )
+
+
+def test_staged_peak_immutable_witness_and_smaller_job_keep_original_provenance(tmp_path):
+    m = manager(tmp_path)
+    c = contract(tmp_path)
+    cache_learn(m, c, "high", 50, staged_owned_checkpoint=cache_sample(170))
+    cache_learn(m, c, "small", 60)
+    summary = m._read_summary(c["sha256"], c)
+    assert summary["record"]["allocated_highwater_bytes"] == 170
+    assert summary["record"]["receipt"].endswith("/high.json")
+    assert (
+        summary["witness"]["receipt"]["staged_owned_checkpoint"]["allocated_highwater_bytes"] == 170
+    )
+    assert "witness" not in cache_state(m)["owned_measurements"][c["sha256"]]
+
+
+@pytest.mark.parametrize("damage", ["digest", "schema", "symlink", "missing", "oversized"])
+def test_corrupt_relevant_summary_never_falls_back_to_hot_cache(tmp_path, damage):
+    m = manager(tmp_path)
+    c = contract(tmp_path)
+    cache_learn(m, c, "first", 80)
+    path = m._summary_path(c["sha256"])
+    if damage == "symlink":
+        path.unlink()
+        path.symlink_to(tmp_path / "absent")
+    elif damage == "missing":
+        path.unlink()
+    elif damage == "oversized":
+        path.write_bytes(b"x" * (storage.OWNED_SUMMARY_LIMIT + 1))
+    else:
+        data = json.loads(path.read_text())
+        data["sha256" if damage == "digest" else "schema"] = "invalid"
+        storage.write_json(path, data)
+    with pytest.raises(storage.StorageBlocked):
+        m.admit("next", "verify", 0, 25, owner_token="owner", measurement_contract=c)
+    assert "next" not in cache_state(m)["jobs"]
+
+
+def test_summary_write_failure_preserves_legacy_cache_and_jobs(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "OWNED_CACHE_LIMIT", 1)
+    m = manager(tmp_path)
+    cs = [contract(tmp_path, str(n)) for n in range(2)]
+    records = {c["sha256"]: {"contract": c, "allocated_highwater_bytes": 80} for c in cs}
+    original = {"jobs": {"old": {"remaining": 20}}, "peaks": {}, "owned_measurements": records}
+    storage.write_json(m.directory / "reservations.json", original)
+    monkeypatch.setattr(
+        storage, "write_json", lambda *a, **k: (_ for _ in ()).throw(OSError("write failed"))
+    )
+    with pytest.raises(OSError, match="write failed"):
+        with m.locked():
+            pass
+    assert cache_state(m) == original
+
+
+def test_incoming_receipt_contract_mismatch_cannot_poison_summary(tmp_path):
+    m = manager(tmp_path)
+    c = contract(tmp_path)
+    cache_learn(m, c, "first", 80)
+    path = m._summary_path(c["sha256"])
+    before = path.read_bytes()
+    m.admit("next", "verify", 0, 25, owner_token="owner", measurement_contract=c)
+    with pytest.raises(storage.StorageBlocked, match="witness mismatch"):
+        finish(m, "next", cache_sample(100), measurement_contract=contract(tmp_path, "foreign"))
+    assert path.read_bytes() == before
+    assert "next" in cache_state(m)["jobs"]
+
+
+def test_invalid_cache_key_and_symlink_directory_refuse_without_rewriting(tmp_path):
+    m = manager(tmp_path)
+    c = contract(tmp_path)
+    bad = {
+        "jobs": {},
+        "peaks": {},
+        "owned_measurements": {"../escape": {"contract": c, "allocated_highwater_bytes": 90}},
+    }
+    storage.write_json(m.directory / "reservations.json", bad)
+    with pytest.raises(storage.StorageBlocked):
+        with m.locked():
+            pass
+    assert cache_state(m) == bad
+    storage.write_json(m.directory / "reservations.json", {"jobs": {}, "peaks": {}})
+    (m.directory / "owned-summaries").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(storage.StorageBlocked, match="unsafe owned summary directory"):
+        m.admit("next", "verify", 0, 25, owner_token="owner", measurement_contract=c)

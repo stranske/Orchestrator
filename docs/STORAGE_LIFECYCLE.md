@@ -104,6 +104,24 @@ sampled observations can only raise future reserves. Samples and the staged
 checkpoint are retained before teardown so early cleanup cannot rewrite them as
 a smaller terminal size. No extra verification run is required just to measure.
 
+The reservation ledger keeps at most 256 owned-measurement cache entries, with
+persisted access sequences rather than JSON key order determining eviction.
+Exact-contract summaries in `owned-summaries/<contract-sha256>.json` retain the
+conservative highwater and an immutable snapshot of its supporting receipt
+(including staged checkpoints). Every admission and completion reads that exact
+summary, even on a cache hit. Summary publication precedes ledger updates, so a
+failed ledger write cannot hide a higher retained value. Smaller retries retain
+the original highwater witness even if the ordinary job receipt is overwritten.
+Existing cache entries without authenticated receipt snapshots are preserved as
+explicit legacy-record evidence, never promoted to calibrated measurements.
+
+Only the hot ledger cache is bounded. Durable per-contract summaries and receipts
+remain historical evidence; this policy does not delete them or bound their total
+disk use. Eviction preserves a summary first and refuses on relevant corruption,
+unsafe paths or write failure. Jobs, uncertain reservations, legacy profile peaks
+and their concurrent charges remain unchanged. Summary values are raise-only
+sampled lower bounds, not permission to lower the reviewed cold plan.
+
 The source estimate covers simultaneous mirror/copy-contract staging, including
 Git object sizes for committed docs/tests/scripts even when working-tree files
 are absent or online-only. State

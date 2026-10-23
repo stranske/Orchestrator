@@ -732,6 +732,55 @@ def staging_bytes(
     return total
 
 
+OWNED_CACHE_LIMIT = 256
+OWNED_SUMMARY_LIMIT = 8 * 1024 * 1024
+
+
+def _json_digest(value: JSON) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _owned_record_valid(key: str, record: Any) -> bool:
+    return (
+        isinstance(key, str)
+        and len(key) == 64
+        and all(char in "0123456789abcdef" for char in key)
+        and isinstance(record, dict)
+        and isinstance(record.get("contract"), dict)
+        and record["contract"].get("sha256") == key
+        and type(record.get("allocated_highwater_bytes")) is int
+        and record["allocated_highwater_bytes"] >= 0
+        and type(record.get("access_sequence", 0)) is int
+        and record.get("access_sequence", 0) >= 0
+    )
+
+
+def _owned_sample_peak(receipt: JSON) -> int | None:
+    sample = receipt.get("owned_highwater")
+    if (
+        not isinstance(sample, dict)
+        or sample.get("schema") != OWNED_SAMPLE_CONTRACT
+        or receipt.get("source_unchanged") is not True
+        or receipt.get("exit_code") != 0
+    ):
+        return None
+    samples = [sample]
+    checkpoint = receipt.get("staged_owned_checkpoint")
+    if isinstance(checkpoint, dict):
+        samples.append(checkpoint)
+    for row in samples:
+        if any(
+            type(row.get(field)) is not int or row[field] < 0
+            for field in ("complete_samples", "failed_samples", "allocated_highwater_bytes")
+        ):
+            return None
+    if sum(row["complete_samples"] for row in samples) == 0 or any(
+        row["failed_samples"] for row in samples
+    ):
+        return None
+    return max(row["allocated_highwater_bytes"] for row in samples)
+
+
 class Reservations:
     def __init__(
         self,
@@ -754,6 +803,155 @@ class Reservations:
         if attributes.st_uid != os.getuid() or stat.S_IMODE(attributes.st_mode) & 0o077:
             raise StorageBlocked("storage state must be owner-private; permissions unchanged")
 
+    def _summary_path(self, key: str, *, create: bool = False) -> Path:
+        if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+            raise StorageBlocked("invalid owned summary identity")
+        directory = self.directory / "owned-summaries"
+        if create:
+            directory.mkdir(exist_ok=True, mode=0o700)
+        if directory.exists() or directory.is_symlink():
+            info = directory.lstat()
+            if (
+                directory.is_symlink()
+                or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                raise StorageBlocked("unsafe owned summary directory; preserved")
+        return directory / (key + ".json")
+
+    def _read_summary(self, key: str, contract: JSON) -> JSON | None:
+        path = self._summary_path(key)
+        if path.is_symlink():
+            raise StorageBlocked("owned summary is a symlink; preserved")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+                or info.st_size > OWNED_SUMMARY_LIMIT
+            ):
+                raise StorageBlocked("unsafe owned summary; preserved")
+            raw = stream.read(OWNED_SUMMARY_LIMIT + 1)
+        if len(raw) > OWNED_SUMMARY_LIMIT:
+            raise StorageBlocked("owned summary exceeds read bound; preserved")
+        try:
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise ValueError
+            body = {name: value for name, value in result.items() if name != "sha256"}
+            record, witness = result.get("record"), result.get("witness")
+            if (
+                result.get("schema") != "storage-owned-summary/v1"
+                or result.get("sha256") != _json_digest(body)
+                or not isinstance(record, dict)
+                or not _owned_record_valid(key, record)
+                or record["contract"] != contract
+                or not isinstance(witness, dict)
+            ):
+                raise ValueError
+            if witness.get("kind") == "receipt_snapshot":
+                if (
+                    not isinstance(witness.get("receipt"), dict)
+                    or witness.get("sha256") != _json_digest(witness["receipt"])
+                    or witness["receipt"].get("measurement_contract") != contract
+                    or _owned_sample_peak(witness["receipt"]) != record["allocated_highwater_bytes"]
+                ):
+                    raise ValueError
+            elif witness.get("kind") == "legacy_record":
+                if witness.get("sha256") != _json_digest(record):
+                    raise ValueError
+            else:
+                raise ValueError
+        except (ValueError, TypeError, RecursionError) as error:
+            raise StorageBlocked("invalid owned summary; preserved") from error
+        return result
+
+    def _save_summary(self, key: str, record: JSON, receipt: JSON | None = None) -> JSON:
+        if not _owned_record_valid(key, record):
+            raise StorageBlocked("invalid owned summary record; preserved")
+        if receipt is not None and (
+            receipt.get("measurement_contract") != record["contract"]
+            or _owned_sample_peak(receipt) != record["allocated_highwater_bytes"]
+        ):
+            raise StorageBlocked("owned summary witness mismatch; preserved")
+        current = self._read_summary(key, record["contract"])
+        clean = {
+            name: value
+            for name, value in record.items()
+            if name not in {"access_sequence", "summary_sha256"}
+        }
+        if current is not None:
+            old = current["record"]["allocated_highwater_bytes"]
+            new = clean["allocated_highwater_bytes"]
+            if old > new or (
+                old == new and (receipt is None or current["witness"]["kind"] == "receipt_snapshot")
+            ):
+                return current
+        witness = (
+            {"kind": "receipt_snapshot", "sha256": _json_digest(receipt), "receipt": receipt}
+            if receipt is not None
+            else {"kind": "legacy_record", "sha256": _json_digest(clean)}
+        )
+        body = {"schema": "storage-owned-summary/v1", "record": clean, "witness": witness}
+        result = {**body, "sha256": _json_digest(body)}
+        if len(json.dumps(result).encode()) > OWNED_SUMMARY_LIMIT:
+            raise StorageBlocked("owned summary exceeds read bound; evidence retained")
+        path = self._summary_path(key, create=True)
+        write_json(path, result)  # Durable max BEFORE any hot-ledger eviction/update.
+        return result
+
+    def _touch_owned(self, data: JSON, key: str, summary: JSON) -> JSON:
+        cache = data.setdefault("owned_measurements", {})
+        sequence = (
+            max(
+                data.get("owned_cache_sequence", 0),
+                max((row.get("access_sequence", 0) for row in cache.values()), default=0),
+            )
+            + 1
+        )
+        data["owned_cache_sequence"] = sequence
+        record = {
+            **summary["record"],
+            "summary_sha256": summary["sha256"],
+            "access_sequence": sequence,
+        }
+        cache[key] = record
+        return record
+
+    def _owned_calibration(self, data: JSON, contract: JSON) -> JSON:
+        key = contract["sha256"]
+        cached = data.get("owned_measurements", {}).get(key)
+        if cached is not None and cached["contract"] != contract:
+            raise StorageBlocked("owned calibration contract mismatch; preserved")
+        summary = self._read_summary(key, contract)  # ALWAYS read, including a cache hit.
+        if cached is not None:
+            if summary is None and cached.get("summary_sha256"):
+                raise StorageBlocked("referenced owned summary missing; preserved")
+            if (
+                summary is not None
+                and cached.get("summary_sha256")
+                and summary["record"]["allocated_highwater_bytes"]
+                < cached["allocated_highwater_bytes"]
+            ):
+                raise StorageBlocked("owned summary regressed; preserved")
+            summary = self._save_summary(key, cached)
+        return self._touch_owned(data, key, summary) if summary is not None else {}
+
+    def _trim_owned(self, data: JSON) -> None:
+        cache = data.get("owned_measurements", {})
+        excess = len(cache) - OWNED_CACHE_LIMIT
+        for key in sorted(cache, key=lambda name: (cache[name].get("access_sequence", 0), name))[
+            : max(0, excess)
+        ]:
+            self._save_summary(key, cache[key])
+            del cache[key]
+
     @contextlib.contextmanager
     def locked(self) -> Iterator[JSON]:
         descriptor = os.open(self.directory / "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -770,20 +968,20 @@ class Reservations:
                 raise StorageBlocked("invalid storage reservation state; preserved")
             if not isinstance(data.get("owned_measurements", {}), dict):
                 raise StorageBlocked("invalid owned measurement state; preserved")
+            if (
+                type(data.get("owned_cache_sequence", 0)) is not int
+                or data.get("owned_cache_sequence", 0) < 0
+            ):
+                raise StorageBlocked("invalid owned cache recency; preserved")
             for key, record in data.get("owned_measurements", {}).items():
-                if (
-                    not isinstance(record, dict)
-                    or not isinstance(record.get("contract"), dict)
-                    or record["contract"].get("sha256") != key
-                    or type(record.get("allocated_highwater_bytes")) is not int
-                    or record["allocated_highwater_bytes"] < 0
-                ):
+                if not _owned_record_valid(key, record):
                     raise StorageBlocked("invalid owned measurement record; preserved")
             if any(not isinstance(row, dict) for row in data["jobs"].values()) or any(
                 type(value) is not int or value < 0 for value in data["peaks"].values()
             ):
                 raise StorageBlocked("invalid reservation/profile evidence; preserved")
             yield data
+            self._trim_owned(data)
             write_json(path, data)
         finally:
             os.close(descriptor)
@@ -832,11 +1030,9 @@ class Reservations:
                 row["remaining"] for row in rows if row.get("volume_device") in (None, device)
             ]
             # Legacy peaks are retained conservative estimates, not measurements.
-            calibration = data.get("owned_measurements", {}).get(
-                measurement_contract["sha256"] if measurement_contract else "", {}
+            calibration = (
+                self._owned_calibration(data, measurement_contract) if measurement_contract else {}
             )
-            if calibration and calibration.get("contract") != measurement_contract:
-                raise StorageBlocked("owned calibration contract mismatch; preserved")
             sampled = calibration.get("allocated_highwater_bytes", 0)
             if type(sampled) is not int or sampled < 0:
                 raise StorageBlocked("invalid owned calibration; preserved")
@@ -912,46 +1108,21 @@ class Reservations:
                 # Never relabel planned reservations or shared-volume decline as
                 # measured owned growth. Preserve all pre-existing legacy estimates.
                 contract = row.get("measurement_contract")
-                sample = receipt.get("owned_highwater")
-                checkpoint = row.get("staged_owned_checkpoint")
-                if isinstance(sample, dict) and isinstance(checkpoint, dict):
-                    sample = {
-                        **sample,
-                        "complete_samples": sample.get("complete_samples", 0)
-                        + checkpoint.get("complete_samples", 0),
-                        "failed_samples": sample.get("failed_samples", 0)
-                        + checkpoint.get("failed_samples", 0),
-                        "allocated_highwater_bytes": max(
-                            sample.get("allocated_highwater_bytes", 0),
-                            checkpoint.get("allocated_highwater_bytes", 0),
-                        ),
-                    }
-                if (
-                    isinstance(contract, dict)
-                    and isinstance(sample, dict)
-                    and sample.get("schema") == OWNED_SAMPLE_CONTRACT
-                    and type(sample.get("complete_samples")) is int
-                    and sample["complete_samples"] > 0
-                    and type(sample.get("failed_samples")) is int
-                    and sample["failed_samples"] == 0
-                    and receipt.get("source_unchanged") is True
-                    and receipt.get("exit_code") == 0
-                    and type(sample.get("allocated_highwater_bytes")) is int
-                    and sample["allocated_highwater_bytes"] >= 0
-                ):
-                    measurements = data.setdefault("owned_measurements", {})
-                    old = measurements.get(contract["sha256"], {})
-                    measurements[contract["sha256"]] = {
+                sampled_peak = _owned_sample_peak(receipt)
+                if isinstance(contract, dict) and sampled_peak is not None:
+                    self._owned_calibration(data, contract)
+                    candidate = {
                         "contract": contract,
-                        "allocated_highwater_bytes": max(
-                            old.get("allocated_highwater_bytes", 0),
-                            sample["allocated_highwater_bytes"],
-                        ),
+                        "allocated_highwater_bytes": sampled_peak,
                         "receipt": str(receipts / f"{job}.json"),
                         "peak_bound_proven": False,
                         "scope": "total-owned-including-staging",
                         "eligible_to_lower_reserve": False,
                     }
+                    # Summary embeds the max witness, so same-job smaller retry
+                    # cannot invalidate it by overwriting the ordinary receipt.
+                    summary = self._save_summary(contract["sha256"], candidate, receipt)
+                    self._touch_owned(data, contract["sha256"], summary)
                 del data["jobs"][job]
             else:
                 row.update(status="uncertain", receipt=str(receipts / f"{job}.json"))
