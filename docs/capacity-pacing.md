@@ -7,9 +7,8 @@ one hour from the same source and period. Measured zero burn is distinct from
 undefined. Retain the latest sample at or before the six-hour cutoff as an
 anchor, plus the in-window observations, provided the anchor is no older than
 `BURN_WINDOW_HOURS*3600 + 2*SAMPLE_TICK_SECONDS` (28,800 seconds, eight hours).
-`SAMPLE_TICK_SECONDS = 3600`: the orchestrator tick records one pacing sample
-per hour, with additional poll-driven snapshots. Two sample ticks allow for
-normal sampling cadence around the six-hour cutoff; this allowance is separate
+`SAMPLE_TICK_SECONDS = 3600`: allowance for sparse sampling; observed p95 ≈ 26 min.
+Two allowances extend the six-hour cutoff to eight hours; this is separate
 from the poll freshness threshold.
 An older anchor is ignored and prints `anchor ignored: age=<s>s > bound=<s>s`;
 span then starts at the oldest in-window observation. Compute interval rates from
@@ -206,6 +205,9 @@ override only if it reports 3.13 or 3.14; other versions are ignored. The existi
 `ORCH_USAGE_POLL_PYTHON` explicit venv selection remains supported only for
 3.13/3.14; unsupported or unavailable legacy overrides are ignored with a
 diagnostic. If no standard interpreter is available, the wrapper fails explicitly.
+This differs from the first live version: `usage-poll.sh` accepts an
+`ORCH_USAGE_POLL_PYTHON` override only if it reports Python 3.13/3.14; otherwise
+it prints "ignoring unsupported ORCH_USAGE_POLL_PYTHON" and uses the standard interpreter.
 
 The Claude poll owns a dedicated CLI login. The owner signs in once:
 
@@ -223,7 +225,8 @@ inference-only and lacks the `user:profile` scope needed by `/usage` (request
 credential wipes when the default login is shared with other sessions. These are
 user reports, not official authentication guarantees; the dedicated directory
 isolates the poller's login from the desktop app and other CLI sessions.
-At the CLI invocation boundary, `claude-usage-poll.py` also removes inherited
+The second deviation from the first live version is at the CLI invocation
+boundary: `claude-usage-poll.py` removes inherited
 `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` so API/gateway authentication cannot
 override the subscription login. See [Anthropic's API-key guidance](https://support.claude.com/en/articles/12304248-manage-api-key-environment-variables-in-claude-code).
 
@@ -231,7 +234,25 @@ If this login lapses, the poll goes stale and the stale alert fires
 (`usage-poll: claude STALE`). Recover with one re-login in the same directory.
 The seven-day check-in passes when Claude poll age is at most 30 minutes on at
 least 95% of ticks over seven days; this is an acceptance target, not a measured
-result of installing these files.
+result of installing these files. Check date: **2026-10-30 01:30Z**; check-in id:
+`pacing-claude-login-7d`. This coordinator-registered local check-in runs
+`~/.codex/orchestrator/briefs/pacing-claude-login-probe.sh`; it is not part of the repo.
+
+Read-only seven-day poll success count from the wrapper log (not the freshness pass number):
+
+```bash
+python3 -c 'import datetime as d,pathlib,re,time; now=time.time(); p=pathlib.Path("~/.codex/orchestrator/usage-poll/poll.log").expanduser(); rows=[m.groups() for line in (p.read_text().splitlines() if p.exists() else []) if (m:=re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) claude rc=(\d+)(?:\s|$)",line))]; codes=[int(rc) for ts,rc in rows if now-7*86400<=d.datetime.fromisoformat(ts.replace("Z","+00:00")).timestamp()<=now]; n=len(codes); ok=codes.count(0); rate=f"{100*ok/n:.1f}%" if n else "unmeasured"; print(f"claude polls={n} ok={ok} success_rate={rate}")'
+```
+
+Freshness pass number: percentage of the last seven days' 600-second ticks with
+latest observed poll age ≤ 1800 s, using `usage-poll/claude-usage.ndjson`. The
+denominator includes missing ticks; absent history earns zero fresh ticks.
+Retention gaps can make this conservative. A successful poll alone does not
+prove continuous freshness.
+
+```bash
+python3 -c 'import bisect,json,pathlib,time; now=time.time(); p=pathlib.Path("~/.codex/orchestrator/usage-poll/claude-usage.ndjson").expanduser(); stamps=sorted(json.loads(line)["ts"] for line in (p.read_text().splitlines() if p.exists() else []) if line.strip()); ticks=[now-7*86400+i*600 for i in range(1,1009)]; ok=sum(i>0 and 0<=tick-stamps[i-1]<=1800 for tick in ticks for i in [bisect.bisect_right(stamps,tick)]); print(f"claude ticks={len(ticks)} fresh={ok} age_le_1800_rate={100*ok/len(ticks):.1f}%")'
+```
 
 `prune-claude-keychain-slots.py` is an optional manual maintenance helper, dry-run
 by default. It reads item metadata only and always keeps the default credential
