@@ -248,6 +248,28 @@ def test_router_consumes_pacing_shed_loses_to_ok():
     assert codex["pacing"]["projected_fraction"] == 4.2
 
 
+def test_shed_still_loses_to_ok_with_neutral_cursor():
+    """Issue #891: shed-loses-to-ok stays intact when Cursor joins as neutral."""
+    cap = cap_for()
+    cap["agents"]["cursor"] = dict(state="ok")
+    result = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "claude", "cursor"},
+        exploration_rate=0,
+        rng=random.Random(42),
+        simulate=True,
+    )
+    assert result["agent"] in {"claude", "cursor"}
+    decision = result["pacing_decision"]
+    assert decision["policy"] == "posterior*pacing"
+    assert {r["agent"]: r["routing_weight"] for r in decision["candidates"]} == {
+        "codex": 0.0,
+        "claude": 0.5,
+        "cursor": 1.0,
+    }
+
+
 def test_unmeasured_cursor_is_neutral_not_legacy():
     cap = cap_for(codex="warn", cw=0.8)
     cap["agents"]["cursor"] = dict(state="ok")
