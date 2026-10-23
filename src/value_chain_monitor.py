@@ -13,7 +13,8 @@ outcome is the `outcome` step, and a learning-excluded one, one awaiting the swe
 merges and an open one are counted beside it. A run that never merges is scored by verdict in
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
 success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy instead count the
-observed lane-round terminal result; they never earn durable-delivery success.
+observed lane-round terminal result; successful rounds require exit=0. These operational
+results do not establish durable-delivery success.
 The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
@@ -165,6 +166,40 @@ def _stall_situations(inputs: dict[str, Any]) -> int | None:
     return None if targets is None else len(targets)
 
 
+def _relay_situations(inputs: dict[str, Any]) -> int | None:
+    return inputs.get("relay_decision_count")
+
+
+def _relay_decision_population(log: Path, start: int, end: int) -> int | None:
+    """Independent demand: valid distinct log decisions, including unjoined rounds."""
+    try:
+        if not log.is_file():
+            return None
+        decisions = feedback.read_relay_pacing_decisions(log, end=end)
+    except (OSError, UnicodeError):
+        return None
+    return sum(start <= stamp <= end for stamp, _ in decisions.values())
+
+
+def _relay_usable(inputs: dict[str, Any], start: int, end: int) -> int | None:
+    """Accepted decision events prove usability even after the source log rotates."""
+    events = inputs.get("completion_events")
+    if events is None:
+        return None
+    return len(
+        {
+            e["run_id"]
+            for e in events
+            if e.get("capability_id") == feedback.RELAY_PACING_CAPABILITY
+            and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+            and e.get("producer") == "feedback.relay_pacing"
+            and e.get("phase") == "decision"
+            and e.get("validation_status") == "accepted"
+            and start <= e.get("created_ts", -1) <= end
+        }
+    )
+
+
 def _prompt_batches(inputs: dict[str, Any]) -> int | None:
     issues = inputs.get("fleet_issues")
     if issues is None:
@@ -203,6 +238,7 @@ SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "role-triage": _open_issues,
     "role-adjudicator": _disputes,
     "role-redirect": _stall_situations,
+    feedback.RELAY_PACING_CAPABILITY: _relay_situations,
 }
 
 
@@ -281,7 +317,8 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     bad, and `outcome_success` those of them that are a durable success
     (`feedback.outcome_is_durable_success`, the lifecycle's predicate). Every class has its own
     field, so nothing set aside is hidden in a smaller count. The capacity row also counts
-    version-exact relay round completions (including failure) without inventing PR outcomes.
+    version-exact relay round completions (including failure), and completed exit=0 round
+    successes, without inventing PR outcomes.
     None when the edges are unread:
     unmeasured, never zero.
     """
@@ -323,6 +360,10 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
             for c, field in CLASS_FIELDS.items()
         },
         "outcome_success": sum(
+            e.get("relay_round_status") == "completed" and e.get("relay_round_exit_status") == 0
+            for e in relay
+        )
+        + sum(
             c == "terminal"
             and feedback.outcome_is_durable_success(**capability_effectiveness._outcome_fields(e))
             for c, e in classified
@@ -487,7 +528,8 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "AND ce.run_id=ie.target_run_id "
                 "AND ce.capability_id=ie.capability_id "
                 "AND ce.capability_version_id=ie.capability_version_id THEN "
-                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status "
+                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status, "
+                "json_extract(ce.payload_json,'$.relay_pacing.exit_status') AS relay_round_exit_status "
                 "FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
@@ -575,9 +617,27 @@ def fleet_issues(gh_fn: Callable, since: int, now: int, repos: list[str]) -> lis
 
 
 def collect_inputs(
-    *, now: int, gh_fn: Callable, repos: list[str], db: Path, stall_log: Path | None = None
+    *,
+    now: int,
+    gh_fn: Callable,
+    repos: list[str],
+    db: Path,
+    stall_log: Path | None = None,
+    relay_log: Path | None = None,
 ) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    inputs["relay_decision_count"] = _relay_decision_population(
+        relay_log
+        or Path(
+            os.environ.get(
+                "HANDOFF_PACING_LOG", str(Path.home() / ".codex/handoff/relay-pacing.log")
+            )
+        ),
+        now - WINDOW_DAYS * 86400,
+        now,
+    )
+    if inputs["relay_decision_count"] is None:
+        inputs["errors"].append("relay pacing population unavailable (decision log unread)")
     inputs["stall_targets"] = _stall_sweep_targets(
         stall_log or _state_dir() / STALL_SWEEP_LOG, now - WINDOW_DAYS * 86400, now
     )
@@ -656,6 +716,10 @@ def report(
             # Every class set aside from `outcome` has its own count beside it.
             **outcome_counts(cid, own_edges),
         }
+        if cid == feedback.RELAY_PACING_CAPABILITY:
+            usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
+            counts["usable"] = None if usable is None else counts["usable"] + usable
+            counts["success_scope"] = "completed lane rounds (exit=0); no durable-delivery claim"
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).
@@ -698,6 +762,7 @@ def format_lines(section: dict) -> list[str]:
             else f"demand {row['situation_count']}"
         )
         first = row["first_break"] or "unmeasured"
+        success_scope = f" ({row['success_scope']})" if row.get("success_scope") else ""
 
         def aside(step: str) -> str:
             parts = [
@@ -708,7 +773,7 @@ def format_lines(section: dict) -> list[str]:
         lines.append(
             f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {row['usable']}; "
             f"acted_on {row['acted_on']}{aside('acted_on')}; "
-            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}; "
+            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}{success_scope}; "
             f"first_break {first}"
             + ("; " + ", ".join(row["input_off"]) if row["input_off"] else "")
         )

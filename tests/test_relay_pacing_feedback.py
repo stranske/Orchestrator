@@ -53,7 +53,7 @@ def _counts(now=NOW):
     "exit_status,evidence,status",
     [
         (0, "all checks passed", "completed"),
-        (2, "checkout failed", "failed"),
+        (75, "lane already busy", "failed"),
         (1, "HTTP 429 Too Many Requests", "rate-limited"),
     ],
 )
@@ -79,7 +79,11 @@ def test_existing_exit_hook_credits_capacity_row(
         "unjoined": 0,
     }
     counts = _counts()
-    assert (counts["acted_on"], counts["outcome"], counts["outcome_success"]) == (1, 1, 0)
+    assert (counts["acted_on"], counts["outcome"], counts["outcome_success"]) == (
+        1,
+        1,
+        int(exit_status == 0),
+    )
     with feedback._conn() as c:
         row = c.execute(
             "SELECT run_id,payload_json,validation_status FROM completion_events "
@@ -98,6 +102,17 @@ def test_existing_exit_hook_credits_capacity_row(
     )
     row = next(r for r in rep["rows"] if r["capability"] == feedback.RELAY_PACING_CAPABILITY)
     assert (row["acted_on"], row["outcome"]) == (1, 1)
+    assert row["usable"] == 1
+    assert row["outcome_success"] == int(exit_status == 0)
+    inputs = monitor.collect_inputs(
+        now=NOW, gh_fn=lambda _: (True, "{}", ""), repos=[], db=feedback.DB_PATH
+    )
+    measured = monitor.report(now=NOW, path=ledger, env={}, inputs=inputs)["rows"][0]
+    assert measured["situation_count"] == 1
+    assert measured["usable"] >= measured["acted_on"]
+    assert measured["first_break"] != "unusable"
+    assert "no durable-delivery claim" in measured["success_scope"]
+    assert "completed lane rounds (exit=0)" in "\n".join(monitor.format_lines({"rows": [measured]}))
     assert "acted_on 1" in "\n".join(monitor.format_lines(rep))
 
 
@@ -108,6 +123,12 @@ def test_fallback_and_reread_preserve_identity_and_window(tmp_path, monkeypatch)
     for end in (NOW, NOW + 86400):
         assert feedback.ingest_relay_pacing(log, now=end)["joined"] == 1
     assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+    assert monitor._relay_decision_population(log, NOW - 120, NOW) == 1
+    log.write_text(log.read_text() + _line(ts=NOW - 121) + _line(ts=NOW + 1))
+    assert monitor._relay_decision_population(log, NOW - 120, NOW) == 1
+    # The log is the independent denominator: an unjoined eligible decision still counts.
+    log.write_text(log.read_text() + _line(ts=NOW, chosen="cursor", decision_id="not-joined"))
+    assert monitor._relay_decision_population(log, NOW - 120, NOW) == 2
     with feedback._conn() as c:
         assert c.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 1
         assert c.execute("SELECT COUNT(*) FROM completion_events").fetchone()[0] == 2
@@ -186,11 +207,13 @@ def test_serial_rounds_and_lanes_do_not_cross_join(tmp_path, monkeypatch):
 def test_malformed_and_missing_log_and_import_failure(tmp_path, monkeypatch):
     log = _setup(tmp_path, monkeypatch)
     assert feedback.ingest_relay_pacing(log, now=NOW)["status"] == "absent"
+    assert monitor._relay_decision_population(log, NOW - 120, NOW) is None
     log.write_text(
         "unrelated prose\n2026-10-20T05:00:00Z source=codex\n"
         + _line().replace("fallback=no", "fallback=maybe")
     )
     assert feedback.ingest_relay_pacing(log, now=NOW)["decisions"] == 0
+    assert monitor._relay_decision_population(log, NOW - 120, NOW) == 0
     log.unlink()
     log.mkdir()  # A genuine IO error must stay visible while the incident is still written.
     tail = tmp_path / "tail"
@@ -199,6 +222,7 @@ def test_malformed_and_missing_log_and_import_failure(tmp_path, monkeypatch):
         agent="claude", lane="opener", receiver_reason=None, exit_status=1, output_file=tail, ts=NOW
     )
     assert result["relay_pacing"]["status"] == "unavailable"
+    assert monitor._relay_decision_population(log, NOW - 120, NOW) is None
     assert result["incident_id"] is not None
 
 

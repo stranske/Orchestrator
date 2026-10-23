@@ -704,6 +704,15 @@ component or surface moved, so the loop diagram is unchanged.
 No first break changes on today's data: every row these touch breaks earlier or has unmeasured
 demand. No stage, component or surface moved, so the loop diagram is unchanged.
 
+For the existing relay-pacing surface in `windowed-capacity-policy` (#812), the
+monitor now shares the importer's read-only log parser for independent demand,
+counts accepted version-matched decision events as usable, and counts joined
+`completed`/`exit=0` lane rounds as operational success. Failed and lane-busy exits
+earn none. `success_scope` identifies this unit; the durable-delivery predicate
+for PR edges is unchanged. See `docs/capacity-pacing.md` for window and missing-input
+semantics. This adds no dispatch, feedback store, capability row, or loop edge.
+
+
 **An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
 winner").** `exp_abcd` records each member run with the `abcd-experiment` capability and never
 writes its `outcomes` row, by design: a member commits on an isolated branch, never pushes, and is

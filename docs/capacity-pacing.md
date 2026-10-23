@@ -382,3 +382,21 @@ Acceptance after merge and the relay update: within 24 hours, inspect
 decisions with recorded exits, and the `switch_review.py --text-out` monitor row
 for `windowed-capacity-policy` with `acted_on > 0` and `outcome > 0`. This live
 check is separate from the repository's offline tests.
+
+## Relay monitor population (#812)
+
+The `windowed-capacity-policy` row in `switch_review.py --text-out` measures relay
+demand from validated, deduplicated decisions in `HANDOFF_PACING_LOG` (default
+`~/.codex/handoff/relay-pacing.log`) over the same report window. This read is
+independent of ingestion and joins: an eligible unjoined decision contributes to
+demand. An absent or unreadable log leaves demand unmeasured; an empty valid
+population is zero. The reader shares the importer's identity and validation rules.
+
+Accepted, version-matched Brain decision events contribute to `usable`, including
+saved decisions whose log has rotated. Accepted joins retain their existing
+`acted_on` and terminal `outcome` counts. For these operational relay outcomes,
+`success` counts only joined rounds with both `status=completed` and `exit_status=0`;
+failed, rate-limited and lane-busy (`exit=75`) rounds earn no success. The row's
+`success_scope` names this unit. These are lane-round results; durable PR delivery
+continues to use the existing lifecycle predicate on delivery edges. No Brain
+outcome row, routing setting, or durable-delivery verdict is synthesized.
