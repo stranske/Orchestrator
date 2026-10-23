@@ -159,11 +159,22 @@ def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
 
 
 @pytest.mark.parametrize("via_feedback_factory", [False, True])
+@pytest.mark.parametrize("path_kind", ["absolute", "parent-traversal", "symlink"])
 def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, via_feedback_factory: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, via_feedback_factory: bool, path_kind: str
 ) -> None:
     """Check the actual connect argument even when the feedback wrapper is bypassed."""
+    owned = tmp_path / "owned"
+    owned.mkdir()
     sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    selected = sentinel
+    if path_kind == "parent-traversal":
+        selected = owned / ".." / sentinel.name
+    elif path_kind == "symlink":
+        alias = owned / "outside"
+        alias.symlink_to(tmp_path, target_is_directory=True)
+        selected = alias / sentinel.name
+    assert selected.resolve() == sentinel.resolve()
     driver_attempts: list[Path] = []
 
     def forbid_driver(database, *args, **kwargs):
@@ -173,12 +184,12 @@ def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
     monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", forbid_driver)
     with pytest.raises(AssertionError, match="outside owned test root"):
         if via_feedback_factory:
-            monkeypatch.setattr(feedback, "DB_PATH", sentinel)
+            monkeypatch.setattr(feedback, "DB_PATH", selected)
             _REAL_FEEDBACK_CONN()
         else:
             # DB_PATH remains owned; containment must inspect the connect argument itself.
             assert Path(feedback.DB_PATH).is_relative_to(tmp_path / "owned")
-            sqlite3.connect(database=str(sentinel))
+            sqlite3.connect(database=str(selected))
     assert driver_attempts == []
     assert not sentinel.exists()
     assert not sentinel.with_name(f"{sentinel.name}-journal").exists()
