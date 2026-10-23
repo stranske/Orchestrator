@@ -39,9 +39,9 @@ python3 "$ORCH/rate_incidents.py" record-lane-round \
 Prefer `append-relay-pacing-decision` over hand-editing the pacing log: it generates the
 token, writes `decision_id=<id>` in the field order the importer accepts, and prints the
 same token for the exit hook. `capacity.py pick-agent` prints `log_fields.weights` /
-`log_fields.states` on stderr (from top-level `routing_weight`, including neutral 1.0 for
-Cursor beside a measured pool). `format-relay-pacing-fields` rebuilds those tokens from the
-same JSON when the host script does not yet read `log_fields`. `generate-relay-decision-id`
+`log_fields.states` on stderr (using top-level `routing_weight` when present).
+Cursor-top pick behavior is tracked separately in #891. `format-relay-pacing-fields`
+rebuilds those tokens from the same JSON when the host script does not yet read `log_fields`. `generate-relay-decision-id`
 remains available when the relay must emit the id into an existing log writer.
 
 Set `$tail` to a private temporary file and remove it after the call. Pass

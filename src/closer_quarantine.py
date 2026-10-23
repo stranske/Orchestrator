@@ -167,6 +167,128 @@ def resource_overlap(left, right):
     return False
 
 
+def native_queue_role(target, row):
+    """Classify exact native queue contracts, never generic deferred/error text.
+
+    This is an admission view, not permission to replay or edit an old operation.
+    Private advisory uncertainty still owns its explicit/live local resources.
+    """
+    from closer_queue import READ_ONLY_ACTIONS
+
+    try:
+        if not isinstance(row, dict) or row.get("requires_coordinator") is not False:
+            return None
+        if (
+            row.get("provider_outcome_uncertain") is not None
+            and row.get("provider_outcome_uncertain") is not False
+        ) or row.get("recovery_barrier") is not None:
+            return None
+        if row.get("operation_history") != []:
+            return None
+        canonical = _target(target)
+        if _target(row.get("target")) != canonical:
+            return None
+        operation = row.get("operation")
+        if operation is None:
+            if (
+                row.get("status") == "deferred"
+                and row.get("action") == "wait"
+                and row.get("eligible") is True
+                and row.get("revision") == "unknown"
+                and row.get("evidence") == {}
+                and row.get("operation_binding") == {}
+                and row.get("observation_freshness") == "cached_budget_exhausted"
+                and row.get("deferred_reason") == "receipt_reserve"
+                and row.get("deferred_next_trigger") == "retry_observation_next_round"
+                and row.get("next_trigger") == "fresh complete observation"
+                and row.get("reason") == "GitHub core capacity is deferred by the rate ledger"
+                and {_target(t) for t in row.get("claim_targets", [])} == {canonical}
+                and set(row.get("repo_keys", [])) == {canonical.split("#")[0]}
+            ):
+                return "observation_wait"
+            return None
+        if not isinstance(operation, dict):
+            return None
+        binding = operation.get("binding")
+        if (
+            not isinstance(binding, dict)
+            or not isinstance(binding.get("source_targets"), list)
+            or not re.fullmatch(r"[0-9a-f]{40}", str(binding.get("head")))
+            or (
+                binding.get("merge") is not None
+                and not re.fullmatch(r"[0-9a-f]{40}", str(binding["merge"]))
+            )
+            or not SHA.fullmatch(str(operation.get("revision")))
+            or not re.fullmatch(r"[0-9a-f]{32}", str(operation.get("id")))
+            or not re.fullmatch(r"closer-round:[0-9a-f]{32}", str(operation.get("owner")))
+        ):
+            return None
+        aliases = {canonical, _target(binding.get("pr_target"))}
+        aliases.update(_target(t) for t in binding["source_targets"])
+        repos = {t.split("#")[0] for t in aliases}
+        if not isinstance(operation.get("claim_targets"), list) or not isinstance(
+            operation.get("repo_keys"), list
+        ):
+            return None
+        allowed_claims = aliases | {"closer-repo:" + repo for repo in repos}
+        claims = {
+            t if isinstance(t, str) and t.startswith("closer-repo:") else _target(t)
+            for t in operation["claim_targets"]
+        }
+        if (
+            not claims
+            or not claims.issubset(allowed_claims)
+            or not set(operation["repo_keys"]).issubset(repos)
+        ):
+            return None
+        action = operation.get("action")
+        if action in READ_ONLY_ACTIONS and operation.get("status") in {
+            "submitted",
+            "running",
+            "uncertain",
+        }:
+            if operation.get("result") is None and operation.get("outcome") is None:
+                return "advisory"
+            return None
+        # This exact native worker capacity preflight returns before offload/repair.
+        # The queue records a returned deferred value as failed/outcome=deferred;
+        # exceptions instead become uncertain/error_type and cannot borrow this rule.
+        if (
+            action not in READ_ONLY_ACTIONS | {"repair"}
+            or operation.get("status") != "failed"
+            or operation.get("outcome") != "deferred"
+            or operation.get("result") != {"reason": "fresh usable Codex capacity required"}
+            or operation.get("attempts") != 1
+            or operation.get("error_type") is not None
+            or row.get("resource_keys")
+            or operation.get("resource_keys")
+            or operation.get("next_trigger") is not None
+            or any(
+                k in operation
+                for k in ("run_id", "external_run", "provider_run_id", "process_started")
+            )
+        ):
+            return None
+        times = [
+            operation.get(k)
+            for k in (
+                "submitted_at",
+                "invoked_at",
+                "deadline",
+                "elapsed_seconds",
+                "timeout_seconds",
+            )
+        ]
+        if any(type(v) not in {int, float} or not math.isfinite(v) for v in times):
+            return None
+        submitted, invoked, deadline, elapsed, timeout = times
+        if not (0 < submitted <= invoked <= deadline and 0 <= elapsed and timeout > 0):
+            return None
+        return "capacity_refusal"
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
 class _Census:
     def __init__(self, path: Path, workspaces=None):
         self.path = path
@@ -466,6 +588,7 @@ class _Census:
         return entries
 
     def quarantine(self, target, row, source, run_id, reason):
+        original_target = target
         target = _target(target)
         repo = target.split("#")[0]
         closure, closure_reason = "repository_fallback", None
@@ -565,6 +688,11 @@ class _Census:
                 "closure_reason": closure_reason,
                 "explicit_original_keys": sorted(explicit_original_keys),
                 "remote_scope_narrowable": narrowable,
+                "remote_advisory_only": (
+                    native_queue_role(target, row) == "advisory"
+                    if run_id == "native_queue"
+                    else self.legacy_reconcile_role(source, original_target, row) == "advisory"
+                ),
             }
         )
         if len(self.items) > MAX_ENTRIES:
@@ -668,7 +796,189 @@ class _Census:
         for target, reason in finite_unresolved(doc).items():
             self.quarantine(target, None, self.path, "finite", reason)
 
+    def legacy_blocked_wait(self, source, target, row):
+        """Validate actual pre-fix blocked ACT without queue lock inversion.
+
+        Reuse the queue's pure receipt/accounting validator. No normalized row,
+        fabricated wait proof, claim lookup or historical state write is made.
+        """
+        import closer_pipeline as pipeline
+        import closer_queue as queue
+
+        try:
+            if (
+                row.get("status") != "failed"
+                or row.get("stage") != "act"
+                or row.get("error") != "act returned unsupported or missing status"
+                or (
+                    row.get("provider_outcome_uncertain") is not None
+                    and row.get("provider_outcome_uncertain") is not False
+                )
+                or row.get("recovery_barrier") is not None
+                or row.get("known_completed_action") is True
+            ):
+                return False
+            act = row["results"]["act"]
+            receipt = act["queue_receipt"]
+            snapshot, _ = self.verified_snapshot(_target(target), row)
+            original = row["results"]["prepare"]["snapshot"]
+            if (
+                not isinstance(original, dict)
+                or any(
+                    snapshot.get(k) != original.get(k)
+                    for k in ("target", "revision", "head", "merge")
+                )
+                or original.get("target") != target
+                or original.get("revision") != row.get("revision")
+            ):
+                return False
+            reason, trigger = act.get("reason"), act.get("next_trigger")
+            if (
+                act.get("status") != "blocked"
+                or reason not in pipeline.EVIDENCE_REFUSAL_REASONS
+                or trigger != pipeline.EVIDENCE_REFUSAL_TRIGGER
+            ):
+                return False
+            inner_path = (
+                source.parent / f"{source.stem}.actions" / f"{pipeline._digest(target)}.json"
+            )
+            native = self.read(inner_path)
+            if not isinstance(native, dict) or native.get("schema") != queue.SCHEMA:
+                return False
+            round_state = native["round"]
+            item = native["items"][target]
+            if (
+                set(native["items"]) != {target}
+                or round_state.get("status") != "finished"
+                or round_state.get("assignment_targets") != [target]
+                or round_state.get("source_revisions", {}).get(target) != row["revision"]
+                or round_state.get("receipt") != receipt
+                or receipt.get("schema") != queue.RECEIPT_SCHEMA
+                or receipt.get("valid") is not True
+                or receipt.get("stop_valid") is not True
+                or receipt.get("progress") != []
+                or receipt.get("eligible_remaining") != []
+                or receipt.get("accounting") != [queue._account_row(target, item)]
+                or item.get("operation") is not None
+                or item.get("operation_history") != []
+                or item.get("evidence", {}).get("head") != snapshot.get("head")
+            ):
+                return False
+            account = receipt["accounting"][0]
+            if any(
+                account.get(k) != v
+                for k, v in {
+                    "target": target,
+                    "revision": row["revision"],
+                    "action": "wait",
+                    "eligible": False,
+                    "requires_coordinator": False,
+                    "reason": reason,
+                    "next_trigger": trigger,
+                    "observation_freshness": "fresh",
+                    "operation_id": None,
+                    "operation_status": None,
+                }.items()
+            ) or account.get("status") not in {"deferred", "ineligible"}:
+                return False
+
+            def forbidden_holder(_key):
+                raise ValueError("unexpected_claim_lookup")
+
+            checked = queue._validate_data(
+                native,
+                receipt,
+                assignment_targets=[target],
+                now_value=receipt["finished_at"],
+                holder_fn=forbidden_holder,
+            )
+            return checked.get("valid") is True and checked.get("stop_valid") is True
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def legacy_reconcile_role(self, source, target, row):
+        """Interpret a retained legacy barrier using its still-present native origin."""
+        try:
+            if (
+                not isinstance(row, dict)
+                or row.get("status") != "uncertain"
+                or row.get("stage") != "reconcile"
+                or (
+                    row.get("provider_outcome_uncertain") is not None
+                    and row.get("provider_outcome_uncertain") is not False
+                )
+                or row.get("recovery_barrier") is not None
+                or row.get("known_completed_action") is True
+                or row.get("operation") is not None
+                or row.get("operation_history", []) != []
+            ):
+                return None
+            result = row["results"]["reconcile"]
+            if "act" in row["results"]:
+                return None
+            role = native_queue_role(target, self.raw_records.get(_target(target)))
+            if role not in {"capacity_refusal", "advisory"}:
+                return None
+            import closer_pipeline as pipeline
+
+            inner = source.parent / f"{source.stem}.actions" / f"{pipeline._digest(target)}.json"
+            if self.read(inner) is not None:
+                return None
+            if role == "capacity_refusal" and result == {
+                "outcome": "confirmed_not_started",
+                "reason": "inner queue was never created",
+            }:
+                prepared = row["results"]["prepare"]
+                snapshot = self.retained(prepared["snapshot_ref"], "snapshots")
+                original = prepared["snapshot"]
+                if (
+                    not isinstance(snapshot, dict)
+                    or not isinstance(original, dict)
+                    or any(
+                        snapshot.get(k) != original.get(k)
+                        for k in ("target", "revision", "head", "merge")
+                    )
+                    or snapshot.get("target") != target
+                    or snapshot.get("revision") != row.get("revision")
+                    or not re.fullmatch(r"[0-9a-f]{40}", str(snapshot.get("head")))
+                    or row.get("identity")
+                    != hashlib.sha256(
+                        json.dumps(
+                            [target, snapshot["head"], snapshot.get("merge")], sort_keys=True
+                        ).encode()
+                    ).hexdigest()
+                ):
+                    return None
+                return "confirmed_not_started"
+            if (
+                role == "advisory"
+                and result.get("outcome") == "unknown"
+                and isinstance(result.get("reason"), str)
+                and re.fullmatch(
+                    r"legacy (submitted|running|uncertain) operation lacks external-run or live-owner proof; reconcile it in the original closer queue",
+                    result["reason"],
+                )
+            ):
+                return "advisory"
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass
+        return None
+
     def row_problem(self, source, run_id, target, row, doc=None):
+        if isinstance(row, dict) and (
+            self.legacy_blocked_wait(source, target, row)
+            or self.legacy_reconcile_role(source, target, row) == "confirmed_not_started"
+        ):
+            self.observations.append(
+                {
+                    "target": _target(target),
+                    "source_path": str(source),
+                    "item_sha256": _digest(row),
+                    "producer_contract": "validated_original_no_operation_wait",
+                    "acceptance_authority": False,
+                }
+            )
+            return None
         problem = _row_problem(row)
         if problem:
             return problem
@@ -772,6 +1082,19 @@ class _Census:
                         }
                     )
                     continue
+            role = native_queue_role(target, row)
+            if role in {"observation_wait", "capacity_refusal"}:
+                self.observations.append(
+                    {
+                        "target": _target(target),
+                        "source_path": str(source),
+                        "source_sha256": self.sources[str(source)],
+                        "item_sha256": _digest(row),
+                        "producer_contract": "native_" + role,
+                        "acceptance_authority": False,
+                    }
+                )
+                continue
             safe = False
             if isinstance(row, dict):
                 history = row.get("operation_history", [])
@@ -1198,7 +1521,9 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
                 for item in snapshot["items"]:
                     item_keys = set(item.get("keys", []))
                     recorded.update(item_keys)
-                    if item.get("closure") == "repository_fallback" and item.get(
+                    if item.get("remote_advisory_only") is True:
+                        item_keys = set(item.get("explicit_original_keys", []))
+                    elif item.get("closure") == "repository_fallback" and item.get(
                         "remote_scope_narrowable", True
                     ):
                         # Inferred broad fallback is not a demonstrated dependency

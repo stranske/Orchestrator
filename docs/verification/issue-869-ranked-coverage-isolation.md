@@ -1,0 +1,314 @@
+# Issue #869: ranked coverage isolation follow-up
+
+Run date: 2026-10-22/23 UTC. Base: `0a82d7a685d2d355c5dfcb1c543543d99a209247`.
+
+Reconciled recent commits through `0a82d7a` against the PR tasks: all eight checkboxes are already checked; the pre-change standalone isolation module passes (9 tests).
+
+Additional scoped fix prepared in the working tree: block DNS resolution before socket connections and add ten safe-spy regressions proving process, gh, agent, connection, and resolver attempts are denied and counted even when their exceptions are caught. No real external boundary is invoked by those regressions.
+
+Validation using cached local pytest/Black wheels in `/tmp/orch872-py314`:
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 19 passed, with the module's own isolation and no runtime wrapper. This includes the existing safe database break/restore regression.
+- Before the resolver fix, `python -m pytest -q tests/test_issue853_ranked_coverage.py -k external_boundary -m "not slow" --tb=short`: 4 failed, 6 passed, 9 deselected. Failures reached harmless resolver spies, never DNS.
+- Unwrapped neighbors (`tests/test_research_control.py tests/test_research_intake.py tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`): 1 failed, 59 passed, 99 subtests passed. Existing `test_the_lane_accepts_research_items` attempted default feedback-directory creation; the read-only sandbox blocked creation. That separate test was not changed.
+- Repeating those neighbors with `ORCH_STATE_DIR=/tmp/orch872-neighbors/state ORCH_LOCAL_RUNTIME=/tmp/orch872-neighbors/runtime ORCH_FEEDBACK_DB=/tmp/orch872-neighbors/runtime/feedback/orchestrator.db`: 60 passed, 99 subtests passed.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 files unchanged. A temporary event-loop polling workaround collected the initial formatting results because the sandbox blocks worker socket wakeups; the ordinary required command then passed using that verified cache.
+- `git diff --check`: passed.
+
+Commit blocker during that run: local `git add` could not create `.git/index.lock` because `.git` was read-only. GitHub connector `update_file` also refused the commit: "MCP tool call requires approval, but approval policy is never". The automation subsequently committed the patch and this evidence in `b627a6f`. Historical #853 combined-CI provenance and evidence limitations remain unchanged; no new uncovered-unit gain is claimed.
+
+Attempts to update the PR body, add this comment, and apply `needs-human` were also rejected by the same connector approval policy. No remote mutation succeeded. Existing historical combined coverage remains linked from the PR to [CI run 39545834989](https://github.com/stranske/Orchestrator/actions/runs/39545834989); it was not rerun here.
+
+## Path-escape regression follow-up (2026-10-23)
+
+Reviewed the six recent implementation commits through `b627a6f` and the live body of PR #872:
+all eight checkboxes were already checked, and the PR was open with `draft=false`.
+The standalone module passed 19 tests before this follow-up.
+
+Extended the real SQLite-boundary regression to exercise parent traversal and symlink escapes
+through both direct `sqlite3.connect` and the original feedback connection factory. All sentinel
+paths stay under pytest's temporary directory; a driver spy prevents any real SQLite open during
+these containment regressions.
+
+Using `/tmp/orch872-venv/bin/python` (pytest/Black restored from cached local wheels):
+
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 23 passed.
+- Safe mutation: temporarily removed `.resolve()` from the containment helper, ran the module
+  with `-k sqlite_boundary -m "not slow" --tb=short`, and observed 4 failed, 2 passed,
+  17 deselected. The four new cases reached only the driver spy. Restored the helper in a
+  `finally` block and repeated the standalone command: 23 passed.
+- `ORCH_STATE_DIR=/tmp/orch872-neighbors/state ORCH_LOCAL_RUNTIME=/tmp/orch872-neighbors/runtime
+  ORCH_FEEDBACK_DB=/tmp/orch872-neighbors/runtime/feedback/orchestrator.db python -m pytest -q
+  tests/test_research_control.py tests/test_research_intake.py tests/test_research_ownership.py
+  tests/test_research_usage_guard.py -m "not slow"`: 60 passed, 99 subtests passed.
+- Targeted coverage reporting with `--cov=src/research_scheduler --cov-report=term-missing`
+  could not run because pytest-cov is unavailable (unrecognized arguments). No new coverage
+  percentage or uncovered-unit gain is claimed; the historical CI provenance above is preserved.
+- `git diff --check`: passed.
+
+Local staging remains blocked: `git add -- tests/test_issue853_ranked_coverage.py` cannot create
+`.git/index.lock` on the read-only Git metadata filesystem.
+
+Formatting passed: `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check
+--line-length 100 --exclude '(\.workflows-lib|node_modules)' .` reported 645 files unchanged.
+Before that ordinary command, Black's single-file runner checked the same discovered files
+sequentially and populated its verified cache because the sandbox stalls worker notifications.
+The changed test file was also run through `black --line-length 100`.
+
+The GitHub connector rejected the source-file commit, PR-body reconciliation update, blocker
+comment, and `needs-human` label with "MCP tool call requires approval, but approval policy is
+never". No remote mutation succeeded during that run. The automation subsequently committed
+the test follow-up and this evidence in `ca518a2`.
+
+## Cached-path rebinding regression (2026-10-23)
+
+Reviewed the recent commits through `ca518a2` and reconciled the live PR body: all eight task
+and acceptance checkboxes were already checked. PR #872 was open with `draft=false`.
+
+Added `test_runtime_fixture_rebinds_preexisting_environment_and_cached_database` to verify
+that the module fixture replaces preexisting `ORCH_STATE_DIR`, `ORCH_LOCAL_RUNTIME`,
+`ORCH_FEEDBACK_DB`, and the already-imported `feedback.DB_PATH`. It checks all four bindings
+before invoking the real connection factory, verifies SQLite's actual database path, and
+checks that fixture teardown restores the prior bindings without creating the stale root.
+Every path in this regression is under pytest's temporary directory.
+
+Using `/tmp/orch872-venv/bin/python` with pytest/Black restored from cached local wheels:
+
+- Baseline standalone module: 23 passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 24 passed.
+- Safe mutations: removed each of the four fixture bindings individually, then ran
+  `python -m pytest -q tests/test_issue853_ranked_coverage.py -k
+  runtime_fixture_rebinds_preexisting_environment_and_cached_database -m "not slow" --tb=short`.
+  Each mutation produced 1 failed, 23 deselected at the corresponding binding assertion,
+  before the connection factory. Restored the source in a `finally` block and reran the
+  standalone module: 24 passed.
+- Neighbors with `ORCH_STATE_DIR=/tmp/orch872-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/orch872-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/orch872-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed. Only the neighbors use the runtime wrapper; the isolation
+  module runs with its own fixture.
+
+Historical #853 combined-CI provenance and partial-round limitations remain as recorded above;
+this follow-up claims no additional uncovered-unit gain.
+
+Formatting and publication results for this follow-up:
+
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check --line-length 100
+  --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 files unchanged. The initial
+  process-pool runs stalled, so Black's CLI source discovery and single-file checker were run
+  sequentially with the same settings to populate the verified cache; the ordinary command
+  above then exited 0.
+- `git diff --check`: passed.
+- `git add -- tests/test_issue853_ranked_coverage.py
+  docs/verification/issue-869-ranked-coverage-isolation.md`: failed because `.git/index.lock`
+  cannot be created on the read-only Git filesystem. No local commit was possible.
+- GitHub source-file commit, PR-body update, blocker comment, and `needs-human` label were all
+  rejected with "MCP tool call requires approval, but approval policy is never". This follow-up
+  remains in the working tree for a commit-capable run; no remote mutation succeeded.
+
+## Remaining guarded-boundary regressions (2026-10-23)
+
+At base `88dae7b`, all eight checkboxes were checked and PR #872 was open with
+`draft=false`. The baseline standalone module passed 24 tests.
+
+Extended the existing deny-and-count regression to cover `subprocess.call`, `check_call`,
+`check_output`, and the socket methods `connect`, `connect_ex`, and `sendto`. A dummy
+receiver avoids constructing sockets, and each boundary has a harmless fallback spy.
+
+Using `/tmp/orch872-venv/bin/python` with dependencies restored from cached wheels:
+
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 30 passed,
+  using only the module's own runtime isolation.
+- Removed each of the six corresponding guards individually and ran its exact parametrized
+  regression with `-m "not slow" --tb=short`: each failed, reaching only its fallback spy.
+  Restored the source in a `finally` block; the standalone module again passed all 30 tests.
+- `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed. Only these neighbors used a wrapper setting `ORCH_STATE_DIR`,
+  `ORCH_LOCAL_RUNTIME`, and `ORCH_FEEDBACK_DB` under `/tmp/orch872-round-neighbors`.
+- Targeted `--cov=src/research_scheduler --cov-report=term-missing` reporting could not run:
+  pytest-cov is unavailable. No new coverage percentage or uncovered-unit gain is claimed;
+  the historical combined-CI evidence and limitations above remain unchanged.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check
+  --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 files unchanged.
+  The initial process-pool check timed out; Black's single-file checker populated its verified
+  cache before the successful ordinary CLI check.
+- `git diff --check`: passed. Local staging failed because `.git/index.lock` cannot be created
+  on the read-only Git filesystem. The GitHub source-file commit was also rejected:
+  "MCP tool call requires approval, but approval policy is never". Changes remain uncommitted.
+  The blocker comment and `needs-human` label were rejected by the same approval policy;
+  no remote mutation succeeded.
+
+## SQLite URI containment follow-up (2026-10-23)
+
+Reviewed the recent commits through `642f2e9` and the live body of PR #872. All eight
+checkboxes were already checked; the PR was open with `draft=false`. Baseline standalone
+module: 30 passed. No checkbox needed changing.
+
+The SQLite boundary now rejects `file:` URI connections before the driver. Its plain-path
+containment check otherwise accepts relative URI spellings whose decoded SQLite paths
+escape the owned root. Two regressions cover literal and percent-encoded parent traversal;
+both replace the driver with a harmless spy before attempting the call.
+
+Using `/tmp/orch872-uri-venv/bin/python`, restored from cached local pytest/Black wheels:
+
+- Before the fix, `python -m pytest -q tests/test_issue853_ranked_coverage.py -k uri_escape
+  -m "not slow" --tb=short`: 2 failed, 30 deselected, reaching only the driver spy.
+- After the fix, `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`:
+  32 passed, without an outer runtime wrapper. This includes the existing safe database
+  break/restore regression and the real scheduler's owned and offline connection cases.
+- Neighbors with `ORCH_STATE_DIR=/tmp/orch872-uri-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/orch872-uri-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/orch872-uri-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py --cov=src/research_scheduler
+  --cov-report=term-missing -m "not slow"`: unavailable because pytest-cov is not installed.
+  No new percentage or uncovered-unit gain is claimed; historical CI provenance above remains.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-uri-black-cache black --check
+  --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 unchanged.
+  The initial worker-based run timed out; Black's sequential checker populated its verified
+  cache before the successful ordinary CLI check.
+- `git diff --check`: passed.
+
+Publication for the URI follow-up: local `git add` failed because `.git/index.lock` cannot
+be created on the read-only Git filesystem. The GitHub source-file commit, PR-body update,
+blocker comment, and `needs-human` label were each rejected with "MCP tool call requires
+approval, but approval policy is never". No remote mutation succeeded. The source fix and
+this evidence remain uncommitted in the working tree. Final PR verification: #872 remains
+open with `draft=false` at `642f2e9`.
+
+## Sibling-prefix containment regression (2026-10-23)
+
+At base `9271f43`, all eight checkboxes were already checked and PR #872 was open
+with `draft=false`. Extended the existing real SQLite-boundary regression with an
+`owned-sibling` path: it shares the owned root's string prefix but is outside that
+directory. Both direct SQLite and the original feedback factory are exercised. The
+existing driver spy prevents real database opens even if containment regresses.
+
+Using `/tmp/orch872-prefix-venv/bin/python`, installed from cached local wheels:
+
+- Baseline standalone module: 32 passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`:
+  34 passed with the module's own isolation and no runtime wrapper.
+- Safe mutation: replaced `relative_to` with a string-prefix check and ran the module
+  with `-k sibling-prefix -m "not slow" --tb=short`: 2 failed, 32 deselected. Both
+  failures reached only the driver spy. Restored the source in `finally` and repeated
+  the standalone command: 34 passed.
+- Neighbors with `ORCH_STATE_DIR=/tmp/orch872-prefix-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/orch872-prefix-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/orch872-prefix-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed.
+- Targeted `--cov=src/research_scheduler --cov-report=term-missing -m "not slow"`
+  reporting remains unavailable because pytest-cov is absent. Historical CI provenance
+  and partial-round limitations above remain unchanged; no coverage gain is claimed.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-prefix-black-cache black --check
+  --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 unchanged.
+  Black's sequential single-file checker first verified the same discovered sources
+  and populated the cache after the initial worker-based run stalled.
+- `git diff --check`: passed.
+
+Publication remains blocked: local staging cannot create `.git/index.lock` on the
+read-only Git filesystem. Automatic approval review rejected the GitHub source-file
+commit, blocker comment, and `needs-human` label with "MCP tool call requires approval,
+but approval policy is never". No remote mutation succeeded. The test change and these
+notes remain uncommitted. Final PR verification: #872 is open with `draft=false` at
+`9271f4392e7dd5333683c7c63f8374857a8b7b09`.
+
+## Fresh-outcome assertion follow-up (2026-10-23)
+
+Reconciled commits through `09146fc` with PR #872: all eight checkboxes remain checked;
+the PR is open and ready for review. The preceding sibling-prefix change and notes
+were subsequently committed in `09146fc`.
+
+The owned-database scheduler assertion now also seeds and commits a fresh outcome,
+freezes the clock, and supplies observations above the data-hunger threshold. It
+requires a zero acquisition score and connections only to the owned temporary DB.
+This distinguishes successful SQLite reads from conservative query-error fallbacks;
+the malformed-evidence and offline-failure assertions remain exercised.
+
+Using `/tmp/orch872-validation-venv/bin/python`, with pytest and Black installed
+offline from existing cached wheels:
+
+- `-m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 34 passed
+  before and after the change.
+- Safe deliberate query break: temporarily replaced the evaluation timestamp column
+  with a nonexistent column and ran the same module with
+  `-k conservatively_handles_unavailable_or_invalid_evidence -m "not slow" --tb=short`.
+  The new assertion failed (`1.0 != 0.0`): 1 failed, 33 deselected. Restored the
+  scheduler byte-for-byte in `finally`; the standalone module then passed all 34 tests.
+  Existing module guards restricted all SQLite opens to its owned temporary root.
+- Relevant neighbors (`tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`)
+  after restoration: 60 passed, 99 subtests passed. Only this neighbor command used
+  temporary `ORCH_STATE_DIR`, `ORCH_LOCAL_RUNTIME`, and `ORCH_FEEDBACK_DB` overrides.
+- The targeted module command with `--cov=src/research_scheduler
+  --cov-report=term-missing -m "not slow"` exited 4 because pytest-cov is unavailable.
+  No new coverage percentage or uncovered-unit gain is claimed; historical CI
+  provenance and partial-round limitations remain as recorded above.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed unchanged.
+  Black's sequential checker verified all 645 discovered files and populated its
+  cache after the worker notification loop stalled. The required ordinary command,
+  `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-validation-black-cache black
+  --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`, then
+  exited 0: 645 files unchanged. `git diff --check` also passed.
+
+Publication remains blocked for this follow-up: `git add` could not create
+`.git/index.lock` on the read-only filesystem. Automatic approval review rejected
+the GitHub source-file commit, blocker comment, and `needs-human` label with
+"MCP tool call requires approval, but approval policy is never". No remote
+mutation succeeded; this follow-up's test and verification notes remain uncommitted.
+
+## SQLite binding break/restore follow-up (2026-10-23)
+
+Reviewed the implementation through `8bd2b6c` and PR #872: all eight checkboxes
+were already complete, and the PR was open with `draft=false`. The preceding
+fresh-outcome test and notes were subsequently committed in `8bd2b6c`.
+
+Added `test_sqlite_isolation_binding_deliberate_break_and_restore`. It applies
+the same containment assertion before, during, and after removal of the actual
+`sqlite3.connect` binding, bypassing the feedback factory. The assertion fails
+while unbound, and passes before and after. A driver spy remains installed
+throughout: the broken binding reaches only that spy, and the temporary
+out-of-bound sentinel is never opened or created.
+
+Validation with `/tmp/issue869-venv/bin/python`, using pytest and Black restored
+from existing cached wheels because package downloads are unavailable:
+
+- Baseline standalone module: 34 passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`:
+  35 passed, using only the module's own runtime isolation.
+- Same module with `-k sqlite_isolation_binding_deliberate_break_and_restore
+  -m "not slow"`: 1 passed, 34 deselected. This executes the safe break and
+  restoration proof without opening a database.
+- Relevant neighbors with temporary `ORCH_STATE_DIR=/tmp/issue869-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/issue869-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/issue869-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed. Only the neighbor command uses these overrides.
+- Targeted module command with `--cov=src/research_scheduler
+  --cov-report=term-missing -m "not slow"`: exited 4 because pytest-cov is
+  unavailable, including in the local wheel cache. No new coverage percentage
+  or uncovered-unit gain is claimed. Historical combined-CI provenance and
+  partial-round limitations above remain unchanged.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed unchanged.
+  Black's sequential single-file checker verified all 645 discovered files and
+  populated the cache after the initial worker run stalled. The required
+  ordinary command, `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/issue869-black-cache
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`,
+  then exited 0: 645 files unchanged. `git diff --check` passed.
+
+Publication is blocked for this follow-up: local staging cannot create
+`.git/index.lock` on the read-only filesystem. Automatic approval review rejected
+the GitHub source-file commit, blocker comment, and `needs-human` label with
+"MCP tool call requires approval, but approval policy is never". No remote mutation
+succeeded; the source and verification notes remain uncommitted in the working tree.

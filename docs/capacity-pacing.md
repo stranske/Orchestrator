@@ -45,13 +45,9 @@ The reserve formula is `0.15 * max(0, 1 - 0.5*n)`: zero/one/two resets give
 zero-weight warn pools form a second tier, and pacing-shed pools form the final
 best-posterior tier. A zero weight does not itself cause shed. Auth, model and
 manual holds retain their gates. Unknown/stale pacing retains native capacity
-state; measured pacing can only worsen native state. Sampling remains limited to `PACING_POOLS={"codex","claude"}` within identical
-policy tiers. When a non-pool agent wins the rank (Cursor-top relay, or
-Cursor-ok beside Codex warn/shed) but a measured pool peer is present, the
-winner is kept and a pacing receipt records real weights at neutral 1.0 for the
-unmeasured agent — instead of aborting to legacy (`weights=*:unknown` on almost
-every #812 relay). Exploration, non-pacing selection shares and policy-tier
-precedence remain unchanged.
+state; measured pacing can only worsen native state. Sampling remains limited to
+`PACING_POOLS={"codex","claude"}` within identical policy tiers. Exploration,
+non-pacing agents and existing policy-tier precedence remain unchanged.
 
 ## Authoritative sources and precedence
 
@@ -407,9 +403,8 @@ names that combined unit. No Brain outcome row, routing setting, or
 durable-delivery verdict is synthesized from a lane exit. The printed
 `relay pass (2026-10-27)` line grades version-exact joins against log demand
 within ±5% (see `value_chain_monitor.relay_pass_number`); it stays `pending`
-until that UTC date. Relay picks that include an unmeasured peer (Cursor) beside
-a measured Codex/Claude pool keep the Cursor winner and attach a pacing receipt,
-so decision weights reach the pacing log the weekly pass reads. `pick-agent` stderr
+until that UTC date. Cursor-top pick behavior is tracked separately in #891.
+`pick-agent` stderr
 includes `log_fields` (and `rate_incidents.py format-relay-pacing-fields` rebuilds them)
 from top-level `routing_weight` so a nested-only shell path cannot reintroduce
 `weights=*:unknown` after mirror sync.

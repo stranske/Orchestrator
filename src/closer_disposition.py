@@ -343,7 +343,7 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
         return {}
     _section, content, run, manifest = metadata
     ref = manifest.get("raw")
-    data = _safe_raw(ref, root)
+    data = _safe_raw(ref, root, max_bytes=closer_evidence.MAX_NATIVE_INPUT_BYTES)
     if data is None:
         return {}
     try:
@@ -358,6 +358,15 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
         )
         or str(raw_manifest.get("source_run_id")) != str(run.get("id"))
     ):
+        return {}
+    # A compact presentation is valid only when reproduced exactly from the
+    # authenticated retained manifest. It supplies no acceptance authority.
+    presentation = closer_evidence._native_manifest_presentation(
+        {"manifest": raw_manifest, "raw": ref}
+    )
+    if {key: value for key, value in manifest.items() if key != "raw"} != presentation[
+        "manifest"
+    ] or content.get("input_manifest_projection") != presentation.get("manifest_projection"):
         return {}
     index = {}
     for artifact in (
@@ -378,7 +387,8 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
                 not isinstance(container, dict)
                 or container.get("kind") != "native-input-manifest"
                 or container.get("raw") != ref
-                or container.get("manifest") != raw_manifest
+                or container.get("manifest") != presentation["manifest"]
+                or container.get("manifest_projection") != presentation.get("manifest_projection")
                 or container.get("omissions")
             ):
                 continue

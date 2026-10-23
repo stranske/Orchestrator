@@ -1883,11 +1883,19 @@ class Closer:
         repo, number = target.split("#")
         root = self.verifier_archive_root
         reads = []
+        attribution_reference = boundary.digest(
+            [snapshot["target"], snapshot.get("revision"), "verifier-attribution"]
+        )
 
         def read(endpoint):
             value = gh.api(endpoint)
             reads.append(
-                boundary.observation(endpoint, value, root=root if check_current else None)
+                boundary.observation(
+                    endpoint,
+                    value,
+                    root=root if check_current else None,
+                    reference=attribution_reference,
+                )
             )
             return value
 
@@ -2057,7 +2065,12 @@ class Closer:
             if check_current:
                 current = gh.snapshot(snapshot["target"])
                 reads.append(
-                    boundary.observation("snapshot:" + snapshot["target"], current, root=root)
+                    boundary.observation(
+                        "snapshot:" + snapshot["target"],
+                        current,
+                        root=root,
+                        reference=attribution_reference,
+                    )
                 )
                 if (
                     current["revision"] != snapshot["revision"]
@@ -2078,6 +2091,10 @@ class Closer:
             result = preflight()
         except Exception as exc:
             reads.append(boundary.observation("verifier-prewrite-read", error=exc))
+            if isinstance(exc, boundary.AttributionStorageWait):
+                reads.append(boundary.observation("attribution-storage-admission", exc.accounting))
+                requirement = (str(exc).strip() or "attribution storage admission refused")[:512]
+                return boundary.pending(snapshot, target, "storage_capacity", reads, [requirement])
             if isinstance(exc, boundary.HistoryIncomplete):
                 return boundary.pending(snapshot, target, "history_incomplete", reads, [str(exc)])
             if isinstance(exc, RoundCapacityDeferred):
@@ -3425,6 +3442,13 @@ def _legacy_operation_dependency(state_path, target, snapshot, *, remote_only=Fa
         relevant = bool(known_targets.intersection(aliases)) or (
             not remote_only and bool(op_repos.intersection(repos))
         )
+        if remote_only:
+            from closer_quarantine import native_queue_role
+
+            if native_queue_role(old_target, item) == "advisory":
+                # Private computation retains its local ownership/UNKNOWN ledger;
+                # it is not a native GitHub-write dependency of this remote action.
+                continue
         if operation.get("status") not in closer_queue.PENDING_OPERATION_STATES or not relevant:
             if item.get("requires_coordinator") and relevant:
                 raise RuntimeError(
@@ -3786,18 +3810,64 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snaps
         "content_limit_bytes": max_bytes,
         "sections": {},
     }
+    meaning_gaps = (readiness or {}).get("unresolved_title_meaning")
+    if isinstance(meaning_gaps, list) and any(
+        isinstance(gap, dict) and "transform" in gap for gap in meaning_gaps
+    ):
+        result["readiness"] = {
+            **readiness,
+            "unresolved_title_meaning": [
+                (
+                    {key: value for key, value in gap.items() if key != "transform"}
+                    if isinstance(gap, dict)
+                    else gap
+                )
+                for gap in meaning_gaps
+            ],
+        }
+        result["readiness_projection"] = {
+            "omitted_optional_fields": ["unresolved_title_meaning[].transform"],
+            "reason": "title audit retained in the full readiness record and source packet",
+        }
     remaining = max_bytes
     for name in names:
         section = sections.get(name)
         if not isinstance(section, dict):
             continue
         content = section.get("content")
+        projection = None
+        if (
+            name == "source"
+            and isinstance(content, list)
+            and any(isinstance(source, dict) and "title_transform" in source for source in content)
+        ):
+            # Acquisition audit belongs to the retained packet. Its verbose
+            # display hashes must not spend the model's original-request or
+            # named necessary-evidence budget. Preserve every request byte and
+            # explicitly identify the projection instead of claiming full content.
+            projection = {
+                "omitted_optional_fields": ["title_transform"],
+                "full_content_bytes": len(
+                    json.dumps(content, ensure_ascii=False, sort_keys=True).encode()
+                ),
+                "reason": "display-transform audit retained in the source section",
+            }
+            content = [
+                (
+                    {key: value for key, value in source.items() if key != "title_transform"}
+                    if isinstance(source, dict)
+                    else source
+                )
+                for source in content
+            ]
         encoded = json.dumps(content, ensure_ascii=False, sort_keys=True).encode()
         row = {
             k: section.get(k)
             for k in ("status", "reason", "sha256", "provenance", "retained", "truncated")
         }
         row["content_bytes"] = len(encoded)
+        if projection is not None:
+            row["content_projection"] = projection
         if len(encoded) <= remaining:
             row["content"] = content
             row["content_supplied"] = True

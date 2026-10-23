@@ -538,15 +538,9 @@ def _measured_pacing(row: dict) -> bool:
 
 
 def _pacing_choice(scored, cap, learned, rng):
-    """Posterior × literal pacing weight; warn-zero before shed fallback.
-
-    Sampling stays limited to PACING_POOLS within a policy tier. When a non-pool
-    agent wins the rank (Cursor-top relay, ok-before-warn over Codex warn/shed)
-    but a measured pool peer is present, keep that winner and attach a pacing
-    receipt with real weights instead of collapsing to legacy `*:unknown`
-    (owner #812, 2026-10-23). Selection shares and policy-tier precedence are
-    unchanged; only the legacy abort is removed.
-    """
+    """Posterior × literal pacing weight; warn-zero before shed fallback."""
+    if scored[0][1]["agent"] not in PACING_POOLS:
+        return scored[0], None
     rows = []
     for row in scored:
         _, entry, state, idx = row
@@ -557,32 +551,6 @@ def _pacing_choice(scored, cap, learned, rng):
             learned, entry["agent"], _prior_posterior_from_rank(idx, len(scored))
         )
         rows.append((row, posterior, max(0.0, weight)))
-
-    def _receipt(policy: str) -> dict:
-        return {
-            "policy": policy,
-            "candidates": [
-                {
-                    "agent": r[0][1]["agent"],
-                    "state": r[0][2],
-                    "posterior": r[1],
-                    "routing_weight": r[2],
-                    "pacing": cap.get("agents", {}).get(r[0][1]["agent"], {}).get("pacing"),
-                    "reason": cap.get("agents", {}).get(r[0][1]["agent"], {}).get("reason"),
-                }
-                for r in rows
-            ],
-        }
-
-    measured_anywhere = any(
-        r[0][1]["agent"] in PACING_POOLS
-        and _measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {}))
-        for r in rows
-    )
-    if scored[0][1]["agent"] not in PACING_POOLS:
-        if not measured_anywhere:
-            return scored[0], None
-        return scored[0], _receipt("unmeasured-preferred")
     non_shed = [r for r in rows if r[0][2] in ("ok", "warn")]
     eligible = non_shed or rows
     # Preserve every legacy policy tier; replace only the final learned ranking.
@@ -590,9 +558,7 @@ def _pacing_choice(scored, cap, learned, rng):
     eligible = [r for r in eligible if r[0][0][:-1] == best_tier]
     pools = [r for r in eligible if r[0][1]["agent"] in PACING_POOLS]
     if not pools:
-        if not measured_anywhere:
-            return eligible[0][0], None
-        return eligible[0][0], _receipt("unmeasured-preferred")
+        return eligible[0][0], None
     positive = [r for r in pools if non_shed and r[2] > 0]
     tier = positive or pools
     policy = (
@@ -600,9 +566,7 @@ def _pacing_choice(scored, cap, learned, rng):
     )
     if not any(_measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {})) for r in pools):
         # Other tiers having measurements cannot randomize this unmeasured tier.
-        if not measured_anywhere:
-            return eligible[0][0], None
-        return eligible[0][0], _receipt("unmeasured-preferred")
+        return eligible[0][0], None
     weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
     # Zero posterior mass is uninformative; it must not stop all-shed motion.
     if sum(weights) <= 0:
@@ -611,7 +575,21 @@ def _pacing_choice(scored, cap, learned, rng):
         picked = max(tier, key=lambda r: r[1])
     else:
         picked = rng.choices(tier, weights=weights, k=1)[0]
-    return picked[0], _receipt(policy)
+    decision = {
+        "policy": policy,
+        "candidates": [
+            {
+                "agent": r[0][1]["agent"],
+                "state": r[0][2],
+                "posterior": r[1],
+                "routing_weight": r[2],
+                "pacing": cap.get("agents", {}).get(r[0][1]["agent"], {}).get("pacing"),
+                "reason": cap.get("agents", {}).get(r[0][1]["agent"], {}).get("reason"),
+            }
+            for r in rows
+        ],
+    }
+    return picked[0], decision
 
 
 def select_agent(
