@@ -8,12 +8,19 @@ import time
 from pathlib import Path
 
 import pytest
+from test_closer_merge_successor_integration import public_merge_world as public_merge_world
 from test_closer_native_observer import host as host
+from test_closer_reasoning_boundary import native_world as native_world
 
 import closer_campaign as campaign
+import closer_dispatcher
 import closer_mechanisms as mechanisms
 import closer_native_observer as native
 import closer_operational_capacity as scoped
+
+_REAL_PIPELINE_CAPACITY = closer_dispatcher._pipeline_capacity
+_REAL_FRESH_CAPACITY = closer_dispatcher._fresh_capacity_report
+_REAL_TIME = time.time
 
 
 @pytest.fixture
@@ -769,3 +776,70 @@ def test_independent_validator_digest_mismatch_cannot_revalidate_success(
 
     monkeypatch.setattr(closer_resources, "validate_stop", changed)
     assert native.completed_round_proof(manifest, cfg, proof) is None
+
+
+def test_native_invocation_without_low_profile_publishes_only_local_control_scope(
+    capacity_host, monkeypatch
+):
+    import closer_dispatcher
+    import execution_profiles
+
+    manifest, _, _, _, _, clock, _ = capacity_host
+    global_report = Path.home() / ".codex/handoff/capacity.json"
+    global_report.parent.mkdir(parents=True, exist_ok=True)
+    global_report.write_text('{"owner":"unrelated-model-user"}')
+    original = global_report.read_bytes()
+    monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
+    with pytest.raises(mechanisms.MechanismError, match="active low"):
+        native.capacity_contract(manifest)
+    context = publish(capacity_host)
+    report_path = Path(context["report"]["path"])
+    report = native._read(report_path)
+    assert scoped.validate_report(report, now=clock[0])
+    assert report["control_plane_only"] is True
+    assert report["profile_ids"] == []
+    assert report["profiles"] == report["pools"] == {}
+    assert report_path.name == "scoped-capacity.json"
+    assert global_report.read_bytes() == original
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", str(report_path))
+    assert closer_dispatcher._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
+
+
+def test_optional_provider_telemetry_cannot_gate_native_control_publication(
+    capacity_host, monkeypatch
+):
+    manifest, _, _, _, _, clock, _ = capacity_host
+    telemetry = Path.home() / ".codex/orchestrator/usage-poll"
+    telemetry.parent.mkdir(parents=True, exist_ok=True)
+    unrelated = Path.home() / "unrelated"
+    unrelated.mkdir()
+    telemetry.symlink_to(unrelated, target_is_directory=True)
+    context = publish(capacity_host)
+    report = native._read(Path(context["report"]["path"]))
+    assert report["control_plane_only"] is True
+    assert report["profile_ids"] == [] and report["input_sha256"] == {}
+    assert scoped.validate_report(report, now=clock[0])
+    assert native.validate_admission(manifest, context, for_effects=True) == context
+
+
+def test_no_profile_native_admission_and_public_queue_composition(
+    capacity_host, public_merge_world, monkeypatch, capsys
+):
+    import execution_profiles
+
+    world = public_merge_world
+    monkeypatch.setenv("HOME", str(capacity_host[4].parents[3]))
+    capacity_host[5][0] = _REAL_TIME()
+    monkeypatch.setattr(time, "time", _REAL_TIME)
+    capacity_host[6](2)  # Fresh authentic invocation, aligned with real scheduler clock.
+    monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
+    context = publish(capacity_host)
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", context["report"]["path"])
+    monkeypatch.setattr(closer_dispatcher, "_fresh_capacity_report", _REAL_FRESH_CAPACITY)
+    monkeypatch.setattr(closer_dispatcher, "_pipeline_capacity", _REAL_PIPELINE_CAPACITY)
+    assert native.validate_admission(capacity_host[0], context, for_effects=True) == context
+    assert closer_dispatcher._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
+    assert closer_dispatcher.main(world.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert len(world.merges) == len(world.verifies) == 1, result
+    assert world.events["provider"] == 0

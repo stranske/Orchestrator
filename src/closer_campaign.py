@@ -948,6 +948,16 @@ class CoreOperationAdapter(Protocol):
 
     def settle(self, handle: Any, outcome: str) -> None: ...
 
+    def reject_not_accepted(self, handle: Any, evidence: dict[str, Any]) -> None: ...
+
+
+class VerificationRequestNotAccepted(Exception):
+    """Synchronous authoritative rejection of this exact verification POST."""
+
+    def __init__(self, evidence):
+        self.evidence = evidence
+        super().__init__("verification request explicitly not accepted")
+
 
 def submit_effect(
     adapter: CoreOperationAdapter | None,
@@ -988,6 +998,12 @@ def submit_effect(
         return "unknown"  # intent CAS may have landed; never submit without readback
     try:
         outcome = port.submit(spec.action, action)
+    except VerificationRequestNotAccepted as exc:
+        try:
+            adapter.reject_not_accepted(handle, exc.evidence)
+        except Exception:
+            return "unknown"  # rejection receipt CAS may have landed; inspect it first
+        return "not_accepted"
     except Exception as exc:  # noqa: BLE001 - classified, never swallowed silently
         outcome = classify_exception(exc)
     if outcome not in OUTCOMES:
@@ -1132,6 +1148,19 @@ class PinnedCoreAdapter:
             )
         except self.m.PolicyDenied as exc:
             raise PermissionError(str(exc)) from exc
+
+    def reject_not_accepted(self, handle: Any, evidence: dict[str, Any]) -> None:
+        rec = handle["record"]
+        proof = self.m.VerificationRequestRejected(**evidence)
+        handle["record"] = self.m.reject_not_accepted(
+            self.store,
+            handle["key"],
+            handle["executor"],
+            proof,
+            expected_revision=rec["lease"]["revision"],
+            expected_epoch=rec["lease"]["epoch"],
+            spec=handle["spec"],
+        )
 
     def settle(self, handle: Any, outcome: str) -> None:
         rec = handle["record"]

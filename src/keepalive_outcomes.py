@@ -1182,7 +1182,7 @@ def ingest_keepalive_outcomes(
     )
     read_now = int(_now or time.time())
     verifier_fetch_fn = _verifier_fetch_fn or (
-        verifier_evidence.fetch_decisions if _pr_fetch_fn is None else lambda _repo, _nums: {}
+        verifier_evidence.fetch_lifecycle if _pr_fetch_fn is None else lambda _repo, _nums: {}
     )
     dispatch_times_fn = _dispatch_times_fn or (
         _fetch_dispatch_times if _pr_fetch_fn is None else lambda _repo, _number, _agent: None
@@ -1350,7 +1350,8 @@ def ingest_keepalive_outcomes(
             decision = verifier_decisions.get(int(number)) if number is not None else None
             if decision:
                 pr["_verifier_decision"] = decision
-                summary["verifier_verdicts_seen"] += 1
+                if decision.get("verdict") in {"PASS", "NON_PASS"}:
+                    summary["verifier_verdicts_seen"] += 1
         summary["commit_identity_enriched"] += _attach_commit_identities(
             repo, prs, evidence_fn=_evidence_fetch_fn
         )
@@ -1447,6 +1448,14 @@ def ingest_keepalive_outcomes(
             _record_attribution(summary, attribution_source)
             existing_run_id = _existing_remote_for_pr(repo, pr_number)
             if existing_run_id:
+                decision = pr.get("_verifier_decision")
+                if isinstance(decision, dict) and durability_sweep.verifier_candidate_run_ids(
+                    repo, pr_number
+                ) == {existing_run_id}:
+                    if not dry_run:
+                        verifier_evidence.record_decision(
+                            existing_run_id, repo, pr_number, decision
+                        )
                 observe_shadow(repo, pr, existing_run_id)
                 if not dry_run:
                     _stamp_existing_dispatch_policy(

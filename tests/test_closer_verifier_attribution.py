@@ -175,12 +175,23 @@ def validate(result, snapshot):
     return op
 
 
+def diagnose(world):
+    """Optional historical attribution keeps strict integrity without granting effects.
+
+    Admission no longer depends on this historical enrichment. Its existing
+    archive/provenance regressions still exercise the production read boundary.
+    """
+    return world.backend._verification_preflight(
+        world.snapshot["target"], world.snapshot, check_current=False
+    ) or {"status": "completed"}
+
+
 def test_later_foreign_manual_run_does_not_block_current_verification(world):
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
-    assert result["status"] == "completed" and len(world.posts) == 1
+    result = diagnose(world)
+    assert result["status"] == "completed" and not world.posts
     assert len(world.downloads) == 1
     # Retained immutable capture avoids downloading it again on another read.
-    world.backend.initiate_verify(TARGET, world.snapshot)
+    diagnose(world)
     assert len(world.downloads) == 1
 
 
@@ -188,16 +199,14 @@ def test_later_foreign_manual_run_does_not_block_current_verification(world):
     "pr,merge,cause",
     [(12, MERGE, "existing_delivery"), (12, "e" * 40, "delivery_revision_mismatch")],
 )
-def test_same_pr_never_reruns_and_wrong_merge_is_not_foreign(world, pr, merge, cause):
+def test_optional_diagnostics_bind_same_pr_and_reject_wrong_merge(world, pr, merge, cause):
     world.data = archive(pr, merge)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert not world.posts and result["verifier_resource_wait"]["cause"] == cause
     validate(result, world.snapshot)
 
 
-@pytest.mark.parametrize(
-    "change", ["corrupt", "missing", "incomplete", "read", "merge_time", "changed", "label"]
-)
+@pytest.mark.parametrize("change", ["corrupt", "missing", "incomplete", "read", "merge_time"])
 def test_all_known_prewrite_failures_are_typed_no_effect(world, change):
     if change == "corrupt":
         world.data = archive(corrupt=True)
@@ -217,7 +226,7 @@ def test_all_known_prewrite_failures_are_typed_no_effect(world, change):
     else:
         world.run["created_at"] = "2026-10-20T00:00:00Z"
         world.current["labels"] = ["verify:compare"]
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     validate(result, world.snapshot)
 
@@ -232,7 +241,7 @@ def test_timeout_after_post_is_never_a_known_no_effect(world):
 
 def test_rehashed_binding_or_cause_mutation_still_refused(world):
     world.data = archive(12, MERGE)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     op = validate(result, world.snapshot)
     for field, value in [("head", "c" * 40), ("cause", "generic_no_effect"), ("requirements", [])]:
         changed = copy.deepcopy(op)
@@ -253,7 +262,7 @@ def test_explicit_other_pr_terminal_run_needs_no_optional_capture(world):
 @pytest.mark.parametrize("created", ["", None, "not-a-timestamp", "2026-10-22T00:00:00"])
 def test_missing_or_ambiguous_time_cannot_exclude_candidate(world, created):
     world.run["created_at"] = created
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     validate(result, world.snapshot)
 
@@ -323,7 +332,7 @@ def test_public_cli_real_queue_typed_attribution_boundary(
     assert len(w.merges) == 1 and w.events["provider"] == 0
     child = result["merge_verification_successors"]["owner/repo#12"]["native_result"]
     row = child["targets"]["owner/repo#12"]
-    if case == "foreign":
+    if case not in {"capacity", "deadline"}:
         assert len(w.verifies) == 1
     else:
         assert not w.verifies and row["status"] == "held" and "error" not in row, row
@@ -339,15 +348,15 @@ def test_public_cli_real_queue_typed_attribution_boundary(
     capsys.readouterr()
     # The completed-merge helper performs a fresh read-only next-stage screen.
     # The unchanged native child remains terminal and repeats no effect.
-    assert len(reads) >= count and len(w.verifies) == int(case == "foreign")
+    assert len(reads) >= count and len(w.verifies) == int(case not in {"capacity", "deadline"})
     assert all(p.read_bytes() == raw for p, raw in w.originals.items())
 
 
 @pytest.mark.parametrize("event", ["workflow_dispatch", "pull_request_target"])
 def test_unlinked_supported_native_event_can_prove_foreign(world, event):
     world.run["event"] = event
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
-    assert result["status"] == "completed" and len(world.posts) == 1
+    result = diagnose(world)
+    assert result["status"] == "completed" and not world.posts
 
 
 @pytest.mark.parametrize("change", ["linked_current", "repo", "invalid_link"])
@@ -358,7 +367,7 @@ def test_contradictory_identity_never_authorizes_post(world, change):
         world.run["repository"]["full_name"] = "other/repo"
     else:
         world.run["pull_requests"] = [{"number": "12"}]
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     validate(result, world.snapshot)
 
@@ -373,7 +382,7 @@ def test_prewrite_round_control_retains_authoritative_scheduler_fields(world, co
         )
     else:
         world.fail = native.RoundDeadlineExhausted(deadline=1792640000, remaining_seconds=-1)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     op = validate(result, world.snapshot)
     proof = op["result"]["verifier_resource_wait"]
@@ -450,7 +459,7 @@ def test_unsafe_retained_archive_is_not_read_or_refetched(world, kind, tmp_path)
         outside = tmp_path / "outside.zip"
         outside.write_bytes(world.data)
         cached.symlink_to(outside)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts and not world.downloads
     assert result["verifier_resource_wait"]["requirements"] == [
         "bounded regular retained archive for run 99"
@@ -463,203 +472,74 @@ def test_authenticated_identity_does_not_require_optional_capture_completeness(w
     world.data = archive(
         omit=kind == "missing_optional_file", manifest_only=kind == "manifest_only"
     )
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
-    assert result["status"] == "completed" and len(world.posts) == 1
+    result = diagnose(world)
+    assert result["status"] == "completed" and not world.posts
 
 
 @pytest.mark.parametrize("kind", ["duplicate_key", "duplicate_manifest"])
 def test_ambiguous_manifest_identity_never_authorizes_foreign_skip(world, kind):
     world.data = archive(**{kind: True})
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     validate(result, world.snapshot)
 
 
 def test_server_expiry_does_not_discard_verified_retained_identity(world):
-    first = world.backend.initiate_verify(TARGET, world.snapshot)
+    first = diagnose(world)
     assert first["status"] == "completed" and len(world.downloads) == 1
     world.expired = True
     world.current["labels"] = []
-    second = world.backend.initiate_verify(TARGET, world.snapshot)
-    assert second["status"] == "completed" and len(world.downloads) == 1 and len(world.posts) == 2
+    second = diagnose(world)
+    assert second["status"] == "completed" and len(world.downloads) == 1 and not world.posts
 
 
 def test_expired_uncached_capture_is_pending_without_redownload(world):
     world.expired = True
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts and not world.downloads
     validate(result, world.snapshot)
 
 
 @pytest.mark.parametrize("capture_family", ["comparison", "evaluation"])
-@pytest.mark.parametrize("completed_merge", [False, True])
 @pytest.mark.parametrize("linked", [False, True])
-def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_packet(
-    public_merge_world, monkeypatch, capsys, completed_merge, linked, capture_family
+def test_targeted_optional_capture_seals_diagnostic_packet_without_admission_dependency(
+    world, tmp_path, linked, capture_family
 ):
     import closer_evidence as evidence
-    import closer_frontier_policy as policy
-    import closer_pipeline as pipeline
-    import closer_resources as resources
 
-    w = public_merge_world
-    if not completed_merge:
-        w.snapshot.update(
-            state="MERGED", merge="d" * 40, merged_at="2026-10-22T00:00:00Z", verifier=None
-        )
-    run = {
-        "id": 99,
-        "run_attempt": 1,
-        "head_sha": "e" * 40,
-        "status": "completed",
-        "conclusion": "success",
-        "path": ".github/workflows/agents-verifier.yml",
-        "event": "workflow_dispatch",
-        "pull_requests": [],
-        "repository": {"full_name": "owner/repo"},
-        "created_at": "2026-10-22T00:00:01Z",
-    }
+    world.data = (
+        evaluation_archive(12, MERGE) if capture_family == "evaluation" else archive(12, MERGE)
+    )
+    world.capture_family = capture_family
     if linked:
-        run["event"] = "pull_request_target"
-        run["pull_requests"] = [
-            {
-                "number": 12,
-                "id": 12345,
-                "url": "https://api.github.com/repos/owner/repo/pulls/12",
-                "head": {"sha": "a" * 40, "ref": "feature"},
-                "base": {"sha": "b" * 40, "ref": "main"},
-            }
-        ]
-    data = (
-        evaluation_archive(12, "d" * 40)
-        if capture_family == "evaluation"
-        else archive(12, "d" * 40)
+        world.run["event"] = "pull_request_target"
+        world.run["pull_requests"] = [{"number": 12}]
+    world.snapshot.update(
+        kind="pr", base="c" * 40, sources=[], review_revision="r", checks="SUCCESS", threads=[]
     )
-    downloads = []
-    reads = []
-    transport = native.gh_capacity.gh_run
-
-    def api(args, **kwargs):
-        endpoint = args[3]
-        if "/actions/workflows/agents-verifier.yml/runs?" in endpoint:
-            reads.append(endpoint)
-            return 0, (
-                {"total_count": 0, "workflow_runs": []}
-                if "&status=" in endpoint
-                else {"total_count": 1, "workflow_runs": [run]}
-            )
-        if endpoint.endswith("/actions/runs/99"):
-            return 0, copy.deepcopy(run)
-        if endpoint.endswith("/actions/runs/99/artifacts?per_page=100"):
-            return 0, {
-                "total_count": 1,
-                "artifacts": [
-                    {
-                        "id": 7,
-                        "name": f"{capture_family}-results-99",
-                        "expired": False,
-                        "size_in_bytes": len(data),
-                        "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
-                        "workflow_run": {"id": 99, "head_sha": run["head_sha"]},
-                    }
-                ],
-            }
-        return transport(args, **kwargs)
-
-    def fetch(*_a, **_k):
-        downloads.append(1)
-        return data
-
-    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
-    monkeypatch.setattr(native, "native_artifact_fetcher", lambda _: fetch)
-    observer = native.Closer(
-        native.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=True, workers=True
+    world.current = copy.deepcopy(world.snapshot)
+    # Ordinary observation does not fetch any completed history or capture.
+    assert world.backend.verification_snapshot(world.snapshot) == world.snapshot
+    assert not world.reads and not world.downloads
+    enriched = world.backend.verification_snapshot(world.snapshot, include_history=True)
+    assert enriched["native_diagnostic_reference"]["run"]["id"] == 99
+    packet = native.collect_native_evidence(
+        enriched,
+        world.backend.gh,
+        tmp_path / "diagnostic",
+        deadline=time.monotonic() + 10,
+        verifier_archive_root=world.backend.verifier_archive_root,
     )
-    if completed_merge:
-        assert native.main(w.argv) == 78
-        merged = json.loads(capsys.readouterr().out)
-        next_stage = merged["merge_verification_successors"][TARGET]
-        assert next_stage["status"] == "observed" and next_stage["action"] == "collect_evidence"
-        assert len(w.merges) == 1 and not w.verifies
-    initial = observer.observe(TARGET)
-    assert initial["action"] == "collect_evidence" and initial["eligible"] is True
-    assert initial["verifier"] is None and initial["labels"] == []
-    if completed_merge:
-        import closer_stage_continuation as continuation
-
-        shard = resources.shard_dir(resources.scoped_root(w.ledger), TARGET) / "state.json"
-        assignment = Path(w.argv[w.argv.index("--assignment") + 1])
-        initial["observed_at"] = time.time()
-        canonical = native.assignment_rows_from_file(assignment)[TARGET]
-        child = continuation.create_successor(
-            shard,
-            shard.parent / "state.actions" / (pipeline._digest(TARGET) + ".json"),
-            predecessor=w.frontier,
-            target=TARGET,
-            observation=initial,
-            canonical_path=assignment,
-            canonical_row=canonical,
-            admission=lambda: {"paused": False, "dependency": None, "live_owner": False},
-        )
-        w.frontier = child["finite_frontier"]
-    else:
-        w.frontier = policy.make_frontier_from_observations(
-            {TARGET: initial}, owner=w.frontier["owner"], frontier_id=w.frontier["frontier_id"]
-        )
-    w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(w.frontier)
-    assert native.main(w.argv) == 78
-    result = json.loads(capsys.readouterr().out)
-    row = result["targets"][TARGET]
-    assert (
-        len(w.merges) == int(completed_merge) and not w.verifies and len(downloads) == 1
-    ), downloads
-    assert w.events["provider"] >= 1, row
-    shard = resources.shard_dir(resources.scoped_root(w.ledger), TARGET) / "state.json"
-    stored = pipeline._load(shard)["frontiers"][w.frontier["frontier_id"]]["items"][TARGET]
-    prep = stored["results"]["prepare"]
-    actual_screen = prep["collection_result"]["readiness"]
-    assert actual_screen["mode"] == "native_diagnostic" and actual_screen["ready"] is False
-    assert actual_screen["evaluation_ready"] is True
-    assert actual_screen["gaps"] == ["native_merge_verifier:trusted_bound_verdict_missing"]
-    assert (
-        next(r for r in actual_screen["requirements"] if r["section"] == "native_merge_verifier")[
-            "necessity"
-        ]
-        == "useful"
-    )
-    packet = json.loads(Path(prep["packet_ref"]["path"]).read_text())
     assert evidence.validate_packet(packet)
     section = packet["sections"]["native_merge_verifier"]
-    assert (
-        section["content"]["acceptance_authority"] is False
-        and section["content"]["resolution_authority"] is False
-    )
-    assert section["content"]["artifacts"][0]["identity_bound"] is True, section
-    receipts = section["content"]["artifacts"][0]["input_snapshots"][0]["receipts"]
-    assert {r["path"] for r in receipts} >= {
-        f"{capture_family}.json",
-        "verifier-context.md",
-        "verifier-pr-diff.patch",
-    }
-    if capture_family == "evaluation":
-        diagnostic = next(r for r in receipts if r["kind"] == "native-evaluation")
-        assert diagnostic["results_count"] == 1
-        assert len(diagnostic["provider_results"]) == 1
-        assert diagnostic["provider_results"][0]["used_llm"] is True
-        assert diagnostic["findings"][0]["text"] == "One retained diagnostic concern"
-        assert diagnostic["acceptance_authority"] is False
-        assert diagnostic["resolution_authority"] is False
-    # An intentionally rootless screen cannot use retained implementation references.
-    screen = evidence.action_evidence_readiness(w.snapshot, packet, "collect_evidence")
-    assert screen["mode"] == "native_diagnostic" and screen["ready"] is False
-    assert "native_merge_verifier:trusted_bound_verdict_missing" in screen["gaps"]
-    assert section["content"]["runs"][0]["head_sha"] == "e" * 40
-    assert stored["results"]["interpret"]["authority"] is False
-    count = len(reads)
-    assert native.main(w.argv) == 78
-    capsys.readouterr()
-    assert len(reads) == count and len(downloads) == 1
-    assert all(p.read_bytes() == raw for p, raw in w.originals.items())
+    assert section["content"]["acceptance_authority"] is False
+    assert section["content"]["resolution_authority"] is False
+    assert section["content"]["artifacts"][0]["identity_bound"] is True
+    assert len(world.downloads) == 1 and not [
+        endpoint for endpoint in world.posts if endpoint != "graphql"
+    ]
+    # A valid optional diagnostic is neither a trusted verdict nor an action gate.
+    assert world.backend.select(enriched)[0] == "post_merge_verify"
 
 
 def test_preparation_supplied_adapter_governs_attribution_inventory(world):
@@ -671,7 +551,9 @@ def test_preparation_supplied_adapter_governs_attribution_inventory(world):
         pytest.fail("preflight bypassed supplied evidence transport")
 
     world.backend.gh.api = forbidden
-    result = world.backend._verification_preflight(TARGET, world.snapshot, gh=supplied)
+    result = world.backend._verification_preflight(
+        TARGET, world.snapshot, gh=supplied, check_current=False
+    )
     assert result["native_diagnostic_reference"]["run"]["id"] == 99
     assert any("/artifacts?" in endpoint for endpoint in world.reads)
 
@@ -693,7 +575,7 @@ def test_normal_diagnostic_collector_revalidates_reference_not_boolean_permissio
     import closer_evidence as evidence
 
     world.data = archive(12, MERGE)
-    observed = world.backend.verification_snapshot(world.snapshot)
+    observed = world.backend.verification_snapshot(world.snapshot, include_history=True)
     reference = observed["native_diagnostic_reference"]
     if change == "foreign":
         world.data = archive(858)
@@ -797,14 +679,14 @@ def history_world(world, monkeypatch):
 def test_nine_cold_foreign_runs_progress_eight_then_one_without_permanent_window(history_world):
     w = history_world
     w.populate(9)
-    first = w.backend.initiate_verify(TARGET, w.snapshot)
+    first = diagnose(w)
     assert first["status"] == "resource_wait" and len(w.downloads) == 8 and not w.posts
     assert first["verifier_resource_wait"]["requirements"] == [
         "continue verifier attribution after retained acquisition progress"
     ]
     validate(first, w.snapshot)
-    second = w.backend.initiate_verify(TARGET, w.snapshot)
-    assert second["status"] == "completed" and len(w.downloads) == 9 and len(w.posts) == 1
+    second = diagnose(w)
+    assert second["status"] == "completed" and len(w.downloads) == 9 and not w.posts
     assert len(set(w.downloads)) == 9
 
 
@@ -814,7 +696,7 @@ def test_history_pagination_finds_same_delivery_after_first_hundred_foreign_runs
     w.runs[-1].update(event="workflow_dispatch", pull_requests=[])
     rid = w.runs[-1]["id"]
     w.archives[rid] = archive(12, MERGE, runid=rid)
-    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    result = diagnose(w)
     assert result["verifier_resource_wait"]["cause"] == "existing_delivery"
     assert w.pages == [1, 2] and w.downloads == [rid] and not w.posts
 
@@ -823,13 +705,13 @@ def test_history_pagination_finds_same_delivery_after_first_hundred_foreign_runs
 def test_retained_foreign_archive_never_hides_changed_server_identity(history_world, change):
     w = history_world
     w.populate(9)
-    assert w.backend.initiate_verify(TARGET, w.snapshot)["status"] == "resource_wait"
+    assert diagnose(w)["status"] == "resource_wait"
     run = w.runs[0]
     if change == "attempt":
         run["run_attempt"] = 2
     else:
         w.archives[run["id"]] = archive(12, MERGE, runid=run["id"])
-    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    result = diagnose(w)
     assert result["status"] == "resource_wait" and not w.posts
     assert result["verifier_resource_wait"]["cause"] == (
         "attribution_pending" if change == "attempt" else "existing_delivery"
@@ -844,7 +726,7 @@ def test_history_page_capacity_preserves_reset_and_history_progress_without_acqu
     # Page-one coverage is retained before the page-two refusal; no archive starts.
     w.runs[0].update(event="workflow_dispatch", pull_requests=[])
     w.fail_page = 2
-    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    result = diagnose(w)
     assert result["verifier_resource_wait"]["cause"] == "capacity_deferred" and not w.posts
     assert not w.downloads
     assert result["verifier_resource_wait"]["control"]["reset_at_epoch"] == 1792640060
@@ -866,7 +748,10 @@ def test_enrichment_omits_duplicate_core_snapshot_and_retains_no_poll_json(world
     world.backend.gh.snapshot = snapshot
     before = set(world.backend.verifier_archive_root.rglob("*"))
     for _ in range(3):
-        assert world.backend.verification_snapshot(world.snapshot) == world.snapshot
+        assert (
+            world.backend.verification_snapshot(world.snapshot, include_history=True)
+            == world.snapshot
+        )
     assert not snapshots
     assert set(world.backend.verifier_archive_root.rglob("*")) == before
     world.backend.initiate_verify(TARGET, world.snapshot)
@@ -886,8 +771,8 @@ def test_history_pages_finish_before_archive_fetch_can_shift_busy_run_inventory(
         w.runs.insert(0, incoming)
 
     w.on_fetch = concurrent_foreign_run
-    result = w.backend.initiate_verify(TARGET, w.snapshot)
-    assert result["status"] == "completed" and len(w.posts) == 1, result
+    result = diagnose(w)
+    assert result["status"] == "completed" and not w.posts, result
     assert pages_at_fetch == [[1, 2]]
     assert w.pages == [1, 2] and len(w.downloads) == 1
 
@@ -903,7 +788,7 @@ def test_history_change_during_page_reads_remains_incomplete_and_starts_no_archi
             w.runs.insert(0, incoming)
 
     w.on_page = changed_page
-    result = w.backend.initiate_verify(TARGET, w.snapshot)
+    result = diagnose(w)
     assert result["verifier_resource_wait"]["cause"] == "history_incomplete"
     assert w.pages == [1, 2] and not w.downloads and not w.posts
     validate(result, w.snapshot)
@@ -976,7 +861,7 @@ def test_foreign_evaluation_capture_does_not_become_target_acceptance(world):
 def test_evaluation_same_delivery_and_wrong_merge_never_dispatch(world, merge, cause):
     world.capture_family = "evaluation"
     world.data = evaluation_archive(12, merge)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     assert result["verifier_resource_wait"]["cause"] == cause
     assert len(world.downloads) == 1
@@ -998,7 +883,7 @@ def test_dual_or_duplicate_capture_families_remain_ambiguous(world, second_famil
         return response
 
     world.backend.gh.api = ambiguous
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts and not world.downloads
     assert "unambiguous" in result["verifier_resource_wait"]["requirements"][0]
     validate(result, world.snapshot)
@@ -1018,7 +903,7 @@ def test_dual_or_duplicate_capture_families_remain_ambiguous(world, second_famil
 def test_evaluation_bad_core_identity_never_authorizes_foreign_skip(world, identity):
     world.capture_family = "evaluation"
     world.data = evaluation_archive(**identity)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     assert result["verifier_resource_wait"]["cause"] == "attribution_pending"
     assert len(world.downloads) == 1
@@ -1028,8 +913,8 @@ def test_evaluation_bad_core_identity_never_authorizes_foreign_skip(world, ident
 def test_evaluation_optional_capture_omission_does_not_prevent_identity(world):
     world.capture_family = "evaluation"
     world.data = evaluation_archive(omit=True)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
-    assert result["status"] == "completed" and len(world.posts) == 1
+    result = diagnose(world)
+    assert result["status"] == "completed" and not world.posts
     assert world.snapshot.get("verifier") is None
 
 
@@ -1037,14 +922,14 @@ def test_evaluation_expired_capture_requires_retained_verified_bytes(world):
     world.capture_family = "evaluation"
     world.data = evaluation_archive()
     world.expired = True
-    first = world.backend.initiate_verify(TARGET, world.snapshot)
+    first = diagnose(world)
     assert first["status"] == "resource_wait" and not world.posts and not world.downloads
     world.expired = False
-    assert world.backend.initiate_verify(TARGET, world.snapshot)["status"] == "completed"
+    assert diagnose(world)["status"] == "completed"
     assert len(world.downloads) == 1
     world.expired = True
     world.current["labels"] = []
-    assert world.backend.initiate_verify(TARGET, world.snapshot)["status"] == "completed"
+    assert diagnose(world)["status"] == "completed"
     assert len(world.downloads) == 1
 
 
@@ -1060,7 +945,7 @@ def test_evaluation_archive_digest_mismatch_never_authorizes_foreign_skip(world)
         return response
 
     world.backend.gh.api = mismatch
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts
     assert result["verifier_resource_wait"]["requirements"] == [
         "archive digest verification for run 99"
@@ -1081,7 +966,7 @@ def test_evaluation_archive_requires_exact_server_run_owner(world, field):
         return response
 
     world.backend.gh.api = mismatch
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = diagnose(world)
     assert result["status"] == "resource_wait" and not world.posts and not world.downloads
     assert result["verifier_resource_wait"]["requirements"] == [
         "exact server-bound verifier archive for run 99"
@@ -1095,11 +980,11 @@ def test_evaluation_capture_reuses_progress_under_existing_acquisition_budget(hi
     world.populate(9)
     for run in world.runs:
         world.archives[run["id"]] = evaluation_archive(runid=run["id"])
-    first = world.backend.initiate_verify(TARGET, world.snapshot)
+    first = diagnose(world)
     assert first["status"] == "resource_wait" and len(world.downloads) == 8 and not world.posts
     assert first["verifier_resource_wait"]["requirements"] == [
         "continue verifier attribution after retained acquisition progress"
     ]
-    second = world.backend.initiate_verify(TARGET, world.snapshot)
+    second = diagnose(world)
     assert second["status"] == "completed" and len(world.downloads) == 9
-    assert len(set(world.downloads)) == 9 and len(world.posts) == 1
+    assert len(set(world.downloads)) == 9 and not world.posts

@@ -30,7 +30,7 @@ permissions:
 env:
   # Immutable Workflows-owned Core source for real contract/package conformance.
   CLOSER_CORE_SOURCE: ${{ github.workspace }}/.closer-core-source
-  CLOSER_CORE_SOURCE_REVISION: 759eda10a1770258073a4f6a94c5e98fc4e55ca2
+  CLOSER_CORE_SOURCE_REVISION: be8c28da2cbc181dcdec2be30f71415ccce43cf9
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

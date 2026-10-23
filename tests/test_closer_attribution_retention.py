@@ -291,7 +291,9 @@ def test_native_prewrite_storage_wait_is_typed_and_does_not_post(world, monkeypa
 
     import closer_verifier_boundary as boundary
 
-    monkeypatch.setattr(boundary, "Store", lambda root: cache.Store(root, maximum=100))
+    monkeypatch.setattr(
+        boundary, "Store", lambda root, **kwargs: cache.Store(root, maximum=100, **kwargs)
+    )
     result = world.backend.initiate_verify(TARGET, world.snapshot)
     assert result["status"] == "resource_wait"
     assert result["verifier_resource_wait"]["cause"] == "storage_capacity"
@@ -317,13 +319,16 @@ def test_quota_during_manifest_retention_keeps_typed_wait_and_cached_zip(world, 
             return super().retain(data, suffix, **kwargs)
 
     monkeypatch.setattr(boundary, "Store", ManifestRefusal)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = world.backend._verification_preflight(TARGET, world.snapshot, check_current=False)
     assert result["verifier_resource_wait"]["cause"] == "storage_capacity"
     assert result["verifier_resource_wait"]["requirements"] == ["synthetic manifest quota"]
     assert len(world.downloads) == 1 and not world.posts
     validate(result, world.snapshot)
     monkeypatch.setattr(boundary, "Store", cache.Store)
-    assert world.backend.initiate_verify(TARGET, world.snapshot)["status"] == "completed"
+    assert (
+        world.backend._verification_preflight(TARGET, world.snapshot, check_current=False) is None
+    )
+    assert not world.posts
     assert len(world.downloads) == 1  # retained exact ZIP reused, no repeat acquisition
 
 
@@ -377,7 +382,7 @@ def test_storage_wait_requirement_is_bounded_and_always_valid(world, monkeypatch
 
     import closer_verifier_boundary as boundary
 
-    def refuse(_root):
+    def refuse(_root, **kwargs):
         raise cache.AttributionStorageWait(message)
 
     monkeypatch.setattr(boundary, "Store", refuse)
@@ -403,7 +408,7 @@ def test_supplied_retention_io_failure_is_not_reported_as_missing_manifest(world
             return super().retain(data, suffix, **kwargs)
 
     monkeypatch.setattr(boundary, "Store", ManifestIOFailure)
-    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    result = world.backend._verification_preflight(TARGET, world.snapshot, check_current=False)
     assert result["verifier_resource_wait"]["cause"] == "storage_capacity"
     assert result["verifier_resource_wait"]["requirements"] == [
         "attribution retention I/O unavailable"
