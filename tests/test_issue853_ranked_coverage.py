@@ -295,6 +295,39 @@ def test_sqlite_boundary_rejects_uri_escape_before_driver(
     assert not sentinel.exists()
 
 
+def test_sqlite_isolation_binding_deliberate_break_and_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing the real connect guard must fail containment even without the factory."""
+    sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    driver_attempts: list[Path] = []
+
+    def driver_spy(database, *args, **kwargs):
+        driver_attempts.append(Path(database))
+        raise AssertionError("unguarded SQLite driver reached")
+
+    # The driver remains a spy throughout, including while the connect guard is absent.
+    monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", driver_spy)
+
+    def assert_containment() -> None:
+        with pytest.raises(AssertionError, match="outside owned test root"):
+            sqlite3.connect(database=str(sentinel))
+        assert driver_attempts == []
+
+    assert_containment()
+    with monkeypatch.context() as broken:
+        broken.setattr(sqlite3, "connect", driver_spy)
+        # The same containment expectation must fail when only its binding is removed.
+        with pytest.raises(AssertionError):
+            assert_containment()
+        assert driver_attempts == [sentinel]
+        assert not sentinel.exists()
+
+    driver_attempts.clear()
+    assert_containment()
+    assert not sentinel.exists()
+
+
 def test_isolation_binding_deliberate_break_and_restore(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

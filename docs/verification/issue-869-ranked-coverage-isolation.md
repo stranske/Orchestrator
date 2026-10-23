@@ -266,3 +266,49 @@ Publication remains blocked for this follow-up: `git add` could not create
 the GitHub source-file commit, blocker comment, and `needs-human` label with
 "MCP tool call requires approval, but approval policy is never". No remote
 mutation succeeded; this follow-up's test and verification notes remain uncommitted.
+
+## SQLite binding break/restore follow-up (2026-10-23)
+
+Reviewed the implementation through `8bd2b6c` and PR #872: all eight checkboxes
+were already complete, and the PR was open with `draft=false`. The preceding
+fresh-outcome test and notes were subsequently committed in `8bd2b6c`.
+
+Added `test_sqlite_isolation_binding_deliberate_break_and_restore`. It applies
+the same containment assertion before, during, and after removal of the actual
+`sqlite3.connect` binding, bypassing the feedback factory. The assertion fails
+while unbound, and passes before and after. A driver spy remains installed
+throughout: the broken binding reaches only that spy, and the temporary
+out-of-bound sentinel is never opened or created.
+
+Validation with `/tmp/issue869-venv/bin/python`, using pytest and Black restored
+from existing cached wheels because package downloads are unavailable:
+
+- Baseline standalone module: 34 passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`:
+  35 passed, using only the module's own runtime isolation.
+- Same module with `-k sqlite_isolation_binding_deliberate_break_and_restore
+  -m "not slow"`: 1 passed, 34 deselected. This executes the safe break and
+  restoration proof without opening a database.
+- Relevant neighbors with temporary `ORCH_STATE_DIR=/tmp/issue869-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/issue869-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/issue869-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed. Only the neighbor command uses these overrides.
+- Targeted module command with `--cov=src/research_scheduler
+  --cov-report=term-missing -m "not slow"`: exited 4 because pytest-cov is
+  unavailable, including in the local wheel cache. No new coverage percentage
+  or uncovered-unit gain is claimed. Historical combined-CI provenance and
+  partial-round limitations above remain unchanged.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed unchanged.
+  Black's sequential single-file checker verified all 645 discovered files and
+  populated the cache after the initial worker run stalled. The required
+  ordinary command, `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/issue869-black-cache
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`,
+  then exited 0: 645 files unchanged. `git diff --check` passed.
+
+Publication is blocked for this follow-up: local staging cannot create
+`.git/index.lock` on the read-only filesystem. Automatic approval review rejected
+the GitHub source-file commit, blocker comment, and `needs-human` label with
+"MCP tool call requires approval, but approval policy is never". No remote mutation
+succeeded; the source and verification notes remain uncommitted in the working tree.
