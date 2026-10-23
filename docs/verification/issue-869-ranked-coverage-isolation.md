@@ -107,3 +107,37 @@ Formatting and publication results for this follow-up:
 - GitHub source-file commit, PR-body update, blocker comment, and `needs-human` label were all
   rejected with "MCP tool call requires approval, but approval policy is never". This follow-up
   remains in the working tree for a commit-capable run; no remote mutation succeeded.
+
+## Remaining guarded-boundary regressions (2026-10-23)
+
+At base `88dae7b`, all eight checkboxes were checked and PR #872 was open with
+`draft=false`. The baseline standalone module passed 24 tests.
+
+Extended the existing deny-and-count regression to cover `subprocess.call`, `check_call`,
+`check_output`, and the socket methods `connect`, `connect_ex`, and `sendto`. A dummy
+receiver avoids constructing sockets, and each boundary has a harmless fallback spy.
+
+Using `/tmp/orch872-venv/bin/python` with dependencies restored from cached wheels:
+
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 30 passed,
+  using only the module's own runtime isolation.
+- Removed each of the six corresponding guards individually and ran its exact parametrized
+  regression with `-m "not slow" --tb=short`: each failed, reaching only its fallback spy.
+  Restored the source in a `finally` block; the standalone module again passed all 30 tests.
+- `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed. Only these neighbors used a wrapper setting `ORCH_STATE_DIR`,
+  `ORCH_LOCAL_RUNTIME`, and `ORCH_FEEDBACK_DB` under `/tmp/orch872-round-neighbors`.
+- Targeted `--cov=src/research_scheduler --cov-report=term-missing` reporting could not run:
+  pytest-cov is unavailable. No new coverage percentage or uncovered-unit gain is claimed;
+  the historical combined-CI evidence and limitations above remain unchanged.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check
+  --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 files unchanged.
+  The initial process-pool check timed out; Black's single-file checker populated its verified
+  cache before the successful ordinary CLI check.
+- `git diff --check`: passed. Local staging failed because `.git/index.lock` cannot be created
+  on the read-only Git filesystem. The GitHub source-file commit was also rejected:
+  "MCP tool call requires approval, but approval policy is never". Changes remain uncommitted.
+  The blocker comment and `needs-human` label were rejected by the same approval policy;
+  no remote mutation succeeded.
