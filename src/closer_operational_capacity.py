@@ -90,19 +90,27 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
     if not isinstance(owner, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", owner):
         raise CapacityError("explicit publication owner required")
     requested = config.get("profile_ids")
-    if not isinstance(requested, list) or not requested or len(set(requested)) != len(requested):
-        raise CapacityError("nonempty unique exact profile scope required")
+    control_plane_only = config.get("control_plane_only", False)
+    if type(control_plane_only) is not bool:
+        raise CapacityError("control-plane qualification must be explicit")
+    if (
+        not isinstance(requested, list)
+        or len(set(requested)) != len(requested)
+        or (control_plane_only and requested)
+        or (not control_plane_only and not requested)
+    ):
+        raise CapacityError("exact model scope or explicit empty control-plane scope required")
     for key in requested:
         row = execution_profiles.get_profile(key)
         if not row or row.get("agent") not in AGENTS or row.get("lifecycle_status") != "active":
             raise CapacityError("unknown or inactive scoped profile")
     trials = config.get("bounded_trial_agents", [])
-    if not isinstance(trials, list) or set(trials) - set(AGENTS):
+    if not isinstance(trials, list) or set(trials) - set(AGENTS) or (control_plane_only and trials):
         raise CapacityError("unsupported bounded trial policy")
     # These fixed operational paths are host-local, never public package constants.
     poll_dir = Path.home() / ".codex/orchestrator/usage-poll"
     shed_dir = Path.home() / ".codex/handoff/capacity-shed"
-    for directory in (poll_dir, shed_dir):
+    for directory in (() if control_plane_only else (poll_dir, shed_dir)):
         if directory.resolve() != directory or directory.is_symlink():
             raise CapacityError("canonical operational directory required")
     manifest = Path(config.get("runtime_manifest", ""))
@@ -116,7 +124,7 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         raise CapacityError("producer is outside pinned Runtime closure")
     agents: dict[str, Any] = {}
     inputs: dict[str, str | None] = {}
-    for agent in AGENTS:
+    for agent in (() if control_plane_only else AGENTS):
         marker_path = shed_dir / agent
         if marker_path.is_symlink():
             raise CapacityError("shed marker symlink refused")
@@ -206,8 +214,13 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
             shed_marker=marker,
             bounded_trial=state == "warn" and "trial" in reason,
         )
-    projection = capacity.profile_capacity_snapshot(
-        {"agents": agents}, registry={key: execution_profiles.get_profile(key) for key in requested}
+    projection = (
+        {"profiles": {}, "pools": {}}
+        if control_plane_only
+        else capacity.profile_capacity_snapshot(
+            {"agents": agents},
+            registry={key: execution_profiles.get_profile(key) for key in requested},
+        )
     )
     # No operational counter is a measurement of unused provider quota.
     projection["pools"] = {
@@ -224,6 +237,7 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         runtime_manifest_sha256=digest,
         producer_sha256=_sha(Path(__file__).read_bytes()),
         profile_ids=requested,
+        **({"control_plane_only": True} if control_plane_only else {}),
         input_sha256=inputs,
         agents=agents,
         **projection,
@@ -242,12 +256,31 @@ def validate_report(report: dict, *, now: float) -> bool:
         and report["generated_at"] <= now + 30
         and now < report["expires_at"] <= deadline <= report["generated_at"] + 900
         and report.get("producer_sha256") == _sha(Path(__file__).read_bytes())
+        and type(report.get("control_plane_only", False)) is bool
         and isinstance(report.get("profile_ids"), list)
-        and bool(report["profile_ids"])
+        and (
+            (
+                report.get("control_plane_only") is True
+                and not report["profile_ids"]
+                and not report.get("profiles")
+                and not report.get("pools")
+            )
+            or (not report.get("control_plane_only", False) and bool(report["profile_ids"]))
+        )
         and len(set(report["profile_ids"])) == len(report["profile_ids"])
         and set(report["profile_ids"]) == set(report.get("profiles", {}))
         and all(execution_profiles.get_profile(key) for key in report["profile_ids"])
-        and _operational_inputs_match(report.get("input_sha256"))
+        and (
+            (
+                report.get("control_plane_only") is True
+                and report.get("input_sha256") == {}
+                and report.get("agents") == {}
+            )
+            or (
+                report.get("control_plane_only", False) is False
+                and _operational_inputs_match(report.get("input_sha256"))
+            )
+        )
     )
 
 

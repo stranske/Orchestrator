@@ -616,7 +616,7 @@ class RuntimeBinding:
         producer = self.bundle.runtime._load_producer()
         return producer.Evidence(producer.native_gh_pages).one(path)
 
-    def _recover(self, adapter, record, holder):
+    def _recover(self, adapter, record, holder, *, native_result=None):
         """Reconcile the stored operation, never a spec rebuilt from a fresh snapshot."""
         from closer_campaign import sha256_json
 
@@ -641,6 +641,14 @@ class RuntimeBinding:
             return {"status": "unknown", "reason": "original native binding unavailable"}
         if record["status"] == "succeeded":
             return {"status": "completed", "core_reconciled": True, "already_completed": True}
+        rejection_proof = getattr(core, "verification_request_not_accepted", None)
+        if callable(rejection_proof) and rejection_proof(record):
+            return {
+                "status": "not_started",
+                "core_rejected_not_accepted": True,
+                "reason": "exact verification POST was authoritatively rejected (HTTP 422)",
+                "next_trigger": "compatible reviewed consumer workflow and valid event inputs",
+            }
         if record["status"] not in {"intent_recorded", "submitted", "uncertain"}:
             return {"status": "unknown", "reason": "Core operation has no submitted effect"}
         try:
@@ -660,19 +668,53 @@ class RuntimeBinding:
                         for label in pr.get("labels", [])
                     )
                 )
+            mutation = binding.get("verification_mutation")
+            if record["action"] == "verify_request" and not isinstance(mutation, dict):
+                return {
+                    "status": "unknown",
+                    "reason": "legacy verification mutation kind is not established",
+                }
+            if record["action"] == "verify_request" and isinstance(mutation, dict):
+                if mutation.get("mutation_kind") == "workflow_dispatch":
+                    # A pre-existing label cannot witness a fresh workflow POST.
+                    acknowledgement = (native_result or {}).get("verification_post_accepted")
+                    observed = (
+                        (pr.get("head") or {}).get("sha") == binding["head"]
+                        and pr.get("merged") is True
+                        and pr.get("merge_commit_sha") == binding["merge"]
+                        and acknowledgement == mutation
+                        and (native_result or {}).get("status") == "completed"
+                    )
+                elif mutation.get("mutation_kind") != "label":
+                    observed = False
             if not observed:
                 return {"status": "unknown", "reason": "original native effect not observed"}
             spec = core.spec_from_record(record)
+            acknowledged_dispatch = (
+                record["action"] == "verify_request"
+                and isinstance(mutation, dict)
+                and mutation.get("mutation_kind") == "workflow_dispatch"
+            )
+            observation = {"pr": pr, "accepted_request": mutation} if acknowledged_dispatch else pr
             evidence = core.ReconciliationEvidence(
                 operation_key=record["operation_key"],
                 target_fence_key=record["target_fence_key"],
                 head_sha=record["head_sha"],
                 action=record["action"],
                 result="desired_result_observed",
-                source=f"repos/{record['repository']}/pulls/{record['target']['number']}",
-                observation_digest=_digest(pr),
+                source=(
+                    f"repos/{record['repository']}/actions/workflows/agents-verifier.yml/dispatches"
+                    if acknowledged_dispatch
+                    else f"repos/{record['repository']}/pulls/{record['target']['number']}"
+                ),
+                observation_digest=_digest(observation),
                 context=json.dumps(
-                    {"native_binding": binding, "merge": pr.get("merge_commit_sha")}, sort_keys=True
+                    {
+                        "native_binding": binding,
+                        "merge": pr.get("merge_commit_sha"),
+                        **({"accepted_request": mutation} if acknowledged_dispatch else {}),
+                    },
+                    sort_keys=True,
                 ),
             )
             core.reconcile_unknown(
@@ -753,8 +795,15 @@ class RuntimeBinding:
                 "reason": f"Core reconciliation unavailable: {type(exc).__name__}",
             }
 
-    def execute(self, target, action, snapshot, operation, native_effect):
-        from closer_campaign import ActionSpec, sha256_json, submit_effect
+    def execute(
+        self, target, action, snapshot, operation, native_effect, *, verification_mutation=None
+    ):
+        from closer_campaign import (
+            ActionSpec,
+            VerificationRequestNotAccepted,
+            sha256_json,
+            submit_effect,
+        )
 
         dependencies = dependency_problems()
         if dependencies:
@@ -798,6 +847,40 @@ class RuntimeBinding:
                 "source_targets": [row["target"] for row in snapshot.get("sources", [])],
                 "sources": snapshot.get("sources", []),
             }
+            if canonical == "verify_request":
+                if verification_mutation is None:
+                    if "verify:compare" in snapshot.get("labels", []):
+                        return {
+                            "status": "blocked",
+                            "reason": "repeat verification requires an exact prepared mutation",
+                        }
+                    mutation = {"mutation_kind": "label", "request_basis": None}
+                else:
+                    mutation = {
+                        "mutation_kind": verification_mutation.get("mutation_kind"),
+                        "request_basis": verification_mutation.get("request_basis"),
+                    }
+                    if mutation["mutation_kind"] not in {
+                        "label",
+                        "workflow_dispatch",
+                    } or not re.fullmatch(r"[0-9a-f]{64}", str(mutation["request_basis"])):
+                        return {
+                            "status": "blocked",
+                            "reason": "invalid prepared verification mutation",
+                        }
+                if mutation["mutation_kind"] == "workflow_dispatch" and not (
+                    callable(getattr(self.bundle.runtime, "reject_not_accepted", None))
+                    and callable(getattr(self.bundle.runtime, "VerificationRequestRejected", None))
+                    and callable(
+                        getattr(self.bundle.runtime, "verification_request_not_accepted", None)
+                    )
+                ):
+                    return {
+                        "status": "not_started",
+                        "reason": "qualified Core lacks typed verification rejection support",
+                        "next_trigger": "reviewed compatible Core publication",
+                    }
+                native_binding["verification_mutation"] = mutation
             spec = ActionSpec(
                 repository,
                 int(number),
@@ -838,14 +921,23 @@ class RuntimeBinding:
                 if time.time() >= deadline:
                     raise TimeoutError("original native action deadline exhausted before effect")
                 result.update(native_effect())  # all original native guards still execute
+                rejection = result.get("verification_rejected")
+                if rejection is not None:
+                    raise VerificationRequestNotAccepted(rejection)
                 # Anything after submission remains fenced pending independent readback.
                 return "ok" if result.get("status") == "completed" else "unknown"
 
         outcome = submit_effect(adapter, NativePort(), spec, {}, holder=operation["owner"])
+        if outcome == "not_accepted":
+            return {**result, "core_rejected_not_accepted": True}
         if outcome in {"ok", "unknown"}:
             try:
                 record = adapter.store.read(adapter.target_fence_key(spec))
-                recovered = self._recover(adapter, record, operation["owner"]) if record else {}
+                recovered = (
+                    self._recover(adapter, record, operation["owner"], native_result=result)
+                    if record
+                    else {}
+                )
             except Exception:
                 recovered = {}
             if recovered.get("status") == "completed":

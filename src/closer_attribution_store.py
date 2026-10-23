@@ -8,7 +8,6 @@ is no retirement/deletion entry point; recovery material still spends this ceili
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -33,7 +32,10 @@ class AttributionStorageWait(storage.StorageBlocked):
 
 
 class Store:
-    def __init__(self, root: Path, *, maximum: int = MAX_BYTES, ledger=None):
+    def __init__(
+        self, root: Path, *, maximum: int = MAX_BYTES, ledger=None, deadline: float | None = None
+    ):
+        self.deadline = deadline
         self.root = Path(root)
         self.maximum = maximum
         if type(maximum) is not int or maximum <= 0:
@@ -49,13 +51,18 @@ class Store:
         directory = Path(
             os.environ.get("ORCH_STORAGE_STATE_DIR", runtime_state_path(".storage-lifecycle"))
         )
-        self.ledger = ledger or storage.Reservations(directory, self.root, floor=0)
+        self.ledger = ledger or storage.Reservations(
+            directory, self.root, floor=0, deadline=deadline
+        )
 
     @contextlib.contextmanager
     def locked(self):
         fd = os.open(self.control / "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                storage.acquire_exclusive(fd, deadline=self.deadline, scope="attribution_index")
+            except storage.StorageLockWait as exc:
+                raise AttributionStorageWait(str(exc), accounting=exc.accounting) from exc
             path = self.control / "index.json"
             if path.is_symlink():
                 raise AttributionStorageWait("attribution index alias; preserved")
@@ -104,6 +111,17 @@ class Store:
             raise AttributionStorageWait("attribution digest mismatch; preserved")
         return data
 
+    def _finish(self, job, receipt, *, terminal):
+        try:
+            self.ledger.finish(
+                job,
+                receipt,
+                terminal=terminal,
+                **({"deadline": self.deadline} if self.deadline is not None else {}),
+            )
+        except storage.StorageLockWait as exc:
+            raise AttributionStorageWait(str(exc), accounting=exc.accounting) from exc
+
     @contextlib.contextmanager
     def admitted(self, growth):
         resident = self.resident()
@@ -118,7 +136,14 @@ class Store:
             )
         job, token = uuid.uuid4().hex, uuid.uuid4().hex
         try:
-            self.ledger.admit(job, "closer-attribution/v1", growth, 0, owner_token=token)
+            self.ledger.admit(
+                job,
+                "closer-attribution/v1",
+                growth,
+                0,
+                owner_token=token,
+                **({"deadline": self.deadline} if self.deadline is not None else {}),
+            )
         except storage.StorageBlocked as exc:
             try:
                 accounting = json.loads(str(exc))
@@ -131,13 +156,13 @@ class Store:
             # A synchronous Python failure is terminal for these in-process file
             # writes: every handle has unwound, resident partial bytes remain
             # measured. It is not an uncertain remote consequential operation.
-            self.ledger.finish(job, {"status": "file_write_failed"}, terminal=True)
+            self._finish(job, {"status": "file_write_failed"}, terminal=True)
             raise
         except BaseException:
-            self.ledger.finish(job, {"status": "interrupted"}, terminal=False)
+            self._finish(job, {"status": "interrupted"}, terminal=False)
             raise
         else:
-            self.ledger.finish(job, {"status": "retained"}, terminal=True)
+            self._finish(job, {"status": "retained"}, terminal=True)
 
     def retain(self, data, suffix, *, reference="legacy:unresolved", expired=False):
         if not isinstance(data, bytes) or suffix not in {"json", "zip", "txt", "md", "patch"}:

@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import math
 import os
 import platform
 import shutil
@@ -38,6 +39,44 @@ JSON = dict[str, Any]
 
 class StorageBlocked(RuntimeError):
     pass
+
+
+class StorageLockWait(StorageBlocked):
+    """A local lock deadline expired; no holder or reservation was changed."""
+
+    def __init__(self, scope: str):
+        self.accounting = {
+            "status": "storage_lock_wait",
+            "scope": scope,
+            "reason": "request_deadline_exhausted",
+        }
+        super().__init__(json.dumps(self.accounting, sort_keys=True))
+
+
+def acquire_exclusive(
+    descriptor: int, *, deadline: float | None = None, scope: str = "storage"
+) -> None:
+    """Bound contention by the caller's monotonic deadline; legacy default blocks."""
+    if deadline is None:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        return
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        raise ValueError("finite monotonic lock deadline required")
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise StorageLockWait(scope)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
+                raise
+            time.sleep(min(0.05, remaining))
+        else:
+            if time.monotonic() >= deadline:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                raise StorageLockWait(scope)
+            return
 
 
 OWNED_SAMPLE_CONTRACT = "owned-tree-sampled-allocation/v1"
@@ -790,7 +829,9 @@ class Reservations:
         floor: int,
         margin: int = 0,
         free: Callable[[Path], int] = available,
+        deadline: float | None = None,
     ):
+        self.deadline = deadline
         self.directory = directory
         self.volume = volume
         self.floor = floor
@@ -953,10 +994,14 @@ class Reservations:
             del cache[key]
 
     @contextlib.contextmanager
-    def locked(self) -> Iterator[JSON]:
+    def locked(self, *, deadline: float | None = None) -> Iterator[JSON]:
         descriptor = os.open(self.directory / "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            acquire_exclusive(
+                descriptor,
+                deadline=self.deadline if deadline is None else deadline,
+                scope="reservation_ledger",
+            )
             path = self.directory / "reservations.json"
             if path.is_symlink():
                 raise StorageBlocked("reservation state is a symlink")
@@ -996,6 +1041,7 @@ class Reservations:
         owner_token: str,
         scope: str | None = None,
         measurement_contract: JSON | None = None,
+        deadline: float | None = None,
     ) -> JSON:
         if not job.isalnum() or len(job) > 64:
             raise ValueError("invalid storage job identity")
@@ -1008,7 +1054,7 @@ class Reservations:
             or any(c not in "0123456789abcdef" for c in measurement_contract["sha256"])
         ):
             raise StorageBlocked("invalid measurement contract")
-        with self.locked() as data:
+        with self.locked(deadline=deadline) as data:
             if job in data["jobs"] or (self.directory / "receipts" / f"{job}.json").exists():
                 raise StorageBlocked("existing job reservation; reconcile without replay")
             if scope and any(row.get("scope") == scope for row in data["jobs"].values()):
@@ -1097,8 +1143,10 @@ class Reservations:
                 row["staged_owned_checkpoint"] = checkpoint.result
             row.update(status="staged", remaining=row["peak"])
 
-    def finish(self, job: str, receipt: JSON, *, terminal: bool) -> None:
-        with self.locked() as data:
+    def finish(
+        self, job: str, receipt: JSON, *, terminal: bool, deadline: float | None = None
+    ) -> None:
+        with self.locked(deadline=deadline) as data:
             row = data["jobs"][job]
             receipt = {**row, **receipt, "available_after": self.free(self.volume)}
             receipts = self.directory / "receipts"
@@ -1252,7 +1300,17 @@ def run_job(
     *,
     free: Callable[[Path], int] = available,
     probe: Callable[[Path], None] = idle,
+    lock_deadline: float | None = None,
+    lifecycle_lock_timeout_seconds: float = 5.0,
 ) -> int:
+    # Acquisition is request-bound. Later ledger operations each get their own
+    # bounded wait: a legitimate child lifetime must not consume cleanup time.
+    if (
+        type(lifecycle_lock_timeout_seconds) not in (int, float)
+        or not math.isfinite(lifecycle_lock_timeout_seconds)
+        or lifecycle_lock_timeout_seconds <= 0
+    ):
+        raise ValueError("finite positive lifecycle lock timeout required")
     parent = args.temp_parent.resolve()
     fallback_reason: JSON = {}
     cold_plan = _qualified_cold_plan(args, reason=fallback_reason)
@@ -1260,7 +1318,15 @@ def run_job(
     # Replace it ONLY for the exact reviewed contract, never by current free space.
     floor = STRICT_RELEASE_FLOOR if args.local_strict and cold_plan is None else 0
     margin = OBSERVED_OPERATING_MARGIN if args.local_strict else 0
-    manager = Reservations(args.state_dir, parent, floor=floor, margin=margin, free=free)
+    manager = Reservations(
+        args.state_dir, parent, floor=floor, margin=margin, free=free, deadline=lock_deadline
+    )
+
+    def lifecycle_call(method: str, *values: Any, **metadata: Any) -> Any:
+        manager.deadline = time.monotonic() + lifecycle_lock_timeout_seconds
+        # bind accepts arbitrary metadata; do not serialize a deadline as a field.
+        return getattr(manager, method)(*values, **metadata)
+
     job = uuid.uuid4().hex
     token = uuid.uuid4().hex
     for flag in ("--snapshot-out", "--digest-out"):
@@ -1316,13 +1382,16 @@ def run_job(
     )
     # A shared byte ledger admits one aggregate demand under one lock. This separate
     # per-job lock remains held through the child, evidence retention and cleanup.
+    lock = None
     try:
         lock = os.open(
             manager.directory / f"{job}.owner", os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600
         )
-        fcntl.flock(lock, fcntl.LOCK_EX)
-    except OSError:
-        manager.finish(job, {"status": "not_started_owner_lock_failed"}, terminal=True)
+        acquire_exclusive(lock, deadline=lock_deadline, scope="storage_job_owner")
+    except (OSError, StorageLockWait):
+        if lock is not None:
+            os.close(lock)
+        lifecycle_call("finish", job, {"status": "not_started_owner_lock_failed"}, terminal=True)
         raise
     root: Path | None = None
     root_id: tuple[int, int] | None = None
@@ -1347,7 +1416,8 @@ def run_job(
         root = Path(tempfile.mkdtemp(prefix="storage-verify-", dir=parent)).resolve()
         root_id = (root.stat().st_dev, root.stat().st_ino)
         write_json(root / "owner.json", {"job": job, "token": token})
-        manager.bind(
+        lifecycle_call(
+            "bind",
             job,
             root=str(root),
             root_identity=list(root_id),
@@ -1358,14 +1428,14 @@ def run_job(
         tmp_attributes = (root / "tmp").stat()
         tmp_id = (tmp_attributes.st_dev, tmp_attributes.st_ino)
         write_json(root / "tmp" / "owner.json", {"job": job, "token": token})
-        manager.bind(job, tmp_identity=list(tmp_id))
+        lifecycle_call("bind", job, tmp_identity=list(tmp_id))
         (root / "staging").mkdir()
-        manager.bind(job, source_command=source_command, source_identity=before)
+        lifecycle_call("bind", job, source_command=source_command, source_identity=before)
         receipt.update(root=str(root), source_identity=before)
         if args.local_strict:
             sampler = OwnedHighwater(root, root_id, token)
             sampler.sample(force=True)
-            manager.bind(job, owned_highwater=sampler.result)
+            lifecycle_call("bind", job, owned_highwater=sampler.result)
         env = {
             **os.environ,
             "ORCH_STORAGE_RUN_ID": job,
@@ -1391,14 +1461,14 @@ def run_job(
             env=env,
             start_new_session=True,
         )
-        manager.bind(job, child_pgid=child.pid)
+        lifecycle_call("bind", job, child_pgid=child.pid)
         lowest = admitted["available_before"]
         warned = False
         while child.poll() is None:
             if sampler is not None and sampler.sample():
                 # Preserve pre-teardown samples even if the supervisor later dies.
                 # Interrupted ownership stays charged; this is not a terminal proof.
-                manager.bind(job, owned_highwater=sampler.result)
+                lifecycle_call("bind", job, owned_highwater=sampler.result)
             lowest = min(lowest, free(parent))
             if not warned and free(parent) < margin + forecast:
                 print(
@@ -1446,7 +1516,9 @@ def run_job(
         target = root if rc == 0 else root / "tmp"
         target_id = root_id if rc == 0 else tmp_id
         receipt["retirement_path"] = str(target.with_name(target.name + ".retiring"))
-        manager.finish(job, {**receipt, "status": "terminal_evidence_saved"}, terminal=False)
+        lifecycle_call(
+            "finish", job, {**receipt, "status": "terminal_evidence_saved"}, terminal=False
+        )
         if stable and os.environ.get("VERIFY_BEFORE_SYNC_KEEP") != "1":
 
             def checked_idle(path: Path) -> None:
@@ -1471,7 +1543,7 @@ def run_job(
             )
         else:
             receipt["status"] = "retained_requested" if stable else "retained_source_changed"
-        manager.finish(job, receipt, terminal=True)
+        lifecycle_call("finish", job, receipt, terminal=True)
         print(
             json.dumps(
                 {
@@ -1497,7 +1569,7 @@ def run_job(
                 status="not_started", error=type(exc).__name__, root=str(root) if root else None
             )
             if root is None:
-                manager.finish(job, receipt, terminal=True)
+                lifecycle_call("finish", job, receipt, terminal=True)
                 raise
             try:
                 if root_id is None:
@@ -1529,7 +1601,7 @@ def run_job(
                 receipt.update(
                     status="not_started_cleanup_pending", cleanup_error=type(cleanup_error).__name__
                 )
-            manager.finish(job, receipt, terminal=no_writers)
+            lifecycle_call("finish", job, receipt, terminal=no_writers)
             raise
         receipt.update(
             status="cleanup_pending" if no_writers else "retained_uncertain",
@@ -1539,7 +1611,7 @@ def run_job(
         # Failed deletion does not reserve future growth after positive terminality:
         # existing remnants are already reflected in actual free bytes. Uncertain
         # children keep their reservation; never infer death from elapsed time.
-        manager.finish(job, receipt, terminal=terminal and no_writers)
+        lifecycle_call("finish", job, receipt, terminal=terminal and no_writers)
         raise
     finally:
         os.close(lock)

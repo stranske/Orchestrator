@@ -24,7 +24,7 @@ def waiting_world(public_merge_world, monkeypatch):
         "conclusion": None,
         "path": ".github/workflows/agents-verifier.yml",
         "event": "pull_request_target",
-        "pull_requests": [],
+        "pull_requests": [{"number": 12}],
         "repository": {"full_name": "owner/repo"},
         "created_at": "2026-10-22T00:00:01Z",
     }
@@ -64,7 +64,7 @@ def waiting_world(public_merge_world, monkeypatch):
     return w
 
 
-def test_public_racing_foreign_verifier_is_named_no_effect_wait(waiting_world, capsys):
+def test_public_racing_same_target_verifier_is_named_no_effect_wait(waiting_world, capsys):
     w = waiting_world
     assert native.main(w.argv) == 78
     result = json.loads(capsys.readouterr().out)
@@ -100,12 +100,9 @@ def test_unchanged_frontier_waits_then_terminal_event_fresh_frontier_verifies_on
     inventory_reads = len(w.inventory_requests)
     assert native.main(w.argv) == 78
     capsys.readouterr()
-    # Fresh completed-merge next-stage observation checks active capacity only;
-    # the retained child does not rerun or collect artifacts without a new trigger.
-    assert w.inventory_requests[inventory_reads:] == [
-        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=queued",
-        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=in_progress",
-    ]
+    # An unchanged retained child waits for its exact external terminal trigger;
+    # ordinary observation performs no optional history/capture polling.
+    assert w.inventory_requests[inventory_reads:] == []
     assert not w.verifies and len(w.merges) == 1
     w.blocking_run.update(status="completed", conclusion="success")
     # The next campaign is causally bound to a real external terminal read,
@@ -133,7 +130,7 @@ def test_unchanged_frontier_waits_then_terminal_event_fresh_frontier_verifies_on
     assert all(after[key]["items"] == entry["items"] for key, entry in old.items())
 
 
-@pytest.mark.parametrize("linked", [[], [{"number": 12}]])
+@pytest.mark.parametrize("linked", [[{"number": 12}]])
 def test_prewrite_blocking_run_never_becomes_target_owned_async(waiting_world, capsys, linked):
     w = waiting_world
     w.blocking_run["pull_requests"] = linked
@@ -314,3 +311,14 @@ def test_foreign_same_basename_module_cannot_self_authenticate_native_wait():
     backend.runtime_binding = None
     backend.require_runtime_binding = False
     assert queue._native_verify_wait_executor(backend.execute) is False
+
+
+@pytest.mark.parametrize("linked", [[], [{"number": 858}]])
+def test_unrelated_active_repository_run_does_not_create_target_dependency(
+    waiting_world, capsys, linked
+):
+    w = waiting_world
+    w.blocking_run["pull_requests"] = linked
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(w.verifies) == 1 and len(w.merges) == 1

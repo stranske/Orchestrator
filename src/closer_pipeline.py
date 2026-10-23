@@ -2588,6 +2588,42 @@ def _run_pipeline_impl(
     }
     if reconcile is not None:
         callbacks["reconcile"] = (reconcile, "io")
+
+    def stage_lane(stage, target, item):
+        # Running work retains the lane actually reserved at submission, even
+        # when its retained packet changes or becomes unreadable before completion.
+        if item.get("status") == "running":
+            for scheduled in futures.values():
+                if scheduled[0] == target:
+                    return scheduled[5]
+        callback, lane = callbacks[stage]
+        if stage == "interpret":
+            import closer_dispatcher
+
+            callback = closer_resources.native_interpretation_callback(callback)
+            try:
+                remote = closer_dispatcher.native_stage_remote_only(
+                    target, item.get("results", {}), stage, callback
+                )
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                RecursionError,
+            ) as exc:
+                item.update(
+                    status="failed",
+                    error="native_readiness_unavailable:" + type(exc).__name__,
+                    deferred_next_trigger="restore_bound_native_input",
+                )
+                item["metrics"]["errors"] += 1
+                return None
+            if remote:
+                return "io"
+        return lane
+
     assignment = sorted(target_list)
     observed_at = now()
     if float(deadline) <= observed_at:
@@ -3183,7 +3219,7 @@ def _run_pipeline_impl(
         lane: ThreadPoolExecutor(max_workers=bounds[lane], thread_name_prefix=f"closer-{lane}")
         for lane in bounds
     }
-    futures: dict[Future[Any], tuple[str, str, str, str | None, float]] = {}
+    futures: dict[Future[Any], tuple[str, str, str, str | None, float, str]] = {}
     active: dict[str, int] = {lane: 0 for lane in bounds}
     started = now()
     capacity_samples: list[dict[str, Any]] = []
@@ -3242,8 +3278,7 @@ def _run_pipeline_impl(
             # Resolve completions immediately and persist before finding more work.
             done = [f for f in futures if f.done()]
             for future in done:
-                target, stage, key, cache_key, launched = futures.pop(future)
-                lane = callbacks[stage][1]
+                target, stage, key, cache_key, launched, lane = futures.pop(future)
                 active[lane] -= 1
                 elapsed = max(0.0, now() - launched)
                 try:
@@ -3740,7 +3775,9 @@ def _run_pipeline_impl(
                     candidate_stage = candidate_item.get("stage")
                     if candidate_item.get("status") != "queued" or candidate_stage not in callbacks:
                         continue
-                    candidate_lane = callbacks[candidate_stage][1]
+                    candidate_lane = stage_lane(candidate_stage, candidate, candidate_item)
+                    if candidate_lane is None:
+                        continue
                     if candidate_lane != "io":
                         other_lanes.append(candidate)
                     elif candidate_stage == "prepare":
@@ -3761,8 +3798,8 @@ def _run_pipeline_impl(
                     advancing_work = any(
                         item.get("status") in {"queued", "running"}
                         and item.get("stage") in {"interpret", "exception"}
-                        and cap[callbacks[item["stage"]][1]] > 0
-                        for item in rows.values()
+                        and cap.get(stage_lane(item["stage"], candidate_target, item) or "", 0) > 0
+                        for candidate_target, item in rows.items()
                     )
                     if advancing_work:
                         io_slots -= 1
@@ -3786,7 +3823,10 @@ def _run_pipeline_impl(
                     stage = item.get("stage")
                     if stage not in callbacks:
                         continue
-                    callback, lane = callbacks[stage]
+                    callback = callbacks[stage][0]
+                    lane = stage_lane(stage, target, item)
+                    if lane is None:
+                        continue
                     if active[lane] >= min(cap[lane], bounds[lane]):
                         item["metrics"]["waits"] += 1
                         continue
@@ -3887,7 +3927,7 @@ def _run_pipeline_impl(
                             future.set_result(cached_value)
                     if not isinstance(cached, Mapping):
                         future = executors[lane].submit(invoke)
-                    futures[future] = (target, stage, key, cache_key, now())
+                    futures[future] = (target, stage, key, cache_key, now(), lane)
                     active[lane] += 1
                     peak_active[lane] = max(peak_active[lane], active[lane])
                 _save(path, state)
@@ -3901,7 +3941,9 @@ def _run_pipeline_impl(
                     for target, item in current_state["targets"].items():
                         if item.get("status") != "queued" or item.get("stage") not in callbacks:
                             continue
-                        lane = callbacks[item["stage"]][1]
+                        lane = stage_lane(item["stage"], target, item)
+                        if lane is None:
+                            continue
                         if capacity_error:
                             item.update(
                                 status="failed",
@@ -4221,6 +4263,35 @@ def _run_pipeline_finite(
                         rows[target] = dict(item)
                         break
                     lane = lane_by_stage[stage]
+                    if stage == "interpret":
+                        import closer_dispatcher
+
+                        original = closer_resources.native_interpretation_callback(
+                            callbacks[stage][0]
+                        )
+                        try:
+                            remote = closer_dispatcher.native_stage_remote_only(
+                                target, item.get("results", {}), stage, original
+                            )
+                        except (
+                            OSError,
+                            ValueError,
+                            TypeError,
+                            KeyError,
+                            AttributeError,
+                            RecursionError,
+                        ) as exc:
+                            item.update(
+                                status="held",
+                                stage_status="held",
+                                error="native_readiness_unavailable:" + type(exc).__name__,
+                                deferred_next_trigger="restore_bound_native_input",
+                            )
+                            _save(path, state)
+                            rows[target] = dict(item)
+                            break
+                        if remote:
+                            lane = "io"  # Native interpretation invokes no model.
                     if capacity.get(lane, 0) < 1:
                         item.update(
                             status="capacity_blocked",
@@ -4354,6 +4425,12 @@ def _run_pipeline_finite(
                         expected = frontier["bindings"][target]["revision"]
                         if revision != expected:
                             current.update(status="held", error="frontier revision binding differs")
+                        elif result.get("finite_binding_changed"):
+                            current.update(
+                                status="held",
+                                error="frontier action binding differs",
+                                deferred_next_trigger="fresh finite frontier",
+                            )
                         else:
                             current.update(
                                 status="pending",

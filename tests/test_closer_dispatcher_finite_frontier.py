@@ -452,6 +452,20 @@ def test_public_finite_max_workers_caps_actual_target_executor(native_world, mon
         return snapshot
 
     monkeypatch.setattr(dispatcher.GitHub, "snapshot", observed)
+    from closer_frontier_policy import make_frontier_from_observations
+
+    observer = dispatcher.Closer(
+        dispatcher.GitHub(deadline=time.time() + 25),
+        state_path=w.raw,
+        apply=True,
+        workers=True,
+    )
+    frontier = make_frontier_from_observations(
+        {target: observer.observe(target) for target in targets},
+        owner=_frontier["owner"],
+        frontier_id=_frontier["frontier_id"],
+    )
+    args[args.index("--finite-frontier-json") + 1] = json.dumps(frontier)
     monkeypatch.setattr(adapters, "data_only_problem", lambda *_: "fixture CLI absent")
     actual = concurrent.futures.ThreadPoolExecutor
     observed_ceilings = []

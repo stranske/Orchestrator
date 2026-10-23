@@ -264,3 +264,19 @@ def test_expired_claude_exhaustion_still_blocks_explicit_trial(host, window, per
     assert report["agents"]["claude"]["state"] == "shed"
     assert report["profiles"][PROFILE]["state"] == "shed"
     assert report["agents"]["claude"]["bounded_trial"] is False
+
+
+def test_explicit_control_plane_qualification_never_grants_model_capacity(host, monkeypatch):
+    cfg, _, _ = host
+    cfg.update(control_plane_only=True, profile_ids=[], bounded_trial_agents=[])
+    monkeypatch.setattr(scoped.execution_profiles, "get_profile", lambda *_: None)
+    report = scoped.evaluate(cfg, now=NOW)
+    assert scoped.validate_report(report, now=NOW)
+    assert report["profiles"] == report["pools"] == {}
+    assert report["profile_ids"] == []
+    damaged = copy.deepcopy(report)
+    damaged["profiles"] = {PROFILE: {"state": "ok"}}
+    assert not scoped.validate_report(damaged, now=NOW)
+    cfg["control_plane_only"] = False
+    with pytest.raises(scoped.CapacityError, match="scope"):
+        scoped.evaluate(cfg, now=NOW)

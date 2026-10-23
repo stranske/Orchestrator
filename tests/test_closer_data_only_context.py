@@ -297,6 +297,21 @@ def test_real_native_prompt_supplies_full_nonissue_request_beyond_optional_sampl
         + ("original task material;" * 600)
         + "EXACT_REQUEST_TAIL"
     )
+    # The original request participates in operation identity. Freeze discovery
+    # after changing it, rather than executing a now-stale frontier.
+    import time
+
+    import closer_frontier_policy
+
+    observer = cd.Closer(
+        cd.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=True, workers=True
+    )
+    frontier = closer_frontier_policy.make_frontier_from_observations(
+        {w.snapshot["target"]: observer.observe(w.snapshot["target"])},
+        owner=w.frontier["owner"],
+        frontier_id=w.frontier["frontier_id"],
+    )
+    w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(frontier)
     cd.main(w.argv)
     capsys.readouterr()
     assert w.events["provider"] == 1
