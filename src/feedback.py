@@ -6464,6 +6464,7 @@ def record_lane_round(
     return decision_id
 
 
+# Relay consumption grades on the existing capacity row — no second relay-pacing capability (#812).
 RELAY_PACING_CAPABILITY = "windowed-capacity-policy"
 RELAY_PACING_VERSION = "relay-pacing-v1"
 RELAY_PACING_BACKLOG_CUTOFF = int(datetime(2026, 10, 20, 11, 58, tzinfo=timezone.utc).timestamp())

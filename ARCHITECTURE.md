@@ -1803,10 +1803,11 @@ logged. The source event and accepted influence edge retain the decision time, s
 delayed import does not move evidence into another monitor window. One-to-one binding prevents
 late exits from reassigning a decision. The existing hook accepts Codex, Claude, Cursor and
 Muse. A joined round records completed / failed / rate-limited and the chosen agent; the
-existing value-chain row counts the observed terminal round as `outcome`. Process success
-never creates a PR verdict, merge, or durable success (`outcome_success`). Mirror sync
-activates the importer and record hook; the host-owned `handoff-relay.sh` must emit and pass
-the decision id after merge for the explicit-join campaign pass. See
+existing value-chain row counts the observed terminal round as `outcome`. Operational
+`outcome_success` counts only joined rounds with `status=completed` and `exit_status=0`
+(`success_scope`); that never creates a PR verdict, merge, or durable-delivery claim.
+Mirror sync activates the importer and record hook; the host-owned `handoff-relay.sh` must
+emit and pass the decision id after merge for the explicit-join campaign pass. See
 `docs/LANE_ROUND_FEEDBACK.md`.
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.

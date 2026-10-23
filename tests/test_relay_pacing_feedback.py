@@ -116,6 +116,49 @@ def test_existing_exit_hook_credits_capacity_row(
     assert "acted_on 1" in "\n".join(monitor.format_lines(rep))
 
 
+def test_relay_decision_acted_on_fields_and_single_owner(tmp_path, monkeypatch):
+    """#812 recording contract: one owner row, joined fields, fallback flag, no double-count."""
+    # Ownership is the existing capacity row — never a second relay-pacing capability.
+    assert feedback.RELAY_PACING_CAPABILITY == "windowed-capacity-policy"
+    assert feedback.RELAY_PACING_VERSION == "relay-pacing-v1"
+    log = _setup(tmp_path, monkeypatch)
+    log.write_text(_line(chosen="muse", fallback="yes"))
+    feedback.record_lane_round("muse", "opener", None, 0, "none", NOW)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+    with feedback._conn() as c:
+        decision = json.loads(
+            c.execute(
+                "SELECT payload_json FROM completion_events WHERE phase='decision'"
+            ).fetchone()[0]
+        )["relay_pacing"]
+        outcome = json.loads(
+            c.execute(
+                "SELECT payload_json FROM completion_events WHERE phase='outcome'"
+            ).fetchone()[0]
+        )["relay_pacing"]
+        edge = c.execute(
+            "SELECT capability_id, capability_version_id, accepted FROM influence_edges"
+        ).fetchone()
+        assert decision == {
+            "source": "codex",
+            "lane": "opener",
+            "candidates": ["claude_code", "cursor", "muse"],
+            "chosen": "muse",
+            "weights": "claude_code:1,cursor:1,muse:1",
+            "states": "codex:shed,claude_code:ok,cursor:ok,muse:ok",
+            "fallback": True,
+        }
+        assert outcome["status"] == "completed"
+        assert outcome["chosen"] == "muse"
+        assert outcome["fallback"] is True
+        assert edge == (feedback.RELAY_PACING_CAPABILITY, feedback.RELAY_PACING_VERSION, 1)
+        assert c.execute("SELECT COUNT(*) FROM influence_edges").fetchone()[0] == 1
+    # Re-read must not invent a second acted_on edge for the same decision line.
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+
+
 def test_fallback_and_reread_preserve_identity_and_window(tmp_path, monkeypatch):
     log = _setup(tmp_path, monkeypatch)
     log.write_text(_line(fallback="yes") * 2)
@@ -140,6 +183,8 @@ def test_fallback_and_reread_preserve_identity_and_window(tmp_path, monkeypatch)
         )["relay_pacing"]
         assert payload["fallback"] is True
         assert payload["source"] == "codex"
+        assert payload["chosen"] == "claude_code"
+        assert payload["weights"] == "claude_code:1,cursor:1,muse:1"
         assert payload["states"].startswith("codex:shed")
         assert payload["candidates"] == ["claude_code", "cursor", "muse"]
     index, _ = monitor.acted_on_window_index(
