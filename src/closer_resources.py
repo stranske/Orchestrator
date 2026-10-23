@@ -1255,6 +1255,15 @@ def release_legacy_boundary(root, owner):
 def unknown_reservations(root: Path) -> dict[str, str]:
     """``{key: target}`` for every intent left behind (in_flight with no live holder is unknown)."""
     found: dict[str, str] = {}
+
+    def retain(key: str, target: str) -> None:
+        # Both intent kinds can survive in both reservation roots. Keep every
+        # advertisement so receipt counts cannot mistake a partial drain for a
+        # cleared latch; unreadable intents need the same collision handling.
+        while key in found:
+            key = "historical:" + key
+        found[key] = target
+
     directories = [
         directory
         for base in _reservation_bases(root)
@@ -1265,13 +1274,10 @@ def unknown_reservations(root: Path) -> dict[str, str]:
             try:
                 intent = _read_intent(directory / filename)
             except ResourceBlocked:
-                found[f"unreadable:{directory.name}:{filename}"] = "?"
+                retain(f"unreadable:{directory.name}:{filename}", "?")
                 continue
             if intent is not None:
-                key = str(intent.get("key"))
-                if key in found:
-                    key = "historical:" + key
-                found[key] = str(intent.get("target"))
+                retain(str(intent.get("key")), str(intent.get("target")))
     return found
 
 

@@ -4799,6 +4799,65 @@ def test_reservation_drain_pass_number_requires_authority_after_check_date():
     assert passed["reservation_cleared"] is True
 
 
+@pytest.mark.parametrize("live_historical_owner", [False, True])
+def test_reservation_drain_pass_counts_all_same_key_intents(
+    tmp_path, monkeypatch, live_historical_owner
+):
+    """Current and historical intents must each count toward the printed pass number."""
+    import closer_resources as resources
+
+    path = tmp_path / "pipeline.json"
+    path.write_text("{}")
+    root = resources.scoped_root(path)
+    key = "branch:o/r@shared"
+    directory_name = hashlib.sha256(key.encode()).hexdigest()[:24]
+    for index, base in enumerate(resources._reservation_bases(root)):
+        directory = base / directory_name
+        directory.mkdir(parents=True)
+        target = TARGET.lower() if index == 0 else "o/r#8"
+        owner = (
+            f"{os.getpid()}:123:original"
+            if index == 1 and live_historical_owner
+            else "99999999:123:original"
+        )
+        for filename in ("intent.json", "legacy-intent.json"):
+            resources._atomic_write(
+                directory / filename,
+                {"key": key, "target": target, "owner": owner, "state": "unknown"},
+            )
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*intent.json")}
+    monkeypatch.setattr(resources, "_terminal_remote_observation", _terminal_observation)
+
+    counts = adapter._admitted_reservation_counts(path)
+    grade = adapter.reservation_drain_pass_number(
+        {**counts, "authority": True}, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS
+    )
+    assert grade["status"] == ("fail" if live_historical_owner else "pass")
+    assert grade["reservation_cleared"] is (not live_historical_owner)
+    assert counts["blocking_reservations"] == len(resources.unknown_reservations(root)) == 4
+    assert counts["drainable_reservations"] == (2 if live_historical_owner else 4)
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_reservation_drain_counts_unreadable_intents_in_both_storage_roots(tmp_path):
+    """Matching corrupt filenames in both roots remain separate unknown blockers."""
+    import closer_resources as resources
+
+    path = tmp_path / "pipeline.json"
+    path.write_text("{}")
+    root = resources.scoped_root(path)
+    for base in resources._reservation_bases(root):
+        directory = base / "same-resource"
+        directory.mkdir(parents=True)
+        (directory / "intent.json").write_text("not-json")
+
+    counts = adapter._admitted_reservation_counts(path)
+    assert counts["blocking_reservations"] == len(resources.unknown_reservations(root)) == 2
+    assert counts["drainable_reservations"] == 0
+    assert counts["deadlock"] is True
+    assert all(p.read_text() == "not-json" for p in tmp_path.rglob("intent.json"))
+
+
 def test_expired_admission_receipt_reports_dead_owner_drainable(tmp_path, monkeypatch, capsys):
     """Printed --pipeline receipt: drainable==blocking for dead owners; pass pending."""
     import closer_resources as resources
