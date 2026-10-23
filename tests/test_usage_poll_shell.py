@@ -187,3 +187,13 @@ def test_wrapper_stops_when_standard_is_unavailable(shell_home):
     assert result.returncode != 0
     assert "standard python unavailable" in result.stderr
     assert not result.stdout
+
+
+@pytest.mark.parametrize("root", ["opt/homebrew/bin", "usr/local/bin"])
+def test_standard_prefers_uv_314_over_homebrew_313(shell_home, tmp_path, root):
+    home, _ = shell_home
+    interpreter(tmp_path / root / "python3.13", "3.13")
+    expected = interpreter(uv_python(home, "3.14"), "3.14")
+    result = run_shell(home, selected(home))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(expected)

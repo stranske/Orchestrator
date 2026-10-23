@@ -1397,7 +1397,7 @@ def test_burn_anchor_age_bound_after_poller_outage(anchor_age, used):
     now = START + pacing.DAY_SECONDS
     data = observations([now - anchor_age, now - 720, now - 360, now], [0.01, 0.58, 0.59, 0.6])
     row = evaluate(u=0.6, samples=data)
-    ignored = f"anchor ignored: age={anchor_age:g}s > bound=28800s"
+    ignored = f"anchor ignored: age={anchor_age:.0f}s > bound=28800s"
     assert (ignored in row["fyi"]) is not used
     if used:
         assert row["confidence"] == 1 and row["span_h"] == 6
@@ -1407,3 +1407,16 @@ def test_burn_anchor_age_bound_after_poller_outage(anchor_age, used):
         assert row["confidence"] == pytest.approx(0.2 / 6)
         assert row["burn_rate_per_day"] is None
         assert row["state"] == "warn", "partial confidence must not shed from projection"
+
+
+@pytest.mark.parametrize("age,rendered", [(2_000_000, "2000000"), (32_400.6, "32401")])
+def test_ignored_anchor_age_is_a_plain_rounded_integer(age, rendered):
+    now = 3_000_000
+    diagnostics = []
+    pacing.burn_estimate(
+        [{"ts": now - age, "used_fraction": 0.1}],
+        now,
+        0,
+        diagnostics=diagnostics,
+    )
+    assert diagnostics == [f"anchor ignored: age={rendered}s > bound=28800s"]
