@@ -242,8 +242,8 @@ if [[ "${ORCH_STORAGE_ENTRY_PID:-}" != "$$" ]]; then
   storage_args=(run --state-dir "$storage_state" --source "$src" --runtime "$runtime_src"
     --state-source "$statedir_src" --temp-parent "${TMPDIR:-/tmp}" --max-dir-mb "$max_dir_mb"
     --profile "$expected_tree" --peak-bytes "${VERIFY_BEFORE_SYNC_PEAK_BYTES:-0}")
-  # The 27 GiB strict local release floor is never lowered. CI's deliberately
-  # different BARE shape is not a local release and has no such host agreement.
+  # The supervisor selects the reviewed fixture contract or the conservative
+  # 27 GiB fallback. CI's deliberately different BARE shape is not a local release.
   [[ "$expected_tree" == "BARE EXEC MIRROR" && "${CI:-}" == "true" ]] || storage_args+=(--local-strict)
   verify_args=()
   [[ -z "$snapshot_out" ]] || verify_args+=(--snapshot-out "$snapshot_out")

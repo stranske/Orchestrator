@@ -75,14 +75,33 @@ def test_staged_charge_requires_exact_owner_and_releases_only_copy_forecast(tmp_
 
 def test_peak_learning_never_lowers_forecast_and_completed_job_cannot_replay(tmp_path):
     manager = ledger(tmp_path, free=1000)
-    manager.admit("one", "verify", 10, 25, owner_token="owner")
-    manager.finish("one", {"observed_growth_bytes": 90}, terminal=True)
-    row = manager.admit("two", "verify", 10, 1, owner_token="owner")
+    contract = storage.measurement_profile(tmp_path, "verify", "fixture-copy-identity", tmp_path)
+
+    def measured(value):
+        return {
+            "source_unchanged": True,
+            "exit_code": 0,
+            "owned_highwater": {
+                "schema": storage.OWNED_SAMPLE_CONTRACT,
+                "complete_samples": 2,
+                "failed_samples": 0,
+                "allocated_highwater_bytes": value,
+            },
+        }
+
+    manager.admit("one", "verify", 10, 25, owner_token="owner", measurement_contract=contract)
+    manager.finish("one", measured(90), terminal=True)
+    row = manager.admit("two", "verify", 10, 1, owner_token="owner", measurement_contract=contract)
     assert row["peak"] == 90
-    manager.finish("two", {"observed_growth_bytes": 2}, terminal=True)
+    manager.finish("two", measured(2), terminal=True)
     with pytest.raises(storage.StorageBlocked, match="existing job"):
-        manager.admit("one", "verify", 0, 0, owner_token="owner")
-    assert manager.admit("three", "verify", 0, 0, owner_token="owner")["peak"] == 90
+        manager.admit("one", "verify", 0, 0, owner_token="owner", measurement_contract=contract)
+    assert (
+        manager.admit("three", "verify", 0, 0, owner_token="owner", measurement_contract=contract)[
+            "peak"
+        ]
+        == 90
+    )
 
 
 def test_uncertain_reservations_have_no_time_expiry(tmp_path, monkeypatch):
