@@ -1128,6 +1128,7 @@ def reserve(
                         raise ResourceBlocked(
                             f"resource {key} carries an unresolved effect of {intent.get('target')!r}"
                         )
+        writer_pgid = os.getpgrp()
         for key, _handle, path in held:
             if key.split(":", 1)[0] in DURABLE_KINDS:
                 _atomic_write(
@@ -1137,6 +1138,9 @@ def reserve(
                         "target": canonical_target(target),
                         "owner": owner,
                         "state": "in_flight",
+                        # Fence terminal reconciliation against this writer's group.
+                        # Detached effect children should update process_group when spawned.
+                        "process_group": writer_pgid,
                         "at": now(),
                     },
                 )
@@ -1149,6 +1153,7 @@ def reserve(
             for key, _handle, path in held:
                 if key.split(":", 1)[0] in DURABLE_KINDS and path.exists():
                     with contextlib.suppress(OSError):
+                        prior = _read_intent(path) or {}
                         _atomic_write(
                             path,
                             {
@@ -1156,6 +1161,7 @@ def reserve(
                                 "target": canonical_target(target),
                                 "owner": owner,
                                 "state": "unknown",
+                                "process_group": prior.get("process_group", os.getpgrp()),
                                 "at": now(),
                             },
                         )
@@ -3173,7 +3179,14 @@ def _terminal_owner(intent, filename):
     if not match:
         raise ResourceBlocked("owner_identity_unknown")
     pid = int(match.group(1))
-    for probe, identity in ((os.kill, pid), (os.killpg, intent.get("process_group", pid))):
+    if "process_group" in intent:
+        pgid = intent["process_group"]
+    else:
+        # Historical Core intents omitted process_group. Fall back to the recorded
+        # pid so those advertisements remain drainable; plan/apply still require
+        # fresh remote and native-writer terminality. New writers record the group.
+        pgid = pid
+    for probe, identity in ((os.kill, pid), (os.killpg, pgid)):
         if type(identity) is not int or identity <= 0:
             raise ResourceBlocked("owner_process_group_unknown")
         try:

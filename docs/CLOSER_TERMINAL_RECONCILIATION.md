@@ -43,6 +43,11 @@ explicitly grants no acceptance, global-stop or effect-retry authority. Existing
 operation reconciliation, current-head merge/review gates and admission still
 apply. In particular this does not repair `no_pipeline_continuation_proof` or
 promise `authority: true` merely because the reservation count falls to zero.
+Expired-admission receipts grade that outcome as `reservation_drain_pass`
+(`reservation_drain_pass_number`, check date 2026-10-30): before the date the
+status stays `pending` while `reservation_cleared` reports whether
+`blocking_reservations` is 0 or equals `drainable_reservations`. After the date
+both that clearance and `authority: true` are required to pass.
 No production reservation was migrated or retired during implementation.
 
 New legacy reservations require either a pipeline-run binding or the existing

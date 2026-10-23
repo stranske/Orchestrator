@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -4299,6 +4300,8 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
     assert receipt["deadlock"] is True
     assert receipt["reservation_recovery"][0]["recovery_path"] == "plan_legacy_reconciliation"
     assert receipt["reservation_recovery"][0]["reasons"]
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is False
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
     assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
@@ -4739,6 +4742,146 @@ def _terminal_observation(target):
         },
         "native_writer": {"terminal": True, "evidence": []},
     }
+
+
+def test_reservation_drain_pass_number_pending_before_check_date():
+    """#898 pass number stays pending before 2026-10-30 while grading reservation half."""
+    cleared = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 15, "drainable_reservations": 15, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS - 1,
+    )
+    assert cleared["status"] == "pending"
+    assert cleared["reservation_cleared"] is True
+    assert cleared["check_date"] == "2026-10-30"
+    latch = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 15, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS - 1,
+    )
+    assert latch["status"] == "pending"
+    assert latch["reservation_cleared"] is False
+
+
+def test_reservation_drain_pass_number_requires_authority_after_check_date():
+    """Drain alone never invents authority; both halves are required after the check date."""
+    no_authority = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 0, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert no_authority["status"] == "fail"
+    assert no_authority["reservation_cleared"] is True
+    assert "authority" in no_authority["reason"]
+    latch = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 2, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert latch["status"] == "fail"
+    assert latch["reservation_cleared"] is False
+    passed = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 2, "drainable_reservations": 2, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert passed["status"] == "pass"
+    assert passed["reservation_cleared"] is True
+
+
+def test_expired_admission_receipt_reports_dead_owner_drainable(tmp_path, monkeypatch, capsys):
+    """Printed --pipeline receipt: drainable==blocking for dead owners; pass pending."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "uncertain"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    for kind, filename, owner in [
+        ("pr", "intent.json", "99999999:123:original"),
+        ("issue", "legacy-intent.json", "legacy"),
+    ]:
+        key = kind + ":" + TARGET.lower()
+        directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "lock").touch()
+        resources._atomic_write(
+            directory / filename,
+            {
+                "key": key,
+                "target": TARGET.lower(),
+                "owner": owner,
+                "state": "unknown" if kind == "pr" else "legacy_executor",
+                "at": 1,
+            },
+        )
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {"reason": "admission_deadline_expired", "authority": False},
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 78
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 2
+    assert receipt["deadlock"] is False
+    assert all(row["drainable"] for row in receipt["reservation_recovery"])
+    # Reservation half of #898 clears; authority stays false under expired admission.
+    assert receipt["authority"] is False
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
+def test_core_reserve_records_process_group(tmp_path):
+    import closer_resources as resources
+
+    state = tmp_path / "pipeline.json"
+    state.write_text("{}")
+    root = resources.scoped_root(state)
+    with pytest.raises(RuntimeError, match="synthetic"):
+        with resources.reserve(
+            root,
+            ["pr:" + TARGET],
+            target=TARGET,
+            owner=f"{os.getpid()}:test",
+            deadline=time.time() + 5,
+        ):
+            path = next(tmp_path.rglob("intent.json"))
+            intent = json.loads(path.read_text())
+            assert intent["process_group"] == os.getpgrp()
+            assert intent["state"] == "in_flight"
+            raise RuntimeError("synthetic")
+    retained = json.loads(next(tmp_path.rglob("intent.json")).read_text())
+    assert retained["state"] == "unknown"
+    assert retained["process_group"] == os.getpgrp()
 
 
 def test_dead_owner_reservations_become_drainable(tmp_path, monkeypatch):

@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 import weakref
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
@@ -36,6 +36,10 @@ import verifier_evidence
 
 TARGET = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+# #898 pass number: first post-merge closer receipt clears the reservation latch
+# (blocking 0 or drainable==blocking) with authority true. Check date 2026-10-30.
+RESERVATION_DRAIN_PASS_CHECK_TS = int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp())
+RESERVATION_DRAIN_PASS_CHECK_LABEL = "2026-10-30"
 
 
 def _pipeline_state_path(state_path, *, shadow=False):
@@ -8368,6 +8372,8 @@ def _main_admitted(args, p, assignment_rows, targets):
                     result["reservation_diagnostics_error"] = (
                         f"{type(exc).__name__}: {str(exc)[:200]}"
                     )
+                # Grade the #898 pass number from the printed receipt itself.
+                result["reservation_drain_pass"] = reservation_drain_pass_number(result)
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
@@ -8447,6 +8453,59 @@ def _main_admitted(args, p, assignment_rows, targets):
             result.update(stop_valid=False, valid=False, unknown_reservations=unknown)
     print(json.dumps(result, sort_keys=True))
     return 0 if result.get("stop_valid") else 78
+
+
+def reservation_drain_pass_number(receipt, *, now=None):
+    """#898 pass number: post-merge closer receipt clears the reservation latch.
+
+    Pass requires ``blocking_reservations == 0`` or
+    ``drainable_reservations == blocking_reservations``, and ``authority is True``.
+    Before the check date the status stays ``pending`` while still reporting whether
+    the reservation half already clears. Reservation drain alone never invents
+    authority; an expired-admission receipt with ``authority: false`` fails the
+    authority half even when drainable equals blocking.
+    """
+    stamp = time.time() if now is None else float(now)
+    blocking = receipt.get("blocking_reservations")
+    drainable = receipt.get("drainable_reservations")
+    authority = receipt.get("authority")
+    reservation_cleared = (
+        isinstance(blocking, int)
+        and isinstance(drainable, int)
+        and not isinstance(blocking, bool)
+        and not isinstance(drainable, bool)
+        and (blocking == 0 or drainable == blocking)
+    )
+    result = {
+        "check_date": RESERVATION_DRAIN_PASS_CHECK_LABEL,
+        "blocking_reservations": blocking,
+        "drainable_reservations": drainable,
+        "authority": authority,
+        "reservation_cleared": reservation_cleared,
+        "status": "pending",
+        "reason": f"check date {RESERVATION_DRAIN_PASS_CHECK_LABEL} not reached",
+    }
+    if stamp < RESERVATION_DRAIN_PASS_CHECK_TS:
+        return result
+    if not isinstance(blocking, int) or isinstance(blocking, bool):
+        result["status"] = "unmeasured"
+        result["reason"] = "blocking_reservations unread"
+        return result
+    if not isinstance(drainable, int) or isinstance(drainable, bool):
+        result["status"] = "unmeasured"
+        result["reason"] = "drainable_reservations unread"
+        return result
+    if not reservation_cleared:
+        result["status"] = "fail"
+        result["reason"] = f"blocking {blocking} with drainable {drainable}"
+        return result
+    if authority is not True:
+        result["status"] = "fail"
+        result["reason"] = f"authority {authority!r} is not true"
+        return result
+    result["status"] = "pass"
+    result["reason"] = "reservation latch cleared with authority"
+    return result
 
 
 def _expired_admission_diagnostics(pipeline_path):
