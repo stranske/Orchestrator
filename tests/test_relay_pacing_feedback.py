@@ -151,6 +151,17 @@ def test_relay_pass_number_grades_joins_against_demand_within_tolerance():
         assert enough["status"] == "pass", (demand, enough)
         assert enough["acted_on_floor"] == required
 
+    # Surplus joins outside the upper tolerance indicate a population mismatch.
+    for demand, ceiling in ((1, 1), (19, 19), (20, 21), (40, 42)):
+        row = {**base, "situation_count": demand, "usable": ceiling + 1, "outcome": ceiling + 1}
+        excess = monitor.relay_pass_number({**row, "relay_acted_on": ceiling + 1}, now=check)
+        assert excess["status"] == "fail", (demand, excess)
+        assert f"> ceiling {ceiling}" in excess["reason"]
+        assert (
+            monitor.relay_pass_number({**row, "relay_acted_on": ceiling}, now=check)["status"]
+            == "pass"
+        )
+
     short = monitor.relay_pass_number({**base, "relay_acted_on": 18}, now=check)
     assert short["status"] == "fail"
     assert "relay_acted_on 18 < floor 19" in short["reason"]

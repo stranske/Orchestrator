@@ -265,6 +265,11 @@ def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
         result["status"] = "fail"
         result["reason"] = f"relay_acted_on {relay_acted} < floor {floor} (demand {demand} ±5%)"
         return result
+    ceiling = math.floor(demand * (1.0 + RELAY_PASS_TOLERANCE))
+    if relay_acted > ceiling:
+        result["status"] = "fail"
+        result["reason"] = f"relay_acted_on {relay_acted} > ceiling {ceiling} (demand {demand} ±5%)"
+        return result
     if usable < relay_acted:
         result["status"] = "fail"
         result["reason"] = f"usable {usable} < relay_acted_on {relay_acted}"
