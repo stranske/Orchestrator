@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import capabilities
 import capability_admission as admission
 import env_prereq
 import ledger_reconcile
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_state(tmp_path, monkeypatch):
+    """`admission.preflight` consults the capability ledger under a lock: keep that off the live one."""
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    monkeypatch.setattr(capabilities, "REG", tmp_path / "capabilities.json")
 
 
 def test_consumer_resolution_confines_paths_and_classifies_evidence(tmp_path):
