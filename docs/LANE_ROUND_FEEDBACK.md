@@ -15,7 +15,11 @@ decision. The append helper replaces the relay's existing `relay-pacing.log`
 writer; do not also emit a legacy pacing line for the same decision. The hook is:
 
 ```bash
-# At decision time (before dispatch): append an importer-valid line with decision_id=<id>.
+# At decision time (before dispatch): prefer pick-agent stderr log_fields (or format-relay-pacing-fields)
+# so Cursor-top unmeasured-preferred receipts keep numeric weights instead of nested-pacing *:unknown.
+# weights="$(printf '%s' "$decision_json" | python3 "$ORCH/rate_incidents.py" format-relay-pacing-fields \
+#   --candidates "$candidates" | python3 -c 'import json,sys; print(json.load(sys.stdin)["weights"])')"
+# Append an importer-valid line with decision_id=<id>.
 # Replace the existing pacing-log writer with this call; do not also write a legacy line.
 # Requires $source, $candidates, $chosen, $weights, $states and $fallback from the decision.
 # Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
@@ -34,8 +38,11 @@ python3 "$ORCH/rate_incidents.py" record-lane-round \
 
 Prefer `append-relay-pacing-decision` over hand-editing the pacing log: it generates the
 token, writes `decision_id=<id>` in the field order the importer accepts, and prints the
-same token for the exit hook. `generate-relay-decision-id` remains available when the
-relay must emit the id into an existing log writer.
+same token for the exit hook. `capacity.py pick-agent` prints `log_fields.weights` /
+`log_fields.states` on stderr (using top-level `routing_weight` when present).
+Cursor-top pick behavior is tracked separately in #891. `format-relay-pacing-fields`
+rebuilds those tokens from the same JSON when the host script does not yet read `log_fields`. `generate-relay-decision-id`
+remains available when the relay must emit the id into an existing log writer.
 
 Set `$tail` to a private temporary file and remove it after the call. Pass
 `--receiver-reason "$reason"` when the relay has retained its actual routing
@@ -86,14 +93,21 @@ Brain write lock.
 
 The target completion event records `completed` (exit zero), `rate-limited`
 (nonzero plus authoritative capacity evidence), or `failed` (other nonzero).
-These observed terminal results count as `outcome` in the capacity row; they are not
-PR acceptance or durable-delivery evidence and do not increment `outcome_success`.
+These observed terminal results count as `outcome` in the capacity row. Operational
+`outcome_success` increments only for joined rounds with `status=completed` and
+`exit_status=0`; failed, rate-limited and lane-busy exits earn none. They are not
+PR acceptance evidence and never synthesize a durable-delivery verdict — durable
+PR edges on the same row still use the existing lifecycle predicate and remain
+part of the combined `success_scope`.
 Import errors are returned as `relay_pacing.status=unavailable` in the hook receipt;
 provider-incident recording still runs. Missing logs report `absent`.
 
-For the 2026-10-27 check, compare decision timestamps in the same UTC window against
-this row's accepted edges (the normal monitor window is 90 days), retaining any
-other capacity-consumer edges separately when comparing to relay log counts.
-Inspect `completion_events` with producer `feedback.relay_pacing` for unjoined
-decisions and chosen-agent outcome payloads. A fixture pass does not establish
-one-day production consumption or the weekly +/-5% acceptance criterion.
+For the 2026-10-27 check, `switch_review.py --text-out` prints a `relay pass
+(2026-10-27):` line under the capacity row. It compares version-exact relay joins
+(`relay_acted_on`) to independent log demand within ±5%, and requires
+`usable ≥ relay_acted_on` and `outcome ≥ relay_acted_on`. Durable-delivery edges on
+the same row are retained separately and do not inflate the join count. Before the
+check date the line reads `pending`. Inspect `completion_events` with producer
+`feedback.relay_pacing` for unjoined decisions and chosen-agent outcome payloads. A
+fixture pass does not establish one-day production consumption or the weekly
+acceptance criterion.

@@ -382,3 +382,29 @@ Acceptance after merge and the relay update: within 24 hours, inspect
 decisions with recorded exits, and the `switch_review.py --text-out` monitor row
 for `windowed-capacity-policy` with `acted_on > 0` and `outcome > 0`. This live
 check is separate from the repository's offline tests.
+
+## Relay monitor population (#812)
+
+The `windowed-capacity-policy` row in `switch_review.py --text-out` measures relay
+demand from validated, deduplicated decisions in `HANDOFF_PACING_LOG` (default
+`~/.codex/handoff/relay-pacing.log`) over the same report window. This read is
+independent of ingestion and joins: an eligible unjoined decision contributes to
+demand. An absent or unreadable log leaves demand unmeasured; an empty valid
+population is zero. The reader shares the importer's identity and validation rules.
+
+Accepted, version-matched Brain decision events contribute to `usable`, including
+saved decisions whose log has rotated. Accepted joins retain their existing
+`acted_on` and terminal `outcome` counts. For these operational relay outcomes,
+`success` counts joined rounds with both `status=completed` and `exit_status=0`;
+failed, rate-limited and lane-busy (`exit=75`) rounds earn no operational success.
+Durable PR delivery continues to use the existing lifecycle predicate on delivery
+edges, and both contributors land in `outcome_success`. The row's `success_scope`
+names that combined unit. No Brain outcome row, routing setting, or
+durable-delivery verdict is synthesized from a lane exit. The printed
+`relay pass (2026-10-27)` line grades version-exact joins against log demand
+within ±5% (see `value_chain_monitor.relay_pass_number`); it stays `pending`
+until that UTC date. Cursor-top pick behavior is tracked separately in #891.
+`pick-agent` stderr
+includes `log_fields` (and `rate_incidents.py format-relay-pacing-fields` rebuilds them)
+from top-level `routing_weight` so a nested-only shell path cannot reintroduce
+`weights=*:unknown` after mirror sync.

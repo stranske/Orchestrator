@@ -704,6 +704,16 @@ component or surface moved, so the loop diagram is unchanged.
 No first break changes on today's data: every row these touch breaks earlier or has unmeasured
 demand. No stage, component or surface moved, so the loop diagram is unchanged.
 
+For the existing relay-pacing surface in `windowed-capacity-policy` (#812), the
+monitor now shares the importer's read-only log parser for independent demand,
+counts accepted version-matched decision events as usable, and counts joined
+`completed`/`exit=0` lane rounds as operational success. Failed and lane-busy exits
+earn none. Durable-delivery successes on non-relay edges remain in the same
+`outcome_success` total; `success_scope` names both contributors. See
+`docs/capacity-pacing.md` for window and missing-input semantics. This adds no
+dispatch, feedback store, capability row, or loop edge.
+
+
 **An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
 winner").** `exp_abcd` records each member run with the `abcd-experiment` capability and never
 writes its `outcomes` row, by design: a member commits on an isolated branch, never pushes, and is
@@ -1794,10 +1804,17 @@ logged. The source event and accepted influence edge retain the decision time, s
 delayed import does not move evidence into another monitor window. One-to-one binding prevents
 late exits from reassigning a decision. The existing hook accepts Codex, Claude, Cursor and
 Muse. A joined round records completed / failed / rate-limited and the chosen agent; the
-existing value-chain row counts the observed terminal round as `outcome`. Process success
-never creates a PR verdict, merge, or durable success (`outcome_success`). Mirror sync
-activates the importer and record hook; the host-owned `handoff-relay.sh` must emit and pass
-the decision id after merge for the explicit-join campaign pass. See
+existing value-chain row counts the observed terminal round as `outcome`. Operational
+`outcome_success` counts joined rounds with `status=completed` and `exit_status=0`,
+and durable-delivery successes on non-relay edges remain in the same total
+(`success_scope`); a lane exit never creates a PR verdict, merge, or durable-delivery
+claim.
+The value-chain section also prints `relay pass (2026-10-27)` under the capacity row:
+version-exact joins versus independent log demand within ±5%, with `usable` and `outcome`
+at least the join count. Before that UTC date the line is `pending`. Durable-delivery
+edges on the same row are excluded from the join count.
+Mirror sync activates the importer and record hook; the host-owned `handoff-relay.sh` must
+emit and pass the decision id after merge for the explicit-join campaign pass. See
 `docs/LANE_ROUND_FEEDBACK.md`.
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.

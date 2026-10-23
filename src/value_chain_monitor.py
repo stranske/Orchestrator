@@ -12,8 +12,10 @@ edge onto a role run is not acted on; it is counted beside `acted_on`. Only a te
 outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, one that never
 merges and an open one are counted beside it. A run that never merges is scored by verdict in
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
-success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy instead count the
-observed lane-round terminal result; they never earn durable-delivery success.
+success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy count the
+observed lane-round terminal result; successful rounds require exit=0. Those operational
+results sit beside durable-delivery successes on non-relay edges in the same total and
+never synthesize a durable-delivery claim from a lane exit.
 The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -29,7 +32,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +42,10 @@ import feedback
 
 CAPABILITY_ID = "value-chain-monitor"
 WINDOW_DAYS = 90
+# #812 weekly pass: relay_acted_on vs independent log demand within ±5% (check date 2026-10-27).
+RELAY_PASS_TOLERANCE = 0.05
+RELAY_PASS_CHECK_TS = int(datetime(2026, 10, 27, tzinfo=timezone.utc).timestamp())
+RELAY_PASS_CHECK_LABEL = "2026-10-27"
 # What an accepted edge's target can say, as `capability_effectiveness._classify` names it, and the
 # row field each class is counted in. An association is set aside at the `acted_on` step (2026-10-12,
 # owner decision): an edge onto a role run is not a run acting on the capability's output, because
@@ -165,6 +172,150 @@ def _stall_situations(inputs: dict[str, Any]) -> int | None:
     return None if targets is None else len(targets)
 
 
+def _relay_situations(inputs: dict[str, Any]) -> int | None:
+    return inputs.get("relay_decision_count")
+
+
+def _relay_decisions(log: Path, end: int) -> dict[str, tuple[int, dict[str, Any]]] | None:
+    """Independent decisions; None means the source could not be read."""
+    try:
+        if not log.is_file():
+            return None
+        return feedback.read_relay_pacing_decisions(log, end=end)
+    except (OSError, UnicodeError):
+        return None
+
+
+def _relay_decision_population(log: Path, start: int, end: int) -> int | None:
+    """Independent demand: valid distinct log decisions, including unjoined rounds."""
+    decisions = _relay_decisions(log, end)
+    return (
+        None if decisions is None else sum(start <= stamp <= end for stamp, _ in decisions.values())
+    )
+
+
+def _relay_usable(inputs: dict[str, Any], start: int, end: int) -> int | None:
+    """Accepted decision events prove usability even after the source log rotates."""
+    events = inputs.get("completion_events")
+    if events is None:
+        return None
+    return len(
+        {
+            e["run_id"]
+            for e in events
+            if e.get("capability_id") == feedback.RELAY_PACING_CAPABILITY
+            and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+            and e.get("producer") == "feedback.relay_pacing"
+            and e.get("phase") == "decision"
+            and e.get("validation_status") == "accepted"
+            and start <= e.get("created_ts", -1) <= end
+        }
+    )
+
+
+def _relay_joined_edges(own_edges: list[dict] | None) -> list[dict]:
+    """Version-exact accepted joins; durable-delivery edges on the same row are excluded."""
+    if own_edges is None:
+        return []
+    return [
+        e
+        for e in own_edges
+        if e.get("accepted") == 1
+        and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+        and e.get("relay_round_status") in {"completed", "failed", "rate-limited"}
+    ]
+
+
+def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
+    """#812 weekly criterion: relay joins cover log demand within ±5%.
+
+    Compares version-exact relay joins to independent log demand, not the row's total
+    `acted_on` (which may include durable-delivery edges). Both populations start at
+    feedback.RELAY_PACING_BACKLOG_CUTOFF, using the source decision timestamp for
+    joins; retired legacy orphans are displayed separately. Before the check date the
+    status is `pending`; missing demand or join counts stay `unmeasured`.
+    """
+    demand = row.get("situation_count")
+    relay_acted = row.get("relay_acted_on")
+    retired_unjoinable = None
+    if "relay_decisions" in row:
+        decisions = row["relay_decisions"]
+        joins = row["relay_joined_edges"]
+        start = max(now - WINDOW_DAYS * 86400, feedback.RELAY_PACING_BACKLOG_CUTOFF)
+        demand = (
+            None
+            if decisions is None
+            else sum(start <= stamp <= now for stamp, _ in decisions.values())
+        )
+        relay_acted = (
+            None if joins is None else sum(start <= e["relay_decision_ts"] <= now for e in joins)
+        )
+        if decisions is not None and joins is not None:
+            joined_ids = {e["source_run_id"] for e in joins}
+            retired_unjoinable = sum(
+                now - WINDOW_DAYS * 86400 <= stamp < feedback.RELAY_PACING_BACKLOG_CUTOFF
+                and decision_id not in joined_ids
+                for decision_id, (stamp, _) in decisions.items()
+            )
+    usable = row.get("usable")
+    outcome = row.get("outcome")
+    success = row.get("outcome_success")
+    result: dict[str, Any] = {
+        "check_date": RELAY_PASS_CHECK_LABEL,
+        "tolerance": RELAY_PASS_TOLERANCE,
+        "demand": demand,
+        "retired_unjoinable": retired_unjoinable,
+        "relay_acted_on": relay_acted,
+        "acted_on_floor": None,
+        "usable": usable,
+        "outcome": outcome,
+        "outcome_success": success,
+        "status": "pending",
+        "reason": f"check date {RELAY_PASS_CHECK_LABEL} not reached",
+    }
+    if now < RELAY_PASS_CHECK_TS:
+        return result
+    if demand is None or relay_acted is None:
+        result["status"] = "unmeasured"
+        result["reason"] = "demand or relay joins unread"
+        return result
+    # Joins are whole rounds: rounding down would admit less than 95% coverage,
+    # including zero joins for a single logged decision.
+    floor = math.ceil(demand * (1.0 - RELAY_PASS_TOLERANCE))
+    result["acted_on_floor"] = floor
+    if demand <= 0:
+        result["status"] = "fail"
+        result["reason"] = "demand 0 on check date"
+        return result
+    if usable is None or outcome is None:
+        result["status"] = "unmeasured"
+        result["reason"] = "usable or outcome unread"
+        return result
+    if relay_acted < floor:
+        result["status"] = "fail"
+        result["reason"] = f"relay_acted_on {relay_acted} < floor {floor} (demand {demand} ±5%)"
+        return result
+    ceiling = math.floor(demand * (1.0 + RELAY_PASS_TOLERANCE))
+    if relay_acted > ceiling:
+        result["status"] = "fail"
+        result["reason"] = f"relay_acted_on {relay_acted} > ceiling {ceiling} (demand {demand} ±5%)"
+        return result
+    if usable < relay_acted:
+        result["status"] = "fail"
+        result["reason"] = f"usable {usable} < relay_acted_on {relay_acted}"
+        return result
+    if outcome < relay_acted:
+        result["status"] = "fail"
+        result["reason"] = f"outcome {outcome} < relay_acted_on {relay_acted}"
+        return result
+    result["status"] = "pass"
+    result["reason"] = (
+        f"relay_acted_on {relay_acted} ≥ floor {floor}; usable {usable}; "
+        f"outcome {outcome}; success {success}"
+    )
+    return result
+
+
 def _prompt_batches(inputs: dict[str, Any]) -> int | None:
     issues = inputs.get("fleet_issues")
     if issues is None:
@@ -203,6 +354,7 @@ SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
     "role-triage": _open_issues,
     "role-adjudicator": _disputes,
     "role-redirect": _stall_situations,
+    feedback.RELAY_PACING_CAPABILITY: _relay_situations,
 }
 
 
@@ -281,7 +433,8 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     bad, and `outcome_success` those of them that are a durable success
     (`feedback.outcome_is_durable_success`, the lifecycle's predicate). Every class has its own
     field, so nothing set aside is hidden in a smaller count. The capacity row also counts
-    version-exact relay round completions (including failure) without inventing PR outcomes.
+    version-exact relay round completions (including failure), and completed exit=0 round
+    successes, without inventing PR outcomes.
     None when the edges are unread:
     unmeasured, never zero.
     """
@@ -323,6 +476,10 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
             for c, field in CLASS_FIELDS.items()
         },
         "outcome_success": sum(
+            e.get("relay_round_status") == "completed" and e.get("relay_round_exit_status") == 0
+            for e in relay
+        )
+        + sum(
             c == "terminal"
             and feedback.outcome_is_durable_success(**capability_effectiveness._outcome_fields(e))
             for c, e in classified
@@ -482,16 +639,19 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "r.role_name AS target_role_name, r.mode AS target_mode, "
                 "r.pr_number AS target_pr_number, "
                 "r.routing_metadata AS target_routing_metadata, "
+                "source_ce.created_ts AS relay_decision_ts, "
                 "CASE WHEN ce.producer='feedback.relay_pacing' "
                 "AND ce.validation_status='accepted' AND ce.created_ts<=? "
                 "AND ce.run_id=ie.target_run_id "
                 "AND ce.capability_id=ie.capability_id "
                 "AND ce.capability_version_id=ie.capability_version_id THEN "
-                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status "
+                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status, "
+                "json_extract(ce.payload_json,'$.relay_pacing.exit_status') AS relay_round_exit_status "
                 "FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
                 "LEFT JOIN completion_events ce ON ce.event_id = ie.target_event_id "
+                "LEFT JOIN completion_events source_ce ON source_ce.event_id = ie.source_event_id "
                 "WHERE ie.created_ts BETWEEN ? AND ?",
                 (now, since, now),
             ):
@@ -575,9 +735,32 @@ def fleet_issues(gh_fn: Callable, since: int, now: int, repos: list[str]) -> lis
 
 
 def collect_inputs(
-    *, now: int, gh_fn: Callable, repos: list[str], db: Path, stall_log: Path | None = None
+    *,
+    now: int,
+    gh_fn: Callable,
+    repos: list[str],
+    db: Path,
+    stall_log: Path | None = None,
+    relay_log: Path | None = None,
 ) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    inputs["relay_decisions"] = _relay_decisions(
+        relay_log
+        or Path(
+            os.environ.get(
+                "HANDOFF_PACING_LOG", str(Path.home() / ".codex/handoff/relay-pacing.log")
+            )
+        ),
+        now,
+    )
+    decisions = inputs["relay_decisions"]
+    inputs["relay_decision_count"] = (
+        None
+        if decisions is None
+        else sum(now - WINDOW_DAYS * 86400 <= stamp <= now for stamp, _ in decisions.values())
+    )
+    if inputs["relay_decision_count"] is None:
+        inputs["errors"].append("relay pacing population unavailable (decision log unread)")
     inputs["stall_targets"] = _stall_sweep_targets(
         stall_log or _state_dir() / STALL_SWEEP_LOG, now - WINDOW_DAYS * 86400, now
     )
@@ -656,6 +839,28 @@ def report(
             # Every class set aside from `outcome` has its own count beside it.
             **outcome_counts(cid, own_edges),
         }
+        if cid == feedback.RELAY_PACING_CAPABILITY:
+            usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
+            counts["usable"] = None if usable is None else counts["usable"] + usable
+            # Relay exit=0 and durable-delivery edges both land in outcome_success;
+            # the scope must name both so a mixed row is not misread as exit=0 alone.
+            counts["success_scope"] = (
+                "completed lane rounds (exit=0) and durable-delivery successes"
+            )
+            # Weekly ±5% pass compares these joins to log demand, not total acted_on.
+            counts["relay_acted_on"] = (
+                None if own_edges is None else len(_relay_joined_edges(own_edges))
+            )
+            counts["relay_pass"] = relay_pass_number(
+                {
+                    **counts,
+                    "relay_decisions": inputs.get("relay_decisions"),
+                    "relay_joined_edges": (
+                        None if own_edges is None else _relay_joined_edges(own_edges)
+                    ),
+                },
+                now=now,
+            )
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).
@@ -698,6 +903,7 @@ def format_lines(section: dict) -> list[str]:
             else f"demand {row['situation_count']}"
         )
         first = row["first_break"] or "unmeasured"
+        success_scope = f" ({row['success_scope']})" if row.get("success_scope") else ""
 
         def aside(step: str) -> str:
             parts = [
@@ -708,10 +914,25 @@ def format_lines(section: dict) -> list[str]:
         lines.append(
             f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {row['usable']}; "
             f"acted_on {row['acted_on']}{aside('acted_on')}; "
-            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}; "
+            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}{success_scope}; "
             f"first_break {first}"
             + ("; " + ", ".join(row["input_off"]) if row["input_off"] else "")
         )
+        relay_pass = row.get("relay_pass")
+        if isinstance(relay_pass, Mapping):
+            floor = relay_pass.get("acted_on_floor")
+            floor_s = "unmeasured" if floor is None else str(floor)
+            demand_s = relay_pass.get("demand")
+            if demand_s is None:
+                demand_s = "unmeasured"
+            retired = relay_pass.get("retired_unjoinable")
+            retired_s = "unmeasured" if retired is None else str(retired)
+            lines.append(
+                f"    relay pass ({relay_pass.get('check_date')}): {relay_pass.get('status')}; "
+                f"joins {relay_pass.get('relay_acted_on')} / demand {demand_s} "
+                f"(floor {floor_s}; retired_unjoinable {retired_s} excluded); "
+                f"{relay_pass.get('reason')}"
+            )
     # One legend line per label that appears, so a count is never printed without its meaning.
     lines.extend(
         f"  `{label}`: {meaning}"
