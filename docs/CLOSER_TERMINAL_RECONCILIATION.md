@@ -30,9 +30,12 @@ python3 src/closer_resources.py --state /absolute/pipeline.json --target owner/r
 
 The immutable audit retains original intent bytes and SHA-256 hashes plus the
 fresh observed target state. Each intent is atomically moved to a `.retired`
-file only after the audit is fsynced. A partial archive leaves the remaining
-intents blocking: plan those remaining bytes afresh, preserving prior audit files.
-No live reservation is expired, overwritten or silently deleted.
+file only after the audit is fsynced. A crash after the audit write and before
+the first rename resumes from that same audit when the plan hash and
+advertisement bytes still match (`observed_at` is ignored). A partial archive
+after at least one rename leaves remaining intents blocking: plan those
+remaining bytes afresh, preserving prior audit files. No live reservation is
+expired, overwritten or silently deleted.
 
 Retirement releases resource advertisements only. The original operation and
 pipeline ledgers are unchanged; UNKNOWN is not rewritten as success. The result

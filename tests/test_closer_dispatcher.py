@@ -4800,6 +4800,93 @@ def test_live_owner_reservation_stays_blocking(tmp_path, monkeypatch):
     assert resources.unknown_reservations(root) == before
 
 
+def test_dead_owner_drain_deliberate_break_without_terminal_path(tmp_path, monkeypatch):
+    """AC deliberate-break: unbound legacy with eligible=False stays undrainable.
+
+    Restoring reasons=['missing_causal_run_binding'] / eligible=False for unbound
+    legacy (and recovery_path none for Core) makes the named dead-owner acceptance
+    fail; reverting restores drainable==blocking. Encodes the issue's break→revert.
+    """
+    import closer_resources as resources
+
+    path, _root = _dead_owner_reservations(tmp_path)
+    monkeypatch.setattr(
+        resources,
+        "_terminal_remote_observation",
+        lambda target: _terminal_observation(target),
+    )
+    # Break: refuse the terminal plan so diagnostics keep the historical latch.
+    monkeypatch.setattr(
+        resources,
+        "plan_terminal_reconciliation",
+        lambda *a, **k: {
+            "eligible": False,
+            "advertisements": [],
+            "reasons": ["missing_causal_run_binding"],
+        },
+    )
+    broken = adapter._expired_admission_diagnostics(path)
+    assert broken["drainable_reservations"] == 0
+    assert broken["deadlock"] is True
+    assert broken["reservation_reason_counts"].get("missing_causal_run_binding")
+    assert all(not row["drainable"] for row in broken["reservation_recovery"])
+    # Revert the deliberate break and confirm the named acceptance shape returns.
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        resources,
+        "_terminal_remote_observation",
+        lambda target: _terminal_observation(target),
+    )
+    restored = adapter._expired_admission_diagnostics(path)
+    assert restored["drainable_reservations"] == restored["blocking_reservations"] == 2
+    assert restored["deadlock"] is False
+    assert all(row["drainable"] for row in restored["reservation_recovery"])
+
+
+def test_terminal_reconciliation_resumes_after_audit_write_crash(tmp_path, monkeypatch):
+    """Crash after immutable audit, before first rename, must resume — not latch."""
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*intent.json")}
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET)
+    assert plan["eligible"] is True
+    real_rename = resources.os.rename
+    attempts = {"n": 0}
+
+    def block_first_rename(src, dst):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise OSError("synthetic crash after audit before first rename")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(resources.os, "rename", block_first_rename)
+    with pytest.raises(OSError, match="synthetic crash after audit"):
+        resources.apply_terminal_reconciliation(
+            path, target=TARGET, expected_plan_sha256=plan["plan_sha256"]
+        )
+    assert resources.unknown_reservations(root)
+    audit = (
+        resources._reservation_base(resources.scoped_root(path)).parent
+        / "reconciliation-audit"
+        / f"{plan['plan_sha256']}.json"
+    )
+    assert audit.is_file()
+    # Resume with the same plan hash: identical audit (ignoring observed_at) continues.
+    monkeypatch.setattr(resources.os, "rename", real_rename)
+    result = resources.apply_terminal_reconciliation(
+        path, target=TARGET, expected_plan_sha256=plan["plan_sha256"]
+    )
+    assert result["status"] == "retired"
+    assert result["audit_path"] == str(audit)
+    assert resources.unknown_reservations(root) == {}
+    for row, retired in zip(json.loads(audit.read_text())["advertisements"], result["retired"]):
+        assert Path(retired).read_bytes() == before[Path(row["path"])]
+
+
 @pytest.mark.parametrize(
     "failure", ["remote", "native", "changed", "lock", "group", "malformed_owner", "alias"]
 )

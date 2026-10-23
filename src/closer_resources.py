@@ -3397,8 +3397,11 @@ def plan_terminal_reconciliation(state_path, *, target, observe=None):
 def apply_terminal_reconciliation(state_path, *, target, expected_plan_sha256, observe=None):
     """Fresh observation + exact-byte CAS; archive each intent before retirement.
 
-    There is no automatic effect retry. A partial archive is conservative: plan
-    remaining advertisements afresh; the original audit and retired bytes survive.
+    There is no automatic effect retry. A crash after the audit write and before
+    the first rename resumes from that same immutable audit when the plan hash
+    and advertisement bytes still match (observed_at is transport freshness).
+    A partial archive retires remaining exact bytes under the same audit; the
+    original audit and retired bytes survive.
     """
     if not re.fullmatch(r"[0-9a-f]{64}", expected_plan_sha256):
         raise ResourceBlocked("invalid_reconciliation_audit_identity")
@@ -3413,24 +3416,41 @@ def apply_terminal_reconciliation(state_path, *, target, expected_plan_sha256, o
         audit_dir = _reservation_base(scoped_root(path)).parent / "reconciliation-audit"
         if audit_dir.is_symlink():
             raise ResourceBlocked("aliased_reconciliation_audit")
+        existed = audit_dir.exists()
         audit_dir.mkdir(exist_ok=True)
+        if audit_dir.is_symlink():
+            raise ResourceBlocked("aliased_reconciliation_audit")
+        if not existed:
+            # Persist the new directory entry before any retired rename lands.
+            _fsync_dir(audit_dir.parent)
         audit_path = audit_dir / f"{expected_plan_sha256}.json"
         encoded = (
             json.dumps({**current, "observed_at": time.time()}, sort_keys=True, indent=2) + "\n"
         ).encode()
-        # One immutable write before ANY original intent is moved.
-        fd = os.open(audit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _fsync_dir(audit_dir)
+        # One immutable write before ANY original intent is moved. An identical
+        # audit already present (crash between write and rename) resumes.
+        try:
+            fd = os.open(audit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+        except FileExistsError:
+            _, prior = _reconciliation_record(audit_path)
+            prior_body = {k: v for k, v in prior.items() if k != "observed_at"}
+            if prior_body != current:
+                raise ResourceBlocked("reconciliation_audit_mismatch") from None
+        else:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            _fsync_dir(audit_dir)
         retired = []
-        for index, row in enumerate(rows):
+        for index, row in enumerate(current["advertisements"]):
             source = Path(row["path"])
+            destination = audit_dir / f"{expected_plan_sha256}-{index}.retired"
+            if not source.exists() and _reconciliation_bytes(destination) == row["bytes"].encode():
+                retired.append(str(destination))
+                continue
             if _reconciliation_bytes(source) != row["bytes"].encode():
                 raise ResourceBlocked("advertisement_changed_before_retirement")
-            destination = audit_dir / f"{expected_plan_sha256}-{index}.retired"
             if destination.exists() or destination.is_symlink():
                 raise ResourceBlocked("retirement_destination_exists")
             os.rename(source, destination)
@@ -3486,7 +3506,7 @@ def _reconciliation_main(argv=None):
         )
         print(json.dumps(result, sort_keys=True))
         return 0 if result.get("eligible", result.get("status") == "retired") else 78
-    except (OSError, ValueError, ResourceBlocked) as exc:
+    except (OSError, ValueError, KeyError, RuntimeError, ResourceBlocked) as exc:
         print(json.dumps({"status": "held", "reason": str(exc), "acceptance_authority": False}))
         return 78
 
