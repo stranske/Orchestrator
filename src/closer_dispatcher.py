@@ -2258,13 +2258,44 @@ class Closer:
             # Active runs remain a capacity exclusion, independently of attribution.
             for status in ("queued", "in_progress", "waiting", "requested", "pending"):
                 endpoint = f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100&status={status}"
-                runs = read(endpoint)
-                rows = runs.get("workflow_runs")
-                if (
-                    not isinstance(rows, list)
-                    or type(runs.get("total_count")) is not int
-                    or runs["total_count"] != len(rows)
-                ):
+                rows = None
+                # Status transitions can race GitHub's count and page contents.
+                # Retry that read once; never infer an empty inventory from an
+                # inconsistent response, or ignore runs beyond the first page.
+                for _attempt in range(2):
+                    collected, identifiers, row_reads = [], set(), {}
+                    page, expected = 1, None
+                    while True:
+                        runs = read(endpoint if page == 1 else f"{endpoint}&page={page}")
+                        batch = runs.get("workflow_runs")
+                        total = runs.get("total_count")
+                        if (
+                            not isinstance(batch, list)
+                            or type(total) is not int
+                            or total < 0
+                            or (expected is not None and total != expected)
+                        ):
+                            break
+                        expected = total
+                        ids = [run.get("id") if isinstance(run, dict) else None for run in batch]
+                        if (
+                            any(type(identifier) is not int or identifier < 1 for identifier in ids)
+                            or len(set(ids)) != len(ids)
+                            or identifiers.intersection(ids)
+                        ):
+                            break
+                        identifiers.update(ids)
+                        row_reads.update({identifier: reads[-1] for identifier in ids})
+                        collected.extend(batch)
+                        if len(collected) == expected:
+                            rows = collected
+                            break
+                        if not batch or len(collected) > expected:
+                            break
+                        page += 1
+                    if rows is not None:
+                        break
+                if rows is None:
                     return boundary.pending(
                         snapshot,
                         target,
@@ -2304,6 +2335,7 @@ class Closer:
                         "merge": snapshot["merge"],
                         "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?per_page=100&status={status}",
                         "observed_at": time.time(),
+                        "inventory_read": row_reads[run["id"]],
                         "blocking_run": {
                             key: run.get(key)
                             for key in (
@@ -7196,6 +7228,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         "merge": proof["merge"],
                         "observed_revision": row.get("revision"),
                         "blocking_run": proof["blocking_run"],
+                        "inventory_read": proof.get("inventory_read"),
                         "collection_requirements": proof.get("requirements"),
                         "collection_cause": proof.get("cause"),
                         "retained_reads": proof.get("observations"),

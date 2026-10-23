@@ -174,6 +174,24 @@ def verifier_resource_wait_proof(operation, target):
             <= operation.get("completed_at", 0)
         ):
             return None
+        inventory_read = proof.get("inventory_read")
+        if "inventory_read" in proof:
+            if not isinstance(inventory_read, dict):
+                return None
+            # Legacy single-page receipts remain valid. New receipts identify
+            # the actual page that observed the blocker, including its retained
+            # content hash, rather than misattributing it to page one.
+            page_endpoint = inventory_read.get("endpoint", "")
+            base_endpoint = proof["endpoint"]
+            if (
+                inventory_read.get("status") != "observed"
+                or not re.fullmatch("[0-9a-f]{64}", inventory_read.get("sha256", ""))
+                or not (
+                    page_endpoint == base_endpoint
+                    or re.fullmatch(re.escape(base_endpoint) + r"&page=[1-9][0-9]*", page_endpoint)
+                )
+            ):
+                return None
         return proof
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
