@@ -999,3 +999,22 @@ def test_issue825_interleaved_backlog_explicit_join_credits_monitor(tmp_path, mo
     assert "windowed-capacity-policy" in text
     assert "acted_on 1" in text
     assert re.search(r"outcome 1\b", text)
+
+
+def test_pick_agent_non_relay_candidate_keeps_success(monkeypatch, capsys):
+    """Relay-only log formatting cannot fail a valid general router pick."""
+    import capacity
+    import router
+
+    monkeypatch.setattr(capacity, "build", lambda: {"agents": {"gemini": {"state": "ok"}}})
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    monkeypatch.setattr(router, "select_agent", lambda *args, **kwargs: {"agent": "gemini"})
+    assert capacity.main(["pick-agent", "--candidates", "gemini"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "gemini"
+    diagnostic, raw = captured.err.splitlines()
+    assert "Relay log fields unavailable" in diagnostic
+    assert "supported agents" in diagnostic
+    decision = json.loads(raw)
+    assert "log_fields" not in decision
+    assert decision["candidates"][0]["agent"] == "gemini"

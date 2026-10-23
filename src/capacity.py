@@ -1459,12 +1459,13 @@ def main(argv):
         # unmeasured-preferred puts routing_weight on the candidate while pacing is absent.
         import rate_incidents
 
-        decision = {
-            **decision,
-            "log_fields": rate_incidents.relay_log_fields_from_decision(
+        try:
+            decision["log_fields"] = rate_incidents.relay_log_fields_from_decision(
                 decision, candidates=args.candidates
-            ),
-        }
+            )
+        except ValueError as exc:
+            # Log formatting must not turn a valid non-relay selection into failure.
+            print(f"Relay log fields unavailable: {exc}", file=sys.stderr)
         print(json.dumps(decision), file=sys.stderr)
         return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)

@@ -43,11 +43,12 @@
   "router_receipt": {
     "commit": "0050d01",
     "change": "Cursor-top beside measured Codex/Claude attaches unmeasured-preferred pacing receipt instead of legacy",
-    "tests": "126 pacing tests PASS including warn/shed/ok Cursor-top cases"
+    "tests": "126 pacing tests PASS including warn/shed/ok Cursor-top cases",
+    "status": "Historical only: router behavior from 0050d01 is absent from the reviewed head; src/router.py matches main. Cursor-top pick changes belong to #891."
   },
   "acceptance": {
     "post_merge_acted_on": "pending merge+mirror sync (production already acted_on 57 from #827)",
-    "weekly_pass_2026_10_27": "pending check date; monitor + pacing receipt paths landed",
-    "relay_log_fields": "pick-agent stderr log_fields + format-relay-pacing-fields keep Cursor-top weights numeric for host relay (nested pacing alone is *:unknown)"
+    "weekly_pass_2026_10_27": "pending check date; monitor and formatter/log-field paths included; Cursor-top pick behavior remains #891",
+    "relay_log_fields": "pick-agent stderr log_fields and format-relay-pacing-fields format supplied receipt weights; numeric Cursor-top receipts depend on #891"
   }
 }
