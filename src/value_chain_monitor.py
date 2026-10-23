@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -248,7 +249,9 @@ def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
         result["status"] = "unmeasured"
         result["reason"] = "demand or relay joins unread"
         return result
-    floor = int(demand * (1.0 - RELAY_PASS_TOLERANCE))
+    # Joins are whole rounds: rounding down would admit less than 95% coverage,
+    # including zero joins for a single logged decision.
+    floor = math.ceil(demand * (1.0 - RELAY_PASS_TOLERANCE))
     result["acted_on_floor"] = floor
     if demand <= 0:
         result["status"] = "fail"

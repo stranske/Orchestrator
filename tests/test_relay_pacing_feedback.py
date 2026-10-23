@@ -138,7 +138,18 @@ def test_relay_pass_number_grades_joins_against_demand_within_tolerance():
 
     passed = monitor.relay_pass_number(base, now=check)
     assert passed["status"] == "pass"
-    assert passed["acted_on_floor"] == 19  # int(20 * 0.95)
+    assert passed["acted_on_floor"] == 19  # Exactly 95% of 20 decisions.
+
+    # Whole-round credit must reach 95%, including populations below 20 where
+    # rounding down would allow a false pass (even zero joins for one decision).
+    for demand, required in ((1, 1), (7, 7), (19, 19), (21, 20), (39, 38), (40, 38)):
+        row = {**base, "situation_count": demand, "usable": demand, "outcome": demand}
+        below = monitor.relay_pass_number({**row, "relay_acted_on": required - 1}, now=check)
+        assert below["status"] == "fail", (demand, below)
+        assert below["acted_on_floor"] == required
+        enough = monitor.relay_pass_number({**row, "relay_acted_on": required}, now=check)
+        assert enough["status"] == "pass", (demand, enough)
+        assert enough["acted_on_floor"] == required
 
     short = monitor.relay_pass_number({**base, "relay_acted_on": 18}, now=check)
     assert short["status"] == "fail"
