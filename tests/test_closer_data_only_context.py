@@ -1,5 +1,6 @@
 """Available packet data can be assessed without converting omissions into proof."""
 
+import copy
 from contextlib import contextmanager
 
 import pytest
@@ -64,13 +65,22 @@ def packet(tmp_path):
 
 def test_actual_partial_packet_preserves_available_content_and_gaps(packet):
     value, readiness = packet
+    before = copy.deepcopy(value)
     context = cd.data_only_evidence_context(value, readiness=readiness)
     assert context["readiness"] == readiness
     source = context["sections"]["source"]
     assert source["content_supplied"] is True
-    assert source["content"] == value["sections"]["source"]["content"]
+    full_source = value["sections"]["source"]
+    assert source["content"] == [
+        {key: field for key, field in row.items() if key != "title_transform"}
+        for row in full_source["content"]
+    ]
+    assert source["content_projection"]["omitted_optional_fields"] == ["title_transform"]
+    assert source["content_projection"]["full_content_bytes"] > source["content_bytes"]
     assert "Original criterion" in source["content"][0]["body"]
     assert source["retained"] == value["sections"]["source"]["retained"]
+    assert source["sha256"] == full_source["sha256"]
+    assert value == before and ce.validate_packet(value)
     ci = context["sections"]["ci_artifacts"]
     assert ci["status"] == value["sections"]["ci_artifacts"]["status"]
     assert ci["status"] != "complete"
