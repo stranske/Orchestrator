@@ -17,6 +17,13 @@ redacted or truncated bodies, source drift and forged transform records still
 block. Post-verification full-source acceptance retains the necessary title
 transform hold. This is an action-specific minimum screen, never acceptance PASS.
 
+The data-only model context projects out optional `title_transform` audit metadata
+so it cannot displace the original request body or named necessary evidence. Its
+`content_projection` explicitly names the omitted field and full source size;
+the complete packet, source revision, original/display digests and retained audit
+remain unchanged. A projected model context is not a claim that all packet bytes
+were inspected, and the original content budget and missing-input rules remain.
+
 The finite production closer uses one readiness rail and the existing low-agent,
 exception and action paths. Collection is a task variant of `closer_interpret`,
 not another evaluator, acceptance standard, queue or scheduler. Legacy generic

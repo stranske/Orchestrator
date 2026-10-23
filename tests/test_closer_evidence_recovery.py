@@ -985,6 +985,48 @@ def test_necessary_extra_is_delivered_before_optional_context_can_consume_window
     )
 
 
+def test_source_display_audit_cannot_displace_original_body_or_necessary_extra_on_long_paths(
+    tmp_path,
+):
+    retained = tmp_path / "ci-long-retained-parent" / "scoped-original-request"
+    _snap, packet = code_only_packet(retained)
+    root = retained / "code-only"
+    packet["sections"]["requested_evidence"] = evidence._section(
+        "complete", [{"raw": "The specifically requested assertion result."}]
+    )
+    packet["manifest"]["section_files"]["requested_evidence"] = None
+    reseal_section(packet, "requested_evidence", root)
+    before = copy.deepcopy(packet)
+    full_source = packet["sections"]["source"]
+    assert (
+        full_source["content"][0]["title_transform"]["schema"] == "closer-source-title-transform/v1"
+    )
+    context = dispatcher.data_only_evidence_context(
+        packet,
+        readiness={
+            "requirements": [
+                {"section": "requested_evidence", "necessity": "necessary", "satisfied": True}
+            ]
+        },
+        max_bytes=1600,
+    )
+    source = context["sections"]["source"]
+    assert source["content_supplied"] is True
+    assert context["sections"]["requested_evidence"]["content_supplied"] is True
+    for original, projected in zip(full_source["content"], source["content"], strict=True):
+        assert projected["body"] == original["body"]
+        assert projected["body_sha256"] == original["body_sha256"]
+        assert projected["title_sha256"] == original["title_sha256"]
+        assert projected["request_revision"] == original["request_revision"]
+        assert "title_transform" not in projected
+    assert source["content_projection"]["omitted_optional_fields"] == ["title_transform"]
+    assert source["content_projection"]["full_content_bytes"] > source["content_bytes"]
+    assert (
+        source["retained"] == full_source["retained"] and source["sha256"] == full_source["sha256"]
+    )
+    assert packet == before and evidence.validate_packet(packet)
+
+
 @pytest.mark.parametrize(
     "body",
     [

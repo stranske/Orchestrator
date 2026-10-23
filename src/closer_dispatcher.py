@@ -3816,12 +3816,39 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snaps
         if not isinstance(section, dict):
             continue
         content = section.get("content")
+        projection = None
+        if (
+            name == "source"
+            and isinstance(content, list)
+            and any(isinstance(source, dict) and "title_transform" in source for source in content)
+        ):
+            # Acquisition audit belongs to the retained packet. Its verbose
+            # display hashes must not spend the model's original-request or
+            # named necessary-evidence budget. Preserve every request byte and
+            # explicitly identify the projection instead of claiming full content.
+            projection = {
+                "omitted_optional_fields": ["title_transform"],
+                "full_content_bytes": len(
+                    json.dumps(content, ensure_ascii=False, sort_keys=True).encode()
+                ),
+                "reason": "display-transform audit retained in the source section",
+            }
+            content = [
+                (
+                    {key: value for key, value in source.items() if key != "title_transform"}
+                    if isinstance(source, dict)
+                    else source
+                )
+                for source in content
+            ]
         encoded = json.dumps(content, ensure_ascii=False, sort_keys=True).encode()
         row = {
             k: section.get(k)
             for k in ("status", "reason", "sha256", "provenance", "retained", "truncated")
         }
         row["content_bytes"] = len(encoded)
+        if projection is not None:
+            row["content_projection"] = projection
         if len(encoded) <= remaining:
             row["content"] = content
             row["content_supplied"] = True
