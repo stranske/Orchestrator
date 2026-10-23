@@ -77,6 +77,7 @@ def archive(
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STORAGE_STATE_DIR", str(tmp_path / "private-storage-ledger"))
     snapshot = {
         "target": TARGET,
         "state": "MERGED",

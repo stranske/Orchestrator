@@ -1883,11 +1883,19 @@ class Closer:
         repo, number = target.split("#")
         root = self.verifier_archive_root
         reads = []
+        attribution_reference = boundary.digest(
+            [snapshot["target"], snapshot.get("revision"), "verifier-attribution"]
+        )
 
         def read(endpoint):
             value = gh.api(endpoint)
             reads.append(
-                boundary.observation(endpoint, value, root=root if check_current else None)
+                boundary.observation(
+                    endpoint,
+                    value,
+                    root=root if check_current else None,
+                    reference=attribution_reference,
+                )
             )
             return value
 
@@ -2057,7 +2065,12 @@ class Closer:
             if check_current:
                 current = gh.snapshot(snapshot["target"])
                 reads.append(
-                    boundary.observation("snapshot:" + snapshot["target"], current, root=root)
+                    boundary.observation(
+                        "snapshot:" + snapshot["target"],
+                        current,
+                        root=root,
+                        reference=attribution_reference,
+                    )
                 )
                 if (
                     current["revision"] != snapshot["revision"]
@@ -2078,6 +2091,9 @@ class Closer:
             result = preflight()
         except Exception as exc:
             reads.append(boundary.observation("verifier-prewrite-read", error=exc))
+            if isinstance(exc, boundary.AttributionStorageWait):
+                reads.append(boundary.observation("attribution-storage-admission", exc.accounting))
+                return boundary.pending(snapshot, target, "storage_capacity", reads, [str(exc)])
             if isinstance(exc, boundary.HistoryIncomplete):
                 return boundary.pending(snapshot, target, "history_incomplete", reads, [str(exc)])
             if isinstance(exc, RoundCapacityDeferred):

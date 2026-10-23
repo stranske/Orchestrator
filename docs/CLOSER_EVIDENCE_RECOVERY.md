@@ -1,5 +1,22 @@
 # Gap-directed closer evidence recovery
 
+## Original titles and safely represented requirements
+
+Source rows distinguish the original title digest from the retained masked-display
+digest through `closer-source-title-transform/v1`. The acquisition-time record is
+recomputed against the bound current original source at readiness; a forged record,
+changed body/source identity, missing bytes or truncation cannot establish readiness.
+Credential masking remains applied to the display title.
+
+For objective MERGE only, an exact nonempty unchanged original body supplies the
+request needed to evaluate merge eligibility, even when it is freeform. A valid
+masked-title transform then remains explicit unresolved context, with no claim
+that all title meaning was preserved. No masked original title text is copied
+into another field, and no Tasks/AC heading requirement is introduced. Empty,
+redacted or truncated bodies, source drift and forged transform records still
+block. Post-verification full-source acceptance retains the necessary title
+transform hold. This is an action-specific minimum screen, never acceptance PASS.
+
 The finite production closer uses one readiness rail and the existing low-agent,
 exception and action paths. Collection is a task variant of `closer_interpret`,
 not another evaluator, acceptance standard, queue or scheduler. Legacy generic

@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import closer_evidence as evidence
+from closer_attribution_store import AttributionStorageWait, Store
 
 SCHEMA = "closer-verifier-prewrite-read/v1"
 CAUSES = frozenset(
@@ -31,6 +32,7 @@ CAUSES = frozenset(
         "read_unavailable",
         "capacity_deferred",
         "request_deadline",
+        "storage_capacity",
     }
 )
 SHA = re.compile(r"[0-9a-f]{40}")
@@ -110,15 +112,15 @@ def logical_run(run):
     }
 
 
-def observation(endpoint, value=None, *, error=None, root=None):
+def observation(endpoint, value=None, *, error=None, root=None, reference="legacy:unresolved"):
     result = {
         "endpoint": endpoint,
         "status": "unavailable" if error else "observed",
         "sha256": digest({"error_type": type(error).__name__} if error else logical(value)),
     }
     if root is not None and error is None:
-        result["raw"] = evidence._retain_bytes(
-            root, json.dumps(logical(value), sort_keys=True).encode(), "json"
+        result["raw"] = Store(root).retain(
+            json.dumps(logical(value), sort_keys=True).encode(), "json", reference=reference
         )
     return result
 
@@ -303,6 +305,7 @@ def attribute(
 ):
     """Only an intact native capture may prove a different PR's manual run."""
     read_root = root if retain_reads else None
+    reference = digest([snapshot["target"], snapshot.get("revision"), "verifier-attribution"])
     subject = snapshot.get("pr_target") or snapshot["target"]
     repo, number = subject.rsplit("#", 1)
     rid = run.get("id")
@@ -321,7 +324,7 @@ def attribute(
     endpoint = f"repos/{repo}/actions/runs/{rid}/artifacts?per_page=100"
     try:
         inventory = api(endpoint)
-        reads.append(observation(endpoint, inventory, root=read_root))
+        reads.append(observation(endpoint, inventory, root=read_root, reference=reference))
         rows = inventory.get("artifacts")
         if (
             not isinstance(rows, list)
@@ -375,11 +378,16 @@ def attribute(
             or hashlib.sha256(data).hexdigest() != sha
         ):
             return "pending", f"archive digest verification for run {rid}"
-        archive_ref = evidence._retain_bytes(root, data, "zip")
-        parsed = evidence._native_manifest_from_archive(data, root)
+        store = Store(root)
+        archive_ref = store.retain(data, "zip", reference=reference, expired=bool(a.get("expired")))
+        parsed = evidence._native_manifest_from_archive(
+            data,
+            root,
+            retain=lambda _root, value, suffix: store.retain(value, suffix, reference=reference),
+        )
         reads.append(
             observation(
-                f'archive:{a["id"]}:{expected}',
+                f"archive:{a['id']}:{expected}",
                 {
                     "archive": archive_ref,
                     "manifests": [
@@ -406,6 +414,7 @@ def attribute(
                     ],
                 },
                 root=read_root,
+                reference=reference,
             )
         )
         if len(parsed) != 1:
@@ -464,6 +473,8 @@ def attribute(
         reads.append(observation(endpoint, error=exc))
         return "pending", f"{exc}; recover sealed input for run {rid}"
     except Exception as exc:
+        if isinstance(exc, AttributionStorageWait):
+            raise
         if evidence._is_round_control_exception(exc):
             raise
         reads.append(observation(endpoint, error=exc))

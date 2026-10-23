@@ -1,5 +1,31 @@
 # Verification storage lifecycle
 
+## Persistent verifier attribution evidence
+
+`closer_attribution_store.py` bounds the shared
+`<state>.evidence/verifier-attribution` store at 256 MiB. This is a retained-byte
+ceiling, not a provider/runtime budget. Content-addressed identical observations
+deduplicate. New objects and reference updates use one store lock and the existing
+`storage_lifecycle.Reservations` admission ledger (`ORCH_STORAGE_STATE_DIR` when
+supplied, otherwise the existing operational runtime's `.storage-lifecycle`). The forecast includes atomic
+object/index staging; all resident bytes, including recovery material, count.
+
+References are registered before dependent bytes/receipts are published. Current,
+pending, uncertain and imported legacy references remain protected. The append
+contract has no release, eviction or cleanup entry point. Exhaustion yields the
+typed per-item `storage_capacity` prewrite wait with measured accounting for a
+meaningful re-screen trigger; previously retained identical evidence stays usable.
+It never silently omits a required archive or deletes the last expired remote copy.
+
+An interrupted write retains its reservation. A synchronous failed file write,
+after all owned handles have unwound, releases its prospective charge while its
+partial bytes remain measured; it is not an uncertain remote effect. An exact digest-verified pending
+object can resume under the same exclusive store lock; unknown partial staging
+requires explicit reconciliation. This patch does not claim automatic reclamation:
+future reference-aware retirement needs authoritative terminal ownership, verified
+recoverability and a separately reviewed policy. Moving recovery material alone
+would not free this ceiling. No live cache is cleaned or migrated by installation.
+
 `scripts/verify_before_sync.sh` admits and finishes its own storage through
 `src/storage_lifecycle.py`. This is part of the existing verification command;
 there is no scheduled cleaner, new native automation, or engineering time lease.
