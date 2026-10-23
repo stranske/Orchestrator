@@ -182,3 +182,43 @@ blocker comment, and `needs-human` label were each rejected with "MCP tool call 
 approval, but approval policy is never". No remote mutation succeeded. The source fix and
 this evidence remain uncommitted in the working tree. Final PR verification: #872 remains
 open with `draft=false` at `642f2e9`.
+
+## Sibling-prefix containment regression (2026-10-23)
+
+At base `9271f43`, all eight checkboxes were already checked and PR #872 was open
+with `draft=false`. Extended the existing real SQLite-boundary regression with an
+`owned-sibling` path: it shares the owned root's string prefix but is outside that
+directory. Both direct SQLite and the original feedback factory are exercised. The
+existing driver spy prevents real database opens even if containment regresses.
+
+Using `/tmp/orch872-prefix-venv/bin/python`, installed from cached local wheels:
+
+- Baseline standalone module: 32 passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`:
+  34 passed with the module's own isolation and no runtime wrapper.
+- Safe mutation: replaced `relative_to` with a string-prefix check and ran the module
+  with `-k sibling-prefix -m "not slow" --tb=short`: 2 failed, 32 deselected. Both
+  failures reached only the driver spy. Restored the source in `finally` and repeated
+  the standalone command: 34 passed.
+- Neighbors with `ORCH_STATE_DIR=/tmp/orch872-prefix-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/orch872-prefix-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/orch872-prefix-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed.
+- Targeted `--cov=src/research_scheduler --cov-report=term-missing -m "not slow"`
+  reporting remains unavailable because pytest-cov is absent. Historical CI provenance
+  and partial-round limitations above remain unchanged; no coverage gain is claimed.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-prefix-black-cache black --check
+  --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 unchanged.
+  Black's sequential single-file checker first verified the same discovered sources
+  and populated the cache after the initial worker-based run stalled.
+- `git diff --check`: passed.
+
+Publication remains blocked: local staging cannot create `.git/index.lock` on the
+read-only Git filesystem. Automatic approval review rejected the GitHub source-file
+commit, blocker comment, and `needs-human` label with "MCP tool call requires approval,
+but approval policy is never". No remote mutation succeeded. The test change and these
+notes remain uncommitted. Final PR verification: #872 is open with `draft=false` at
+`9271f4392e7dd5333683c7c63f8374857a8b7b09`.

@@ -229,7 +229,7 @@ def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
 
 
 @pytest.mark.parametrize("via_feedback_factory", [False, True])
-@pytest.mark.parametrize("path_kind", ["absolute", "parent-traversal", "symlink"])
+@pytest.mark.parametrize("path_kind", ["absolute", "parent-traversal", "symlink", "sibling-prefix"])
 def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, via_feedback_factory: bool, path_kind: str
 ) -> None:
@@ -237,6 +237,11 @@ def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
     owned = tmp_path / "owned"
     owned.mkdir()
     sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    if path_kind == "sibling-prefix":
+        sentinel = tmp_path / "owned-sibling" / OUT_OF_BOUND_SENTINEL_NAME
+        # String-prefix checks accept a sibling whose name starts with the owned root.
+        assert str(sentinel.resolve()).startswith(str(owned.resolve()))
+        assert not sentinel.resolve().is_relative_to(owned.resolve())
     selected = sentinel
     if path_kind == "parent-traversal":
         selected = owned / ".." / sentinel.name
