@@ -133,3 +133,71 @@ not authorize retrieval, make optional evidence necessary, or establish a produc
 defect. Retrieval requests retain their separate, smaller coordinator-supported
 section contract and requirement/criterion validation. Unknown or malformed cause
 classifications remain recoverable per-item validation failures.
+
+## Repeat verification and current outcomes
+
+Initial requests and repaired deliveries use the same hosted collector, input
+screen, configured verifier agents and result publisher. An already-applied
+`verify:compare` label with no applicable result is dispatched through the
+existing workflow inputs; adding the label again would not start another run.
+Completed repository-wide workflow history is optional diagnostic evidence, not
+an admission dependency. Complete active inventory, an exact current PR read,
+relevant active requests and native uncertain-operation fences remain required.
+Historical archive acquisition is explicit (`verification_snapshot` with
+`include_history=True`) and cannot delay ordinary initial observation.
+
+`verification-event/v1` binds the actual delivery PR's head/merge, authentic
+request revision and collector-resolved material. Its predecessor records causal
+history without making unchanged evidence a new event. Optional log packaging,
+transport metadata and collection timestamps do not create material progress.
+Specific necessary material selectors are re-authenticated by the hosted
+collector. Accounting a finding is not declaring it PASS: a retained, evaluable
+unresolved question can return through `post_merge_verify`. Legacy reports have
+no comparable material digest, so same-SHA re-entry additionally needs genuine
+retained necessary recovery progress. Selecting an old artifact or changing a
+packet's serialization alone is insufficient.
+
+Current status follows a unique applicable authenticated event chain. Pending,
+incomplete, conflicting or orphan events cannot restore an old PASS. Exact
+attempts remain immutable in the existing Brain completion-event history;
+out-of-order arrivals do not replace a newer applicable result. A known
+no-evaluation input failure may retry the same bound event. An existing or
+uncertain evaluation must first recover its retained result. A POST timeout
+remains uncertain; explicit unsupported-input HTTP422 is known not started.
+
+A later fix's code is evaluated as its actual merged delivery. Existing explicit
+linked-descendant ancestry selection is reused. An old PR number cannot evaluate
+arbitrary later code, and a repair's PASS does not rewrite the old PR's historical
+verdict. Missing authentic delivery lineage remains a named collection task.
+
+The optional repeat inputs require the reviewed Workflows producer and synced
+consumer contract; ordinary initial requests do not. Cross-language digest
+fixtures and offline lifecycle tests cover request/result/Brain/closure
+composition without provider calls. Workflows' separately recorded historical
+CI-owner provenance limitation (the #872 case) is not waived by this contract.
+
+Native verification dispatch prepares a bound core packet without fetching optional
+diffs, review conversations or ordinary CI archives. Their sections explicitly say
+`request_status: not_requested`; this grants no acceptance proof. Both scheduler
+paths and scoped pool admission recognize only registered native callbacks with
+an immutable validated deterministic packet. They use IO capacity, retain target
+and local-state ownership checks, and do not claim a product checkout. Pinned
+workspace mappings remain intact; physical checkout checks occur before a callback
+that consumes the checkout. A changed frozen finite action holds before collection
+or model work and requires a fresh frontier.
+
+If the native invocation has no qualifying model profile, its existing local scoped
+capacity publication may explicitly qualify only the control plane. That report has
+literal `control_plane_only: true`, no model profiles/pools or trial grants, and does
+not replace shared model-capacity publications. Model work remains capacity-blocked.
+Attribution retention and reservation locks use the request deadline; contention
+returns a named pre-POST wait while preserving the current holder and evidence.
+
+An authenticated pending event can re-enter this same path when its advertised
+execution binding, exact terminal run/attempt, complete jobs inventory and second
+run read prove every known evaluator step was skipped after the pending marker
+was recorded. Missing bindings, incomplete inventories and started evaluators
+remain scoped recovery; age is never a no-start proof. The original pending
+marker is unchanged. A transient read proof enters the existing operation binding,
+and an accepted dispatch receipt prevents another request for that same event
+before a new authenticated attempt or supported request reconciliation.

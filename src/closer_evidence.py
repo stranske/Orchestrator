@@ -2840,18 +2840,58 @@ def collect_evidence(
         if native_first
         else None
     )
+    minimum_dispatch = action in {"post_merge_verify", "wait", "complete"}
+
+    def retained_or_not_requested(name):
+        if (
+            prior_ok
+            and prior_packet
+            and prior_packet.get("capture_revision") == snapshot.get("revision")
+        ):
+            binding_name, binding = (
+                ("reviews", _hash(snapshot.get("review_revision")))
+                if name == "review_conversations"
+                else ("identity", expected_identity)
+            )
+            section = prior_packet["sections"].get(name)
+            if (
+                prior_packet["bindings"].get(binding_name) == binding
+                and isinstance(section, dict)
+                and _retained_section_payload_valid(section)
+                and (name != "diff_files" or cached_diff is not None)
+                and (name != "review_conversations" or cached_reviews is not None)
+            ):
+                return section
+        return not_requested()
+
+    def not_requested():
+        return _section(
+            "missing",
+            None,
+            provenance={"request_status": "not_requested", "action": action},
+            reason="optional enrichment not requested for native verification dispatch",
+        )
+
     sections = {
         "source": preserved("source") or cached_source or _source_section(sources, root),
-        "diff_files": preserved("diff_files")
-        or (None if refresh_sections and "diff_files" in refresh_sections else cached_diff)
-        or _diff_section(snapshot, api, deadline, root),
-        "review_conversations": preserved("review_conversations")
-        or (
-            None
-            if refresh_sections and "review_conversations" in refresh_sections
-            else cached_reviews
-        )
-        or _review_section(snapshot, review_threads_fetch, deadline, root),
+        "diff_files": (
+            retained_or_not_requested("diff_files")
+            if minimum_dispatch
+            else preserved("diff_files")
+            or (None if refresh_sections and "diff_files" in refresh_sections else cached_diff)
+            or _diff_section(snapshot, api, deadline, root)
+        ),
+        "review_conversations": (
+            retained_or_not_requested("review_conversations")
+            if minimum_dispatch
+            else preserved("review_conversations")
+            or (
+                None
+                if refresh_sections and "review_conversations" in refresh_sections
+                else cached_reviews
+            )
+            or _review_section(snapshot, review_threads_fetch, deadline, root)
+        ),
         "prior_dispositions": _section(
             "complete" if dispositions else "missing",
             dispositions or None,
@@ -2867,31 +2907,39 @@ def collect_evidence(
             },
             reason=None if snapshot.get("checks") is not None else "no current-head check rollup",
         ),
-        "ci_artifacts": preserved("ci_artifacts")
-        or _artifact_section(
-            snapshot,
-            api,
-            deadline,
-            root,
-            artifact_fetch,
-            (
-                prior_packet.get("sections", {}).get("ci_artifacts")
-                if prior_ok and prior_packet
-                else None
-            ),
-            shared_budget,
-        ),
-        "native_merge_verifier": (
-            native_section
-            if native_section is not None
-            else _native_verifier_section(
+        "ci_artifacts": (
+            retained_or_not_requested("ci_artifacts")
+            if minimum_dispatch
+            else preserved("ci_artifacts")
+            or _artifact_section(
                 snapshot,
                 api,
                 deadline,
                 root,
                 artifact_fetch,
+                (
+                    prior_packet.get("sections", {}).get("ci_artifacts")
+                    if prior_ok and prior_packet
+                    else None
+                ),
                 shared_budget,
-                native_archive_root=native_archive_root,
+            )
+        ),
+        "native_merge_verifier": (
+            retained_or_not_requested("native_merge_verifier")
+            if minimum_dispatch
+            else (
+                native_section
+                if native_section is not None
+                else _native_verifier_section(
+                    snapshot,
+                    api,
+                    deadline,
+                    root,
+                    artifact_fetch,
+                    shared_budget,
+                    native_archive_root=native_archive_root,
+                )
             )
         ),
     }

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import closer_dispatcher as d
+import closer_frontier_policy as frontier_policy
 import closer_pipeline as cp
 import closer_resources as resources
 import execution_profiles
@@ -177,6 +178,16 @@ def native_world(tmp_path, monkeypatch):
     monkeypatch.setattr(closer_queue, "run_round", effect)
     argv, frontier, _assignment = command(root, (TARGET,))
     argv[argv.index("--state") + 1] = str(raw)
+    observer = d.Closer(
+        d.GitHub(deadline=time.time() + 25), state_path=raw, apply=True, workers=True
+    )
+    frontier = frontier_policy.make_frontier_from_observations(
+        {TARGET: observer.observe(TARGET)},
+        owner=frontier["owner"],
+        frontier_id=frontier["frontier_id"],
+    )
+    argv[argv.index("--finite-frontier-json") + 1] = json.dumps(frontier)
+    events["prepare"] = 0  # Frontier discovery is not a pipeline PREPARE execution.
     return SimpleNamespace(
         root=root,
         raw=raw,
@@ -284,13 +295,13 @@ def test_new_frontier_cannot_rearm_own_unknown_or_reconcile_it(native_world, cap
     protected_unchanged(w)
 
 
-def test_generic_legacy_scoped_callbacks_still_stop_at_overlap(native_world, capsys):
+def test_registered_legacy_native_discovery_stops_before_model_at_overlap(native_world, capsys):
     w = native_world
     i = w.argv.index("--finite-frontier-json")
     del w.argv[i : i + 2]
     w.argv += ["--budget-seconds", "10"]
     invoke(w, capsys)
-    assert w.events["prepare"] == w.events["provider"] == 0
+    assert w.events["prepare"] == 1 and w.events["provider"] == 0
     protected_unchanged(w)
 
 
@@ -347,7 +358,10 @@ def test_scope_proofs_distinguish_observation_from_effect(native_world, capsys):
     read = [
         proof for proof in proofs if proof["stage"] in {"target_admission", "prepare", "interpret"}
     ]
-    assert read and all(proof["purpose"] == "observation" and proof["admitted"] for proof in read)
+    assert read and all(
+        proof["purpose"] in {"observation", "remote_observation"} and proof["admitted"]
+        for proof in read
+    )
     assert all(proof["historical_overlaps"]["quarantine_keys"] for proof in read)
     effect = [proof for proof in proofs if proof["stage"] == "act"]
     assert effect and all(

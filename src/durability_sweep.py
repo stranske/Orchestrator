@@ -254,13 +254,10 @@ def verifier_candidate_run_ids(
 
 
 def _missing_verifier_runs() -> list[tuple[str, str, int]]:
-    """Include already-durable rows: verification often arrives after merge."""
+    """Refresh exact unique deliveries, including previously NON_PASS durable rows."""
     candidates = _merged_verifier_candidates()
     with feedback._conn() as c:
-        missing = {
-            row[0]
-            for row in c.execute("SELECT run_id FROM outcomes WHERE verifier_verdict IS NULL")
-        }
+        missing = {row[0] for row in c.execute("SELECT run_id FROM outcomes WHERE merged=1")}
     return [
         (run_id, repo, number)
         for (repo, number), run_ids in candidates.items()
@@ -272,7 +269,7 @@ def _missing_verifier_runs() -> list[tuple[str, str, int]]:
 
 def refresh_verifier_verdicts(*, dry_run: bool = False, _fetch_fn=None) -> dict:
     """Patch exact-merge verifier evidence without changing durability state."""
-    fetch = _fetch_fn or verifier_evidence.fetch_decisions
+    fetch = _fetch_fn or verifier_evidence.fetch_lifecycle
     rows = _missing_verifier_runs()
     by_repo: dict[str, set[int]] = {}
     for _run_id, repo, number in rows:
@@ -285,11 +282,19 @@ def refresh_verifier_verdicts(*, dry_run: bool = False, _fetch_fn=None) -> dict:
     recorded = 0
     for run_id, repo, number in rows:
         decision = decisions.get((repo, number))
-        if not isinstance(decision, dict) or decision.get("verdict") not in {"PASS", "NON_PASS"}:
+        if not isinstance(decision, dict):
             continue
-        if not dry_run:
-            feedback.record_outcome(run_id, verifier_verdict=decision["verdict"])
-        recorded += 1
+        valid = verifier_evidence.decision_matches_identity(
+            decision, repo, number, decision.get("head_sha"), decision.get("evaluated_sha")
+        ) or verifier_evidence._valid_state(
+            decision, repo, number, decision.get("head_sha"), decision.get("evaluated_sha")
+        )
+        if not valid and not verifier_evidence.is_unusable_observation(decision, repo, number):
+            continue
+        if dry_run:
+            recorded += 1
+        elif verifier_evidence.record_decision(run_id, repo, number, decision):
+            recorded += 1
     return {"verifier_checked": len(rows), "verifier_recorded": recorded}
 
 

@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import math
 import os
 import platform
 import shutil
@@ -38,6 +39,44 @@ JSON = dict[str, Any]
 
 class StorageBlocked(RuntimeError):
     pass
+
+
+class StorageLockWait(StorageBlocked):
+    """A local lock deadline expired; no holder or reservation was changed."""
+
+    def __init__(self, scope: str):
+        self.accounting = {
+            "status": "storage_lock_wait",
+            "scope": scope,
+            "reason": "request_deadline_exhausted",
+        }
+        super().__init__(json.dumps(self.accounting, sort_keys=True))
+
+
+def acquire_exclusive(
+    descriptor: int, *, deadline: float | None = None, scope: str = "storage"
+) -> None:
+    """Bound contention by the caller's monotonic deadline; legacy default blocks."""
+    if deadline is None:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        return
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        raise ValueError("finite monotonic lock deadline required")
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise StorageLockWait(scope)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
+                raise
+            time.sleep(min(0.05, remaining))
+        else:
+            if time.monotonic() >= deadline:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                raise StorageLockWait(scope)
+            return
 
 
 OWNED_SAMPLE_CONTRACT = "owned-tree-sampled-allocation/v1"
@@ -790,7 +829,9 @@ class Reservations:
         floor: int,
         margin: int = 0,
         free: Callable[[Path], int] = available,
+        deadline: float | None = None,
     ):
+        self.deadline = deadline
         self.directory = directory
         self.volume = volume
         self.floor = floor
@@ -953,10 +994,14 @@ class Reservations:
             del cache[key]
 
     @contextlib.contextmanager
-    def locked(self) -> Iterator[JSON]:
+    def locked(self, *, deadline: float | None = None) -> Iterator[JSON]:
         descriptor = os.open(self.directory / "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            acquire_exclusive(
+                descriptor,
+                deadline=self.deadline if deadline is None else deadline,
+                scope="reservation_ledger",
+            )
             path = self.directory / "reservations.json"
             if path.is_symlink():
                 raise StorageBlocked("reservation state is a symlink")
@@ -996,6 +1041,7 @@ class Reservations:
         owner_token: str,
         scope: str | None = None,
         measurement_contract: JSON | None = None,
+        deadline: float | None = None,
     ) -> JSON:
         if not job.isalnum() or len(job) > 64:
             raise ValueError("invalid storage job identity")
@@ -1008,7 +1054,7 @@ class Reservations:
             or any(c not in "0123456789abcdef" for c in measurement_contract["sha256"])
         ):
             raise StorageBlocked("invalid measurement contract")
-        with self.locked() as data:
+        with self.locked(deadline=deadline) as data:
             if job in data["jobs"] or (self.directory / "receipts" / f"{job}.json").exists():
                 raise StorageBlocked("existing job reservation; reconcile without replay")
             if scope and any(row.get("scope") == scope for row in data["jobs"].values()):
@@ -1097,8 +1143,10 @@ class Reservations:
                 row["staged_owned_checkpoint"] = checkpoint.result
             row.update(status="staged", remaining=row["peak"])
 
-    def finish(self, job: str, receipt: JSON, *, terminal: bool) -> None:
-        with self.locked() as data:
+    def finish(
+        self, job: str, receipt: JSON, *, terminal: bool, deadline: float | None = None
+    ) -> None:
+        with self.locked(deadline=deadline) as data:
             row = data["jobs"][job]
             receipt = {**row, **receipt, "available_after": self.free(self.volume)}
             receipts = self.directory / "receipts"
@@ -1252,6 +1300,7 @@ def run_job(
     *,
     free: Callable[[Path], int] = available,
     probe: Callable[[Path], None] = idle,
+    lock_deadline: float | None = None,
 ) -> int:
     parent = args.temp_parent.resolve()
     fallback_reason: JSON = {}
@@ -1260,7 +1309,9 @@ def run_job(
     # Replace it ONLY for the exact reviewed contract, never by current free space.
     floor = STRICT_RELEASE_FLOOR if args.local_strict and cold_plan is None else 0
     margin = OBSERVED_OPERATING_MARGIN if args.local_strict else 0
-    manager = Reservations(args.state_dir, parent, floor=floor, margin=margin, free=free)
+    manager = Reservations(
+        args.state_dir, parent, floor=floor, margin=margin, free=free, deadline=lock_deadline
+    )
     job = uuid.uuid4().hex
     token = uuid.uuid4().hex
     for flag in ("--snapshot-out", "--digest-out"):
@@ -1316,12 +1367,15 @@ def run_job(
     )
     # A shared byte ledger admits one aggregate demand under one lock. This separate
     # per-job lock remains held through the child, evidence retention and cleanup.
+    lock = None
     try:
         lock = os.open(
             manager.directory / f"{job}.owner", os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600
         )
-        fcntl.flock(lock, fcntl.LOCK_EX)
-    except OSError:
+        acquire_exclusive(lock, deadline=lock_deadline, scope="storage_job_owner")
+    except (OSError, StorageLockWait):
+        if lock is not None:
+            os.close(lock)
         manager.finish(job, {"status": "not_started_owner_lock_failed"}, terminal=True)
         raise
     root: Path | None = None

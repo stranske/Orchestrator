@@ -606,6 +606,7 @@ VALID_COMPLETION_PHASES = {
     "durability",
 }
 VALID_COMPLETION_PRODUCERS = {
+    "verifier_evidence",
     "closer_disposition.integrate_ordinary",
     "closer_dispatcher.response_binding",
     "closer_dispatcher.worker",
@@ -704,6 +705,7 @@ COMPLETION_NESTED_FIELDS = {
         "validator",
     },
     "verification": {
+        "decision",
         "verifier_verdict",
         "adjudicated_verdict",
         "verifier_ids",

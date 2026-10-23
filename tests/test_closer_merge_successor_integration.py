@@ -414,7 +414,11 @@ def public_merge_world(native_world, monkeypatch):
         endpoint = args[3]
         if "/actions/workflows/agents-verifier.yml/runs" in endpoint:
             return 0, {"total_count": 0, "workflow_runs": []}
-        if endpoint.endswith("/issues/12/labels"):
+        if endpoint == "repos/owner/repo":
+            return 0, {"default_branch": "main"}
+        if endpoint.endswith("/issues/12/labels") or endpoint.endswith(
+            "/actions/workflows/agents-verifier.yml/dispatches"
+        ):
             assert args[:3] == ["api", "--method", "POST"]
             w.verifies.append(tuple(args))
             w.snapshot["labels"] = ["verify:compare"]

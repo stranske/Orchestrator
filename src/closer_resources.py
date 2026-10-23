@@ -31,6 +31,7 @@ import stat
 import tempfile
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -79,6 +80,14 @@ class ScopeBlocked(ResourceBlocked):
     def __init__(self, reason, proof):
         super().__init__(reason)
         self.proof = proof
+
+
+_NATIVE_INTERPRET_WRAPPERS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def native_interpretation_callback(callback):
+    """Resolve only wrappers created here; never trust callable attributes."""
+    return _NATIVE_INTERPRET_WRAPPERS.get(callback, callback)
 
 
 def resolve_mode(mode: str | None, environ: Mapping[str, str] | None = None) -> str:
@@ -2248,8 +2257,10 @@ def run_scoped(
     The whole-target lease is held across agent work; callbacks run with no shared lock held.
     ``resource_keys(target, context) -> iterable of 'kind:value'`` names what ``act`` mutates
     (the PR, its source issue, branch, worktree); the target's own PR key and its repository's
-    short serialisation key are always added. Reasoning takes the same alias locks and a
-    fresh quarantine proof, without writing effect intents. Only ``act`` writes intents.
+    short serialisation key are always added. Reasoning takes alias locks and a fresh
+    quarantine proof without writing effect intents. Registered native read stages omit
+    inferred checkout claims; authenticated deterministic interpretation uses IO capacity.
+    Only ``act`` writes intents.
     ``pool_lease(lane, target, context)``
     may return a context manager (the root's profile-pool reservation); without it the lane
     bounds are enforced across processes by ``pool_slot``.
@@ -2329,11 +2340,27 @@ def run_scoped(
             raise ResourceBlocked("finite callback cancelled or paused")
         return value
 
-    def check_scope(target, stage, keys, context=None, refusal=None, request_deadline=None):
+    def native_remote_stage(target, context, stage):
+        # The shared native helper authenticates original callback identities.
+        # A caller-supplied callback or proposal cannot opt into reduced scope.
+        import closer_dispatcher
+
+        callback = {"prepare": prepare, "interpret": interpret}.get(stage)
+        return closer_dispatcher.native_stage_remote_only(target, context, stage, callback)
+
+    def check_scope(
+        target,
+        stage,
+        keys,
+        context=None,
+        refusal=None,
+        request_deadline=None,
+        native_remote_expected=False,
+    ):
         if finite_frontier is not None and context is not None:
             request_deadline = callback_deadline(context)
         with inventory_lock(root, deadline=request_deadline, now=now):
-            return check_scope_locked(target, stage, keys, context, refusal)
+            return check_scope_locked(target, stage, keys, context, refusal, native_remote_expected)
 
     def remote_act(target, context):
         # Finite entry already requires the exact registered production callbacks.
@@ -2343,7 +2370,9 @@ def run_scoped(
         capability = getattr(act, "__globals__", {}).get("_remote_only_effect")
         return callable(capability) and capability(target, context) is True
 
-    def check_scope_locked(target, stage, keys, context=None, refusal=None):
+    def check_scope_locked(
+        target, stage, keys, context=None, refusal=None, native_remote_expected=False
+    ):
         import closer_quarantine
 
         purpose = (
@@ -2351,6 +2380,8 @@ def run_scoped(
             if finite_frontier is not None and stage in {"target_admission", "prepare", "interpret"}
             else "effect"
         )
+        if native_remote_expected:
+            purpose = "remote_observation"
         if stage == "act" and context is not None and remote_act(target, context):
             purpose = "remote_effect"
         snapshot = closer_quarantine.scope_snapshot(state_path, workspaces=quarantine_workspaces)
@@ -2364,6 +2395,10 @@ def run_scoped(
                 state_path, workspaces=quarantine_workspaces
             )
             problem = closer_quarantine.scope_problem(snapshot, target, keys, purpose=purpose)
+        if native_remote_expected and not native_remote_stage(
+            target, context or {}, "prepare" if stage == "target_admission" else stage
+        ):
+            problem = "native_remote_contract_changed"
         problem = refusal or problem
         if (
             problem is None
@@ -2435,8 +2470,13 @@ def run_scoped(
             # Preparation is native read-only discovery. Its initial gate fences
             # the target/repository; its returned immutable packet supplies all
             # aliases before any model, effect, or reconciliation callback.
+            remote = native_remote_stage(target, ctx, stage)
             keys = _scope_keys(
-                target, ctx, None if stage == "prepare" else resource_keys, quarantine_workspaces
+                target,
+                ctx,
+                None if stage == "prepare" else resource_keys,
+                quarantine_workspaces,
+                infer_workspaces=not remote,
             )
             with contextlib.ExitStack() as stack:
                 try:
@@ -2444,34 +2484,43 @@ def run_scoped(
                         scope_locks(root, keys, deadline=callback_deadline(ctx), now=now)
                     )
                 except ResourceBlocked as exc:
-                    check_scope(target, stage, keys, ctx, refusal=str(exc))
-                check_scope(target, stage, keys, ctx)
+                    check_scope(
+                        target,
+                        stage,
+                        keys,
+                        ctx,
+                        refusal=str(exc),
+                        native_remote_expected=remote,
+                    )
+                check_scope(target, stage, keys, ctx, native_remote_expected=remote)
                 callback_deadline(ctx)
                 return fn(target, ctx)
 
         return call
 
-    def gated(fn, lane):
+    def gated(fn, lane, *, native_interpret=False):
         def call(target, ctx):
+            remote = native_interpret and native_remote_stage(target, ctx, "interpret")
+            selected_lane = "io" if remote else lane
             if pool_lease is not None:
-                lease_cm = pool_lease(lane, target, ctx)
+                lease_cm = pool_lease(selected_lane, target, ctx)
             else:
                 reservation = None
                 if finite_frontier is not None:
                     reservation_id = hashlib.sha256(
-                        f"{root.resolve()}\0{lane}\0{finite_frontier['frontier_id']}\0{target}".encode()
+                        f"{root.resolve()}\0{selected_lane}\0{finite_frontier['frontier_id']}\0{target}".encode()
                     ).hexdigest()
                     reservation = {
                         "reservation_id": reservation_id,
                         "target": target,
                         "frontier_id": finite_frontier["frontier_id"],
                         "agent": "closer-dispatcher",
-                        "profile_id": lane,
+                        "profile_id": selected_lane,
                     }
                 lease_cm = pool_slot(
                     root,
-                    lane,
-                    bounds[lane],
+                    selected_lane,
+                    bounds[selected_lane],
                     deadline=callback_deadline(ctx),
                     now=now,
                     finite_frontier=finite_frontier is not None,
@@ -2480,6 +2529,8 @@ def run_scoped(
             with lease_cm:
                 try:
                     callback_deadline(ctx)
+                    if remote and not native_remote_stage(target, ctx, "interpret"):
+                        raise ResourceBlocked("native_remote_contract_changed")
                     if finite_frontier is not None:
                         with inventory_request(ctx["deadline"], now=now):
                             result = fn(target, ctx)
@@ -2498,6 +2549,8 @@ def run_scoped(
                     finite_pool_no_start()
                     return result
 
+        if native_interpret:
+            _NATIVE_INTERPRET_WRAPPERS[call] = interpret
         return call
 
     def guarded_act(target, ctx):
@@ -2550,11 +2603,19 @@ def run_scoped(
         )
         row: dict[str, Any] | None
         try:
+            remote_prepare = native_remote_stage(target, {}, "prepare")
             check_scope(
                 target,
                 "target_admission",
-                _scope_keys(target, {}, None, quarantine_workspaces),
+                _scope_keys(
+                    target,
+                    {},
+                    None,
+                    quarantine_workspaces,
+                    infer_workspaces=not remote_prepare,
+                ),
                 request_deadline=admission_deadline,
+                native_remote_expected=remote_prepare,
             )
         except ScopeBlocked as exc:
             row = _fenced_row("scope_quarantined", str(exc))
@@ -2612,7 +2673,9 @@ def run_scoped(
                             lease.state_path,
                             [target],
                             prepare=gated(known_progress_prepare, "io"),
-                            interpret=gated(scope_guard(interpret, "interpret"), "low"),
+                            interpret=gated(
+                                scope_guard(interpret, "interpret"), "low", native_interpret=True
+                            ),
                             act=gated(guarded_act, "io"),
                             exception=gated(scope_guard(exception, "exception"), "exception"),
                             reconcile=(

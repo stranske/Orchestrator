@@ -1450,9 +1450,11 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
     Observation permits reasoning about historical overlap, not effects or a
     replay of an unresolved target shard. Its caller must separately enforce the
     production finite callback contract and hold the same live resource locks.
+    Remote observation additionally requires the registered native read contract;
+    it omits only inferred checkout completeness, never own-shard uncertainty.
     """
     try:
-        if purpose not in {"effect", "observation", "remote_effect"}:
+        if purpose not in {"effect", "observation", "remote_effect", "remote_observation"}:
             return "invalid_scope_purpose"
         if (
             snapshot.get("schema") != SCHEMA
@@ -1488,7 +1490,7 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
             return "incomplete_resource_inventory"
         mapped = (
             set()
-            if purpose == "remote_effect"
+            if purpose in {"remote_effect", "remote_observation"}
             else current_workspace_keys(
                 canonical,
                 keys,
@@ -1501,7 +1503,7 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
         )
         if not mapped.issubset(keys):
             return "incomplete_resource_inventory"
-        if purpose == "observation":
+        if purpose in {"observation", "remote_observation"}:
             from closer_resources import scoped_root, shard_dir
 
             own_shard = str(

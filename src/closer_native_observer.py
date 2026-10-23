@@ -107,11 +107,11 @@ def contract(manifest):
     problem = policy_problem(manifest.get("policy") or {})
     if problem:
         raise mechanisms.MechanismError(problem)
-    capacity_contract(manifest)
+    capacity_contract(manifest, control_plane_only=True)
     return value, wrapper, interpreter, root
 
 
-def capacity_contract(manifest):
+def capacity_contract(manifest, *, control_plane_only=False):
     """Explicit host opt-in; never infer quota or profile scope from the wrapper actor."""
     import execution_profiles
     from closer_agent_launchers import APPROVED_AGENTS
@@ -161,7 +161,7 @@ def capacity_contract(manifest):
     profiles, trials = value.get("profile_ids"), value.get("bounded_trial_agents")
     if (
         not isinstance(profiles, list)
-        or not profiles
+        or (not profiles and not control_plane_only)
         or any(not isinstance(p, str) for p in profiles)
         or len(set(profiles)) != len(profiles)
         or not isinstance(trials, list)
@@ -169,6 +169,10 @@ def capacity_contract(manifest):
     ):
         raise mechanisms.MechanismError("native capacity exact profile/trial scope missing")
     for key in profiles:
+        if not key or len(key) > 160 or not re.fullmatch(r"[A-Za-z0-9_.-]+", key):
+            raise mechanisms.MechanismError("native capacity profile identity is malformed")
+        if control_plane_only:
+            continue
         profile = execution_profiles.get_profile(key)
         if (
             not profile
@@ -201,7 +205,14 @@ def publish_admission(manifest, manifest_path, state_path, doc):
     """Publish only for a genuinely pending new round; never renew an old worker."""
     import closer_operational_capacity as scoped
 
-    policy = capacity_contract(manifest)
+    policy = capacity_contract(manifest, control_plane_only=True)
+    control_plane_only = False
+    if policy is not None:
+        try:
+            capacity_contract(manifest)
+        except mechanisms.MechanismError:
+            # Explicit zero-grant qualification; never manufacture an eligible profile.
+            control_plane_only = True
     if policy is None:
         return None
     if not entry_active(manifest):
@@ -287,9 +298,11 @@ def publish_admission(manifest, manifest_path, state_path, doc):
             return value
 
         workspace_bindings(json.loads(workspace_bytes, object_pairs_hook=unique))
-        # Validate every selected physical checkout before A. The captured bytes
-        # cannot later resolve an alias to a different execution route.
-        load_workspace_config(source, pin["sha256"], require_pin=True, targets=targets)
+        # Pin the exact canonical routing map before A. Product checkout liveness
+        # and Git identity are checked only by callbacks that consume that checkout.
+        load_workspace_config(
+            source, pin["sha256"], require_pin=True, targets=targets, validate_execution=False
+        )
         workspace_path = directory / "workspaces.json"
         _immutable(workspace_path, workspace_bytes)
         workspace_config = {
@@ -318,8 +331,9 @@ def publish_admission(manifest, manifest_path, state_path, doc):
     producer_cfg = {
         "schema": scoped.SCHEMA,
         "owner": policy["owner"],
-        "profile_ids": policy["profile_ids"],
-        "bounded_trial_agents": policy["bounded_trial_agents"],
+        "profile_ids": [] if control_plane_only else policy["profile_ids"],
+        "bounded_trial_agents": [] if control_plane_only else policy["bounded_trial_agents"],
+        **({"control_plane_only": True} if control_plane_only else {}),
         # This report window limits evidence freshness, never frontier work duration.
         "original_deadline": (
             time.time() + policy["freshness_seconds"] if finite else invocation["original_deadline"]
@@ -327,6 +341,13 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         "runtime_manifest": str(Path(manifest_path).resolve()),
         "runtime_manifest_sha256": _hash(Path(manifest_path).resolve()),
     }
+    if not control_plane_only:
+        try:
+            scoped.evaluate(producer_cfg)
+        except (scoped.CapacityError, OSError):
+            # Unavailable optional provider telemetry cannot qualify model work,
+            # but does not prevent independently authenticated GitHub control IO.
+            producer_cfg.update(control_plane_only=True, profile_ids=[], bounded_trial_agents=[])
     report = scoped.publish(producer_cfg, report_path, expected_sha256=None)
     if not scoped.validate_report(report, now=time.time()):
         raise mechanisms.MechanismError("native scoped capacity readback is not current")
@@ -371,7 +392,7 @@ def _campaign_identity(state_path, doc):
 def validate_admission(manifest, context, *, for_effects):
     import closer_operational_capacity as scoped
 
-    policy = capacity_contract(manifest)
+    policy = capacity_contract(manifest, control_plane_only=True)
     root = contract(manifest)[3]
     if not policy or not isinstance(context, dict):
         raise mechanisms.MechanismError("native signed admission missing")
@@ -452,6 +473,9 @@ def validate_admission(manifest, context, *, for_effects):
         or _hash(manifest_path) != context["runtime_manifest_sha256"]
     ):
         raise mechanisms.MechanismError("native admission manifest bytes differ")
+    capacity_report = _read(directory / "scoped-capacity.json")
+    if capacity_report.get("control_plane_only") is not True:
+        capacity_contract(manifest)  # Model qualification retains the strict registry contract.
     if for_effects and (
         (not finite and not time.time() < deadline)
         or not scoped.validate_report(_read(directory / "scoped-capacity.json"), now=time.time())

@@ -2562,3 +2562,28 @@ the weekly view. Missing Brain evidence remains unmeasured. Reads are cached per
 hour, and first-invocation binding; this change does not activate the installed mirror.
 
 Native wrapper capability: `closer_native_observer.py` implements the separately versioned native-handoff mechanism, with canonical configured pause policy, owned-process observations, signed durable worker handoffs, and no-effect qualification. It never substitutes wrapper provenance for Desktop scheduler events. The preview exporter and deployment contract are documented in `docs/CLOSER_NATIVE_HANDOFF.md`. Exact admitted-domain continuation retains global stop and acceptance as false.
+
+### Verification events and native control IO
+
+Initial and repaired verification use the same Workflows collector, input screen,
+configured evaluator and result publisher. `verification_events.py` binds immutable
+delivery code, authentic original requirements and material evidence; explicit
+linked repair ancestry supplies later delivery code. Exact duplicate events are
+suppressed, while known no-evaluation failures may retry without inventing material
+progress. Original verdicts remain immutable; `verifier_evidence.py` imports the
+complete authenticated causal ancestry atomically and projects the latest applicable
+result to current status. Pending, incomplete, conflicting or malformed events cannot
+restore an older PASS. The existing acceptance and revision-bound closure guards
+remain authoritative.
+
+Registered deterministic native merge/verification callbacks use IO capacity in both
+schedulers and scoped resource admission. Verification dispatch collects bound core
+information and preserves valid retained progress without downloading optional
+archives or requiring a product checkout or model profile. Model work still needs
+its existing qualified profile and physical workspace. A signed invocation-local
+control-plane-only report grants no model capacity. Exact pending execution recovery
+requires a terminal attempt, complete authenticated jobs and skipped evaluator proof;
+uncertain execution remains scoped recovery. Existing operation receipts prevent
+repeating accepted requests. Request deadlines bound attribution/reservation locks,
+without clearing holders or changing concurrent reservation accounting. See
+`docs/CLOSER_EVIDENCE_RECOVERY.md` for the producer/consumer rollout contract.

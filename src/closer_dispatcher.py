@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ from typing import Mapping
 
 import closer_evidence
 import gh_capacity
+import verification_events
 import verifier_evidence
 
 TARGET = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
@@ -64,10 +66,14 @@ NONPASS_ACCOUNTING_CONTRACT = (
     "original-criterion assessment instead, and do not require empty decision.criteria on that path. "
     "Known NON_PASS accounting is distinct from acceptance. This path requires at least one supplied nonpass_finding. Only when ALL supplied nonpass_finding "
     "exact finding_id values are confidently accounted for and each bounded next_guarded_action is "
-    "clear (wait, collect_evidence, or repair with a validated bound mechanical plan), return "
+    "clear (wait, collect_evidence, post_merge_verify for a bounded evaluable question with retained new material, or repair with a validated bound mechanical plan), return "
     "classification relevant and substantive_needs [] if there is no OTHER semantic, ownership, "
     "security, or routing ambiguity. Put missing acceptance proof in each unresolved_missing_evidence "
     "resolution's reason, preserve every raw NON_PASS verdict, and leave decision.criteria empty. "
+    "For post_merge_verify, supply verification_request {question, material:[exact selector]} and retained evidence/proofs on that resolution. "
+    "A selector is {kind:'comment',url:<exact GitHub issuecomment URL>} or {kind:'artifact_member',run_id:<integer>,artifact_id:<integer>,path:<exact member>}; "
+    "select only specific necessary retained material that makes the question evaluable. Do not require the finding already PASS; the verifier judges it. "
+    "Legacy reports without an event digest additionally require the supplied genuine necessary recovery progress, never a timestamp or serialization change. "
     "Accounting never grants PASS or acceptance authority. Resolved duplicate/nonissue claims still "
     "require exact raw evidence/proofs; repair still requires the existing coordinator authorization. "
     "Security/high-risk findings require senior review with classification uncertain and nonempty "
@@ -697,6 +703,81 @@ def acceptance_ok(snapshot, decision):
     )
 
 
+# Actual callback identities created by the native driver, not caller opt-in flags.
+
+_NATIVE_STAGE_CALLBACKS: dict[str, weakref.WeakSet] = {
+    "prepare": weakref.WeakSet(),
+    "interpret": weakref.WeakSet(),
+}
+
+
+def native_stage_remote_only(target, context, stage, callback):
+    registry = _NATIVE_STAGE_CALLBACKS
+    if callback not in registry.get(stage, ()):
+        import sys
+
+        main = sys.modules.get("__main__")
+        if (
+            main is None
+            or Path(getattr(main, "__file__", "")).resolve() != Path(__file__).resolve()
+        ):
+            return False
+        registry = getattr(main, "_NATIVE_STAGE_CALLBACKS", {})
+        if callback not in registry.get(stage, ()):
+            return False
+    if stage == "prepare":
+        # Native discovery reads GitHub and immutable local evidence; never a product cwd.
+        return bool(TARGET.fullmatch(str(target)))
+    return native_interpretation_ready(context.get("prepare"), target=target)
+
+
+def native_interpretation_ready(prep, *, target=None):
+    """Recognize the existing registered native route; grant no action authority."""
+    if not isinstance(prep, Mapping):
+        return False
+    snapshot = prep.get("snapshot") or {}
+    proposal = prep.get("proposal") or {}
+    action = proposal.get("action")
+    readiness = (prep.get("collection_result") or {}).get("readiness") or {}
+    if (
+        action not in {"merge", "post_merge_verify"}
+        or proposal.get("eligible") is not True
+        or snapshot.get("state") != ("OPEN" if action == "merge" else "MERGED")
+        or not TARGET.fullmatch(str(snapshot.get("target")))
+        or (target is not None and snapshot.get("target") != target)
+        or not SHA.fullmatch(str(snapshot.get("head")))
+        or not prep.get("revision")
+        or snapshot.get("revision") != prep.get("revision")
+        or not _remote_only_effect(
+            snapshot["target"], {"prepare": prep, "revision": prep["revision"]}
+        )
+        or readiness.get("mode") != "deterministic"
+        or readiness.get("ready") is not True
+        or readiness.get("gaps") != []
+    ):
+        return False
+    ref = prep.get("packet_ref") or {}
+    path = Path(ref.get("path", ""))
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 8_000_000:
+            return False
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != ref.get("sha256"):
+            return False
+        packet = json.loads(raw)
+    except (OSError, ValueError, TypeError):
+        return False
+    return (
+        closer_evidence.validate_packet(packet)
+        and packet.get("target") == snapshot["target"]
+        and packet.get("head") == snapshot["head"]
+        and packet.get("capture_revision") == prep["revision"]
+        and packet.get("collection_action") == action
+        and packet.get("producer_sha256") == prep.get("producer_sha256")
+        and closer_evidence.collection_summary(packet, ref) == prep.get("collection_result")
+    )
+
+
 def _native_remote_footprint(snapshot, action):
     """Positive capability for native effects that never use a product checkout."""
     if action in {"post_merge_verify", "initiate_verify", "respond_review"}:
@@ -1024,6 +1105,10 @@ def _request_source(target, obj, *, kind="issue", via):
     }
 
 
+class GitHubNoEffectRejected(RuntimeError):
+    """An explicit GitHub validation rejection; no mutation was accepted."""
+
+
 class GitHub:
     def __init__(self, *, deadline, api_fn=None):
         self.deadline = deadline
@@ -1053,6 +1138,13 @@ class GitHub:
             timeout_s=max(1, min(25, int(remaining))),
             **({"raw_body": True} if _text else {}),
         )
+        is_dispatch = method == "POST" and endpoint.endswith(
+            "/actions/workflows/agents-verifier.yml/dispatches"
+        )
+        if is_dispatch and rc and isinstance(doc, dict) and str(doc.get("status")) == "422":
+            raise GitHubNoEffectRejected("GitHub rejected verifier dispatch inputs (HTTP 422)")
+        if is_dispatch and not rc and doc is None:
+            return {"accepted": True}  # workflow_dispatch returns 204 without a body.
         if (
             rc
             or not isinstance(doc, str if _text else (dict, list))
@@ -1277,8 +1369,10 @@ class GitHub:
                 if pending_check_run_ids:
                     pending_check_head = head
         marker = None
+        lifecycle = None
         if not pr["comments"]["pageInfo"].get("hasPreviousPage"):
             marker = verifier_evidence.decision_from_pr(repo, pr)
+            lifecycle = verifier_evidence.decision_from_pr(repo, pr, include_pending=True)
         timeline = pr.get("timelineItems")
         label_events_complete = (
             isinstance(timeline, dict)
@@ -1327,6 +1421,7 @@ class GitHub:
             "label_events": label_events,
             "label_events_complete": label_events_complete,
             "verifier": marker,
+            "verifier_lifecycle": lifecycle,
             "verifier_history_complete": not pr["comments"]["pageInfo"].get("hasPreviousPage"),
         }
         if snapshot["state"] == "MERGED" and "verify:compare" in snapshot["labels"] and not marker:
@@ -1422,6 +1517,49 @@ class Closer:
         # authority: execute() still obtains a fresh exact remote observation.
         return {**cached, "_local_cached": True}
 
+    def operation_binding(self, target, s):
+        return {
+            "head": s.get("head"),
+            "merge": s.get("merge"),
+            "pr_target": s.get("pr_target", target),
+            "source_targets": [x["target"] for x in s.get("sources", [])],
+            "review_revision": s.get("review_revision"),
+            **(
+                {"pending_no_evaluation": s["pending_no_evaluation"]}
+                if s.get("pending_no_evaluation")
+                else {}
+            ),
+            **(
+                {"native_diagnostic_reference": s["native_diagnostic_reference"]}
+                if s.get("native_diagnostic_reference")
+                else {}
+            ),
+            "disposition_digest": digest(
+                {
+                    k: self.dispositions.get(target, {}).get(k)
+                    for k in ("repair", "followup_task", "response", "resolve_threads")
+                }
+                | (
+                    {
+                        "verification_request": {
+                            key: value
+                            for key, value in (
+                                self.dispositions.get(target, {})
+                                .get("ordinary_nonpass", {})
+                                .get("verification_request")
+                                or {}
+                            ).items()
+                            if key not in {"question", "recovery_progress"}
+                        }
+                    }
+                    if (self.dispositions.get(target, {}).get("ordinary_nonpass") or {}).get(
+                        "verification_request"
+                    )
+                    else {}
+                )
+            ),
+        }
+
     def observe(self, target):
         try:
             s = self._local_snapshot(target) if self.local_first else None
@@ -1456,24 +1594,7 @@ class Closer:
                         + [x["target"] for x in s.get("sources", [])]
                     )
                 ),
-                "operation_binding": {
-                    "head": s.get("head"),
-                    "merge": s.get("merge"),
-                    "pr_target": s.get("pr_target", target),
-                    "source_targets": [x["target"] for x in s.get("sources", [])],
-                    "review_revision": s.get("review_revision"),
-                    **(
-                        {"native_diagnostic_reference": s["native_diagnostic_reference"]}
-                        if s.get("native_diagnostic_reference")
-                        else {}
-                    ),
-                    "disposition_digest": digest(
-                        {
-                            k: self.dispositions.get(target, {}).get(k)
-                            for k in ("repair", "followup_task", "response", "resolve_threads")
-                        }
-                    ),
-                },
+                "operation_binding": self.operation_binding(target, s),
             }
         except Exception as exc:
             return {
@@ -1597,6 +1718,65 @@ class Closer:
         if s["kind"] == "issue":
             return self.proposal(s, "collect_evidence", "link original source to verified delivery")
         if s["state"] == "MERGED":
+            lifecycle = s.get("verifier_lifecycle") or {}
+            if lifecycle.get("schema") == verifier_evidence.OBSERVATION_SCHEMA:
+                return self.proposal(
+                    s,
+                    "collect_evidence",
+                    "recover the malformed or conflicting current verifier event",
+                )
+            if lifecycle.get(
+                "schema"
+            ) == verifier_evidence.STATE_MARKER and self._accepted_verification_request(s):
+                return (
+                    "wait",
+                    "same verification request already accepted",
+                    False,
+                    "new authenticated verifier attempt or request reconciliation",
+                )
+            if (
+                lifecycle.get("schema") == verifier_evidence.STATE_MARKER
+                and lifecycle.get("status") == "pending"
+            ):
+                proof = s.get("pending_no_evaluation") or {}
+                if (
+                    proof.get("schema") == "verifier-no-evaluation-proof/v1"
+                    and proof.get("event_id") == lifecycle["verification_event"]["event_id"]
+                    and str(proof.get("run_id")) == str(lifecycle.get("run_id"))
+                    and str(proof.get("run_attempt")) == str(lifecycle.get("run_attempt"))
+                    and proof.get("repo") == lifecycle.get("repo")
+                ):
+                    return (
+                        "post_merge_verify",
+                        "authenticated pending evaluator never started",
+                        True,
+                        None,
+                    )
+                return (
+                    "wait",
+                    "authenticated current verification event is pending",
+                    False,
+                    "current verifier terminal receipt",
+                )
+            if (
+                lifecycle.get("schema") == verifier_evidence.STATE_MARKER
+                and lifecycle.get("status") == "incomplete"
+            ):
+                if (
+                    lifecycle.get("retry_kind") == "known_no_evaluation"
+                    and lifecycle.get("retryable") is True
+                ):
+                    return (
+                        "post_merge_verify",
+                        "known no-evaluation event; retry same bound inputs",
+                        True,
+                        None,
+                    )
+                return self.proposal(
+                    s,
+                    "collect_evidence",
+                    "recover existing incomplete evaluation before another model request",
+                )
             issue_sources = [
                 source for source in s["sources"] if source.get("kind") != "pr_request"
             ]
@@ -1607,6 +1787,13 @@ class Closer:
                 and isinstance(ordinary_nonpass, dict)
                 and ordinary_nonpass.get("head") == s.get("head")
             ):
+                if verification_events.request_matches(s, ordinary_nonpass):
+                    return (
+                        "post_merge_verify",
+                        "new material required to evaluate accounted NON_PASS findings",
+                        True,
+                        None,
+                    )
                 repair = ordinary_nonpass.get("repair")
                 if isinstance(repair, dict) and repair.get("head") == s.get("head"):
                     return self.proposal(
@@ -1657,11 +1844,18 @@ class Closer:
                 return self.proposal(
                     s, "collect_evidence", "collect original source acceptance evidence"
                 )
-            if s.get("native_diagnostic_reference"):
+            if self._accepted_verification_request(s):
                 return self.proposal(
                     s,
                     "collect_evidence",
                     "collect terminal or unattributed verifier evidence; do not rerun",
+                )
+            if s.get("native_diagnostic_reference"):
+                return (
+                    "post_merge_verify",
+                    "terminal diagnostics contain no applicable verifier verdict",
+                    True,
+                    None,
                 )
             if "verify:compare" in s["labels"]:
                 active = [r for r in s.get("verifier_runs", []) if r.get("status") != "completed"]
@@ -1672,10 +1866,11 @@ class Closer:
                         False,
                         "verifier terminal receipt",
                     )
-                return self.proposal(
-                    s,
-                    "collect_evidence",
-                    "collect terminal or unattributed verifier evidence; do not rerun",
+                return (
+                    "post_merge_verify",
+                    "verify label has no active request or usable verdict",
+                    True,
+                    None,
                 )
             return "post_merge_verify", "merged PR lacks merge-bound verifier evidence", True, None
         if s["state"] != "OPEN" or s.get("draft"):
@@ -1715,6 +1910,108 @@ class Closer:
             True,
             None,
         )
+
+    def verification_request_basis(self, snapshot):
+        lifecycle = snapshot.get("verifier_lifecycle") or snapshot.get("verifier") or {}
+        repeat = verification_events.request_matches(
+            snapshot, self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
+        )
+        return digest(
+            {
+                "schema": "verification-request-basis/v1",
+                "target": snapshot.get("pr_target", snapshot["target"]),
+                "head": snapshot.get("head"),
+                "merge": snapshot.get("merge"),
+                "event_id": (lifecycle.get("verification_event") or {}).get("event_id"),
+                "run_id": str(lifecycle.get("run_id", "")),
+                "run_attempt": str(lifecycle.get("run_attempt", "")),
+                "repeat": (
+                    {
+                        key: value
+                        for key, value in repeat.items()
+                        if key not in {"question", "recovery_progress"}
+                    }
+                    if repeat
+                    else None
+                ),
+            }
+        )
+
+    def _accepted_verification_request(self, snapshot, *, state_path=None):
+        """Reuse the native exact-target request receipt while its result is pending."""
+        import closer_queue
+
+        try:
+            state = closer_queue._read_state(Path(state_path or self.state_path))
+            frontier = getattr(self, "finite_frontier", None)
+            selected = (
+                (
+                    closer_queue.state_for_frontier(
+                        state, frontier["frontier_id"], expected_policy=frontier, allow_missing=True
+                    )
+                    or {}
+                )
+                if frontier
+                else state
+            )
+            entry = (selected.get("items") or {}).get(snapshot["target"], {})
+            operation = (
+                (
+                    (
+                        _finite_queue_operation(entry, frontier, snapshot["target"])
+                        if frontier
+                        else entry.get("operation")
+                    )
+                    or {}
+                )
+                if entry
+                else {}
+            )
+            operations = [operation]
+            # Only an exact accepted request basis creates a causal dependency
+            # across frontiers. Unrelated historical operations are never gates.
+            for bucket in (state.get("frontiers") or {}).values():
+                if not isinstance(bucket, dict):
+                    continue
+                prior = (bucket.get("items") or {}).get(snapshot["target"], {})
+                prior_op = prior.get("operation") if isinstance(prior, dict) else None
+                if (
+                    isinstance(prior_op, dict)
+                    and (prior_op.get("binding") or {}).get("pr_target")
+                    == snapshot.get("pr_target", snapshot["target"])
+                    and (prior_op.get("binding") or {}).get("head") == snapshot.get("head")
+                    and (prior_op.get("binding") or {}).get("merge") == snapshot.get("merge")
+                    and (prior_op.get("result") or {}).get("verification_request_basis")
+                    == self.verification_request_basis(snapshot)
+                ):
+                    prior_frontier = prior_op.get("finite_frontier")
+                    if isinstance(prior_frontier, Mapping):
+                        validated = _finite_queue_operation(
+                            prior, prior_frontier, snapshot["target"]
+                        )
+                        if validated:
+                            operations.append(validated)
+            for candidate in operations:
+                binding = candidate.get("binding") or {}
+                result = candidate.get("result") or {}
+                if (
+                    candidate.get("status") == "completed"
+                    and candidate.get("action") == "post_merge_verify"
+                    and binding.get("pr_target") == snapshot.get("pr_target", snapshot["target"])
+                    and binding.get("head") == snapshot.get("head")
+                    and binding.get("merge") == snapshot.get("merge")
+                    and result.get("verification_request_basis")
+                    == self.verification_request_basis(snapshot)
+                ):
+                    return {
+                        "operation_id": candidate.get("id"),
+                        "request_basis": result["verification_request_basis"],
+                    }
+            return _confirmed_post_merge_label_event(
+                snapshot.get("pr_target", snapshot["target"]), operation, snapshot
+            )
+        except FileNotFoundError:
+            return None
 
     def proposal(self, snapshot, action, reason):
         if self.advisory.get(snapshot["target"]) == snapshot["revision"]:
@@ -1895,6 +2192,8 @@ class Closer:
                     value,
                     root=root if check_current else None,
                     reference=attribution_reference,
+                    deadline=time.monotonic()
+                    + max(0, getattr(gh, "deadline", time.time()) - time.time()),
                 )
             )
             return value
@@ -1929,7 +2228,15 @@ class Closer:
                             reads,
                             ["complete active verifier identity before dispatch"],
                         )
-                    if linked and int(number) not in [p["number"] for p in linked]:
+                    lifecycle = snapshot.get("verifier_lifecycle") or {}
+                    exact_pending = lifecycle.get(
+                        "schema"
+                    ) == verifier_evidence.STATE_MARKER and str(lifecycle.get("run_id")) == str(
+                        run.get("id")
+                    )
+                    if int(number) not in [p["number"] for p in linked] and not exact_pending:
+                        # Repository identity alone is not a dependency. Owned
+                        # uncertain POSTs remain fenced by the native queue.
                         continue
                     proof = {
                         "schema": "closer-verifier-prewrite-wait/v1",
@@ -1988,6 +2295,20 @@ class Closer:
                         "next_trigger": closer_queue.verifier_resource_wait_event(proof),
                     }
 
+            if check_current:
+                # Completed history is evidence, not a pending effect. Exact
+                # authenticated current comments were read in the PR snapshot;
+                # archives remain optional collection/enrichment below.
+                current = gh.snapshot(snapshot["target"])
+                if current.get("revision") != snapshot.get("revision"):
+                    return boundary.pending(
+                        snapshot,
+                        target,
+                        "state_changed",
+                        reads,
+                        ["fresh exact PR observation before verification request"],
+                    )
+                return None
             try:
                 merge_time = boundary.timestamp(snapshot.get("merged_at"))
             except (ValueError, TypeError):
@@ -2070,6 +2391,8 @@ class Closer:
                         current,
                         root=root,
                         reference=attribution_reference,
+                        deadline=time.monotonic()
+                        + max(0, getattr(gh, "deadline", time.time()) - time.time()),
                     )
                 )
                 if (
@@ -2138,8 +2461,62 @@ class Closer:
             return result
         return None
 
-    def verification_snapshot(self, snapshot, *, gh=None):
-        """Optional identity enrichment never replaces the core GitHub observation."""
+    def verification_snapshot(self, snapshot, *, gh=None, include_history=False):
+        """Optional targeted historical reads never precede initial verification."""
+        snapshot = {key: value for key, value in snapshot.items() if key != "pending_no_evaluation"}
+        lifecycle = snapshot.get("verifier_lifecycle") or {}
+        if (
+            snapshot.get("state") == "MERGED"
+            and not snapshot.get("_local_cached")
+            and lifecycle.get("schema") == verifier_evidence.STATE_MARKER
+            and lifecycle.get("status") == "pending"
+            # This existing native request route is compare-only. A targeted
+            # hosted evaluate attempt must recover through its own assessment.
+            and (lifecycle.get("assessment_identity") or {}).get("mode") == "compare"
+            and verification_events.execution_binding(lifecycle.get("execution_binding"))
+        ):
+            reader = gh or self.gh
+            repo = lifecycle["repo"]
+            run_id, attempt = lifecycle["run_id"], lifecycle["run_attempt"]
+            try:
+                run = reader.api(f"repos/{repo}/actions/runs/{run_id}")
+                jobs = reader.api(
+                    f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
+                )
+                if isinstance(jobs, dict) and isinstance(jobs.get("jobs"), list):
+                    rows = list(jobs["jobs"])
+                    total = jobs.get("total_count")
+                    for page in range(2, 11):
+                        if type(total) is not int or len(rows) >= total:
+                            break
+                        batch = reader.api(
+                            f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}"
+                        )
+                        if (
+                            not isinstance(batch, dict)
+                            or batch.get("total_count") != total
+                            or not isinstance(batch.get("jobs"), list)
+                            or not batch["jobs"]
+                        ):
+                            break
+                        rows.extend(batch["jobs"])
+                    jobs = {"total_count": total, "jobs": rows}
+                proof = verification_events.pending_no_evaluation_proof(lifecycle, run, jobs)
+                if proof is not None:
+                    refreshed = reader.api(f"repos/{repo}/actions/runs/{run_id}")
+                    if (
+                        verification_events.pending_no_evaluation_proof(lifecycle, refreshed, jobs)
+                        != proof
+                    ):
+                        proof = None
+            except Exception as exc:
+                if closer_evidence._is_round_control_exception(exc):
+                    raise
+                proof = None
+            if proof is not None:
+                snapshot = {**snapshot, "pending_no_evaluation": proof}
+        if not include_history:
+            return snapshot
         if (
             snapshot.get("state") != "MERGED"
             or snapshot.get("verifier")
@@ -2161,10 +2538,98 @@ class Closer:
         return snapshot
 
     def initiate_verify(self, target, snapshot):
+        disposition = self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
+        repeat_request = verification_events.request_matches(snapshot, disposition)
         result = self._verification_preflight(target, snapshot)
         if result is not None:
             return result
         repo, number = target.split("#")
+        initial_redispatch = repeat_request is None and (
+            "verify:compare" in snapshot.get("labels", [])
+            or snapshot.get("native_diagnostic_reference")
+        )
+        if repeat_request is not None or initial_redispatch:
+            # The reusable collector validates actual merged subject/material and
+            # dedups exact event+assessment. A POST timeout remains UNKNOWN.
+            try:
+                repository = self.gh.api(f"repos/{repo}")
+            except RoundCapacityDeferred as exc:
+                import closer_verifier_boundary as boundary
+
+                return boundary.pending(
+                    snapshot,
+                    target,
+                    "capacity_deferred",
+                    [],
+                    ["authoritative GitHub capacity recovery before metadata read"],
+                    control={
+                        "kind": "capacity",
+                        "resource": exc.resource,
+                        "throttle": exc.throttle,
+                        "observed_at": exc.observed_at,
+                        "reset_at_epoch": exc.reset_at_epoch,
+                    },
+                )
+            except RoundDeadlineExhausted as exc:
+                import closer_verifier_boundary as boundary
+
+                return boundary.pending(
+                    snapshot,
+                    target,
+                    "request_deadline",
+                    [],
+                    ["fresh owned metadata read after request deadline"],
+                    control={
+                        "kind": "request_deadline",
+                        "deadline": exc.deadline,
+                        "remaining_seconds": exc.remaining_seconds,
+                    },
+                )
+            except Exception as exc:
+                return {
+                    "status": "not_started",
+                    "reason": f"verifier repository metadata unavailable: {type(exc).__name__}",
+                    "next_trigger": "authoritative repository metadata recovery",
+                }
+            branch = repository.get("default_branch") if isinstance(repository, dict) else None
+            if not isinstance(branch, str) or not branch:
+                return {
+                    "status": "not_started",
+                    "reason": "verifier workflow default branch unavailable",
+                    "next_trigger": "authoritative repository metadata",
+                }
+            inputs = {"ref": branch, "inputs[pr_number]": number, "inputs[mode]": "compare"}
+            if repeat_request is not None:
+                inputs.update(
+                    {
+                        "inputs[verification_material]": json.dumps(
+                            repeat_request["material"], separators=(",", ":")
+                        ),
+                        "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
+                    }
+                )
+            try:
+                self.gh.api(
+                    f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
+                    method="POST",
+                    fields=inputs,
+                )
+            except GitHubNoEffectRejected:
+                return {
+                    "status": "not_started",
+                    "reason": "verification event inputs unsupported or rejected (HTTP 422)",
+                    "next_trigger": "compatible reviewed consumer workflow and valid event inputs",
+                }
+            return {
+                "status": "completed",
+                "verification_key": f"{target}:{snapshot['merge']}:compare",
+                "verification_request_basis": self.verification_request_basis(snapshot),
+                "verification_predecessor": (
+                    repeat_request["predecessor_event_id"] if repeat_request else None
+                ),
+                "material_selectors": repeat_request["material"] if repeat_request else [],
+                "next_trigger": "verifier terminal receipt",
+            }
         # Nothing catches the POST: a timeout/exception here remains UNKNOWN.
         self.gh.api(
             f"repos/{repo}/issues/{number}/labels",
@@ -2174,6 +2639,7 @@ class Closer:
         return {
             "status": "completed",
             "verification_key": f"{target}:{snapshot['merge']}:compare",
+            "verification_request_basis": self.verification_request_basis(snapshot),
             "next_trigger": "verifier terminal receipt",
         }
 
@@ -2642,7 +3108,9 @@ def selected_workspace(workspaces, target):
     return mapping.get(target.casefold()) or mapping.get(target.split("#")[0].casefold())
 
 
-def load_workspace_config(path, expected_sha256=None, *, require_pin=False, targets=None):
+def load_workspace_config(
+    path, expected_sha256=None, *, require_pin=False, targets=None, validate_execution=True
+):
     """Read exactly the native-pinned mapping, without networking or changing it."""
     import closer_quarantine
 
@@ -2698,7 +3166,7 @@ def load_workspace_config(path, expected_sha256=None, *, require_pin=False, targ
                     "native execution workspace must be a canonical physical directory"
                 )
             selected[target.casefold()] = workspace
-    for target, workspace in selected.items():
+    for target, workspace in (selected.items() if validate_execution else ()):
         directory = Path(workspace)
         if not directory.is_dir():
             raise ValueError("execution workspace is unavailable")
@@ -3354,7 +3822,7 @@ def _prepared_resource_keys(
             raise closer_resources.ResourceBlocked("prepared source identity is missing")
         keys.append("issue:" + source["target"])
     workspace = selected_workspace(workspaces, target)
-    if workspace and infer_workspace:
+    if workspace and infer_workspace and not native_interpretation_ready(prep, target=target):
         keys.append("worktree:" + str(Path(workspace).resolve()))
     return keys
 
@@ -3367,7 +3835,7 @@ def _pipeline_capacity():
     """
     report = _fresh_capacity_report()
     io_capacity = 4
-    if report is None:
+    if report is None or report.get("control_plane_only") is True:
         return {"io": io_capacity, "low": 0, "exception": 0}
     # Count distinct currently usable low-effort pools. The shared reservation
     # lock arbitrates any overlap with the strong exception lane at dispatch time.
@@ -4548,6 +5016,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return None
         return None
 
+    def validate_product_workspace(target):
+        if getattr(args, "workspaces", None):
+            load_workspace_config(
+                args.workspaces,
+                getattr(args, "workspaces_sha256", None),
+                require_pin=args.runtime_manifest is not None,
+                targets=[target],
+                validate_execution=True,
+            )
+
     def prepare(target, context):
         # Each target receives its own GitHub adapter, avoiding shared deadline mutation
         # when independent IO workers overlap.
@@ -4639,6 +5117,46 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if selective_previous:
             packet = None
         action, reason, eligible, trigger = backend.select(snap)
+        if action == "post_merge_verify" and backend._accepted_verification_request(
+            snap, state_path=context.get("action_state_path")
+        ):
+            action, reason, eligible, trigger = (
+                "wait",
+                "same verification request already accepted",
+                False,
+                "new authenticated verifier attempt or supported request reconciliation",
+            )
+        if action == "post_merge_verify" and durable_verifier_label_event(
+            target, {"revision": snap["revision"]}, snap, context.get("action_state_path")
+        ):
+            action, reason, eligible, trigger = (
+                "collect_evidence",
+                "collect terminal or unattributed verifier evidence; do not rerun",
+                False,
+                "merge-bound verifier terminal receipt for confirmed label event",
+            )
+        if finite_frontier is not None:
+            from closer_frontier_policy import action_identity
+
+            frozen = finite_frontier["bindings"][target]
+            if (
+                snap.get("revision") != frozen["revision"]
+                or action_identity(
+                    target, snap.get("revision"), action, backend.operation_binding(target, snap)
+                )
+                != frozen["action_id"]
+            ):
+                # Refuse before collection/model/effects; ACT still independently checks.
+                return {
+                    "revision": snap.get("revision"),
+                    "snapshot": snap,
+                    "proposal": {
+                        "action": "wait",
+                        "eligible": False,
+                        "reason": "finite_action_binding_changed",
+                    },
+                    "finite_binding_changed": True,
+                }
         if packet is not None and packet.get("collection_action") != action and action != "merge":
             packet = None
         if packet is None:
@@ -4734,6 +5252,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 else None
             ),
             "recovery_requests": recovery_requests,
+            "verification_recovery_progress": verification_events.recovery_progress_descriptor(
+                selective_previous, recovery_requests, retained_dir
+            ),
             "revision": snap["revision"],
             "identity": digest([target, snap.get("head"), snap.get("merge")]),
             "assignment_fingerprint": assignment_row.get("fingerprint"),
@@ -5046,6 +5567,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
 
     def interpret(target, context):
         prep = context.get("prepare", {})
+        if prep.get("finite_binding_changed"):
+            return {
+                "classification": "finite_action_binding_changed",
+                "substantive_needs": [],
+                "authority": False,
+            }
         snap = prep.get("snapshot", {})
         packet = prep.get("evidence_summary", {})
         raw_packet = load_packet(prep)
@@ -5084,6 +5611,13 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 }
             raise RuntimeError(dependency.get("reason") or "assignment changed during pipeline")
         deterministic_action = (prep.get("proposal") or {}).get("action")
+        if native_interpretation_ready(prep, target=target):
+            return {
+                "classification": "deterministic_" + deterministic_action,
+                "substantive_needs": [],
+                "authority": False,
+                "reason": (prep.get("proposal") or {}).get("reason"),
+            }
         if (
             deterministic_action == "close_source"
             and admitted_snapshot.get("target") == target
@@ -5119,6 +5653,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "authority": False,
                 "reason": (prep.get("proposal") or {}).get("reason"),
                 "next_trigger": (prep.get("proposal") or {}).get("next_trigger"),
+            }
+        try:
+            validate_product_workspace(target)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            return {
+                "classification": "workspace_unavailable",
+                "substantive_needs": [],
+                "status": "deferred",
+                "reason": str(exc),
+                "next_trigger": "restore authenticated product execution workspace",
+                "authority": False,
             }
         prior_wait = durable_prior_inner_wait(target, prep, context)
         readiness = None
@@ -5305,6 +5850,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "manifest": (raw_packet or {}).get("manifest"),
             "section_refs": packet.get("sections", {}) if isinstance(packet, dict) else {},
             "existing_disposition": backend.dispositions.get(target, {}),
+            "verification_recovery_progress": prep.get("verification_recovery_progress"),
         }
         if data_only:
             prompt_mandatory["data_only_evidence"] = data_only_evidence_context(
@@ -6317,6 +6863,22 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     def act(target, context):
         import closer_pipeline
 
+        if context.get("prepare", {}).get("finite_binding_changed"):
+            return {
+                "status": "deferred",
+                "reason": "finite_action_binding_changed",
+                "next_trigger": "fresh finite frontier",
+            }
+        if not _remote_only_effect(target, context):
+            try:
+                validate_product_workspace(target)
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                return {
+                    "status": "deferred",
+                    "reason": "workspace_unavailable: " + str(exc),
+                    "next_trigger": "restore authenticated product execution workspace",
+                }
+
         # Re-enter the existing durable queue for one target as soon as its pipeline
         # stages finish. Claims, exact-head refreshes, reconciliation and guards remain there.
         action_state = (
@@ -6953,6 +7515,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reconcile": reconcile_action,
             }
         )
+    if not shadow:
+        _NATIVE_STAGE_CALLBACKS["prepare"].add(prepare)
+        _NATIVE_STAGE_CALLBACKS["interpret"].add(interpret)
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,
@@ -7482,6 +8047,7 @@ def _main_admitted(args, p, assignment_rows, targets):
                 getattr(args, "workspaces_sha256", None),
                 require_pin=args.runtime_manifest is not None,
                 targets=targets,
+                validate_execution=False,
             )
         except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
             p.error(str(exc))
