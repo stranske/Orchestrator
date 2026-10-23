@@ -362,7 +362,7 @@ def test_concerns_recovered_material_same_sha_reenters_existing_verifier_then_cl
             if method == "POST":
                 posts.append((endpoint, kwargs))
                 return None
-            if endpoint.endswith("/runs/100"):
+            if endpoint.endswith(("/runs/100", "/runs/100/attempts/1")):
                 return run
             if "/attempts/1/jobs?" in endpoint:
                 return jobs
@@ -686,7 +686,10 @@ def pending_execution(world):
     original = world.backend.gh.api
 
     def api(endpoint, **kwargs):
-        if endpoint == "repos/owner/repo/actions/runs/99":
+        if endpoint in {
+            "repos/owner/repo/actions/runs/99",
+            "repos/owner/repo/actions/runs/99/attempts/1",
+        }:
             return run
         if endpoint == "repos/owner/repo/actions/runs/99/attempts/1/jobs?per_page=100":
             return inventory
@@ -844,3 +847,159 @@ def test_accepted_pending_retry_receipt_prevents_second_dispatch_before_new_mark
     operation["binding"]["pr_target"] = "owner/repo#999"
     Path(world.backend.state_path).write_text(json.dumps(state))
     assert world.backend.select(observed)[0] == "post_merge_verify"
+
+
+@pytest.mark.parametrize(
+    "newer_state",
+    [
+        "skipped",
+        "active",
+        "started",
+        "missing",
+        "drift",
+        "old_changed",
+        "foreign_attempt",
+        "wrong_head",
+        "incomplete",
+        "intermediate_started",
+        "excess_attempts",
+    ],
+)
+def test_native_pending_attempt_recovery_binds_all_newer_attempts(world, newer_state):
+    pending, first_run, first_inventory = pending_execution(world)
+    original_marker = copy.deepcopy(pending)
+    second_run = {**copy.deepcopy(first_run), "run_attempt": 2}
+    second_inventory = copy.deepcopy(first_inventory)
+    second_job = second_inventory["jobs"][0]
+    second_job.update(id=18, run_attempt=2)
+    # A later terminal skipped evaluator does not require a new successful pending
+    # publication. The original pending marker retains its original attempt.
+    second_job["steps"] = second_job["steps"][1:]
+    if newer_state == "active":
+        second_run["status"] = "in_progress"
+    elif newer_state == "started":
+        second_job["steps"][0]["conclusion"] = "failure"
+    elif newer_state == "missing":
+        second_job["steps"] = []
+    elif newer_state == "foreign_attempt":
+        second_run["repository"] = {"full_name": "owner/foreign"}
+    elif newer_state == "wrong_head":
+        second_run["head_sha"] = second_job["head_sha"] = "e" * 40
+    elif newer_state == "incomplete":
+        second_inventory["total_count"] = 2
+    elif newer_state == "intermediate_started":
+        second_job["steps"][0]["conclusion"] = "failure"
+    latest_run = {**second_run}
+    if newer_state in {"intermediate_started", "excess_attempts"}:
+        latest_run["run_attempt"] = 3 if newer_state == "intermediate_started" else 12
+    third_inventory = copy.deepcopy(first_inventory)
+    third_inventory["jobs"][0].update(id=19, run_attempt=3)
+    original_api = world.backend.gh.api
+    latest_reads = 0
+    old_reads = 0
+
+    def api(endpoint, **kwargs):
+        nonlocal latest_reads, old_reads
+        if endpoint == "repos/owner/repo/actions/runs/99":
+            latest_reads += 1
+            if newer_state == "drift" and latest_reads > 1:
+                return {**second_run, "run_attempt": 3}
+            return copy.deepcopy(latest_run)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/3":
+            return copy.deepcopy(latest_run)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/3/jobs?per_page=100":
+            return copy.deepcopy(third_inventory)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/1":
+            old_reads += 1
+            if newer_state == "old_changed" and old_reads > 1:
+                return {**first_run, "conclusion": "success"}
+            return copy.deepcopy(first_run)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/2":
+            return copy.deepcopy(second_run)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/2/jobs?per_page=100":
+            return copy.deepcopy(second_inventory)
+        return original_api(endpoint, **kwargs)
+
+    world.backend.gh.api = api
+    observed = world.backend.verification_snapshot(world.snapshot)
+    assert observed["verifier_lifecycle"] == original_marker
+    assert world.posts == []
+    if newer_state == "skipped":
+        proof = observed["pending_no_evaluation"]
+        assert proof["run_attempt"] == "1"
+        assert proof["latest_run_attempt"] == "2"
+        assert proof["subsequent_attempts"][0]["run_attempt"] == "2"
+        assert proof["subsequent_attempts"][0]["jobs_sha256"] == verification_events.content_hash(
+            second_inventory["jobs"]
+        )
+        assert world.backend.select(observed)[0] == "post_merge_verify"
+    else:
+        assert "pending_no_evaluation" not in observed
+        assert world.backend.select(observed)[0] == "wait"
+
+
+def test_newer_old_run_attempt_cannot_supersede_an_accepted_new_dispatch(world):
+    import json
+    from pathlib import Path
+
+    import closer_queue
+
+    pending, first_run, first_inventory = pending_execution(world)
+    original = world.backend.gh.api
+    latest = {**first_run, "run_attempt": 2}
+    inventory = copy.deepcopy(first_inventory)
+    inventory["jobs"][0].update(id=18, run_attempt=2)
+
+    def api(endpoint, **kwargs):
+        if endpoint == "repos/owner/repo/actions/runs/99":
+            return copy.deepcopy(latest)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/2":
+            return copy.deepcopy(latest)
+        if endpoint == "repos/owner/repo/actions/runs/99/attempts/2/jobs?per_page=100":
+            return copy.deepcopy(inventory)
+        if "/runs?" in endpoint:
+            return {
+                "total_count": 1,
+                "workflow_runs": [
+                    {
+                        "id": 100,
+                        "status": "in_progress",
+                        "pull_requests": [],
+                    }
+                ],
+            }
+        return original(endpoint, **kwargs)
+
+    original_basis = world.backend.verification_request_basis(world.snapshot)
+    world.backend.gh.api = api
+    observed = world.backend.verification_snapshot(world.snapshot)
+    new_basis = world.backend.verification_request_basis(observed)
+    assert new_basis == original_basis
+    unchanged = copy.deepcopy(observed)
+    unchanged["pending_no_evaluation"]["jobs_sha256"] = "0" * 64
+    assert world.backend.verification_request_basis(unchanged) == new_basis
+    state = closer_queue._new_state()
+    state["items"][TARGET] = {
+        "operation": {
+            "id": "previous-request",
+            "action": "post_merge_verify",
+            "status": "completed",
+            "revision": observed["revision"],
+            "binding": {"pr_target": TARGET, "head": HEAD, "merge": MERGE},
+            "result": {
+                "verification_request_basis": original_basis,
+                "verification_post_accepted": {
+                    "mutation_kind": "workflow_dispatch",
+                    "request_basis": original_basis,
+                },
+            },
+        }
+    }
+    Path(world.backend.state_path).write_text(json.dumps(state))
+    assert world.backend.select(observed)[0] == "wait"
+    result = world.backend.execute(
+        TARGET, "post_merge_verify", observed, {"deadline": time.time() + 10}
+    )
+    assert result["status"] == "blocked"
+    assert world.posts == []
+    assert observed["verifier_lifecycle"] == pending

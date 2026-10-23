@@ -278,7 +278,7 @@ def execution_binding(value):
     return dict(value)
 
 
-def pending_no_evaluation_proof(state, run, inventory):
+def pending_no_evaluation_proof(state, run, inventory, *, _require_pending=True):
     """Reduce exact authenticated terminal execution evidence; absence proves nothing."""
     binding = execution_binding(state.get("execution_binding"))
     assessment = state.get("assessment_identity") or {}
@@ -375,16 +375,21 @@ def pending_no_evaluation_proof(state, run, inventory):
         for s in job["steps"]
         if isinstance(s, dict) and s.get("name") == binding["evaluator_step"]
     ]
-    if len(pending) != 1 or len(evaluator) != 1:
+    if len(evaluator) != 1 or (_require_pending and len(pending) != 1):
         return None
-    pending, evaluator = pending[0], evaluator[0]
+    pending = pending[0] if len(pending) == 1 else None
+    evaluator = evaluator[0]
     if (
+        evaluator.get("status") != "completed"
+        or evaluator.get("conclusion") != "skipped"
+        or type(evaluator.get("number")) is not int
+        or evaluator["number"] <= 0
+    ):
+        return None
+    if _require_pending and (
         pending.get("status") != "completed"
         or pending.get("conclusion") != "success"
-        or evaluator.get("status") != "completed"
-        or evaluator.get("conclusion") != "skipped"
         or type(pending.get("number")) is not int
-        or type(evaluator.get("number")) is not int
         or not 0 < pending["number"] < evaluator["number"]
     ):
         return None
@@ -398,10 +403,77 @@ def pending_no_evaluation_proof(state, run, inventory):
         "run_head_sha": run["head_sha"],
         "workflow_path": binding["workflow_path"],
         "job_id": job["id"],
-        "pending_step_number": pending["number"],
+        "pending_step_number": pending["number"] if pending else None,
         "evaluator_step_number": evaluator["number"],
         "evaluator_step": binding["evaluator_step"],
         "conclusion": "skipped",
         "source": "actions.listJobsForWorkflowRunAttempt",
         "jobs_sha256": content_hash(jobs),
     }
+
+
+def pending_execution_identity(run):
+    """Stable authority fields for an exact attempt and the separate latest read."""
+    if not isinstance(run, dict):
+        return None
+    result = {
+        key: run.get(key)
+        for key in ("id", "run_attempt", "status", "conclusion", "head_sha", "path", "event")
+    }
+    for key in ("repository", "head_repository"):
+        repository = run.get(key)
+        result[key] = (
+            repository.get("full_name", "").lower() if isinstance(repository, dict) else None
+        )
+    return result
+
+
+def pending_no_evaluation_history_proof(state, attempts, latest):
+    """Authenticate every intervening terminal attempt without rewriting the marker."""
+    try:
+        first, last = int(state["run_attempt"]), int(latest["run_attempt"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        first < 1
+        or last < first
+        or last - first >= 10
+        or not isinstance(attempts, list)
+        or len(attempts) != last - first + 1
+    ):
+        return None
+    proofs = []
+    workflow_head = None
+    for number, observation in zip(range(first, last + 1), attempts):
+        if not isinstance(observation, dict):
+            return None
+        run = observation.get("run")
+        bound_state = {**state, "run_attempt": str(number)}
+        proof = pending_no_evaluation_proof(
+            bound_state, run, observation.get("inventory"), _require_pending=number == first
+        )
+        if proof is None or (workflow_head is not None and proof["run_head_sha"] != workflow_head):
+            return None
+        workflow_head = proof["run_head_sha"]
+        proofs.append(proof)
+    if pending_execution_identity(latest) != pending_execution_identity(attempts[-1]["run"]):
+        return None
+    result = dict(proofs[0])
+    result["latest_run_attempt"] = str(last)
+    result["subsequent_attempts"] = [
+        {
+            key: proof[key]
+            for key in (
+                "run_attempt",
+                "run_head_sha",
+                "workflow_path",
+                "job_id",
+                "evaluator_step_number",
+                "evaluator_step",
+                "conclusion",
+                "jobs_sha256",
+            )
+        }
+        for proof in proofs[1:]
+    ]
+    return result

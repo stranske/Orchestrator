@@ -2519,34 +2519,61 @@ class Closer:
             repo = lifecycle["repo"]
             run_id, attempt = lifecycle["run_id"], lifecycle["run_attempt"]
             try:
-                run = reader.api(f"repos/{repo}/actions/runs/{run_id}")
-                jobs = reader.api(
-                    f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
-                )
-                if isinstance(jobs, dict) and isinstance(jobs.get("jobs"), list):
-                    rows = list(jobs["jobs"])
-                    total = jobs.get("total_count")
-                    for page in range(2, 11):
-                        if type(total) is not int or len(rows) >= total:
-                            break
+                latest_endpoint = f"repos/{repo}/actions/runs/{run_id}"
+                latest = reader.api(latest_endpoint)
+                first, last = int(attempt), int(latest.get("run_attempt"))
+                observations = []
+                pages = 0
+                if not 0 < first <= last < first + 10:
+                    raise ValueError("pending attempt range unavailable")
+                # Native callers are outside Actions: an active newer attempt
+                # never receives the hosted current-collector self exemption.
+                if latest.get("status") != "completed":
+                    raise ValueError("latest verifier attempt is active")
+                for number in range(first, last + 1):
+                    endpoint = f"repos/{repo}/actions/runs/{run_id}/attempts/{number}"
+                    run = reader.api(endpoint)
+                    rows, total = [], None
+                    for page in range(1, 11):
+                        if pages >= 10:
+                            raise ValueError("pending job inventory exceeds bounded transport")
+                        pages += 1
                         batch = reader.api(
-                            f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}"
+                            f"{endpoint}/jobs?per_page=100" + (f"&page={page}" if page > 1 else "")
                         )
                         if (
                             not isinstance(batch, dict)
-                            or batch.get("total_count") != total
+                            or type(batch.get("total_count")) is not int
+                            or batch["total_count"] < 0
+                            or (total is not None and total != batch["total_count"])
                             or not isinstance(batch.get("jobs"), list)
-                            or not batch["jobs"]
                         ):
-                            break
+                            raise ValueError("pending job inventory incomplete")
+                        total = batch["total_count"]
                         rows.extend(batch["jobs"])
-                    jobs = {"total_count": total, "jobs": rows}
-                proof = verification_events.pending_no_evaluation_proof(lifecycle, run, jobs)
+                        if len(rows) == total:
+                            break
+                        if not batch["jobs"] or len(rows) > total:
+                            raise ValueError("pending job inventory incomplete")
+                    observations.append(
+                        {"run": run, "inventory": {"total_count": total, "jobs": rows}}
+                    )
+                proof = verification_events.pending_no_evaluation_history_proof(
+                    lifecycle, observations, latest
+                )
                 if proof is not None:
-                    refreshed = reader.api(f"repos/{repo}/actions/runs/{run_id}")
-                    if (
-                        verification_events.pending_no_evaluation_proof(lifecycle, refreshed, jobs)
-                        != proof
+                    for number, observation in zip(range(first, last + 1), observations):
+                        refreshed = reader.api(
+                            f"repos/{repo}/actions/runs/{run_id}/attempts/{number}"
+                        )
+                        if verification_events.pending_execution_identity(refreshed) != (
+                            verification_events.pending_execution_identity(observation["run"])
+                        ):
+                            proof = None
+                            break
+                    refreshed = reader.api(latest_endpoint)
+                    if verification_events.pending_execution_identity(refreshed) != (
+                        verification_events.pending_execution_identity(latest)
                     ):
                         proof = None
             except Exception as exc:

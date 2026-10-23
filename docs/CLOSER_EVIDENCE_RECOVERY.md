@@ -202,6 +202,15 @@ marker is unchanged. A transient read proof enters the existing operation bindin
 and an accepted dispatch receipt prevents another request for that same event
 before a new authenticated attempt or supported request reconciliation.
 
+Attempt metadata is read from the exact attempt endpoint, independently of the
+latest run. Each intervening terminal attempt needs explicit skipped-evaluator
+proof, with bounded complete job inventories and fresh metadata reads. A hosted
+collector may recognize only its own authenticated current collection attempt;
+native callers cannot exempt an active attempt. Later proved no-evaluation
+attempts support recovery without relabeling the original pending marker or
+superseding an independently accepted dispatch that still needs reconciliation.
+Optional job metadata never creates a new request identity.
+
 The shared Core intent binds whether verification adds its initial label or submits
 an exact workflow request, including the request-basis digest. Read admission runs
 before that intent. An old label cannot acknowledge a later workflow dispatch;
