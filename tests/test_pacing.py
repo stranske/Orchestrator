@@ -248,6 +248,47 @@ def test_router_consumes_pacing_shed_loses_to_ok():
     assert codex["pacing"]["projected_fraction"] == 4.2
 
 
+def test_unmeasured_cursor_is_neutral_not_legacy():
+    cap = cap_for(codex="warn", cw=0.8)
+    cap["agents"]["cursor"] = dict(state="ok")
+    original = copy.deepcopy(cap)
+    result = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "cursor"},
+        exploration_rate=0,
+        rng=random.Random(42),
+        simulate=True,
+    )
+    decision = result["pacing_decision"]
+    assert decision["policy"] == "posterior*pacing"
+    assert {r["agent"]: r["routing_weight"] for r in decision["candidates"]} == {
+        "codex": 0.8,
+        "cursor": 1.0,
+    }
+    cursor = next(r for r in decision["candidates"] if r["agent"] == "cursor")
+    assert cursor["pacing"] is None
+    assert "cursor" not in router.PACING_POOLS
+    assert cap == original
+
+
+def test_unmeasured_cursor_is_sampled_beside_ok_codex():
+    cap = cap_for(codex="ok", cw=1)
+    cap["agents"]["cursor"] = dict(state="ok")
+    chosen = {
+        router.select_agent(
+            "implement",
+            cap,
+            only={"codex", "cursor"},
+            exploration_rate=0,
+            rng=random.Random(seed),
+            simulate=True,
+        )["agent"]
+        for seed in range(200)
+    }
+    assert chosen == {"codex", "cursor"}
+
+
 def test_all_shed_fails_toward_motion_best_posterior():
     result = pick(
         cap_for(claude="shed", aw=0),
@@ -735,13 +776,11 @@ def test_all_unknown_pacing_matches_legacy_including_exploration():
         assert before == after
 
 
-@pytest.mark.parametrize("field", ["late", "state", "policy", "drain"])
+@pytest.mark.parametrize("field", ["late", "policy", "drain"])
 def test_measured_weight_preserves_policy_tiers(monkeypatch, field):
     cap = cap_for(codex="ok", cw=1, aw=0.01)
     if field == "late":
         monkeypatch.setitem(router._ROUTE_TABLE_TYPED["implement"]["agents"][1], "late", True)
-    elif field == "state":
-        cap["agents"]["codex"]["state"] = "warn"
     elif field == "policy":
         monkeypatch.setattr(
             router, "_capacity_policy_bias", lambda task, agent, cap: int(agent == "codex")
@@ -903,7 +942,7 @@ def test_export_schedule_and_weight_drift_wait_for_regular_cadence():
 
 
 @pytest.mark.parametrize("leader", ["claude", "cursor", "vibe", "gemini"])
-def test_measured_codex_keeps_nonpacing_legacy_shares(monkeypatch, leader):
+def test_measured_codex_keeps_nonpacing_exploration_shares(monkeypatch, leader):
     agents = ("claude", "cursor", "codex", "vibe", "gemini")
     posteriors = dict(zip(agents, (0.766, 0.776, 0.612, 0.641, 0.561)))
     learned = {
@@ -921,18 +960,25 @@ def test_measured_codex_keeps_nonpacing_legacy_shares(monkeypatch, leader):
         monkeypatch.setitem(entry, "late", False)
     before = {a: 0 for a in agents}
     after = {a: 0 for a in agents}
+    exploited = {a: 0 for a in agents}
     for seed in range(2000):
         args = dict(
             learned=learned, exploration_rate=0.2, exploration_mode="epsilon-greedy", simulate=True
         )
         old = router.select_agent("implement", cap, rng=random.Random(seed), **args)
         new = router.select_agent("implement", measured, rng=random.Random(seed), **args)
-        before[old["agent"]] += 1
-        after[new["agent"]] += 1
-    for agent in ("cursor", "vibe", "gemini"):
-        assert after[agent] == before[agent], (before, after)
+        # Neutral participation intentionally changes exploitation shares. The
+        # independent exploration draw must still choose the same challenger.
+        assert old["exploration"] == new["exploration"]
+        if old["exploration"]:
+            before[old["agent"]] += 1
+            after[new["agent"]] += 1
+        else:
+            exploited[new["agent"]] += 1
+    assert sum(before.values()) > 0
+    assert after == before
     if leader == "claude":
-        share = after["claude"] / (after["claude"] + after["codex"])
+        share = exploited["claude"] / (exploited["claude"] + exploited["codex"])
         assert share == pytest.approx(0.766 / (0.766 + 0.612 * 0.918), abs=0.04)
 
 
@@ -1085,14 +1131,26 @@ def test_shed_to_warn_with_projection_prints_drain():
 
 
 @pytest.mark.parametrize("weight", [0, 0.918])
-def test_pacing_subset_ignores_nonpool_positive_weight(monkeypatch, weight):
+def test_pacing_includes_neutral_nonpool_candidates(monkeypatch, weight):
     cap = {"agents": {a: dict(state="ok") for a in ("claude", "codex", "cursor", "vibe", "gemini")}}
     for a in ("codex", "claude"):
         cap["agents"][a]["pacing"] = dict(state="ok", routing_weight=weight)
     monkeypatch.setattr(router.execution_profiles, "profiles_for_agent", lambda *a, **k: [])
-    row = router.select_agent("implement", cap, exploration_rate=0, simulate=True)
-    assert row["agent"] in router.PACING_POOLS
-    assert row["pacing_decision"]["policy"] == ("posterior*pacing" if weight else "fallback-warn")
+    row = router.select_agent(
+        "implement", cap, exploration_rate=0, rng=random.Random(42), simulate=True
+    )
+    decision = row["pacing_decision"]
+    assert decision["policy"] == "posterior*pacing"
+    candidates = {r["agent"]: r for r in decision["candidates"]}
+    # Gemini has no admissible execution profile in this fixture and stays out.
+    assert "gemini" not in candidates
+    for agent in ("cursor", "vibe"):
+        assert candidates[agent]["routing_weight"] == 1.0
+        assert candidates[agent]["pacing"] is None
+    for agent in router.PACING_POOLS:
+        assert candidates[agent]["routing_weight"] == weight
+    if not weight:
+        assert row["agent"] not in router.PACING_POOLS
 
 
 # #698: history confidence, minimum evidence, reset boundaries and tick damping.

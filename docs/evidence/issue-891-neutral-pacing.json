@@ -1,0 +1,30 @@
+{
+  "source": "src/router.py::_pacing_choice",
+  "mutation": "Restore base implementation including Cursor-top legacy return and PACING_POOLS-only sample filter",
+  "red_exit": 1,
+  "red_summary": "2 failed in 1.59s",
+  "green_exit": 0,
+  "green_summary": "2 passed in 0.28s",
+  "restored_exact_bytes": true,
+  "sha256": "13a537f1e8cd524fdd129151db411895a84f4dce7ffd466427dd5417dee14228",
+  "base_sha": "88c1013def5fe641c1aefd310f61c835eb292231",
+  "test_command": "/opt/anaconda3/bin/python3 -m pytest -q tests/test_pacing.py",
+  "fresh_pacing_result": "123 passed in 2.02s",
+  "red_output": "FF                                                                       [100%]\n=================================== FAILURES ===================================\n_________________ test_unmeasured_cursor_is_neutral_not_legacy _________________\n\n    def test_unmeasured_cursor_is_neutral_not_legacy():\n        cap = cap_for(codex=\"warn\", cw=0.8)\n        cap[\"agents\"][\"cursor\"] = dict(state=\"ok\")\n        original = copy.deepcopy(cap)\n        result = router.select_agent(\n            \"implement\",\n            cap,\n            only={\"codex\", \"cursor\"},\n            exploration_rate=0,\n            rng=random.Random(42),\n            simulate=True,\n        )\n>       decision = result[\"pacing_decision\"]\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^\nE       KeyError: 'pacing_decision'\n\ntests/test_pacing.py:263: KeyError\n______________ test_unmeasured_cursor_is_sampled_beside_ok_codex _______________\n\n    def test_unmeasured_cursor_is_sampled_beside_ok_codex():\n        cap = cap_for(codex=\"ok\", cw=1)\n        cap[\"agents\"][\"cursor\"] = dict(state=\"ok\")\n        chosen = {\n            router.select_agent(\n                \"implement\",\n                cap,\n                only={\"codex\", \"cursor\"},\n                exploration_rate=0,\n                rng=random.Random(seed),\n                simulate=True,\n            )[\"agent\"]\n            for seed in range(200)\n        }\n>       assert chosen == {\"codex\", \"cursor\"}\nE       AssertionError: assert {'codex'} == {'codex', 'cursor'}\nE         \nE         Extra items in the right set:\nE         'cursor'\nE         Use -v to get more diff\n\ntests/test_pacing.py:289: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_pacing.py::test_unmeasured_cursor_is_neutral_not_legacy - K...\nFAILED tests/test_pacing.py::test_unmeasured_cursor_is_sampled_beside_ok_codex\n2 failed in 1.59s\n",
+  "green_output": "..                                                                       [100%]\n2 passed in 0.28s\n",
+  "prior_strict_verification": {
+    "result": "VERIFIED",
+    "passed": 8620,
+    "failed": 0,
+    "skipped": 0,
+    "selftest_modules": 115,
+    "gates_passed": 5,
+    "mypy_modules": 159,
+    "provenance": "Retained same-base unchanged implementation/test payload from earlier source891 run; terminal receipt read this round. Full suite not rerun."
+  },
+  "runtime_acceptance": {
+    "due": "2026-10-27",
+    "state": "pending",
+    "next": "Inspect switch_review windowed-capacity-policy usable count and numeric relay weights after source delivery; separate success-producer concerns per source issue."
+  }
+}

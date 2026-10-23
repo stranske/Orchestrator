@@ -539,34 +539,42 @@ def _measured_pacing(row: dict) -> bool:
 
 def _pacing_choice(scored, cap, learned, rng):
     """Posterior × literal pacing weight; warn-zero before shed fallback."""
-    if scored[0][1]["agent"] not in PACING_POOLS:
+
+    def measured(row):
+        agent = row[1]["agent"]
+        return agent in PACING_POOLS and _measured_pacing(cap.get("agents", {}).get(agent, {}))
+
+    if not any(measured(row) for row in scored):
         return scored[0], None
     rows = []
     for row in scored:
         _, entry, state, idx = row
         pace = cap.get("agents", {}).get(entry["agent"], {}).get("pacing") or {}
-        weight = pace.get("routing_weight")
-        weight = float(weight) if weight is not None else (1.0 if state == "ok" else 0.0)
+        # Unmetered seats compete neutrally; this does not invent a usage reading.
+        weight = float(pace["routing_weight"]) if measured(row) else 1.0
         posterior, _, _ = _learned_posterior_score(
             learned, entry["agent"], _prior_posterior_from_rank(idx, len(scored))
         )
         rows.append((row, posterior, max(0.0, weight)))
     non_shed = [r for r in rows if r[0][2] in ("ok", "warn")]
     eligible = non_shed or rows
-    # Preserve every legacy policy tier; replace only the final learned ranking.
-    best_tier = min(r[0][0][:-1] for r in eligible)
-    eligible = [r for r in eligible if r[0][0][:-1] == best_tier]
-    pools = [r for r in eligible if r[0][1]["agent"] in PACING_POOLS]
-    if not pools:
+
+    # Keep load, late-seat and capacity-policy boundaries. Pacing weights replace
+    # ok-before-warn ranking so measured warn seats can compete with neutral ones.
+    def policy_tier(item):
+        score = item[0][0]
+        return score[:2] + score[3:-1]
+
+    best_tier = min(policy_tier(r) for r in eligible)
+    eligible = [r for r in eligible if policy_tier(r) == best_tier]
+    if not any(measured(r[0]) for r in eligible):
+        # Measurements in another policy tier cannot randomize this legacy tier.
         return eligible[0][0], None
-    positive = [r for r in pools if non_shed and r[2] > 0]
-    tier = positive or pools
+    positive = [r for r in eligible if non_shed and r[2] > 0]
+    tier = positive or eligible
     policy = (
         "posterior*pacing" if positive else "fallback-warn" if non_shed else "fail-toward-motion"
     )
-    if not any(_measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {})) for r in pools):
-        # Other tiers having measurements cannot randomize this unmeasured tier.
-        return eligible[0][0], None
     weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
     # Zero posterior mass is uninformative; it must not stop all-shed motion.
     if sum(weights) <= 0:
