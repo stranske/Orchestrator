@@ -40,6 +40,11 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 # (blocking 0 or drainable==blocking) with authority true. Check date 2026-10-30.
 RESERVATION_DRAIN_PASS_CHECK_TS = int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp())
 RESERVATION_DRAIN_PASS_CHECK_LABEL = "2026-10-30"
+# A terminal reconciliation plan performs live GitHub reads under its own 120-second
+# request deadline. Bound the receipt diagnostic as a whole as well, so a backlog of
+# historical advertisements cannot turn one expired/admitted receipt into an
+# unbounded sequence of otherwise bounded plans.
+ADMISSION_DIAGNOSTICS_BUDGET_SECONDS = 120.0
 
 
 def _pipeline_state_path(state_path, *, shadow=False):
@@ -8546,6 +8551,7 @@ def _expired_admission_diagnostics(pipeline_path):
     # Match plan_legacy_reconciliation: absolute paths so drainable comparisons agree.
     pipeline_path = Path(pipeline_path).absolute()
     root = closer_resources.scoped_root(pipeline_path)
+    diagnostic_deadline = time.monotonic() + ADMISSION_DIAGNOSTICS_BUDGET_SECONDS
     unknown = closer_resources.unknown_reservations(root)
     diagnostics = []
     drainable = set()
@@ -8571,14 +8577,19 @@ def _expired_admission_diagnostics(pipeline_path):
                         )
                         key = (run_id, intent.get("owner"), plan_target)
                         if key not in plans:
-                            plans[key] = closer_resources.plan_legacy_reconciliation(
-                                pipeline_path, run_id=key[0], owner=key[1], target=plan_target
+                            if time.monotonic() < diagnostic_deadline:
+                                plans[key] = closer_resources.plan_legacy_reconciliation(
+                                    pipeline_path, run_id=key[0], owner=key[1], target=plan_target
+                                )
+                        plan = plans.get(key)
+                        if plan is None:
+                            reasons = ["diagnostic_budget_exhausted"]
+                        else:
+                            eligible = plan.get("eligible") is True and any(
+                                row.get("path") == str(path)
+                                for row in plan.get("advertisements", [])
                             )
-                        plan = plans[key]
-                        eligible = plan.get("eligible") is True and any(
-                            row.get("path") == str(path) for row in plan.get("advertisements", [])
-                        )
-                        reasons = plan.get("reasons") or ([] if eligible else reasons)
+                            reasons = plan.get("reasons") or ([] if eligible else reasons)
                     elif filename == "legacy-intent.json":
                         reasons = ["missing_causal_run_binding"]
                     recovery_path = (
@@ -8587,18 +8598,25 @@ def _expired_admission_diagnostics(pipeline_path):
                     if not eligible and intent and (filename == "intent.json" or not run_id):
                         target = intent.get("target")
                         if target not in terminal_plans:
-                            terminal_plans[target] = closer_resources.plan_terminal_reconciliation(
-                                pipeline_path, target=target
-                            )
-                        terminal_plan = terminal_plans[target]
-                        if terminal_plan.get("eligible") is True:
-                            eligible = any(
-                                row["path"] == str(path) for row in terminal_plan["advertisements"]
-                            )
-                            recovery_path = "plan_terminal_reconciliation"
-                            reasons = []
+                            if time.monotonic() < diagnostic_deadline:
+                                terminal_plans[target] = (
+                                    closer_resources.plan_terminal_reconciliation(
+                                        pipeline_path, target=target
+                                    )
+                                )
+                        terminal_plan = terminal_plans.get(target)
+                        if terminal_plan is None:
+                            reasons = ["diagnostic_budget_exhausted"]
                         else:
-                            reasons = sorted(set(reasons + terminal_plan.get("reasons", [])))
+                            if terminal_plan.get("eligible") is True:
+                                eligible = any(
+                                    row["path"] == str(path)
+                                    for row in terminal_plan["advertisements"]
+                                )
+                                recovery_path = "plan_terminal_reconciliation"
+                                reasons = []
+                            else:
+                                reasons = sorted(set(reasons + terminal_plan.get("reasons", [])))
                     for reason in reasons:
                         reason_counts[reason] = reason_counts.get(reason, 0) + 1
                     if eligible:

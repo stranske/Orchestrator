@@ -4730,6 +4730,28 @@ def _dead_owner_reservations(tmp_path):
     return path, root
 
 
+def _second_dead_core_reservation(root):
+    """Add an independent terminal-plan target to a synthetic diagnostic scan."""
+    import closer_resources as resources
+
+    target = "o/r#8"
+    key = "pr:" + target
+    directory = resources._key_dir(root, key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": target,
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    return target
+
+
 def _terminal_observation(target):
     return {
         "snapshot": {
@@ -5189,6 +5211,78 @@ def test_dead_owner_reservations_become_drainable(tmp_path, monkeypatch):
     assert not result["acceptance_authority"]
     assert not result["global_stop_authority"]
     assert not result["effect_retry_authority"]
+
+
+@pytest.mark.parametrize(
+    "entrypoint", [adapter._expired_admission_diagnostics, adapter._admitted_reservation_counts]
+)
+def test_reservation_diagnostics_keep_completed_plan_and_budget_later_targets(
+    tmp_path, monkeypatch, entrypoint
+):
+    """One expensive failed plan consumes the aggregate receipt budget.
+
+    Both expired and admitted receipts must retain the completed target's
+    concrete failure while refusing to start a second live terminal plan.
+    """
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    later_target = _second_dead_core_reservation(root)
+    clock = [0.0]
+    calls = []
+
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock[0])
+
+    def failed_plan(_path, *, target):
+        calls.append(target)
+        clock[0] = adapter.ADMISSION_DIAGNOSTICS_BUDGET_SECONDS
+        return {"eligible": False, "advertisements": [], "reasons": ["synthetic_live_failure"]}
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", failed_plan)
+    receipt = entrypoint(path)
+
+    assert len(calls) == 1
+    rows = {row.get("target"): row for row in receipt["reservation_recovery"]}
+    completed_target = calls[0]
+    unprocessed_target = ({TARGET, later_target} - {completed_target}).pop()
+    assert "synthetic_live_failure" in rows[completed_target]["reasons"]
+    assert rows[unprocessed_target]["reasons"] == ["diagnostic_budget_exhausted"]
+    assert not rows[unprocessed_target]["drainable"]
+    budget_rows = [
+        row
+        for row in receipt["reservation_recovery"]
+        if row["reasons"] == ["diagnostic_budget_exhausted"]
+    ]
+    assert budget_rows and all(not row["drainable"] for row in budget_rows)
+    assert receipt["reservation_reason_counts"]["diagnostic_budget_exhausted"] == len(budget_rows)
+
+
+def test_reservation_diagnostics_reuses_eligible_plan_after_budget_expiry(tmp_path, monkeypatch):
+    """An eligible completed plan stays usable for matching reservations after expiry."""
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    paths = [str(intent) for intent in tmp_path.rglob("*intent.json")]
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock[0])
+
+    def eligible_plan(_path, *, target):
+        calls.append(target)
+        clock[0] = adapter.ADMISSION_DIAGNOSTICS_BUDGET_SECONDS
+        return {
+            "eligible": True,
+            "advertisements": [{"path": value} for value in paths],
+            "reasons": [],
+        }
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", eligible_plan)
+    receipt = adapter._expired_admission_diagnostics(path)
+
+    assert len(calls) == 1
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == len(paths)
+    assert all(row["drainable"] for row in receipt["reservation_recovery"])
+    assert "diagnostic_budget_exhausted" not in receipt["reservation_reason_counts"]
 
 
 def test_live_owner_reservation_stays_blocking(tmp_path, monkeypatch):

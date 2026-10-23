@@ -55,6 +55,14 @@ Admitted receipts with a clear latch print cheap zero counts; when unknown
 reservations remain they reuse the same read-only drain diagnostics so
 `drainable_reservations == blocking_reservations` is measurable with
 `authority: true` on the first post-merge round.
+Those diagnostics use the production terminal-plan live reads (remote target
+snapshot plus all-head native-writer evidence), but their receipt-wide
+monotonic wall-clock budget is 120 seconds. A plan already started may retain
+its normal plan result; after that budget expires no further plan starts.
+Already-cached plans remain usable for matching advertisements, while every
+unprocessed advertisement remains undrainable with
+`diagnostic_budget_exhausted`. This is read-only diagnostic behavior and does
+not change admission, reservation, or retirement authority.
 No production reservation was migrated or retired during implementation.
 
 New legacy reservations require either a pipeline-run binding or the existing
