@@ -705,6 +705,8 @@ def acceptance_ok(snapshot, decision):
 
 # Actual callback identities created by the native driver, not caller opt-in flags.
 
+_NATIVE_WAIT_CALLBACKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
 _NATIVE_STAGE_CALLBACKS: dict[str, weakref.WeakSet] = {
     "prepare": weakref.WeakSet(),
     "interpret": weakref.WeakSet(),
@@ -728,7 +730,12 @@ def native_stage_remote_only(target, context, stage, callback):
     if stage == "prepare":
         # Native discovery reads GitHub and immutable local evidence; never a product cwd.
         return bool(TARGET.fullmatch(str(target)))
-    return native_interpretation_ready(context.get("prepare"), target=target)
+    validator = _NATIVE_WAIT_CALLBACKS.get(callback)
+    if validator is None and registry is not _NATIVE_STAGE_CALLBACKS:
+        validator = getattr(main, "_NATIVE_WAIT_CALLBACKS", {}).get(callback)
+    return native_interpretation_ready(context.get("prepare"), target=target) or bool(
+        validator and validator(target, context)
+    )
 
 
 def native_interpretation_ready(prep, *, target=None):
@@ -1790,6 +1797,13 @@ class Closer:
                 and ordinary_nonpass.get("head") == s.get("head")
             ):
                 if verification_events.request_matches(s, ordinary_nonpass):
+                    if isinstance(self._accepted_verification_request(s), dict):
+                        return (
+                            "wait",
+                            "same verification request already accepted",
+                            False,
+                            "new authenticated verifier attempt or request reconciliation",
+                        )
                     return (
                         "post_merge_verify",
                         "new material required to evaluate accounted NON_PASS findings",
@@ -4819,6 +4833,40 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         name = (prep.get("packet_ref") or {}).get("path")
         return Path(name).parent.parent if isinstance(name, str) and name else None
 
+    def accepted_request_wait(target, context):
+        prep = context.get("prepare") or {}
+        snap, _packet = full_snapshot(prep)
+        if (
+            not isinstance(snap, dict)
+            or snap.get("target") != target
+            or snap.get("revision") != prep.get("revision")
+            or snap.get("state") != "MERGED"
+            or not SHA.fullmatch(str(snap.get("head")))
+            or not SHA.fullmatch(str(snap.get("merge")))
+            or (prep.get("proposal") or {}).get("action") not in {"wait", "collect_evidence"}
+            or (prep.get("proposal") or {}).get("reason")
+            not in {
+                "same verification request already accepted",
+                "collect terminal or unattributed verifier evidence; do not rerun",
+            }
+        ):
+            return False
+        import copy
+
+        current = copy.copy(backend)
+        current.state_path = (
+            pipeline_path.parent / f"{pipeline_path.stem}.actions" / f"{digest(target)}.json"
+        )
+        if finite_frontier is not None:
+            current.finite_frontier = finite_frontier
+        return current.select(snap)[1] in {
+            "same verification request already accepted",
+            "collect terminal or unattributed verifier evidence; do not rerun",
+        } and isinstance(
+            current._accepted_verification_request(snap, state_path=current.state_path),
+            dict,
+        )
+
     def resource_keys(target, context):
         import closer_resources
 
@@ -4839,7 +4887,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             snapshot,
             backend.workspaces,
             workspace_bindings=getattr(backend, "workspace_bindings", None),
-            infer_workspace=not _remote_only_effect(target, context),
+            infer_workspace=not (
+                _remote_only_effect(target, context) or accepted_request_wait(target, context)
+            ),
         )
 
     def completed_retention_hold(
@@ -5227,15 +5277,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if selective_previous:
             packet = None
         action, reason, eligible, trigger = backend.select(snap)
-        if action == "post_merge_verify" and backend._accepted_verification_request(
-            snap, state_path=context.get("action_state_path")
-        ):
-            action, reason, eligible, trigger = (
-                "wait",
-                "same verification request already accepted",
-                False,
-                "new authenticated verifier attempt or supported request reconciliation",
-            )
         if action == "post_merge_verify" and durable_verifier_label_event(
             target, {"revision": snap["revision"]}, snap, context.get("action_state_path")
         ):
@@ -5244,6 +5285,15 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "collect terminal or unattributed verifier evidence; do not rerun",
                 False,
                 "merge-bound verifier terminal receipt for confirmed label event",
+            )
+        elif action == "post_merge_verify" and backend._accepted_verification_request(
+            snap, state_path=context.get("action_state_path")
+        ):
+            action, reason, eligible, trigger = (
+                "wait",
+                "same verification request already accepted",
+                False,
+                "new authenticated verifier attempt or supported request reconciliation",
             )
         if finite_frontier is not None:
             from closer_frontier_policy import action_identity
@@ -5752,6 +5802,25 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "substantive_needs": [],
                 "authority": False,
                 "next_trigger": "merge-bound verifier terminal receipt for confirmed label event",
+            }
+        if (
+            deterministic_action in {"wait", "collect_evidence"}
+            and (prep.get("proposal") or {}).get("reason")
+            in {
+                "same verification request already accepted",
+                "collect terminal or unattributed verifier evidence; do not rerun",
+            }
+            and isinstance(
+                backend._accepted_verification_request(
+                    admitted_snapshot, state_path=context.get("action_state_path")
+                ),
+                dict,
+            )
+        ):
+            return {
+                "classification": "deterministic_verifier_request_wait",
+                "substantive_needs": [],
+                "authority": False,
             }
         if deterministic_action in {"complete", "wait", "merge", "post_merge_verify"}:
             # These states already have an explicit dispatcher route. The guarded
@@ -6864,6 +6933,20 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return current
         if (
             isinstance(interpreted, dict)
+            and interpreted.get("classification") == "deterministic_verifier_request_wait"
+            and current.select(snap)[1]
+            in {
+                "same verification request already accepted",
+                "collect terminal or unattributed verifier evidence; do not rerun",
+            }
+            and isinstance(
+                current._accepted_verification_request(snap, state_path=action_state), dict
+            )
+        ):
+            current.workers = False
+            return current
+        if (
+            isinstance(interpreted, dict)
             and interpreted.get("classification") == "deterministic_inner_wait"
         ):
             import closer_pipeline
@@ -6979,7 +7062,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "reason": "finite_action_binding_changed",
                 "next_trigger": "fresh finite frontier",
             }
-        if not _remote_only_effect(target, context):
+        if not (_remote_only_effect(target, context) or accepted_request_wait(target, context)):
             try:
                 validate_product_workspace(target)
             except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
@@ -7124,6 +7207,45 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             progress = verified_finite_partial_progress(target, action_state, row, receipt)
             if progress is not None:
                 return progress
+        if (
+            receipt.get("stop_valid") is True
+            and row.get("eligible") is False
+            and row.get("status") in {"deferred", "ineligible"}
+            and row.get("action") in {"wait", "collect_evidence"}
+            and reason
+            in {
+                "same verification request already accepted",
+                "collect terminal or unattributed verifier evidence; do not rerun",
+            }
+        ):
+            inner = queue_item_readback(action_state, target)
+            fresh = inner.get("evidence") if isinstance(inner, dict) else None
+            accepted = (
+                current._accepted_verification_request(fresh, state_path=action_state)
+                if isinstance(fresh, dict)
+                and inner.get("observation_freshness") == "fresh"
+                and inner.get("revision") == row.get("revision")
+                and fresh.get("target") == target
+                and current.select(fresh)[1] == reason
+                and fresh.get("head") == prep_snapshot.get("head")
+                and fresh.get("merge") == prep_snapshot.get("merge")
+                else None
+            )
+            if isinstance(accepted, dict):
+                return {
+                    "status": "pending",
+                    "pending_kind": "external_event",
+                    "next_trigger": "authenticated verifier result or supported request reconciliation",
+                    "pending_evidence": {
+                        "event_id": accepted["request_basis"],
+                        "operation_id": accepted["operation_id"],
+                        "target": target,
+                        "head": fresh["head"],
+                        "merge": fresh["merge"],
+                        "observed_revision": row["revision"],
+                    },
+                    "queue_receipt": receipt,
+                }
         if (
             receipt.get("stop_valid")
             and row.get("eligible")
@@ -7628,6 +7750,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     if not shadow:
         _NATIVE_STAGE_CALLBACKS["prepare"].add(prepare)
         _NATIVE_STAGE_CALLBACKS["interpret"].add(interpret)
+        _NATIVE_WAIT_CALLBACKS[interpret] = accepted_request_wait
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,

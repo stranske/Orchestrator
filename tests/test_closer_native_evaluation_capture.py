@@ -124,7 +124,22 @@ def test_integrated_large_evaluation_identity_and_diagnostics(world, tmp_path, p
     assert not world.posts and world.snapshot.get("verifier") is None
     if pr != 12:
         return
-    observed = world.backend.verification_snapshot(world.snapshot)
+    ordinary = world.backend.verification_snapshot(world.snapshot)
+    assert ordinary.get("native_diagnostic_reference") is None
+    missing = evidence._native_verifier_section(
+        ordinary,
+        world.backend.gh.api,
+        time.monotonic() + 30,
+        tmp_path / "ordinary-packet",
+        lambda *_a, **_k: world.data,
+        native_archive_root=world.backend.verifier_archive_root,
+    )
+    assert missing["status"] == "missing"
+    assert missing["reason"] == "no trusted exact-identity NON_PASS marker for current merged PR"
+    # Historical diagnostic capture is a targeted opt-in, never initial admission.
+    observed = world.backend.verification_snapshot(world.snapshot, include_history=True)
+    assert observed["native_diagnostic_reference"]["subject_pr"] == "owner/repo#12"
+    assert observed.get("verifier") is None
     section = evidence._native_verifier_section(
         observed,
         world.backend.gh.api,

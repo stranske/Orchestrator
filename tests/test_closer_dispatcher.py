@@ -575,7 +575,7 @@ def test_pause_label_blocks_automatic_completion(tmp_path, where):
     "state,labels,expected",
     [
         ("OPEN", ["needs-human"], "merge"),
-        ("MERGED", ["needs-human", "verify:compare"], "collect_evidence"),
+        ("MERGED", ["needs-human", "verify:compare"], "post_merge_verify"),
     ],
 )
 def test_generic_needs_human_label_is_not_a_scoped_decision(tmp_path, state, labels, expected):
@@ -718,7 +718,10 @@ def assert_nonpass_accounting_prompt_contract(prompt):
     for required in (
         "This path requires at least one supplied nonpass_finding",
         "Only when ALL supplied nonpass_finding exact finding_id values are confidently accounted for",
-        "wait, collect_evidence, or repair with a validated bound mechanical plan",
+        "wait, collect_evidence, post_merge_verify for a bounded evaluable question with retained new material, or repair with a validated bound mechanical plan",
+        "For post_merge_verify, supply verification_request {question, material:[exact selector]}",
+        "select only specific necessary retained material that makes the question evaluable",
+        "Legacy reports without an event digest additionally require the supplied genuine necessary recovery progress",
         "substantive_needs [] if there is no OTHER semantic, ownership, security, or routing ambiguity",
         "missing acceptance proof in each unresolved_missing_evidence resolution's reason",
         "preserve every raw NON_PASS verdict, and leave decision.criteria empty",
@@ -1788,20 +1791,33 @@ def test_repair_workspace_must_be_clean_and_match_approved_head(tmp_path, monkey
 
 
 def test_compare_label_waits_only_for_attributed_active_run_and_collects_other_outcomes(tmp_path):
-    for status, expected in [
-        ("in_progress", "wait"),
-        ("completed", "collect_evidence"),
-        (None, "collect_evidence"),
+    for status, expected, expected_eligible in [
+        ("in_progress", "wait", False),
+        ("completed", "post_merge_verify", True),
+        (None, "post_merge_verify", True),
     ]:
         current = snapshot(
             state="MERGED",
             merge=MERGE,
             labels=["verify:compare"],
-            verifier_runs=([{"id": 99, "status": status}] if status else []),
+            verifier_runs=(
+                [
+                    {
+                        "id": 99,
+                        "status": status,
+                        "linked_pr": TARGET,
+                        "head_sha": HEAD,
+                        "path": ".github/workflows/agents-verifier.yml",
+                        "event": "pull_request_target",
+                    }
+                ]
+                if status
+                else []
+            ),
         )
         backend = closer(tmp_path, current)
         action, _, eligible, _ = backend.select(current)
-        assert action == expected and not eligible
+        assert action == expected and eligible is expected_eligible
         assert backend.gh.calls == []
 
 
@@ -1872,7 +1888,9 @@ def test_snapshot_verifier_wait_uses_only_current_pr_attribution(tmp_path, monke
     manual = {"id": 10, "status": "in_progress", "pull_requests": []}
     current = _snapshot_from_document(monkeypatch, document, [unrelated, manual])
     assert current["verifier_run_identity_unknown"] and current["verifier_runs"] == []
-    assert closer(tmp_path, current).select(current)[0] == "collect_evidence"
+    # Unrelated/unbound historical runs cannot prevent an initial exact-subject
+    # request; the actual preflight still checks attributable active execution.
+    assert closer(tmp_path, current).select(current)[0] == "post_merge_verify"
     attributed = {
         "id": 11,
         "status": "in_progress",
