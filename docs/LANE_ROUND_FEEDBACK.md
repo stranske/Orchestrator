@@ -15,7 +15,11 @@ decision. The append helper replaces the relay's existing `relay-pacing.log`
 writer; do not also emit a legacy pacing line for the same decision. The hook is:
 
 ```bash
-# At decision time (before dispatch): append an importer-valid line with decision_id=<id>.
+# At decision time (before dispatch): prefer pick-agent stderr log_fields (or format-relay-pacing-fields)
+# so Cursor-top unmeasured-preferred receipts keep numeric weights instead of nested-pacing *:unknown.
+# weights="$(printf '%s' "$decision_json" | python3 "$ORCH/rate_incidents.py" format-relay-pacing-fields \
+#   --candidates "$candidates" | python3 -c 'import json,sys; print(json.load(sys.stdin)["weights"])')"
+# Append an importer-valid line with decision_id=<id>.
 # Replace the existing pacing-log writer with this call; do not also write a legacy line.
 # Requires $source, $candidates, $chosen, $weights, $states and $fallback from the decision.
 # Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
@@ -34,8 +38,11 @@ python3 "$ORCH/rate_incidents.py" record-lane-round \
 
 Prefer `append-relay-pacing-decision` over hand-editing the pacing log: it generates the
 token, writes `decision_id=<id>` in the field order the importer accepts, and prints the
-same token for the exit hook. `generate-relay-decision-id` remains available when the
-relay must emit the id into an existing log writer.
+same token for the exit hook. `capacity.py pick-agent` prints `log_fields.weights` /
+`log_fields.states` on stderr (from top-level `routing_weight`, including neutral 1.0 for
+Cursor beside a measured pool). `format-relay-pacing-fields` rebuilds those tokens from the
+same JSON when the host script does not yet read `log_fields`. `generate-relay-decision-id`
+remains available when the relay must emit the id into an existing log writer.
 
 Set `$tail` to a private temporary file and remove it after the call. Pass
 `--receiver-reason "$reason"` when the relay has retained its actual routing

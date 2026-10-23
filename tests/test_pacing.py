@@ -275,6 +275,8 @@ def test_unmeasured_cursor_peer_keeps_winner_with_pacing_receipt(codex_state, co
     so almost every relay logged weights=unknown. Keep the Cursor winner
     (selection shares unchanged) and attach a pacing receipt with real weights.
     """
+    import rate_incidents
+
     cap = {
         "agents": {
             "codex": {
@@ -310,6 +312,52 @@ def test_unmeasured_cursor_peer_keeps_winner_with_pacing_receipt(codex_state, co
     assert by_agent["codex"] == codex_weight
     assert by_agent["cursor"] == 1.0  # neutral unmeasured
     assert result["agent"] == "cursor"
+    # Nested-only jq would still emit *:unknown for Cursor (pacing absent). The
+    # log-field helper must use top-level routing_weight so post-merge relays grade.
+    fields = rate_incidents.relay_log_fields_from_decision(decision, candidates="codex,cursor")
+    assert "unknown" not in fields["weights"], fields
+    weight_token = {0.2: "0.2", 0.0: "0", 0.5: "0.5"}[codex_weight]
+    assert fields["weights"] == f"codex:{weight_token},cursor:1"
+    assert fields["states"] == f"codex:{codex_state},cursor:ok"
+    assert fields["policy"] == "unmeasured-preferred"
+
+
+def test_pick_agent_cli_attaches_log_fields_for_cursor_top(monkeypatch, capsys):
+    """pick-agent stderr carries log_fields so the host relay need not re-derive weights."""
+    import rate_incidents
+
+    cap = {
+        "agents": {
+            "codex": {
+                "state": "warn",
+                "pacing": {
+                    "state": "warn",
+                    "routing_weight": 0.2,
+                    "projected_fraction": 0.9,
+                    "effective_reserve": 0.15,
+                },
+            },
+            "cursor": {"state": "ok", "reason": "subscription ok"},
+        }
+    }
+    learned = {
+        "implement": {
+            "cursor": {"posterior": 0.9, "score": 0.9, "n_obs": 10, "rank": 0},
+            "codex": {"posterior": 0.1, "score": 0.1, "n_obs": 10, "rank": 1},
+        }
+    }
+    monkeypatch.setattr(capacity, "build", lambda: cap)
+    monkeypatch.setattr(router, "learned_ranks", lambda: learned)
+    assert capacity.main(["pick-agent", "--candidates", "codex,cursor"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "cursor"
+    decision = json.loads(captured.err.strip())
+    assert decision["policy"] == "unmeasured-preferred"
+    assert decision["log_fields"] == rate_incidents.relay_log_fields_from_decision(
+        decision, candidates="codex,cursor"
+    )
+    assert "unknown" not in decision["log_fields"]["weights"]
+    assert decision["log_fields"]["weights"] == "codex:0.2,cursor:1"
 
 
 def test_router_weighted_probabilities_without_changing_posteriors():

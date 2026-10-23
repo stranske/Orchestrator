@@ -452,6 +452,84 @@ def test_cli_generate_relay_decision_id_prints_one_token(capsys):
     assert len(token) <= feedback.RELAY_DECISION_ID_MAX_CHARS
 
 
+def test_cursor_top_log_fields_feed_monitor_usable_and_acted_on(tmp_path, monkeypatch, capsys):
+    """#812 post-merge path: unmeasured-preferred fields → log → join → usable/acted_on > 0.
+
+    Nested pacing is absent on Cursor; formatting must still emit numeric weights so the
+    weekly pass can see consumption after mirror sync (owner 2026-10-23).
+    """
+    log = _setup(tmp_path, monkeypatch)
+    decision = {
+        "policy": "unmeasured-preferred",
+        "candidates": [
+            {
+                "agent": "cursor",
+                "state": "ok",
+                "routing_weight": 1.0,
+                "pacing": None,
+                "reason": "subscription ok",
+            },
+            {
+                "agent": "codex",
+                "state": "warn",
+                "routing_weight": 0.2,
+                "pacing": {"state": "warn", "routing_weight": 0.2},
+            },
+        ],
+    }
+    fields = rate_incidents.relay_log_fields_from_decision(decision, candidates="codex,cursor")
+    assert fields["weights"] == "codex:0.2,cursor:1"
+    assert "unknown" not in fields["weights"]
+    # CLI path used by the host relay after pick-agent.
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(decision)))
+    assert rate_incidents.main(["format-relay-pacing-fields", "--candidates", "codex,cursor"]) == 0
+    printed = json.loads(capsys.readouterr().out.strip())
+    assert printed["weights"] == fields["weights"]
+    assert printed["states"] == fields["states"]
+
+    when = datetime.fromtimestamp(NOW - 30, timezone.utc)
+    token = rate_incidents.append_relay_pacing_decision(
+        source="codex",
+        lane="opener",
+        candidates="codex,cursor",
+        chosen="cursor",
+        weights=fields["weights"],
+        states=fields["states"],
+        fallback="no",
+        when=when,
+        log=log,
+    )
+    line = log.read_text(encoding="utf-8")
+    assert "weights=codex:0.2,cursor:1" in line
+    assert "unknown" not in line
+    tail = tmp_path / "tail"
+    tail.write_text("all checks passed")
+    result = rate_incidents.record_lane_round(
+        agent="cursor",
+        lane="opener",
+        receiver_reason=None,
+        exit_status=0,
+        output_file=tail,
+        ts=NOW,
+        relay_decision_id=token,
+    )
+    assert result["relay_pacing"]["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"], _counts()["outcome_success"]) == (1, 1, 1)
+    ledger = tmp_path / "capabilities.json"
+    capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
+    inputs = monitor.collect_inputs(
+        now=NOW, gh_fn=lambda _: (True, "{}", ""), repos=[], db=feedback.DB_PATH
+    )
+    row = monitor.report(now=NOW, path=ledger, env={}, inputs=inputs)["rows"][0]
+    assert row["situation_count"] == 1
+    assert row["usable"] >= 1
+    assert row["acted_on"] >= 1
+    assert row["relay_acted_on"] == 1
+    assert row["relay_pass"]["status"] == "pending"
+
+
 def test_append_relay_pacing_decision_writes_joinable_line(tmp_path, monkeypatch, capsys):
     log = _setup(tmp_path, monkeypatch)
     when = datetime.fromtimestamp(NOW - 30, timezone.utc)

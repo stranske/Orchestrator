@@ -1787,7 +1787,9 @@ posterior × pacing weight within Codex/Claude only (legacy exploration runs fir
 back to zero-weight warn pools, then pacing-shed pools with
 `fail-toward-motion`; auth/model/manual holds retain authority. The plan and persisted dispatch
 metadata carry all candidate weights and projections. `capacity.py pick-agent` exposes that same
-selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr.
+selection for the separate relay follow-up; it prints the agent on stdout and evidence on stderr
+(including `log_fields.weights` / `log_fields.states` derived from top-level `routing_weight`,
+so Cursor-top `unmeasured-preferred` receipts do not collapse to nested-pacing `*:unknown`).
 The relay's existing `rate_incidents.py record-lane-round` exit hook imports
 `$HANDOFF_PACING_LOG` (default `$HANDOFF_DIR/relay-pacing.log`) through
 `feedback.ingest_relay_pacing`. **`windowed-capacity-policy` owns this consumption**; there is

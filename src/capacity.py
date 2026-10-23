@@ -1455,6 +1455,16 @@ def main(argv):
                 for agent in args.candidates.split(",")
             ],
         }
+        # Host relay must use these tokens (not nested pacing alone): Cursor-top
+        # unmeasured-preferred puts routing_weight on the candidate while pacing is absent.
+        import rate_incidents
+
+        decision = {
+            **decision,
+            "log_fields": rate_incidents.relay_log_fields_from_decision(
+                decision, candidates=args.candidates
+            ),
+        }
         print(json.dumps(decision), file=sys.stderr)
         return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)

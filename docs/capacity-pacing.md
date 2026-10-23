@@ -409,4 +409,7 @@ durable-delivery verdict is synthesized from a lane exit. The printed
 within ±5% (see `value_chain_monitor.relay_pass_number`); it stays `pending`
 until that UTC date. Relay picks that include an unmeasured peer (Cursor) beside
 a measured Codex/Claude pool keep the Cursor winner and attach a pacing receipt,
-so decision weights reach the pacing log the weekly pass reads.
+so decision weights reach the pacing log the weekly pass reads. `pick-agent` stderr
+includes `log_fields` (and `rate_incidents.py format-relay-pacing-fields` rebuilds them)
+from top-level `routing_weight` so a nested-only shell path cannot reintroduce
+`weights=*:unknown` after mirror sync.

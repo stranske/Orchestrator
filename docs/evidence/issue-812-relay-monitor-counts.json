@@ -47,6 +47,7 @@
   },
   "acceptance": {
     "post_merge_acted_on": "pending merge+mirror sync (production already acted_on 57 from #827)",
-    "weekly_pass_2026_10_27": "pending check date; monitor + pacing receipt paths landed"
+    "weekly_pass_2026_10_27": "pending check date; monitor + pacing receipt paths landed",
+    "relay_log_fields": "pick-agent stderr log_fields + format-relay-pacing-fields keep Cursor-top weights numeric for host relay (nested pacing alone is *:unknown)"
   }
 }
