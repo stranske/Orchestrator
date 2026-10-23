@@ -3,13 +3,384 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
+import sqlite3
+import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 import cross_repo_lane
+import dispatcher
 import epic_lane
+import feedback
+import gh_capacity
 import research_scheduler
+
+_REAL_FEEDBACK_CONN = feedback._conn
+_REAL_SQLITE_CONNECT = sqlite3.connect
+OUT_OF_BOUND_SENTINEL_NAME = "issue853-out-of-bound-sentinel.db"
+
+
+def _assert_database_path_owned(database: str | Path, owned_root: Path) -> None:
+    selected = Path(database).expanduser().resolve()
+    try:
+        selected.relative_to(owned_root.resolve())
+    except ValueError:
+        raise AssertionError(
+            f"feedback DB {selected} is outside owned test root {owned_root.resolve()}"
+        ) from None
+
+
+def _guarded_feedback_conn(owned_root: Path, *, timeout: float = 5.0):
+    _assert_database_path_owned(feedback.DB_PATH, owned_root)
+    return _REAL_FEEDBACK_CONN(timeout=timeout)
+
+
+def _guarded_sqlite_connect(owned_root: Path, database, *args, **kwargs):
+    # This module uses plain filenames; URI decoding can escape a Path containment check.
+    if str(database).startswith("file:"):
+        raise AssertionError("SQLite URI connections are not allowed in issue #853 tests")
+    _assert_database_path_owned(database, owned_root)
+    return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep #853 tests off the live Brain and block process/network/agent side effects."""
+    owned = tmp_path / "owned"
+    state = owned / "state"
+    runtime = owned / "runtime"
+    db = runtime / "feedback" / "orchestrator.db"
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(runtime))
+    monkeypatch.setenv(feedback.DB_PATH_ENV, str(db))
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    monkeypatch.setattr(
+        sqlite3,
+        "connect",
+        lambda database, *args, **kwargs: _guarded_sqlite_connect(owned, database, *args, **kwargs),
+    )
+    monkeypatch.setattr(
+        feedback,
+        "_conn",
+        lambda *, timeout=5.0: _guarded_feedback_conn(owned, timeout=timeout),
+    )
+    attempted: list[object] = []
+
+    def forbidden(*args, **kwargs):
+        attempted.append((args, kwargs))
+        raise AssertionError(
+            "issue #853 coverage test started an external process, agent, or network call"
+        )
+
+    for name in ("run", "Popen", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, forbidden)
+    for name in ("connect", "connect_ex", "sendto"):
+        monkeypatch.setattr(socket.socket, name, forbidden)
+    # Resolvers can send DNS traffic before a guarded socket connection is attempted.
+    for name in (
+        "create_connection",
+        "getaddrinfo",
+        "gethostbyname",
+        "gethostbyname_ex",
+        "gethostbyaddr",
+    ):
+        monkeypatch.setattr(socket, name, forbidden)
+    monkeypatch.setattr(gh_capacity, "gh_run", forbidden)
+    monkeypatch.setattr(dispatcher, "delegate", forbidden)
+    monkeypatch.setattr(dispatcher, "offload", forbidden)
+    yield
+    assert attempted == [], "issue #853 test attempted external effects"
+
+
+def test_runtime_fixture_rebinds_preexisting_environment_and_cached_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Imports may cache a database path before the per-test environment is installed."""
+    stale_root = tmp_path / "stale-runtime"
+    stale_db = stale_root / OUT_OF_BOUND_SENTINEL_NAME
+    stale_env = {
+        "ORCH_STATE_DIR": str(stale_root / "state"),
+        "ORCH_LOCAL_RUNTIME": str(stale_root / "runtime"),
+        feedback.DB_PATH_ENV: str(stale_db),
+    }
+    for name, value in stale_env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(feedback, "DB_PATH", stale_db)
+
+    nested_root = tmp_path / "nested"
+    owned = nested_root / "owned"
+    expected_db = owned / "runtime" / "feedback" / "orchestrator.db"
+    with monkeypatch.context() as guard_patch:
+        runtime = isolated_runtime.__wrapped__(nested_root, guard_patch)
+        next(runtime)
+        try:
+            # Check every binding before calling the factory, even if isolation is broken.
+            assert Path(os.environ["ORCH_STATE_DIR"]) == owned / "state"
+            assert Path(os.environ["ORCH_LOCAL_RUNTIME"]) == owned / "runtime"
+            assert Path(os.environ[feedback.DB_PATH_ENV]) == expected_db
+            assert feedback.DB_PATH == expected_db
+            conn = feedback._conn()
+            try:
+                actual_db = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+                assert actual_db.resolve() == expected_db.resolve()
+            finally:
+                conn.close()
+        finally:
+            with pytest.raises(StopIteration):
+                next(runtime)
+
+    assert feedback.DB_PATH == stale_db
+    assert {name: os.environ[name] for name in stale_env} == stale_env
+    assert not stale_root.exists(), "stale runtime must remain untouched"
+
+
+@pytest.mark.parametrize(
+    ("boundary", "name", "args"),
+    [
+        (subprocess, "run", (["unused-command"],)),
+        (subprocess, "Popen", (["unused-command"],)),
+        (subprocess, "call", (["unused-command"],)),
+        (subprocess, "check_call", (["unused-command"],)),
+        (subprocess, "check_output", (["unused-command"],)),
+        (gh_capacity, "gh_run", (["api", "user"],)),
+        (dispatcher, "delegate", ()),
+        (dispatcher, "offload", ()),
+        # A dummy receiver exercises the patched methods without constructing a socket.
+        (socket.socket, "connect", (None, ("192.0.2.1", 443))),
+        (socket.socket, "connect_ex", (None, ("192.0.2.1", 443))),
+        (socket.socket, "sendto", (None, b"unused", ("192.0.2.1", 443))),
+        (socket, "create_connection", (("unused.invalid", 443),)),
+        (socket, "getaddrinfo", ("unused.invalid", 443)),
+        (socket, "gethostbyname", ("unused.invalid",)),
+        (socket, "gethostbyname_ex", ("unused.invalid",)),
+        (socket, "gethostbyaddr", ("192.0.2.1",)),
+    ],
+    ids=[
+        "run",
+        "popen",
+        "call",
+        "check-call",
+        "check-output",
+        "gh",
+        "delegate",
+        "offload",
+        "socket-connect",
+        "socket-connect-ex",
+        "socket-sendto",
+        "connect",
+        "dns",
+        "host",
+        "hosts",
+        "reverse",
+    ],
+)
+def test_external_boundary_attempts_are_denied_and_counted_even_when_caught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary, name: str, args: tuple
+) -> None:
+    """A swallowed boundary error must still fail teardown; no real boundary is invoked."""
+    unguarded_attempts: list[tuple] = []
+
+    def unguarded_spy(*args, **kwargs):
+        unguarded_attempts.append((args, kwargs))
+        raise AssertionError("unguarded external boundary reached")
+
+    # Even a broken guard can only reach this spy, never a resolver, process, or agent.
+    monkeypatch.setattr(boundary, name, unguarded_spy)
+    with monkeypatch.context() as guard_patch:
+        runtime = isolated_runtime.__wrapped__(tmp_path / "nested", guard_patch)
+        next(runtime)
+        try:
+            with pytest.raises(AssertionError, match="started an external"):
+                getattr(boundary, name)(*args)
+            assert unguarded_attempts == []
+        finally:
+            with pytest.raises(AssertionError, match="attempted external effects"):
+                next(runtime)
+
+
+def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Named regression: refuse sentinel paths outside the owned root before SQLite opens."""
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    sentinel = (tmp_path / OUT_OF_BOUND_SENTINEL_NAME).resolve()
+    assert sentinel.parent == tmp_path.resolve()
+    with pytest.raises(ValueError):
+        sentinel.relative_to(owned.resolve())
+
+    open_attempts: list[Path] = []
+
+    def forbid_sqlite_open(*, timeout: float = 5.0):
+        open_attempts.append(Path(feedback.DB_PATH).expanduser().resolve())
+        raise AssertionError("SQLite open attempted before containment check")
+
+    monkeypatch.setitem(globals(), "_REAL_FEEDBACK_CONN", forbid_sqlite_open)
+    monkeypatch.setattr(feedback, "DB_PATH", sentinel)
+    with pytest.raises(AssertionError, match="outside owned test root"):
+        feedback._conn()
+    assert open_attempts == [], "containment must reject before any SQLite open"
+    assert not sentinel.exists()
+    assert not sentinel.parent.joinpath(f"{sentinel.name}-journal").exists()
+
+
+@pytest.mark.parametrize("via_feedback_factory", [False, True])
+@pytest.mark.parametrize("path_kind", ["absolute", "parent-traversal", "symlink", "sibling-prefix"])
+def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, via_feedback_factory: bool, path_kind: str
+) -> None:
+    """Check the actual connect argument even when the feedback wrapper is bypassed."""
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    if path_kind == "sibling-prefix":
+        sentinel = tmp_path / "owned-sibling" / OUT_OF_BOUND_SENTINEL_NAME
+        # String-prefix checks accept a sibling whose name starts with the owned root.
+        assert str(sentinel.resolve()).startswith(str(owned.resolve()))
+        assert not sentinel.resolve().is_relative_to(owned.resolve())
+    selected = sentinel
+    if path_kind == "parent-traversal":
+        selected = owned / ".." / sentinel.name
+    elif path_kind == "symlink":
+        alias = owned / "outside"
+        alias.symlink_to(tmp_path, target_is_directory=True)
+        selected = alias / sentinel.name
+    assert selected.resolve() == sentinel.resolve()
+    driver_attempts: list[Path] = []
+
+    def forbid_driver(database, *args, **kwargs):
+        driver_attempts.append(Path(database))
+        raise AssertionError("SQLite driver reached before containment check")
+
+    monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", forbid_driver)
+    with pytest.raises(AssertionError, match="outside owned test root"):
+        if via_feedback_factory:
+            monkeypatch.setattr(feedback, "DB_PATH", selected)
+            _REAL_FEEDBACK_CONN()
+        else:
+            # DB_PATH remains owned; containment must inspect the connect argument itself.
+            assert Path(feedback.DB_PATH).is_relative_to(tmp_path / "owned")
+            sqlite3.connect(database=str(selected))
+    assert driver_attempts == []
+    assert not sentinel.exists()
+    assert not sentinel.with_name(f"{sentinel.name}-journal").exists()
+
+
+@pytest.mark.parametrize("uri_parent", ["../", "%2e%2e%2f"])
+def test_sqlite_boundary_rejects_uri_escape_before_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uri_parent: str
+) -> None:
+    """SQLite decodes URI paths differently from Path; never pass them to the driver."""
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    monkeypatch.chdir(owned)
+    sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    database = f"file:{uri_parent}{sentinel.name}"
+    # The ordinary path check would accept this spelling, though SQLite opens ../sentinel.
+    assert Path(database).resolve().is_relative_to(owned.resolve())
+    driver_attempts: list[str] = []
+
+    def forbid_driver(database, *args, **kwargs):
+        driver_attempts.append(database)
+        raise AssertionError("SQLite driver reached before URI rejection")
+
+    monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", forbid_driver)
+    with pytest.raises(AssertionError, match="SQLite URI connections are not allowed"):
+        sqlite3.connect(database=database, uri=True)
+    assert driver_attempts == []
+    assert not sentinel.exists()
+
+
+def test_sqlite_isolation_binding_deliberate_break_and_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing the real connect guard must fail containment even without the factory."""
+    sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    driver_attempts: list[Path] = []
+
+    def driver_spy(database, *args, **kwargs):
+        driver_attempts.append(Path(database))
+        raise AssertionError("unguarded SQLite driver reached")
+
+    # The driver remains a spy throughout, including while the connect guard is absent.
+    monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", driver_spy)
+
+    def assert_containment() -> None:
+        with pytest.raises(AssertionError, match="outside owned test root"):
+            sqlite3.connect(database=str(sentinel))
+        assert driver_attempts == []
+
+    assert_containment()
+    with monkeypatch.context() as broken:
+        broken.setattr(sqlite3, "connect", driver_spy)
+        # The same containment expectation must fail when only its binding is removed.
+        with pytest.raises(AssertionError):
+            assert_containment()
+        assert driver_attempts == [sentinel]
+        assert not sentinel.exists()
+
+    driver_attempts.clear()
+    assert_containment()
+    assert not sentinel.exists()
+
+
+def test_isolation_binding_deliberate_break_and_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Safe break/restore: without ownership, opener-spy fires; with it, reject before open.
+
+    Never opens a real runtime database — the spy replaces SQLite and the sentinel lives under
+    tmp_path only.
+    """
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    sentinel = (tmp_path / OUT_OF_BOUND_SENTINEL_NAME).resolve()
+    monkeypatch.setattr(feedback, "DB_PATH", sentinel)
+    open_attempts: list[Path] = []
+
+    def opener_spy(*, timeout: float = 5.0):
+        open_attempts.append(Path(feedback.DB_PATH).expanduser().resolve())
+        raise AssertionError("SQLite open attempted before containment check")
+
+    # BREAK: remove the ownership binding; opener-spy must fire (no real SQLite).
+    monkeypatch.setitem(globals(), "_REAL_FEEDBACK_CONN", opener_spy)
+    monkeypatch.setattr(
+        feedback,
+        "_conn",
+        lambda *, timeout=5.0: _REAL_FEEDBACK_CONN(timeout=timeout),
+    )
+    with pytest.raises(AssertionError, match="SQLite open attempted before containment check"):
+        feedback._conn()
+    assert open_attempts == [sentinel]
+    assert not sentinel.exists()
+
+    # The named containment expectation ("outside owned test root") fails while unbound.
+    open_attempts.clear()
+    unbound_failed = False
+    try:
+        with pytest.raises(AssertionError, match="outside owned test root"):
+            feedback._conn()
+    except AssertionError:
+        unbound_failed = True
+    assert unbound_failed, "containment regression must fail when isolation binding is removed"
+    assert open_attempts == [sentinel]
+    assert not sentinel.exists()
+
+    # RESTORE: ownership check rejects the sentinel before the opener-spy runs.
+    open_attempts.clear()
+    monkeypatch.setattr(
+        feedback,
+        "_conn",
+        lambda *, timeout=5.0: _guarded_feedback_conn(owned, timeout=timeout),
+    )
+    with pytest.raises(AssertionError, match="outside owned test root"):
+        feedback._conn()
+    assert open_attempts == []
+    assert not sentinel.exists()
 
 
 def test_cross_repo_validation_rejects_malformed_plans_and_cli_stays_read_only(
@@ -129,7 +500,7 @@ def test_cross_repo_barriers_and_rollout_dependencies_are_deterministic() -> Non
 
 
 def test_research_scheduler_conservatively_handles_unavailable_or_invalid_evidence(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
         research_scheduler.feedback,
@@ -142,12 +513,58 @@ def test_research_scheduler_conservatively_handles_unavailable_or_invalid_eviden
         "implement", ["codex"], weights=[{"agent": "codex", "n_obs": "bad"}]
     ) == {"codex": 0}
     assert research_scheduler.data_hunger("implement", []) == 0.0
-    assert (
-        research_scheduler._agent_acquisition_scores(
-            "implement", ["codex"], n_obs={"codex": "bad"}
-        )["codex"]
-        >= 0
+    # Controlled temp SQLite (fixture-owned): real _agent_acquisition_scores, not a stub.
+    owned_paths: list[Path] = []
+    owned_conn = feedback._conn
+
+    def record_owned_conn(*, timeout: float = 5.0):
+        db = owned_conn(timeout=timeout)
+        owned_paths.append(Path(db.execute("PRAGMA database_list").fetchone()[2]).resolve())
+        return db
+
+    monkeypatch.setattr(feedback, "_conn", record_owned_conn)
+    owned_scores = research_scheduler._agent_acquisition_scores(
+        "implement", ["codex"], n_obs={"codex": "bad"}
     )
+    assert owned_scores["codex"] >= 0
+    expected_db = Path(feedback.DB_PATH).resolve()
+    assert expected_db.is_relative_to((tmp_path / "owned").resolve())
+    assert owned_paths and all(path == expected_db for path in owned_paths)
+
+    # Fresh evidence must be read successfully, rather than hidden by a full data deficit
+    # or the scheduler's conservative fallback after a swallowed database error.
+    now = 2_000_000_000
+    monkeypatch.setattr(research_scheduler.time, "time", lambda: now)
+    db = owned_conn()
+    try:
+        db.execute(
+            "INSERT INTO runs (run_id, ts, task_type, agent) VALUES (?, ?, ?, ?)",
+            ("issue853-fresh", now, "implement", "codex"),
+        )
+        db.execute("INSERT INTO outcomes (run_id) VALUES (?)", ("issue853-fresh",))
+        db.commit()
+    finally:
+        db.close()
+    owned_paths.clear()
+    assert research_scheduler._agent_acquisition_scores(
+        "implement", ["codex"], n_obs={"codex": research_scheduler.DATA_HUNGER_THRESHOLD + 1}
+    ) == {"codex": 0.0}
+    assert owned_paths and all(path == expected_db for path in owned_paths)
+
+    # Intentional offline connection failure at the _conn boundary (still not a stub).
+    offline_attempts: list[float] = []
+
+    def offline_conn(*, timeout: float = 5.0):
+        offline_attempts.append(timeout)
+        raise OSError("feedback offline for issue853 isolation proof")
+
+    monkeypatch.setattr(feedback, "_conn", offline_conn)
+    offline_scores = research_scheduler._agent_acquisition_scores(
+        "implement", ["codex"], n_obs={"codex": research_scheduler.DATA_HUNGER_THRESHOLD + 1}
+    )
+    assert offline_attempts
+    # No data deficit remains; storage failure must supply conservative staleness pressure.
+    assert offline_scores["codex"] == 1.0
     with pytest.raises(ValueError, match="identified"):
         research_scheduler._validate_hypotheses([{}])
     with pytest.raises(ValueError, match="duplicate"):
