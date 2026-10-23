@@ -490,10 +490,11 @@ def test_expired_uncached_capture_is_pending_without_redownload(world):
     validate(result, world.snapshot)
 
 
+@pytest.mark.parametrize("capture_family", ["comparison", "evaluation"])
 @pytest.mark.parametrize("completed_merge", [False, True])
 @pytest.mark.parametrize("linked", [False, True])
 def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_packet(
-    public_merge_world, monkeypatch, capsys, completed_merge, linked
+    public_merge_world, monkeypatch, capsys, completed_merge, linked, capture_family
 ):
     import closer_evidence as evidence
     import closer_frontier_policy as policy
@@ -528,7 +529,11 @@ def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_p
                 "base": {"sha": "b" * 40, "ref": "main"},
             }
         ]
-    data = archive(12, "d" * 40)
+    data = (
+        evaluation_archive(12, "d" * 40)
+        if capture_family == "evaluation"
+        else archive(12, "d" * 40)
+    )
     downloads = []
     reads = []
     transport = native.gh_capacity.gh_run
@@ -550,7 +555,7 @@ def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_p
                 "artifacts": [
                     {
                         "id": 7,
-                        "name": "comparison-results-99",
+                        "name": f"{capture_family}-results-99",
                         "expired": False,
                         "size_in_bytes": len(data),
                         "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
@@ -631,10 +636,18 @@ def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_p
     assert section["content"]["artifacts"][0]["identity_bound"] is True, section
     receipts = section["content"]["artifacts"][0]["input_snapshots"][0]["receipts"]
     assert {r["path"] for r in receipts} >= {
-        "comparison.json",
+        f"{capture_family}.json",
         "verifier-context.md",
         "verifier-pr-diff.patch",
     }
+    if capture_family == "evaluation":
+        diagnostic = next(r for r in receipts if r["kind"] == "native-evaluation")
+        assert diagnostic["results_count"] == 1
+        assert len(diagnostic["provider_results"]) == 1
+        assert diagnostic["provider_results"][0]["used_llm"] is True
+        assert diagnostic["findings"][0]["text"] == "One retained diagnostic concern"
+        assert diagnostic["acceptance_authority"] is False
+        assert diagnostic["resolution_authority"] is False
     # An intentionally rootless screen cannot use retained implementation references.
     screen = evidence.action_evidence_readiness(w.snapshot, packet, "collect_evidence")
     assert screen["mode"] == "native_diagnostic" and screen["ready"] is False
@@ -903,7 +916,27 @@ def evaluation_archive(pr=867, merge="e" * 40, *, runid=99, omit=False, **identi
     manifest.update(mode="evaluate", **identity)
     files["verifier-input-manifest.json"] = json.dumps(manifest).encode()
     files.pop("comparison.json")
-    files["evaluation.json"] = b'{"verdict":"PASS","note":"foreign untrusted decision"}'
+    files["evaluation.json"] = json.dumps(
+        {
+            "verdict": "PASS",
+            "summary": "Single-provider untrusted diagnostic",
+            "concerns": ["One retained diagnostic concern"],
+            "provider_used": "anthropic/example",
+            "model": "example-model",
+            "used_llm": True,
+            "error": None,
+        }
+    ).encode()
+    files["evaluation-execution.json"] = json.dumps(
+        {
+            "schema": "workflows-verifier-evaluation-execution/v1",
+            "mode": "evaluate",
+            "status": "completed",
+            "decision_available": True,
+            "acceptance_authority": False,
+        }
+    ).encode()
+    files["evaluation-comment.md"] = b"One-provider retained diagnostic; no acceptance authority."
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as capture:
         for name, data in files.items():

@@ -1795,8 +1795,12 @@ def _native_manifest_presentation(capture: dict) -> dict:
     }
 
 
-def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) -> list[dict]:
-    """Read native manifests and exact known verifier report files from an archive."""
+def native_capture_artifact_names(run_id: str | int) -> tuple[str, str]:
+    """Exact producer capture families; names grant no identity/verdict authority."""
+    return (f"comparison-results-{run_id}", f"evaluation-results-{run_id}")
+
+
+def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) -> list[dict]:    """Read native manifests and exact known verifier report files from an archive."""
     supplied_retain = retain
     if supplied_retain is None:
         retain = _retain_bytes
@@ -1871,6 +1875,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                 if path.suffix.lower() != ".json":
                     if path.name in {
                         "comparison-comment.md",
+                        "evaluation-comment.md",
                         "verifier-diff-summary.md",
                         "verifier-context.md",
                         "verifier-pr-diff.patch",
@@ -1896,26 +1901,42 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                     "receipts": [],
                     "omissions": [],
                 }
-                report = files.get("comparison.json")
+                report_names = [
+                    name for name in ("comparison.json", "evaluation.json") if name in files
+                ]
+                report_name = (
+                    report_names[0]
+                    if len(report_names) == 1
+                    else "evaluation.json" if doc.get("mode") == "evaluate" else "comparison.json"
+                )
+                report = files.get(report_name) if len(report_names) == 1 else None
+                evaluation_report = report_name == "evaluation.json"
                 if report is not None:
                     try:
                         report_doc = json.loads(report)
                     except (ValueError, UnicodeDecodeError):
-                        row["omissions"].append(
-                            {"path": "comparison.json", "reason": "invalid JSON"}
-                        )
+                        row["omissions"].append({"path": report_name, "reason": "invalid JSON"})
                     else:
                         report_ref = retain(root, report, "json")
                         findings = []
                         provider_results = []
-                        if isinstance(report_doc, dict) and isinstance(
-                            report_doc.get("results"), list
-                        ):
-                            raw_results = report_doc["results"]
+                        raw_results = (
+                            [report_doc]
+                            if evaluation_report and isinstance(report_doc, dict)
+                            else report_doc.get("results") if isinstance(report_doc, dict) else None
+                        )
+                        if evaluation_report and not isinstance(report_doc, dict):
+                            row["omissions"].append(
+                                {
+                                    "path": report_name,
+                                    "reason": "evaluation result is not an object",
+                                }
+                            )
+                        if isinstance(raw_results, list):
                             if len(raw_results) > MAX_NATIVE_RESULTS:
                                 row["omissions"].append(
                                     {
-                                        "path": "comparison.json",
+                                        "path": report_name,
                                         "reason": "provider result count cap reached",
                                     }
                                 )
@@ -1925,7 +1946,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                 if not isinstance(result, dict):
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "provider result entry is not an object",
                                         }
                                     )
@@ -1939,11 +1960,14 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                     "summary": summary,
                                     "text_is_untrusted": True,
                                 }
+                                if evaluation_report:
+                                    provider["used_llm"] = result.get("used_llm")
+                                    provider["error"] = _safe_text(result.get("error"), 8000)[0]
                                 provider_results.append(provider)
                                 if summary_cut:
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "provider summary text truncated",
                                         }
                                     )
@@ -1951,7 +1975,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                 if not isinstance(concerns, list):
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "provider concern list missing or invalid",
                                         }
                                     )
@@ -1959,7 +1983,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                 if len(concerns) > 100:
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "per-provider concern count cap reached",
                                         }
                                     )
@@ -1968,7 +1992,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                         if not concern_cap_reached:
                                             row["omissions"].append(
                                                 {
-                                                    "path": "comparison.json",
+                                                    "path": report_name,
                                                     "reason": "aggregate concern count cap reached",
                                                 }
                                             )
@@ -1987,7 +2011,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                     if text_cut:
                                         row["omissions"].append(
                                             {
-                                                "path": "comparison.json",
+                                                "path": report_name,
                                                 "reason": "provider concern text truncated",
                                             }
                                         )
@@ -2003,7 +2027,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                     else:
                                         row["omissions"].append(
                                             {
-                                                "path": "comparison.json",
+                                                "path": report_name,
                                                 "reason": "provider concern has no text",
                                             }
                                         )
@@ -2030,17 +2054,27 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                                     )
                         row["receipts"].append(
                             {
-                                "kind": "native-comparison",
-                                "path": "comparison.json",
+                                "kind": (
+                                    "native-evaluation"
+                                    if evaluation_report
+                                    else "native-comparison"
+                                ),
+                                "path": report_name,
+                                **(
+                                    {
+                                        "acceptance_authority": False,
+                                        "resolution_authority": False,
+                                        "text_is_untrusted": True,
+                                    }
+                                    if evaluation_report
+                                    else {}
+                                ),
                                 "results_count": (
-                                    len(report_doc.get("results", []))
-                                    if isinstance(report_doc, dict)
-                                    and isinstance(report_doc.get("results"), list)
-                                    else None
+                                    len(raw_results) if isinstance(raw_results, list) else None
                                 ),
                                 "aggregate_report_excerpt": _safe_text(
                                     (
-                                        report_doc.get("report")
+                                        report_doc.get("summary" if evaluation_report else "report")
                                         if isinstance(report_doc, dict)
                                         else ""
                                     ),
@@ -2053,10 +2087,23 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                         )
                 else:
                     row["omissions"].append(
-                        {"path": "comparison.json", "reason": "native comparison report missing"}
+                        {
+                            "path": (
+                                "comparison.json/evaluation.json"
+                                if len(report_names) > 1
+                                else report_name
+                            ),
+                            "reason": (
+                                "native reports ambiguous"
+                                if len(report_names) > 1
+                                else f"native {'evaluation' if evaluation_report else 'comparison'} report missing"
+                            ),
+                        }
                     )
                 known_files = (
                     ("comparison-comment.md", "native-comparison-comment", None, False),
+                    ("evaluation-comment.md", "native-evaluation-comment", None, False),
+                    ("evaluation-execution.json", "native-evaluation-execution", None, False),
                     (
                         "verifier-diff-summary.md",
                         "native-verifier-diff-summary",
@@ -2092,6 +2139,12 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                         ),
                         "sha256": actual,
                     }
+                    if kind.startswith("native-evaluation"):
+                        receipt.update(
+                            acceptance_authority=False,
+                            resolution_authority=False,
+                            text_is_untrusted=True,
+                        )
                     if filename.endswith(".md"):
                         receipt["excerpt"] = content[:8000].decode("utf-8", "replace")
                         receipt["text_is_untrusted"] = True
@@ -2236,7 +2289,7 @@ def _native_diagnostic_section(
             matches = [
                 a
                 for a in artifacts
-                if isinstance(a, dict) and a.get("name") == f"comparison-results-{run_id}"
+                if isinstance(a, dict) and a.get("name") in native_capture_artifact_names(run_id)
             ]
             if len(matches) != 1:
                 content["unavailable"].append(

@@ -335,7 +335,7 @@ def attribute(
         # Both native modes publish the same production input identity. The
         # report family is not identity or acceptance authority; dual captures
         # remain ambiguous rather than preferring one provider/mode's report.
-        capture_names = (f"comparison-results-{rid}", f"evaluation-results-{rid}")
+        capture_names = evidence.native_capture_artifact_names(rid)
         candidates = [a for a in rows if isinstance(a, dict) and a.get("name") in capture_names]
         if len(candidates) != 1:
             return "pending", f"unambiguous native verifier capture for run {rid}"
