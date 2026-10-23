@@ -289,6 +289,36 @@ def test_unmeasured_cursor_is_sampled_beside_ok_codex():
     assert chosen == {"codex", "cursor"}
 
 
+def test_unmeasured_warn_drain_does_not_outrank_ok(monkeypatch):
+    """Drain-urgent unmeasured warn must not steal an unmeasured-only stripped tier."""
+    cap = cap_for(codex="ok", cw=1)
+    cap["agents"]["cursor"] = dict(state="ok")
+    cap["agents"]["vibe"] = dict(state="warn")
+    monkeypatch.setattr(
+        router, "_drain_urgency", lambda agent, _cap: -1.0 if agent == "vibe" else 0.0
+    )
+    chosen = set()
+    for seed in range(50):
+        result = router.select_agent(
+            "implement",
+            cap,
+            only={"codex", "cursor", "vibe"},
+            exploration_rate=0,
+            rng=random.Random(seed),
+            simulate=True,
+        )
+        chosen.add(result["agent"])
+        decision = result["pacing_decision"]
+        assert decision["policy"] == "posterior*pacing"
+        assert {r["agent"]: r["routing_weight"] for r in decision["candidates"]} == {
+            "codex": 1.0,
+            "cursor": 1.0,
+            "vibe": 1.0,
+        }
+    assert chosen == {"codex", "cursor"}
+    assert "vibe" not in chosen
+
+
 def test_all_shed_fails_toward_motion_best_posterior():
     result = pick(
         cap_for(claude="shed", aw=0),

@@ -565,11 +565,21 @@ def _pacing_choice(scored, cap, learned, rng):
         score = item[0][0]
         return score[:2] + score[3:-1]
 
+    def legacy_tier(item):
+        # Full discrete+drain prefix (ok-before-warn included); learned rank excluded.
+        return item[0][0][:-1]
+
     best_tier = min(policy_tier(r) for r in eligible)
-    eligible = [r for r in eligible if policy_tier(r) == best_tier]
-    if not any(measured(r[0]) for r in eligible):
-        # Measurements in another policy tier cannot randomize this legacy tier.
-        return eligible[0][0], None
+    paced = [r for r in eligible if policy_tier(r) == best_tier]
+    if not any(measured(r[0]) for r in paced):
+        # Stripped tier is unmeasured-only. Restore ok-before-warn so a drain-urgent
+        # warn cannot outrank ok; pace if that legacy tier still has measurements.
+        best_legacy = min(legacy_tier(r) for r in eligible)
+        eligible = [r for r in eligible if legacy_tier(r) == best_legacy]
+        if not any(measured(r[0]) for r in eligible):
+            return eligible[0][0], None
+    else:
+        eligible = paced
     positive = [r for r in eligible if non_shed and r[2] > 0]
     tier = positive or eligible
     policy = (
