@@ -226,8 +226,13 @@ def test_owner_questions_and_work_item_subject_preserve_scope_and_expiry():
     first = feedback.record_owner_question("Ship?", "hold", repo="owner/repo", expires_days=0)
     assert first["deduped"] is False
     assert feedback.record_owner_question("Ship?", "hold", repo="owner/repo")["deduped"] is True
+    other = feedback.record_owner_question("Ship?", "proceed", repo="other/repo", expires_days=0)
+    assert other["deduped"] is False
     assert feedback.open_owner_questions()[0]["question"] == "Ship?"
-    assert feedback.expire_owner_questions(1_700_000_001) == 1
+    assert feedback.expire_owner_questions(1_700_000_001) == 2
     assert feedback.owner_decisions_for(repo="owner/repo") == [
         {"question": "Ship?", "decision": "hold", "source": "default_ratified"}
+    ]
+    assert feedback.owner_decisions_for(repo="other/repo") == [
+        {"question": "Ship?", "decision": "proceed", "source": "default_ratified"}
     ]

@@ -86,6 +86,10 @@ def test_tick_env_retries_only_machine_failures_and_labels_the_result(monkeypatc
 
 
 def test_tick_values_and_predicate_flags_keep_unknown_distinct_from_unset(monkeypatch):
+    # An inherited value turns the source into "ambient" (and an inherited ORCH_MISSING into the
+    # ambient value), so the flags under test must not exist in this process.
+    monkeypatch.delenv("ORCH_FLAG", raising=False)
+    monkeypatch.delenv("ORCH_MISSING", raising=False)
     monkeypatch.setattr(recurrence, "tick_env", lambda: {"ORCH_FLAG": "1"})
     monkeypatch.setattr(recurrence, "_TICK_ENV_DIAG", {"outcome": "ok"})
     assert recurrence.as_the_tick_sees_it("ORCH_FLAG") == ("1", "tick")
