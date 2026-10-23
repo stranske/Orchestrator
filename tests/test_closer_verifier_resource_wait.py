@@ -166,6 +166,110 @@ def test_incomplete_active_inventory_never_authorizes_write(waiting_world, monke
     )
 
 
+def test_racing_empty_active_page_is_refetched_before_dispatch(waiting_world, monkeypatch, capsys):
+    w = waiting_world
+    w.blocking_run.update(status="completed", conclusion="success")
+    transport = native.gh_capacity.gh_run
+    queued_reads = []
+
+    def api(args, **kwargs):
+        if "/agents-verifier.yml/runs?" in args[3] and "&status=queued" in args[3]:
+            queued_reads.append(args[3])
+            # Exact retained #714 response: count and empty page raced.
+            return 0, {"total_count": 2 if len(queued_reads) == 1 else 0, "workflow_runs": []}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(queued_reads) >= 2 and len(w.verifies) == 1
+    assert w.events["provider"] == 0
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(w.verifies) == 1
+
+
+def test_active_verifier_on_second_page_still_prevents_post(waiting_world, monkeypatch, capsys):
+    w = waiting_world
+    transport = native.gh_capacity.gh_run
+    pages = []
+
+    def api(args, **kwargs):
+        endpoint = args[3]
+        if "/agents-verifier.yml/runs?" in endpoint and "&status=in_progress" in endpoint:
+            pages.append(endpoint)
+            if "&page=2" in endpoint:
+                return 0, {"total_count": 101, "workflow_runs": [copy.deepcopy(w.blocking_run)]}
+            foreign = [
+                {**copy.deepcopy(w.blocking_run), "id": 1000 + i, "pull_requests": [{"number": 13}]}
+                for i in range(100)
+            ]
+            return 0, {"total_count": 101, "workflow_runs": foreign}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    row = result["merge_verification_successors"]["owner/repo#12"]["native_result"]["targets"][
+        "owner/repo#12"
+    ]
+    proof = row["results"]["act"]["pending_evidence"]
+    assert proof["blocking_run"]["id"] == 99
+    assert proof["inventory_read"]["endpoint"].endswith("&page=2")
+    assert proof["inventory_read"]["status"] == "observed"
+    assert len(proof["inventory_read"]["sha256"]) == 64
+    assert any("&page=2" in page for page in pages) and not w.verifies
+
+
+def test_fresh_complete_inventory_wakes_new_frontier_without_resetting_old_wait(
+    waiting_world, monkeypatch, capsys
+):
+    import time
+
+    import closer_frontier_policy as policy
+    import closer_pipeline as pipeline
+
+    w = waiting_world
+    w.blocking_run.update(status="completed", conclusion="success")
+    transport = native.gh_capacity.gh_run
+    incomplete = True
+
+    def api(args, **kwargs):
+        if incomplete and "/agents-verifier.yml/runs?" in args[3] and "&status=queued" in args[3]:
+            return 0, {"total_count": 2, "workflow_runs": []}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    first = json.loads(capsys.readouterr().out)
+    child = first["merge_verification_successors"]["owner/repo#12"]["native_result"]
+    assert (
+        child["targets"]["owner/repo#12"]["results"]["act"]["pending_evidence"]["collection_cause"]
+        == "active_inventory_incomplete"
+    )
+    shard = resources.shard_dir(resources.scoped_root(w.ledger), "owner/repo#12") / "state.json"
+    old = copy.deepcopy(pipeline._load(shard)["frontiers"])
+    incomplete = False
+    gh = native.GitHub(deadline=time.time() + 25)
+    endpoint = (
+        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=queued"
+    )
+    assert gh.api(endpoint) == {"total_count": 0, "workflow_runs": []}
+    observer = native.Closer(gh, state_path=w.raw, apply=True, workers=True)
+    frontier = policy.make_frontier_from_observations(
+        {"owner/repo#12": observer.observe("owner/repo#12")},
+        owner=w.frontier["owner"],
+        frontier_id="complete-active-inventory-after-read-wait",
+    )
+    argv = list(w.argv)
+    argv[argv.index("--finite-frontier-json") + 1] = json.dumps(frontier)
+    assert native.main(argv) == 78
+    capsys.readouterr()
+    assert len(w.verifies) == 1 and w.events["provider"] == 0
+    after = pipeline._load(shard)["frontiers"]
+    assert all(after[key]["items"] == entry["items"] for key, entry in old.items())
+
+
 def test_timeout_after_label_post_remains_uncertain(public_merge_world, monkeypatch, capsys):
     w = public_merge_world
     transport = native.gh_capacity.gh_run

@@ -1,5 +1,18 @@
 # Gap-directed closer evidence recovery
 
+## Active verification inventory read progress
+
+Before requesting verification, the native preflight reads every page of each
+active-run status. An inconsistent count/page result gets one bounded fresh
+read; a still-incomplete, duplicate or malformed inventory remains a typed
+no-POST wait. A real same-target active run still prevents another request.
+
+A retained finite frontier does not poll or rewrite that wait on replay. After
+an authoritative complete inventory establishes read progress, the existing
+native observer and frontier builder may create the next request frontier.
+Its normal prewrite checks run again. The old frontier and its no-POST proof
+remain history; uncertain consequential operations are never reset this way.
+
 ## Original titles and safely represented requirements
 
 Source rows distinguish the original title digest from the retained masked-display
