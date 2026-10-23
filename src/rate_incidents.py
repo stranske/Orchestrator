@@ -17,7 +17,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import credential_redaction
 
@@ -179,6 +179,86 @@ def generate_relay_decision_id(
 
 
 _RELAY_PACING_AGENTS = frozenset({"codex", "claude", "claude_code", "cursor", "muse"})
+
+
+def _relay_weight_token(value: Any) -> str:
+    """Compact numeric weight for the pacing log, or unknown when unmeasured."""
+    if value is None or isinstance(value, bool):
+        return "unknown"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / inf
+        return "unknown"
+    if number == int(number):
+        return str(int(number))
+    return f"{number:g}"
+
+
+def _relay_candidate_weight(row: Mapping[str, Any]) -> str:
+    """Prefer measured routing_weight; absent measurement logs neutral 1.
+
+    Matches ``router._pacing_choice`` (unmetered seats compete at weight 1.0).
+    Legacy Cursor receipts used to emit ``cursor:unknown`` when ``pacing`` was
+    absent, which failed the #891 weights half of the Oct 27 pass even after
+    pick-agent started printing ``log_fields``.
+    """
+    if "routing_weight" in row and row.get("routing_weight") is not None:
+        return _relay_weight_token(row.get("routing_weight"))
+    pace = row.get("pacing")
+    if isinstance(pace, Mapping) and pace.get("routing_weight") is not None:
+        return _relay_weight_token(pace.get("routing_weight"))
+    return "1"
+
+
+def _relay_candidate_state(row: Mapping[str, Any]) -> str:
+    state = row.get("state")
+    if isinstance(state, str) and state.strip():
+        return state.strip()
+    pace = row.get("pacing")
+    if isinstance(pace, Mapping):
+        nested = pace.get("state")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return "unknown"
+
+
+def relay_log_fields_from_decision(
+    decision: Mapping[str, Any], *, candidates: str
+) -> dict[str, str]:
+    """Importer-valid ``weights`` / ``states`` tokens from pick-agent decision JSON.
+
+    Host ``handoff-relay.sh`` must not re-derive weights from nested ``pacing`` alone:
+    issue #891's neutral Cursor receipt puts ``routing_weight`` 1.0 on the candidate
+    while ``pacing`` stays absent — a nested-only path logs ``cursor:unknown`` and the
+    weekly pass never sees numeric consumption (owner 2026-10-23). Candidate order
+    follows the relay's candidates list.
+    """
+    names = [part for part in candidates.split(",") if part]
+    if not names or not set(names) <= _RELAY_PACING_AGENTS:
+        raise ValueError("candidates must be a nonempty list of supported agents")
+    by_agent: dict[str, Mapping[str, Any]] = {}
+    raw = decision.get("candidates")
+    if isinstance(raw, list):
+        for row in raw:
+            if not isinstance(row, Mapping):
+                continue
+            agent = row.get("agent")
+            if isinstance(agent, str) and agent in _RELAY_PACING_AGENTS:
+                by_agent[agent] = row
+    weights = []
+    states = []
+    for name in names:
+        row = by_agent.get(name, {"agent": name})
+        weights.append(f"{name}:{_relay_candidate_weight(row)}")
+        states.append(f"{name}:{_relay_candidate_state(row)}")
+    policy = decision.get("policy")
+    return {
+        "weights": ",".join(weights),
+        "states": ",".join(states),
+        "policy": policy if isinstance(policy, str) and policy.strip() else "unmeasured",
+    }
 
 
 def append_relay_pacing_decision(
@@ -840,12 +920,26 @@ def main(argv: list[str]) -> int:
     append_parser.add_argument("--decision-id")
     append_parser.add_argument("--log", type=Path)
     append_parser.add_argument("--ts", type=int, help="UTC epoch second for the log stamp")
+    format_parser = subparsers.add_parser(
+        "format-relay-pacing-fields",
+        help="turn pick-agent decision JSON (stdin) into weights=/states= log tokens",
+    )
+    format_parser.add_argument("--candidates", required=True)
     subparsers.add_parser("summary", help="summarize the append-only incident ledger")
     args = parser.parse_args(argv)
     if args.selftest:
         return _selftest()
     if args.command == "generate-relay-decision-id":
         print(generate_relay_decision_id())
+        return 0
+    if args.command == "format-relay-pacing-fields":
+        try:
+            payload = json.loads(sys.stdin.read())
+            if not isinstance(payload, dict):
+                raise ValueError("decision JSON must be an object")
+            print(json.dumps(relay_log_fields_from_decision(payload, candidates=args.candidates)))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
         return 0
     if args.command == "append-relay-pacing-decision":
         try:
