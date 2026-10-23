@@ -2093,7 +2093,8 @@ class Closer:
             reads.append(boundary.observation("verifier-prewrite-read", error=exc))
             if isinstance(exc, boundary.AttributionStorageWait):
                 reads.append(boundary.observation("attribution-storage-admission", exc.accounting))
-                return boundary.pending(snapshot, target, "storage_capacity", reads, [str(exc)])
+                requirement = (str(exc).strip() or "attribution storage admission refused")[:512]
+                return boundary.pending(snapshot, target, "storage_capacity", reads, [requirement])
             if isinstance(exc, boundary.HistoryIncomplete):
                 return boundary.pending(snapshot, target, "history_incomplete", reads, [str(exc)])
             if isinstance(exc, RoundCapacityDeferred):

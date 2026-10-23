@@ -1797,7 +1797,24 @@ def _native_manifest_presentation(capture: dict) -> dict:
 
 def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) -> list[dict]:
     """Read native manifests and exact known verifier report files from an archive."""
-    retain = retain or _retain_bytes
+    supplied_retain = retain
+    if supplied_retain is None:
+        retain = _retain_bytes
+    else:
+
+        def retain(root, data, suffix):
+            try:
+                return supplied_retain(root, data, suffix)
+            except OSError as exc:
+                from closer_attribution_store import AttributionStorageWait
+
+                # A supplied retention sink failing is not a malformed ZIP.
+                # Preserve a typed storage cause without leaking exception paths.
+                raise AttributionStorageWait(
+                    "attribution retention I/O unavailable",
+                    accounting={"error_type": type(exc).__name__, "errno": exc.errno},
+                ) from exc
+
     manifests = []
     if len(archive) > MAX_ARCHIVE_BYTES:
         raise NativeInputCaptureError("native input transport limit: compressed archive")

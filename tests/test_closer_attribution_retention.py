@@ -324,3 +324,57 @@ def test_known_failed_replace_keeps_measured_partial_bytes_without_dead_charge(
     assert not json.loads((value.ledger.directory / "reservations.json").read_text())["jobs"]
     monkeypatch.setattr(cache.os, "replace", original)
     assert value.retain(b"recoverable partial bytes", "json", reference="pending")["bytes"] == 25
+
+
+@pytest.mark.parametrize("message", ["", " " * 20, "storage refused " * 100])
+def test_storage_wait_requirement_is_bounded_and_always_valid(world, monkeypatch, message):
+    from test_closer_verifier_attribution import TARGET, validate
+
+    import closer_verifier_boundary as boundary
+
+    def refuse(_root):
+        raise cache.AttributionStorageWait(message)
+
+    monkeypatch.setattr(boundary, "Store", refuse)
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    requirements = result["verifier_resource_wait"]["requirements"]
+    assert result["verifier_resource_wait"]["cause"] == "storage_capacity"
+    assert len(requirements) == 1 and 1 <= len(requirements[0]) <= 512
+    if not message.strip():
+        assert requirements == ["attribution storage admission refused"]
+    assert not world.posts and not world.downloads
+    validate(result, world.snapshot)
+
+
+def test_supplied_retention_io_failure_is_not_reported_as_missing_manifest(world, monkeypatch):
+    from test_closer_verifier_attribution import TARGET, validate
+
+    import closer_verifier_boundary as boundary
+
+    class ManifestIOFailure(cache.Store):
+        def retain(self, data, suffix, **kwargs):
+            if suffix == "json" and list((self.root / "raw").glob("*/*.zip")):
+                raise OSError(28, "synthetic private path must not enter the requirement")
+            return super().retain(data, suffix, **kwargs)
+
+    monkeypatch.setattr(boundary, "Store", ManifestIOFailure)
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["verifier_resource_wait"]["cause"] == "storage_capacity"
+    assert result["verifier_resource_wait"]["requirements"] == [
+        "attribution retention I/O unavailable"
+    ]
+    assert len(world.downloads) == 1 and not world.posts
+    validate(result, world.snapshot)
+    monkeypatch.setattr(boundary, "Store", cache.Store)
+    assert world.backend.initiate_verify(TARGET, world.snapshot)["status"] == "completed"
+    assert len(world.downloads) == 1
+
+
+def test_default_retention_io_failure_keeps_prior_archive_parser_behavior(tmp_path, monkeypatch):
+    from test_closer_verifier_attribution import archive
+
+    def fail(*_args):
+        raise OSError("synthetic default retention failure")
+
+    monkeypatch.setattr(evidence, "_retain_bytes", fail)
+    assert evidence._native_manifest_from_archive(archive(), tmp_path) == []

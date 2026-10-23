@@ -26,6 +26,31 @@ future reference-aware retirement needs authoritative terminal ownership, verifi
 recoverability and a separately reviewed policy. Moving recovery material alone
 would not free this ceiling. No live cache is cleaned or migrated by installation.
 
+### Activation and over-capacity procedure
+
+Before activation, identify the exact `--state` used by the installed invocation
+and measure its `verifier-attribution` root with the read-only metadata operation
+`storage_lifecycle.footprint(root)`; compare the larger of logical/allocated bytes
+against `closer_attribution_store.MAX_BYTES`. Include control, staging and recovery
+material. This is a point-in-time observation, not admission or permission to write;
+the existing ledger must also admit actual staging alongside concurrent reservations.
+Repeat for separately scoped state roots; one legacy-root measurement is not a
+fleet total. Do not instantiate `Store` just to measure: its constructor initializes
+control/ledger directories.
+
+If at or above the ceiling, preserve the store and record its exact state/root,
+measured bytes, requested growth and the affected target's `storage_capacity` wait.
+An unchanged indexed reference can still return existing bytes without new admission;
+do not declare all preflight reads or the whole lane blocked. Continue independent
+eligible work. Do not unlink, rotate/copy the store, release unknown references or
+lower storage admission to make the refusal disappear. A reviewed capacity plan or
+future proven-terminal, reference-aware recoverable retirement is needed before
+growth resumes; this append-only patch grants neither cleanup nor unlimited quota.
+
+Before retry, obtain fresh measured accounting and normal per-target re-screening.
+Expired required archives and uncertain operations retain their evidence. A move to
+recovery alone is not reclaimed capacity, and successful collection is not acceptance.
+
 `scripts/verify_before_sync.sh` admits and finishes its own storage through
 `src/storage_lifecycle.py`. This is part of the existing verification command;
 there is no scheduled cleaner, new native automation, or engineering time lease.
