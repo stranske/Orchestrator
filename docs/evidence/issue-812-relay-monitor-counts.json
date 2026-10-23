@@ -39,5 +39,14 @@
     "prerequisite_recheck": "CLOSER_CORE_SOURCE set to the existing canonical Workflows checkout; 259 tests PASS with no skipped tests",
     "floor": "Unchanged byte-for-byte from origin/main",
     "hosted_full_verdict": "PENDING"
+  },
+  "router_receipt": {
+    "commit": "0050d01",
+    "change": "Cursor-top beside measured Codex/Claude attaches unmeasured-preferred pacing receipt instead of legacy",
+    "tests": "126 pacing tests PASS including warn/shed/ok Cursor-top cases"
+  },
+  "acceptance": {
+    "post_merge_acted_on": "pending merge+mirror sync (production already acted_on 57 from #827)",
+    "weekly_pass_2026_10_27": "pending check date; monitor + pacing receipt paths landed"
   }
 }
