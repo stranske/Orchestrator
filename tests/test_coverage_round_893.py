@@ -168,6 +168,10 @@ def test_keepalive_json_helpers_handle_success_failure_and_malformed_link_data(
 
     def fake_run(args: list[str], **_kwargs: object) -> Result:
         calls.append(args)
+        if args[1:3] == ["issue", "list"]:
+            result = Result()
+            result.stdout = '[{"number": 41, "title": "Existing issue"}]'
+            return result
         if "closingIssuesReferences" in args:
             result = Result()
             result.stdout = (
@@ -182,7 +186,9 @@ def test_keepalive_json_helpers_handle_success_failure_and_malformed_link_data(
 
     monkeypatch.setattr(keepalive_evidence.subprocess, "run", fake_run)
     assert keepalive_evidence._fetch_pr_title("owner/repo", 5) == "A title"
-    assert keepalive_evidence._issue_search("owner/repo", "needle") == []
+    assert keepalive_evidence._issue_search("owner/repo", "needle") == [
+        {"number": 41, "title": "Existing issue"}
+    ]
     assert keepalive_evidence._linked_issues("owner/repo", 5) == [{"number": 8, "state": "OPEN"}]
     assert all(call[0] == "gh" for call in calls)
 
@@ -191,6 +197,15 @@ def test_keepalive_json_helpers_handle_success_failure_and_malformed_link_data(
         stdout = "not-json"
 
     monkeypatch.setattr(keepalive_evidence.subprocess, "run", lambda *_args, **_kwargs: BadResult())
+    assert keepalive_evidence._run_json(["gh", "issue", "list"]) is None
+
+    class MalformedResult:
+        returncode = 0
+        stdout = "not-json"
+
+    monkeypatch.setattr(
+        keepalive_evidence.subprocess, "run", lambda *_args, **_kwargs: MalformedResult()
+    )
     assert keepalive_evidence._run_json(["gh", "issue", "list"]) is None
 
 
