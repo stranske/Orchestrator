@@ -76,12 +76,60 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
         monkeypatch.setattr(subprocess, name, forbidden)
     for name in ("connect", "connect_ex", "sendto"):
         monkeypatch.setattr(socket.socket, name, forbidden)
-    monkeypatch.setattr(socket, "create_connection", forbidden)
+    # Resolvers can send DNS traffic before a guarded socket connection is attempted.
+    for name in (
+        "create_connection",
+        "getaddrinfo",
+        "gethostbyname",
+        "gethostbyname_ex",
+        "gethostbyaddr",
+    ):
+        monkeypatch.setattr(socket, name, forbidden)
     monkeypatch.setattr(gh_capacity, "gh_run", forbidden)
     monkeypatch.setattr(dispatcher, "delegate", forbidden)
     monkeypatch.setattr(dispatcher, "offload", forbidden)
     yield
-    assert attempted == []
+    assert attempted == [], "issue #853 test attempted external effects"
+
+
+@pytest.mark.parametrize(
+    ("boundary", "name", "args"),
+    [
+        (subprocess, "run", (["unused-command"],)),
+        (subprocess, "Popen", (["unused-command"],)),
+        (gh_capacity, "gh_run", (["api", "user"],)),
+        (dispatcher, "delegate", ()),
+        (dispatcher, "offload", ()),
+        (socket, "create_connection", (("unused.invalid", 443),)),
+        (socket, "getaddrinfo", ("unused.invalid", 443)),
+        (socket, "gethostbyname", ("unused.invalid",)),
+        (socket, "gethostbyname_ex", ("unused.invalid",)),
+        (socket, "gethostbyaddr", ("192.0.2.1",)),
+    ],
+    ids=["run", "popen", "gh", "delegate", "offload", "connect", "dns", "host", "hosts", "reverse"],
+)
+def test_external_boundary_attempts_are_denied_and_counted_even_when_caught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary, name: str, args: tuple
+) -> None:
+    """A swallowed boundary error must still fail teardown; no real boundary is invoked."""
+    unguarded_attempts: list[tuple] = []
+
+    def unguarded_spy(*args, **kwargs):
+        unguarded_attempts.append((args, kwargs))
+        raise AssertionError("unguarded external boundary reached")
+
+    # Even a broken guard can only reach this spy, never a resolver, process, or agent.
+    monkeypatch.setattr(boundary, name, unguarded_spy)
+    with monkeypatch.context() as guard_patch:
+        runtime = isolated_runtime.__wrapped__(tmp_path / "nested", guard_patch)
+        next(runtime)
+        try:
+            with pytest.raises(AssertionError, match="started an external"):
+                getattr(boundary, name)(*args)
+            assert unguarded_attempts == []
+        finally:
+            with pytest.raises(AssertionError, match="attempted external effects"):
+                next(runtime)
 
 
 def test_feedback_containment_rejects_out_of_bound_sentinel_before_open(
