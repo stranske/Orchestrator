@@ -116,6 +116,11 @@ def publish(row, destination=OUT):
 def run_usage(executable):
     """Bound one attempt and its children; diagnostics never include CLI output."""
     per_try = int(os.environ.get("CLAUDE_USAGE_POLL_TIMEOUT", "40"))
+    # Subscription usage must use the dedicated login, even if the parent has
+    # API/gateway credentials. Preserve the wrapper's config and other settings.
+    env = dict(os.environ)
+    for variable in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        env.pop(variable, None)
     process = subprocess.Popen(
         [executable, "-p", "/usage"],
         stdin=subprocess.DEVNULL,
@@ -124,6 +129,7 @@ def run_usage(executable):
         text=True,
         cwd="/tmp",
         start_new_session=True,
+        env=env,
     )
     try:
         out, _ = process.communicate(timeout=per_try)

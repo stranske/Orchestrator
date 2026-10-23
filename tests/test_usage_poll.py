@@ -603,6 +603,38 @@ def test_claude_retries_with_process_group_cleanup(tmp_path, pollers, monkeypatc
     assert json.loads((tmp_path / "claude-usage.json").read_text())["weekly"]["used_percent"] == 85
 
 
+def test_claude_cli_uses_login_instead_of_inherited_api_auth(pollers, monkeypatch, capsys):
+    module = pollers["claude"]
+    sentinel = "FAKE_API_AUTH_MUST_NOT_APPEAR"
+    parent = {
+        "ANTHROPIC_API_KEY": sentinel,
+        "ANTHROPIC_AUTH_TOKEN": sentinel,
+        "CLAUDE_CONFIG_DIR": "/fixture/dedicated-login",
+        "PRESERVE": "other-setting",
+    }
+    monkeypatch.setattr(module.os, "environ", parent)
+
+    class Process:
+        returncode = 0
+
+        def __init__(self, command, **kwargs):
+            assert command == ["/fixture/claude", "-p", "/usage"]
+            assert kwargs["env"] == {
+                "CLAUDE_CONFIG_DIR": "/fixture/dedicated-login",
+                "PRESERVE": "other-setting",
+            }
+
+        def communicate(self, timeout):
+            return CLAUDE_TEXT, ""
+
+    monkeypatch.setattr(module.subprocess, "Popen", Process)
+    assert module.run_usage("/fixture/claude") == (CLAUDE_TEXT, "")
+    assert parent["ANTHROPIC_API_KEY"] == sentinel
+    assert parent["ANTHROPIC_AUTH_TOKEN"] == sentinel
+    output = capsys.readouterr()
+    assert sentinel not in output.out + output.err
+
+
 def test_claude_all_retries_fail_preserves_latest_and_lists_every_try(
     tmp_path, pollers, monkeypatch
 ):
