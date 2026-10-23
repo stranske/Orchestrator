@@ -16,7 +16,7 @@ def legacy(
 ):
     operation = {
         "id": "retained-review-operation",
-        "action": "review",
+        "action": "respond_review",
         "status": status,
         "repo_keys": ["o/r"],
         "binding": binding or {"pr_target": old_target, "source_targets": ["o/r#666"]},
@@ -145,3 +145,41 @@ def test_registered_legacy_barriers_receive_full_source_snapshot(native_world, m
     assert seen[0]["sources"] == snapshot["sources"]
     assert seen[0]["pr_target"] == snapshot["pr_target"]
     assert world.events["effect"] == world.events["provider"] == 0
+
+
+@pytest.mark.parametrize("status", ["submitted", "running", "uncertain"])
+def test_same_target_native_advisory_contract_not_remote_write_dependency(tmp_path, status):
+    from test_closer_native_admission_classification import native_row
+
+    row = native_row(TARGET, action="review", capacity=False)
+    row["operation"]["status"] = status
+    path = tmp_path / "native.json"
+    path.write_text(json.dumps({"schema": "closer-queue/v1", "round": {}, "items": {TARGET: row}}))
+    before = path.read_bytes()
+    assert (
+        dispatcher._legacy_operation_dependency(path, TARGET, snapshot(), remote_only=True) is None
+    )
+    with pytest.raises(RuntimeError, match="original closer queue"):
+        dispatcher._legacy_operation_dependency(path, TARGET, snapshot())
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"requires_coordinator": True},
+        {"operation_history": [{"status": "uncertain", "action": "respond_review"}]},
+        {"operation_history": "malformed"},
+    ],
+)
+def test_advisory_exception_never_borrows_private_or_mixed_history(tmp_path, change):
+    from test_closer_native_admission_classification import native_row
+
+    row = native_row(TARGET, action="review", capacity=False)
+    row.update(change)
+    path = tmp_path / "native.json"
+    path.write_text(json.dumps({"schema": "closer-queue/v1", "round": {}, "items": {TARGET: row}}))
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError):
+        dispatcher._legacy_operation_dependency(path, TARGET, snapshot(), remote_only=True)
+    assert path.read_bytes() == before

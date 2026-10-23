@@ -31,6 +31,16 @@ MAX_RUNS = 150
 MAX_FILES = 200
 MAX_ARCHIVE_BYTES = 8_000_000
 MAX_UNCOMPRESSED_BYTES = 16_000_000
+# Canonical sealed transport inputs are not model section content.
+MAX_NATIVE_INPUT_BYTES = MAX_UNCOMPRESSED_BYTES
+NATIVE_INPUT_COMPONENTS = frozenset(
+    {
+        "verifier-input-manifest.json",
+        "verifier-context.md",
+        "verifier-pr-diff.patch",
+        "verifier-diff-summary.md",
+    }
+)
 MAX_ARTIFACTS = 20
 MAX_PACKET_ARCHIVES = 20
 MAX_PACKET_ARCHIVE_BYTES = 8_000_000
@@ -1650,9 +1660,54 @@ def _recognized_json(doc: Any) -> dict | None:
     return None
 
 
+class NativeInputCaptureError(ValueError):
+    """A required sealed transport component needs bounded, recoverable acquisition."""
+
+
+def _native_manifest_presentation(capture: dict) -> dict:
+    """Keep full authenticated bytes in raw storage, not a model section."""
+    manifest = capture["manifest"]
+    size = len(_bytes(manifest))
+    if size <= MAX_TEXT_BYTES:
+        return capture
+    fields = (
+        "schema",
+        "capture_kind",
+        "repository",
+        "pr",
+        "head_sha",
+        "merge_sha",
+        "source_run_id",
+        "source_run_attempt",
+        "context_sha256",
+        "diff_sha256",
+        "diff_summary_sha256",
+        "mode",
+        "requested_provider",
+        "input_limits",
+    )
+    projected = {
+        k: manifest[k] for k in fields if k in manifest and len(_bytes(manifest[k])) <= 8000
+    }
+    return {
+        **capture,
+        "manifest": projected,
+        "manifest_projection": {
+            "kind": "identity-and-input-digests",
+            "full_content_bytes": capture["raw"]["bytes"],
+            "supplied_fields": sorted(projected),
+            "omitted_field_count": len(manifest) - len(projected),
+            "full_content_ref": capture["raw"],
+            "acceptance_authority": False,
+        },
+    }
+
+
 def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
     """Read native manifests and exact known verifier report files from an archive."""
     manifests = []
+    if len(archive) > MAX_ARCHIVE_BYTES:
+        raise NativeInputCaptureError("native input transport limit: compressed archive")
     try:
         with zipfile.ZipFile(io.BytesIO(archive)) as zf:
             infos = zf.infolist()
@@ -1660,17 +1715,48 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                 len(infos) > MAX_FILES
                 or sum(item.file_size for item in infos) > MAX_UNCOMPRESSED_BYTES
             ):
-                return []
+                raise NativeInputCaptureError(
+                    "native input transport limit: archive entries or expansion"
+                )
             files = {}
             manifest_candidates = []
+            native_names = set()
+            actual_total = 0
+
+            def read_entry(info, limit):
+                nonlocal actual_total
+                with zf.open(info) as stream:
+                    raw = stream.read(limit + 1)
+                if len(raw) > limit or len(raw) != info.file_size:
+                    raise NativeInputCaptureError(
+                        "native input transport limit or size mismatch: "
+                        + PurePosixPath(info.filename).name[:100]
+                    )
+                actual_total += len(raw)
+                if actual_total > MAX_UNCOMPRESSED_BYTES:
+                    raise NativeInputCaptureError("native input transport limit: actual expansion")
+                return raw
+
             for info in infos:
                 path = PurePosixPath(info.filename)
-                if (
-                    info.is_dir()
-                    or path.is_absolute()
-                    or ".." in path.parts
-                    or info.file_size > MAX_SECTION_BYTES
-                ):
+                if path.name in NATIVE_INPUT_COMPONENTS and not info.is_dir():
+                    # An unsafe competing path cannot shadow a canonical identity input.
+                    if path.name in native_names:
+                        raise NativeInputCaptureError(
+                            "native input component ambiguous: " + path.name
+                        )
+                    native_names.add(path.name)
+                    if path.is_absolute() or ".." in path.parts:
+                        raise NativeInputCaptureError(
+                            "native input canonical path invalid: " + path.name
+                        )
+                if info.is_dir() or path.is_absolute() or ".." in path.parts:
+                    continue
+                canonical = path.name in NATIVE_INPUT_COMPONENTS
+                limit = MAX_NATIVE_INPUT_BYTES if canonical else MAX_SECTION_BYTES
+                if info.file_size > limit:
+                    if canonical:
+                        raise NativeInputCaptureError("native input transport limit: " + path.name)
                     continue
                 if path.suffix.lower() != ".json":
                     if path.name in {
@@ -1679,9 +1765,9 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                         "verifier-context.md",
                         "verifier-pr-diff.patch",
                     }:
-                        files[path.name] = zf.read(info)
+                        files[path.name] = read_entry(info, limit)
                     continue
-                raw = zf.read(info)
+                raw = read_entry(info, limit)
                 files[path.name] = raw
                 try:
                     doc = json.loads(raw)
@@ -2095,14 +2181,21 @@ def _native_diagnostic_section(
                     "evaluated_sha": merge,
                     "archive": archive_ref,
                     "identity_bound": len(bound) == 1,
-                    "input_snapshots": bound,
+                    "input_snapshots": [_native_manifest_presentation(row) for row in bound],
                 }
             )
     except Exception as exc:
         if _is_round_control_exception(exc):
             raise
         content["unavailable"].append(
-            {"reason": "native diagnostic lookup failed", "error_type": type(exc).__name__}
+            {
+                "reason": (
+                    str(exc)
+                    if isinstance(exc, NativeInputCaptureError)
+                    else "native diagnostic lookup failed"
+                ),
+                "error_type": type(exc).__name__,
+            }
         )
     return _section(
         "unknown",
@@ -2299,12 +2392,18 @@ def _native_verifier_section(
                 found = _native_manifest_from_archive(archive, root)
                 receipts = []
                 for item in found:
+                    presented = _native_manifest_presentation(item)
                     receipts.append(
                         {
                             "kind": "native-input-manifest",
                             "path": item["path"],
-                            "manifest": item["manifest"],
+                            "manifest": presented["manifest"],
                             "raw": item["raw"],
+                            **(
+                                {"manifest_projection": presented["manifest_projection"]}
+                                if "manifest_projection" in presented
+                                else {}
+                            ),
                         }
                     )
                     receipts.extend(item.get("receipts", []))
@@ -2336,7 +2435,11 @@ def _native_verifier_section(
                 entry = {
                     **ident,
                     "status": "unknown",
-                    "reason": f"artifact fetch failed: {type(exc).__name__}",
+                    "reason": (
+                        str(exc)
+                        if isinstance(exc, NativeInputCaptureError)
+                        else f"artifact fetch failed: {type(exc).__name__}"
+                    ),
                 }
                 artifacts.append(entry)
                 missing.append(entry)
@@ -2372,11 +2475,17 @@ def _native_verifier_section(
             k: run.get(k)
             for k in ("id", "run_attempt", "status", "conclusion", "head_sha", "event", "path")
         }
+        presented = _native_manifest_presentation(manifests[0])
         content = {
             "verifier": marker,
             "run": native_run,
             "artifacts": artifacts,
-            "input_manifest": {**manifest, "raw": manifest_ref},
+            "input_manifest": {**presented["manifest"], "raw": manifest_ref},
+            **(
+                {"input_manifest_projection": presented["manifest_projection"]}
+                if "manifest_projection" in presented
+                else {}
+            ),
             "unavailable": missing,
             "evidence_type": "evaluated-merge-verifier-non-pass",
             "proof_status": "resolution-only",

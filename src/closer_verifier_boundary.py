@@ -416,9 +416,9 @@ def attribute(
         # acceptance report. Missing optional capture files remain retained gaps;
         # present contradictory hashes or ambiguous manifest keys are not usable.
         with Path(capture["raw"]["path"]).open("rb") as stream:
-            raw_manifest = stream.read(evidence.MAX_SECTION_BYTES + 1)
+            raw_manifest = stream.read(evidence.MAX_NATIVE_INPUT_BYTES + 1)
         if (
-            len(raw_manifest) > evidence.MAX_SECTION_BYTES
+            len(raw_manifest) > evidence.MAX_NATIVE_INPUT_BYTES
             or json.loads(raw_manifest, object_pairs_hook=unique_members) != manifest
         ):
             return "pending", f"unambiguous bounded input manifest for run {rid}"
@@ -460,6 +460,9 @@ def attribute(
         if manifest["merge_sha"] != snapshot["merge"]:
             return "mismatch", f"current merge attribution for same PR run {rid}"
         return "same", f"collect existing verifier result for run {rid}"
+    except evidence.NativeInputCaptureError as exc:
+        reads.append(observation(endpoint, error=exc))
+        return "pending", f"{exc}; recover sealed input for run {rid}"
     except Exception as exc:
         if evidence._is_round_control_exception(exc):
             raise
