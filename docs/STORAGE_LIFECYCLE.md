@@ -90,8 +90,12 @@ is an explicit policy cushion, not a claim about an OS minimum. Producer hashes,
 archived test/script blobs, the copier, actual verifier argv, interpreter and
 local registry input qualify this plan; a detected mismatch uses the legacy
 fallback. Newly introduced amplifying producers require a manifest review. This
-does not claim to bound all possible future test behavior. Legacy history and
-uncertain reservations remain intact and charged across profile versions.
+does not claim to bound all possible future test behavior. Legacy peak estimates
+remain in history; the matched engineering profile does not inherit the old
+profile's forecast. All active or uncertain reservations on the same filesystem,
+including unknown legacy ownership, remain charged across profile versions.
+Conservative fallback receipts expose a fixed reason code, without paths or raw
+exception details.
 
 The supervisor records planned demand, sampled owned allocation, terminal
 allocation and shared-volume decline separately. Bounded samples are lower

@@ -92,8 +92,16 @@ def _producer_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _archived_producers_match(source: Path) -> bool:
+def _cold_fallback(reason: JSON | None, code: str) -> None:
+    """Expose fixed diagnostic codes only, never paths or exception messages."""
+    if reason is not None:
+        reason["reason"] = code
+
+
+def _archived_producers_match(source: Path, *, reason: JSON | None = None) -> bool:
     """The copier archives tests/scripts from HEAD, not their working-tree bytes."""
+    if reason is not None:
+        reason.pop("reason", None)
     names = [name for name in REVIEWED_PRODUCERS if name.startswith(("tests/", "scripts/"))]
     try:
         result = subprocess.run(
@@ -110,6 +118,7 @@ def _archived_producers_match(source: Path) -> bool:
             mode, kind, oid = metadata.split()
             name = raw_name.decode()
             if name not in names or mode not in (b"100644", b"100755") or kind != b"blob":
+                _cold_fallback(reason, "archived_entry_mismatch")
                 return False
             path = source / name
             digest = hashlib.sha1(b"blob " + str(path.stat().st_size).encode() + b"\0")
@@ -117,42 +126,69 @@ def _archived_producers_match(source: Path) -> bool:
                 for block in iter(lambda: stream.read(65536), b""):
                     digest.update(block)
             if digest.hexdigest() != oid.decode():
+                _cold_fallback(reason, "archived_bytes_mismatch")
                 return False
             found.add(name)
-        return found == set(names)
-    except (OSError, ValueError, UnicodeDecodeError, subprocess.SubprocessError):
+        if found != set(names):
+            _cold_fallback(reason, "archived_producer_missing")
+            return False
+        return True
+    except (OSError, subprocess.SubprocessError):
+        _cold_fallback(reason, "archived_inventory_unavailable")
+        return False
+    except (ValueError, UnicodeDecodeError):
+        _cold_fallback(reason, "archived_inventory_malformed")
         return False
 
 
-def reviewed_cold_plan(source: Path, profile: str, maximum_mb: int) -> JSON | None:
+def reviewed_cold_plan(
+    source: Path, profile: str, maximum_mb: int, *, reason: JSON | None = None
+) -> JSON | None:
     """Only a matching reviewed producer/mode gets the explicit engineering plan.
 
     Current host semantics are an explicit qualification assumption; old receipts
     did not independently record OS versions. Source identity remains separately
     bound by normal verification. This is not a claim about all future test code.
     """
-    if (
-        profile != "EXEC MIRROR"
-        or maximum_mb != 50
-        or (platform.system(), platform.release(), platform.machine())
-        != ("Darwin", "25.6.0", "arm64")
-        or sys.version_info[:2] != (3, 12)
-    ):
+    if reason is not None:
+        reason.pop("reason", None)
+    if profile != "EXEC MIRROR":
+        _cold_fallback(reason, "profile_mismatch")
+        return None
+    if maximum_mb != 50:
+        _cold_fallback(reason, "directory_limit_mismatch")
+        return None
+    if (platform.system(), platform.release(), platform.machine()) != ("Darwin", "25.6.0", "arm64"):
+        _cold_fallback(reason, "platform_mismatch")
+        return None
+    if sys.version_info[:2] != (3, 12):
+        _cold_fallback(reason, "python_version_mismatch")
         return None
     try:
         producers = {name: _producer_digest(source / name) for name in REVIEWED_PRODUCERS}
-        copier = Path(
-            os.environ.get("ORCH_SYNC_SCRIPT", str(Path.home() / ".codex/bin/orch-sync-mirror.sh"))
-        ).expanduser()
-        if (
-            producers != REVIEWED_PRODUCERS
-            or _producer_digest(copier) != REVIEWED_EXTERNAL_COPY_SHA256
-            or not _archived_producers_match(source)
-        ):
-            return None
-    except OSError:
+    except (OSError, StorageBlocked):
+        _cold_fallback(reason, "producer_unavailable")
         return None
-    except StorageBlocked:
+    if producers != REVIEWED_PRODUCERS:
+        _cold_fallback(reason, "producer_bytes_mismatch")
+        return None
+    copier = Path(
+        os.environ.get("ORCH_SYNC_SCRIPT", str(Path.home() / ".codex/bin/orch-sync-mirror.sh"))
+    ).expanduser()
+    try:
+        copier_digest = _producer_digest(copier)
+    except (OSError, StorageBlocked):
+        _cold_fallback(reason, "copier_unavailable")
+        return None
+    if copier_digest != REVIEWED_EXTERNAL_COPY_SHA256:
+        _cold_fallback(reason, "copier_bytes_mismatch")
+        return None
+    archived = (
+        _archived_producers_match(source, reason=reason)
+        if reason is not None
+        else _archived_producers_match(source)
+    )
+    if not archived:
         return None
     contract = {
         "version": REVIEWED_COLD_VERSION,
@@ -181,8 +217,10 @@ def reviewed_cold_plan(source: Path, profile: str, maximum_mb: int) -> JSON | No
     }
 
 
-def _reviewed_command_matches(args: argparse.Namespace) -> bool:
+def _reviewed_command_matches(args: argparse.Namespace, *, reason: JSON | None = None) -> bool:
     """Bind the estimated workload, not just a source directory/profile claim."""
+    if reason is not None:
+        reason.pop("reason", None)
     command = args.command
     source = args.source.resolve()
     if (
@@ -191,17 +229,21 @@ def _reviewed_command_matches(args: argparse.Namespace) -> bool:
         or Path(command[1]).resolve() != source / "scripts/verify_before_sync.sh"
         or Path(command[-1]).resolve() != source
     ):
+        _cold_fallback(reason, "verifier_command_mismatch")
         return False
     options = command[2:-1]
     if options[:1] == ["--snapshot-out"]:
         if len(options) < 2 or not options[1]:
+            _cold_fallback(reason, "verifier_options_mismatch")
             return False
         options = options[2:]
         if options[:1] == ["--digest-out"]:
             if len(options) < 2 or not options[1]:
+                _cold_fallback(reason, "verifier_options_mismatch")
                 return False
             options = options[2:]
     if options:
+        _cold_fallback(reason, "verifier_options_mismatch")
         return False
     if (
         (os.environ.get("VERIFY_BEFORE_SYNC_TREE") or "EXEC MIRROR") != args.profile
@@ -209,10 +251,12 @@ def _reviewed_command_matches(args: argparse.Namespace) -> bool:
         or os.environ.get("PYTEST_ADDOPTS")
         or os.environ.get("PYTEST_DEBUG_TEMPROOT")
     ):
+        _cold_fallback(reason, "workload_environment_mismatch")
         return False
     registry = os.environ.get("ORCH_REVIEW_REGISTRY_SNAPSHOT")
     if not registry or Path(registry).is_symlink() or not Path(registry).is_file():
         # A future network registry payload has no local prospective size proof.
+        _cold_fallback(reason, "registry_unavailable")
         return False
     default = Path.home() / ".codex/orchestrator"
     if (
@@ -220,6 +264,7 @@ def _reviewed_command_matches(args: argparse.Namespace) -> bool:
         or Path(os.environ.get("ORCH_STATE_DIR") or default).resolve()
         != args.state_source.resolve()
     ):
+        _cold_fallback(reason, "copy_roots_mismatch")
         return False
     # The reviewed shell prepends this directory before selecting its Python.
     local = Path.home() / ".local/bin"
@@ -227,13 +272,32 @@ def _reviewed_command_matches(args: argparse.Namespace) -> bool:
     if local.is_dir():
         path = str(local) + os.pathsep + path
     python = shutil.which(os.environ.get("PYTHON") or "python3", path=path)
-    return python is not None and Path(python).resolve() == Path(sys.executable).resolve()
+    if python is None or Path(python).resolve() != Path(sys.executable).resolve():
+        _cold_fallback(reason, "interpreter_mismatch")
+        return False
+    return True
 
 
-def _qualified_cold_plan(args: argparse.Namespace) -> JSON | None:
-    if not args.local_strict or not _reviewed_command_matches(args):
+def _qualified_cold_plan(args: argparse.Namespace, *, reason: JSON | None = None) -> JSON | None:
+    if reason is not None:
+        reason.pop("reason", None)
+    if not args.local_strict:
+        _cold_fallback(reason, "non_strict_mode")
         return None
-    return reviewed_cold_plan(args.source, args.profile, args.max_dir_mb)
+    command_matches = (
+        _reviewed_command_matches(args, reason=reason)
+        if reason is not None
+        else _reviewed_command_matches(args)
+    )
+    if not command_matches:
+        if reason is not None and "reason" not in reason:
+            _cold_fallback(reason, "workload_contract_mismatch")
+        return None
+    return (
+        reviewed_cold_plan(args.source, args.profile, args.max_dir_mb, reason=reason)
+        if reason is not None
+        else reviewed_cold_plan(args.source, args.profile, args.max_dir_mb)
+    )
 
 
 def measurement_profile(source: Path, profile: str, source_identity: str, volume: Path) -> JSON:
@@ -1019,7 +1083,8 @@ def run_job(
     probe: Callable[[Path], None] = idle,
 ) -> int:
     parent = args.temp_parent.resolve()
-    cold_plan = _qualified_cold_plan(args)
+    fallback_reason: JSON = {}
+    cold_plan = _qualified_cold_plan(args, reason=fallback_reason)
     # The old 27 GiB floor already included the pre-861 fixture working demand.
     # Replace it ONLY for the exact reviewed contract, never by current free space.
     floor = STRICT_RELEASE_FLOOR if args.local_strict and cold_plan is None else 0
@@ -1103,7 +1168,7 @@ def run_job(
         or {
             "kind": "legacy_conservative_forecast",
             "floor_bytes": floor,
-            "reason": "no matching reviewed producer/mode/platform contract",
+            "reason": fallback_reason.get("reason", "reviewed_contract_unavailable"),
         },
         "actual_staging_forecast_bytes": actual_staging_forecast,
     }

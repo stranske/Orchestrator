@@ -292,7 +292,7 @@ def engineering_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(storage.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(storage.sys, "version_info", (3, 12, 2))
     monkeypatch.setenv("ORCH_SYNC_SCRIPT", str(copier))
-    monkeypatch.setattr(storage, "_archived_producers_match", lambda source: True)
+    monkeypatch.setattr(storage, "_archived_producers_match", lambda source, **_kw: True)
     return source, producer, copier
 
 
@@ -346,8 +346,8 @@ def test_engineering_plan_counts_baseline_staging_once_and_growth_fully(
 ):
     source, _producer, _copier = engineering_contract
     plan = storage.reviewed_cold_plan(source, "EXEC MIRROR", 50)
-    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args: True)
-    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args: plan)
+    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args, **_kw: True)
+    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args, **_kw: plan)
     monkeypatch.setattr(
         storage, "staging_bytes", lambda *args, **kwargs: storage.REVIEWED_STAGING_BYTES + growth
     )
@@ -370,8 +370,8 @@ def test_engineering_plan_preserves_legacy_forecasts_and_active_unknown_charges(
 ):
     source, _producer, _copier = engineering_contract
     plan = storage.reviewed_cold_plan(source, "EXEC MIRROR", 50)
-    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args: True)
-    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args: plan)
+    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args, **_kw: True)
+    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args, **_kw: plan)
     monkeypatch.setattr(
         storage, "staging_bytes", lambda *args, **kwargs: storage.REVIEWED_STAGING_BYTES
     )
@@ -399,8 +399,8 @@ def test_engineering_producer_drift_before_admission_has_no_child(
     source, _producer, _copier = engineering_contract
     plan = storage.reviewed_cold_plan(source, "EXEC MIRROR", 50)
     calls = iter([plan, None])
-    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args: True)
-    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args: next(calls))
+    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args, **_kw: True)
+    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args, **_kw: next(calls))
     job.local_strict = True
     with pytest.raises(storage.StorageBlocked, match="changed before admission"):
         storage.run_job(job, free=lambda _: 100 * storage.GIB, probe=lambda _: None)
@@ -477,6 +477,9 @@ def test_archived_producer_uses_head_not_uncommitted_known_bytes(tmp_path, monke
         {"scripts/copy.sh": hashlib.sha256(producer.read_bytes()).hexdigest()},
     )
     assert storage._archived_producers_match(tmp_path) is False
+    reason = {}
+    assert storage._archived_producers_match(tmp_path, reason=reason) is False
+    assert reason == {"reason": "archived_bytes_mismatch"}
     git("add", "scripts/copy.sh")
     git(
         "-c",
@@ -507,8 +510,8 @@ def test_larger_explicit_plan_wins_over_engineering_estimate(
 ):
     source, _producer, _copier = engineering_contract
     plan = storage.reviewed_cold_plan(source, "EXEC MIRROR", 50)
-    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args: True)
-    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args: plan)
+    monkeypatch.setattr(storage, "_reviewed_command_matches", lambda args, **_kw: True)
+    monkeypatch.setattr(storage, "reviewed_cold_plan", lambda *args, **_kw: plan)
     job.local_strict = True
     job.peak_bytes = plan["runtime_component_bytes"] + storage.GIB
     assert storage.run_job(job, free=lambda _: 100 * storage.GIB, probe=lambda _: None) == 0
@@ -604,7 +607,7 @@ def test_workload_or_interpreter_mismatch_never_gets_engineering_forecast(
     monkeypatch.setattr(
         storage,
         "reviewed_cold_plan",
-        lambda *a: pytest.fail("unmatched workload must retain legacy plan"),
+        lambda *a, **_kw: pytest.fail("unmatched workload must retain legacy plan"),
     )
     assert storage._qualified_cold_plan(args) is None
 
@@ -650,7 +653,7 @@ def test_pre_spawn_contract_refusal_retires_only_proven_owned_root(
     source, _producer, _copier = engineering_contract
     plan = storage.reviewed_cold_plan(source, "EXEC MIRROR", 50)
     calls = iter([plan, plan, None])
-    monkeypatch.setattr(storage, "_qualified_cold_plan", lambda args: next(calls))
+    monkeypatch.setattr(storage, "_qualified_cold_plan", lambda args, **_kw: next(calls))
     monkeypatch.setattr(storage, "identity", lambda _: "original")
     monkeypatch.setattr(storage.subprocess, "Popen", lambda *a, **k: pytest.fail("must not spawn"))
     job.local_strict = True
@@ -719,3 +722,99 @@ def test_allocation_failure_before_any_spawn_releases_future_charge(job, monkeyp
     assert record["status"] == "not_started" and record["spawn_attempted"] is False
     assert record["root"] is None
     assert json.loads((job.state_dir / "reservations.json").read_text())["jobs"] == {}
+
+
+@pytest.mark.parametrize(
+    "change,code",
+    [
+        ("profile", "profile_mismatch"),
+        ("maximum", "directory_limit_mismatch"),
+        ("platform", "platform_mismatch"),
+        ("python", "python_version_mismatch"),
+        ("producer", "producer_bytes_mismatch"),
+        ("missing", "producer_unavailable"),
+        ("copier", "copier_bytes_mismatch"),
+        ("copier_missing", "copier_unavailable"),
+    ],
+)
+def test_cold_fallback_reasons_are_explicit_fixed_codes(
+    engineering_contract, monkeypatch, change, code
+):
+    source, producer, copier = engineering_contract
+    profile, maximum = "EXEC MIRROR", 50
+    if change == "profile":
+        profile = "other"
+    elif change == "maximum":
+        maximum = 51
+    elif change == "platform":
+        monkeypatch.setattr(storage.platform, "release", lambda: "other")
+    elif change == "python":
+        monkeypatch.setattr(storage.sys, "version_info", (3, 13, 0))
+    elif change == "producer":
+        producer.write_text("changed")
+    elif change == "missing":
+        producer.unlink()
+    elif change == "copier":
+        copier.write_text("changed")
+    else:
+        copier.unlink()
+    reason = {}
+    assert storage.reviewed_cold_plan(source, profile, maximum, reason=reason) is None
+    assert reason == {"reason": code}
+    assert len(code) < 64 and str(source) not in str(reason)
+
+
+def test_archive_failure_reports_fixed_reason_not_stderr_or_paths(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, "git", stderr="private/path/secret")
+
+    monkeypatch.setattr(storage.subprocess, "run", fail)
+    reason = {}
+    assert storage._archived_producers_match(tmp_path, reason=reason) is False
+    assert reason == {"reason": "archived_inventory_unavailable"}
+
+
+def test_fallback_reason_flows_into_existing_terminal_receipt(job):
+    job.local_strict = True
+    assert storage.run_job(job, free=lambda _: 100 * storage.GIB, probe=lambda _: None) == 0
+    record = json.loads(next((job.state_dir / "receipts").glob("*.json")).read_text())
+    assert record["resource_plan"]["reason"] == "verifier_command_mismatch"
+
+
+def test_actual_command_mismatch_reason_preserves_legacy_admission(job, monkeypatch):
+    job.local_strict = True
+    job.command[1] = str(job.source / "unreviewed.sh")
+    reason = {}
+    assert storage._qualified_cold_plan(job, reason=reason) is None
+    assert reason == {"reason": "verifier_command_mismatch"}
+
+
+def test_archive_bytes_and_missing_reasons_preserve_false_result(tmp_path, monkeypatch):
+    producer = tmp_path / "known.py"
+    producer.write_text("known")
+    monkeypatch.setattr(storage, "REVIEWED_PRODUCERS", {"scripts/known.py": "0" * 64})
+    monkeypatch.setattr(
+        storage.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess("git", 0, b"")
+    )
+    reason = {}
+    assert storage._archived_producers_match(tmp_path, reason=reason) is False
+    assert reason == {"reason": "archived_producer_missing"}
+
+
+def test_successful_qualification_clears_stale_reason_without_changing_result(engineering_contract):
+    source, _producer, _copier = engineering_contract
+    reason = {"reason": "old_failure"}
+    plan = storage.reviewed_cold_plan(source, "EXEC MIRROR", 50, reason=reason)
+    assert plan is not None
+    assert reason == {}
+
+
+def test_malformed_archive_inventory_is_fixed_code_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        storage.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess("git", 0, b"private malformed inventory"),
+    )
+    reason = {}
+    assert storage._archived_producers_match(tmp_path, reason=reason) is False
+    assert reason == {"reason": "archived_inventory_malformed"}
