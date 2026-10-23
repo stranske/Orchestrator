@@ -111,6 +111,7 @@ def world(tmp_path, monkeypatch):
         current=copy.deepcopy(snapshot),
         post_timeout=False,
         expired=False,
+        capture_family="comparison",
     )
 
     def api(endpoint, **kwargs):
@@ -131,7 +132,7 @@ def world(tmp_path, monkeypatch):
                 "artifacts": [
                     {
                         "id": 7,
-                        "name": "comparison-results-99",
+                        "name": f"{w.capture_family}-results-99",
                         "expired": w.expired,
                         "digest": "sha256:" + hashlib.sha256(w.data).hexdigest(),
                         "size_in_bytes": len(w.data),
@@ -489,10 +490,11 @@ def test_expired_uncached_capture_is_pending_without_redownload(world):
     validate(result, world.snapshot)
 
 
+@pytest.mark.parametrize("capture_family", ["comparison", "evaluation"])
 @pytest.mark.parametrize("completed_merge", [False, True])
 @pytest.mark.parametrize("linked", [False, True])
 def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_packet(
-    public_merge_world, monkeypatch, capsys, completed_merge, linked
+    public_merge_world, monkeypatch, capsys, completed_merge, linked, capture_family
 ):
     import closer_evidence as evidence
     import closer_frontier_policy as policy
@@ -527,7 +529,11 @@ def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_p
                 "base": {"sha": "b" * 40, "ref": "main"},
             }
         ]
-    data = archive(12, "d" * 40)
+    data = (
+        evaluation_archive(12, "d" * 40)
+        if capture_family == "evaluation"
+        else archive(12, "d" * 40)
+    )
     downloads = []
     reads = []
     transport = native.gh_capacity.gh_run
@@ -549,7 +555,7 @@ def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_p
                 "artifacts": [
                     {
                         "id": 7,
-                        "name": "comparison-results-99",
+                        "name": f"{capture_family}-results-99",
                         "expired": False,
                         "size_in_bytes": len(data),
                         "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
@@ -630,10 +636,18 @@ def test_public_cli_unlabelled_same_manual_delivery_collects_sealed_diagnostic_p
     assert section["content"]["artifacts"][0]["identity_bound"] is True, section
     receipts = section["content"]["artifacts"][0]["input_snapshots"][0]["receipts"]
     assert {r["path"] for r in receipts} >= {
-        "comparison.json",
+        f"{capture_family}.json",
         "verifier-context.md",
         "verifier-pr-diff.patch",
     }
+    if capture_family == "evaluation":
+        diagnostic = next(r for r in receipts if r["kind"] == "native-evaluation")
+        assert diagnostic["results_count"] == 1
+        assert len(diagnostic["provider_results"]) == 1
+        assert diagnostic["provider_results"][0]["used_llm"] is True
+        assert diagnostic["findings"][0]["text"] == "One retained diagnostic concern"
+        assert diagnostic["acceptance_authority"] is False
+        assert diagnostic["resolution_authority"] is False
     # An intentionally rootless screen cannot use retained implementation references.
     screen = evidence.action_evidence_readiness(w.snapshot, packet, "collect_evidence")
     assert screen["mode"] == "native_diagnostic" and screen["ready"] is False
@@ -746,7 +760,7 @@ def history_world(world, monkeypatch):
                 "artifacts": [
                     {
                         "id": rid * 10,
-                        "name": f"comparison-results-{rid}",
+                        "name": f"{w.capture_family}-results-{rid}",
                         "expired": False,
                         "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
                         "size_in_bytes": len(data),
@@ -892,3 +906,199 @@ def test_history_change_during_page_reads_remains_incomplete_and_starts_no_archi
     assert result["verifier_resource_wait"]["cause"] == "history_incomplete"
     assert w.pages == [1, 2] and not w.downloads and not w.posts
     validate(result, w.snapshot)
+
+
+def evaluation_archive(pr=867, merge="e" * 40, *, runid=99, omit=False, **identity):
+    """Small production-shaped input capture; no retained operational payloads."""
+    with zipfile.ZipFile(io.BytesIO(archive(pr, merge, runid=runid, omit=omit))) as source:
+        files = {name: source.read(name) for name in source.namelist()}
+    manifest = json.loads(files["verifier-input-manifest.json"])
+    manifest.update(mode="evaluate", **identity)
+    files["verifier-input-manifest.json"] = json.dumps(manifest).encode()
+    files.pop("comparison.json")
+    files["evaluation.json"] = json.dumps(
+        {
+            "verdict": "PASS",
+            "summary": "Single-provider untrusted diagnostic",
+            "concerns": ["One retained diagnostic concern"],
+            "provider_used": "anthropic/example",
+            "model": "example-model",
+            "used_llm": True,
+            "error": None,
+        }
+    ).encode()
+    files["evaluation-execution.json"] = json.dumps(
+        {
+            "schema": "workflows-verifier-evaluation-execution/v1",
+            "mode": "evaluate",
+            "status": "completed",
+            "decision_available": True,
+            "acceptance_authority": False,
+        }
+    ).encode()
+    files["evaluation-comment.md"] = b"One-provider retained diagnostic; no acceptance authority."
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as capture:
+        for name, data in files.items():
+            capture.writestr(name, data)
+    return output.getvalue()
+
+
+def test_foreign_evaluation_capture_does_not_become_target_acceptance(world):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive()
+    target = "owner/repo#656"
+    world.snapshot["target"] = target
+    world.current["target"] = target
+    relation, requirement = boundary.attribute(
+        world.run,
+        world.snapshot,
+        world.backend.gh.api,
+        native.native_artifact_fetcher(world.snapshot),
+        world.backend.verifier_archive_root,
+        deadline=time.monotonic() + 30,
+        reads=[],
+    )
+    assert (relation, requirement) == ("foreign", None)
+    assert not world.posts
+    result = world.backend.initiate_verify(target, world.snapshot)
+    assert result["status"] == "completed"
+    assert len(world.posts) == 1 and world.posts == ["repos/owner/repo/issues/656/labels"]
+    assert "verdict" not in result and "native_diagnostic_reference" not in result
+    assert world.snapshot.get("verifier") is None
+    assert len(world.downloads) == 1
+
+
+@pytest.mark.parametrize(
+    "merge,cause", [(MERGE, "existing_delivery"), ("e" * 40, "delivery_revision_mismatch")]
+)
+def test_evaluation_same_delivery_and_wrong_merge_never_dispatch(world, merge, cause):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive(12, merge)
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["status"] == "resource_wait" and not world.posts
+    assert result["verifier_resource_wait"]["cause"] == cause
+    assert len(world.downloads) == 1
+    validate(result, world.snapshot)
+
+
+@pytest.mark.parametrize("second_family", ["comparison", "evaluation"])
+def test_dual_or_duplicate_capture_families_remain_ambiguous(world, second_family):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive()
+    api = world.backend.gh.api
+
+    def ambiguous(endpoint, **kwargs):
+        response = api(endpoint, **kwargs)
+        if endpoint.endswith("/artifacts?per_page=100"):
+            extra = dict(response["artifacts"][0], id=8, name=f"{second_family}-results-99")
+            response["artifacts"].append(extra)
+            response["total_count"] = 2
+        return response
+
+    world.backend.gh.api = ambiguous
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["status"] == "resource_wait" and not world.posts and not world.downloads
+    assert "unambiguous" in result["verifier_resource_wait"]["requirements"][0]
+    validate(result, world.snapshot)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"repository": "other/repo"},
+        {"source_run_id": "100"},
+        {"source_run_attempt": 2},
+        {"pr": None},
+        {"merge_sha": "not-a-merge"},
+        {"context_sha256": "0" * 64},
+    ],
+)
+def test_evaluation_bad_core_identity_never_authorizes_foreign_skip(world, identity):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive(**identity)
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["status"] == "resource_wait" and not world.posts
+    assert result["verifier_resource_wait"]["cause"] == "attribution_pending"
+    assert len(world.downloads) == 1
+    validate(result, world.snapshot)
+
+
+def test_evaluation_optional_capture_omission_does_not_prevent_identity(world):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive(omit=True)
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["status"] == "completed" and len(world.posts) == 1
+    assert world.snapshot.get("verifier") is None
+
+
+def test_evaluation_expired_capture_requires_retained_verified_bytes(world):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive()
+    world.expired = True
+    first = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert first["status"] == "resource_wait" and not world.posts and not world.downloads
+    world.expired = False
+    assert world.backend.initiate_verify(TARGET, world.snapshot)["status"] == "completed"
+    assert len(world.downloads) == 1
+    world.expired = True
+    world.current["labels"] = []
+    assert world.backend.initiate_verify(TARGET, world.snapshot)["status"] == "completed"
+    assert len(world.downloads) == 1
+
+
+def test_evaluation_archive_digest_mismatch_never_authorizes_foreign_skip(world):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive()
+    api = world.backend.gh.api
+
+    def mismatch(endpoint, **kwargs):
+        response = api(endpoint, **kwargs)
+        if endpoint.endswith("/artifacts?per_page=100"):
+            response["artifacts"][0]["digest"] = "sha256:" + "0" * 64
+        return response
+
+    world.backend.gh.api = mismatch
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["status"] == "resource_wait" and not world.posts
+    assert result["verifier_resource_wait"]["requirements"] == [
+        "archive digest verification for run 99"
+    ]
+    validate(result, world.snapshot)
+
+
+@pytest.mark.parametrize("field", ["id", "head_sha"])
+def test_evaluation_archive_requires_exact_server_run_owner(world, field):
+    world.capture_family = "evaluation"
+    world.data = evaluation_archive()
+    api = world.backend.gh.api
+
+    def mismatch(endpoint, **kwargs):
+        response = api(endpoint, **kwargs)
+        if endpoint.endswith("/artifacts?per_page=100"):
+            response["artifacts"][0]["workflow_run"][field] = 100 if field == "id" else "f" * 40
+        return response
+
+    world.backend.gh.api = mismatch
+    result = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert result["status"] == "resource_wait" and not world.posts and not world.downloads
+    assert result["verifier_resource_wait"]["requirements"] == [
+        "exact server-bound verifier archive for run 99"
+    ]
+    validate(result, world.snapshot)
+
+
+def test_evaluation_capture_reuses_progress_under_existing_acquisition_budget(history_world):
+    world = history_world
+    world.capture_family = "evaluation"
+    world.populate(9)
+    for run in world.runs:
+        world.archives[run["id"]] = evaluation_archive(runid=run["id"])
+    first = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert first["status"] == "resource_wait" and len(world.downloads) == 8 and not world.posts
+    assert first["verifier_resource_wait"]["requirements"] == [
+        "continue verifier attribution after retained acquisition progress"
+    ]
+    second = world.backend.initiate_verify(TARGET, world.snapshot)
+    assert second["status"] == "completed" and len(world.downloads) == 9
+    assert len(set(world.downloads)) == 9 and len(world.posts) == 1

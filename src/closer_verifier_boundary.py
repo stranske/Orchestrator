@@ -332,11 +332,13 @@ def attribute(
             or len(rows) > evidence.MAX_ARTIFACTS
         ):
             return "pending", f"complete artifact inventory for run {rid}"
-        candidates = [
-            a for a in rows if isinstance(a, dict) and a.get("name") == f"comparison-results-{rid}"
-        ]
+        # Both native modes publish the same production input identity. The
+        # report family is not identity or acceptance authority; dual captures
+        # remain ambiguous rather than preferring one provider/mode's report.
+        capture_names = evidence.native_capture_artifact_names(rid)
+        candidates = [a for a in rows if isinstance(a, dict) and a.get("name") in capture_names]
         if len(candidates) != 1:
-            return "pending", f"unambiguous comparison capture for run {rid}"
+            return "pending", f"unambiguous native verifier capture for run {rid}"
         a = candidates[0]
         owner = a.get("workflow_run") or {}
         expected = a.get("digest")
@@ -348,7 +350,7 @@ def attribute(
             or type(a.get("size_in_bytes")) is not int
             or not 0 < a["size_in_bytes"] <= evidence.MAX_ARCHIVE_BYTES
         ):
-            return "pending", f"exact server-bound comparison archive for run {rid}"
+            return "pending", f"exact server-bound verifier archive for run {rid}"
         sha = expected.split(":")[1]
         cached = root / "raw" / sha[:2] / (sha + ".zip")
         if cached.exists() or cached.is_symlink():
