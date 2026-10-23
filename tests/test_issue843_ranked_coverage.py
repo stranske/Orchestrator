@@ -198,27 +198,29 @@ def test_router_heartbeat_and_exploration_short_circuits(monkeypatch):
 
 def test_router_pacing_choice_edge_branches(monkeypatch):
     rng = random.Random(1)
-    # Winner not in PACING_POOLS → early return of scored[0].
+    # No measured PACING_POOLS peer → still legacy, even when a non-pool agent ranks first.
     scored = [_scored("gemini"), _scored("codex", idx=1)]
     picked, decision = router._pacing_choice(scored, {"agents": {}}, {}, rng)
     assert picked[1]["agent"] == "gemini" and decision is None
 
-    # Line 561: winner is a pacing-pool agent, but after tier filter the pool list is empty.
-    # Shrink PACING_POOLS so the winner qualifies at entry, then no eligible row remains in-pool.
+    # Non-pool winner with a measured shed peer: keep the winner, attach a receipt (#812).
     monkeypatch.setattr(router, "PACING_POOLS", {"codex", "ghost"})
     scored = [
         ((0, 0, 0, 0, 0.0, 0), {"agent": "codex", "late": False}, "shed", 0),
         ((0, 0, 0, 0, 0.0, 1), {"agent": "gemini", "late": False}, "ok", 1),
     ]
+    # Put gemini first so the non-pool early path runs.
+    scored = [scored[1], scored[0]]
     cap = {
         "agents": {
             "codex": {"pacing": {"state": "shed", "routing_weight": 0.0}, "state": "shed"},
             "gemini": {"pacing": {"state": "ok", "routing_weight": 1.0}, "state": "ok"},
         }
     }
-    # With non_shed = [gemini] only, best tier is gemini's; pools among that tier is empty.
     picked, decision = router._pacing_choice(scored, cap, {}, rng)
-    assert decision is None and picked[1]["agent"] == "gemini"
+    assert picked[1]["agent"] == "gemini"
+    assert decision is not None and decision["policy"] == "unmeasured-preferred"
+    assert {c["agent"] for c in decision["candidates"]} == {"codex", "gemini"}
 
     scored = [
         ((0, 0, 0, 0, 0.0, 0), {"agent": "codex", "late": False}, "ok", 0),
@@ -227,7 +229,7 @@ def test_router_pacing_choice_edge_branches(monkeypatch):
     monkeypatch.setattr(router, "PACING_POOLS", {"codex", "claude"})
     cap = {"agents": {"codex": {"pacing": {}}, "gemini": {"pacing": {}}}}
     picked, decision = router._pacing_choice(scored, cap, {}, rng)
-    # Unmeasured pacing on the pool → return eligible[0], None (line 569).
+    # Unmeasured pacing on the pool and no measured peer → legacy.
     assert decision is None
 
     # Measured pacing with zero posterior mass → weight rewrite (line 573).

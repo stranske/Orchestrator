@@ -266,6 +266,52 @@ def test_warn_zero_is_not_shed():
     assert result["pacing_decision"]["policy"] == "fallback-warn"
 
 
+@pytest.mark.parametrize("codex_state,codex_weight", [("warn", 0.2), ("shed", 0.0), ("ok", 0.5)])
+def test_unmeasured_cursor_peer_keeps_winner_with_pacing_receipt(codex_state, codex_weight):
+    """#812: Cursor-top relay must not force legacy when Codex is measured.
+
+    Owner 2026-10-23: pick-agent --candidates codex,cursor fell to
+    `legacy (pacing unmeasured in selected tier)` whenever Cursor ranked first,
+    so almost every relay logged weights=unknown. Keep the Cursor winner
+    (selection shares unchanged) and attach a pacing receipt with real weights.
+    """
+    cap = {
+        "agents": {
+            "codex": {
+                "state": codex_state,
+                "pacing": {
+                    "state": codex_state,
+                    "routing_weight": codex_weight,
+                    "projected_fraction": 0.9,
+                    "effective_reserve": 0.15,
+                },
+            },
+            "cursor": {"state": "ok", "reason": "subscription ok"},
+        }
+    }
+    # Prefer Cursor in the learned rank so it is scored[0] — the old abort path.
+    learned = {
+        "cursor": {"posterior": 0.9, "score": 0.9, "n_obs": 10, "rank": 0},
+        "codex": {"posterior": 0.1, "score": 0.1, "n_obs": 10, "rank": 1},
+    }
+    result = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "cursor"},
+        learned=learned,
+        rng=random.Random(7),
+        simulate=True,
+    )
+    assert result is not None
+    decision = result.get("pacing_decision")
+    assert decision is not None, "Cursor-top must not collapse measured Codex to legacy"
+    assert decision["policy"] == "unmeasured-preferred"
+    by_agent = {row["agent"]: row["routing_weight"] for row in decision["candidates"]}
+    assert by_agent["codex"] == codex_weight
+    assert by_agent["cursor"] == 1.0  # neutral unmeasured
+    assert result["agent"] == "cursor"
+
+
 def test_router_weighted_probabilities_without_changing_posteriors():
     cap = cap_for(codex="ok", cw=0.25, aw=0.75)
     learned = {a: {"posterior": 0.8, "score": 0.8} for a in ("codex", "claude")}
