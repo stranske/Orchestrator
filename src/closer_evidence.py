@@ -1800,7 +1800,8 @@ def native_capture_artifact_names(run_id: str | int) -> tuple[str, str]:
     return (f"comparison-results-{run_id}", f"evaluation-results-{run_id}")
 
 
-def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) -> list[dict]:    """Read native manifests and exact known verifier report files from an archive."""
+def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) -> list[dict]:
+    """Read native manifests and exact known verifier report files from an archive."""
     supplied_retain = retain
     if supplied_retain is None:
         retain = _retain_bytes
