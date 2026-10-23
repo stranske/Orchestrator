@@ -207,10 +207,12 @@ def publish_admission(manifest, manifest_path, state_path, doc):
 
     policy = capacity_contract(manifest, control_plane_only=True)
     control_plane_only = False
+    control_plane_reasons = []
     if policy is not None:
         try:
             capacity_contract(manifest)
-        except mechanisms.MechanismError:
+        except mechanisms.MechanismError as exc:
+            control_plane_reasons.append(f"model qualification unavailable: {exc}")
             # Explicit zero-grant qualification; never manufacture an eligible profile.
             control_plane_only = True
     if policy is None:
@@ -344,7 +346,10 @@ def publish_admission(manifest, manifest_path, state_path, doc):
     if not control_plane_only:
         try:
             scoped.evaluate(producer_cfg)
-        except (scoped.CapacityError, OSError):
+        except (scoped.CapacityError, OSError, ValueError) as exc:
+            control_plane_reasons.append(
+                f"optional model telemetry unavailable: {type(exc).__name__}: {exc}"
+            )
             # Unavailable optional provider telemetry cannot qualify model work,
             # but does not prevent independently authenticated GitHub control IO.
             producer_cfg.update(control_plane_only=True, profile_ids=[], bounded_trial_agents=[])
@@ -365,6 +370,8 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         "runtime_manifest": producer_cfg["runtime_manifest"],
         "runtime_manifest_sha256": producer_cfg["runtime_manifest_sha256"],
     }
+    if control_plane_reasons:
+        context["control_plane_reasons"] = control_plane_reasons
     if workspace_config is not None:
         context["workspace_config"] = workspace_config
     if finite:

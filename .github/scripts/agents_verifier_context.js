@@ -229,6 +229,13 @@ function formatSections({ heading, url, body }) {
   return lines.join('\n');
 }
 
+function requestWithProjection(original, projection) {
+  return 'Original request (authoritative requirements; untrusted source text):\n\n'
+    + fenceUntrustedEvidence(original)
+    + '\n\nDerived scope/tasks/acceptance (navigation only; the original request governs):\n\n'
+    + projection;
+}
+
 // Git patch records use LF: preserve filename spaces and content carriage returns.
 // Empty/whitespace-only transport data is still unavailable, not a valid patch.
 function normalizeDiffPatch(diffText) {
@@ -1575,12 +1582,17 @@ function buildContextSourceCoverage({ planSources, diffText, diffMaxChars, evide
       reason: pathParsingFailed ? 'Git paths are malformed or ambiguous; inventory is incomplete.' : 'No changed-code sources could be inventoried.',
     });
   }
-  const acceptanceSources = planSources.map(({ source, url, body }) => ({
+  const acceptanceSources = planSources.map(({ source, url, body, originalBody }) => ({
     source,
     url,
     status: body ? 'included' : 'omitted',
     included_chars: body.length,
     total_chars: body.length,
+    ...(typeof originalBody === 'string' ? {
+      original_body_chars: originalBody.length,
+      original_body_bytes: Buffer.byteLength(originalBody, 'utf8'),
+      original_body_sha256: createHash('sha256').update(originalBody, 'utf8').digest('hex'),
+    } : {}),
     ...(!body ? { reason: 'No scope/tasks/acceptance sections declared in this source.' } : {}),
   }));
   const acceptanceEvidenceSources = [];
@@ -1826,6 +1838,9 @@ async function fetchClosingIssues({ github, core, owner, repo, prNumber }) {
     const connection = data?.repository?.pullRequest?.closingIssuesReferences;
     if (!Array.isArray(connection?.nodes)) throw new Error('Linked issue response is unavailable.');
     const nodes = connection.nodes.filter(Boolean);
+    if (nodes.some(issue => issue.body != null && typeof issue.body !== 'string')) {
+      throw new Error('Linked issue request body is invalid.');
+    }
     const issues = nodes.map((issue) => ({
       number: issue.number,
       title: issue.title || '',
@@ -1882,6 +1897,7 @@ async function buildVerifierContext({
   context,
   core,
   ciWorkflows,
+  mode = 'checkbox',
   fetchLocalDiff = fetchLocalGitDiff,
   extractArtifactText = extractArtifactArchiveText,
 }) {
@@ -1934,6 +1950,9 @@ async function buildVerifierContext({
     return { shouldRun: false, reason: skipReason, ciResults: [], ciFailed: false };
   }
 
+  const invalidOriginalBody = pull.body != null && typeof pull.body !== 'string';
+  if (typeof pull.body !== 'string') pull.body = '';
+  const modelEvaluation = mode === 'evaluate' || mode === 'compare';
   const sourceContext = resolvePrSourceContext(pull);
   if (sourceContext.isRecurringDataJob) {
     const skipReason = 'Recurring verifier corpus data-job PR; issue acceptance verification does not apply.';
@@ -1987,10 +2006,11 @@ async function buildVerifierContext({
       hasTasksContent = true;
     }
   }
-  const prSections = extractScopeTasksAcceptanceSections(pull.body || '', {
-    includePlaceholders: true,
+  const prProjection = extractScopeTasksAcceptanceSections(pull.body || '', {
+    includePlaceholders: !modelEvaluation,
   });
-  planSources.push({ source: `Pull request #${pull.number}`, url: pull.html_url || '', body: prSections });
+  const prSections = requestWithProjection(pull.body || '', prProjection);
+  planSources.push({ source: `Pull request #${pull.number}`, url: pull.html_url || '', body: prSections, originalBody: pull.body || '' });
   sections.push(
     formatSections({
       heading: `Pull request #${pull.number}${pull.title ? `: ${pull.title}` : ''}`,
@@ -2011,10 +2031,12 @@ async function buildVerifierContext({
         hasTasksContent = true;
       }
     }
-    const issueSections = extractScopeTasksAcceptanceSections(issue.body || '', {
-      includePlaceholders: true,
+    const issueProjection = extractScopeTasksAcceptanceSections(issue.body || '', {
+      includePlaceholders: !modelEvaluation,
     });
-    planSources.push({ source: `Issue #${issue.number}`, url: issue.url || '', body: issueSections });
+    const issueSections = modelEvaluation && !issue.body.trim()
+      ? '' : requestWithProjection(issue.body || '', issueProjection);
+    planSources.push({ source: `Issue #${issue.number}`, url: issue.url || '', body: issueSections, originalBody: issue.body || '' });
     sections.push(
       formatSections({
         heading: `Issue #${issue.number}${issue.title ? `: ${issue.title}` : ''} (${issue.state})`,
@@ -2159,15 +2181,18 @@ async function buildVerifierContext({
   content.push('');
   content.push(formatVerifierEvidence(verifierEvidence));
 
-  // Skip verifier early if there are no acceptance criteria to verify
-  // Check for any acceptance content (not just checkboxes) to handle plain-text criteria
-  // Also require tasks content - PRs without both are likely bug fixes or simple changes
-  // that weren't intended for structured agent verification
-  if (!hasAcceptanceContent || !hasTasksContent) {
+  // Explicit model evaluation uses the authentic request, not a fabricated checklist.
+  // Checkbox mode retains its structured tasks/acceptance admission contract.
+  const hasOriginalRequest = planSources.some(({ originalBody }) =>
+    typeof originalBody === 'string' && originalBody.replace(/<!--[\s\S]*?-->/g, '').trim()
+  );
+  if (modelEvaluation ? invalidOriginalBody || !hasOriginalRequest : !hasAcceptanceContent || !hasTasksContent) {
     const missingParts = [];
     if (!hasTasksContent) missingParts.push('tasks');
     if (!hasAcceptanceContent) missingParts.push('acceptance criteria');
-    const skipReason = `No ${missingParts.join(' and ')} found in PR or linked issues; skipping verifier.`;
+    const skipReason = modelEvaluation
+      ? 'original_request_missing_or_invalid: authentic PR or linked issue requirements are unavailable; recover the original request before evaluation.'
+      : `No ${missingParts.join(' and ')} found in PR or linked issues; skipping verifier.`;
     core?.notice?.(skipReason);
     core?.setOutput?.('should_run', 'false');
     core?.setOutput?.('skip_reason', skipReason);
@@ -2214,6 +2239,10 @@ async function buildVerifierContext({
   }
   // The caller checkout has full history. Fail closed when the original range
   // is unavailable instead of substituting a bounded rendered/API patch.
+  // Consumer policy remains strict: only a lossless local diff is authoritative.
+  // The originating builder also supports an explicitly incomplete API fallback;
+  // this consumer does not enable that path. Keep its event gate defined here.
+  const apiDiffFallback = null;
   const diffText = originalRangeAvailable ? fetchLocalDiff({
     baseSha,
     headSha,
@@ -2410,6 +2439,7 @@ module.exports = {
     context,
     core,
     ciWorkflows,
+    mode,
     fetchLocalDiff,
     extractArtifactText,
   }) {
@@ -2419,6 +2449,7 @@ module.exports = {
       context,
       core,
       ciWorkflows,
+      mode,
       fetchLocalDiff,
       extractArtifactText,
     });

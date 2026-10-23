@@ -1301,7 +1301,16 @@ def run_job(
     free: Callable[[Path], int] = available,
     probe: Callable[[Path], None] = idle,
     lock_deadline: float | None = None,
+    lifecycle_lock_timeout_seconds: float = 5.0,
 ) -> int:
+    # Acquisition is request-bound. Later ledger operations each get their own
+    # bounded wait: a legitimate child lifetime must not consume cleanup time.
+    if (
+        type(lifecycle_lock_timeout_seconds) not in (int, float)
+        or not math.isfinite(lifecycle_lock_timeout_seconds)
+        or lifecycle_lock_timeout_seconds <= 0
+    ):
+        raise ValueError("finite positive lifecycle lock timeout required")
     parent = args.temp_parent.resolve()
     fallback_reason: JSON = {}
     cold_plan = _qualified_cold_plan(args, reason=fallback_reason)
@@ -1312,6 +1321,12 @@ def run_job(
     manager = Reservations(
         args.state_dir, parent, floor=floor, margin=margin, free=free, deadline=lock_deadline
     )
+
+    def lifecycle_call(method: str, *values: Any, **metadata: Any) -> Any:
+        manager.deadline = time.monotonic() + lifecycle_lock_timeout_seconds
+        # bind accepts arbitrary metadata; do not serialize a deadline as a field.
+        return getattr(manager, method)(*values, **metadata)
+
     job = uuid.uuid4().hex
     token = uuid.uuid4().hex
     for flag in ("--snapshot-out", "--digest-out"):
@@ -1376,7 +1391,7 @@ def run_job(
     except (OSError, StorageLockWait):
         if lock is not None:
             os.close(lock)
-        manager.finish(job, {"status": "not_started_owner_lock_failed"}, terminal=True)
+        lifecycle_call("finish", job, {"status": "not_started_owner_lock_failed"}, terminal=True)
         raise
     root: Path | None = None
     root_id: tuple[int, int] | None = None
@@ -1401,7 +1416,8 @@ def run_job(
         root = Path(tempfile.mkdtemp(prefix="storage-verify-", dir=parent)).resolve()
         root_id = (root.stat().st_dev, root.stat().st_ino)
         write_json(root / "owner.json", {"job": job, "token": token})
-        manager.bind(
+        lifecycle_call(
+            "bind",
             job,
             root=str(root),
             root_identity=list(root_id),
@@ -1412,14 +1428,14 @@ def run_job(
         tmp_attributes = (root / "tmp").stat()
         tmp_id = (tmp_attributes.st_dev, tmp_attributes.st_ino)
         write_json(root / "tmp" / "owner.json", {"job": job, "token": token})
-        manager.bind(job, tmp_identity=list(tmp_id))
+        lifecycle_call("bind", job, tmp_identity=list(tmp_id))
         (root / "staging").mkdir()
-        manager.bind(job, source_command=source_command, source_identity=before)
+        lifecycle_call("bind", job, source_command=source_command, source_identity=before)
         receipt.update(root=str(root), source_identity=before)
         if args.local_strict:
             sampler = OwnedHighwater(root, root_id, token)
             sampler.sample(force=True)
-            manager.bind(job, owned_highwater=sampler.result)
+            lifecycle_call("bind", job, owned_highwater=sampler.result)
         env = {
             **os.environ,
             "ORCH_STORAGE_RUN_ID": job,
@@ -1445,14 +1461,14 @@ def run_job(
             env=env,
             start_new_session=True,
         )
-        manager.bind(job, child_pgid=child.pid)
+        lifecycle_call("bind", job, child_pgid=child.pid)
         lowest = admitted["available_before"]
         warned = False
         while child.poll() is None:
             if sampler is not None and sampler.sample():
                 # Preserve pre-teardown samples even if the supervisor later dies.
                 # Interrupted ownership stays charged; this is not a terminal proof.
-                manager.bind(job, owned_highwater=sampler.result)
+                lifecycle_call("bind", job, owned_highwater=sampler.result)
             lowest = min(lowest, free(parent))
             if not warned and free(parent) < margin + forecast:
                 print(
@@ -1500,7 +1516,9 @@ def run_job(
         target = root if rc == 0 else root / "tmp"
         target_id = root_id if rc == 0 else tmp_id
         receipt["retirement_path"] = str(target.with_name(target.name + ".retiring"))
-        manager.finish(job, {**receipt, "status": "terminal_evidence_saved"}, terminal=False)
+        lifecycle_call(
+            "finish", job, {**receipt, "status": "terminal_evidence_saved"}, terminal=False
+        )
         if stable and os.environ.get("VERIFY_BEFORE_SYNC_KEEP") != "1":
 
             def checked_idle(path: Path) -> None:
@@ -1525,7 +1543,7 @@ def run_job(
             )
         else:
             receipt["status"] = "retained_requested" if stable else "retained_source_changed"
-        manager.finish(job, receipt, terminal=True)
+        lifecycle_call("finish", job, receipt, terminal=True)
         print(
             json.dumps(
                 {
@@ -1551,7 +1569,7 @@ def run_job(
                 status="not_started", error=type(exc).__name__, root=str(root) if root else None
             )
             if root is None:
-                manager.finish(job, receipt, terminal=True)
+                lifecycle_call("finish", job, receipt, terminal=True)
                 raise
             try:
                 if root_id is None:
@@ -1583,7 +1601,7 @@ def run_job(
                 receipt.update(
                     status="not_started_cleanup_pending", cleanup_error=type(cleanup_error).__name__
                 )
-            manager.finish(job, receipt, terminal=no_writers)
+            lifecycle_call("finish", job, receipt, terminal=no_writers)
             raise
         receipt.update(
             status="cleanup_pending" if no_writers else "retained_uncertain",
@@ -1593,7 +1611,7 @@ def run_job(
         # Failed deletion does not reserve future growth after positive terminality:
         # existing remnants are already reflected in actual free bytes. Uncertain
         # children keep their reservation; never infer death from elapsed time.
-        manager.finish(job, receipt, terminal=terminal and no_writers)
+        lifecycle_call("finish", job, receipt, terminal=terminal and no_writers)
         raise
     finally:
         os.close(lock)

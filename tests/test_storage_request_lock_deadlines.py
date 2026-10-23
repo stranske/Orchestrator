@@ -134,7 +134,7 @@ def test_owner_guard_wait_is_prechild_and_releases_only_own_reservation(job, mon
     assert json.loads((job.state_dir / "reservations.json").read_text())["jobs"] == {}
     with pytest.raises(OSError):
         os.fstat(owner_fd[0])
-    assert not list(job.temp_parent.glob("storage-run-*"))
+    assert not list(job.temp_parent.glob("storage-verify-*"))
 
 
 def test_finish_lock_wait_retains_charge_and_is_typed_not_remote_unknown(tmp_path):

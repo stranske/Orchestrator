@@ -2751,6 +2751,12 @@ def collect_evidence(
         ):
             return None
         section = prior_packet["sections"].get(name)
+        if (
+            isinstance(section, dict)
+            and isinstance(section.get("provenance"), dict)
+            and section["provenance"].get("request_status") == "not_requested"
+        ):
+            return None
         if allow_partial and name == "review_conversations":
             provenance = section.get("provenance", {}) if isinstance(section, dict) else {}
             if (
@@ -2779,6 +2785,12 @@ def collect_evidence(
         if prior_packet["bindings"].get(binding_name) != binding:
             return None
         section = prior_packet["sections"].get(name)
+        if (
+            isinstance(section, dict)
+            and isinstance(section.get("provenance"), dict)
+            and section["provenance"].get("request_status") == "not_requested"
+        ):
+            return None
         # A verified missing/partial observation is progress too. Keep its raw
         # section and failure reason until an explicit requirement selects it.
         if not isinstance(section, dict) or not _retained_section_payload_valid(section):

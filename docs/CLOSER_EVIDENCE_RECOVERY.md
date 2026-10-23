@@ -190,8 +190,11 @@ If the native invocation has no qualifying model profile, its existing local sco
 capacity publication may explicitly qualify only the control plane. That report has
 literal `control_plane_only: true`, no model profiles/pools or trial grants, and does
 not replace shared model-capacity publications. Model work remains capacity-blocked.
-Attribution retention and reservation locks use the request deadline; contention
+Attribution retention and admission locks use the request deadline; contention
 returns a named pre-POST wait while preserving the current holder and evidence.
+After a supervised child starts, each ledger bind/finish/recovery uses a fresh
+bounded lock budget so legitimate child runtime cannot expire its own cleanup.
+Contended cleanup preserves the reservation for supported recovery.
 
 An authenticated pending event can re-enter this same path when its advertised
 execution binding, exact terminal run/attempt, complete jobs inventory and second
@@ -219,3 +222,10 @@ acceptance still require the authenticated terminal result. An explicit HTTP 422
 on the bound workflow request uses Core's typed live-owner rejection transition,
 retaining the original intent and rejection proof for supported retry. A timeout
 or crash without authoritative rejection/acceptance evidence remains uncertain.
+
+The synced consumer's complete exported collector is exercised by the normal
+Python Gate through its retained Node contract fixture. An action-inapplicable
+`not_requested` packet placeholder is not a fetched observation and is collected
+when a later action actually needs that section. Current lifecycle feedback is
+refreshed in bounded fair batches, including previously PASS outcomes; its
+SQLite-scoped cursor is advisory and cannot override an authenticated result.

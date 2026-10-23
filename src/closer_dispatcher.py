@@ -1480,6 +1480,7 @@ class Closer:
         local_first=False,
         runtime_binding=None,
         require_runtime_binding=False,
+        workspace_validator=None,
     ):
         self.gh = github
         self.state_path = Path(state_path)
@@ -1492,6 +1493,7 @@ class Closer:
         self.worker_timeout = worker_timeout
         self.workspaces = workspaces or {}
         self.workspace_bindings = workspace_bindings
+        self.workspace_validator = workspace_validator
         self.offload_fn = offload_fn
         self.advisory = {}
         self.advisory_reasons = {}
@@ -2816,6 +2818,15 @@ class Closer:
     ):
         if not self.workers:
             return {"status": "deferred", "reason": "private workers disabled"}
+        if self.workspace_validator is not None:
+            try:
+                self.workspace_validator(target)
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                return {
+                    "status": "blocked",
+                    "reason": f"execution workspace validation failed: {exc}",
+                    "next_trigger": "authorized repository workspace recovery",
+                }
         import capacity
         import dispatcher
 
@@ -3237,18 +3248,19 @@ def load_workspace_config(
         raise ValueError("native workspace config requires its frozen assignment targets")
     effective = {**historical, **execution}
     selected = {} if require_pin else dict(execution)
-    if require_pin:
+    if targets is not None:
         if not isinstance(targets, (list, tuple)) or any(
             not isinstance(target, str) or not TARGET.fullmatch(target) for target in targets
         ):
             raise ValueError("native workspace config assignment targets are invalid")
-        raw_effective = {**value["historical"], **value["execution"]}
+        selected = {}
+        raw_effective = {**value["historical"], **value["execution"]} if envelope else value
         for target in targets:
             workspace = selected_workspace(effective, target)
             if workspace is None:
                 continue
             raw_workspace = selected_workspace(raw_effective, target)
-            if raw_workspace != workspace:
+            if require_pin and raw_workspace != workspace:
                 raise ValueError(
                     "native execution workspace must be a canonical physical directory"
                 )
@@ -3288,6 +3300,17 @@ def load_workspace_config(
         else historical
     )
     return {**historical, **execution}, binding
+
+
+def validate_bound_workspace_config(
+    path, bound_workspaces, target, expected_sha256=None, *, require_pin=False
+):
+    """Validate the exact cwd selected for execution, never a replacement mapping."""
+    current, _ = load_workspace_config(
+        path, expected_sha256, require_pin=require_pin, targets=[target], validate_execution=True
+    )
+    if selected_workspace(current, target) != selected_workspace(bound_workspaces, target):
+        raise ValueError("execution workspace mapping changed; refresh the bound invocation")
 
 
 def known_workspaces(targets):
@@ -8163,6 +8186,19 @@ def _main_admitted(args, p, assignment_rows, targets):
         ),
         workspaces=workspaces,
         workspace_bindings=workspace_bindings,
+        workspace_validator=(
+            (
+                lambda target: validate_bound_workspace_config(
+                    args.workspaces,
+                    workspaces,
+                    target,
+                    getattr(args, "workspaces_sha256", None),
+                    require_pin=args.runtime_manifest is not None,
+                )
+            )
+            if args.workspaces
+            else None
+        ),
         local_first=bool(args.pipeline),
     )
     if args.pipeline and args.shadow:
