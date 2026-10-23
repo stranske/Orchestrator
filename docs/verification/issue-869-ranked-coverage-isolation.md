@@ -14,7 +14,7 @@ Validation using cached local pytest/Black wheels in `/tmp/orch872-py314`:
 - `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 files unchanged. A temporary event-loop polling workaround collected the initial formatting results because the sandbox blocks worker socket wakeups; the ordinary required command then passed using that verified cache.
 - `git diff --check`: passed.
 
-Commit blocker: local `git add` cannot create `.git/index.lock` because `.git` is read-only. GitHub connector `update_file` also refused the commit: "MCP tool call requires approval, but approval policy is never". The patch remains local and needs a commit-capable follow-up run. Historical #853 combined-CI provenance and evidence limitations remain unchanged; no new uncovered-unit gain is claimed.
+Commit blocker during that run: local `git add` could not create `.git/index.lock` because `.git` was read-only. GitHub connector `update_file` also refused the commit: "MCP tool call requires approval, but approval policy is never". The automation subsequently committed the patch and this evidence in `b627a6f`. Historical #853 combined-CI provenance and evidence limitations remain unchanged; no new uncovered-unit gain is claimed.
 
 Attempts to update the PR body, add this comment, and apply `needs-human` were also rejected by the same connector approval policy. No remote mutation succeeded. Existing historical combined coverage remains linked from the PR to [CI run 39545834989](https://github.com/stranske/Orchestrator/actions/runs/39545834989); it was not rerun here.
 
@@ -56,4 +56,54 @@ The changed test file was also run through `black --line-length 100`.
 
 The GitHub connector rejected the source-file commit, PR-body reconciliation update, blocker
 comment, and `needs-human` label with "MCP tool call requires approval, but approval policy is
-never". No remote mutation succeeded. Both the test follow-up and this evidence remain local.
+never". No remote mutation succeeded during that run. The automation subsequently committed
+the test follow-up and this evidence in `ca518a2`.
+
+## Cached-path rebinding regression (2026-10-23)
+
+Reviewed the recent commits through `ca518a2` and reconciled the live PR body: all eight task
+and acceptance checkboxes were already checked. PR #872 was open with `draft=false`.
+
+Added `test_runtime_fixture_rebinds_preexisting_environment_and_cached_database` to verify
+that the module fixture replaces preexisting `ORCH_STATE_DIR`, `ORCH_LOCAL_RUNTIME`,
+`ORCH_FEEDBACK_DB`, and the already-imported `feedback.DB_PATH`. It checks all four bindings
+before invoking the real connection factory, verifies SQLite's actual database path, and
+checks that fixture teardown restores the prior bindings without creating the stale root.
+Every path in this regression is under pytest's temporary directory.
+
+Using `/tmp/orch872-venv/bin/python` with pytest/Black restored from cached local wheels:
+
+- Baseline standalone module: 23 passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`: 24 passed.
+- Safe mutations: removed each of the four fixture bindings individually, then ran
+  `python -m pytest -q tests/test_issue853_ranked_coverage.py -k
+  runtime_fixture_rebinds_preexisting_environment_and_cached_database -m "not slow" --tb=short`.
+  Each mutation produced 1 failed, 23 deselected at the corresponding binding assertion,
+  before the connection factory. Restored the source in a `finally` block and reran the
+  standalone module: 24 passed.
+- Neighbors with `ORCH_STATE_DIR=/tmp/orch872-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/orch872-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/orch872-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed. Only the neighbors use the runtime wrapper; the isolation
+  module runs with its own fixture.
+
+Historical #853 combined-CI provenance and partial-round limitations remain as recorded above;
+this follow-up claims no additional uncovered-unit gain.
+
+Formatting and publication results for this follow-up:
+
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-black-cache black --check --line-length 100
+  --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 files unchanged. The initial
+  process-pool runs stalled, so Black's CLI source discovery and single-file checker were run
+  sequentially with the same settings to populate the verified cache; the ordinary command
+  above then exited 0.
+- `git diff --check`: passed.
+- `git add -- tests/test_issue853_ranked_coverage.py
+  docs/verification/issue-869-ranked-coverage-isolation.md`: failed because `.git/index.lock`
+  cannot be created on the read-only Git filesystem. No local commit was possible.
+- GitHub source-file commit, PR-body update, blocker comment, and `needs-human` label were all
+  rejected with "MCP tool call requires approval, but approval policy is never". This follow-up
+  remains in the working tree for a commit-capable run; no remote mutation succeeded.

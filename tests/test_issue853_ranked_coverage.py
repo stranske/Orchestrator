@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sqlite3
 import subprocess
@@ -90,6 +91,48 @@ def isolated_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterato
     monkeypatch.setattr(dispatcher, "offload", forbidden)
     yield
     assert attempted == [], "issue #853 test attempted external effects"
+
+
+def test_runtime_fixture_rebinds_preexisting_environment_and_cached_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Imports may cache a database path before the per-test environment is installed."""
+    stale_root = tmp_path / "stale-runtime"
+    stale_db = stale_root / OUT_OF_BOUND_SENTINEL_NAME
+    stale_env = {
+        "ORCH_STATE_DIR": str(stale_root / "state"),
+        "ORCH_LOCAL_RUNTIME": str(stale_root / "runtime"),
+        feedback.DB_PATH_ENV: str(stale_db),
+    }
+    for name, value in stale_env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(feedback, "DB_PATH", stale_db)
+
+    nested_root = tmp_path / "nested"
+    owned = nested_root / "owned"
+    expected_db = owned / "runtime" / "feedback" / "orchestrator.db"
+    with monkeypatch.context() as guard_patch:
+        runtime = isolated_runtime.__wrapped__(nested_root, guard_patch)
+        next(runtime)
+        try:
+            # Check every binding before calling the factory, even if isolation is broken.
+            assert Path(os.environ["ORCH_STATE_DIR"]) == owned / "state"
+            assert Path(os.environ["ORCH_LOCAL_RUNTIME"]) == owned / "runtime"
+            assert Path(os.environ[feedback.DB_PATH_ENV]) == expected_db
+            assert feedback.DB_PATH == expected_db
+            conn = feedback._conn()
+            try:
+                actual_db = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+                assert actual_db.resolve() == expected_db.resolve()
+            finally:
+                conn.close()
+        finally:
+            with pytest.raises(StopIteration):
+                next(runtime)
+
+    assert feedback.DB_PATH == stale_db
+    assert {name: os.environ[name] for name in stale_env} == stale_env
+    assert not stale_root.exists(), "stale runtime must remain untouched"
 
 
 @pytest.mark.parametrize(
