@@ -2091,9 +2091,42 @@ class Closer:
         if action in {"collect_evidence", "review", "disposition", "repair"}:
             return self.worker(target, action, fresh, operation)
 
+        if self.require_runtime_binding and self.runtime_binding is None:
+            return {"status": "blocked", "reason": "pinned shared Core binding required"}
+        prepared_verify = None
+        if action in {"initiate_verify", "post_merge_verify"}:
+            prepared_verify = self.prepare_verify(pr_target, fresh)
+            if "mutation_kind" not in prepared_verify:
+                return prepared_verify
+            # Metadata/inventory admission may take time. Refresh the exact
+            # subject and current holds before Core records any mutation intent.
+            try:
+                latest = self.verification_snapshot(self.gh.snapshot(target))
+                latest_action, latest_reason, latest_eligible, latest_trigger = self.select(latest)
+                changed = latest.get("revision") != fresh.get("revision")
+                if "target" in latest:
+                    changed = changed or prepared_verify.get(
+                        "request_basis"
+                    ) != self.verification_request_basis(latest)
+            except Exception as exc:
+                return {
+                    "status": "not_started",
+                    "reason": f"verification admission freshness unavailable: {type(exc).__name__}",
+                    "next_trigger": "fresh authoritative verification admission",
+                }
+            if changed or not latest_eligible or latest_action != action:
+                return {
+                    "status": "not_started",
+                    "reason": (
+                        latest_reason if not latest_eligible else "verification binding changed"
+                    ),
+                    "next_trigger": latest_trigger or "fresh verification frontier",
+                }
+            fresh = latest
+
         def native_effect():
             if action in {"initiate_verify", "post_merge_verify"}:
-                return self.initiate_verify(pr_target, fresh)
+                return self.submit_verify(pr_target, fresh, prepared_verify)
             if action == "merge":
                 import paths
 
@@ -2167,7 +2200,14 @@ class Closer:
         if self.require_runtime_binding or self.runtime_binding is not None:
             if self.runtime_binding is None:
                 return {"status": "blocked", "reason": "pinned shared Core binding required"}
-            return self.runtime_binding.execute(target, action, fresh, operation, native_effect)
+            return self.runtime_binding.execute(
+                target,
+                action,
+                fresh,
+                operation,
+                native_effect,
+                verification_mutation=prepared_verify,
+            )
         return native_effect()  # deployed legacy invocation retains its native guards
 
     def _verification_preflight(self, target, snapshot, *, gh=None, check_current=True):
@@ -2537,7 +2577,8 @@ class Closer:
             }
         return snapshot
 
-    def initiate_verify(self, target, snapshot):
+    def prepare_verify(self, target, snapshot):
+        """Complete read admission before recording a consequential Core intent."""
         disposition = self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
         repeat_request = verification_events.request_matches(snapshot, disposition)
         result = self._verification_preflight(target, snapshot)
@@ -2608,40 +2649,59 @@ class Closer:
                         "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
                     }
                 )
-            try:
-                self.gh.api(
-                    f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
-                    method="POST",
-                    fields=inputs,
-                )
-            except GitHubNoEffectRejected:
-                return {
-                    "status": "not_started",
-                    "reason": "verification event inputs unsupported or rejected (HTTP 422)",
-                    "next_trigger": "compatible reviewed consumer workflow and valid event inputs",
-                }
             return {
-                "status": "completed",
-                "verification_key": f"{target}:{snapshot['merge']}:compare",
-                "verification_request_basis": self.verification_request_basis(snapshot),
+                "mutation_kind": "workflow_dispatch",
+                "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
+                "fields": inputs,
+                "request_basis": self.verification_request_basis(snapshot),
                 "verification_predecessor": (
                     repeat_request["predecessor_event_id"] if repeat_request else None
                 ),
                 "material_selectors": repeat_request["material"] if repeat_request else [],
-                "next_trigger": "verifier terminal receipt",
             }
-        # Nothing catches the POST: a timeout/exception here remains UNKNOWN.
-        self.gh.api(
-            f"repos/{repo}/issues/{number}/labels",
-            method="POST",
-            fields={"labels[]": "verify:compare"},
-        )
+        return {
+            "mutation_kind": "label",
+            "endpoint": f"repos/{repo}/issues/{number}/labels",
+            "fields": {"labels[]": "verify:compare"},
+            "request_basis": self.verification_request_basis(snapshot),
+        }
+
+    def submit_verify(self, target, snapshot, prepared):
+        # Only this exact prepared POST follows the Core intent. Its acknowledgement
+        # proves request acceptance, never evaluation or acceptance completion.
+        if prepared.get("request_basis") != self.verification_request_basis(snapshot):
+            return {"status": "not_started", "reason": "verification request changed"}
+        try:
+            self.gh.api(prepared["endpoint"], method="POST", fields=prepared["fields"])
+        except GitHubNoEffectRejected:
+            return {
+                "status": "not_started",
+                "reason": "verification event inputs unsupported or rejected (HTTP 422)",
+                "next_trigger": "compatible reviewed consumer workflow and valid event inputs",
+                "verification_rejected": {
+                    "mutation_kind": prepared["mutation_kind"],
+                    "request_basis": prepared["request_basis"],
+                    "http_status": 422,
+                },
+            }
         return {
             "status": "completed",
             "verification_key": f"{target}:{snapshot['merge']}:compare",
-            "verification_request_basis": self.verification_request_basis(snapshot),
+            "verification_request_basis": prepared["request_basis"],
+            "verification_post_accepted": {
+                "mutation_kind": prepared["mutation_kind"],
+                "request_basis": prepared["request_basis"],
+            },
+            "verification_predecessor": prepared.get("verification_predecessor"),
+            "material_selectors": prepared.get("material_selectors", []),
             "next_trigger": "verifier terminal receipt",
         }
+
+    def initiate_verify(self, target, snapshot):
+        prepared = self.prepare_verify(target, snapshot)
+        if "mutation_kind" not in prepared:
+            return prepared
+        return self.submit_verify(target, snapshot, prepared)
 
     def close_sources(self, target, snapshot, *, owner=None, decision_target=None):
         if (

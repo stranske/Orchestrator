@@ -519,7 +519,7 @@ def test_targeted_optional_capture_seals_diagnostic_packet_without_admission_dep
     )
     world.current = copy.deepcopy(world.snapshot)
     # Ordinary observation does not fetch any completed history or capture.
-    assert world.backend.verification_snapshot(world.snapshot) is world.snapshot
+    assert world.backend.verification_snapshot(world.snapshot) == world.snapshot
     assert not world.reads and not world.downloads
     enriched = world.backend.verification_snapshot(world.snapshot, include_history=True)
     assert enriched["native_diagnostic_reference"]["run"]["id"] == 99

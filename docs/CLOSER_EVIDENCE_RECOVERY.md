@@ -201,3 +201,12 @@ remain scoped recovery; age is never a no-start proof. The original pending
 marker is unchanged. A transient read proof enters the existing operation binding,
 and an accepted dispatch receipt prevents another request for that same event
 before a new authenticated attempt or supported request reconciliation.
+
+The shared Core intent binds whether verification adds its initial label or submits
+an exact workflow request, including the request-basis digest. Read admission runs
+before that intent. An old label cannot acknowledge a later workflow dispatch;
+only its explicit accepted POST response proves request submission. Evaluation and
+acceptance still require the authenticated terminal result. An explicit HTTP 422
+on the bound workflow request uses Core's typed live-owner rejection transition,
+retaining the original intent and rejection proof for supported retry. A timeout
+or crash without authoritative rejection/acceptance evidence remains uncertain.
