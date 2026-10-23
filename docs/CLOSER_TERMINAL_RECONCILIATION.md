@@ -29,13 +29,15 @@ python3 src/closer_resources.py --state /absolute/pipeline.json --target owner/r
 ```
 
 The immutable audit retains original intent bytes and SHA-256 hashes plus the
-fresh observed target state. Each intent is atomically moved to a `.retired`
-file only after the audit is fsynced. A crash after the audit write and before
-the first rename resumes from that same audit when the plan hash and
-advertisement bytes still match (`observed_at` is ignored). A partial archive
-after at least one rename leaves remaining intents blocking: plan those
-remaining bytes afresh, preserving prior audit files. No live reservation is
-expired, overwritten or silently deleted.
+fresh observed target state. The audit is fsynced via a temp file then
+published with `os.link` so a crash cannot leave a torn read-only audit that
+latches the plan hash. Each intent is atomically moved to a `.retired` file
+only after that publish. A crash after the audit write and before the first
+rename resumes from that same audit when the plan hash and advertisement bytes
+still match (`observed_at` is ignored). A partial archive after at least one
+rename leaves remaining intents blocking: plan those remaining bytes afresh,
+preserving prior audit files. No live reservation is expired, overwritten or
+silently deleted.
 
 Retirement releases resource advertisements only. The original operation and
 pipeline ledgers are unchanged; UNKNOWN is not rewritten as success. The result
@@ -47,10 +49,12 @@ Expired-admission receipts grade that outcome as `reservation_drain_pass`
 (`reservation_drain_pass_number`, check date 2026-10-30): before the date the
 status stays `pending` while `reservation_cleared` reports whether
 `blocking_reservations` is 0 or equals `drainable_reservations`. After the date
-both that clearance and `authority: true` are required to pass. Admitted
-pipeline receipts (past the deadline/lock gate) set `authority: true` and
-print a cheap `blocking_reservations` count so a cleared latch is visible on
-the first post-merge round without remote terminal planning.
+both that clearance and `authority: true` are required to pass. Every non-shadow
+pipeline receipt grades this field (not only when `budget_admission` is present).
+Admitted receipts with a clear latch print cheap zero counts; when unknown
+reservations remain they reuse the same read-only drain diagnostics so
+`drainable_reservations == blocking_reservations` is measurable with
+`authority: true` on the first post-merge round.
 No production reservation was migrated or retired during implementation.
 
 New legacy reservations require either a pipeline-run binding or the existing

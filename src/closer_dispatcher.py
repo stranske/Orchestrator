@@ -8364,26 +8364,19 @@ def _main_admitted(args, p, assignment_rows, targets):
             validation = result["validation"]
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
+        # #898 pass number needs reservation counts on every non-shadow pipeline
+        # receipt, including admitted rounds (authority true) and runs that never
+        # built a budget_admission row. Shadow uses a different pipeline path.
+        if not args.shadow:
             pipeline_path = _pipeline_state_path(args.state)
-            # #898 pass number needs reservation counts on every pipeline receipt,
-            # including admitted rounds (authority true). Full terminal planning is
-            # reserved for expired admission; admitted rounds use a cheap count so
-            # a cleared latch prints blocking_reservations: 0 without remote work.
-            if result.get("reason") == "admission_deadline_expired":
-                try:
+            try:
+                if result.get("reason") == "admission_deadline_expired":
                     result.update(_expired_admission_diagnostics(pipeline_path))
-                except Exception as exc:
-                    # Diagnostics must not suppress the deferred receipt or exit 78.
-                    result["reservation_diagnostics_error"] = (
-                        f"{type(exc).__name__}: {str(exc)[:200]}"
-                    )
-            else:
-                try:
+                else:
                     result.update(_admitted_reservation_counts(pipeline_path))
-                except Exception as exc:
-                    result["reservation_diagnostics_error"] = (
-                        f"{type(exc).__name__}: {str(exc)[:200]}"
-                    )
+            except Exception as exc:
+                # Diagnostics must not suppress the deferred receipt or exit 78.
+                result["reservation_diagnostics_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
             # Grade the #898 pass number from the printed receipt itself.
             result["reservation_drain_pass"] = reservation_drain_pass_number(result)
         print(json.dumps(result, sort_keys=True))
@@ -8468,25 +8461,24 @@ def _main_admitted(args, p, assignment_rows, targets):
 
 
 def _admitted_reservation_counts(pipeline_path):
-    """Cheap reservation counts for an admitted pipeline receipt.
+    """Reservation counts for an admitted pipeline receipt (authority true).
 
-    Does not plan terminal or legacy reconciliation (no remote observation). When
-    the latch is clear, both counts are 0 so the #898 pass number can grade
-    ``blocking_reservations: 0`` with ``authority: true``. Non-empty unknown
-    reservations leave ``drainable_reservations`` unread until expired-admission
-    diagnostics (or an explicit apply) measure drainability.
+    A clear latch is a cheap local count: both sides print 0 so the #898 pass
+    number can grade ``blocking_reservations: 0`` with ``authority: true`` without
+    remote work. When unknown reservations remain, reuse the read-only drain
+    diagnostics so ``drainable_reservations == blocking_reservations`` is also
+    measurable on the first post-merge admitted round. Diagnostics never apply.
     """
     import closer_resources
 
     root = closer_resources.scoped_root(Path(pipeline_path).absolute())
-    blocking = len(closer_resources.unknown_reservations(root))
-    counts = {
-        "blocking_reservations": blocking,
-        "deadlock": False,
-    }
-    if blocking == 0:
-        counts["drainable_reservations"] = 0
-    return counts
+    if not closer_resources.unknown_reservations(root):
+        return {
+            "blocking_reservations": 0,
+            "drainable_reservations": 0,
+            "deadlock": False,
+        }
+    return _expired_admission_diagnostics(pipeline_path)
 
 
 def reservation_drain_pass_number(receipt, *, now=None):

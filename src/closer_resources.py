@@ -3413,8 +3413,9 @@ def apply_terminal_reconciliation(state_path, *, target, expected_plan_sha256, o
     There is no automatic effect retry. A crash after the audit write and before
     the first rename resumes from that same immutable audit when the plan hash
     and advertisement bytes still match (observed_at is transport freshness).
-    A partial archive retires remaining exact bytes under the same audit; the
-    original audit and retired bytes survive.
+    After the first rename, the retired intent leaves the scan, so the plan hash
+    changes and a rerun raises reconciliation_plan_changed. Plan the remaining
+    bytes afresh; the new audit does not replace the prior audit or retired bytes.
     """
     if not re.fullmatch(r"[0-9a-f]{64}", expected_plan_sha256):
         raise ResourceBlocked("invalid_reconciliation_audit_identity")
@@ -3440,21 +3441,27 @@ def apply_terminal_reconciliation(state_path, *, target, expected_plan_sha256, o
         encoded = (
             json.dumps({**current, "observed_at": time.time()}, sort_keys=True, indent=2) + "\n"
         ).encode()
-        # One immutable write before ANY original intent is moved. An identical
-        # audit already present (crash between write and rename) resumes.
+        # Fsync a temp file, then link it into place so a crash cannot leave a
+        # torn read-only audit that latches every identical plan hash. An
+        # identical audit already present (crash between publish and rename)
+        # resumes; always fsync the audit directory before any intent moves.
+        fd, temp = tempfile.mkstemp(prefix=".audit-", suffix=".tmp", dir=audit_dir)
         try:
-            fd = os.open(audit_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temp, 0o444)
+            os.link(temp, audit_path)
         except FileExistsError:
             _, prior = _reconciliation_record(audit_path)
             prior_body = {k: v for k, v in prior.items() if k != "observed_at"}
             if prior_body != current:
                 raise ResourceBlocked("reconciliation_audit_mismatch") from None
-        else:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(encoded)
-                stream.flush()
-                os.fsync(stream.fileno())
-            _fsync_dir(audit_dir)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temp)
+        _fsync_dir(audit_dir)
         retired = []
         for index, row in enumerate(current["advertisements"]):
             source = Path(row["path"])

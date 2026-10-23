@@ -4278,6 +4278,7 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
         adapter, "_run_staged_pipeline", lambda *_: {"reason": "admission_deadline_expired"}
     )
     monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    _pin_pass_number_before_check_date(monkeypatch)
     assert (
         adapter.main(
             [
@@ -4744,6 +4745,20 @@ def _terminal_observation(target):
     }
 
 
+def _pin_pass_number_before_check_date(monkeypatch):
+    """Keep main()-driven receipts pending regardless of wall clock vs 2026-10-30.
+
+    Returns the real grader so tests can still assert the post-check-date outcome.
+    """
+    real = adapter.reservation_drain_pass_number
+
+    def _pending(receipt, *, now=None):
+        return real(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS - 1)
+
+    monkeypatch.setattr(adapter, "reservation_drain_pass_number", _pending)
+    return real
+
+
 def test_reservation_drain_pass_number_pending_before_check_date():
     """#898 pass number stays pending before 2026-10-30 while grading reservation half."""
     cleared = adapter.reservation_drain_pass_number(
@@ -4834,6 +4849,7 @@ def test_expired_admission_receipt_reports_dead_owner_drainable(tmp_path, monkey
     monkeypatch.setattr(
         resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
     )
+    _pin_pass_number_before_check_date(monkeypatch)
     assert (
         adapter.main(
             [
@@ -4895,6 +4911,7 @@ def test_admitted_pipeline_receipt_grades_pass_number_when_reservations_cleared(
         },
     )
     monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    grade = _pin_pass_number_before_check_date(monkeypatch)
     assert (
         adapter.main(
             [
@@ -4916,17 +4933,15 @@ def test_admitted_pipeline_receipt_grades_pass_number_when_reservations_cleared(
     assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
     assert receipt["reservation_drain_pass"]["authority"] is True
     assert receipt["reservation_drain_pass"]["status"] == "pending"
-    after_check = adapter.reservation_drain_pass_number(
-        receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS
-    )
+    after_check = grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)
     assert after_check["status"] == "pass"
     assert after_check["reason"] == "reservation latch cleared with authority"
 
 
-def test_admitted_pipeline_receipt_leaves_drainable_unread_while_blocking(
+def test_admitted_pipeline_receipt_grades_drainable_blocking_with_authority(
     tmp_path, monkeypatch, capsys
 ):
-    """Admitted rounds do not remote-plan; unread drainable stays unmeasured."""
+    """#898 OR-branch: admitted authority true + drainable==blocking on the receipt."""
     import closer_resources as resources
 
     state = _terminal_queue_state(tmp_path)
@@ -4965,6 +4980,10 @@ def test_admitted_pipeline_receipt_leaves_drainable_unread_while_blocking(
         },
     )
     monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    grade = _pin_pass_number_before_check_date(monkeypatch)
     assert (
         adapter.main(
             [
@@ -4982,13 +5001,75 @@ def test_admitted_pipeline_receipt_leaves_drainable_unread_while_blocking(
     )
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["authority"] is True
-    assert receipt["blocking_reservations"] == 1
-    assert "drainable_reservations" not in receipt
-    graded = adapter.reservation_drain_pass_number(
-        receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 1
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    graded = grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)
+    assert graded["status"] == "pass"
+    assert graded["reason"] == "reservation latch cleared with authority"
+
+
+def test_pipeline_receipt_grades_pass_number_without_budget_admission(
+    tmp_path, monkeypatch, capsys
+):
+    """Pass grading must not depend on budget_admission being present."""
+    import contextlib
+
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    real_admission = resources.coordination_admission
+
+    @contextlib.contextmanager
+    def empty_runnable(state_path, targets, *, mode="legacy"):
+        with real_admission(state_path, targets, mode=mode) as admission:
+            admission.runnable.clear()
+            yield admission
+
+    monkeypatch.setattr(resources, "coordination_admission", empty_runnable)
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted",
+            "finished_at": time.time(),
+            "targets": {},
+        },
     )
-    assert graded["status"] == "unmeasured"
-    assert "drainable" in graded["reason"]
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    grade = _pin_pass_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert "budget_admission" not in receipt
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    assert grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)["status"] == "pass"
 
 
 def test_core_reserve_records_process_group(tmp_path):
