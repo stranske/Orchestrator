@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import shutil
 import stat
 import subprocess
@@ -27,9 +28,9 @@ from typing import Any
 
 GIB = 1024**3
 STRICT_RELEASE_FLOOR = 27 * GIB
-# The October 20 strict-run window fell from 29,490,778,112 to 5,630,369,792
-# available bytes. Use this larger recorded growth, not October 21's partial
-# ~9.86 GiB observation. Larger producer plans/history win; this is no run budget.
+# Conservative legacy bootstrap: the October 20 shared-volume decline is NOT an
+# exclusive owned measurement. Keep its reserve until reviewed calibration can
+# bound transient fixture/copy growth; terminal or sampled sizes cannot lower it.
 INITIAL_VERIFY_PEAK = 29_490_778_112 - 5_630_369_792
 OBSERVED_OPERATING_MARGIN = 5_630_369_792
 JSON = dict[str, Any]
@@ -37,6 +38,376 @@ JSON = dict[str, Any]
 
 class StorageBlocked(RuntimeError):
     pass
+
+
+OWNED_SAMPLE_CONTRACT = "owned-tree-sampled-allocation/v1"
+SAMPLE_INTERVAL_SECONDS = 30.0
+SAMPLE_SCAN_SECONDS = 1.0
+SAMPLE_MAX_ENTRIES = 100_000
+
+
+# Reviewed engineering forecast, NOT an exclusive or mathematical peak bound.
+# Four post-861 strict PASS windows (before staging through child terminal/probe)
+# declined 5094690816,4512907264,4578033664,6811734016 shared-volume bytes.
+# Concurrent deletions can mask growth. Keep the existing 5630369792 policy
+# uncertainty reserve; it is not a measured OS minimum. Terminal sizes are NOT peaks.
+# Reviewers must refresh this declared producer manifest when adding/changing
+# amplifying fixture/copy producers, including newly introduced unlisted producers.
+REVIEWED_COLD_VERSION = "post861-exec-mirror-engineering/v1"
+REVIEWED_WINDOW_BYTES = 6_811_734_016
+REVIEWED_STAGING_BYTES = 611_594_240
+REVIEWED_EXTERNAL_COPY_SHA256 = "1335374937c9eca5a9221ba1ad43535f23eaa84e447c8853cb0eec53a4ce8a70"
+REVIEWED_RECEIPTS = (
+    "d65f2f16d337bfd5d6854ebeb66e0bbef78bfd5b6a80f59cf44ce56cc360b401",
+    "e9c6f38f765dd61d670c6bdb89ed3d4dd503e796ee99814a71e9e6a18251cdd2",
+    "ec983a54e3593414d830b5f6ace89d80901847a92a9be6b9d50fc5200302432c",
+    "88923538611de7ea9cdf0830abb8f53a893f0e02ce21c35342906d68ec4eb3fb",
+)
+REVIEWED_PRODUCERS = {
+    "scripts/build_exec_mirror.sh": "b426986ee2d1eedeb0b17e6b736320d75fae98b83419ad475c7a4e02caaca162",
+    "scripts/verify_before_sync.sh": "042ef69a438f1ae12ed87ee1e633a18e96d3fe8f02575bfbc999d9f5edb5b80c",
+    "scripts/install_verified_snapshot.py": "978f7a66668f9dde869bd9b0f9803a9e3a54aa4c97d10adf759626f84ca66b3c",
+    "scripts/incumbent_copy_guard.sh": "88a6cff25827fbf019c7827822483a7eaa8a092ef7fc03ccc32b96fa9423a0b7",
+    "tests/test_closer_native_observer.py": "898ecf104971c4cc357b86015ff748a353166acbfbb0dab6485a28aea4319b64",
+    "tests/test_closer_native_collector.py": "a392951df7d9d66aa0b852662b7b8b1573229f8696e5ba4388983855a88815c5",
+    "tests/mirror_generation_imports_witness.py": "58aff9902b4ef7ed30b39a893dd59363f6dcd9803fd849bcb2124bcde411e6fc",
+    "tests/test_mirror_generation_imports.sh": "3d7ce7d2463d6ccc6d6000618fedd052f13c3fb86dcaf5e99bbf230a72a393b3",
+    "tests/test_mirror_product_witnesses.py": "224edde6214d2207f76f0ef996aabb3df1e8e6aaa4f891aee5f0fbc9a77329e6",
+    "tests/conftest.py": "8878537123d9ae5336c376ad0dbd83d0582cdbeabc8a3e1130b879ce91365b86",
+    "tests/test_closer_runtime_distribution.py": "ac7bc41878542728c0b020641fa38ddf69cdb6089a26644fa4dff6ac8c06a088",
+    "tests/test_build_exec_mirror.py": "48a48be1de6bfff9bcd79c49c3f6693781ea686effea290b454546586dc7c00b",
+    "tests/test_exec_mirror_shape.py": "d56f78032832b792162099374766243348b40baa01b8150029697db932bb6e95",
+    "src/closer_campaign.py": "40a3086b2537507fb7e4c3570c9d4f646ed0e7ace59408e1fb6fb8443db899b8",
+    "src/closer_distribution_package.py": "a1118593333d700c3acf1f78319dc1ec684e4bec823e741fce66471257a645ee",
+}
+
+
+def _producer_digest(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise StorageBlocked("unavailable declared cold-plan producer")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(65536), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _cold_fallback(reason: JSON | None, code: str) -> None:
+    """Expose fixed diagnostic codes only, never paths or exception messages."""
+    if reason is not None:
+        reason["reason"] = code
+
+
+def _archived_producers_match(source: Path, *, reason: JSON | None = None) -> bool:
+    """The copier archives tests/scripts from HEAD, not their working-tree bytes."""
+    if reason is not None:
+        reason.pop("reason", None)
+    names = [name for name in REVIEWED_PRODUCERS if name.startswith(("tests/", "scripts/"))]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(source), "ls-tree", "-rz", "HEAD", "--", *names],
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+        found = set()
+        for entry in result.stdout.split(b"\0"):
+            if not entry:
+                continue
+            metadata, raw_name = entry.split(b"\t", 1)
+            mode, kind, oid = metadata.split()
+            name = raw_name.decode()
+            if name not in names or mode not in (b"100644", b"100755") or kind != b"blob":
+                _cold_fallback(reason, "archived_entry_mismatch")
+                return False
+            path = source / name
+            digest = hashlib.sha1(b"blob " + str(path.stat().st_size).encode() + b"\0")
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(65536), b""):
+                    digest.update(block)
+            if digest.hexdigest() != oid.decode():
+                _cold_fallback(reason, "archived_bytes_mismatch")
+                return False
+            found.add(name)
+        if found != set(names):
+            _cold_fallback(reason, "archived_producer_missing")
+            return False
+        return True
+    except (OSError, subprocess.SubprocessError):
+        _cold_fallback(reason, "archived_inventory_unavailable")
+        return False
+    except (ValueError, UnicodeDecodeError):
+        _cold_fallback(reason, "archived_inventory_malformed")
+        return False
+
+
+def reviewed_cold_plan(
+    source: Path, profile: str, maximum_mb: int, *, reason: JSON | None = None
+) -> JSON | None:
+    """Only a matching reviewed producer/mode gets the explicit engineering plan.
+
+    Current host semantics are an explicit qualification assumption; old receipts
+    did not independently record OS versions. Source identity remains separately
+    bound by normal verification. This is not a claim about all future test code.
+    """
+    if reason is not None:
+        reason.pop("reason", None)
+    if profile != "EXEC MIRROR":
+        _cold_fallback(reason, "profile_mismatch")
+        return None
+    if maximum_mb != 50:
+        _cold_fallback(reason, "directory_limit_mismatch")
+        return None
+    if (platform.system(), platform.release(), platform.machine()) != ("Darwin", "25.6.0", "arm64"):
+        _cold_fallback(reason, "platform_mismatch")
+        return None
+    if sys.version_info[:2] != (3, 12):
+        _cold_fallback(reason, "python_version_mismatch")
+        return None
+    try:
+        producers = {name: _producer_digest(source / name) for name in REVIEWED_PRODUCERS}
+    except (OSError, StorageBlocked):
+        _cold_fallback(reason, "producer_unavailable")
+        return None
+    if producers != REVIEWED_PRODUCERS:
+        _cold_fallback(reason, "producer_bytes_mismatch")
+        return None
+    copier = Path(
+        os.environ.get("ORCH_SYNC_SCRIPT", str(Path.home() / ".codex/bin/orch-sync-mirror.sh"))
+    ).expanduser()
+    try:
+        copier_digest = _producer_digest(copier)
+    except (OSError, StorageBlocked):
+        _cold_fallback(reason, "copier_unavailable")
+        return None
+    if copier_digest != REVIEWED_EXTERNAL_COPY_SHA256:
+        _cold_fallback(reason, "copier_bytes_mismatch")
+        return None
+    archived = (
+        _archived_producers_match(source, reason=reason)
+        if reason is not None
+        else _archived_producers_match(source)
+    )
+    if not archived:
+        return None
+    contract = {
+        "version": REVIEWED_COLD_VERSION,
+        "producer_sha256": producers,
+        "external_copy_sha256": REVIEWED_EXTERNAL_COPY_SHA256,
+        "mode": profile,
+        "max_dir_mb": maximum_mb,
+        "os": ["Darwin", "25.6.0", "arm64"],
+        "python": [3, 12],
+        "shared_window_bytes": REVIEWED_WINDOW_BYTES,
+        "baseline_staging_bytes": REVIEWED_STAGING_BYTES,
+        "operating_policy_reserve_bytes": OBSERVED_OPERATING_MARGIN,
+    }
+    return {
+        "kind": "reviewed_engineering_estimate",
+        "measured_peak": False,
+        "contract": contract,
+        "profile_key": hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest(),
+        "receipt_sha256": list(REVIEWED_RECEIPTS),
+        "shared_window_bytes": REVIEWED_WINDOW_BYTES,
+        "baseline_staging_bytes": REVIEWED_STAGING_BYTES,
+        "runtime_component_bytes": REVIEWED_WINDOW_BYTES - REVIEWED_STAGING_BYTES,
+        "operating_policy_reserve_bytes": OBSERVED_OPERATING_MARGIN,
+        "baseline_total_bytes": REVIEWED_WINDOW_BYTES + OBSERVED_OPERATING_MARGIN,
+        "coverage": "declared producers only; newly introduced amplification requires manifest review",
+    }
+
+
+def _reviewed_command_matches(args: argparse.Namespace, *, reason: JSON | None = None) -> bool:
+    """Bind the estimated workload, not just a source directory/profile claim."""
+    if reason is not None:
+        reason.pop("reason", None)
+    command = args.command
+    source = args.source.resolve()
+    if (
+        len(command) < 3
+        or command[0] != "bash"
+        or Path(command[1]).resolve() != source / "scripts/verify_before_sync.sh"
+        or Path(command[-1]).resolve() != source
+    ):
+        _cold_fallback(reason, "verifier_command_mismatch")
+        return False
+    options = command[2:-1]
+    if options[:1] == ["--snapshot-out"]:
+        if len(options) < 2 or not options[1]:
+            _cold_fallback(reason, "verifier_options_mismatch")
+            return False
+        options = options[2:]
+        if options[:1] == ["--digest-out"]:
+            if len(options) < 2 or not options[1]:
+                _cold_fallback(reason, "verifier_options_mismatch")
+                return False
+            options = options[2:]
+    if options:
+        _cold_fallback(reason, "verifier_options_mismatch")
+        return False
+    if (
+        (os.environ.get("VERIFY_BEFORE_SYNC_TREE") or "EXEC MIRROR") != args.profile
+        or (os.environ.get("VERIFY_BEFORE_SYNC_MAX_DIR_MB") or "50") != str(args.max_dir_mb)
+        or os.environ.get("PYTEST_ADDOPTS")
+        or os.environ.get("PYTEST_DEBUG_TEMPROOT")
+    ):
+        _cold_fallback(reason, "workload_environment_mismatch")
+        return False
+    registry = os.environ.get("ORCH_REVIEW_REGISTRY_SNAPSHOT")
+    if not registry or Path(registry).is_symlink() or not Path(registry).is_file():
+        # A future network registry payload has no local prospective size proof.
+        _cold_fallback(reason, "registry_unavailable")
+        return False
+    default = Path.home() / ".codex/orchestrator"
+    if (
+        Path(os.environ.get("ORCH_LOCAL_RUNTIME") or default).resolve() != args.runtime.resolve()
+        or Path(os.environ.get("ORCH_STATE_DIR") or default).resolve()
+        != args.state_source.resolve()
+    ):
+        _cold_fallback(reason, "copy_roots_mismatch")
+        return False
+    # The reviewed shell prepends this directory before selecting its Python.
+    local = Path.home() / ".local/bin"
+    path = os.environ.get("PATH", "")
+    if local.is_dir():
+        path = str(local) + os.pathsep + path
+    python = shutil.which(os.environ.get("PYTHON") or "python3", path=path)
+    if python is None or Path(python).resolve() != Path(sys.executable).resolve():
+        _cold_fallback(reason, "interpreter_mismatch")
+        return False
+    return True
+
+
+def _qualified_cold_plan(args: argparse.Namespace, *, reason: JSON | None = None) -> JSON | None:
+    if reason is not None:
+        reason.pop("reason", None)
+    if not args.local_strict:
+        _cold_fallback(reason, "non_strict_mode")
+        return None
+    command_matches = (
+        _reviewed_command_matches(args, reason=reason)
+        if reason is not None
+        else _reviewed_command_matches(args)
+    )
+    if not command_matches:
+        if reason is not None and "reason" not in reason:
+            _cold_fallback(reason, "workload_contract_mismatch")
+        return None
+    return (
+        reviewed_cold_plan(args.source, args.profile, args.max_dir_mb, reason=reason)
+        if reason is not None
+        else reviewed_cold_plan(args.source, args.profile, args.max_dir_mb)
+    )
+
+
+def measurement_profile(source: Path, profile: str, source_identity: str, volume: Path) -> JSON:
+    """Bind fixture/copy bytes and OS allocation semantics, not a mutable label.
+
+    The verifier's existing source identity covers its copy inputs, including test
+    fixtures. Exact source changes deliberately invalidate calibration reuse.
+    """
+    producers: dict[str, str | None] = {}
+    for name in (
+        "scripts/verify_before_sync.sh",
+        "scripts/build_exec_mirror.sh",
+        "src/verify.py",
+        "src/storage_lifecycle.py",
+        "pyproject.toml",
+    ):
+        path = source / name
+        if not path.is_file() or path.is_symlink():
+            producers[name] = None
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(65536), b""):
+                digest.update(block)
+        producers[name] = digest.hexdigest()
+    contract = {
+        "schema": "storage-fixture-copy-profile/v1",
+        "profile": profile,
+        "fixture_copy_identity": source_identity,
+        "producer_sha256": producers,
+        "os": [platform.system(), platform.release(), platform.machine()],
+        "python": list(sys.version_info[:2]),
+        "allocation_unit_bytes": os.statvfs(volume).f_frsize,
+        "measurement_contract": OWNED_SAMPLE_CONTRACT,
+    }
+    return {
+        **contract,
+        "sha256": hashlib.sha256(json.dumps(contract, sort_keys=True).encode()).hexdigest(),
+    }
+
+
+class OwnedHighwater:
+    """Bounded, non-following metadata samples; never claim an exhaustive peak.
+
+    A racing/inaccessible entry invalidates scan completeness. Even all complete
+    scans remain samples: producer teardown between scans is not observable.
+    """
+
+    def __init__(self, root: Path, identity: tuple[int, int], token: str):
+        self.root, self.identity, self.token = root, identity, token
+        self.next_sample = 0.0
+        self.result: JSON = {
+            "schema": OWNED_SAMPLE_CONTRACT,
+            "complete_samples": 0,
+            "failed_samples": 0,
+            "allocated_highwater_bytes": 0,
+            "logical_highwater_bytes": 0,
+            "errors": [],
+            "peak_bound_proven": False,
+            "scope": "total-owned-including-staging",
+            "observation": "sampled owned allocation lower bound; not physical peak or reclaimed bytes",
+        }
+
+    def sample(self, *, force: bool = False) -> bool:
+        now = time.monotonic()
+        if not force and now < self.next_sample:
+            return False
+        self.next_sample = now + SAMPLE_INTERVAL_SECONDS
+        try:
+            initial = self.root.lstat()
+            if self.root.is_symlink() or (initial.st_dev, initial.st_ino) != self.identity:
+                raise StorageBlocked("owned sample identity changed")
+            marker = self.root / "owner.json"
+            if marker.is_symlink() or json.loads(marker.read_text()).get("token") != self.token:
+                raise StorageBlocked("owned sample token changed")
+            seen = {(initial.st_dev, initial.st_ino)}
+            allocated, logical, count = initial.st_blocks * 512, 0, 1
+
+            def failed(error):
+                raise error
+
+            for directory, dirs, files in os.walk(self.root, followlinks=False, onerror=failed):
+                for name in dirs + files:
+                    count += 1
+                    if count > SAMPLE_MAX_ENTRIES or time.monotonic() - now > SAMPLE_SCAN_SECONDS:
+                        raise StorageBlocked("owned sample scan bound reached")
+                    info = (Path(directory) / name).lstat()
+                    if info.st_dev != initial.st_dev:
+                        raise StorageBlocked("owned sample crosses filesystem")
+                    key = (info.st_dev, info.st_ino)
+                    if key not in seen:
+                        seen.add(key)
+                        allocated += info.st_blocks * 512
+                        if stat.S_ISREG(info.st_mode):
+                            logical += info.st_size
+            final = self.root.lstat()
+            if (final.st_dev, final.st_ino) != self.identity:
+                raise StorageBlocked("owned sample identity changed during scan")
+            self.result["complete_samples"] += 1
+            self.result["allocated_highwater_bytes"] = max(
+                self.result["allocated_highwater_bytes"], allocated
+            )
+            self.result["logical_highwater_bytes"] = max(
+                self.result["logical_highwater_bytes"], logical
+            )
+        except (OSError, ValueError, TypeError, AttributeError, StorageBlocked) as error:
+            self.result["failed_samples"] += 1
+            if len(self.result["errors"]) < 10:
+                self.result["errors"].append(type(error).__name__ + ":" + str(error)[:256])
+        return True
 
 
 def owned_agent_tmpdir(agent: str, env: dict | None = None) -> Path | None:
@@ -346,12 +717,68 @@ def staging_bytes(
         source / "experiments" / name
         for name in ("features.json", "repo_knowledge.json", "hypotheses.json")
     ]
+    registry = os.environ.get("ORCH_REVIEW_REGISTRY_SNAPSHOT")
+    if registry:
+        entry = Path(registry)
+        if entry.is_symlink() or not entry.is_file():
+            raise StorageBlocked("captured copy registry unavailable or symlinked")
+        # The reviewed copier writes mirror and runtime registry destinations.
+        total += 2 * copy_bytes(entry)
     for entry in extra:
         if entry.is_symlink():
             raise StorageBlocked("external copied input is a symlink")
         if entry.is_file():
             total += copy_bytes(entry)
     return total
+
+
+OWNED_CACHE_LIMIT = 256
+OWNED_SUMMARY_LIMIT = 8 * 1024 * 1024
+
+
+def _json_digest(value: JSON) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _owned_record_valid(key: str, record: Any) -> bool:
+    return (
+        isinstance(key, str)
+        and len(key) == 64
+        and all(char in "0123456789abcdef" for char in key)
+        and isinstance(record, dict)
+        and isinstance(record.get("contract"), dict)
+        and record["contract"].get("sha256") == key
+        and type(record.get("allocated_highwater_bytes")) is int
+        and record["allocated_highwater_bytes"] >= 0
+        and type(record.get("access_sequence", 0)) is int
+        and record.get("access_sequence", 0) >= 0
+    )
+
+
+def _owned_sample_peak(receipt: JSON) -> int | None:
+    sample = receipt.get("owned_highwater")
+    if (
+        not isinstance(sample, dict)
+        or sample.get("schema") != OWNED_SAMPLE_CONTRACT
+        or receipt.get("source_unchanged") is not True
+        or receipt.get("exit_code") != 0
+    ):
+        return None
+    samples = [sample]
+    checkpoint = receipt.get("staged_owned_checkpoint")
+    if isinstance(checkpoint, dict):
+        samples.append(checkpoint)
+    for row in samples:
+        if any(
+            type(row.get(field)) is not int or row[field] < 0
+            for field in ("complete_samples", "failed_samples", "allocated_highwater_bytes")
+        ):
+            return None
+    if sum(row["complete_samples"] for row in samples) == 0 or any(
+        row["failed_samples"] for row in samples
+    ):
+        return None
+    return max(row["allocated_highwater_bytes"] for row in samples)
 
 
 class Reservations:
@@ -376,6 +803,155 @@ class Reservations:
         if attributes.st_uid != os.getuid() or stat.S_IMODE(attributes.st_mode) & 0o077:
             raise StorageBlocked("storage state must be owner-private; permissions unchanged")
 
+    def _summary_path(self, key: str, *, create: bool = False) -> Path:
+        if len(key) != 64 or any(char not in "0123456789abcdef" for char in key):
+            raise StorageBlocked("invalid owned summary identity")
+        directory = self.directory / "owned-summaries"
+        if create:
+            directory.mkdir(exist_ok=True, mode=0o700)
+        if directory.exists() or directory.is_symlink():
+            info = directory.lstat()
+            if (
+                directory.is_symlink()
+                or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+            ):
+                raise StorageBlocked("unsafe owned summary directory; preserved")
+        return directory / (key + ".json")
+
+    def _read_summary(self, key: str, contract: JSON) -> JSON | None:
+        path = self._summary_path(key)
+        if path.is_symlink():
+            raise StorageBlocked("owned summary is a symlink; preserved")
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077
+                or info.st_size > OWNED_SUMMARY_LIMIT
+            ):
+                raise StorageBlocked("unsafe owned summary; preserved")
+            raw = stream.read(OWNED_SUMMARY_LIMIT + 1)
+        if len(raw) > OWNED_SUMMARY_LIMIT:
+            raise StorageBlocked("owned summary exceeds read bound; preserved")
+        try:
+            result = json.loads(raw)
+            if not isinstance(result, dict):
+                raise ValueError
+            body = {name: value for name, value in result.items() if name != "sha256"}
+            record, witness = result.get("record"), result.get("witness")
+            if (
+                result.get("schema") != "storage-owned-summary/v1"
+                or result.get("sha256") != _json_digest(body)
+                or not isinstance(record, dict)
+                or not _owned_record_valid(key, record)
+                or record["contract"] != contract
+                or not isinstance(witness, dict)
+            ):
+                raise ValueError
+            if witness.get("kind") == "receipt_snapshot":
+                if (
+                    not isinstance(witness.get("receipt"), dict)
+                    or witness.get("sha256") != _json_digest(witness["receipt"])
+                    or witness["receipt"].get("measurement_contract") != contract
+                    or _owned_sample_peak(witness["receipt"]) != record["allocated_highwater_bytes"]
+                ):
+                    raise ValueError
+            elif witness.get("kind") == "legacy_record":
+                if witness.get("sha256") != _json_digest(record):
+                    raise ValueError
+            else:
+                raise ValueError
+        except (ValueError, TypeError, RecursionError) as error:
+            raise StorageBlocked("invalid owned summary; preserved") from error
+        return result
+
+    def _save_summary(self, key: str, record: JSON, receipt: JSON | None = None) -> JSON:
+        if not _owned_record_valid(key, record):
+            raise StorageBlocked("invalid owned summary record; preserved")
+        if receipt is not None and (
+            receipt.get("measurement_contract") != record["contract"]
+            or _owned_sample_peak(receipt) != record["allocated_highwater_bytes"]
+        ):
+            raise StorageBlocked("owned summary witness mismatch; preserved")
+        current = self._read_summary(key, record["contract"])
+        clean = {
+            name: value
+            for name, value in record.items()
+            if name not in {"access_sequence", "summary_sha256"}
+        }
+        if current is not None:
+            old = current["record"]["allocated_highwater_bytes"]
+            new = clean["allocated_highwater_bytes"]
+            if old > new or (
+                old == new and (receipt is None or current["witness"]["kind"] == "receipt_snapshot")
+            ):
+                return current
+        witness = (
+            {"kind": "receipt_snapshot", "sha256": _json_digest(receipt), "receipt": receipt}
+            if receipt is not None
+            else {"kind": "legacy_record", "sha256": _json_digest(clean)}
+        )
+        body = {"schema": "storage-owned-summary/v1", "record": clean, "witness": witness}
+        result = {**body, "sha256": _json_digest(body)}
+        if len(json.dumps(result).encode()) > OWNED_SUMMARY_LIMIT:
+            raise StorageBlocked("owned summary exceeds read bound; evidence retained")
+        path = self._summary_path(key, create=True)
+        write_json(path, result)  # Durable max BEFORE any hot-ledger eviction/update.
+        return result
+
+    def _touch_owned(self, data: JSON, key: str, summary: JSON) -> JSON:
+        cache = data.setdefault("owned_measurements", {})
+        sequence = (
+            max(
+                data.get("owned_cache_sequence", 0),
+                max((row.get("access_sequence", 0) for row in cache.values()), default=0),
+            )
+            + 1
+        )
+        data["owned_cache_sequence"] = sequence
+        record = {
+            **summary["record"],
+            "summary_sha256": summary["sha256"],
+            "access_sequence": sequence,
+        }
+        cache[key] = record
+        return record
+
+    def _owned_calibration(self, data: JSON, contract: JSON) -> JSON:
+        key = contract["sha256"]
+        cached = data.get("owned_measurements", {}).get(key)
+        if cached is not None and cached["contract"] != contract:
+            raise StorageBlocked("owned calibration contract mismatch; preserved")
+        summary = self._read_summary(key, contract)  # ALWAYS read, including a cache hit.
+        if cached is not None:
+            if summary is None and cached.get("summary_sha256"):
+                raise StorageBlocked("referenced owned summary missing; preserved")
+            if (
+                summary is not None
+                and cached.get("summary_sha256")
+                and summary["record"]["allocated_highwater_bytes"]
+                < cached["allocated_highwater_bytes"]
+            ):
+                raise StorageBlocked("owned summary regressed; preserved")
+            summary = self._save_summary(key, cached)
+        return self._touch_owned(data, key, summary) if summary is not None else {}
+
+    def _trim_owned(self, data: JSON) -> None:
+        cache = data.get("owned_measurements", {})
+        excess = len(cache) - OWNED_CACHE_LIMIT
+        for key in sorted(cache, key=lambda name: (cache[name].get("access_sequence", 0), name))[
+            : max(0, excess)
+        ]:
+            self._save_summary(key, cache[key])
+            del cache[key]
+
     @contextlib.contextmanager
     def locked(self) -> Iterator[JSON]:
         descriptor = os.open(self.directory / "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -390,11 +966,22 @@ class Reservations:
                 raise StorageBlocked("unreadable reservation state; preserved") from error
             if not isinstance(data.get("jobs"), dict) or not isinstance(data.get("peaks"), dict):
                 raise StorageBlocked("invalid storage reservation state; preserved")
+            if not isinstance(data.get("owned_measurements", {}), dict):
+                raise StorageBlocked("invalid owned measurement state; preserved")
+            if (
+                type(data.get("owned_cache_sequence", 0)) is not int
+                or data.get("owned_cache_sequence", 0) < 0
+            ):
+                raise StorageBlocked("invalid owned cache recency; preserved")
+            for key, record in data.get("owned_measurements", {}).items():
+                if not _owned_record_valid(key, record):
+                    raise StorageBlocked("invalid owned measurement record; preserved")
             if any(not isinstance(row, dict) for row in data["jobs"].values()) or any(
                 type(value) is not int or value < 0 for value in data["peaks"].values()
             ):
                 raise StorageBlocked("invalid reservation/profile evidence; preserved")
             yield data
+            self._trim_owned(data)
             write_json(path, data)
         finally:
             os.close(descriptor)
@@ -408,11 +995,19 @@ class Reservations:
         *,
         owner_token: str,
         scope: str | None = None,
+        measurement_contract: JSON | None = None,
     ) -> JSON:
         if not job.isalnum() or len(job) > 64:
             raise ValueError("invalid storage job identity")
         if min(staging, planned_peak) < 0:
             raise ValueError("negative storage forecast")
+        if measurement_contract is not None and (
+            not isinstance(measurement_contract, dict)
+            or not isinstance(measurement_contract.get("sha256"), str)
+            or len(measurement_contract["sha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in measurement_contract["sha256"])
+        ):
+            raise StorageBlocked("invalid measurement contract")
         with self.locked() as data:
             if job in data["jobs"] or (self.directory / "receipts" / f"{job}.json").exists():
                 raise StorageBlocked("existing job reservation; reconcile without replay")
@@ -434,7 +1029,16 @@ class Reservations:
             remaining = [
                 row["remaining"] for row in rows if row.get("volume_device") in (None, device)
             ]
-            peak = max(planned_peak, data["peaks"].get(profile, 0))
+            # Legacy peaks are retained conservative estimates, not measurements.
+            calibration = (
+                self._owned_calibration(data, measurement_contract) if measurement_contract else {}
+            )
+            sampled = calibration.get("allocated_highwater_bytes", 0)
+            if type(sampled) is not int or sampled < 0:
+                raise StorageBlocked("invalid owned calibration; preserved")
+            # A total-owned sample can only conservatively RAISE the runtime
+            # reserve; it includes staging and is never labelled runtime growth.
+            peak = max(planned_peak, data["peaks"].get(profile, 0), sampled)
             required = max(self.floor, peak + self.margin) + sum(remaining) + staging
             free = self.free(self.volume)
             if free < required:
@@ -455,6 +1059,12 @@ class Reservations:
                 )
             row = {
                 "profile": profile,
+                "measurement_contract": measurement_contract,
+                "calibration_status": "insufficient_calibration",
+                "calibration_requirement": "reviewed transient fixture/copy peak bound; samples can only raise reserve",
+                "planned_peak_bytes": planned_peak,
+                "sampled_owned_highwater_bytes": sampled,
+                "sampled_scope": "total-owned-including-staging; conservative extra charge if larger than planned runtime reserve",
                 "staging": staging,
                 "peak": peak,
                 "remaining": staging + peak,
@@ -479,6 +1089,12 @@ class Reservations:
                 raise StorageBlocked("staging owner token does not match")
             if row["status"] not in ("admitted", "staged"):
                 raise StorageBlocked("cannot stage an uncertain or terminal reservation")
+            if row.get("measurement_contract") is not None and row.get("root"):
+                checkpoint = OwnedHighwater(
+                    Path(row["root"]), tuple(row["root_identity"]), owner_token
+                )
+                checkpoint.sample(force=True)
+                row["staged_owned_checkpoint"] = checkpoint.result
             row.update(status="staged", remaining=row["peak"])
 
     def finish(self, job: str, receipt: JSON, *, terminal: bool) -> None:
@@ -489,10 +1105,24 @@ class Reservations:
             receipts.mkdir(exist_ok=True, mode=0o700)
             write_json(receipts / f"{job}.json", receipt)
             if terminal:
-                # Keep a high-water mark, never let a short/failed run lower the forecast.
-                data["peaks"][row["profile"]] = max(
-                    row["peak"], receipt.get("observed_growth_bytes", 0)
-                )
+                # Never relabel planned reservations or shared-volume decline as
+                # measured owned growth. Preserve all pre-existing legacy estimates.
+                contract = row.get("measurement_contract")
+                sampled_peak = _owned_sample_peak(receipt)
+                if isinstance(contract, dict) and sampled_peak is not None:
+                    self._owned_calibration(data, contract)
+                    candidate = {
+                        "contract": contract,
+                        "allocated_highwater_bytes": sampled_peak,
+                        "receipt": str(receipts / f"{job}.json"),
+                        "peak_bound_proven": False,
+                        "scope": "total-owned-including-staging",
+                        "eligible_to_lower_reserve": False,
+                    }
+                    # Summary embeds the max witness, so same-job smaller retry
+                    # cannot invalidate it by overwriting the ordinary receipt.
+                    summary = self._save_summary(contract["sha256"], candidate, receipt)
+                    self._touch_owned(data, contract["sha256"], summary)
                 del data["jobs"][job]
             else:
                 row.update(status="uncertain", receipt=str(receipts / f"{job}.json"))
@@ -624,7 +1254,11 @@ def run_job(
     probe: Callable[[Path], None] = idle,
 ) -> int:
     parent = args.temp_parent.resolve()
-    floor = STRICT_RELEASE_FLOOR if args.local_strict else 0
+    fallback_reason: JSON = {}
+    cold_plan = _qualified_cold_plan(args, reason=fallback_reason)
+    # The old 27 GiB floor already included the pre-861 fixture working demand.
+    # Replace it ONLY for the exact reviewed contract, never by current free space.
+    floor = STRICT_RELEASE_FLOOR if args.local_strict and cold_plan is None else 0
     margin = OBSERVED_OPERATING_MARGIN if args.local_strict else 0
     manager = Reservations(args.state_dir, parent, floor=floor, margin=margin, free=free)
     job = uuid.uuid4().hex
@@ -645,7 +1279,16 @@ def run_job(
         args.max_dir_mb * 1024**2,
         exclude=manager.directory,
     )
-    peak = max(args.peak_bytes, INITIAL_VERIFY_PEAK if args.local_strict else 0)
+    actual_staging_forecast = forecast
+    if cold_plan is not None:
+        # The observed full window already contains baseline staging. Charge it
+        # once, then charge all additional prospective copied bytes in full.
+        forecast = max(forecast, cold_plan["baseline_staging_bytes"])
+        peak = max(args.peak_bytes, cold_plan["runtime_component_bytes"])
+        reservation_profile = args.profile + ":" + cold_plan["profile_key"]
+    else:
+        peak = max(args.peak_bytes, INITIAL_VERIFY_PEAK if args.local_strict else 0)
+        reservation_profile = args.profile
     source_command = ["bash", args.command[1], "--identity", str(args.source)]
     before = identity(source_command)
     owner_key = os.environ.get("VERIFY_BEFORE_SYNC_OWNER_KEY")
@@ -655,7 +1298,22 @@ def run_job(
         else ["source", str(args.runtime.resolve()), args.profile, before]
     )
     scope = hashlib.sha256(json.dumps(claim).encode()).hexdigest()
-    admitted = manager.admit(job, args.profile, forecast, peak, owner_token=token, scope=scope)
+    contract = (
+        measurement_profile(args.source, args.profile, before, parent)
+        if args.local_strict
+        else None
+    )
+    if cold_plan is not None and _qualified_cold_plan(args) != cold_plan:
+        raise StorageBlocked("reviewed storage producer contract changed before admission")
+    admitted = manager.admit(
+        job,
+        reservation_profile,
+        forecast,
+        peak,
+        owner_token=token,
+        scope=scope,
+        measurement_contract=contract,
+    )
     # A shared byte ledger admits one aggregate demand under one lock. This separate
     # per-job lock remains held through the child, evidence retention and cleanup.
     try:
@@ -667,19 +1325,35 @@ def run_job(
         manager.finish(job, {"status": "not_started_owner_lock_failed"}, terminal=True)
         raise
     root: Path | None = None
+    root_id: tuple[int, int] | None = None
     child: subprocess.Popen[Any] | None = None
+    spawn_attempted = False
     terminal = False
     no_writers = False
+    sampler: OwnedHighwater | None = None
     receipt: JSON = {
         "job": job,
         "source": str(args.source),
         "available_before": admitted["available_before"],
+        "resource_plan": cold_plan
+        or {
+            "kind": "legacy_conservative_forecast",
+            "floor_bytes": floor,
+            "reason": fallback_reason.get("reason", "reviewed_contract_unavailable"),
+        },
+        "actual_staging_forecast_bytes": actual_staging_forecast,
     }
     try:
         root = Path(tempfile.mkdtemp(prefix="storage-verify-", dir=parent)).resolve()
         root_id = (root.stat().st_dev, root.stat().st_ino)
         write_json(root / "owner.json", {"job": job, "token": token})
-        manager.bind(job, root=str(root), root_identity=list(root_id))
+        manager.bind(
+            job,
+            root=str(root),
+            root_identity=list(root_id),
+            resource_plan=receipt["resource_plan"],
+            actual_staging_forecast_bytes=actual_staging_forecast,
+        )
         (root / "tmp").mkdir(mode=0o700)
         tmp_attributes = (root / "tmp").stat()
         tmp_id = (tmp_attributes.st_dev, tmp_attributes.st_ino)
@@ -688,6 +1362,10 @@ def run_job(
         (root / "staging").mkdir()
         manager.bind(job, source_command=source_command, source_identity=before)
         receipt.update(root=str(root), source_identity=before)
+        if args.local_strict:
+            sampler = OwnedHighwater(root, root_id, token)
+            sampler.sample(force=True)
+            manager.bind(job, owned_highwater=sampler.result)
         env = {
             **os.environ,
             "ORCH_STORAGE_RUN_ID": job,
@@ -697,6 +1375,11 @@ def run_job(
             "TMPDIR": str(root / "tmp"),
             "VERIFY_BEFORE_SYNC_TMP_PARENT": str(root / "staging"),
         }
+        if cold_plan is not None and _qualified_cold_plan(args) != cold_plan:
+            raise StorageBlocked("reviewed storage producer contract changed before child launch")
+        # Constructor failure can follow a fork. From this point, child=None
+        # never proves no spawn; uncertainty must preserve storage and charge.
+        spawn_attempted = True
         child = subprocess.Popen(
             [
                 "bash",
@@ -712,6 +1395,10 @@ def run_job(
         lowest = admitted["available_before"]
         warned = False
         while child.poll() is None:
+            if sampler is not None and sampler.sample():
+                # Preserve pre-teardown samples even if the supervisor later dies.
+                # Interrupted ownership stays charged; this is not a terminal proof.
+                manager.bind(job, owned_highwater=sampler.result)
             lowest = min(lowest, free(parent))
             if not warned and free(parent) < margin + forecast:
                 print(
@@ -738,12 +1425,17 @@ def run_job(
             raise StorageBlocked("descendant group still exists; retain storage and reservation")
         probe(root)
         no_writers = True
+        if sampler is not None:
+            sampler.sample(force=True)
         stable = identity(source_command) == before
         receipt.update(
             exit_code=rc,
             source_unchanged=stable,
-            observed_growth_bytes=max(0, admitted["available_before"] - min(lowest, free(parent))),
-            observation="shared-volume high-water; concurrent activity can increase this conservative forecast",
+            shared_volume_decline_bytes=max(
+                0, admitted["available_before"] - min(lowest, free(parent))
+            ),
+            owned_highwater=sampler.result if sampler is not None else None,
+            observation="shared-volume decline is diagnostic only; concurrent activity is not owned growth",
         )
         logs = sorted((root / "staging").glob("verify-before-sync.*/verify.log"))
         if logs:
@@ -795,6 +1487,50 @@ def run_job(
     except BaseException as exc:
         # No signal escalation, alternate deletion, expiry or blind replay. A dead
         # supervisor does not prove that descendants stopped using its files.
+        if sampler is not None:
+            receipt["owned_highwater"] = sampler.result
+        receipt["spawn_attempted"] = spawn_attempted
+        if not spawn_attempted:
+            # No constructor was entered. Retire only our authenticated root
+            # through the ordinary independent probe/ownership checks.
+            receipt.update(
+                status="not_started", error=type(exc).__name__, root=str(root) if root else None
+            )
+            if root is None:
+                manager.finish(job, receipt, terminal=True)
+                raise
+            try:
+                if root_id is None:
+                    raise StorageBlocked("pre-spawn root identity unavailable")
+
+                def pre_spawn_idle(path: Path) -> None:
+                    nonlocal no_writers
+                    no_writers = False
+                    probe(path)
+                    no_writers = True
+
+                receipt["terminal_owned_footprint"] = {}
+                preserved = retire(
+                    root,
+                    root_id,
+                    token,
+                    pre_spawn_idle,
+                    measurement=receipt["terminal_owned_footprint"],
+                )
+                receipt.update(
+                    preserved_permission_paths=preserved,
+                    status=(
+                        "not_started_retired_with_permission_remnants"
+                        if preserved
+                        else "not_started_retired"
+                    ),
+                )
+            except BaseException as cleanup_error:
+                receipt.update(
+                    status="not_started_cleanup_pending", cleanup_error=type(cleanup_error).__name__
+                )
+            manager.finish(job, receipt, terminal=no_writers)
+            raise
         receipt.update(
             status="cleanup_pending" if no_writers else "retained_uncertain",
             error=type(exc).__name__,

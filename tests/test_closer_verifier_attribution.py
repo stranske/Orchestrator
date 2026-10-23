@@ -400,7 +400,8 @@ def test_prewrite_round_control_retains_authoritative_scheduler_fields(world, co
     assert queue.verifier_resource_wait_proof(changed, TARGET) is None
 
 
-def test_progress_trigger_ignores_transport_urls_and_retained_ref_locations(tmp_path):
+def test_progress_trigger_ignores_transport_urls_and_retained_ref_locations(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STORAGE_STATE_DIR", str(tmp_path / "private-storage-ledger"))
     first = {
         "total_count": 1,
         "artifacts": [

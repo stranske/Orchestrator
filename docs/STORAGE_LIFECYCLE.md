@@ -58,14 +58,69 @@ It does not install a runtime or retire unrelated worktrees.
 
 ## Prepare before staging
 
-Strict local verification preserves the **27 GiB** launch floor. Before copying
-anything substantial, one filesystem-locked ledger admits this demand:
+Before copying anything substantial, one filesystem-locked ledger admits the
+job's prospective demand and all outstanding reservations. The **27 GiB** floor
+is the conservative legacy fallback, not a separately measured OS reserve:
 
 ```
 required available bytes = max(27 GiB, peak growth + observed operating margin)
                          + this job's staging forecast
                          + outstanding bytes for other admitted jobs
 ```
+
+The reviewed `post861-exec-mirror-engineering/v1` contract has a different cold
+plan. PR #861 removed the recursive whole-runtime fixture copies responsible for
+the old amplification. Four later successful strict runs recorded shared-volume
+pressure windows of 5,094,690,816; 4,512,907,264; 4,578,033,664; and 6,811,734,016
+bytes. These windows include staging and the published snapshot. They are
+engineering observations, **not exclusive owned peaks or guaranteed upper bounds**;
+concurrent writes and deletions can inflate or mask them.
+
+For a matching declared producer, command, copy mode and host contract:
+
+```
+required = 6,200,139,776 runtime estimate
+         + max(current staging forecast, 611,594,240 baseline staging)
+         + 5,630,369,792 explicit uncertainty/operating reserve
+         + outstanding bytes for other admitted jobs
+```
+
+This is 12,442,103,808 bytes at baseline, with staging counted once. The reserve
+is an explicit policy cushion, not a claim about an OS minimum. Producer hashes,
+archived test/script blobs, the copier, actual verifier argv, interpreter and
+local registry input qualify this plan; a detected mismatch uses the legacy
+fallback. Newly introduced amplifying producers require a manifest review. This
+does not claim to bound all possible future test behavior. Legacy peak estimates
+remain in history; the matched engineering profile does not inherit the old
+profile's forecast. All active or uncertain reservations on the same filesystem,
+including unknown legacy ownership, remain charged across profile versions.
+Conservative fallback receipts expose a fixed reason code, without paths or raw
+exception details.
+
+The supervisor records planned demand, sampled owned allocation, terminal
+allocation and shared-volume decline separately. Bounded samples are lower
+bounds; incomplete or interrupted scans do not establish calibration, and
+sampled observations can only raise future reserves. Samples and the staged
+checkpoint are retained before teardown so early cleanup cannot rewrite them as
+a smaller terminal size. No extra verification run is required just to measure.
+
+The reservation ledger keeps at most 256 owned-measurement cache entries, with
+persisted access sequences rather than JSON key order determining eviction.
+Exact-contract summaries in `owned-summaries/<contract-sha256>.json` retain the
+conservative highwater and an immutable snapshot of its supporting receipt
+(including staged checkpoints). Every admission and completion reads that exact
+summary, even on a cache hit. Summary publication precedes ledger updates, so a
+failed ledger write cannot hide a higher retained value. Smaller retries retain
+the original highwater witness even if the ordinary job receipt is overwritten.
+Existing cache entries without authenticated receipt snapshots are preserved as
+explicit legacy-record evidence, never promoted to calibrated measurements.
+
+Only the hot ledger cache is bounded. Durable per-contract summaries and receipts
+remain historical evidence; this policy does not delete them or bound their total
+disk use. Eviction preserves a summary first and refuses on relevant corruption,
+unsafe paths or write failure. Jobs, uncertain reservations, legacy profile peaks
+and their concurrent charges remain unchanged. Summary values are raise-only
+sampled lower bounds, not permission to lower the reviewed cold plan.
 
 The source estimate covers simultaneous mirror/copy-contract staging, including
 Git object sizes for committed docs/tests/scripts even when working-tree files
@@ -75,13 +130,15 @@ never copied into another run. Cross-filesystem snapshot publication refuses
 until a separate destination forecast is supplied; a source-filesystem plan is
 not authority to spend another volume's space.
 
-The initial strict-verification forecast is 23,860,408,320 bytes (22.22 GiB),
+The legacy strict-verification forecast is 23,860,408,320 bytes (22.22 GiB),
 grounded in the October 20 strict-run window: available space fell from
 29,490,778,112 bytes at 20:40 UTC to 5,630,369,792 bytes at 21:02 UTC.
 This is larger than October 21's partial 9.86 GiB observation. These shared-volume
 observations are not exclusive attribution or proof of a final upper bound.
 `VERIFY_BEFORE_SYNC_PEAK_BYTES` can supply a larger producer forecast. The largest
-recorded peak also wins; a failed or unusually short run never lowers it. The
+recorded legacy estimate also wins within that profile; a failed or unusually
+short run never lowers it. Planned reserves and shared-volume decline are no
+longer learned as owned measurements. The
 observed 5,630,369,792-byte residual is the initial operating margin. The 27 GiB
 launch minimum already budgets working space, so adding a second full peak to it
 would count that space twice. A comparable next run prepares above roughly
