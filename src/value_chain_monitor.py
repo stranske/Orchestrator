@@ -31,7 +31,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,10 @@ import feedback
 
 CAPABILITY_ID = "value-chain-monitor"
 WINDOW_DAYS = 90
+# #812 weekly pass: relay_acted_on vs independent log demand within ±5% (check date 2026-10-27).
+RELAY_PASS_TOLERANCE = 0.05
+RELAY_PASS_CHECK_TS = int(datetime(2026, 10, 27, tzinfo=timezone.utc).timestamp())
+RELAY_PASS_CHECK_LABEL = "2026-10-27"
 # What an accepted edge's target can say, as `capability_effectiveness._classify` names it, and the
 # row field each class is counted in. An association is set aside at the `acted_on` step (2026-10-12,
 # owner decision): an edge onto a role run is not a run acting on the capability's output, because
@@ -199,6 +203,79 @@ def _relay_usable(inputs: dict[str, Any], start: int, end: int) -> int | None:
             and start <= e.get("created_ts", -1) <= end
         }
     )
+
+
+def _relay_joined_edges(own_edges: list[dict] | None) -> list[dict]:
+    """Version-exact accepted joins; durable-delivery edges on the same row are excluded."""
+    if own_edges is None:
+        return []
+    return [
+        e
+        for e in own_edges
+        if e.get("accepted") == 1
+        and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+        and e.get("relay_round_status") in {"completed", "failed", "rate-limited"}
+    ]
+
+
+def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
+    """#812 weekly criterion: relay joins cover log demand within ±5%.
+
+    Compares version-exact relay joins to independent log demand, not the row's total
+    `acted_on` (which may include durable-delivery edges). Before the check date the
+    status is `pending`; missing demand or join counts stay `unmeasured`.
+    """
+    demand = row.get("situation_count")
+    relay_acted = row.get("relay_acted_on")
+    usable = row.get("usable")
+    outcome = row.get("outcome")
+    success = row.get("outcome_success")
+    result: dict[str, Any] = {
+        "check_date": RELAY_PASS_CHECK_LABEL,
+        "tolerance": RELAY_PASS_TOLERANCE,
+        "demand": demand,
+        "relay_acted_on": relay_acted,
+        "acted_on_floor": None,
+        "usable": usable,
+        "outcome": outcome,
+        "outcome_success": success,
+        "status": "pending",
+        "reason": f"check date {RELAY_PASS_CHECK_LABEL} not reached",
+    }
+    if now < RELAY_PASS_CHECK_TS:
+        return result
+    if demand is None or relay_acted is None:
+        result["status"] = "unmeasured"
+        result["reason"] = "demand or relay joins unread"
+        return result
+    floor = int(demand * (1.0 - RELAY_PASS_TOLERANCE))
+    result["acted_on_floor"] = floor
+    if demand <= 0:
+        result["status"] = "fail"
+        result["reason"] = "demand 0 on check date"
+        return result
+    if usable is None or outcome is None:
+        result["status"] = "unmeasured"
+        result["reason"] = "usable or outcome unread"
+        return result
+    if relay_acted < floor:
+        result["status"] = "fail"
+        result["reason"] = f"relay_acted_on {relay_acted} < floor {floor} (demand {demand} ±5%)"
+        return result
+    if usable < relay_acted:
+        result["status"] = "fail"
+        result["reason"] = f"usable {usable} < relay_acted_on {relay_acted}"
+        return result
+    if outcome < relay_acted:
+        result["status"] = "fail"
+        result["reason"] = f"outcome {outcome} < relay_acted_on {relay_acted}"
+        return result
+    result["status"] = "pass"
+    result["reason"] = (
+        f"relay_acted_on {relay_acted} ≥ floor {floor}; usable {usable}; "
+        f"outcome {outcome}; success {success}"
+    )
+    return result
 
 
 def _prompt_batches(inputs: dict[str, Any]) -> int | None:
@@ -725,6 +802,11 @@ def report(
             counts["success_scope"] = (
                 "completed lane rounds (exit=0) and durable-delivery successes"
             )
+            # Weekly ±5% pass compares these joins to log demand, not total acted_on.
+            counts["relay_acted_on"] = (
+                None if own_edges is None else len(_relay_joined_edges(own_edges))
+            )
+            counts["relay_pass"] = relay_pass_number(counts, now=now)
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).
@@ -782,6 +864,15 @@ def format_lines(section: dict) -> list[str]:
             f"first_break {first}"
             + ("; " + ", ".join(row["input_off"]) if row["input_off"] else "")
         )
+        relay_pass = row.get("relay_pass")
+        if isinstance(relay_pass, Mapping):
+            floor = relay_pass.get("acted_on_floor")
+            floor_s = "unmeasured" if floor is None else str(floor)
+            lines.append(
+                f"    relay pass ({relay_pass.get('check_date')}): {relay_pass.get('status')}; "
+                f"demand {relay_pass.get('demand')}; relay_acted_on {relay_pass.get('relay_acted_on')} "
+                f"(floor {floor_s}); {relay_pass.get('reason')}"
+            )
     # One legend line per label that appears, so a count is never printed without its meaning.
     lines.extend(
         f"  `{label}`: {meaning}"

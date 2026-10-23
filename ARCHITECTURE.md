@@ -1809,6 +1809,10 @@ existing value-chain row counts the observed terminal round as `outcome`. Operat
 and durable-delivery successes on non-relay edges remain in the same total
 (`success_scope`); a lane exit never creates a PR verdict, merge, or durable-delivery
 claim.
+The value-chain section also prints `relay pass (2026-10-27)` under the capacity row:
+version-exact joins versus independent log demand within ±5%, with `usable` and `outcome`
+at least the join count. Before that UTC date the line is `pending`. Durable-delivery
+edges on the same row are excluded from the join count.
 Mirror sync activates the importer and record hook; the host-owned `handoff-relay.sh` must
 emit and pass the decision id after merge for the explicit-join campaign pass. See
 `docs/LANE_ROUND_FEEDBACK.md`.

@@ -400,4 +400,7 @@ failed, rate-limited and lane-busy (`exit=75`) rounds earn no operational succes
 Durable PR delivery continues to use the existing lifecycle predicate on delivery
 edges, and both contributors land in `outcome_success`. The row's `success_scope`
 names that combined unit. No Brain outcome row, routing setting, or
-durable-delivery verdict is synthesized from a lane exit.
+durable-delivery verdict is synthesized from a lane exit. The printed
+`relay pass (2026-10-27)` line grades version-exact joins against log demand
+within ±5% (see `value_chain_monitor.relay_pass_number`); it stays `pending`
+until that UTC date.

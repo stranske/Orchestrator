@@ -114,8 +114,45 @@ def test_existing_exit_hook_credits_capacity_row(
     assert measured["success_scope"] == (
         "completed lane rounds (exit=0) and durable-delivery successes"
     )
-    assert "completed lane rounds (exit=0)" in "\n".join(monitor.format_lines({"rows": [measured]}))
+    assert measured["relay_acted_on"] == 1
+    assert measured["relay_pass"]["status"] == "pending"
+    text = "\n".join(monitor.format_lines({"rows": [measured]}))
+    assert "completed lane rounds (exit=0)" in text
+    assert "relay pass (2026-10-27): pending" in text
     assert "acted_on 1" in "\n".join(monitor.format_lines(rep))
+
+
+def test_relay_pass_number_grades_joins_against_demand_within_tolerance():
+    """2026-10-27 criterion: relay joins cover log demand ±5%; durable edges stay aside."""
+    check = monitor.RELAY_PASS_CHECK_TS
+    base = {
+        "situation_count": 20,
+        "relay_acted_on": 19,
+        "usable": 20,
+        "outcome": 19,
+        "outcome_success": 12,
+    }
+    pending = monitor.relay_pass_number(base, now=check - 1)
+    assert pending["status"] == "pending"
+    assert pending["acted_on_floor"] is None
+
+    passed = monitor.relay_pass_number(base, now=check)
+    assert passed["status"] == "pass"
+    assert passed["acted_on_floor"] == 19  # int(20 * 0.95)
+
+    short = monitor.relay_pass_number({**base, "relay_acted_on": 18}, now=check)
+    assert short["status"] == "fail"
+    assert "relay_acted_on 18 < floor 19" in short["reason"]
+
+    unusable = monitor.relay_pass_number({**base, "usable": 10}, now=check)
+    assert unusable["status"] == "fail"
+    assert "usable 10 < relay_acted_on 19" in unusable["reason"]
+
+    unread = monitor.relay_pass_number(
+        {"situation_count": None, "relay_acted_on": 1, "usable": 1, "outcome": 1},
+        now=check,
+    )
+    assert unread["status"] == "unmeasured"
 
 
 def test_mixed_relay_and_durable_edges_share_combined_success_scope(tmp_path, monkeypatch):
@@ -167,14 +204,32 @@ def test_mixed_relay_and_durable_edges_share_combined_success_scope(tmp_path, mo
         if r["capability"] == feedback.RELAY_PACING_CAPABILITY
     )
     assert row["outcome_success"] == 1
+    assert row["acted_on"] == 2
+    # Weekly ±5% pass uses version-exact joins only — durable edges must not inflate it.
+    assert row["relay_acted_on"] == 1
+    assert row["relay_pass"]["status"] == "pending"
     assert row["success_scope"] == ("completed lane rounds (exit=0) and durable-delivery successes")
-    assert "durable-delivery successes" in "\n".join(monitor.format_lines({"rows": [row]}))
+    text = "\n".join(monitor.format_lines({"rows": [row]}))
+    assert "durable-delivery successes" in text
+    assert "relay_acted_on 1" in text
 
     # An exit=0 relay round adds a second success beside the durable edge.
     log.write_text(log.read_text() + _line(ts=NOW - 30, chosen="muse", decision_id="ok-round"))
     feedback.record_lane_round("muse", "opener", None, 0, "none", NOW, relay_decision_id="ok-round")
     assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 2
     assert _counts()["outcome_success"] == 2
+    after = next(
+        r
+        for r in monitor.report(
+            now=NOW,
+            path=ledger,
+            env={},
+            inputs=monitor._brain(feedback.DB_PATH, NOW - 120, NOW),
+        )["rows"]
+        if r["capability"] == feedback.RELAY_PACING_CAPABILITY
+    )
+    assert after["acted_on"] == 3
+    assert after["relay_acted_on"] == 2
 
 
 def test_relay_decision_acted_on_fields_and_single_owner(tmp_path, monkeypatch):
