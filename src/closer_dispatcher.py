@@ -3283,7 +3283,7 @@ def load_workspace_config(
                     "native execution workspace must be a canonical physical directory"
                 )
             selected[target.casefold()] = workspace
-    for target, workspace in (selected.items() if validate_execution else ()):
+    for target, workspace in selected.items() if validate_execution else ():
         directory = Path(workspace)
         if not directory.is_dir():
             raise ValueError("execution workspace is unavailable")
@@ -8364,16 +8364,28 @@ def _main_admitted(args, p, assignment_rows, targets):
             validation = result["validation"]
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
+            pipeline_path = _pipeline_state_path(args.state)
+            # #898 pass number needs reservation counts on every pipeline receipt,
+            # including admitted rounds (authority true). Full terminal planning is
+            # reserved for expired admission; admitted rounds use a cheap count so
+            # a cleared latch prints blocking_reservations: 0 without remote work.
             if result.get("reason") == "admission_deadline_expired":
                 try:
-                    result.update(_expired_admission_diagnostics(_pipeline_state_path(args.state)))
+                    result.update(_expired_admission_diagnostics(pipeline_path))
                 except Exception as exc:
                     # Diagnostics must not suppress the deferred receipt or exit 78.
                     result["reservation_diagnostics_error"] = (
                         f"{type(exc).__name__}: {str(exc)[:200]}"
                     )
-                # Grade the #898 pass number from the printed receipt itself.
-                result["reservation_drain_pass"] = reservation_drain_pass_number(result)
+            else:
+                try:
+                    result.update(_admitted_reservation_counts(pipeline_path))
+                except Exception as exc:
+                    result["reservation_diagnostics_error"] = (
+                        f"{type(exc).__name__}: {str(exc)[:200]}"
+                    )
+            # Grade the #898 pass number from the printed receipt itself.
+            result["reservation_drain_pass"] = reservation_drain_pass_number(result)
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
@@ -8455,6 +8467,28 @@ def _main_admitted(args, p, assignment_rows, targets):
     return 0 if result.get("stop_valid") else 78
 
 
+def _admitted_reservation_counts(pipeline_path):
+    """Cheap reservation counts for an admitted pipeline receipt.
+
+    Does not plan terminal or legacy reconciliation (no remote observation). When
+    the latch is clear, both counts are 0 so the #898 pass number can grade
+    ``blocking_reservations: 0`` with ``authority: true``. Non-empty unknown
+    reservations leave ``drainable_reservations`` unread until expired-admission
+    diagnostics (or an explicit apply) measure drainability.
+    """
+    import closer_resources
+
+    root = closer_resources.scoped_root(Path(pipeline_path).absolute())
+    blocking = len(closer_resources.unknown_reservations(root))
+    counts = {
+        "blocking_reservations": blocking,
+        "deadlock": False,
+    }
+    if blocking == 0:
+        counts["drainable_reservations"] = 0
+    return counts
+
+
 def reservation_drain_pass_number(receipt, *, now=None):
     """#898 pass number: post-merge closer receipt clears the reservation latch.
 
@@ -8463,7 +8497,8 @@ def reservation_drain_pass_number(receipt, *, now=None):
     Before the check date the status stays ``pending`` while still reporting whether
     the reservation half already clears. Reservation drain alone never invents
     authority; an expired-admission receipt with ``authority: false`` fails the
-    authority half even when drainable equals blocking.
+    authority half even when drainable equals blocking. An admitted receipt with
+    ``authority: true`` and ``blocking_reservations: 0`` is the post-merge shape.
     """
     stamp = time.time() if now is None else float(now)
     blocking = receipt.get("blocking_reservations")

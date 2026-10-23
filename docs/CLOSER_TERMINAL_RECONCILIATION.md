@@ -47,7 +47,10 @@ Expired-admission receipts grade that outcome as `reservation_drain_pass`
 (`reservation_drain_pass_number`, check date 2026-10-30): before the date the
 status stays `pending` while `reservation_cleared` reports whether
 `blocking_reservations` is 0 or equals `drainable_reservations`. After the date
-both that clearance and `authority: true` are required to pass.
+both that clearance and `authority: true` are required to pass. Admitted
+pipeline receipts (past the deadline/lock gate) set `authority: true` and
+print a cheap `blocking_reservations` count so a cleared latch is visible on
+the first post-merge round without remote terminal planning.
 No production reservation was migrated or retired during implementation.
 
 New legacy reservations require either a pipeline-run binding or the existing

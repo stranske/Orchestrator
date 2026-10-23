@@ -4860,6 +4860,137 @@ def test_expired_admission_receipt_reports_dead_owner_drainable(tmp_path, monkey
     assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
+def test_admitted_pipeline_receipt_grades_pass_number_when_reservations_cleared(
+    tmp_path, monkeypatch, capsys
+):
+    """#898 post-merge shape: authority true + blocking 0 prints on --pipeline."""
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "completed"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    # No reservation intents: cleared latch. Admitted round carries authority.
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass"]["authority"] is True
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    after_check = adapter.reservation_drain_pass_number(
+        receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS
+    )
+    assert after_check["status"] == "pass"
+    assert after_check["reason"] == "reservation latch cleared with authority"
+
+
+def test_admitted_pipeline_receipt_leaves_drainable_unread_while_blocking(
+    tmp_path, monkeypatch, capsys
+):
+    """Admitted rounds do not remote-plan; unread drainable stays unmeasured."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    key = "pr:" + TARGET.lower()
+    directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": TARGET.lower(),
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == 1
+    assert "drainable_reservations" not in receipt
+    graded = adapter.reservation_drain_pass_number(
+        receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS
+    )
+    assert graded["status"] == "unmeasured"
+    assert "drainable" in graded["reason"]
+
+
 def test_core_reserve_records_process_group(tmp_path):
     import closer_resources as resources
 
