@@ -175,7 +175,9 @@ def verifier_resource_wait_proof(operation, target):
         ):
             return None
         inventory_read = proof.get("inventory_read")
-        if inventory_read is not None:
+        if "inventory_read" in proof:
+            if not isinstance(inventory_read, dict):
+                return None
             # Legacy single-page receipts remain valid. New receipts identify
             # the actual page that observed the blocker, including its retained
             # content hash, rather than misattributing it to page one.

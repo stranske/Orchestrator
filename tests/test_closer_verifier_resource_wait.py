@@ -426,3 +426,143 @@ def test_unrelated_active_repository_run_does_not_create_target_dependency(
     assert native.main(w.argv) == 78
     capsys.readouterr()
     assert len(w.verifies) == 1 and len(w.merges) == 1
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "count_changes",
+        "duplicate_in_page",
+        "duplicate_across_pages",
+        "id_string",
+        "id_zero",
+        "id_bool",
+        "id_negative",
+        "excess_rows",
+        "missing_runs",
+        "runs_not_list",
+    ],
+)
+def test_malformed_active_inventory_never_dispatches(waiting_world, monkeypatch, capsys, defect):
+    w = waiting_world
+    transport = native.gh_capacity.gh_run
+    calls = []
+
+    def api(args, **kwargs):
+        endpoint = args[3]
+        if "/agents-verifier.yml/runs?" in endpoint and "&status=queued" in endpoint:
+            calls.append(endpoint)
+            run = {**copy.deepcopy(w.blocking_run), "pull_requests": [{"number": 13}]}
+            if defect == "count_changes":
+                return 0, {"total_count": 3 if "&page=2" in endpoint else 2, "workflow_runs": [run]}
+            if defect == "duplicate_in_page":
+                return 0, {"total_count": 2, "workflow_runs": [run, run]}
+            if defect == "duplicate_across_pages":
+                return 0, {"total_count": 2, "workflow_runs": [run]}
+            if defect.startswith("id_"):
+                run["id"] = {"id_string": "99", "id_zero": 0, "id_bool": True, "id_negative": -1}[
+                    defect
+                ]
+                return 0, {"total_count": 1, "workflow_runs": [run]}
+            if defect == "excess_rows":
+                return 0, {"total_count": 0, "workflow_runs": [run]}
+            return 0, {
+                "total_count": 0,
+                **({"workflow_runs": {}} if defect == "runs_not_list" else {}),
+            }
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    evidence = result["merge_verification_successors"]["owner/repo#12"]["native_result"]["targets"][
+        "owner/repo#12"
+    ]["results"]["act"]["pending_evidence"]
+    assert evidence["collection_cause"] == "active_inventory_incomplete"
+    assert not w.verifies and len(calls) >= 2
+
+
+def test_inventory_retry_uses_complete_nonempty_foreign_page(waiting_world, monkeypatch, capsys):
+    w = waiting_world
+    w.blocking_run.update(status="completed", conclusion="success")
+    transport = native.gh_capacity.gh_run
+    reads = []
+
+    def api(args, **kwargs):
+        if "/agents-verifier.yml/runs?" in args[3] and "&status=queued" in args[3]:
+            reads.append(args[3])
+            rows = (
+                []
+                if len(reads) == 1
+                else [
+                    {
+                        **copy.deepcopy(w.blocking_run),
+                        "id": 1000 + i,
+                        "status": "queued",
+                        "conclusion": None,
+                        "pull_requests": [{"number": 13}],
+                    }
+                    for i in range(2)
+                ]
+            )
+            return 0, {"total_count": 2, "workflow_runs": rows}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(reads) >= 2 and len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "defect", ["status", "hash", "foreign_endpoint", "page_zero", "list", "string", "null"]
+)
+def test_inventory_observation_mutations_are_rejected(waiting_world, defect):
+    import closer_queue
+
+    w = waiting_world
+    endpoint = "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=in_progress"
+    proof = {
+        "schema": "closer-verifier-prewrite-wait/v1",
+        "boundary": "before_verify_label_post",
+        "target": "owner/repo#12",
+        "subject_pr": "owner/repo#12",
+        "revision": "r",
+        "head": "a" * 40,
+        "merge": "d" * 40,
+        "endpoint": endpoint,
+        "observed_at": 1,
+        "blocking_run": copy.deepcopy(w.blocking_run),
+        "inventory_read": {
+            "endpoint": endpoint + "&page=2",
+            "status": "observed",
+            "sha256": "b" * 64,
+        },
+    }
+    operation = {
+        "status": "resource_wait",
+        "action": "post_merge_verify",
+        "revision": "r",
+        "binding": {"pr_target": "owner/repo#12", "head": proof["head"], "merge": proof["merge"]},
+        "invoked_at": 1,
+        "completed_at": 1,
+        "result": {"verifier_resource_wait": proof},
+    }
+    proof["sha256"] = closer_queue._digest(proof)
+    assert closer_queue.verifier_resource_wait_proof(operation, "owner/repo#12") is not None
+    if defect in {"list", "string", "null"}:
+        proof["inventory_read"] = {"list": [], "string": "invalid", "null": None}[defect]
+    else:
+        key, value = {
+            "status": ("status", "unavailable"),
+            "hash": ("sha256", "invalid"),
+            "foreign_endpoint": ("endpoint", endpoint.replace("owner/repo", "other/repo")),
+            "page_zero": ("endpoint", endpoint + "&page=0"),
+        }[defect]
+        proof["inventory_read"][key] = value
+    proof["sha256"] = closer_queue._digest({k: v for k, v in proof.items() if k != "sha256"})
+    assert closer_queue.verifier_resource_wait_proof(operation, "owner/repo#12") is None
+    del proof["inventory_read"]
+    proof["sha256"] = closer_queue._digest({k: v for k, v in proof.items() if k != "sha256"})
+    assert closer_queue.verifier_resource_wait_proof(operation, "owner/repo#12") is not None
