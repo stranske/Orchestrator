@@ -14,6 +14,8 @@ merges and an open one are counted beside it. A run that never merges is scored 
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
 success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy instead count the
 observed lane-round terminal result; they never earn durable-delivery success.
+Accepted relay decision events also count as usable for that row (#891/#812): ledger
+``success`` heartbeats alone stayed at 0 while ``acted_on`` already had joins.
 The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
@@ -163,6 +165,32 @@ def _stall_sweep_targets(log: Path, start: int, end: int) -> set[str] | None:
 def _stall_situations(inputs: dict[str, Any]) -> int | None:
     targets = inputs.get("stall_targets")
     return None if targets is None else len(targets)
+
+
+def _relay_usable(inputs: dict[str, Any], start: int, end: int) -> int | None:
+    """Accepted decision events prove usability even after the source log rotates.
+
+    Issue #891's Oct 27 pass needs ``usable N>0`` once Cursor-bearing picks are real
+    pacing decisions. Ledger ``success`` heartbeats never fired for this capability
+    (only ``invocation`` at ``capacity.build``), so the monitor must also count Brain
+    decision events the importer already accepts — the same population ``acted_on``
+    joins against. None when completion events are unread; never invent zero.
+    """
+    events = inputs.get("completion_events")
+    if events is None:
+        return None
+    return len(
+        {
+            e["run_id"]
+            for e in events
+            if e.get("capability_id") == feedback.RELAY_PACING_CAPABILITY
+            and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+            and e.get("producer") == "feedback.relay_pacing"
+            and e.get("phase") == "decision"
+            and e.get("validation_status") == "accepted"
+            and start <= e.get("created_ts", -1) <= end
+        }
+    )
 
 
 def _prompt_batches(inputs: dict[str, Any]) -> int | None:
@@ -656,6 +684,10 @@ def report(
             # Every class set aside from `outcome` has its own count beside it.
             **outcome_counts(cid, own_edges),
         }
+        if cid == feedback.RELAY_PACING_CAPABILITY:
+            # Accepted relay decisions are usable even when no ledger success heartbeat exists.
+            usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
+            counts["usable"] = None if usable is None else counts["usable"] + usable
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).

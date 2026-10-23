@@ -40,8 +40,13 @@
       ]
     },
     "usable_half": {
-      "state": "pending-2026-10-27",
-      "caveat": "usable still counts production success events at HEAD; #888 changes that to accepted relay decisions. If N stays 0 after delivery, file success-producer separately per source issue."
+      "state": "code-complete-pending-live-2026-10-27",
+      "mechanism": "value_chain_monitor._relay_usable adds accepted feedback.relay_pacing decision events to usable (ledger success heartbeats alone stayed at 0 while acted_on already had joins)",
+      "verified": [
+        "test_neutral_cursor_pacing_feeds_monitor_usable",
+        "test_existing_exit_hook_credits_capacity_row (usable >= 1)"
+      ],
+      "note": "Overlaps #888's usable counting; demand/pass-number machinery remains on #888. Live switch_review read still due 2026-10-27 after mirror sync."
     },
     "next": "On 2026-10-27: switch_review windowed-capacity-policy usable N>0 and live relay-pacing.log weights= numeric for Cursor candidates after mirror sync."
   }

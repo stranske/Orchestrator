@@ -12,6 +12,7 @@ import rate_incidents
 import value_chain_monitor as monitor
 
 NOW = 1792476000
+WINDOW_DAYS_SECONDS = monitor.WINDOW_DAYS * 86400
 _DECISION_ID_RE = re.compile(r"^\d{8}T\d{6}Z-\d+-[0-9a-f]+$")
 
 
@@ -98,7 +99,11 @@ def test_existing_exit_hook_credits_capacity_row(
     )
     row = next(r for r in rep["rows"] if r["capability"] == feedback.RELAY_PACING_CAPABILITY)
     assert (row["acted_on"], row["outcome"]) == (1, 1)
-    assert "acted_on 1" in "\n".join(monitor.format_lines(rep))
+    # Accepted decision events count as usable (#891 Oct 27 pass; no ledger success heartbeat).
+    assert row["usable"] >= 1
+    text = "\n".join(monitor.format_lines(rep))
+    assert "acted_on 1" in text
+    assert re.search(r"usable [1-9]", text)
 
 
 def test_fallback_and_reread_preserve_identity_and_window(tmp_path, monkeypatch):
@@ -327,6 +332,77 @@ def test_pick_agent_emits_log_fields_for_neutral_cursor(monkeypatch, capsys):
     assert decision["policy"] == "posterior*pacing"
     assert decision["log_fields"]["weights"] == "codex:0.8,cursor:1"
     assert "unknown" not in decision["log_fields"]["weights"]
+
+
+def test_neutral_cursor_pacing_feeds_monitor_usable(tmp_path, monkeypatch, capsys):
+    """#891: posterior*pacing with neutral Cursor → numeric weights → join → usable N>0."""
+    import capacity
+    import router
+
+    log = _setup(tmp_path, monkeypatch)
+    snapshot = {
+        "agents": {
+            "codex": {
+                "state": "warn",
+                "pacing": {"state": "warn", "routing_weight": 0.8},
+            },
+            "cursor": {"state": "ok"},
+        }
+    }
+    monkeypatch.setattr(capacity, "build", lambda: snapshot)
+    monkeypatch.setattr(router, "learned_ranks", lambda: {})
+    assert (
+        capacity.main(["pick-agent", "--candidates", "codex,cursor", "--task-type", "implement"])
+        == 0
+    )
+    captured = capsys.readouterr()
+    chosen = captured.out.strip()
+    assert chosen in {"codex", "cursor"}
+    decision = json.loads(captured.err.strip())
+    assert decision["policy"] == "posterior*pacing"
+    fields = decision["log_fields"]
+    assert fields["weights"] == "codex:0.8,cursor:1"
+    assert "unknown" not in fields["weights"]
+
+    when = datetime.fromtimestamp(NOW - 30, timezone.utc)
+    token = rate_incidents.append_relay_pacing_decision(
+        source="codex",
+        lane="opener",
+        candidates="codex,cursor",
+        chosen=chosen,
+        weights=fields["weights"],
+        states=fields["states"],
+        fallback="no",
+        when=when,
+        log=log,
+    )
+    line = log.read_text(encoding="utf-8")
+    assert "weights=codex:0.8,cursor:1" in line
+    assert "unknown" not in line
+    tail = tmp_path / "tail"
+    tail.write_text("all checks passed")
+    result = rate_incidents.record_lane_round(
+        agent=chosen,
+        lane="opener",
+        receiver_reason=None,
+        exit_status=0,
+        output_file=tail,
+        ts=NOW,
+        relay_decision_id=token,
+    )
+    assert result["relay_pacing"]["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"]) == (1, 1)
+
+    ledger = tmp_path / "capabilities.json"
+    capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
+    inputs = monitor._brain(feedback.DB_PATH, NOW - WINDOW_DAYS_SECONDS, NOW)
+    assert inputs["completion_events"] is not None
+    row = monitor.report(now=NOW, path=ledger, env={}, inputs=inputs)["rows"][0]
+    assert row["capability"] == feedback.RELAY_PACING_CAPABILITY
+    assert row["usable"] >= 1
+    assert row["acted_on"] >= 1
+    text = "\n".join(monitor.format_lines({"rows": [row], "errors": []}))
+    assert re.search(r"usable [1-9]", text)
 
 
 def test_pick_agent_non_relay_candidate_keeps_success(monkeypatch, capsys):
