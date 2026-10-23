@@ -17,6 +17,8 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
+from closer_evidence import REQUIRED_SECTIONS
+
 LEVELS = {"necessary", "useful", "nice_to_have", "possibly_useful"}
 SECTIONS = {
     "source",
@@ -26,6 +28,10 @@ SECTIONS = {
     "ci_artifacts",
     "native_merge_verifier",
 }
+# Describing an observed packet section grants no ability to retrieve it.
+# Keep the planner's annotation schema aligned with the packet producer while
+# preserving the smaller set of coordinator-supported retrieval operations.
+CAUSE_SECTIONS = SECTIONS | REQUIRED_SECTIONS
 CAUSES = {
     "producer_omission",
     "collector_contract",
@@ -746,9 +752,14 @@ def confirmed_defects(before, after, causes, *, retained_dir):
 
 
 def causes_from(proposal):
+    """Validate descriptive causes independently of retrieval capabilities."""
     rows = proposal.get("collection_causes", [])
     if not isinstance(rows, list) or any(
-        not isinstance(r, dict) or r.get("kind") not in CAUSES or r.get("section") not in SECTIONS
+        not isinstance(r, dict)
+        or not isinstance(r.get("kind"), str)
+        or r["kind"] not in CAUSES
+        or not isinstance(r.get("section"), str)
+        or r["section"] not in CAUSE_SECTIONS
         for r in rows
     ):
         raise ValueError("invalid collection cause classification")
@@ -764,6 +775,10 @@ COLLECTION_INSTRUCTIONS = (
     "question, and basis:{source,criterion_sha256} or {finding_id}. The coordinator performs bounded reads. "
     "Classify collection_causes [{section,kind,reason}] as producer_omission, collector_contract, "
     "parser_failure, transient_api_failure, legitimate_absence, competing_pr_ambiguity, or unknown. "
+    "Cause sections may describe any of: " + ", ".join(sorted(CAUSE_SECTIONS)) + ". "
+    "These classifications are observations, not retrieval requests or proof of a producer defect. "
+    "Request only the supplied necessary rail requirements and their listed retrieval alternatives; "
+    "optional cause sections do not become necessary evidence. "
     "Confirmed producer/collector defects must be grouped upstream, searched against existing "
     "issues/PRs/improvement records, and filed or updated once with cases/provenance/regression expectations. "
     "The coordinator owns that idempotent filing after processing; never file per packet. An API "

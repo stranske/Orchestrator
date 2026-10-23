@@ -342,7 +342,7 @@ def test_reporting_failure_does_not_repost_or_change_recovered_case(tmp_path, fa
         assert len(record["cases"]) == 2
 
 
-def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True):
+def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, causes=None):
     import time
 
     import test_closer_dispatcher as runtime
@@ -436,7 +436,11 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True):
                     }
                     for r in recovery.required(screen)
                 ],
-                "collection_causes": [{"kind": "transient_api_failure", "section": "diff_files"}],
+                "collection_causes": (
+                    causes
+                    if causes is not None
+                    else [{"kind": "transient_api_failure", "section": "diff_files"}]
+                ),
             }
         else:
             response = {
@@ -1145,3 +1149,51 @@ def test_deadline_raised_after_provider_invocation_remains_held(tmp_path, monkey
         callbacks["interpret"](target, context)
     result = callbacks["interpret"](target, context)
     assert result["status"] == "pending" and len(started) == 1
+
+
+RETAINED_COLLECTION_CASES = json.loads(
+    (Path(__file__).parent / "fixtures" / "collection-cause-retained-four.json").read_text()
+)
+
+
+@pytest.mark.parametrize("case", RETAINED_COLLECTION_CASES, ids=lambda case: case["target"])
+def test_retained_auxiliary_causes_do_not_block_targeted_read_and_reentry(
+    tmp_path, monkeypatch, case
+):
+    callbacks, context, calls, refreshes = recovery_callbacks(
+        tmp_path, monkeypatch, recover=True, causes=case["collection_causes"]
+    )
+    result = callbacks["interpret"](context["prepare"]["snapshot"]["target"], context)
+    assert result["evidence_recovery"]["outcome"] == "recovered"
+    assert refreshes == [{"diff_files"}]
+    assert len(calls) == 2  # one collection plan, then the same normal closer
+    assert "gap-directed second-pass" in calls[0] and "gap-directed second-pass" not in calls[1]
+    assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
+    assert result["authority"] is False and not result.get("accepted")
+
+
+@pytest.mark.parametrize("section", sorted(evidence.REQUIRED_SECTIONS | {"delivery_inventory"}))
+def test_cause_classification_can_describe_each_producer_section(section):
+    proposal = {"collection_causes": [{"section": section, "kind": "unknown"}]}
+    assert recovery.causes_from(proposal) == proposal["collection_causes"]
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        {"section": "invented", "kind": "unknown"},
+        {"section": [], "kind": "unknown"},
+        {"section": "source", "kind": {}},
+    ],
+)
+def test_malformed_or_unknown_cause_is_a_recoverable_validation_error(row):
+    with pytest.raises(ValueError, match="invalid collection cause"):
+        recovery.causes_from({"collection_causes": [row]})
+
+
+def test_cause_description_contract_does_not_grant_auxiliary_retrieval():
+    assert "test_coverage_artifacts" not in recovery.SECTIONS
+    assert "prior_dispositions" not in recovery.SECTIONS
+    for section in evidence.REQUIRED_SECTIONS:
+        assert section in recovery.COLLECTION_INSTRUCTIONS

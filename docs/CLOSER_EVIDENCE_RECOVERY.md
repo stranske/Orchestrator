@@ -99,3 +99,13 @@ This extends the collector/runtime boundary owned by Orchestrator. Portable
 Workflows action safeguards are unchanged. The implementation composes PRs 857
 and 858; combined-tree release verification and installation remain with the
 release owner. Focused offline tests use synthetic data and transport boundaries.
+
+### Cause annotations and retrieval capabilities
+
+A collection plan may classify causes for every produced packet section, including
+`prior_dispositions`, `checks`, and `test_coverage_artifacts`. Cause annotations use
+the packet producer's section inventory plus the delivery-inventory rail. They do
+not authorize retrieval, make optional evidence necessary, or establish a producer
+defect. Retrieval requests retain their separate, smaller coordinator-supported
+section contract and requirement/criterion validation. Unknown or malformed cause
+classifications remain recoverable per-item validation failures.
