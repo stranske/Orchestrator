@@ -32,18 +32,20 @@
     "state": "pending",
     "weights_half": {
       "state": "code-complete",
-      "mechanism": "rate_incidents.relay_log_fields_from_decision + capacity pick-agent log_fields; prefers top-level routing_weight so Cursor pacing=None still emits cursor:1",
+      "mechanism": "rate_incidents._relay_candidate_weight prefers measured routing_weight then logs neutral 1 for absent measurement (matches router unmetered seats); pick-agent log_fields + format-relay-pacing-fields; legacy Cursor-only tiers no longer emit cursor:unknown",
       "verified": [
         "test_neutral_cursor_log_fields_emit_numeric_weights",
         "test_pick_agent_emits_log_fields_for_neutral_cursor",
+        "test_legacy_cursor_log_fields_emit_neutral_weight",
         "test_unmeasured_cursor_is_neutral_not_legacy (fields bridge)"
       ]
     },
     "usable_half": {
       "state": "code-complete-pending-live-2026-10-27",
-      "mechanism": "value_chain_monitor._relay_usable adds accepted feedback.relay_pacing decision events to usable (ledger success heartbeats alone stayed at 0 while acted_on already had joins)",
+      "mechanism": "value_chain_monitor._relay_usable adds accepted feedback.relay_pacing decision events to usable (ledger success heartbeats alone stayed at 0 while acted_on already had joins); switch_review.write_text_report is the grading surface named in the AC",
       "verified": [
         "test_neutral_cursor_pacing_feeds_monitor_usable",
+        "test_switch_review_text_out_usable_after_neutral_cursor_pacing",
         "test_existing_exit_hook_credits_capacity_row (usable >= 1)"
       ],
       "note": "Overlaps #888's usable counting; demand/pass-number machinery remains on #888. Live switch_review read still due 2026-10-27 after mirror sync."

@@ -197,13 +197,19 @@ def _relay_weight_token(value: Any) -> str:
 
 
 def _relay_candidate_weight(row: Mapping[str, Any]) -> str:
-    """Prefer the receipt's top-level routing_weight (neutral Cursor puts 1.0 there)."""
+    """Prefer measured routing_weight; absent measurement logs neutral 1.
+
+    Matches ``router._pacing_choice`` (unmetered seats compete at weight 1.0).
+    Legacy Cursor receipts used to emit ``cursor:unknown`` when ``pacing`` was
+    absent, which failed the #891 weights half of the Oct 27 pass even after
+    pick-agent started printing ``log_fields``.
+    """
     if "routing_weight" in row and row.get("routing_weight") is not None:
         return _relay_weight_token(row.get("routing_weight"))
     pace = row.get("pacing")
     if isinstance(pace, Mapping) and pace.get("routing_weight") is not None:
         return _relay_weight_token(pace.get("routing_weight"))
-    return "unknown"
+    return "1"
 
 
 def _relay_candidate_state(row: Mapping[str, Any]) -> str:
