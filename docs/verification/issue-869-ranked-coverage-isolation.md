@@ -141,3 +141,44 @@ Using `/tmp/orch872-venv/bin/python` with dependencies restored from cached whee
   "MCP tool call requires approval, but approval policy is never". Changes remain uncommitted.
   The blocker comment and `needs-human` label were rejected by the same approval policy;
   no remote mutation succeeded.
+
+## SQLite URI containment follow-up (2026-10-23)
+
+Reviewed the recent commits through `642f2e9` and the live body of PR #872. All eight
+checkboxes were already checked; the PR was open with `draft=false`. Baseline standalone
+module: 30 passed. No checkbox needed changing.
+
+The SQLite boundary now rejects `file:` URI connections before the driver. Its plain-path
+containment check otherwise accepts relative URI spellings whose decoded SQLite paths
+escape the owned root. Two regressions cover literal and percent-encoded parent traversal;
+both replace the driver with a harmless spy before attempting the call.
+
+Using `/tmp/orch872-uri-venv/bin/python`, restored from cached local pytest/Black wheels:
+
+- Before the fix, `python -m pytest -q tests/test_issue853_ranked_coverage.py -k uri_escape
+  -m "not slow" --tb=short`: 2 failed, 30 deselected, reaching only the driver spy.
+- After the fix, `python -m pytest -q tests/test_issue853_ranked_coverage.py -m "not slow"`:
+  32 passed, without an outer runtime wrapper. This includes the existing safe database
+  break/restore regression and the real scheduler's owned and offline connection cases.
+- Neighbors with `ORCH_STATE_DIR=/tmp/orch872-uri-neighbors/state`,
+  `ORCH_LOCAL_RUNTIME=/tmp/orch872-uri-neighbors/runtime`, and
+  `ORCH_FEEDBACK_DB=/tmp/orch872-uri-neighbors/runtime/feedback/orchestrator.db`:
+  `python -m pytest -q tests/test_research_control.py tests/test_research_intake.py
+  tests/test_research_ownership.py tests/test_research_usage_guard.py -m "not slow"`:
+  60 passed, 99 subtests passed.
+- `python -m pytest -q tests/test_issue853_ranked_coverage.py --cov=src/research_scheduler
+  --cov-report=term-missing -m "not slow"`: unavailable because pytest-cov is not installed.
+  No new percentage or uncovered-unit gain is claimed; historical CI provenance above remains.
+- `black --line-length 100 tests/test_issue853_ranked_coverage.py`: passed, unchanged.
+- `BLACK_NUM_WORKERS=1 BLACK_CACHE_DIR=/tmp/orch872-uri-black-cache black --check
+  --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: passed, 645 unchanged.
+  The initial worker-based run timed out; Black's sequential checker populated its verified
+  cache before the successful ordinary CLI check.
+- `git diff --check`: passed.
+
+Publication for the URI follow-up: local `git add` failed because `.git/index.lock` cannot
+be created on the read-only Git filesystem. The GitHub source-file commit, PR-body update,
+blocker comment, and `needs-human` label were each rejected with "MCP tool call requires
+approval, but approval policy is never". No remote mutation succeeded. The source fix and
+this evidence remain uncommitted in the working tree. Final PR verification: #872 remains
+open with `draft=false` at `642f2e9`.

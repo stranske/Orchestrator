@@ -40,6 +40,9 @@ def _guarded_feedback_conn(owned_root: Path, *, timeout: float = 5.0):
 
 
 def _guarded_sqlite_connect(owned_root: Path, database, *args, **kwargs):
+    # This module uses plain filenames; URI decoding can escape a Path containment check.
+    if str(database).startswith("file:"):
+        raise AssertionError("SQLite URI connections are not allowed in issue #853 tests")
     _assert_database_path_owned(database, owned_root)
     return _REAL_SQLITE_CONNECT(database, *args, **kwargs)
 
@@ -260,6 +263,31 @@ def test_sqlite_boundary_rejects_out_of_bound_path_before_driver(
     assert driver_attempts == []
     assert not sentinel.exists()
     assert not sentinel.with_name(f"{sentinel.name}-journal").exists()
+
+
+@pytest.mark.parametrize("uri_parent", ["../", "%2e%2e%2f"])
+def test_sqlite_boundary_rejects_uri_escape_before_driver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uri_parent: str
+) -> None:
+    """SQLite decodes URI paths differently from Path; never pass them to the driver."""
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    monkeypatch.chdir(owned)
+    sentinel = tmp_path / OUT_OF_BOUND_SENTINEL_NAME
+    database = f"file:{uri_parent}{sentinel.name}"
+    # The ordinary path check would accept this spelling, though SQLite opens ../sentinel.
+    assert Path(database).resolve().is_relative_to(owned.resolve())
+    driver_attempts: list[str] = []
+
+    def forbid_driver(database, *args, **kwargs):
+        driver_attempts.append(database)
+        raise AssertionError("SQLite driver reached before URI rejection")
+
+    monkeypatch.setitem(globals(), "_REAL_SQLITE_CONNECT", forbid_driver)
+    with pytest.raises(AssertionError, match="SQLite URI connections are not allowed"):
+        sqlite3.connect(database=database, uri=True)
+    assert driver_attempts == []
+    assert not sentinel.exists()
 
 
 def test_isolation_binding_deliberate_break_and_restore(
