@@ -395,8 +395,9 @@ population is zero. The reader shares the importer's identity and validation rul
 Accepted, version-matched Brain decision events contribute to `usable`, including
 saved decisions whose log has rotated. Accepted joins retain their existing
 `acted_on` and terminal `outcome` counts. For these operational relay outcomes,
-`success` counts only joined rounds with both `status=completed` and `exit_status=0`;
-failed, rate-limited and lane-busy (`exit=75`) rounds earn no success. The row's
-`success_scope` names this unit. These are lane-round results; durable PR delivery
-continues to use the existing lifecycle predicate on delivery edges. No Brain
-outcome row, routing setting, or durable-delivery verdict is synthesized.
+`success` counts joined rounds with both `status=completed` and `exit_status=0`;
+failed, rate-limited and lane-busy (`exit=75`) rounds earn no operational success.
+Durable PR delivery continues to use the existing lifecycle predicate on delivery
+edges, and both contributors land in `outcome_success`. The row's `success_scope`
+names that combined unit. No Brain outcome row, routing setting, or
+durable-delivery verdict is synthesized from a lane exit.

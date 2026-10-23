@@ -708,9 +708,10 @@ For the existing relay-pacing surface in `windowed-capacity-policy` (#812), the
 monitor now shares the importer's read-only log parser for independent demand,
 counts accepted version-matched decision events as usable, and counts joined
 `completed`/`exit=0` lane rounds as operational success. Failed and lane-busy exits
-earn none. `success_scope` identifies this unit; the durable-delivery predicate
-for PR edges is unchanged. See `docs/capacity-pacing.md` for window and missing-input
-semantics. This adds no dispatch, feedback store, capability row, or loop edge.
+earn none. Durable-delivery successes on non-relay edges remain in the same
+`outcome_success` total; `success_scope` names both contributors. See
+`docs/capacity-pacing.md` for window and missing-input semantics. This adds no
+dispatch, feedback store, capability row, or loop edge.
 
 
 **An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
@@ -1804,8 +1805,10 @@ delayed import does not move evidence into another monitor window. One-to-one bi
 late exits from reassigning a decision. The existing hook accepts Codex, Claude, Cursor and
 Muse. A joined round records completed / failed / rate-limited and the chosen agent; the
 existing value-chain row counts the observed terminal round as `outcome`. Operational
-`outcome_success` counts only joined rounds with `status=completed` and `exit_status=0`
-(`success_scope`); that never creates a PR verdict, merge, or durable-delivery claim.
+`outcome_success` counts joined rounds with `status=completed` and `exit_status=0`,
+and durable-delivery successes on non-relay edges remain in the same total
+(`success_scope`); a lane exit never creates a PR verdict, merge, or durable-delivery
+claim.
 Mirror sync activates the importer and record hook; the host-owned `handoff-relay.sh` must
 emit and pass the decision id after merge for the explicit-join campaign pass. See
 `docs/LANE_ROUND_FEEDBACK.md`.

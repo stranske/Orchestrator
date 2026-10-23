@@ -12,9 +12,10 @@ edge onto a role run is not acted on; it is counted beside `acted_on`. Only a te
 outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, one that never
 merges and an open one are counted beside it. A run that never merges is scored by verdict in
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
-success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy instead count the
-observed lane-round terminal result; successful rounds require exit=0. These operational
-results do not establish durable-delivery success.
+success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy count the
+observed lane-round terminal result; successful rounds require exit=0. Those operational
+results sit beside durable-delivery successes on non-relay edges in the same total and
+never synthesize a durable-delivery claim from a lane exit.
 The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
@@ -719,7 +720,11 @@ def report(
         if cid == feedback.RELAY_PACING_CAPABILITY:
             usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
             counts["usable"] = None if usable is None else counts["usable"] + usable
-            counts["success_scope"] = "completed lane rounds (exit=0); no durable-delivery claim"
+            # Relay exit=0 and durable-delivery edges both land in outcome_success;
+            # the scope must name both so a mixed row is not misread as exit=0 alone.
+            counts["success_scope"] = (
+                "completed lane rounds (exit=0) and durable-delivery successes"
+            )
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).

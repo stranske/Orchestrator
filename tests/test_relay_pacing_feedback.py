@@ -111,9 +111,70 @@ def test_existing_exit_hook_credits_capacity_row(
     assert measured["situation_count"] == 1
     assert measured["usable"] >= measured["acted_on"]
     assert measured["first_break"] != "unusable"
-    assert "no durable-delivery claim" in measured["success_scope"]
+    assert measured["success_scope"] == (
+        "completed lane rounds (exit=0) and durable-delivery successes"
+    )
     assert "completed lane rounds (exit=0)" in "\n".join(monitor.format_lines({"rows": [measured]}))
     assert "acted_on 1" in "\n".join(monitor.format_lines(rep))
+
+
+def test_mixed_relay_and_durable_edges_share_combined_success_scope(tmp_path, monkeypatch):
+    """Exit-75 relay + durable delivery edge → success 1; scope names both contributors.
+
+    The capacity row's outcome_success sums operational exit=0 rounds and durable-delivery
+    edges. A label that claims exit=0 alone would mis-grade the 2026-10-27 weekly row.
+    """
+    import time
+
+    log = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(time, "time", lambda: float(NOW))
+    log.write_text(_line(chosen="claude_code"))
+    feedback.record_lane_round("claude", "opener", None, 75, "lane_busy", NOW)
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 1
+    assert (_counts()["acted_on"], _counts()["outcome"], _counts()["outcome_success"]) == (
+        1,
+        1,
+        0,
+    )
+
+    run = "remote:o/r#812:gemini"
+    feedback.record_run(run, "o/r#812", "implement", "gemini", mode="remote", pr_number=812)
+    feedback.record_capability_consumption(
+        capability_id=feedback.RELAY_PACING_CAPABILITY,
+        capability_version_id="cv:capacity-delivery",
+        source_run_id="capability-producer:windowed-capacity-policy:812",
+        target_run_id=run,
+        accepted=True,
+        receipt_ref="fixture:mixed-edge",
+    )
+    feedback.record_outcome(run, adjudicated_verdict="PASS", merged=1, durability="durable")
+    assert (_counts()["acted_on"], _counts()["outcome"], _counts()["outcome_success"]) == (
+        2,
+        2,
+        1,
+    )
+
+    ledger = tmp_path / "capabilities.json"
+    capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
+    row = next(
+        r
+        for r in monitor.report(
+            now=NOW,
+            path=ledger,
+            env={},
+            inputs=monitor._brain(feedback.DB_PATH, NOW - 120, NOW),
+        )["rows"]
+        if r["capability"] == feedback.RELAY_PACING_CAPABILITY
+    )
+    assert row["outcome_success"] == 1
+    assert row["success_scope"] == ("completed lane rounds (exit=0) and durable-delivery successes")
+    assert "durable-delivery successes" in "\n".join(monitor.format_lines({"rows": [row]}))
+
+    # An exit=0 relay round adds a second success beside the durable edge.
+    log.write_text(log.read_text() + _line(ts=NOW - 30, chosen="muse", decision_id="ok-round"))
+    feedback.record_lane_round("muse", "opener", None, 0, "none", NOW, relay_decision_id="ok-round")
+    assert feedback.ingest_relay_pacing(log, now=NOW)["joined"] == 2
+    assert _counts()["outcome_success"] == 2
 
 
 def test_relay_decision_acted_on_fields_and_single_owner(tmp_path, monkeypatch):
