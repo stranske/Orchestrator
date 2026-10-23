@@ -3425,6 +3425,13 @@ def _legacy_operation_dependency(state_path, target, snapshot, *, remote_only=Fa
         relevant = bool(known_targets.intersection(aliases)) or (
             not remote_only and bool(op_repos.intersection(repos))
         )
+        if remote_only:
+            from closer_quarantine import native_queue_role
+
+            if native_queue_role(old_target, item) == "advisory":
+                # Private computation retains its local ownership/UNKNOWN ledger;
+                # it is not a native GitHub-write dependency of this remote action.
+                continue
         if operation.get("status") not in closer_queue.PENDING_OPERATION_STATES or not relevant:
             if item.get("requires_coordinator") and relevant:
                 raise RuntimeError(
