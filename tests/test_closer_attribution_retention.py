@@ -202,9 +202,9 @@ def test_title_transform_reuses_normal_action_readiness_without_acceptance(tmp_p
         snapshot["sources"], tmp_path / "evidence"
     )
     if mutation == "forged":
-        packet["sections"]["source"]["content"][0]["title_transform"]["requirements_text"] = (
-            "Invented criterion"
-        )
+        packet["sections"]["source"]["content"][0]["title_transform"][
+            "requirements_text"
+        ] = "Invented criterion"
     reseal_section(packet, "source", tmp_path / "evidence")
     if mutation == "body_drift":
         snapshot["sources"][0]["body"] += "\nNew actual request"

@@ -900,9 +900,7 @@ def _source_section(sources: list, root: Path) -> dict:
         reason=(
             "source count/body byte bound reached"
             if truncated_any
-            else "credential-like values redacted"
-            if redacted_any
-            else None
+            else "credential-like values redacted" if redacted_any else None
         ),
         truncated=truncated_any,
     )
