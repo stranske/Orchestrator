@@ -8,8 +8,8 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
-import time
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -266,11 +266,23 @@ def test_load_yaml_or_json_missing_file(tmp_path):
         bridge._load_yaml_or_json(missing)
 
 
-def test_load_yaml_or_json_yaml_file(tmp_path):
+def test_load_yaml_or_json_yaml_file(tmp_path, monkeypatch):
+    # CI's runner installs no PyYAML, so the parser is a stand-in: what is under test is that a non-.json
+    # registry file is read as text and handed to ``yaml.safe_load``, and that its mapping is returned.
+    seen = []
+
+    class FakeYaml:
+        @staticmethod
+        def safe_load(text):
+            seen.append(text)
+            return {"key": "value", "count": 42}
+
+    monkeypatch.setitem(sys.modules, "yaml", FakeYaml)
     yaml_file = tmp_path / "test.yaml"
     yaml_file.write_text("key: value\ncount: 42\n", encoding="utf-8")
     loaded = bridge._load_yaml_or_json(yaml_file)
     assert loaded == {"key": "value", "count": 42}
+    assert seen == ["key: value\ncount: 42\n"]
 
 
 def test_load_yaml_or_json_non_dict_root(tmp_path):
@@ -1225,10 +1237,17 @@ def test_default_qualification_report_path(monkeypatch, tmp_path):
     file1 = sub1 / bridge.DEFAULT_QUALIFICATION_NAME
     file2 = sub2 / bridge.DEFAULT_QUALIFICATION_NAME
     file1.touch()
-    time.sleep(0.01)
     file2.touch()
     monkeypatch.setattr(bridge, "DEFAULT_ARTIFACT_ROOT", artifact_root)
+    # Explicit mtimes, in both orders: the newest report wins whichever directory holds it, and the answer
+    # cannot come from creation order, listing order or a filesystem with coarse timestamps.
+    older, newer = 1_000_000_000_000_000_000, 2_000_000_000_000_000_000
+    os.utime(file1, ns=(older, older))
+    os.utime(file2, ns=(newer, newer))
     assert bridge._default_qualification_report_path() == file2
+    os.utime(file1, ns=(newer, newer))
+    os.utime(file2, ns=(older, older))
+    assert bridge._default_qualification_report_path() == file1
 
 
 def test_selftest_workflows_root_location_independent(monkeypatch, tmp_path):
