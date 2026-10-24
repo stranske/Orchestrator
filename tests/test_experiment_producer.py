@@ -1334,6 +1334,8 @@ def producer_derivation_proof(tmp_path, monkeypatch):
         [str(consumer_python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
         text=True,
     ).strip()
+    # Nested venvs inherit base packages, so expose pytest from the current runner's venv too.
+    (Path(site) / "test_runner.pth").write_text(str(Path(pytest.__file__).parent.parent) + "\n")
     (Path(site) / "consumer_only_731.py").write_text("VALUE = 'fixed'\n")
     root = tmp_path / "derived-experiment"
     root.mkdir()
