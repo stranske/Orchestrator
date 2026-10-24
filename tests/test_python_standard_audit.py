@@ -128,6 +128,26 @@ def test_env_shebang_uses_job_path(fleet):
     assert calls[0][0] == "python3"
 
 
+@pytest.mark.parametrize("options", [[], ["-o", "pipefail", "--"]])
+def test_shell_entry_script_needs_no_filename_extension(fleet, options):
+    job, script, measure, _, _ = fleet
+    entry = script("/usr/bin/python3 -c pass\n", "runner")
+    job("extensionless-shell", ["/bin/bash", *options, entry, "--config"])
+    report = measure()
+    assert report["status"] == "measured" and report["bad"] == 1
+
+
+def test_direct_extensionless_python_script_uses_its_shebang(fleet):
+    job, script, measure, calls, _ = fleet
+    entry = script(
+        '#!/usr/bin/env python3\n"""Don\'t parse this as shell."""\nprint(1)\n', "runner"
+    )
+    job("extensionless-python", [entry])
+    report = measure()
+    assert report["status"] == "measured" and report["bad"] == 1
+    assert calls[0][0] == "python3"
+
+
 def test_explicit_python_ignores_unused_entry_shebang(fleet):
     job, script, measure, _, _ = fleet
     entry = script("#!/usr/bin/python3\nprint('hello')\n", "task.py")

@@ -226,12 +226,15 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
     return list(dict.fromkeys(refs))
 
 
-def shell_command(args: list[str]) -> tuple[str, bool]:
+def shell_command(args: list[str]) -> tuple[str, bool, str]:
     """Read only shell options preceding its command/script, never script arguments."""
     index, login = 1, False
     while index < len(args):
         option = args[index]
-        if option == "--" or not option.startswith(("-", "+")) or option == "-":
+        if option == "--":
+            index += 1
+            break
+        if not option.startswith(("-", "+")) or option == "-":
             break
         if option in ("-o", "+o", "--rcfile", "--init-file"):
             index += 2
@@ -243,9 +246,10 @@ def shell_command(args: list[str]) -> tuple[str, bool]:
             if "c" in option[1:]:
                 if index + 1 >= len(args):
                     raise ValueError("a command operand after shell -c")
-                return args[index + 1], login
+                return args[index + 1], login, ""
         index += 1
-    return "", login
+    entry = args[index] if index < len(args) and args[index] != "-" else ""
+    return "", login, entry
 
 
 def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
@@ -264,7 +268,7 @@ def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
     if not isinstance(path, str):
         raise ValueError("a string EnvironmentVariables.PATH")
     shell = Path(args[0]).name in ("bash", "zsh", "sh")
-    command, login = shell_command(args) if shell else ("", False)
+    command, login, shell_entry = shell_command(args) if shell else ("", False, "")
     tokens = shlex.split(command, comments=True) if command else args
     # Scan only executable command text, never arbitrary arguments to a direct Python job.
     refs = references(command, path, home) if command else []
@@ -277,7 +281,16 @@ def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
         for t in tokens
         if t.endswith((".sh", ".py")) and not t.endswith("/py-standard.sh")
     ]
-    for entry in dict.fromkeys(entries):
+    if shell_entry:
+        entries.insert(0, expand(shell_entry, home, path))
+    elif not shell and not PYTHON.fullmatch(args[0]):
+        executable = Path(expand(args[0], home, path))
+        if executable.is_file():
+            with executable.open("rb") as stream:
+                if stream.read(2) == b"#!":
+                    entries.insert(0, str(executable))
+    entries = list(dict.fromkeys(entries))
+    for entry in entries:
         script = Path(entry)
         if not script.is_absolute():
             working = job.get("WorkingDirectory")
@@ -286,7 +299,8 @@ def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
             script = Path(working) / script
         # Python source is not shell. Its shebang matters only for direct execution.
         text = script.read_text()
-        if script.suffix == ".py":
+        shebang = shlex.split(text.splitlines()[0][2:]) if text.startswith("#!") else []
+        if script.suffix == ".py" or any(PYTHON.fullmatch(token) for token in shebang):
             if refs:
                 text = "\n".join(text.splitlines()[1:]) if text.startswith("#!") else text
             else:
