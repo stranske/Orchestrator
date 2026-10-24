@@ -406,6 +406,23 @@ check is separate from the repository's offline tests.
 
 ## Relay monitor population (#812)
 
+The weekly `switch_review.py --text-out PATH` sweep also prints one `Python standard:`
+health line beside the capacity health sections. The read-only launchd audit counts
+`com.stranske.`, `com.openai.codex.`, and `com.codex.` entrypoints on Python 3.9 or
+anaconda 3.12, names at most five offenders with `+N more`, and reports the one-line
+migration count and `~/.codex/orchestrator/python-migration/inventory.md` reference.
+For the 2026-10-31 check this count must be zero; the drained line requires no known
+unsupported versions or missing measurements. Non-Python jobs remain in the job
+population without adding offenders. Missing LaunchAgents (including CI), unreadable
+scripts/plists, dynamic PATHs, or failed lookups print `unmeasured — would need ...`,
+never a measured zero. `python3 src/python_standard_audit.py [--json]` exposes the same
+snapshot, classifications and interpreter evidence independently. Bare Python lookup
+runs in a controlled shell with the job's PATH and login flag; simple script PATH
+assignments are followed. This is entry-script inspection, not execution tracing of
+arbitrary descendants, shell branches, or dynamically constructed commands. Standard
+selector references count as standard intent; explicit legacy pins still win. The
+audit never edits launchd jobs, runs their bodies, or changes scheduling gates.
+
 The `windowed-capacity-policy` row in `switch_review.py --text-out` measures relay
 demand from validated, deduplicated decisions in `HANDOFF_PACING_LOG` (default
 `~/.codex/handoff/relay-pacing.log`) over the same report window. This read is
