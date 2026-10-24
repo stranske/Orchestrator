@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from io import StringIO
 from pathlib import Path
+from xml.parsers.expat import ExpatError
 
 DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 PREFIXES = ("com.stranske.", "com.openai.codex.", "com.codex.")
@@ -111,14 +112,48 @@ def code_lines(text: str) -> Iterator[list[str]]:
                 raise
             continued += "\n"
             continue
+        active = continued
         continued = ""
         if not tokens:
             continue
-        active = shlex.join(tokens)
-        pending.extend((m[3], bool(m[1])) for m in HEREDOC.finditer(active))
+        pending.extend(heredoc_delimiters(active))
         yield tokens
     if continued or pending:
         raise ValueError("a complete entry script (unterminated quotation/heredoc)")
+
+
+def heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
+    """Find shell redirections outside quotes, comments and arithmetic shifts."""
+    found: list[tuple[str, bool]] = []
+    quote, index, arithmetic = "", 0, 0
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and (
+            index == 0 or line[index - 1].isspace() or line[index - 1] in ";&|()<>"
+        ):
+            break
+        elif line.startswith("((", index):
+            arithmetic += 1
+            index += 2
+            continue
+        elif arithmetic and line.startswith("))", index):
+            arithmetic -= 1
+            index += 2
+            continue
+        elif not arithmetic and (match := HEREDOC.match(line, index)):
+            found.append((match[3], bool(match[1])))
+            index = match.end()
+            continue
+        index += 1
+    return found
 
 
 def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[tuple[str, str]]:
@@ -154,7 +189,7 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
             token = expand(token, home, path)
             interpreters = re.findall(
                 r"/(?:[^/\s'\";$()`]+/)*python(?:3(?:\.\d+)?)?(?![\w.-])"
-                r"|(?<![\w./-])python3?(?![\w.-])",
+                r"|(?<![\w./-])python(?:3(?:\.\d+)?)?(?![\w.-])",
                 token,
             )
             candidate = token.split("=", 1)[1] if re.match(r"[A-Za-z_]\w*=", token) else token
@@ -167,6 +202,28 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
     if standard:
         refs.append(("standard", path))
     return list(dict.fromkeys(refs))
+
+
+def shell_command(args: list[str]) -> tuple[str, bool]:
+    """Read only shell options preceding its command/script, never script arguments."""
+    index, login = 1, False
+    while index < len(args):
+        option = args[index]
+        if option == "--" or not option.startswith(("-", "+")) or option == "-":
+            break
+        if option in ("-o", "+o", "--rcfile", "--init-file"):
+            index += 2
+            continue
+        if option == "--login":
+            login = True
+        elif not option.startswith("--"):
+            login = login or "l" in option[1:]
+            if "c" in option[1:]:
+                if index + 1 >= len(args):
+                    raise ValueError("a command operand after shell -c")
+                return args[index + 1], login
+        index += 1
+    return "", login
 
 
 def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
@@ -184,9 +241,8 @@ def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
     path = environment.get("PATH", DEFAULT_PATH)
     if not isinstance(path, str):
         raise ValueError("a string EnvironmentVariables.PATH")
-    login = any(arg == "-lc" for arg in args[1:])
     shell = Path(args[0]).name in ("bash", "zsh", "sh")
-    command = args[-1] if shell and any("c" in a for a in args[1:] if a.startswith("-")) else ""
+    command, login = shell_command(args) if shell else ("", False)
     tokens = shlex.split(command, comments=True) if command else args
     # Scan only executable command text, never arbitrary arguments to a direct Python job.
     refs = references(command, path, home) if command else []
@@ -276,6 +332,7 @@ def audit(
             TypeError,
             AttributeError,
             plistlib.InvalidFileException,
+            ExpatError,
         ) as exc:
             needs.append(f"readable plist {file.name} ({type(exc).__name__})")
             continue
@@ -326,11 +383,25 @@ def format_line(report: dict) -> str:
     return line
 
 
+def snapshot() -> dict:
+    """Preserve the weekly artifact even if an unexpected reader/probe failure occurs."""
+    try:
+        return audit()
+    except Exception as exc:  # noqa: BLE001 — this health reader cannot discard the weekly sweep
+        return {
+            "status": "unmeasured",
+            "jobs": None,
+            "bad": None,
+            "rows": [],
+            "needs": [f"a working scheduled-Python audit ({type(exc).__name__})"],
+        }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    report = audit()
+    report = snapshot()
     print(json.dumps(report, indent=2) if args.json else format_line(report))
     return 0
 

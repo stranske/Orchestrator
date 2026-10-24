@@ -3171,7 +3171,7 @@ def main(argv: list[str]) -> int:
         sources=sources,
         value_chain_inputs=value_chain_inputs,
         credential_exposure_report=credential_exposure(),
-        python_standard_report=python_standard_audit.audit(),
+        python_standard_report=python_standard_audit.snapshot(),
     )
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.

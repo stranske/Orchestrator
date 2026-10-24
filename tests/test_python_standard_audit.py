@@ -20,7 +20,7 @@ def fleet(tmp_path):
 
     def resolver(command, path, login, home):
         calls.append((command, path, login, home))
-        if command in ("python", "python3"):
+        if "/" not in command and audit.PYTHON.fullmatch(command):
             command = path.split(":")[0] + "/" + command
         version = "3.9.6" if command.startswith("/usr/bin/") else "3.14.3"
         if "anaconda3" in command:
@@ -412,3 +412,73 @@ def test_weekly_cli_collects_audit_once_and_carries_json_and_text(
     assert json.loads(capsys.readouterr().out)["python_standard"] == snapshot
     assert destination.read_text() == audit.format_line(snapshot)
     assert calls == ["audit"]
+
+
+def test_spaced_heredoc_ignores_legacy_prose_and_apostrophes(fleet):
+    job, script, measure, calls, _ = fleet
+    entry = script("cat << EOF\nDon't execute /usr/bin/python3\nEOF\ntrue\n")
+    job("spaced-heredoc", ["/bin/bash", entry])
+    report = measure()
+    assert report["status"] == "measured"
+    assert report["rows"][0]["class"] == "no-python"
+    assert calls == []
+
+
+@pytest.mark.parametrize("line", ['echo "<< EOF"', 'echo "$(( 1 << 2 ))"', "true;# << EOF"])
+def test_quoted_operators_arithmetic_and_comments_do_not_open_heredocs(fleet, line):
+    job, script, measure, _, _ = fleet
+    job("not-heredoc", ["/bin/bash", script(line + "\n/usr/bin/python3 task.py")])
+    assert measure()["bad"] == 1
+
+
+@pytest.mark.parametrize("inline", [False, True])
+def test_bare_versioned_python_cannot_print_drained(fleet, inline):
+    job, script, measure, calls, _ = fleet
+    task = script("print('hello')\n", "task.py")
+    body = f"python3.9 {task}"
+    args = ["/bin/bash", "-c", body] if inline else ["/bin/bash", script(body)]
+    job("versioned", args)
+    report = measure()
+    assert report["bad"] == 1
+    assert report["rows"][0]["class"] == "system-3.9"
+    assert calls[0][0] == "python3.9"
+    assert "(drained)" not in audit.format_line(report)
+
+
+@pytest.mark.parametrize("argument", ["--check", "--config"])
+def test_script_options_cannot_hide_the_entry_script(fleet, argument):
+    job, script, measure, _, _ = fleet
+    entry = script("/usr/bin/python3 task.py")
+    job("script-option", ["/bin/bash", entry, argument])
+    assert measure()["bad"] == 1
+
+
+@pytest.mark.parametrize("options", [["-c"], ["-o", "pipefail", "-c"], ["-lc"]])
+def test_shell_command_precedes_arg0(fleet, options):
+    job, _, measure, calls, _ = fleet
+    job("arg0", ["/bin/bash", *options, "/usr/bin/python3 -c pass", "arg0"])
+    assert measure()["bad"] == 1
+    assert calls[0][0] == "/usr/bin/python3"
+    assert calls[0][2] == (options == ["-lc"])
+
+
+def test_truncated_xml_plist_is_unmeasured_and_retains_other_jobs(fleet):
+    job, _, measure, _, directory = fleet
+    job("valid", ["/standard/python3"])
+    (directory / "truncated.plist").write_bytes(b'<?xml version="1.0"?><plist><dict>')
+    report = measure()
+    assert report["status"] == "unmeasured"
+    assert report["jobs"] == 1
+    assert "ExpatError" in audit.format_line(report)
+    assert "(drained)" not in audit.format_line(report)
+
+
+def test_unexpected_audit_failure_keeps_cli_unmeasured(monkeypatch, capsys):
+    def failed():
+        raise RuntimeError("future reader failed")
+
+    monkeypatch.setattr(audit, "audit", failed)
+    assert audit.main([]) == 0
+    line = capsys.readouterr().out
+    assert "unmeasured — would need" in line and "RuntimeError" in line
+    assert "(drained)" not in line
