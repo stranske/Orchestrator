@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 import weakref
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
@@ -36,6 +36,15 @@ import verifier_evidence
 
 TARGET = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+# #898 pass number: first post-merge closer receipt clears the reservation latch
+# (blocking 0 or drainable==blocking) with authority true. Check date 2026-10-30.
+RESERVATION_DRAIN_PASS_CHECK_TS = int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp())
+RESERVATION_DRAIN_PASS_CHECK_LABEL = "2026-10-30"
+# A terminal reconciliation plan performs live GitHub reads under its own 120-second
+# request deadline. Bound the receipt diagnostic as a whole as well, so a backlog of
+# historical advertisements cannot turn one expired/admitted receipt into an
+# unbounded sequence of otherwise bounded plans.
+ADMISSION_DIAGNOSTICS_BUDGET_SECONDS = 120.0
 
 
 def _pipeline_state_path(state_path, *, shadow=False):
@@ -3311,7 +3320,7 @@ def load_workspace_config(
                     "native execution workspace must be a canonical physical directory"
                 )
             selected[target.casefold()] = workspace
-    for target, workspace in (selected.items() if validate_execution else ()):
+    for target, workspace in selected.items() if validate_execution else ():
         directory = Path(workspace)
         if not directory.is_dir():
             raise ValueError("execution workspace is unavailable")
@@ -8427,14 +8436,21 @@ def _main_admitted(args, p, assignment_rows, targets):
             validation = result["validation"]
         if budget_admission is not None:
             result["budget_admission"] = budget_admission
-            if result.get("reason") == "admission_deadline_expired":
-                try:
-                    result.update(_expired_admission_diagnostics(_pipeline_state_path(args.state)))
-                except Exception as exc:
-                    # Diagnostics must not suppress the deferred receipt or exit 78.
-                    result["reservation_diagnostics_error"] = (
-                        f"{type(exc).__name__}: {str(exc)[:200]}"
-                    )
+        # #898 pass number needs reservation counts on every non-shadow pipeline
+        # receipt, including admitted rounds (authority true) and runs that never
+        # built a budget_admission row. Shadow uses a different pipeline path.
+        if not args.shadow:
+            pipeline_path = _pipeline_state_path(args.state)
+            try:
+                if result.get("reason") == "admission_deadline_expired":
+                    result.update(_expired_admission_diagnostics(pipeline_path))
+                else:
+                    result.update(_admitted_reservation_counts(pipeline_path))
+            except Exception as exc:
+                # Diagnostics must not suppress the deferred receipt or exit 78.
+                result["reservation_diagnostics_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+            # Grade the #898 pass number from the printed receipt itself.
+            result["reservation_drain_pass"] = reservation_drain_pass_number(result)
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
@@ -8480,7 +8496,15 @@ def _main_admitted(args, p, assignment_rows, targets):
                 ),
             ]
             with closer_resources.legacy_reserve(
-                root, keys, target=target, owner=owner, deadline=deadline
+                root,
+                keys,
+                target=target,
+                owner=owner,
+                deadline=deadline,
+                causal_binding={
+                    "native_state_path": str(args.state),
+                    "operation_id": operation["id"],
+                },
             ):
                 return backend.execute(target, action, observed, operation)
 
@@ -8508,6 +8532,81 @@ def _main_admitted(args, p, assignment_rows, targets):
     return 0 if result.get("stop_valid") else 78
 
 
+def _admitted_reservation_counts(pipeline_path):
+    """Reservation counts for an admitted pipeline receipt (authority true).
+
+    A clear latch is a cheap local count: both sides print 0 so the #898 pass
+    number can grade ``blocking_reservations: 0`` with ``authority: true`` without
+    remote work. When unknown reservations remain, reuse the read-only drain
+    diagnostics so ``drainable_reservations == blocking_reservations`` is also
+    measurable on the first post-merge admitted round. Diagnostics never apply.
+    """
+    import closer_resources
+
+    root = closer_resources.scoped_root(Path(pipeline_path).absolute())
+    if not closer_resources.unknown_reservations(root):
+        return {
+            "blocking_reservations": 0,
+            "drainable_reservations": 0,
+            "deadlock": False,
+        }
+    return _expired_admission_diagnostics(pipeline_path)
+
+
+def reservation_drain_pass_number(receipt, *, now=None):
+    """#898 pass number: post-merge closer receipt clears the reservation latch.
+
+    Pass requires ``blocking_reservations == 0`` or
+    ``drainable_reservations == blocking_reservations``, and ``authority is True``.
+    Before the check date the status stays ``pending`` while still reporting whether
+    the reservation half already clears. Reservation drain alone never invents
+    authority; an expired-admission receipt with ``authority: false`` fails the
+    authority half even when drainable equals blocking. An admitted receipt with
+    ``authority: true`` and ``blocking_reservations: 0`` is the post-merge shape.
+    """
+    stamp = time.time() if now is None else float(now)
+    blocking = receipt.get("blocking_reservations")
+    drainable = receipt.get("drainable_reservations")
+    authority = receipt.get("authority")
+    reservation_cleared = (
+        isinstance(blocking, int)
+        and isinstance(drainable, int)
+        and not isinstance(blocking, bool)
+        and not isinstance(drainable, bool)
+        and (blocking == 0 or drainable == blocking)
+    )
+    result = {
+        "check_date": RESERVATION_DRAIN_PASS_CHECK_LABEL,
+        "blocking_reservations": blocking,
+        "drainable_reservations": drainable,
+        "authority": authority,
+        "reservation_cleared": reservation_cleared,
+        "status": "pending",
+        "reason": f"check date {RESERVATION_DRAIN_PASS_CHECK_LABEL} not reached",
+    }
+    if stamp < RESERVATION_DRAIN_PASS_CHECK_TS:
+        return result
+    if not isinstance(blocking, int) or isinstance(blocking, bool):
+        result["status"] = "unmeasured"
+        result["reason"] = "blocking_reservations unread"
+        return result
+    if not isinstance(drainable, int) or isinstance(drainable, bool):
+        result["status"] = "unmeasured"
+        result["reason"] = "drainable_reservations unread"
+        return result
+    if not reservation_cleared:
+        result["status"] = "fail"
+        result["reason"] = f"blocking {blocking} with drainable {drainable}"
+        return result
+    if authority is not True:
+        result["status"] = "fail"
+        result["reason"] = f"authority {authority!r} is not true"
+        return result
+    result["status"] = "pass"
+    result["reason"] = "reservation latch cleared with authority"
+    return result
+
+
 def _expired_admission_diagnostics(pipeline_path):
     """Explain retained resource advertisements without adopting or releasing them.
 
@@ -8519,10 +8618,13 @@ def _expired_admission_diagnostics(pipeline_path):
     # Match plan_legacy_reconciliation: absolute paths so drainable comparisons agree.
     pipeline_path = Path(pipeline_path).absolute()
     root = closer_resources.scoped_root(pipeline_path)
+    diagnostic_deadline = time.monotonic() + ADMISSION_DIAGNOSTICS_BUDGET_SECONDS
     unknown = closer_resources.unknown_reservations(root)
     diagnostics = []
     drainable = set()
     plans = {}
+    terminal_plans = {}
+    reason_counts = {}
     for base in closer_resources._reservation_bases(root):
         for directory in sorted(base.iterdir()) if base.is_dir() else []:
             for filename in ("intent.json", "legacy-intent.json"):
@@ -8542,27 +8644,55 @@ def _expired_admission_diagnostics(pipeline_path):
                         )
                         key = (run_id, intent.get("owner"), plan_target)
                         if key not in plans:
-                            plans[key] = closer_resources.plan_legacy_reconciliation(
-                                pipeline_path, run_id=key[0], owner=key[1], target=plan_target
+                            if time.monotonic() < diagnostic_deadline:
+                                plans[key] = closer_resources.plan_legacy_reconciliation(
+                                    pipeline_path, run_id=key[0], owner=key[1], target=plan_target
+                                )
+                        plan = plans.get(key)
+                        if plan is None:
+                            reasons = ["diagnostic_budget_exhausted"]
+                        else:
+                            eligible = plan.get("eligible") is True and any(
+                                row.get("path") == str(path)
+                                for row in plan.get("advertisements", [])
                             )
-                        plan = plans[key]
-                        eligible = plan.get("eligible") is True and any(
-                            row.get("path") == str(path) for row in plan.get("advertisements", [])
-                        )
-                        reasons = plan.get("reasons") or ([] if eligible else reasons)
+                            reasons = plan.get("reasons") or ([] if eligible else reasons)
                     elif filename == "legacy-intent.json":
                         reasons = ["missing_causal_run_binding"]
+                    recovery_path = (
+                        "plan_legacy_reconciliation" if filename == "legacy-intent.json" else "none"
+                    )
+                    if not eligible and intent and (filename == "intent.json" or not run_id):
+                        target = intent.get("target")
+                        if target not in terminal_plans:
+                            if time.monotonic() < diagnostic_deadline:
+                                terminal_plans[target] = (
+                                    closer_resources.plan_terminal_reconciliation(
+                                        pipeline_path, target=target
+                                    )
+                                )
+                        terminal_plan = terminal_plans.get(target)
+                        if terminal_plan is None:
+                            reasons = ["diagnostic_budget_exhausted"]
+                        else:
+                            if terminal_plan.get("eligible") is True:
+                                eligible = any(
+                                    row["path"] == str(path)
+                                    for row in terminal_plan["advertisements"]
+                                )
+                                recovery_path = "plan_terminal_reconciliation"
+                                reasons = []
+                            else:
+                                reasons = sorted(set(reasons + terminal_plan.get("reasons", [])))
+                    for reason in reasons:
+                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
                     if eligible:
                         drainable.add(str(path))
                     diagnostics.append(
                         {
                             "path": str(path),
                             "target": (intent or {}).get("target"),
-                            "recovery_path": (
-                                "plan_legacy_reconciliation"
-                                if filename == "legacy-intent.json"
-                                else "none"
-                            ),
+                            "recovery_path": recovery_path,
                             "drainable": eligible,
                             "reasons": reasons,
                         }
@@ -8582,6 +8712,7 @@ def _expired_admission_diagnostics(pipeline_path):
         "drainable_reservations": len(drainable),
         "deadlock": bool(unknown) and not drainable,
         "reservation_recovery": diagnostics,
+        "reservation_reason_counts": dict(sorted(reason_counts.items())),
     }
 
 

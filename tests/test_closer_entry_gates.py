@@ -110,7 +110,14 @@ def test_raw_legacy_exact_alias_unknown_blocks_effect_disjoint_progresses(
 
     monkeypatch.setattr(q, "run_round", native)
     # Leave a durable unknown from another owner, without creating any scoped root.
-    with r.legacy_reserve(root, [key], target="o/r#1", owner="prior", deadline=time.time() + 2):
+    with r.legacy_reserve(
+        root,
+        [key],
+        target="o/r#1",
+        owner="prior",
+        deadline=time.time() + 2,
+        causal_binding={"pipeline_run_id": "synthetic"},
+    ):
         pass
     assert not root.exists()
     before = r.unknown_reservations(root)
@@ -144,7 +151,12 @@ def test_raw_validate_stop_includes_common_unknown_intents(tmp_path, monkeypatch
     state = tmp_path / "state"
     root = r.scoped_root(d._pipeline_state_path(state))
     with r.legacy_reserve(
-        root, ["branch:o/r@feature"], target="o/r#1", owner="old", deadline=time.time() + 2
+        root,
+        ["branch:o/r@feature"],
+        target="o/r#1",
+        owner="old",
+        deadline=time.time() + 2,
+        causal_binding={"pipeline_run_id": "synthetic"},
     ):
         pass
     monkeypatch.setattr(q, "validate_stop", lambda *a, **kw: {"valid": True, "stop_valid": True})

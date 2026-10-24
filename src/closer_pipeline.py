@@ -4040,6 +4040,8 @@ def _run_pipeline_impl(
                 carry[target] = _carry_item(item)
         receipt = {
             "schema": "closer-pipeline-receipt/v1",
+            # Admitted past the deadline/lock gate; deferred paths set authority False.
+            "authority": True,
             "run_id": run_id,
             "deadline": run["deadline"],
             "elapsed_seconds": max(0.0, now() - started),

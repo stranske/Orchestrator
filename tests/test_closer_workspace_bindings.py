@@ -51,6 +51,8 @@ def test_concurrent_parent_child_admission_never_double_acts(
         manager = resources.reserve if kind == "core" else resources.legacy_reserve
         if kind == "core":
             kwargs["scope_check"] = scope_check
+        else:
+            kwargs["causal_binding"] = {"pipeline_run_id": f"synthetic-{number}"}
         try:
             with manager(root, [f"repo:owner/repo{number}", f"worktree:{path}"], **kwargs):
                 effects.append(number)
