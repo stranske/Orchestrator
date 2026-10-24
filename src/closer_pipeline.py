@@ -5465,7 +5465,9 @@ def _validate_stop_finite(
                 / f"{Path(state_path).stem}.actions"
                 / f"{_digest(frontier_target)}.json"
             )
-            result = item.get("results", {}).get("act", {})
+            results = item.get("results")
+            result = results.get("act") if isinstance(results, Mapping) else None
+            result = result if isinstance(result, Mapping) else {}
             proof = closer_queue.accepted_verifier_wait_proof(
                 action_path,
                 frontier_target,
@@ -5476,6 +5478,8 @@ def _validate_stop_finite(
             resource = item.get("resource_evidence")
             valid = (
                 proof is not None
+                and result.get("status") == "pending"
+                and result.get("pending_kind") == "external_event"
                 and isinstance(resource, Mapping)
                 and resource.get("accepted_verifier_request") == proof
             )

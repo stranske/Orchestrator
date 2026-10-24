@@ -881,6 +881,36 @@ def _exclusive(path):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+@contextlib.contextmanager
+def _accepted_receipt_transaction(path, frontier, target, audit):
+    """Keep inner bytes stable through outer commit, audit and retirement."""
+    import closer_queue
+
+    state, _ = _read(path)
+    row = _entry(state, frontier)["items"][target]
+    prior = _read(audit)[0] if audit.exists() else {}
+    proposal = prior.get("plan")
+    if proposal is not None and not isinstance(proposal, dict):
+        raise ValueError("malformed_reentry_audit_plan")
+    proposal = proposal or {}
+    accepted = proposal.get("kind") == "accepted_verifier_request_receipt"
+    if (
+        not accepted
+        and row.get("error") != "action wait lacks exact verified no-effect queue proof"
+    ):
+        yield
+        return
+    inner = _physical(path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json")
+    if not inner.is_file():
+        raise ValueError("accepted_request_inner_queue_missing")
+    with closer_queue._ledger_lock(inner, cutoff=time.time() + 1, now=time.time) as locked:
+        if not locked:
+            raise resources.ResourceBlocked("active_accepted_request_queue_writer")
+        if accepted and _read(inner)[1] != proposal["inner_boundary"]["sha256"]:
+            raise ValueError("accepted_request_queue_changed_before_commit")
+        yield
+
+
 def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_receipts=None):
     """CAS one target under existing target/run/inventory/state ownership locks."""
     path = _physical(state_path)
@@ -890,7 +920,9 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
     audit = root / "reentry-audit" / (key + ".json")
     with _exclusive(path.with_name(path.name + ".runlock")), _exclusive(path.parent / "lease.lock"):
         with resources.inventory_lock(root, exclusive=True, deadline=time.time() + 10):
-            with pipeline._locked(path, timeout_seconds=10):
+            with pipeline._locked(path, timeout_seconds=10), _accepted_receipt_transaction(
+                path, frontier, target, audit
+            ):
                 if audit.exists():
                     record, _ = _read(audit)
                     if not isinstance(record.get("plan"), dict):

@@ -20,6 +20,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -61,6 +62,7 @@ DEFAULT_RECEIPT_RESERVE_SECONDS = 15.0
 DEFAULT_MIN_ACTION_SECONDS = 1.0
 MAX_OPERATION_HISTORY = 12
 MAX_CALLBACK_JSON_BYTES = 128 * 1024
+_ledger_threads = threading.local()
 
 
 class QueueStateError(ValueError):
@@ -410,6 +412,15 @@ def _ledger_lock(path: Path, *, cutoff: float, now: Callable[[], float]):
     """Acquire the process-wide ledger lock without waiting beyond the reserve."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
+    key = (os.getpid(), str(lock_path.resolve()))
+    held = getattr(_ledger_threads, "held", None)
+    if held is None:
+        held = _ledger_threads.held = set()
+    if key in held:
+        # Recovery revalidates a stop while committing under this same queue
+        # transaction. Other threads/processes still have to acquire flock.
+        yield True
+        return
     deadline_mono = time.monotonic() + max(0.0, cutoff - float(now()))
     with lock_path.open("a+") as stream:
         while True:
@@ -423,8 +434,10 @@ def _ledger_lock(path: Path, *, cutoff: float, now: Callable[[], float]):
                     return
                 time.sleep(min(0.025, remaining))
         try:
+            held.add(key)
             yield True
         finally:
+            held.remove(key)
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
@@ -968,6 +981,7 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
                         "schema": "closer-accepted-verifier-wait/v1",
                         **dict(evidence),
                         "operation_frontier": policy["frontier_id"],
+                        "receipt_operation_id": row.get("operation_id"),
                         "queue_receipt_sha256": _digest(receipt),
                     }
             return None

@@ -3,6 +3,7 @@
 import copy
 import fcntl
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -162,13 +163,15 @@ def test_recovery_cas_and_live_owner_lock_do_not_change_unknown_row(tmp_path):
     )
 
 
-@pytest.mark.parametrize("duplicate_frontier", [False, True])
+@pytest.mark.parametrize("duplicate_frontier", [False, True, "completed_read"])
 def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
     tmp_path, duplicate_frontier
 ):
     path, target, frontier, posts, inner, _before = case(tmp_path)
     reconcile(path, target, frontier)
     if duplicate_frontier:
+        read_calls = []
+        action = "collect_evidence" if duplicate_frontier == "completed_read" else "wait"
         binding = {"pr_target": target, "source_targets": [], "head": "a" * 40, "merge": "b" * 40}
         frontier = make_frontier(
             [target],
@@ -177,7 +180,7 @@ def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
             bindings={
                 target: {
                     "revision": "rev-1",
-                    "action_id": action_identity(target, "rev-1", "wait", binding),
+                    "action_id": action_identity(target, "rev-1", action, binding),
                 }
             },
         )
@@ -187,20 +190,27 @@ def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
             lambda _t: {
                 "target": target,
                 "revision": "rev-1",
-                "eligible": False,
-                "action": "wait",
-                "reason": "same verification request already accepted",
+                "eligible": duplicate_frontier == "completed_read" and not read_calls,
+                "action": action if not read_calls else "wait",
+                "reason": (
+                    "read current evidence"
+                    if duplicate_frontier == "completed_read" and not read_calls
+                    else "same verification request already accepted"
+                ),
                 "next_trigger": "authenticated verifier result",
                 "operation_binding": binding,
                 "evidence": {"target": target, **binding},
             },
-            lambda *_: pytest.fail("duplicate frontier must not POST"),
+            lambda *_: read_calls.append("read") or {"status": "completed"},
             finite_frontier=frontier,
             frontier_target=target,
             deadline=None,
             request_timeout_seconds=10,
             receipt_reserve_seconds=0,
             max_operation_retries=0,
+            claim_fn=lambda *_: True,
+            release_fn=lambda *_: True,
+            holder_fn=lambda *_: None,
         )
         state = pipeline._load(path)
         original = next(iter(state["frontiers"].values()))["items"][target]
@@ -215,6 +225,9 @@ def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
             evidence=item["results"]["act"]["pending_evidence"],
         )
         assert proof and proof["operation_frontier"] != frontier["frontier_id"]
+        if duplicate_frontier == "completed_read":
+            assert read_calls == ["read"]
+            assert proof["receipt_operation_id"] != proof["operation_id"]
         item["resource_evidence"] = {"accepted_verifier_request": proof}
         state["frontiers"][frontier["frontier_id"]] = {
             "schema": "closer-pipeline-frontier/v2",
@@ -257,12 +270,63 @@ def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
     assert "items" not in successor and "results" not in successor
 
 
-def test_malformed_accepted_wait_resource_proof_refuses_stop_without_crashing(tmp_path):
+@pytest.mark.parametrize(
+    "malformed", ["resource", "results", "act", "changed_resource", "act_not_pending"]
+)
+def test_malformed_accepted_wait_resource_proof_refuses_stop_without_crashing(tmp_path, malformed):
     path, target, frontier, _posts, _inner, _before = case(tmp_path)
     reconcile(path, target, frontier)
     state = pipeline._load(path)
-    state["frontiers"][frontier["frontier_id"]]["items"][target]["resource_evidence"] = ["bad"]
+    row = state["frontiers"][frontier["frontier_id"]]["items"][target]
+    if malformed == "resource":
+        row["resource_evidence"] = ["bad"]
+    elif malformed == "results":
+        row["results"] = None
+    elif malformed == "act":
+        row["results"]["act"] = None
+    elif malformed == "changed_resource":
+        row["resource_evidence"]["accepted_verifier_request"]["operation_id"] = "foreign"
+    else:
+        row["results"]["act"]["status"] = "completed"
     pipeline._save(path, state)
     assert not pipeline.validate_stop(
         path, [target], finite_frontier=frontier, frontier_target=target
     )["valid"]
+
+
+def test_inner_queue_is_locked_through_outer_commit_audit_and_retirement(tmp_path, monkeypatch):
+    path, target, frontier, _posts, inner, _before = case(tmp_path)
+    original_save = pipeline._save_snapshot
+    original_retire = recovery._retire_native_boundary
+    observed = []
+
+    def verify_other_writer_is_excluded(stage):
+        available = []
+
+        def contender():
+            with queue._ledger_lock(
+                inner["path"], cutoff=time.time() + 0.03, now=time.time
+            ) as locked:
+                available.append(locked)
+
+        thread = threading.Thread(target=contender)
+        thread.start()
+        thread.join(timeout=2)
+        assert available == [False], stage
+        # Same-thread stop validation safely reuses the actual held lock.
+        with queue._ledger_lock(inner["path"], cutoff=time.time() + 0.03, now=time.time) as nested:
+            assert nested
+        observed.append(stage)
+
+    def save(*args, **kwargs):
+        verify_other_writer_is_excluded("outer_commit")
+        return original_save(*args, **kwargs)
+
+    def retire(*args, **kwargs):
+        verify_other_writer_is_excluded("retirement")
+        return original_retire(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_save_snapshot", save)
+    monkeypatch.setattr(recovery, "_retire_native_boundary", retire)
+    reconcile(path, target, frontier)
+    assert observed == ["outer_commit", "retirement"]
