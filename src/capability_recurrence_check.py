@@ -286,19 +286,15 @@ def _tick_env_attempt() -> tuple[dict[str, str], dict]:
             }
         inspection = [*inspection, *lines[window_start : window_end + 1]]
     script = "\n".join(inspection) + "\nenv | grep '^ORCH_' || true\n"
-    # bash-c has no script filename: its $0 fallback would otherwise resolve the
-    # caller's CWD instead of the source we just read. Keep explicit overrides,
-    # and bind only this inspection subprocess without changing the caller.
-    inspection_env = dict(os.environ)
-    if not inspection_env.get("ORCH_DIR"):
-        inspection_env["ORCH_DIR"] = str(ORCHESTRATE.parent.resolve())
+    # bash-c has no script filename. Supply the actual script as argument zero
+    # for its existing $0 fallback, without inventing an exported ORCH_ flag that
+    # could mask a genuinely silent prologue. Explicit ORCH_DIR still wins.
     try:
         proc = subprocess.run(
-            ["bash", "-c", script],
+            ["bash", "-c", script, str(ORCHESTRATE.resolve())],
             capture_output=True,
             text=True,
             timeout=TICK_ENV_TIMEOUT,
-            env=inspection_env,
         )
     except FileNotFoundError:
         return {}, {"reason": "bash_missing", "detail": "no `bash` on PATH"}

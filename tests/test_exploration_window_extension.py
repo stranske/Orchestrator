@@ -456,7 +456,7 @@ def test_recurrence_from_external_cwd_previews_late_window_without_orch_dir(tmp_
     env, status = recurrence._tick_env_attempt()
     assert status["reason"] == "ok"
     assert env.get("ORCH_EXPLORATION_RATE") == "0.20"
-    assert env["ORCH_DIR"] == str(paths.REPO_ROOT.resolve())
+    assert "ORCH_DIR" not in env
     assert dict(os.environ) == caller_env
     assert {
         str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
