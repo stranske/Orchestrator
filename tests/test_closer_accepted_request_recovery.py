@@ -292,6 +292,42 @@ def test_malformed_accepted_wait_resource_proof_refuses_stop_without_crashing(tm
     assert not pipeline.validate_stop(
         path, [target], finite_frontier=frontier, frontier_target=target
     )["valid"]
+    if malformed in {"changed_resource", "act_not_pending"}:
+        canonical = tmp_path / "canonical-reject.json"
+        assignment = {"target": target, "fingerprint": "frozen"}
+        canonical.write_text(json.dumps({"targets": [assignment]}))
+        observed_at = time.time()
+        observation = {
+            "target": target,
+            "revision": "fresh-result",
+            "action": "collect_evidence",
+            "eligible": True,
+            "observed_at": observed_at,
+            "operation_binding": {
+                "pr_target": target,
+                "source_targets": [],
+                "head": "a" * 40,
+                "merge": "b" * 40,
+            },
+            "evidence": {"verifier_lifecycle": {"verdict": "NON_PASS", "run_id": "123"}},
+        }
+        expected = (
+            "proof differs" if malformed == "changed_resource" else "not completed partial progress"
+        )
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match=expected):
+            continuation.create_successor(
+                path,
+                _inner["path"],
+                predecessor=frontier,
+                target=target,
+                observation=observation,
+                canonical_path=canonical,
+                canonical_row=assignment,
+                admission=lambda: {"paused": False, "dependency": None, "live_owner": False},
+                now=lambda: observed_at + 1,
+            )
+        assert path.read_bytes() == before
 
 
 def test_inner_queue_is_locked_through_outer_commit_audit_and_retirement(tmp_path, monkeypatch):
