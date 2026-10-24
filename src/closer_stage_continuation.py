@@ -200,6 +200,8 @@ def create_successor(
                     original = queue.state_for_frontier(
                         queue_document, accepted_proof["operation_frontier"]
                     )
+                    if original is None:
+                        raise ValueError("accepted request operation namespace is missing")
                     operation_policy = policy.validate_frontier(
                         queue_document["frontiers"][accepted_proof["operation_frontier"]]["policy"]
                     )
