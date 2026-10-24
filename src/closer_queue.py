@@ -20,6 +20,7 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -61,6 +62,7 @@ DEFAULT_RECEIPT_RESERVE_SECONDS = 15.0
 DEFAULT_MIN_ACTION_SECONDS = 1.0
 MAX_OPERATION_HISTORY = 12
 MAX_CALLBACK_JSON_BYTES = 128 * 1024
+_ledger_threads = threading.local()
 
 
 class QueueStateError(ValueError):
@@ -410,6 +412,15 @@ def _ledger_lock(path: Path, *, cutoff: float, now: Callable[[], float]):
     """Acquire the process-wide ledger lock without waiting beyond the reserve."""
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
+    key = (os.getpid(), str(lock_path.resolve()))
+    held = getattr(_ledger_threads, "held", None)
+    if held is None:
+        held = _ledger_threads.held = set()
+    if key in held:
+        # Recovery revalidates a stop while committing under this same queue
+        # transaction. Other threads/processes still have to acquire flock.
+        yield True
+        return
     deadline_mono = time.monotonic() + max(0.0, cutoff - float(now()))
     with lock_path.open("a+") as stream:
         while True:
@@ -423,8 +434,10 @@ def _ledger_lock(path: Path, *, cutoff: float, now: Callable[[], float]):
                     return
                 time.sleep(min(0.025, remaining))
         try:
+            held.add(key)
             yield True
         finally:
+            held.remove(key)
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
@@ -858,6 +871,122 @@ def validate_stop(
             now_value=float(now()),
             holder_fn=holder,
         )
+
+
+def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evidence):
+    """Authenticate a completed request awaiting its result, never a no-effect retry.
+
+    The callback's event label is insufficient. Re-read the exact durable queue
+    receipt and its completed, frontier-bound POST before accepting this wait.
+    """
+    import re
+
+    from closer_frontier_policy import action_identity, validate_frontier
+
+    try:
+        frontier = validate_frontier(frontier)
+        if (
+            not isinstance(evidence, Mapping)
+            or evidence.get("target") != target
+            or not re.fullmatch(r"[0-9a-f]{64}", evidence.get("event_id", ""))
+            or not isinstance(evidence.get("operation_id"), str)
+            or not evidence["operation_id"]
+            or any(
+                not re.fullmatch(r"[0-9a-f]{40}", evidence.get(name, ""))
+                for name in ("head", "merge")
+            )
+        ):
+            return None
+        path = Path(state_path)
+        with _ledger_lock(path, cutoff=time.time() + 1.0, now=time.time) as locked:
+            if not locked:
+                return None
+            document = _read_state(path)
+            selected = state_for_frontier(
+                document, frontier["frontier_id"], expected_policy=frontier
+            )
+            if selected["round"].get("receipt") != receipt:
+                return None
+            checked = _validate_data(
+                selected,
+                receipt,
+                assignment_targets=[target],
+                now_value=time.time(),
+                holder_fn=claims.holder,
+            )
+            rows = receipt.get("accounting", [])
+            matched = [
+                row for row in rows if isinstance(row, Mapping) and row.get("target") == target
+            ]
+            if len(matched) != 1 or not (checked.get("valid") and checked.get("stop_valid")):
+                return None
+            row = matched[0]
+            item = selected["items"][target]
+            snapshot = item.get("evidence") or {}
+            if (
+                row.get("eligible") is not False
+                or row.get("action") not in {"wait", "collect_evidence"}
+                or row.get("reason")
+                not in {
+                    "same verification request already accepted",
+                    "collect terminal or unattributed verifier evidence; do not rerun",
+                }
+                or row.get("status") not in {"deferred", "ineligible"}
+                or item.get("observation_freshness") != "fresh"
+                or evidence.get("observed_revision") != row.get("revision")
+                or snapshot.get("target") != target
+                or any(snapshot.get(name) != evidence[name] for name in ("head", "merge"))
+            ):
+                return None
+            candidates = []
+            for bucket in document.get("frontiers", {}).values():
+                if not isinstance(bucket, Mapping):
+                    continue
+                items = bucket.get("items")
+                item = items.get(target) if isinstance(items, Mapping) else None
+                operation = item.get("operation") if isinstance(item, Mapping) else None
+                if not isinstance(operation, Mapping):
+                    continue
+                if operation.get("id") == evidence["operation_id"]:
+                    candidates.append((bucket, operation))
+            if len(candidates) != 1:
+                return None
+            for bucket, operation in candidates:
+                policy = validate_frontier(bucket.get("policy"))
+                binding = operation.get("binding") or {}
+                result = operation.get("result") or {}
+                accepted = result.get("verification_post_accepted") or {}
+                expected = policy["bindings"].get(target) or {}
+                if (
+                    operation.get("finite_frontier") == policy
+                    and operation.get("revision") == expected.get("revision")
+                    and action_identity(
+                        target, operation.get("revision"), operation.get("action"), binding
+                    )
+                    == expected.get("action_id")
+                    and operation.get("status") == "completed"
+                    and operation.get("action") == "post_merge_verify"
+                    and binding.get("pr_target", target) == snapshot.get("pr_target", target)
+                    and all(binding.get(name) == evidence[name] for name in ("head", "merge"))
+                    and result.get("verification_request_basis") == evidence["event_id"]
+                    and accepted.get("request_basis") == evidence["event_id"]
+                    and accepted.get("mutation_kind") in {"label", "workflow_dispatch"}
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (operation, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
+                ):
+                    return {
+                        "schema": "closer-accepted-verifier-wait/v1",
+                        **dict(evidence),
+                        "operation_frontier": policy["frontier_id"],
+                        "receipt_operation_id": row.get("operation_id"),
+                        "queue_receipt_sha256": _digest(receipt),
+                    }
+            return None
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        return None
 
 
 def _failure_observation(target: str, error: Exception) -> dict[str, Any]:

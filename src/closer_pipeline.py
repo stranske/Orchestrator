@@ -4730,6 +4730,7 @@ def _run_pipeline_finite(
                             trigger = result.get("next_trigger")
                             row = None
                             proof_ok = False
+                            accepted_request_proof = None
                             if (
                                 isinstance(action_state_path, str)
                                 and isinstance(queue_receipt, Mapping)
@@ -4785,6 +4786,16 @@ def _run_pipeline_finite(
                                             else None
                                         )
                                         wait_proof = None
+                                        if kind == "external_event":
+                                            accepted_request_proof = (
+                                                closer_queue.accepted_verifier_wait_proof(
+                                                    action_state_path,
+                                                    target,
+                                                    frontier=frontier,
+                                                    receipt=queue_receipt,
+                                                    evidence=evidence,
+                                                )
+                                            )
                                         if (
                                             kind == "external_event"
                                             and row.get("reason") == "verifier_resource_wait"
@@ -4816,6 +4827,10 @@ def _run_pipeline_finite(
                                                     kind in {"ci", "async_operation"}
                                                     and row.get("eligible") is False
                                                     and row.get("action") == "wait"
+                                                )
+                                                or (
+                                                    kind == "external_event"
+                                                    and accepted_request_proof is not None
                                                 )
                                                 or (
                                                     kind == "external_event"
@@ -4882,9 +4897,17 @@ def _run_pipeline_finite(
                             if proof_ok:
                                 current.update(
                                     status="held",
-                                    deferred_reason=reason or result.get("pending_kind"),
+                                    deferred_reason=(
+                                        "accepted_verifier_request"
+                                        if accepted_request_proof is not None
+                                        else reason or result.get("pending_kind")
+                                    ),
                                     queue_receipt=dict(queue_receipt),
                                 )
+                                if accepted_request_proof is not None:
+                                    current["resource_evidence"] = {
+                                        "accepted_verifier_request": accepted_request_proof
+                                    }
                                 if reason == "validated_inner_wait":
                                     evidence = result.get("resource_evidence")
                                     if isinstance(evidence, Mapping):
@@ -5430,6 +5453,37 @@ def _validate_stop_finite(
         unknown = status == "unknown"
         valid = terminal and not unknown
         unverified_inner_wait = False
+        if (
+            valid
+            and status == "held"
+            and item.get("deferred_reason") == "accepted_verifier_request"
+        ):
+            import closer_queue
+
+            action_path = (
+                Path(state_path).parent
+                / f"{Path(state_path).stem}.actions"
+                / f"{_digest(frontier_target)}.json"
+            )
+            results = item.get("results")
+            result = results.get("act") if isinstance(results, Mapping) else None
+            result = result if isinstance(result, Mapping) else {}
+            proof = closer_queue.accepted_verifier_wait_proof(
+                action_path,
+                frontier_target,
+                frontier=frontier,
+                receipt=item.get("queue_receipt"),
+                evidence=result.get("pending_evidence"),
+            )
+            resource = item.get("resource_evidence")
+            valid = (
+                proof is not None
+                and result.get("status") == "pending"
+                and result.get("pending_kind") == "external_event"
+                and isinstance(resource, Mapping)
+                and resource.get("accepted_verifier_request") == proof
+            )
+            unverified_inner_wait = not valid
         if valid and status == "held" and item.get("deferred_reason") == "validated_inner_wait":
             resource = item.get("resource_evidence")
             proof = resource.get("inner_wait") if isinstance(resource, Mapping) else None

@@ -242,3 +242,28 @@ Python Gate through its retained Node contract fixture. An action-inapplicable
 when a later action actually needs that section. Current lifecycle feedback is
 refreshed in bounded fair batches, including previously PASS outcomes; its
 SQLite-scoped cursor is advisory and cannot override an authenticated result.
+
+
+## Accepted verification requests are external waits
+
+A completed native verification POST can be followed immediately by an observation
+that the same request is already accepted. This is a known effect awaiting its
+result, not a no-effect retry boundary. The finite pipeline validates the exact
+queue receipt, target/head/merge, request basis, operation and immutable frontier
+before holding for the authenticated result. A changed or uncertain operation
+stays unresolved. Re-entering the same frontier never repeats the POST.
+
+Older outer rows may instead record `action wait lacks exact verified no-effect
+queue proof` despite a completed accepted request. The existing
+`closer_finite_reentry.py` plan/apply interface supports this narrowly identified
+receipt correction. Its plan must authenticate the retained inner receipt and
+accepted operation; apply uses the target/run/inventory/state locks and exact
+plan hash, retains the previous UNKNOWN row in audit history, and changes only
+the outer classification to held. It grants neither retry nor acceptance
+authority, and does not rewrite the inner operation or unrelated history.
+
+Once fresh normal observation selects a different action after the request, use
+the existing causal stage-successor path. It rechecks current assignment and
+admission, preserves request provenance, and starts normal preparation without
+copying old acceptance results. Missing proof or an active owner remains a
+per-target hold.

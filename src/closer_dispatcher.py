@@ -8052,7 +8052,7 @@ def main(argv=None):
 
 
 def _run_merge_verification_successors(args, backend, result, targets):
-    """Continue only a confirmed merge into the existing verification action.
+    """Continue a confirmed merge or accepted request through existing stages.
 
     Each child re-enters normal PREPARE, target leases, queue and effect guards.
     Verification response evaluation remains the ordinary post-verifier path.
@@ -8078,10 +8078,15 @@ def _run_merge_verification_successors(args, backend, result, targets):
             document = closer_pipeline._load(shard)
             entry = (document.get("frontiers") or {}).get(predecessor["frontier_id"], {})
             item = (entry.get("items") or {}).get(target, {})
+            accepted_wait = (
+                isinstance(item, Mapping)
+                and item.get("deferred_reason") == "accepted_verifier_request"
+            )
             if not (
-                item.get("stage") == "act"
+                item.get("status") == "held"
+                and item.get("stage") == "act"
                 and item.get("stage_status") == "completed"
-                and item.get("deferred_next_trigger") == "new_frontier_required"
+                and (accepted_wait or item.get("deferred_next_trigger") == "new_frontier_required")
             ):
                 continue
             act = (item.get("results") or {}).get("act") or {}
@@ -8100,14 +8105,37 @@ def _run_merge_verification_successors(args, backend, result, targets):
             )
             import closer_queue
 
+            queue_document = closer_queue._read_state(action_path)
             qstate = closer_queue.state_for_frontier(
-                closer_queue._read_state(action_path),
+                queue_document,
                 predecessor["frontier_id"],
                 expected_policy=predecessor,
             )
+            accepted_proof = None
+            if accepted_wait:
+                accepted_proof = closer_queue.accepted_verifier_wait_proof(
+                    action_path,
+                    target,
+                    frontier=predecessor,
+                    receipt=receipt,
+                    evidence=act.get("pending_evidence"),
+                )
+                if accepted_proof is None:
+                    continuations[target] = {
+                        "status": "held",
+                        "reason": "accepted request proof unavailable",
+                    }
+                    continue
+                qstate = closer_queue.state_for_frontier(
+                    queue_document, accepted_proof["operation_frontier"]
+                )
             qitem = ((qstate or {}).get("items") or {}).get(target, {})
             op = qitem.get("operation") or {}
-            if op.get("action") != "merge" or op.get("status") != "completed":
+            if (
+                op.get("action") != ("post_merge_verify" if accepted_wait else "merge")
+                or op.get("status") != "completed"
+                or (accepted_proof is not None and op.get("id") != accepted_proof["operation_id"])
+            ):
                 continue
             dependency = assignment_dependency(
                 args.assignment,
@@ -8121,17 +8149,22 @@ def _run_merge_verification_successors(args, backend, result, targets):
             backend.local_first = False
             observation = backend.observe(target)
             observation["observed_at"] = time.time()
-            if observation.get("state") != "MERGED" or observation.get("head") != op.get(
-                "binding", {}
-            ).get("head"):
+            if (
+                observation.get("state") != "MERGED"
+                or observation.get("head") != op.get("binding", {}).get("head")
+                or (
+                    accepted_wait and observation.get("merge") != op.get("binding", {}).get("merge")
+                )
+            ):
                 continuations[target] = {
                     "status": "held",
                     "reason": "fresh merged identity unavailable or changed",
                 }
                 continue
-            if (
-                observation.get("action") != "post_merge_verify"
-                or observation.get("eligible") is not True
+            if observation.get("eligible") is not True or (
+                observation.get("action") == op.get("action")
+                if accepted_wait
+                else observation.get("action") != "post_merge_verify"
             ):
                 continuations[target] = {
                     "status": "observed",
@@ -8183,6 +8216,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
             native["validation"] = checked
             continuations[target] = {
                 "status": "verification_successor",
+                "predecessor_kind": "accepted_verifier_request" if accepted_wait else "merge",
                 "lineage": child,
                 "native_result": native,
             }
