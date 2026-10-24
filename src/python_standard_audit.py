@@ -21,7 +21,7 @@ PREFIXES = ("com.stranske.", "com.openai.codex.", "com.codex.")
 BAD = {"system-3.9", "anaconda-3.12"}
 PYTHON = re.compile(r"(?:.*/)?python(?:3(?:\.\d+)?)?$")
 STANDARD = re.compile(r"py-standard\.sh|standard-python|STANDARD_PYTHON")
-HEREDOC = re.compile(r"(?<!<)<<(-?)(?!<)\s*(['\"]?)([\w-]+)\2")
+HEREDOC = re.compile(r"(?<!<)<<(-?)(?!<)")
 
 
 @dataclass(frozen=True)
@@ -122,6 +122,30 @@ def code_lines(text: str) -> Iterator[list[str]]:
         raise ValueError("a complete entry script (unterminated quotation/heredoc)")
 
 
+def heredoc_word(line: str, start: int) -> tuple[str, int]:
+    """Read one redirection word with shell quote removal, without evaluating it."""
+    while start < len(line) and line[start].isspace():
+        start += 1
+    index, quote = start, ""
+    while index < len(line):
+        char = line[index]
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char.isspace() or char in ";&|()<>":
+            break
+        index += 1
+    words = shlex.split(line[start:index])
+    if len(words) != 1:
+        raise ValueError("a complete heredoc delimiter")
+    return words[0], index
+
+
 def heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
     """Find shell redirections outside quotes, comments and arithmetic shifts."""
     found: list[tuple[str, bool]] = []
@@ -149,8 +173,8 @@ def heredoc_delimiters(line: str) -> list[tuple[str, bool]]:
             index += 2
             continue
         elif not arithmetic and (match := HEREDOC.match(line, index)):
-            found.append((match[3], bool(match[1])))
-            index = match.end()
+            delimiter, index = heredoc_word(line, match.end())
+            found.append((delimiter, bool(match[1])))
             continue
         index += 1
     return found
@@ -160,7 +184,7 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
     """Return interpreter references and effective PATHs, without executing script content.
 
     Simple PATH assignments are followed. A dynamic PATH is unmeasurable rather than guessed.
-    A standard selector is evidence of intent, but cannot mask an explicit legacy pin.
+    A standard selector is evidence of intent, but cannot mask another interpreter reference.
     """
     refs: list[tuple[str, str]] = []
     if shell:
@@ -196,8 +220,6 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
             if candidate.startswith("/") and PYTHON.fullmatch(candidate):
                 interpreters = [candidate]
             for interpreter in interpreters:
-                if standard and interpreter in ("python", "python3"):
-                    continue
                 refs.append((expand(interpreter, home, path), path))
     if standard:
         refs.append(("standard", path))

@@ -91,6 +91,16 @@ def test_script_hardcoded_pin_wins_over_standard_reference(fleet):
     assert {e["class"] for e in report["rows"][0]["evidence"]} == {"standard", "system-3.9"}
 
 
+def test_standard_selector_cannot_mask_independent_bare_python(fleet):
+    job, script, measure, calls, _ = fleet
+    entry = script('source "$HOME/.codex/bin/py-standard.sh"\npython3 -c pass\n')
+    job("bare-beside-selector", ["/bin/bash", entry])
+    report = measure()
+    assert report["bad"] == 1
+    assert calls[0][0] == "python3"
+    assert {e["class"] for e in report["rows"][0]["evidence"]} == {"standard", "system-3.9"}
+
+
 @pytest.mark.parametrize("marker", ["py-standard.sh", "standard-python", "STANDARD_PYTHON"])
 def test_standard_selector_reference_counts_as_standard(fleet, marker):
     job, script, measure, _, _ = fleet
@@ -422,6 +432,35 @@ def test_spaced_heredoc_ignores_legacy_prose_and_apostrophes(fleet):
     assert report["status"] == "measured"
     assert report["rows"][0]["class"] == "no-python"
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("word", "delimiter"),
+    [
+        ("'E.O.F'", "E.O.F"),
+        ('"END TEXT"', "END TEXT"),
+        ("E\\ OF", "E OF"),
+        ("$END", "$END"),
+        ("''", ""),
+        ("'E''OF'", "EOF"),
+    ],
+)
+def test_quoted_and_escaped_heredoc_words_cannot_mask_bare_python(fleet, word, delimiter):
+    job, script, measure, _, _ = fleet
+    entry = script(f"cat <<{word}\nSTANDARD_PYTHON\n{delimiter}\npython3 -c pass\n")
+    job("quoted-heredoc", ["/bin/bash", entry])
+    report = measure()
+    assert report["status"] == "measured" and report["bad"] == 1
+    assert report["rows"][0]["class"] == "system-3.9"
+
+
+def test_multiple_heredoc_bodies_are_both_ignored(fleet):
+    job, script, measure, _, _ = fleet
+    entry = script(
+        "cat <<ONE <<'T.W.O'\nSTANDARD_PYTHON\nONE\n" "/usr/bin/python3\nT.W.O\npython3 -c pass\n"
+    )
+    job("multiple-heredocs", ["/bin/bash", entry])
+    assert measure()["bad"] == 1
 
 
 @pytest.mark.parametrize("line", ['echo "<< EOF"', 'echo "$(( 1 << 2 ))"', "true;# << EOF"])

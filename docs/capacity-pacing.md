@@ -420,7 +420,8 @@ snapshot, classifications and interpreter evidence independently. Bare Python lo
 runs in a controlled shell with the job's PATH and login flag; simple script PATH
 assignments are followed. This is entry-script inspection, not execution tracing of
 arbitrary descendants, shell branches, or dynamically constructed commands. Standard
-selector references count as standard intent; explicit legacy pins still win. The
+selector references count as standard intent; independent bare or hard-coded legacy
+references still win. The
 audit never edits launchd jobs, runs their bodies, or changes scheduling gates.
 
 The `windowed-capacity-policy` row in `switch_review.py --text-out` measures relay
