@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import inspect
 import io
 import json
 import sys
@@ -44,6 +45,47 @@ class Spy:
 
 def _refuse_capacity_read():
     raise AssertionError("this test must pass cap= or stub router.load_capacity itself")
+
+
+def _reroot_home_paths(monkeypatch, new_home, anchor_module):
+    """Move every import-time path under the real ~/.codex to `new_home`, wherever it is held.
+
+    The Brain, the capability ledger, the repo-knowledge registry and the capacity ledgers fix their default
+    location when their module is imported, both as module constants and as `path: Path = X` defaults, so
+    setting ORCH_* variables inside a test moves none of them: run on the owner's machine these tests would
+    write to the real state. Each such path is re-pointed at the same relative location under `new_home`.
+    """
+    live = Path.home() / ".codex"
+
+    def moved(value):
+        if isinstance(value, Path) and (value == live or live in value.parents):
+            return new_home / value.relative_to(Path.home())
+        return value
+
+    src_dir = Path(anchor_module.__file__).resolve().parent
+    for module in list(sys.modules.values()):
+        module_file = getattr(module, "__file__", None)
+        if not module_file or Path(module_file).resolve().parent != src_dir:
+            continue
+        for name, value in list(vars(module).items()):
+            if isinstance(value, Path) and moved(value) != value:
+                monkeypatch.setattr(module, name, moved(value))
+            elif inspect.isfunction(value) and value.__module__ == module.__name__:
+                defaults = value.__defaults__ or ()
+                if any(moved(d) != d for d in defaults):
+                    monkeypatch.setattr(value, "__defaults__", tuple(moved(d) for d in defaults))
+                kwdefaults = value.__kwdefaults__ or {}
+                if any(moved(d) != d for d in kwdefaults.values()):
+                    monkeypatch.setattr(
+                        value, "__kwdefaults__", {k: moved(d) for k, d in kwdefaults.items()}
+                    )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _live_paths_rerooted(tmp_path_factory):
+    with pytest.MonkeyPatch.context() as patch:
+        _reroot_home_paths(patch, tmp_path_factory.mktemp("home"), roles)
+        yield
 
 
 @pytest.fixture(autouse=True)
