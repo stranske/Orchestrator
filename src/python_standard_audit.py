@@ -157,8 +157,9 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
                 r"|(?<![\w./-])python3?(?![\w.-])",
                 token,
             )
-            if PYTHON.fullmatch(token):
-                interpreters = [token]
+            candidate = token.split("=", 1)[1] if re.match(r"[A-Za-z_]\w*=", token) else token
+            if candidate.startswith("/") and PYTHON.fullmatch(candidate):
+                interpreters = [candidate]
             for interpreter in interpreters:
                 if standard and interpreter in ("python", "python3"):
                     continue

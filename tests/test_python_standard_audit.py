@@ -320,6 +320,17 @@ def test_quoted_interpreter_path_preserves_spaces(fleet):
     assert calls[0][0] == interpreter
 
 
+@pytest.mark.parametrize("interpreter", ["/standard/bin/python3", "/My Environment/bin/python3"])
+def test_interpreter_assignment_keeps_only_executable_path(fleet, interpreter):
+    job, script, measure, calls, _ = fleet
+    job(
+        "assignment",
+        ["/bin/bash", script(f'PYTHON_BIN="{interpreter}"\n"$PYTHON_BIN" task.py')],
+    )
+    assert measure()["rows"][0]["class"] == "standard"
+    assert calls[0][0] == interpreter
+
+
 def test_here_string_is_not_a_heredoc(fleet):
     job, script, measure, _, _ = fleet
     job("here-string", ["/bin/bash", script('cat <<< "hello"\n/usr/bin/python3 task.py')])
