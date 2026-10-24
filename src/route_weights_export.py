@@ -811,7 +811,7 @@ def write_document(path: Path, document: dict[str, Any], *, refresh: bool = Fals
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             existing = None
         if isinstance(existing, dict):
             if not refresh and _same_semantics(document, existing):
@@ -1161,6 +1161,12 @@ def main() -> int:
         default=Path(os.environ["ORCH_STATE_DIR"]) if os.environ.get("ORCH_STATE_DIR") else None,
     )
     parser.add_argument("--feedback-db", type=Path)
+    parser.add_argument("--as-of", type=int, help="UTC decision instant shared with this tick")
+    parser.add_argument(
+        "--refresh-exploration-window",
+        action="store_true",
+        help="refresh only the local exploration decision; print end and UTC day",
+    )
     parser.add_argument("--comparative-report", action="store_true")
     parser.add_argument(
         "--publish-lag", action="store_true", help="read-only local/published pool states"
@@ -1216,7 +1222,27 @@ def main() -> int:
             )
         )
         return 0
-    document = build_document(db_path, args.min_observations)
+    state_dir = args.state_dir or Path.home() / ".codex" / "orchestrator"
+    timestamp = args.as_of
+    if timestamp is None:
+        timestamp = int(dt.datetime.fromisoformat(_now().replace("Z", "+00:00")).timestamp())
+    window = update_exploration_window(db_path, state_dir, now=timestamp)
+    day = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).strftime("%Y%m%d")
+    if args.refresh_exploration_window:
+        print(window["end"], day)
+        return 0
+    # Match the tick's window default even for a standalone export. Never replace an
+    # explicit caller setting, and do not leave a temporary default in the caller.
+    previous_rate = os.environ.get("ORCH_EXPLORATION_RATE")
+    if not previous_rate and day <= window["end"]:
+        os.environ["ORCH_EXPLORATION_RATE"] = "0.20"
+    try:
+        document = build_document(db_path, args.min_observations, now=timestamp)
+    finally:
+        if previous_rate is None:
+            os.environ.pop("ORCH_EXPLORATION_RATE", None)
+        else:
+            os.environ["ORCH_EXPLORATION_RATE"] = previous_rate
     # Credit INVOCATION only after the document builds; `success` below records publication's
     # result. A success alone moves `last_success` only, so the former daily step exported every day from
     # 2026-09-04 while the firing monitor read it as silent since its one consult trial. Guarded: a
@@ -1227,8 +1253,6 @@ def main() -> int:
         )
     except Exception as exc:  # noqa: BLE001 — a swallowed heartbeat reads as dormancy later
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
-    state_dir = args.state_dir or Path.home() / ".codex" / "orchestrator"
-    update_exploration_window(db_path, state_dir)
     target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
     print(f"{'wrote' if changed else 'unchanged'} {target}")

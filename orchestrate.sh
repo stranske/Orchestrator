@@ -86,8 +86,21 @@ _orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.
 if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
   _orch_exploration_end=20261117
 fi
+# Decide from current measured counts BEFORE applying the default on this tick.
+# The exporter uses this same instant later, rather than a second wall-clock read.
+_orch_exploration_day="$(date -u +%Y%m%d)"
+if [[ -f "${ORCH:-}/route_weights_export.py" ]]; then
+  _orch_exploration_as_of="$(date -u +%s)"
+  _orch_exploration_decision="$(python3 "$ORCH/route_weights_export.py" \
+    --refresh-exploration-window --as-of "$_orch_exploration_as_of" \
+    --state-dir "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}" 2>/dev/null || true)"
+  if [[ "$_orch_exploration_decision" =~ ^([0-9]{8})\ ([0-9]{8})$ ]]; then
+    _orch_exploration_end="${BASH_REMATCH[1]}"
+    _orch_exploration_day="${BASH_REMATCH[2]}"
+  fi
+fi
 # Only the window default expires; explicit caller overrides remain supported.
-if [[ "$(date -u +%Y%m%d)" -le "$_orch_exploration_end" ]]; then
+if [[ "$_orch_exploration_day" -le "$_orch_exploration_end" ]]; then
   export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
 fi
 # ORCH-ANCHOR: exploration-window-end
@@ -1153,6 +1166,7 @@ if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
   route_weights_export_start=$(date -u +%s)
   echo "  [cadence] route weights export start $(date -u +%Y-%m-%dT%H:%M:%SZ) duration=0"
   if python3 "$ORCH/route_weights_export.py" --publish --state-dir "$STAMP_DIR" \
+       --as-of "${_orch_exploration_as_of:-$(date -u +%s)}" \
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
     sed -n '/^\[cadence\] capacity publish held:/p' "$STAMP_DIR/route-weights-export.log"
