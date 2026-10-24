@@ -320,6 +320,36 @@ if [[ "$mode" == "active" ]]; then
   esac
 fi
 
+# ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
+# `capabilities.production_heartbeat` and `daily_heartbeat` are NO-OPS unless
+# ORCH_CAPABILITY_HEARTBEATS=1 is in the CHILD process's environment. So this export must sit above
+# every heartbeat-emitting producer, or the producer runs and records nothing — and "recorded
+# nothing" is indistinguishable from "never ran", which is the silence this whole ledger exists to
+# break. Measured 2026-08-22: the export sat BELOW `capacity.py` and the frontend doctor, so
+#   * `frontend-verifier` could never accrue a single invocation (the doctor is its only tick
+#     caller), making ORCH_FRONTEND_VERIFY_START_BROWSER=1 look like a switch that did not help; and
+#   * `windowed-capacity-policy`'s declared cadence "every tick (capacity.build at the top of the
+#     tick)" was false — its evidence came only from LATER in-process callers.
+# DO NOT cite this block by line number; cite the anchor above. The stored criterion for
+# ORCH_FRONTEND_VERIFY_START_BROWSER cited `orchestrate.sh:133`/`:152` and both had rotted to
+# 171/190 by the time anyone read them. Enforced by test_heartbeat_ordering.py, which fails if any
+# producer that calls production_heartbeat/daily_heartbeat is invoked above this anchor.
+#
+# Ordering INSIDE this block is also load-bearing and unchanged: validate lifecycle truth FIRST,
+# then enable heartbeats. Invalid active declarations are a dispatch blocker — continuing would
+# manufacture evidence outside the declared producer/consumer/outcome contract.
+if [[ "$mode" == "active" ]]; then
+  if ! python3 "$ORCH/capabilities.py" --json validate > "$STAMP_DIR/capability-validation.json"; then
+    echo "  ABORT: capability lifecycle validation failed; see $STAMP_DIR/capability-validation.json" >&2
+    exit 1
+  fi
+  if [[ "${ORCH_CAPABILITY_HEARTBEATS:-1}" != "1" ]]; then
+    echo "  ABORT: active ticks require ORCH_CAPABILITY_HEARTBEATS=1" >&2
+    exit 1
+  fi
+  export ORCH_CAPABILITY_HEARTBEATS=1
+fi
+
 # ORCH-ANCHOR: exploration-window-start
 # 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
 # Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
@@ -351,36 +381,6 @@ if [[ "$_orch_exploration_day" -le "$_orch_exploration_end" ]]; then
   export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
 fi
 # ORCH-ANCHOR: exploration-window-end
-
-# ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
-# `capabilities.production_heartbeat` and `daily_heartbeat` are NO-OPS unless
-# ORCH_CAPABILITY_HEARTBEATS=1 is in the CHILD process's environment. So this export must sit above
-# every heartbeat-emitting producer, or the producer runs and records nothing — and "recorded
-# nothing" is indistinguishable from "never ran", which is the silence this whole ledger exists to
-# break. Measured 2026-08-22: the export sat BELOW `capacity.py` and the frontend doctor, so
-#   * `frontend-verifier` could never accrue a single invocation (the doctor is its only tick
-#     caller), making ORCH_FRONTEND_VERIFY_START_BROWSER=1 look like a switch that did not help; and
-#   * `windowed-capacity-policy`'s declared cadence "every tick (capacity.build at the top of the
-#     tick)" was false — its evidence came only from LATER in-process callers.
-# DO NOT cite this block by line number; cite the anchor above. The stored criterion for
-# ORCH_FRONTEND_VERIFY_START_BROWSER cited `orchestrate.sh:133`/`:152` and both had rotted to
-# 171/190 by the time anyone read them. Enforced by test_heartbeat_ordering.py, which fails if any
-# producer that calls production_heartbeat/daily_heartbeat is invoked above this anchor.
-#
-# Ordering INSIDE this block is also load-bearing and unchanged: validate lifecycle truth FIRST,
-# then enable heartbeats. Invalid active declarations are a dispatch blocker — continuing would
-# manufacture evidence outside the declared producer/consumer/outcome contract.
-if [[ "$mode" == "active" ]]; then
-  if ! python3 "$ORCH/capabilities.py" --json validate > "$STAMP_DIR/capability-validation.json"; then
-    echo "  ABORT: capability lifecycle validation failed; see $STAMP_DIR/capability-validation.json" >&2
-    exit 1
-  fi
-  if [[ "${ORCH_CAPABILITY_HEARTBEATS:-1}" != "1" ]]; then
-    echo "  ABORT: active ticks require ORCH_CAPABILITY_HEARTBEATS=1" >&2
-    exit 1
-  fi
-  export ORCH_CAPABILITY_HEARTBEATS=1
-fi
 
 # ORCH-ANCHOR: experiment-producer-trial — independent of dispatch/research switches.
 # Read the trial default without starting it; the first active producer tick starts the clock.

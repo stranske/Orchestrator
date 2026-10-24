@@ -184,7 +184,7 @@ def test_late_first_tick_refreshes_window_before_default_rate(
     fake_date.chmod(0o755)
     env = dict(
         os.environ,
-        ORCH=str(paths.REPO_ROOT / "src"),
+        ORCH=os.path.dirname(export.__file__),
         ORCH_STATE_DIR=str(tmp_path),
         ORCH_FEEDBACK_DB=str(brain),
         PATH=f"{tmp_path}:{os.path.dirname(sys.executable)}:{os.environ['PATH']}",
@@ -329,7 +329,7 @@ def test_real_preview_cli_does_not_write_or_run_export(tmp_path, existing):
     result = subprocess.run(
         [
             sys.executable,
-            str(paths.REPO_ROOT / "src" / "route_weights_export.py"),
+            str(export.__file__),
             "--preview-exploration-window",
             "--feedback-db",
             str(brain),
