@@ -19,6 +19,22 @@ TRUSTED_AUTHORS = {"github-actions", "github-actions[bot]"}
 VALID_PROVIDER_VERDICTS = {"PASS", "CONCERNS", "FAIL", "NON_PASS"}
 
 
+def _valid_result_admission(record):
+    admission = record.get("result_admission")
+    assessment = record.get("assessment_identity")
+    return (
+        isinstance(admission, dict)
+        and admission.get("schema") == "verifier-result-admission/v1"
+        and admission.get("mode") in ("evaluate", "compare")
+        and (not isinstance(assessment, dict) or admission.get("mode") == assessment.get("mode"))
+        and all(
+            isinstance(admission.get(key), str)
+            and verification_events.HEX256.fullmatch(admission[key])
+            for key in ("payload_sha256", "execution_receipt_sha256")
+        )
+    )
+
+
 def decision_matches_identity(decision: Any, repo: str, number: int, head: Any, merge: Any) -> bool:
     """Validate a parsed marker's exact delivery identity and verdict semantics.
 
@@ -58,6 +74,8 @@ def decision_matches_identity(decision: Any, repo: str, number: int, head: Any, 
     if "verification_event" in decision and not verification_events.valid_event(
         decision["verification_event"], repo, number, head, merge
     ):
+        return False
+    if "result_admission" in decision and not _valid_result_admission(decision):
         return False
     return decision.get("verdict") == expected
 
@@ -171,6 +189,8 @@ def _public_record(record):
             "retryable",
             "failure_cause",
             "execution_binding",
+            "result_admission",
+            "retained_revalidation",
         )
         if key in record
     }
@@ -211,6 +231,67 @@ def _valid_state(state, repo, number, head, merge):
     )
 
 
+def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_events):
+    """Retain history without making an older failed read govern a fresh review.
+
+    Only an earlier, incomplete independent chain with no semantic verdict can
+    be superseded, and only by a complete review of the same immutable request.
+    Real verdict conflicts, newer observations and changed requirements retain
+    the ordinary causal checks below.
+    """
+    roots = [identity for identity, parent in parents.items() if parent is None]
+
+    def chain(root):
+        seen = [root]
+        while True:
+            children = [identity for identity, parent in parents.items() if parent == seen[-1]]
+            if not children:
+                return seen
+            if len(children) != 1 or children[0] in seen:
+                return None
+            seen.append(children[0])
+
+    chains = [chain(root) for root in roots]
+    if any(part is None for part in chains):
+        return set()
+    semantic = [part for part in chains if any(identity in terminal_events for identity in part)]
+    if len(semantic) != 1:
+        return set()
+    # Keep the supersession established by a completed assessment even while
+    # its same event or explicit successor has a newer pending attempt.
+    selected_id = next(
+        identity for identity in reversed(semantic[0]) if identity in terminal_events
+    )
+    # Legacy markers may come from a producer that published before validating
+    # its execution receipt. They cannot establish a new supersession edge.
+    selected = admitted_events.get(selected_id)
+    if (
+        selected is None
+        or selected.get("verdict") not in {"PASS", "NON_PASS"}
+        or not isinstance(selected.get("assessment_identity"), dict)
+        or selected["assessment_identity"].get("canonical") is not True
+    ):
+        return set()
+
+    def request(record):
+        event = record["verification_event"]
+        return tuple(
+            event.get(key) for key in ("repo", "pr", "head_sha", "evaluated_sha", "request_sha256")
+        )
+
+    obsolete = set()
+    for part in chains:
+        if part is semantic[0] or any(identity in terminal_events for identity in part):
+            continue
+        if (
+            nodes[part[-1]].get("status") == "incomplete"
+            and all(request(nodes[identity]) == request(selected) for identity in part)
+            and all(_attempt(nodes[identity]) < _attempt(selected) for identity in part)
+        ):
+            obsolete.update(part)
+    return obsolete
+
+
 def applicable_decision(decisions, states=(), *, include_pending=False):
     """Choose a causal event, then the latest attempt *within that event*.
 
@@ -225,6 +306,8 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
         return baseline
     nodes = {}
     parents = {}
+    terminal_events = {}
+    admitted_events = {}
     for record in records:
         identity = record["verification_event"]["event_id"]
         parent = record.get("predecessor_event_id")
@@ -233,6 +316,20 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
         if identity in parents and parents[identity] != parent:
             return None
         parents[identity] = parent
+        if "verdict" in record and (
+            identity not in terminal_events
+            or _attempt(record) < _attempt(terminal_events[identity])
+        ):
+            terminal_events[identity] = record
+        if (
+            "verdict" in record
+            and _valid_result_admission(record)
+            and (
+                identity not in admitted_events
+                or _attempt(record) < _attempt(admitted_events[identity])
+            )
+        ):
+            admitted_events[identity] = record
         prior = nodes.get(identity)
         if prior is None or _attempt(record) > _attempt(prior):
             nodes[identity] = record
@@ -249,6 +346,15 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
                 nodes[identity] = record
             elif "verdict" in record and "verdict" in prior and record != prior:
                 return None
+    # A previous incomplete read is not an acceptance verdict or an uncertain
+    # consequential effect. Do not let it invalidate a later complete review of
+    # the identical request. Preserve every input record and all other branches.
+    if baseline is None:
+        for identity in _superseded_incomplete_roots(
+            nodes, parents, terminal_events, admitted_events
+        ):
+            nodes.pop(identity)
+            parents.pop(identity)
     current = verification_events.legacy_id(baseline) if baseline else None
     visited = set()
     while True:
