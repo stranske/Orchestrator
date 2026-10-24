@@ -732,3 +732,37 @@ def test_normal_export_uses_fresh_clock_for_post_tick_capacity(tmp_path, monkeyp
         "in the future" in row.get("reason", "")
         for row in stale_clock["comparative"]["inputs"]["cost_source_by_agent"].values()
     )
+
+
+@pytest.mark.parametrize(
+    "snapshot_offset,expected",
+    [(30, "optimal"), (32, "inputs_unmeasured"), (-3601, "inputs_unmeasured")],
+)
+def test_live_capacity_uses_post_collection_clock_without_trusting_future_data(
+    tmp_path, monkeypatch, snapshot_offset, expected
+):
+    db, snapshot = fixture(tmp_path)
+    snapshot["generated_at"] = NOW + snapshot_offset
+    snapshot["ts"] = NOW + snapshot_offset
+    sampled = []
+    measured_at = []
+    measure = comparative.measure
+
+    def measured(*args, **kwargs):
+        measured_at.append(kwargs["now"])
+        return measure(*args, **kwargs)
+
+    monkeypatch.setattr(comparative, "measure", measured)
+
+    def collect():
+        sampled.append(True)
+        return snapshot
+
+    monkeypatch.setattr(export, "_current_capacity_snapshot", collect)
+    monkeypatch.setattr(export, "_now", lambda: "2027-01-15T08:00:31Z")
+    # The policy/window decision precedes the real capacity collection by31s.
+    document = export.build_document(db, now=NOW)
+    assert sampled == [True]
+    assert document["generated_at"] == "2027-01-15T08:00:00Z"
+    assert document["comparative"]["status"] == expected
+    assert measured_at == [NOW + 31]

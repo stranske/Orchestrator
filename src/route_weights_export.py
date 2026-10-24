@@ -668,9 +668,15 @@ def build_document(
         "reserve": reserve,
         "exploration": _exploration_block(version, by_task, task_types, timestamp),
     }
+    comparison_now = timestamp
     if include_capacity:
         if capacity_snapshot is None:
             capacity_snapshot = _current_capacity_snapshot()
+            # The policy/window clock precedes live collection. Measure the fresh
+            # sample against the clock after collection, never its own claimed ts.
+            comparison_now = int(
+                dt.datetime.fromisoformat(_now().replace("Z", "+00:00")).timestamp()
+            )
         document["capacity_schema"] = CAPACITY_SCHEMA
         document["capacity"] = _capacity_block(capacity_snapshot)
     # Bind the tag to the exported policy, including rankings and the sampled
@@ -682,7 +688,7 @@ def build_document(
     }
     digest = hashlib.sha256(_canonical_bytes(routing_semantic)).hexdigest()
     document["exploration"]["policy_version"] = f"route-exploration/v1:{digest}"
-    _add_comparative(document, db_path, capacity_snapshot, timestamp)
+    _add_comparative(document, db_path, capacity_snapshot, comparison_now)
     return document
 
 
