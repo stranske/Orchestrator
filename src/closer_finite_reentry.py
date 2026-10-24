@@ -1,4 +1,4 @@
-"""Exact, explicit re-entry for proven unstarted finite Closer requests.
+"""Exact recovery of proven unstarted requests or known accepted-request receipts.
 
 This repairs scheduling state only. Normal dispatcher admission, interpretation,
 queue claims and effect guards still run; historical state is never rewritten.
@@ -637,12 +637,16 @@ def _retire_native_boundary(root, path, target, frontier, record):
     if record["plan"].get("kind") not in {
         "native_pre_queue_refusal",
         "native_prewrite_verifier_refusal",
+        "accepted_verifier_request_receipt",
     }:
         return
     state, _ = _read(path)
     if _digest(_entry(state, frontier)["items"][target]) != record["after_sha256"]:
         raise ValueError("reconciled_row_changed_before_retirement")
-    if record["plan"].get("kind") == "native_prewrite_verifier_refusal":
+    if record["plan"].get("kind") in {
+        "native_prewrite_verifier_refusal",
+        "accepted_verifier_request_receipt",
+    }:
         inner = record["plan"]["inner_boundary"]
         if _read(inner["path"])[1] != inner["sha256"]:
             raise ValueError("reconciled_inner_queue_changed_before_retirement")
@@ -666,6 +670,36 @@ def _retire_native_boundary(root, path, target, frontier, record):
                 and intent.get("target") == resources.canonical_target(target)
             ):
                 raise ValueError("known_native_boundary_retirement_pending")
+
+
+def _accepted_request_boundary(path, frontier, target, row):
+    """Reclassify an accepted POST receipt, without retrying the callback."""
+    import closer_queue
+
+    action = row.get("results", {}).get("act") or {}
+    if not (
+        row.get("status") == "unknown"
+        and row.get("stage") == "act"
+        and row.get("stage_status") == "completed"
+        and row.get("error") == "action wait lacks exact verified no-effect queue proof"
+        and action.get("status") == "pending"
+        and action.get("pending_kind") == "external_event"
+        and isinstance(action.get("next_trigger"), str)
+        and action["next_trigger"].strip()
+    ):
+        raise ValueError("not_an_accepted_request_receipt_boundary")
+    inner = _physical(path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json")
+    _document, sha = _read(inner)
+    proof = closer_queue.accepted_verifier_wait_proof(
+        inner,
+        target,
+        frontier=frontier,
+        receipt=action.get("queue_receipt"),
+        evidence=action.get("pending_evidence"),
+    )
+    if proof is None:
+        raise ValueError("accepted_request_receipt_not_authenticated")
+    return {"path": str(inner), "sha256": sha, "accepted_request": proof}
 
 
 def plan(state_path, *, frontier, target, event, source_receipts=None):
@@ -741,7 +775,10 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
     if not isinstance(stage, str):
         raise ValueError("malformed_request_stage")
     kind = None
-    if (
+    if row.get("error") == "action wait lacks exact verified no-effect queue proof":
+        inner = _accepted_request_boundary(path, frontier, target, row)
+        kind = "accepted_verifier_request_receipt"
+    elif (
         row.get("status") == "held"
         and stage == "interpret"
         and results.get("interpret", {}).get("classification") == "assessment_transport_unavailable"
@@ -792,7 +829,7 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
             contract=_prewrite_contract(_receipt(source_receipts["installation"])["candidate_sha"]),
         )
         if kind == "native_prewrite_verifier_refusal"
-        else _inner_boundary(path, target)
+        else inner if kind == "accepted_verifier_request_receipt" else _inner_boundary(path, target)
     )
     trigger_fingerprint = _digest(
         {
@@ -922,7 +959,24 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                 row.pop("error", None)
                 row.pop("deferred_next_trigger", None)
                 row.pop("scope_refusal", None)
-                if proposal["stage"] in {"act", "exception"}:
+                if proposal["kind"] == "accepted_verifier_request_receipt":
+                    # An effect DID occur. Correct only the outer classification;
+                    # preserve the original callback and prohibit automatic replay.
+                    action = row["results"]["act"]
+                    row.update(
+                        status="held",
+                        stage_status="completed",
+                        deferred_reason="accepted_verifier_request",
+                        deferred_next_trigger=action["next_trigger"],
+                        queue_receipt=copy.deepcopy(action["queue_receipt"]),
+                        resource_evidence={
+                            "accepted_verifier_request": copy.deepcopy(
+                                proposal["inner_boundary"]["accepted_request"]
+                            )
+                        },
+                    )
+                    row.pop("reentry_ready", None)
+                elif proposal["stage"] in {"act", "exception"}:
                     # No effect occurred, but the real historical scope is still
                     # unavailable. Reconciliation cannot turn that into readiness.
                     row.update(

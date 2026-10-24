@@ -602,6 +602,142 @@ def test_finite_act_pending_requires_and_accepts_exact_queue_proof(tmp_path):
     assert receipt["valid"] and receipt["stop_valid"]
 
 
+def _accepted_request_round(tmp_path, *, change_evidence=None, pipeline_path=None):
+    target = "acme/repo#42"
+    binding = {"pr_target": target, "source_targets": [], "head": "a" * 40, "merge": "b" * 40}
+    frontier = make_frontier(
+        [target],
+        owner="owner",
+        frontier_id="accepted-request",
+        bindings={
+            target: {
+                "revision": "rev-1",
+                "action_id": action_identity(target, "rev-1", "post_merge_verify", binding),
+            }
+        },
+    )
+    posts = []
+    retained = {}
+
+    def act(_target, context):
+        action_state = context["action_state_path"]
+
+        def observe(_name):
+            return {
+                "target": target,
+                "revision": "rev-1",
+                "head": binding["head"],
+                "merge": binding["merge"],
+                "pr_target": target,
+                "action": "wait" if posts else "post_merge_verify",
+                "eligible": not posts,
+                "reason": (
+                    "same verification request already accepted" if posts else "missing result"
+                ),
+                "next_trigger": "authenticated verifier result",
+                "operation_binding": binding,
+                "claim_targets": [target],
+                "repo_keys": ["acme/repo"],
+                "evidence": {
+                    "target": target,
+                    "pr_target": target,
+                    "head": binding["head"],
+                    "merge": binding["merge"],
+                },
+            }
+
+        def execute(*_args, **_kwargs):
+            posts.append("POST")
+            return {
+                "status": "completed",
+                "verification_request_basis": "c" * 64,
+                "verification_post_accepted": {
+                    "request_basis": "c" * 64,
+                    "mutation_kind": "workflow_dispatch",
+                },
+            }
+
+        receipt = closer_queue.run_round(
+            action_state,
+            [target],
+            observe,
+            execute,
+            owner="runner",
+            deadline=None,
+            receipt_reserve_seconds=0,
+            max_operation_retries=0,
+            finite_frontier=frontier,
+            frontier_target=target,
+            request_timeout_seconds=10,
+            max_passes=1,
+            claim_fn=lambda *_: True,
+            release_fn=lambda *_: True,
+            holder_fn=lambda *_: None,
+        )
+        row = receipt["accounting"][0]
+        evidence = {
+            "target": target,
+            "event_id": "c" * 64,
+            "operation_id": row["operation_id"],
+            "head": binding["head"],
+            "merge": binding["merge"],
+            "observed_revision": "rev-1",
+        }
+        if change_evidence:
+            evidence.update(change_evidence)
+        retained.update(path=action_state, receipt=receipt, evidence=evidence)
+        return {
+            "status": "pending",
+            "pending_kind": "external_event",
+            "next_trigger": "authenticated verifier result",
+            "pending_evidence": evidence,
+            "queue_receipt": receipt,
+        }
+
+    path = pipeline_path or tmp_path / "accepted.json"
+    result = _run(path, target, frontier, now=time.time, act=act)
+    return path, target, frontier, posts, retained, result
+
+
+def test_completed_verification_post_wait_is_a_proven_hold_not_unknown(tmp_path):
+    path, target, frontier, posts, retained, result = _accepted_request_round(tmp_path)
+    row = result["targets"][target]
+    assert posts == ["POST"]
+    assert row["status"] == "held" and row["deferred_reason"] == "accepted_verifier_request"
+    assert result["valid"] and result["stop_valid"]
+    checked = cp.validate_stop(path, [target], finite_frontier=frontier, frontier_target=target)
+    assert checked["valid"] and checked["stop_valid"]
+    # Re-entering the same frontier cannot replay the already accepted POST.
+    again = _run(
+        path,
+        target,
+        frontier,
+        now=time.time,
+        act=lambda *_: pytest.fail("accepted POST must not replay"),
+    )
+    assert again["targets"][target]["status"] == "held" and posts == ["POST"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"operation_id": "other-operation"},
+        {"event_id": "d" * 64},
+        {"target": "acme/repo#43"},
+        {"head": "e" * 40},
+        {"merge": "f" * 40},
+        {"observed_revision": "other-revision"},
+    ],
+)
+def test_accepted_request_wait_rejects_mismatched_effect_binding(tmp_path, change):
+    _path, target, _frontier, posts, _retained, result = _accepted_request_round(
+        tmp_path, change_evidence=change
+    )
+    assert posts == ["POST"]
+    assert result["targets"][target]["status"] == "unknown"
+    assert not result["valid"]
+
+
 def test_finite_exception_uncertainty_never_advances_to_action(tmp_path):
     target = "acme/repo#6"
     frontier = _frontier(target)

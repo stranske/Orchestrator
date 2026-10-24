@@ -124,18 +124,27 @@ def create_successor(
             if not isinstance(entry, Mapping) or entry.get("finite_frontier") != old:
                 raise ValueError("exact immutable predecessor is missing")
             item = (entry.get("items") or {}).get(target)
+            accepted_wait = (
+                isinstance(item, Mapping)
+                and item.get("deferred_reason") == "accepted_verifier_request"
+            )
             if not isinstance(item, Mapping) or not (
                 item.get("status") == "held"
                 and item.get("stage") == "act"
                 and item.get("stage_status") == "completed"
-                and item.get("deferred_next_trigger") == "new_frontier_required"
+                and (accepted_wait or item.get("deferred_next_trigger") == "new_frontier_required")
             ):
                 raise ValueError("predecessor has no verified completed stage transition")
             act = (item.get("results") or {}).get("act")
             if (
                 not isinstance(act, Mapping)
-                or act.get("status") != "completed"
-                or act.get("target_complete") is not False
+                or (
+                    not accepted_wait
+                    and (
+                        act.get("status") != "completed" or act.get("target_complete") is not False
+                    )
+                )
+                or (accepted_wait and act.get("status") != "pending")
             ):
                 raise ValueError("predecessor action is not completed partial progress")
             receipt = act.get("queue_receipt")
@@ -147,6 +156,21 @@ def create_successor(
             )
             if checked.get("valid") is not True or checked.get("stop_valid") is not True:
                 raise ValueError("predecessor queue receipt is not authoritative")
+            accepted_proof = None
+            if accepted_wait:
+                accepted_proof = queue.accepted_verifier_wait_proof(
+                    action_path,
+                    target,
+                    frontier=old,
+                    receipt=receipt,
+                    evidence=act.get("pending_evidence"),
+                )
+                if (
+                    accepted_proof is None
+                    or (item.get("resource_evidence") or {}).get("accepted_verifier_request")
+                    != accepted_proof
+                ):
+                    raise ValueError("accepted predecessor request proof differs")
             # Match the native finite-progress validator's pipeline->queue order.
             # Public validation releases its queue lock; CAS those exact bytes,
             # then retain the queue lock through successor store publication.
@@ -194,13 +218,21 @@ def create_successor(
                 if not (
                     len(completed) == 1
                     and row.get("operation_status") == "completed"
-                    and row.get("eligible") is True
-                    and (
-                        row.get("status") in {"completed", "observed"}
-                        or (row.get("status") == "deferred" and row.get("reason") == "pass_limit")
-                    )
                     and receipt.get("stop_valid") is True
-                    and progress == item.get("progress_key") == act.get("progress_key")
+                    and (
+                        accepted_proof is not None
+                        or (
+                            row.get("eligible") is True
+                            and (
+                                row.get("status") in {"completed", "observed"}
+                                or (
+                                    row.get("status") == "deferred"
+                                    and row.get("reason") == "pass_limit"
+                                )
+                            )
+                            and progress == item.get("progress_key") == act.get("progress_key")
+                        )
+                    )
                 ):
                     raise ValueError("predecessor completed operation/progress identity differs")
                 op = completed[0]
