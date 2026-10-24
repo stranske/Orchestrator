@@ -121,7 +121,8 @@ def test_production_execute_requires_binding_but_legacy_remains(tmp_path):
     backend = cd.Closer(gh, state_path=tmp_path / "s", apply=True, require_runtime_binding=True)
     backend.select = lambda s: ("post_merge_verify", "yes", True, None)
     calls = []
-    backend.initiate_verify = lambda *a: calls.append(a) or {"status": "completed"}
+    backend.prepare_verify = lambda *a: {"mutation_kind": "label", "request_basis": "c" * 64}
+    backend.submit_verify = lambda *a: calls.append(a) or {"status": "completed"}
     op = {"owner": "mine", "deadline": time.time() + 30}
     assert backend.execute("o/r#1", "post_merge_verify", snap, op)["status"] == "blocked"
     assert not calls
@@ -141,7 +142,8 @@ def test_actual_execute_uses_shared_core_and_retains_unknown_across_heads(bundle
     backend = cd.Closer(gh, state_path=tmp_path / "s", apply=True, runtime_binding=binding)
     backend.select = lambda s: ("post_merge_verify", "yes", True, None)
     calls = []
-    backend.initiate_verify = lambda *a: calls.append(a) or {"status": "completed"}
+    backend.prepare_verify = lambda *a: {"mutation_kind": "label", "request_basis": "c" * 64}
+    backend.submit_verify = lambda *a: calls.append(a) or {"status": "completed"}
     op = {"owner": "one", "deadline": time.time() + 30}
     assert backend.execute("Org/Repo#7", "post_merge_verify", dict(snap), op)["status"] == "unknown"
     assert binding.adapters["org/repo"].shared

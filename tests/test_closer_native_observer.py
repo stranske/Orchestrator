@@ -626,3 +626,20 @@ def test_host_fixture_copies_runtime_closure_without_flat_mirror_payload(tmp_pat
     modules = Path(manifest["module_path"]).parent
     assert {p.name for p in modules.iterdir()} == set(names)
     assert campaign.verify_modules(manifest) == []
+
+
+def test_control_plane_contract_does_not_invent_missing_model_profile(monkeypatch):
+    import execution_profiles
+
+    publication = {
+        "schema": "native-scoped-capacity/v1",
+        "owner": "native-owner",
+        "admission_seconds": 60,
+        "profile_ids": ["missing-low-profile"],
+        "bounded_trial_agents": [],
+    }
+    manifest = {"mechanism_contract": {"capacity_publication": publication}}
+    monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
+    assert native.capacity_contract(manifest, control_plane_only=True) == publication
+    with pytest.raises(mechanisms.MechanismError, match="active low"):
+        native.capacity_contract(manifest)

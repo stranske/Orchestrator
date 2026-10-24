@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -575,7 +576,7 @@ def test_pause_label_blocks_automatic_completion(tmp_path, where):
     "state,labels,expected",
     [
         ("OPEN", ["needs-human"], "merge"),
-        ("MERGED", ["needs-human", "verify:compare"], "collect_evidence"),
+        ("MERGED", ["needs-human", "verify:compare"], "post_merge_verify"),
     ],
 )
 def test_generic_needs_human_label_is_not_a_scoped_decision(tmp_path, state, labels, expected):
@@ -718,7 +719,10 @@ def assert_nonpass_accounting_prompt_contract(prompt):
     for required in (
         "This path requires at least one supplied nonpass_finding",
         "Only when ALL supplied nonpass_finding exact finding_id values are confidently accounted for",
-        "wait, collect_evidence, or repair with a validated bound mechanical plan",
+        "wait, collect_evidence, post_merge_verify for a bounded evaluable question with retained new material, or repair with a validated bound mechanical plan",
+        "For post_merge_verify, supply verification_request {question, material:[exact selector]}",
+        "select only specific necessary retained material that makes the question evaluable",
+        "Legacy reports without an event digest additionally require the supplied genuine necessary recovery progress",
         "substantive_needs [] if there is no OTHER semantic, ownership, security, or routing ambiguity",
         "missing acceptance proof in each unresolved_missing_evidence resolution's reason",
         "preserve every raw NON_PASS verdict, and leave decision.criteria empty",
@@ -1788,20 +1792,33 @@ def test_repair_workspace_must_be_clean_and_match_approved_head(tmp_path, monkey
 
 
 def test_compare_label_waits_only_for_attributed_active_run_and_collects_other_outcomes(tmp_path):
-    for status, expected in [
-        ("in_progress", "wait"),
-        ("completed", "collect_evidence"),
-        (None, "collect_evidence"),
+    for status, expected, expected_eligible in [
+        ("in_progress", "wait", False),
+        ("completed", "post_merge_verify", True),
+        (None, "post_merge_verify", True),
     ]:
         current = snapshot(
             state="MERGED",
             merge=MERGE,
             labels=["verify:compare"],
-            verifier_runs=([{"id": 99, "status": status}] if status else []),
+            verifier_runs=(
+                [
+                    {
+                        "id": 99,
+                        "status": status,
+                        "linked_pr": TARGET,
+                        "head_sha": HEAD,
+                        "path": ".github/workflows/agents-verifier.yml",
+                        "event": "pull_request_target",
+                    }
+                ]
+                if status
+                else []
+            ),
         )
         backend = closer(tmp_path, current)
         action, _, eligible, _ = backend.select(current)
-        assert action == expected and not eligible
+        assert action == expected and eligible is expected_eligible
         assert backend.gh.calls == []
 
 
@@ -1872,7 +1889,9 @@ def test_snapshot_verifier_wait_uses_only_current_pr_attribution(tmp_path, monke
     manual = {"id": 10, "status": "in_progress", "pull_requests": []}
     current = _snapshot_from_document(monkeypatch, document, [unrelated, manual])
     assert current["verifier_run_identity_unknown"] and current["verifier_runs"] == []
-    assert closer(tmp_path, current).select(current)[0] == "collect_evidence"
+    # Unrelated/unbound historical runs cannot prevent an initial exact-subject
+    # request; the actual preflight still checks attributable active execution.
+    assert closer(tmp_path, current).select(current)[0] == "post_merge_verify"
     attributed = {
         "id": 11,
         "status": "in_progress",
@@ -4259,6 +4278,7 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
         adapter, "_run_staged_pipeline", lambda *_: {"reason": "admission_deadline_expired"}
     )
     monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    _pin_pass_number_before_check_date(monkeypatch)
     assert (
         adapter.main(
             [
@@ -4281,6 +4301,8 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
     assert receipt["deadlock"] is True
     assert receipt["reservation_recovery"][0]["recovery_path"] == "plan_legacy_reconciliation"
     assert receipt["reservation_recovery"][0]["reasons"]
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is False
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
     assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
@@ -4679,3 +4701,946 @@ def test_request_revision_changes_invalidate_acceptance_without_body_changes(tmp
     current["sources"] = [adapter._request_source(SOURCE, issue, via="closingIssuesReferences")]
     assert not adapter.acceptance_ok(current, decision)
     assert adapter.source_digest(current["sources"]) != decision["source_digest"]
+
+
+def _dead_owner_reservations(tmp_path):
+    import closer_resources as resources
+
+    path = tmp_path / "pipeline.json"
+    path.write_text('{"operations":{"original":"unknown"}}')
+    root = resources.scoped_root(path)
+    for kind, filename, owner in [
+        ("pr", "intent.json", "99999999:123:original"),
+        ("issue", "legacy-intent.json", "legacy"),
+    ]:
+        key = kind + ":" + TARGET.lower()
+        directory = resources._key_dir(root, key)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "lock").touch()
+        resources._atomic_write(
+            directory / filename,
+            {
+                "key": key,
+                "target": TARGET.lower(),
+                "owner": owner,
+                "state": "unknown" if kind == "pr" else "legacy_executor",
+                "at": 1,
+            },
+        )
+    return path, root
+
+
+def _second_dead_core_reservation(root):
+    """Add an independent terminal-plan target to a synthetic diagnostic scan."""
+    import closer_resources as resources
+
+    target = "o/r#8"
+    key = "pr:" + target
+    directory = resources._key_dir(root, key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": target,
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    return target
+
+
+def _terminal_observation(target):
+    return {
+        "snapshot": {
+            "target": target,
+            "kind": "pr",
+            "state": "MERGED",
+            "revision": "remote-r1",
+            "head": "a" * 40,
+            "merge": "b" * 40,
+            "observed_at": time.time(),
+        },
+        "native_writer": {"terminal": True, "evidence": []},
+    }
+
+
+def _pin_pass_number_before_check_date(monkeypatch):
+    """Keep main()-driven receipts pending regardless of wall clock vs 2026-10-30.
+
+    Returns the real grader so tests can still assert the post-check-date outcome.
+    """
+    real = adapter.reservation_drain_pass_number
+
+    def _pending(receipt, *, now=None):
+        return real(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS - 1)
+
+    monkeypatch.setattr(adapter, "reservation_drain_pass_number", _pending)
+    return real
+
+
+def test_reservation_drain_pass_number_pending_before_check_date():
+    """#898 pass number stays pending before 2026-10-30 while grading reservation half."""
+    cleared = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 15, "drainable_reservations": 15, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS - 1,
+    )
+    assert cleared["status"] == "pending"
+    assert cleared["reservation_cleared"] is True
+    assert cleared["check_date"] == "2026-10-30"
+    latch = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 15, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS - 1,
+    )
+    assert latch["status"] == "pending"
+    assert latch["reservation_cleared"] is False
+
+
+def test_reservation_drain_pass_number_requires_authority_after_check_date():
+    """Drain alone never invents authority; both halves are required after the check date."""
+    no_authority = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 0, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert no_authority["status"] == "fail"
+    assert no_authority["reservation_cleared"] is True
+    assert "authority" in no_authority["reason"]
+    latch = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 2, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert latch["status"] == "fail"
+    assert latch["reservation_cleared"] is False
+    passed = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 2, "drainable_reservations": 2, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert passed["status"] == "pass"
+    assert passed["reservation_cleared"] is True
+
+
+@pytest.mark.parametrize("live_historical_owner", [False, True])
+def test_reservation_drain_pass_counts_all_same_key_intents(
+    tmp_path, monkeypatch, live_historical_owner
+):
+    """Current and historical intents must each count toward the printed pass number."""
+    import closer_resources as resources
+
+    path = tmp_path / "pipeline.json"
+    path.write_text("{}")
+    root = resources.scoped_root(path)
+    key = "branch:o/r@shared"
+    directory_name = hashlib.sha256(key.encode()).hexdigest()[:24]
+    for index, base in enumerate(resources._reservation_bases(root)):
+        directory = base / directory_name
+        directory.mkdir(parents=True)
+        target = TARGET.lower() if index == 0 else "o/r#8"
+        owner = (
+            f"{os.getpid()}:123:original"
+            if index == 1 and live_historical_owner
+            else "99999999:123:original"
+        )
+        for filename in ("intent.json", "legacy-intent.json"):
+            resources._atomic_write(
+                directory / filename,
+                {"key": key, "target": target, "owner": owner, "state": "unknown"},
+            )
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*intent.json")}
+    monkeypatch.setattr(resources, "_terminal_remote_observation", _terminal_observation)
+
+    counts = adapter._admitted_reservation_counts(path)
+    grade = adapter.reservation_drain_pass_number(
+        {**counts, "authority": True}, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS
+    )
+    assert grade["status"] == ("fail" if live_historical_owner else "pass")
+    assert grade["reservation_cleared"] is (not live_historical_owner)
+    assert counts["blocking_reservations"] == len(resources.unknown_reservations(root)) == 4
+    assert counts["drainable_reservations"] == (2 if live_historical_owner else 4)
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_reservation_drain_counts_unreadable_intents_in_both_storage_roots(tmp_path):
+    """Matching corrupt filenames in both roots remain separate unknown blockers."""
+    import closer_resources as resources
+
+    path = tmp_path / "pipeline.json"
+    path.write_text("{}")
+    root = resources.scoped_root(path)
+    for base in resources._reservation_bases(root):
+        directory = base / "same-resource"
+        directory.mkdir(parents=True)
+        (directory / "intent.json").write_text("not-json")
+
+    counts = adapter._admitted_reservation_counts(path)
+    assert counts["blocking_reservations"] == len(resources.unknown_reservations(root)) == 2
+    assert counts["drainable_reservations"] == 0
+    assert counts["deadlock"] is True
+    assert all(p.read_text() == "not-json" for p in tmp_path.rglob("intent.json"))
+
+
+def test_expired_admission_receipt_reports_dead_owner_drainable(tmp_path, monkeypatch, capsys):
+    """Printed --pipeline receipt: drainable==blocking for dead owners; pass pending."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "uncertain"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    for kind, filename, owner in [
+        ("pr", "intent.json", "99999999:123:original"),
+        ("issue", "legacy-intent.json", "legacy"),
+    ]:
+        key = kind + ":" + TARGET.lower()
+        directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "lock").touch()
+        resources._atomic_write(
+            directory / filename,
+            {
+                "key": key,
+                "target": TARGET.lower(),
+                "owner": owner,
+                "state": "unknown" if kind == "pr" else "legacy_executor",
+                "at": 1,
+            },
+        )
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {"reason": "admission_deadline_expired", "authority": False},
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": False})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    _pin_pass_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 78
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 2
+    assert receipt["deadlock"] is False
+    assert all(row["drainable"] for row in receipt["reservation_recovery"])
+    # Reservation half of #898 clears; authority stays false under expired admission.
+    assert receipt["authority"] is False
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
+def test_admitted_pipeline_receipt_grades_pass_number_when_reservations_cleared(
+    tmp_path, monkeypatch, capsys
+):
+    """#898 post-merge shape: authority true + blocking 0 prints on --pipeline."""
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "completed"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    # No reservation intents: cleared latch. Admitted round carries authority.
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    grade = _pin_pass_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass"]["authority"] is True
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    after_check = grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)
+    assert after_check["status"] == "pass"
+    assert after_check["reason"] == "reservation latch cleared with authority"
+
+
+def test_admitted_pipeline_receipt_grades_drainable_blocking_with_authority(
+    tmp_path, monkeypatch, capsys
+):
+    """#898 OR-branch: admitted authority true + drainable==blocking on the receipt."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    key = "pr:" + TARGET.lower()
+    directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": TARGET.lower(),
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    grade = _pin_pass_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 1
+    assert receipt["reservation_drain_pass"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    graded = grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)
+    assert graded["status"] == "pass"
+    assert graded["reason"] == "reservation latch cleared with authority"
+
+
+def test_pipeline_receipt_grades_pass_number_without_budget_admission(
+    tmp_path, monkeypatch, capsys
+):
+    """Pass grading must not depend on budget_admission being present."""
+    import contextlib
+
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    real_admission = resources.coordination_admission
+
+    @contextlib.contextmanager
+    def empty_runnable(state_path, targets, *, mode="legacy"):
+        with real_admission(state_path, targets, mode=mode) as admission:
+            admission.runnable.clear()
+            yield admission
+
+    monkeypatch.setattr(resources, "coordination_admission", empty_runnable)
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    grade = _pin_pass_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert "budget_admission" not in receipt
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass"]["status"] == "pending"
+    assert grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)["status"] == "pass"
+
+
+def test_core_reserve_records_process_group(tmp_path):
+    import closer_resources as resources
+
+    state = tmp_path / "pipeline.json"
+    state.write_text("{}")
+    root = resources.scoped_root(state)
+    with pytest.raises(RuntimeError, match="synthetic"):
+        with resources.reserve(
+            root,
+            ["pr:" + TARGET],
+            target=TARGET,
+            owner=f"{os.getpid()}:test",
+            deadline=time.time() + 5,
+        ):
+            path = next(tmp_path.rglob("intent.json"))
+            intent = json.loads(path.read_text())
+            assert intent["process_group"] == os.getpgrp()
+            assert intent["state"] == "in_flight"
+            raise RuntimeError("synthetic")
+    retained = json.loads(next(tmp_path.rglob("intent.json")).read_text())
+    assert retained["state"] == "unknown"
+    assert retained["process_group"] == os.getpgrp()
+
+
+def test_dead_owner_reservations_become_drainable(tmp_path, monkeypatch):
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    original_ledger = path.read_bytes()
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*intent.json")}
+    calls = []
+
+    def observe(target):
+        calls.append(target)
+        return _terminal_observation(target)
+
+    monkeypatch.setattr(resources, "_terminal_remote_observation", observe)
+    report = adapter._expired_admission_diagnostics(path)
+    assert report["blocking_reservations"] == report["drainable_reservations"] == 2
+    assert report["deadlock"] is False
+    assert all(x["drainable"] for x in report["reservation_recovery"])
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET)
+    result = resources.apply_terminal_reconciliation(
+        path, target=TARGET, expected_plan_sha256=plan["plan_sha256"]
+    )
+    assert len(calls) == 3  # diagnostics, plan, fresh apply; never a cached observation
+    assert resources.unknown_reservations(root) == {}
+    assert path.read_bytes() == original_ledger  # original UNKNOWN still refuses effect retry
+    audit = json.loads(Path(result["audit_path"]).read_text())
+    assert audit["observation"]["snapshot"]["merge"] == "b" * 40
+    import hashlib
+
+    for row, retired in zip(audit["advertisements"], result["retired"]):
+        assert Path(retired).read_bytes() == before[Path(row["path"])]
+        assert hashlib.sha256(Path(retired).read_bytes()).hexdigest() == row["sha256"]
+    assert not result["acceptance_authority"]
+    assert not result["global_stop_authority"]
+    assert not result["effect_retry_authority"]
+
+
+@pytest.mark.parametrize(
+    "entrypoint", [adapter._expired_admission_diagnostics, adapter._admitted_reservation_counts]
+)
+def test_reservation_diagnostics_keep_completed_plan_and_budget_later_targets(
+    tmp_path, monkeypatch, entrypoint
+):
+    """One expensive failed plan consumes the aggregate receipt budget.
+
+    Both expired and admitted receipts must retain the completed target's
+    concrete failure while refusing to start a second live terminal plan.
+    """
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    later_target = _second_dead_core_reservation(root)
+    clock = [0.0]
+    calls = []
+
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock[0])
+
+    def failed_plan(_path, *, target):
+        calls.append(target)
+        clock[0] = adapter.ADMISSION_DIAGNOSTICS_BUDGET_SECONDS
+        return {"eligible": False, "advertisements": [], "reasons": ["synthetic_live_failure"]}
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", failed_plan)
+    receipt = entrypoint(path)
+
+    assert len(calls) == 1
+    rows = {row.get("target"): row for row in receipt["reservation_recovery"]}
+    completed_target = calls[0]
+    unprocessed_target = ({TARGET, later_target} - {completed_target}).pop()
+    assert "synthetic_live_failure" in rows[completed_target]["reasons"]
+    assert rows[unprocessed_target]["reasons"] == ["diagnostic_budget_exhausted"]
+    assert not rows[unprocessed_target]["drainable"]
+    budget_rows = [
+        row
+        for row in receipt["reservation_recovery"]
+        if row["reasons"] == ["diagnostic_budget_exhausted"]
+    ]
+    assert budget_rows and all(not row["drainable"] for row in budget_rows)
+    assert receipt["reservation_reason_counts"]["diagnostic_budget_exhausted"] == len(budget_rows)
+
+
+def test_reservation_diagnostics_reuses_eligible_plan_after_budget_expiry(tmp_path, monkeypatch):
+    """An eligible completed plan stays usable for matching reservations after expiry."""
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    paths = [str(intent) for intent in tmp_path.rglob("*intent.json")]
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock[0])
+
+    def eligible_plan(_path, *, target):
+        calls.append(target)
+        clock[0] = adapter.ADMISSION_DIAGNOSTICS_BUDGET_SECONDS
+        return {
+            "eligible": True,
+            "advertisements": [{"path": value} for value in paths],
+            "reasons": [],
+        }
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", eligible_plan)
+    receipt = adapter._expired_admission_diagnostics(path)
+
+    assert len(calls) == 1
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == len(paths)
+    assert all(row["drainable"] for row in receipt["reservation_recovery"])
+    assert "diagnostic_budget_exhausted" not in receipt["reservation_reason_counts"]
+
+
+def test_live_owner_reservation_stays_blocking(tmp_path, monkeypatch):
+    import os
+
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    core = next(tmp_path.rglob("intent.json"))
+    value = json.loads(core.read_text())
+    value["owner"] = f"{os.getpid()}:123:original"
+    resources._atomic_write(core, value)
+    monkeypatch.setattr(
+        resources,
+        "_terminal_remote_observation",
+        lambda _: pytest.fail("live owner must refuse before remote reads"),
+    )
+    before = resources.unknown_reservations(root)
+    report = adapter._expired_admission_diagnostics(path)
+    assert report["drainable_reservations"] == 0
+    assert report["deadlock"] is True
+    assert report["reservation_reason_counts"]["owner_still_alive"] == 2
+    assert resources.unknown_reservations(root) == before
+
+
+def test_dead_owner_drain_deliberate_break_without_terminal_path(tmp_path, monkeypatch):
+    """AC deliberate-break: unbound legacy with eligible=False stays undrainable.
+
+    Restoring reasons=['missing_causal_run_binding'] / eligible=False for unbound
+    legacy (and recovery_path none for Core) makes the named dead-owner acceptance
+    fail; reverting restores drainable==blocking. Encodes the issue's break→revert.
+    """
+    import closer_resources as resources
+
+    path, _root = _dead_owner_reservations(tmp_path)
+    monkeypatch.setattr(
+        resources,
+        "_terminal_remote_observation",
+        lambda target: _terminal_observation(target),
+    )
+    # Break: refuse the terminal plan so diagnostics keep the historical latch.
+    monkeypatch.setattr(
+        resources,
+        "plan_terminal_reconciliation",
+        lambda *a, **k: {
+            "eligible": False,
+            "advertisements": [],
+            "reasons": ["missing_causal_run_binding"],
+        },
+    )
+    broken = adapter._expired_admission_diagnostics(path)
+    assert broken["drainable_reservations"] == 0
+    assert broken["deadlock"] is True
+    assert broken["reservation_reason_counts"].get("missing_causal_run_binding")
+    assert all(not row["drainable"] for row in broken["reservation_recovery"])
+    # Revert the deliberate break and confirm the named acceptance shape returns.
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        resources,
+        "_terminal_remote_observation",
+        lambda target: _terminal_observation(target),
+    )
+    restored = adapter._expired_admission_diagnostics(path)
+    assert restored["drainable_reservations"] == restored["blocking_reservations"] == 2
+    assert restored["deadlock"] is False
+    assert all(row["drainable"] for row in restored["reservation_recovery"])
+
+
+def test_terminal_reconciliation_resumes_after_audit_write_crash(tmp_path, monkeypatch):
+    """Crash after immutable audit, before first rename, must resume — not latch."""
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*intent.json")}
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET)
+    assert plan["eligible"] is True
+    real_rename = resources.os.rename
+    attempts = {"n": 0}
+
+    def block_first_rename(src, dst):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise OSError("synthetic crash after audit before first rename")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(resources.os, "rename", block_first_rename)
+    with pytest.raises(OSError, match="synthetic crash after audit"):
+        resources.apply_terminal_reconciliation(
+            path, target=TARGET, expected_plan_sha256=plan["plan_sha256"]
+        )
+    assert resources.unknown_reservations(root)
+    audit = (
+        resources._reservation_base(resources.scoped_root(path)).parent
+        / "reconciliation-audit"
+        / f"{plan['plan_sha256']}.json"
+    )
+    assert audit.is_file()
+    # Resume with the same plan hash: identical audit (ignoring observed_at) continues.
+    monkeypatch.setattr(resources.os, "rename", real_rename)
+    result = resources.apply_terminal_reconciliation(
+        path, target=TARGET, expected_plan_sha256=plan["plan_sha256"]
+    )
+    assert result["status"] == "retired"
+    assert result["audit_path"] == str(audit)
+    assert resources.unknown_reservations(root) == {}
+    for row, retired in zip(json.loads(audit.read_text())["advertisements"], result["retired"]):
+        assert Path(retired).read_bytes() == before[Path(row["path"])]
+
+
+@pytest.mark.parametrize(
+    "failure", ["remote", "native", "changed", "lock", "group", "malformed_owner", "alias"]
+)
+def test_terminal_reconciliation_retains_unknown_when_evidence_fails(
+    tmp_path, monkeypatch, failure
+):
+    import fcntl
+    import os
+
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = resources.unknown_reservations(root)
+    observe = _terminal_observation
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET, observe=observe)
+    assert plan["eligible"]
+    lock = None
+    if failure == "remote":
+
+        def observe(_):
+            raise RuntimeError("remote unavailable")
+
+    elif failure == "native":
+
+        def observe(target):
+            return {**_terminal_observation(target), "native_writer": {"terminal": False}}
+
+    elif failure == "changed":
+
+        def observe(target):
+            value = _terminal_observation(target)
+            value["snapshot"]["revision"] = "new remote revision"
+            return value
+
+    elif failure == "lock":
+        lock = next(tmp_path.rglob("intent.json")).parent.joinpath("lock").open("r+")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif failure == "group":
+        monkeypatch.setattr(os, "killpg", lambda *_: None)
+    elif failure == "malformed_owner":
+        core = next(tmp_path.rglob("intent.json"))
+        value = json.loads(core.read_text())
+        value["owner"] = "unknown"
+        resources._atomic_write(core, value)
+    elif failure == "alias":
+        core = next(tmp_path.rglob("intent.json"))
+        saved = tmp_path / "saved-intent"
+        saved.write_bytes(core.read_bytes())
+        core.unlink()
+        core.symlink_to(saved)
+    try:
+        with pytest.raises((resources.ResourceBlocked, RuntimeError, ValueError)):
+            resources.apply_terminal_reconciliation(
+                path, target=TARGET, expected_plan_sha256=plan["plan_sha256"], observe=observe
+            )
+        assert resources.unknown_reservations(root) == before
+        assert not list(tmp_path.rglob("*.retired"))
+    finally:
+        if lock:
+            lock.close()
+
+
+def test_legacy_reservation_refuses_unbound_new_intent(tmp_path):
+    import closer_resources as resources
+
+    root = resources.scoped_root(tmp_path / "pipeline")
+    with pytest.raises(resources.ResourceBlocked, match="requires_causal_binding"):
+        with resources.legacy_reserve(
+            root, ["pr:" + TARGET], target=TARGET, owner="legacy", deadline=time.time() + 2
+        ):
+            pytest.fail("unbound writer admitted")
+    assert resources.unknown_reservations(root) == {}
+
+
+@pytest.mark.parametrize("kind", ["pr", "issue"])
+def test_terminal_reconciliation_uses_live_snapshot_and_native_gate(monkeypatch, kind):
+    import closer_resources as resources
+    import review_writer_gate
+
+    reads = []
+    native = []
+    snap = _terminal_observation(TARGET)["snapshot"]
+    if kind == "issue":
+        snap = {
+            **snap,
+            "kind": "issue",
+            "pr_target": "o/r#44",
+            "delivery_links": {"complete": True, "status": "resolved", "candidates": ["o/r#44"]},
+        }
+
+    class GitHub:
+        def __init__(self, *, deadline):
+            assert deadline > time.time()
+
+        def snapshot(self, target):
+            reads.append(target)
+            return snap
+
+        def api(self, endpoint):
+            assert "/timeline?" in endpoint
+            return []
+
+    monkeypatch.setattr(adapter, "GitHub", GitHub)
+
+    def terminal(repo, number, call):
+        native.append((repo, number, callable(call)))
+        return {"terminal": True, "evidence": ["all-head proof"]}
+
+    monkeypatch.setattr(review_writer_gate, "writer_terminality", terminal)
+    result = resources._terminal_remote_observation(TARGET)
+    assert reads == [TARGET]
+    expected = (
+        ("o/r", 44, True)
+        if kind == "issue"
+        else (TARGET.split("#")[0], int(TARGET.split("#")[1]), True)
+    )
+    assert native == [expected]
+    assert result["native_writer"]["evidence"] == ["all-head proof"]
+
+
+def test_terminal_reconciliation_incomplete_remote_inventory_cannot_drain(tmp_path, monkeypatch):
+    import closer_resources as resources
+    import review_writer_gate
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = resources.unknown_reservations(root)
+    snap = {
+        **_terminal_observation(TARGET)["snapshot"],
+        "kind": "issue",
+        "delivery_links": {"complete": False, "status": "failed"},
+    }
+    monkeypatch.setattr(adapter, "GitHub", lambda **_: SimpleNamespace(snapshot=lambda _: snap))
+    monkeypatch.setattr(
+        review_writer_gate, "writer_terminality", lambda *_: pytest.fail("incomplete inventory")
+    )
+    plan = resources.plan_terminal_reconciliation(path, target=TARGET)
+    assert plan["eligible"] is False
+    assert plan["reasons"] == ["delivery_inventory_incomplete"]
+    assert resources.unknown_reservations(root) == before
+
+
+@pytest.mark.parametrize("mutation", ["intent", "owner", "malformed", "native"])
+def test_terminal_observation_cannot_outlive_local_owner_proof(tmp_path, mutation):
+    import os
+
+    import closer_resources as resources
+
+    path, root = _dead_owner_reservations(tmp_path)
+    before = resources.unknown_reservations(root)
+
+    def observe(target):
+        if mutation == "malformed":
+            return {"snapshot": [], "native_writer": []}
+        if mutation == "native":
+            return {"snapshot": _terminal_observation(target)["snapshot"], "native_writer": None}
+        intent = next(tmp_path.rglob("intent.json"))
+        value = json.loads(intent.read_text())
+        value["owner" if mutation == "owner" else "at"] = (
+            f"{os.getpid()}:123:revived" if mutation == "owner" else 2
+        )
+        intent.write_text(json.dumps(value))
+        return _terminal_observation(target)
+
+    report = resources.plan_terminal_reconciliation(path, target=TARGET, observe=observe)
+    assert not report["eligible"]
+    assert resources.unknown_reservations(root).keys() == before.keys()
+    assert not list(tmp_path.rglob("*.retired"))
+
+
+def test_terminal_source_inventory_checks_unmerged_referenced_pr(monkeypatch):
+    import closer_resources as resources
+    import review_writer_gate
+
+    snap = {
+        **_terminal_observation(TARGET)["snapshot"],
+        "kind": "issue",
+        "delivery_links": {"complete": True, "candidates": ["o/r#40"]},
+    }
+    queried = []
+
+    def api(endpoint):
+        assert "/timeline?" in endpoint
+        return [
+            {
+                "event": "cross-referenced",
+                "source": {
+                    "issue": {
+                        "url": "https://api.github.com/repos/o/r/issues/44",
+                        "pull_request": {},
+                    }
+                },
+            }
+        ]
+
+    monkeypatch.setattr(
+        adapter, "GitHub", lambda **_: SimpleNamespace(snapshot=lambda _: snap, api=api)
+    )
+
+    def terminal(repo, number, call):
+        queried.append(number)
+        return {"terminal": number != 44, "reason": "pending unmerged writer", "evidence": []}
+
+    monkeypatch.setattr(review_writer_gate, "writer_terminality", terminal)
+    with pytest.raises(resources.ResourceBlocked, match="pending unmerged writer"):
+        resources._terminal_remote_observation(TARGET)
+    assert queried == [40, 44]
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_terminal_native_receipt_cannot_hide_other_provider_writer(monkeypatch, malformed):
+    import closer_resources as resources
+    import review_writer_gate
+
+    snap = _terminal_observation(TARGET)["snapshot"]
+
+    def api(endpoint):
+        assert "/jobs?" in endpoint
+        return {
+            "jobs": (
+                [None]
+                if malformed
+                else [
+                    {
+                        "name": "Keepalive / Run Claude",
+                        "status": "in_progress",
+                        "steps": [
+                            {"name": "Run Claude", "status": "completed"},
+                            {"name": "Commit and push changes", "status": "in_progress"},
+                        ],
+                    }
+                ]
+            )
+        }
+
+    monkeypatch.setattr(
+        adapter, "GitHub", lambda **_: SimpleNamespace(snapshot=lambda _: snap, api=api)
+    )
+
+    def terminal(repo, number, call):
+        # Even a matching completed Codex receipt must inspect the attempt's
+        # other admitted implementation provider before retirement is possible.
+        call("repos/o/r/actions/runs/1/attempts/1/jobs?per_page=100&page=1")
+        return {"terminal": True, "evidence": ["completed Codex"]}
+
+    monkeypatch.setattr(review_writer_gate, "writer_terminality", terminal)
+    with pytest.raises(
+        resources.ResourceBlocked, match="implementation_.*(malformed|not_terminal)"
+    ):
+        resources._terminal_remote_observation(TARGET)

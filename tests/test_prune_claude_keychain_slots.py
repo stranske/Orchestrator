@@ -145,13 +145,14 @@ def test_cli_protects_configured_and_default_poller(prune, tmp_path, monkeypatch
     assert len(calls) == 1
 
 
-def test_cli_refuses_lower_threshold_before_reading(prune):
+def test_cli_refuses_lower_threshold_before_reading(prune, capsys):
     def runner(*args, **kwargs):
         pytest.fail("invalid threshold must not access keychain")
 
     with pytest.raises(SystemExit) as error:
-        prune.main(["--days", "29"], runner=runner)
+        prune.main(["--apply", "--days", "29"], runner=runner)
     assert error.value.code == 2
+    assert "--days must be at least 30" in capsys.readouterr().err
 
 
 def test_failed_metadata_read_never_deletes_or_echoes_dump(prune, capsys):
@@ -163,3 +164,29 @@ def test_failed_metadata_read_never_deletes_or_echoes_dump(prune, capsys):
     output = capsys.readouterr()
     assert "nothing deleted" in output.err
     assert "UNTRUSTED_OUTPUT" not in output.out + output.err
+
+
+def test_cli_apply_keeps_explicit_suffix_and_deletes_other_old_slots(prune, tmp_path, capsys):
+    suffixes = ["11111111", "22222222", "33333333"]
+    dump = "".join(item(f"Claude Code-credentials-{s}", "20200101000000") for s in suffixes)
+    calls = []
+    keychain = str(tmp_path / "Library/Keychains/login.keychain-db")
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command == ["security", "dump-keychain", keychain]:
+            return SimpleNamespace(stdout=dump, returncode=0)
+        assert command in [
+            ["security", "delete-generic-password", "-s", f"Claude Code-credentials-{s}", keychain]
+            for s in ("11111111", "33333333")
+        ], "--keep must survive CLI parsing and selection"
+        return SimpleNamespace(returncode=0)
+
+    assert prune.main(["--apply", "--keep", "22222222"], runner=runner, home=tmp_path, now=NOW) == 0
+    assert calls == [["security", "dump-keychain", keychain]] + [
+        ["security", "delete-generic-password", "-s", f"Claude Code-credentials-{s}", keychain]
+        for s in ("11111111", "33333333")
+    ]
+    output = capsys.readouterr().out
+    assert "KEEP  Claude Code-credentials-22222222" in output
+    assert "deleted 2, failed 0" in output

@@ -1,5 +1,18 @@
 # Gap-directed closer evidence recovery
 
+## Active verification inventory read progress
+
+Before requesting verification, the native preflight reads every page of each
+active-run status. An inconsistent count/page result gets one bounded fresh
+read; a still-incomplete, duplicate or malformed inventory remains a typed
+no-POST wait. A real same-target active run still prevents another request.
+
+A retained finite frontier does not poll or rewrite that wait on replay. After
+an authoritative complete inventory establishes read progress, the existing
+native observer and frontier builder may create the next request frontier.
+Its normal prewrite checks run again. The old frontier and its no-POST proof
+remain history; uncertain consequential operations are never reset this way.
+
 ## Original titles and safely represented requirements
 
 Source rows distinguish the original title digest from the retained masked-display
@@ -133,3 +146,124 @@ not authorize retrieval, make optional evidence necessary, or establish a produc
 defect. Retrieval requests retain their separate, smaller coordinator-supported
 section contract and requirement/criterion validation. Unknown or malformed cause
 classifications remain recoverable per-item validation failures.
+
+## Repeat verification and current outcomes
+
+Initial requests and repaired deliveries use the same hosted collector, input
+screen, configured verifier agents and result publisher. An already-applied
+`verify:compare` label with no applicable result is dispatched through the
+existing workflow inputs; adding the label again would not start another run.
+Completed repository-wide workflow history is optional diagnostic evidence, not
+an admission dependency. Complete active inventory, an exact current PR read,
+relevant active requests and native uncertain-operation fences remain required.
+Historical archive acquisition is explicit (`verification_snapshot` with
+`include_history=True`) and cannot delay ordinary initial observation.
+
+`verification-event/v1` binds the actual delivery PR's head/merge, authentic
+request revision and collector-resolved material. Its predecessor records causal
+history without making unchanged evidence a new event. Optional log packaging,
+transport metadata and collection timestamps do not create material progress.
+Specific necessary material selectors are re-authenticated by the hosted
+collector. Accounting a finding is not declaring it PASS: a retained, evaluable
+unresolved question can return through `post_merge_verify`. Legacy reports have
+no comparable material digest, so same-SHA re-entry additionally needs genuine
+retained necessary recovery progress. Selecting an old artifact or changing a
+packet's serialization alone is insufficient.
+
+Current status follows a unique applicable authenticated event chain. Pending,
+incomplete, conflicting or orphan events cannot restore an old PASS. Exact
+attempts remain immutable in the existing Brain completion-event history;
+out-of-order arrivals do not replace a newer applicable result. A known
+no-evaluation input failure may retry the same bound event. An existing or
+uncertain evaluation must first recover its retained result. A POST timeout
+remains uncertain; explicit unsupported-input HTTP422 is known not started.
+
+A later fix's code is evaluated as its actual merged delivery. Existing explicit
+linked-descendant ancestry selection is reused. An old PR number cannot evaluate
+arbitrary later code, and a repair's PASS does not rewrite the old PR's historical
+verdict. Missing authentic delivery lineage remains a named collection task.
+
+The optional repeat inputs require the reviewed Workflows producer and synced
+consumer contract; ordinary initial requests do not. Cross-language digest
+fixtures and offline lifecycle tests cover request/result/Brain/closure
+composition without provider calls. Workflows' separately recorded historical
+CI-owner provenance limitation (the #872 case) is not waived by this contract.
+
+Native verification dispatch prepares a bound core packet without fetching optional
+diffs, review conversations or ordinary CI archives. Their sections explicitly say
+`request_status: not_requested`; this grants no acceptance proof. Both scheduler
+paths and scoped pool admission recognize only registered native callbacks with
+an immutable validated deterministic packet. They use IO capacity, retain target
+and local-state ownership checks, and do not claim a product checkout. Pinned
+workspace mappings remain intact; physical checkout checks occur before a callback
+that consumes the checkout. A changed frozen finite action holds before collection
+or model work and requires a fresh frontier.
+
+If the native invocation has no qualifying model profile, its existing local scoped
+capacity publication may explicitly qualify only the control plane. That report has
+literal `control_plane_only: true`, no model profiles/pools or trial grants, and does
+not replace shared model-capacity publications. Model work remains capacity-blocked.
+Attribution retention and admission locks use the request deadline; contention
+returns a named pre-POST wait while preserving the current holder and evidence.
+After a supervised child starts, each ledger bind/finish/recovery uses a fresh
+bounded lock budget so legitimate child runtime cannot expire its own cleanup.
+Contended cleanup preserves the reservation for supported recovery.
+
+An authenticated pending event can re-enter this same path when its advertised
+execution binding, exact terminal run/attempt, complete jobs inventory and second
+run read prove every known evaluator step was skipped after the pending marker
+was recorded. Missing bindings, incomplete inventories and started evaluators
+remain scoped recovery; age is never a no-start proof. The original pending
+marker is unchanged. A transient read proof enters the existing operation binding,
+and an accepted dispatch receipt prevents another request for that same event
+before a new authenticated attempt or supported request reconciliation.
+
+Attempt metadata is read from the exact attempt endpoint, independently of the
+latest run. Each intervening terminal attempt needs explicit skipped-evaluator
+proof, with bounded complete job inventories and fresh metadata reads. A hosted
+collector may recognize only its own authenticated current collection attempt;
+native callers cannot exempt an active attempt. Later proved no-evaluation
+attempts support recovery without relabeling the original pending marker or
+superseding an independently accepted dispatch that still needs reconciliation.
+Optional job metadata never creates a new request identity.
+
+The shared Core intent binds whether verification adds its initial label or submits
+an exact workflow request, including the request-basis digest. Read admission runs
+before that intent. An old label cannot acknowledge a later workflow dispatch;
+only its explicit accepted POST response proves request submission. Evaluation and
+acceptance still require the authenticated terminal result. An explicit HTTP 422
+on the bound workflow request uses Core's typed live-owner rejection transition,
+retaining the original intent and rejection proof for supported retry. A timeout
+or crash without authoritative rejection/acceptance evidence remains uncertain.
+
+The synced consumer's complete exported collector is exercised by the normal
+Python Gate through its retained Node contract fixture. An action-inapplicable
+`not_requested` packet placeholder is not a fetched observation and is collected
+when a later action actually needs that section. Current lifecycle feedback is
+refreshed in bounded fair batches, including previously PASS outcomes; its
+SQLite-scoped cursor is advisory and cannot override an authenticated result.
+
+
+## Accepted verification requests are external waits
+
+A completed native verification POST can be followed immediately by an observation
+that the same request is already accepted. This is a known effect awaiting its
+result, not a no-effect retry boundary. The finite pipeline validates the exact
+queue receipt, target/head/merge, request basis, operation and immutable frontier
+before holding for the authenticated result. A changed or uncertain operation
+stays unresolved. Re-entering the same frontier never repeats the POST.
+
+Older outer rows may instead record `action wait lacks exact verified no-effect
+queue proof` despite a completed accepted request. The existing
+`closer_finite_reentry.py` plan/apply interface supports this narrowly identified
+receipt correction. Its plan must authenticate the retained inner receipt and
+accepted operation; apply uses the target/run/inventory/state locks and exact
+plan hash, retains the previous UNKNOWN row in audit history, and changes only
+the outer classification to held. It grants neither retry nor acceptance
+authority, and does not rewrite the inner operation or unrelated history.
+
+Once fresh normal observation selects a different action after the request, use
+the existing causal stage-successor path. It rechecks current assignment and
+admission, preserves request provenance, and starts normal preparation without
+copying old acceptance results. Missing proof or an active owner remains a
+per-target hold.

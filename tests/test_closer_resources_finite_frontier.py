@@ -989,6 +989,18 @@ def remote_act_world(native_world, monkeypatch):
         return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
 
     monkeypatch.setattr(closer_queue, "run_round", queue_boundary)
+    # Freeze the actual native operation binding, not an empty placeholder.
+    from closer_frontier_policy import make_frontier_from_observations
+
+    observer = native.Closer(
+        native.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=True, workers=True
+    )
+    w.frontier = make_frontier_from_observations(
+        {"owner/repo#12": observer.observe("owner/repo#12")},
+        owner=w.frontier["owner"],
+        frontier_id=w.frontier["frontier_id"],
+    )
+    w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(w.frontier)
     return w
 
 

@@ -414,7 +414,11 @@ def public_merge_world(native_world, monkeypatch):
         endpoint = args[3]
         if "/actions/workflows/agents-verifier.yml/runs" in endpoint:
             return 0, {"total_count": 0, "workflow_runs": []}
-        if endpoint.endswith("/issues/12/labels"):
+        if endpoint == "repos/owner/repo":
+            return 0, {"default_branch": "main"}
+        if endpoint.endswith("/issues/12/labels") or endpoint.endswith(
+            "/actions/workflows/agents-verifier.yml/dispatches"
+        ):
             assert args[:3] == ["api", "--method", "POST"]
             w.verifies.append(tuple(args))
             w.snapshot["labels"] = ["verify:compare"]
@@ -494,6 +498,141 @@ def test_public_finite_main_verifies_selected_merge_despite_foreign_history(
     assert native["validation"]["admitted_domain_valid"] is True, native
     binding = successor["lineage"]["finite_frontier"]["bindings"]["owner/repo#12"]
     assert binding["revision"] != w.frontier["bindings"]["owner/repo#12"]["revision"]
+
+
+def test_public_cli_continues_accepted_request_after_result_without_replaying_post(
+    public_merge_world, capsys, monkeypatch
+):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    initial = json.loads(capsys.readouterr().out)
+    requested = initial["merge_verification_successors"]["owner/repo#12"]
+    accepted_frontier = requested["lineage"]["finite_frontier"]
+    # Retain the actual native POST, but normalize its subsequent observation
+    # to the accepted-wait shape returned by the seven production regressions.
+    target = "owner/repo#12"
+    shard = (
+        resources.shard_dir(resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target)
+        / "state.json"
+    )
+    action_path = shard.parent / "state.actions" / f"{pipeline._digest(target)}.json"
+    stored_queue = queue._read_state(action_path)
+    operation = stored_queue["frontiers"][accepted_frontier["frontier_id"]]["items"][target][
+        "operation"
+    ]
+    prior_frontier = accepted_frontier
+    accepted_frontier = policy.make_frontier(
+        [target],
+        owner=prior_frontier["owner"],
+        frontier_id="accepted-observation",
+        bindings={
+            target: {
+                "revision": "verify-requested",
+                "action_id": policy.action_identity(
+                    target, "verify-requested", "wait", operation["binding"]
+                ),
+            }
+        },
+    )
+    receipt = queue.run_round(
+        action_path,
+        [target],
+        lambda _t: {
+            "target": target,
+            "revision": "verify-requested",
+            "action": "wait",
+            "eligible": False,
+            "reason": "same verification request already accepted",
+            "next_trigger": "authenticated result",
+            "operation_binding": operation["binding"],
+            "evidence": {"target": target, **copy.deepcopy(w.snapshot)},
+        },
+        lambda *_: pytest.fail("already accepted native POST cannot replay"),
+        finite_frontier=accepted_frontier,
+        frontier_target=target,
+        deadline=None,
+        request_timeout_seconds=25,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+    )
+    evidence = {
+        "target": target,
+        "observed_revision": "verify-requested",
+        "head": w.snapshot["head"],
+        "merge": w.snapshot["merge"],
+        "operation_id": operation["id"],
+        "event_id": operation["result"]["verification_request_basis"],
+    }
+    proof = queue.accepted_verifier_wait_proof(
+        action_path, target, frontier=accepted_frontier, receipt=receipt, evidence=evidence
+    )
+    assert proof is not None
+    state = pipeline._load(shard)
+    bucket = copy.deepcopy(state["frontiers"][prior_frontier["frontier_id"]])
+    bucket["finite_frontier"] = accepted_frontier
+    bucket["run_id"] = pipeline._digest(
+        ["finite-frontier/v2", accepted_frontier["frontier_id"], accepted_frontier["owner"]]
+    )[:32]
+    state["frontiers"][accepted_frontier["frontier_id"]] = bucket
+    row = bucket["items"][target]
+    row.update(
+        status="held",
+        stage_status="completed",
+        deferred_reason="accepted_verifier_request",
+        deferred_next_trigger="authenticated result",
+        queue_receipt=receipt,
+        resource_evidence={"accepted_verifier_request": proof},
+    )
+    row.pop("error", None)
+    row["results"]["act"] = {
+        "status": "pending",
+        "pending_kind": "external_event",
+        "pending_evidence": evidence,
+        "queue_receipt": receipt,
+        "next_trigger": "authenticated result",
+    }
+    pipeline._save(shard, state)
+    w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(accepted_frontier)
+    w.snapshot["verifier"] = {
+        "schema": "verifier-corpus-decision/v1",
+        "verdict": "NON_PASS",
+        "repo": "owner/repo",
+        "pr": 12,
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "run_id": 42,
+        "run_attempt": 1,
+        "provider_verdicts": ["CONCERNS"],
+        "ci_failed": False,
+    }
+    w.snapshot["verifier_runs"][0].update(status="completed", conclusion="success")
+    w.snapshot["revision"] = "authenticated-terminal-result"
+    original_transport = dispatcher.gh_capacity.gh_run
+
+    def completed_transport(args, **kwargs):
+        if args[3] == "repos/owner/repo/actions/runs/42":
+            return 0, {
+                "id": 42,
+                "run_attempt": 1,
+                "event": "pull_request_target",
+                "path": ".github/workflows/agents-verifier.yml",
+                "status": "completed",
+                "repository": {"full_name": "owner/repo"},
+            }
+        if args[3] == "repos/owner/repo/actions/runs/42/artifacts?per_page=100":
+            return 0, {"artifacts": []}
+        return original_transport(args, **kwargs)
+
+    monkeypatch.setattr(dispatcher.gh_capacity, "gh_run", completed_transport)
+    dispatcher.main(w.argv)
+    observed = json.loads(capsys.readouterr().out)
+    assert "merge_verification_successors" in observed, observed
+    following = observed["merge_verification_successors"]["owner/repo#12"]
+    assert following["status"] == "verification_successor", following
+    assert following["predecessor_kind"] == "accepted_verifier_request"
+    assert following["lineage"]["finite_frontier"] != accepted_frontier
+    assert len(w.merges) == len(w.verifies) == 1
+    assert all(path.read_bytes() == original for path, original in w.originals.items())
 
 
 @pytest.mark.parametrize("guard_mode", ["blocked", "uncertain"])

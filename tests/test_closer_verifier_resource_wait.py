@@ -24,7 +24,7 @@ def waiting_world(public_merge_world, monkeypatch):
         "conclusion": None,
         "path": ".github/workflows/agents-verifier.yml",
         "event": "pull_request_target",
-        "pull_requests": [],
+        "pull_requests": [{"number": 12}],
         "repository": {"full_name": "owner/repo"},
         "created_at": "2026-10-22T00:00:01Z",
     }
@@ -64,7 +64,7 @@ def waiting_world(public_merge_world, monkeypatch):
     return w
 
 
-def test_public_racing_foreign_verifier_is_named_no_effect_wait(waiting_world, capsys):
+def test_public_racing_same_target_verifier_is_named_no_effect_wait(waiting_world, capsys):
     w = waiting_world
     assert native.main(w.argv) == 78
     result = json.loads(capsys.readouterr().out)
@@ -100,12 +100,9 @@ def test_unchanged_frontier_waits_then_terminal_event_fresh_frontier_verifies_on
     inventory_reads = len(w.inventory_requests)
     assert native.main(w.argv) == 78
     capsys.readouterr()
-    # Fresh completed-merge next-stage observation checks active capacity only;
-    # the retained child does not rerun or collect artifacts without a new trigger.
-    assert w.inventory_requests[inventory_reads:] == [
-        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=queued",
-        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=in_progress",
-    ]
+    # An unchanged retained child waits for its exact external terminal trigger;
+    # ordinary observation performs no optional history/capture polling.
+    assert w.inventory_requests[inventory_reads:] == []
     assert not w.verifies and len(w.merges) == 1
     w.blocking_run.update(status="completed", conclusion="success")
     # The next campaign is causally bound to a real external terminal read,
@@ -133,7 +130,7 @@ def test_unchanged_frontier_waits_then_terminal_event_fresh_frontier_verifies_on
     assert all(after[key]["items"] == entry["items"] for key, entry in old.items())
 
 
-@pytest.mark.parametrize("linked", [[], [{"number": 12}]])
+@pytest.mark.parametrize("linked", [[{"number": 12}]])
 def test_prewrite_blocking_run_never_becomes_target_owned_async(waiting_world, capsys, linked):
     w = waiting_world
     w.blocking_run["pull_requests"] = linked
@@ -167,6 +164,110 @@ def test_incomplete_active_inventory_never_authorizes_write(waiting_world, monke
         row["results"]["act"]["pending_evidence"]["collection_cause"]
         == "active_inventory_incomplete"
     )
+
+
+def test_racing_empty_active_page_is_refetched_before_dispatch(waiting_world, monkeypatch, capsys):
+    w = waiting_world
+    w.blocking_run.update(status="completed", conclusion="success")
+    transport = native.gh_capacity.gh_run
+    queued_reads = []
+
+    def api(args, **kwargs):
+        if "/agents-verifier.yml/runs?" in args[3] and "&status=queued" in args[3]:
+            queued_reads.append(args[3])
+            # Exact retained #714 response: count and empty page raced.
+            return 0, {"total_count": 2 if len(queued_reads) == 1 else 0, "workflow_runs": []}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(queued_reads) >= 2 and len(w.verifies) == 1
+    assert w.events["provider"] == 0
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(w.verifies) == 1
+
+
+def test_active_verifier_on_second_page_still_prevents_post(waiting_world, monkeypatch, capsys):
+    w = waiting_world
+    transport = native.gh_capacity.gh_run
+    pages = []
+
+    def api(args, **kwargs):
+        endpoint = args[3]
+        if "/agents-verifier.yml/runs?" in endpoint and "&status=in_progress" in endpoint:
+            pages.append(endpoint)
+            if "&page=2" in endpoint:
+                return 0, {"total_count": 101, "workflow_runs": [copy.deepcopy(w.blocking_run)]}
+            foreign = [
+                {**copy.deepcopy(w.blocking_run), "id": 1000 + i, "pull_requests": [{"number": 13}]}
+                for i in range(100)
+            ]
+            return 0, {"total_count": 101, "workflow_runs": foreign}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    row = result["merge_verification_successors"]["owner/repo#12"]["native_result"]["targets"][
+        "owner/repo#12"
+    ]
+    proof = row["results"]["act"]["pending_evidence"]
+    assert proof["blocking_run"]["id"] == 99
+    assert proof["inventory_read"]["endpoint"].endswith("&page=2")
+    assert proof["inventory_read"]["status"] == "observed"
+    assert len(proof["inventory_read"]["sha256"]) == 64
+    assert any("&page=2" in page for page in pages) and not w.verifies
+
+
+def test_fresh_complete_inventory_wakes_new_frontier_without_resetting_old_wait(
+    waiting_world, monkeypatch, capsys
+):
+    import time
+
+    import closer_frontier_policy as policy
+    import closer_pipeline as pipeline
+
+    w = waiting_world
+    w.blocking_run.update(status="completed", conclusion="success")
+    transport = native.gh_capacity.gh_run
+    incomplete = True
+
+    def api(args, **kwargs):
+        if incomplete and "/agents-verifier.yml/runs?" in args[3] and "&status=queued" in args[3]:
+            return 0, {"total_count": 2, "workflow_runs": []}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    first = json.loads(capsys.readouterr().out)
+    child = first["merge_verification_successors"]["owner/repo#12"]["native_result"]
+    assert (
+        child["targets"]["owner/repo#12"]["results"]["act"]["pending_evidence"]["collection_cause"]
+        == "active_inventory_incomplete"
+    )
+    shard = resources.shard_dir(resources.scoped_root(w.ledger), "owner/repo#12") / "state.json"
+    old = copy.deepcopy(pipeline._load(shard)["frontiers"])
+    incomplete = False
+    gh = native.GitHub(deadline=time.time() + 25)
+    endpoint = (
+        "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=queued"
+    )
+    assert gh.api(endpoint) == {"total_count": 0, "workflow_runs": []}
+    observer = native.Closer(gh, state_path=w.raw, apply=True, workers=True)
+    frontier = policy.make_frontier_from_observations(
+        {"owner/repo#12": observer.observe("owner/repo#12")},
+        owner=w.frontier["owner"],
+        frontier_id="complete-active-inventory-after-read-wait",
+    )
+    argv = list(w.argv)
+    argv[argv.index("--finite-frontier-json") + 1] = json.dumps(frontier)
+    assert native.main(argv) == 78
+    capsys.readouterr()
+    assert len(w.verifies) == 1 and w.events["provider"] == 0
+    after = pipeline._load(shard)["frontiers"]
+    assert all(after[key]["items"] == entry["items"] for key, entry in old.items())
 
 
 def test_timeout_after_label_post_remains_uncertain(public_merge_world, monkeypatch, capsys):
@@ -314,3 +415,154 @@ def test_foreign_same_basename_module_cannot_self_authenticate_native_wait():
     backend.runtime_binding = None
     backend.require_runtime_binding = False
     assert queue._native_verify_wait_executor(backend.execute) is False
+
+
+@pytest.mark.parametrize("linked", [[], [{"number": 858}]])
+def test_unrelated_active_repository_run_does_not_create_target_dependency(
+    waiting_world, capsys, linked
+):
+    w = waiting_world
+    w.blocking_run["pull_requests"] = linked
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(w.verifies) == 1 and len(w.merges) == 1
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "count_changes",
+        "duplicate_in_page",
+        "duplicate_across_pages",
+        "id_string",
+        "id_zero",
+        "id_bool",
+        "id_negative",
+        "excess_rows",
+        "missing_runs",
+        "runs_not_list",
+    ],
+)
+def test_malformed_active_inventory_never_dispatches(waiting_world, monkeypatch, capsys, defect):
+    w = waiting_world
+    transport = native.gh_capacity.gh_run
+    calls = []
+
+    def api(args, **kwargs):
+        endpoint = args[3]
+        if "/agents-verifier.yml/runs?" in endpoint and "&status=queued" in endpoint:
+            calls.append(endpoint)
+            run = {**copy.deepcopy(w.blocking_run), "pull_requests": [{"number": 13}]}
+            if defect == "count_changes":
+                return 0, {"total_count": 3 if "&page=2" in endpoint else 2, "workflow_runs": [run]}
+            if defect == "duplicate_in_page":
+                return 0, {"total_count": 2, "workflow_runs": [run, run]}
+            if defect == "duplicate_across_pages":
+                return 0, {"total_count": 2, "workflow_runs": [run]}
+            if defect.startswith("id_"):
+                run["id"] = {"id_string": "99", "id_zero": 0, "id_bool": True, "id_negative": -1}[
+                    defect
+                ]
+                return 0, {"total_count": 1, "workflow_runs": [run]}
+            if defect == "excess_rows":
+                return 0, {"total_count": 0, "workflow_runs": [run]}
+            return 0, {
+                "total_count": 0,
+                **({"workflow_runs": {}} if defect == "runs_not_list" else {}),
+            }
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    evidence = result["merge_verification_successors"]["owner/repo#12"]["native_result"]["targets"][
+        "owner/repo#12"
+    ]["results"]["act"]["pending_evidence"]
+    assert evidence["collection_cause"] == "active_inventory_incomplete"
+    assert not w.verifies and len(calls) >= 2
+
+
+def test_inventory_retry_uses_complete_nonempty_foreign_page(waiting_world, monkeypatch, capsys):
+    w = waiting_world
+    w.blocking_run.update(status="completed", conclusion="success")
+    transport = native.gh_capacity.gh_run
+    reads = []
+
+    def api(args, **kwargs):
+        if "/agents-verifier.yml/runs?" in args[3] and "&status=queued" in args[3]:
+            reads.append(args[3])
+            rows = (
+                []
+                if len(reads) == 1
+                else [
+                    {
+                        **copy.deepcopy(w.blocking_run),
+                        "id": 1000 + i,
+                        "status": "queued",
+                        "conclusion": None,
+                        "pull_requests": [{"number": 13}],
+                    }
+                    for i in range(2)
+                ]
+            )
+            return 0, {"total_count": 2, "workflow_runs": rows}
+        return transport(args, **kwargs)
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", api)
+    assert native.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(reads) >= 2 and len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "defect", ["status", "hash", "foreign_endpoint", "page_zero", "list", "string", "null"]
+)
+def test_inventory_observation_mutations_are_rejected(waiting_world, defect):
+    import closer_queue
+
+    w = waiting_world
+    endpoint = "repos/owner/repo/actions/workflows/agents-verifier.yml/runs?per_page=100&status=in_progress"
+    proof = {
+        "schema": "closer-verifier-prewrite-wait/v1",
+        "boundary": "before_verify_label_post",
+        "target": "owner/repo#12",
+        "subject_pr": "owner/repo#12",
+        "revision": "r",
+        "head": "a" * 40,
+        "merge": "d" * 40,
+        "endpoint": endpoint,
+        "observed_at": 1,
+        "blocking_run": copy.deepcopy(w.blocking_run),
+        "inventory_read": {
+            "endpoint": endpoint + "&page=2",
+            "status": "observed",
+            "sha256": "b" * 64,
+        },
+    }
+    operation = {
+        "status": "resource_wait",
+        "action": "post_merge_verify",
+        "revision": "r",
+        "binding": {"pr_target": "owner/repo#12", "head": proof["head"], "merge": proof["merge"]},
+        "invoked_at": 1,
+        "completed_at": 1,
+        "result": {"verifier_resource_wait": proof},
+    }
+    proof["sha256"] = closer_queue._digest(proof)
+    assert closer_queue.verifier_resource_wait_proof(operation, "owner/repo#12") is not None
+    if defect in {"list", "string", "null"}:
+        proof["inventory_read"] = {"list": [], "string": "invalid", "null": None}[defect]
+    else:
+        key, value = {
+            "status": ("status", "unavailable"),
+            "hash": ("sha256", "invalid"),
+            "foreign_endpoint": ("endpoint", endpoint.replace("owner/repo", "other/repo")),
+            "page_zero": ("endpoint", endpoint + "&page=0"),
+        }[defect]
+        proof["inventory_read"][key] = value
+    proof["sha256"] = closer_queue._digest({k: v for k, v in proof.items() if k != "sha256"})
+    assert closer_queue.verifier_resource_wait_proof(operation, "owner/repo#12") is None
+    del proof["inventory_read"]
+    proof["sha256"] = closer_queue._digest({k: v for k, v in proof.items() if k != "sha256"})
+    assert closer_queue.verifier_resource_wait_proof(operation, "owner/repo#12") is not None

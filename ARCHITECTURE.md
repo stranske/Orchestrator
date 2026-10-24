@@ -85,6 +85,16 @@ invalidate prior evidence, and verifier requests are deduplicated. Source closur
 composes the separately owned supervisor actor when deployed and explicitly enabled;
 this coordinator does not enable it. Deployment uses the existing mirror sync and
 canonical local prompt renderers, preserving demand scheduling and safety gates.
+The same resource rail offers explicit terminal-owner reconciliation for historical
+unbound advertisements and Core intents. It probes the recorded process and
+process group, holds original ledger/resource locks, re-reads remote target state
+and all-head native writer evidence, and compares exact intent/observation bytes
+before a durable audit and atomic retirement. Diagnostics expose eligible plans
+and per-reason counts; they never apply them. The original operation/pipeline
+UNKNOWN, admission deadline, acceptance and effect-retry barriers remain intact.
+New legacy advertisements require a pipeline or native-operation causal binding.
+No new coordinator, role, activation flag or live-state migration is introduced.
+
 The resource rail records causal run/revision/identity/work-key bindings before
 staged-pipeline legacy actions. Exact-plan reconciliation independently validates a completed
 no-operation evidence wait under the original locks and archives its evidence
@@ -703,6 +713,16 @@ component or surface moved, so the loop diagram is unchanged.
 
 No first break changes on today's data: every row these touch breaks earlier or has unmeasured
 demand. No stage, component or surface moved, so the loop diagram is unchanged.
+
+For the existing relay-pacing surface in `windowed-capacity-policy` (#812), the
+monitor now shares the importer's read-only log parser for independent demand,
+counts accepted version-matched decision events as usable, and counts joined
+`completed`/`exit=0` lane rounds as operational success. Failed and lane-busy exits
+earn none. Durable-delivery successes on non-relay edges remain in the same
+`outcome_success` total; `success_scope` names both contributors. See
+`docs/capacity-pacing.md` for window and missing-input semantics. This adds no
+dispatch, feedback store, capability row, or loop edge.
+
 
 **An experiment member run has no outcome path (2026-10-12, owner decision "trace and wire
 winner").** `exp_abcd` records each member run with the `abcd-experiment` capability and never
@@ -1794,10 +1814,17 @@ logged. The source event and accepted influence edge retain the decision time, s
 delayed import does not move evidence into another monitor window. One-to-one binding prevents
 late exits from reassigning a decision. The existing hook accepts Codex, Claude, Cursor and
 Muse. A joined round records completed / failed / rate-limited and the chosen agent; the
-existing value-chain row counts the observed terminal round as `outcome`. Process success
-never creates a PR verdict, merge, or durable success (`outcome_success`). Mirror sync
-activates the importer and record hook; the host-owned `handoff-relay.sh` must emit and pass
-the decision id after merge for the explicit-join campaign pass. See
+existing value-chain row counts the observed terminal round as `outcome`. Operational
+`outcome_success` counts joined rounds with `status=completed` and `exit_status=0`,
+and durable-delivery successes on non-relay edges remain in the same total
+(`success_scope`); a lane exit never creates a PR verdict, merge, or durable-delivery
+claim.
+The value-chain section also prints `relay pass (2026-10-27)` under the capacity row:
+version-exact joins versus independent log demand within ±5%, with `usable` and `outcome`
+at least the join count. Before that UTC date the line is `pending`. Durable-delivery
+edges on the same row are excluded from the join count.
+Mirror sync activates the importer and record hook; the host-owned `handoff-relay.sh` must
+emit and pass the decision id after merge for the explicit-join campaign pass. See
 `docs/LANE_ROUND_FEEDBACK.md`.
 `capacity.py pacing-report` queries completed-period usage, incidents with another pool ok, and
 non-Codex dispatch share in constrained versus ok hours; missing populations stay unmeasured.
@@ -2545,3 +2572,28 @@ the weekly view. Missing Brain evidence remains unmeasured. Reads are cached per
 hour, and first-invocation binding; this change does not activate the installed mirror.
 
 Native wrapper capability: `closer_native_observer.py` implements the separately versioned native-handoff mechanism, with canonical configured pause policy, owned-process observations, signed durable worker handoffs, and no-effect qualification. It never substitutes wrapper provenance for Desktop scheduler events. The preview exporter and deployment contract are documented in `docs/CLOSER_NATIVE_HANDOFF.md`. Exact admitted-domain continuation retains global stop and acceptance as false.
+
+### Verification events and native control IO
+
+Initial and repaired verification use the same Workflows collector, input screen,
+configured evaluator and result publisher. `verification_events.py` binds immutable
+delivery code, authentic original requirements and material evidence; explicit
+linked repair ancestry supplies later delivery code. Exact duplicate events are
+suppressed, while known no-evaluation failures may retry without inventing material
+progress. Original verdicts remain immutable; `verifier_evidence.py` imports the
+complete authenticated causal ancestry atomically and projects the latest applicable
+result to current status. Pending, incomplete, conflicting or malformed events cannot
+restore an older PASS. The existing acceptance and revision-bound closure guards
+remain authoritative.
+
+Registered deterministic native merge/verification callbacks use IO capacity in both
+schedulers and scoped resource admission. Verification dispatch collects bound core
+information and preserves valid retained progress without downloading optional
+archives or requiring a product checkout or model profile. Model work still needs
+its existing qualified profile and physical workspace. A signed invocation-local
+control-plane-only report grants no model capacity. Exact pending execution recovery
+requires a terminal attempt, complete authenticated jobs and skipped evaluator proof;
+uncertain execution remains scoped recovery. Existing operation receipts prevent
+repeating accepted requests. Request deadlines bound attribution/reservation locks,
+without clearing holders or changing concurrent reservation accounting. See
+`docs/CLOSER_EVIDENCE_RECOVERY.md` for the producer/consumer rollout contract.

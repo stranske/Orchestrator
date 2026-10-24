@@ -164,7 +164,10 @@ def test_actual_launcher_supervision_proves_cli_only_and_child_process_bootstrap
         ],
         capture_output=True,
         text=True,
-        timeout=5,
+        # This checks fresh-process evidence validation, not startup performance.
+        # Parallel coverage-instrumented CI can spend over five seconds importing
+        # the pinned runtime; keep a bounded wait without changing supervisor budgets.
+        timeout=30,
         check=True,
     )
     assert json.loads(observed.stdout)["qualification_problems"] == []

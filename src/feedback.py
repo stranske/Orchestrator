@@ -606,6 +606,7 @@ VALID_COMPLETION_PHASES = {
     "durability",
 }
 VALID_COMPLETION_PRODUCERS = {
+    "verifier_evidence",
     "closer_disposition.integrate_ordinary",
     "closer_dispatcher.response_binding",
     "closer_dispatcher.worker",
@@ -704,6 +705,7 @@ COMPLETION_NESTED_FIELDS = {
         "validator",
     },
     "verification": {
+        "decision",
         "verifier_verdict",
         "adjudicated_verdict",
         "verifier_ids",
@@ -6464,6 +6466,7 @@ def record_lane_round(
     return decision_id
 
 
+# Relay consumption grades on the existing capacity row — no second relay-pacing capability (#812).
 RELAY_PACING_CAPABILITY = "windowed-capacity-policy"
 RELAY_PACING_VERSION = "relay-pacing-v1"
 RELAY_PACING_BACKLOG_CUTOFF = int(datetime(2026, 10, 20, 11, 58, tzinfo=timezone.utc).timestamp())
@@ -6475,15 +6478,8 @@ RELAY_PACING_ID_RUN_PREFIX = "relay-pacing:id:"
 RELAY_DECISION_ID_MAX_CHARS = 192 - len(RELAY_PACING_ID_RUN_PREFIX)
 
 
-def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
-    """Join explicit relay IDs first, with serial adjacency only for legacy records.
-
-    A legacy join requires exactly one decision between consecutive exits for that lane,
-    matching the chosen agent.
-    Same-second exits, multiple decisions (including preflight retries), mismatches and unfinished
-    rounds retain their decision event but earn no accepted edge. Re-reading is idempotent.
-    """
-    end = int(time.time()) if now is None else now
+def read_relay_pacing_decisions(log: Path, *, end: int) -> dict[str, tuple[int, dict[str, Any]]]:
+    """Read validated, deduplicated log decisions without writing Brain state."""
     log_exists = log.exists()
     decisions: dict[str, tuple[int, dict[str, Any]]] = {}
     for line in log.read_text(encoding="utf-8").splitlines() if log_exists else []:
@@ -6527,6 +6523,20 @@ def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
             decisions[decision_id] = (ts, facts)
         except (ValueError, OverflowError):
             continue  # incomplete trailing lines and unrelated log prose are not evidence
+    return decisions
+
+
+def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
+    """Join explicit relay IDs first, with serial adjacency only for legacy records.
+
+    A legacy join requires exactly one decision between consecutive exits for that lane,
+    matching the chosen agent.
+    Same-second exits, multiple decisions (including preflight retries), mismatches and unfinished
+    rounds retain their decision event but earn no accepted edge. Re-reading is idempotent.
+    """
+    end = int(time.time()) if now is None else now
+    log_exists = log.exists()
+    decisions = read_relay_pacing_decisions(log, end=end)
     with _conn() as c:
         # Serialize binding even when the decision event was saved by an earlier invocation.
         c.execute("BEGIN IMMEDIATE")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,12 +30,37 @@ def start(tmp_path, name, **kw):
         "target": "o/r#1",
         **kw,
     }
+    child_path = ""
+    if spec.get("postverify"):
+        # Model assessment now authenticates its product worktree. Supply a real
+        # isolated Git repository, exposing Git but no provider CLI in the child.
+        directory = Path(spec["directory"])
+        directory.mkdir(parents=True, exist_ok=True)
+        git = shutil.which("git")
+        assert git is not None
+        subprocess.run([git, "init", "--quiet", str(directory)], check=True)
+        subprocess.run(
+            [
+                git,
+                "-C",
+                str(directory),
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/" + spec["target"].split("#")[0] + ".git",
+            ],
+            check=True,
+        )
+        private_bin = directory / "private-bin"
+        private_bin.mkdir()
+        (private_bin / "git").symlink_to(git)
+        child_path = str(private_bin)
     return subprocess.Popen(
         [sys.executable, str(WORKER), json.dumps(spec)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env={**os.environ, "HOME": str(tmp_path / "isolated-home"), "PATH": ""},
+        env={**os.environ, "HOME": str(tmp_path / "isolated-home"), "PATH": child_path},
     )
 
 

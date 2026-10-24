@@ -757,7 +757,14 @@ def test_delivery_producer_to_consumer_preserves_criteria_and_uses_only_ready_ev
         assert packet["collection_result"]["acceptance_authority"] is False
         if variant != "ready-linear":
             strong = callbacks["exception"](observed.source, {**context, "interpret": result})
-            assert strong["status"] == "pending" and strong["authority"] is False
+            if variant == "linear":
+                # A resolved merged delivery without a verdict first requests
+                # its native verification; it does not purchase an assessment.
+                assert strong["classification"] == "deterministic_post_merge_verify"
+                assert strong["substantive_needs"] == []
+                assert strong["authority"] is False
+            else:
+                assert strong["status"] == "pending" and strong["authority"] is False
         return {"targets": {observed.source: result}}
 
     monkeypatch.setattr(closer_pipeline, "run_pipeline", run_pipeline)
@@ -787,8 +794,15 @@ def test_delivery_producer_to_consumer_preserves_criteria_and_uses_only_ready_ev
         assert "Ship text-derived records" in prompt and "Preserve original evidence" in prompt
     else:
         assert calls == []
-        assert seen["packet"]["collection_result"]["status"] == "pending"
-        assert seen["result"]["status"] == "pending" and seen["result"]["authority"] is False
+        assert seen["packet"]["collection_result"]["status"] == (
+            "deterministic" if variant == "linear" else "pending"
+        )
+        if variant == "linear":
+            assert seen["result"]["classification"] == "deterministic_post_merge_verify"
+            assert seen["result"]["substantive_needs"] == []
+            assert seen["result"]["authority"] is False
+        else:
+            assert seen["result"]["status"] == "pending" and seen["result"]["authority"] is False
 
 
 @pytest.mark.parametrize(

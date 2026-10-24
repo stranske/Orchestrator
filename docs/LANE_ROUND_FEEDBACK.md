@@ -94,14 +94,21 @@ Brain write lock.
 
 The target completion event records `completed` (exit zero), `rate-limited`
 (nonzero plus authoritative capacity evidence), or `failed` (other nonzero).
-These observed terminal results count as `outcome` in the capacity row; they are not
-PR acceptance or durable-delivery evidence and do not increment `outcome_success`.
+These observed terminal results count as `outcome` in the capacity row. Operational
+`outcome_success` increments only for joined rounds with `status=completed` and
+`exit_status=0`; failed, rate-limited and lane-busy exits earn none. They are not
+PR acceptance evidence and never synthesize a durable-delivery verdict — durable
+PR edges on the same row still use the existing lifecycle predicate and remain
+part of the combined `success_scope`.
 Import errors are returned as `relay_pacing.status=unavailable` in the hook receipt;
 provider-incident recording still runs. Missing logs report `absent`.
 
-For the 2026-10-27 check, compare decision timestamps in the same UTC window against
-this row's accepted edges (the normal monitor window is 90 days), retaining any
-other capacity-consumer edges separately when comparing to relay log counts.
-Inspect `completion_events` with producer `feedback.relay_pacing` for unjoined
-decisions and chosen-agent outcome payloads. A fixture pass does not establish
-one-day production consumption or the weekly +/-5% acceptance criterion.
+For the 2026-10-27 check, `switch_review.py --text-out` prints a `relay pass
+(2026-10-27):` line under the capacity row. It compares version-exact relay joins
+(`relay_acted_on`) to independent log demand within ±5%, and requires
+`usable ≥ relay_acted_on` and `outcome ≥ relay_acted_on`. Durable-delivery edges on
+the same row are retained separately and do not inflate the join count. Before the
+check date the line reads `pending`. Inspect `completion_events` with producer
+`feedback.relay_pacing` for unjoined decisions and chosen-agent outcome payloads. A
+fixture pass does not establish one-day production consumption or the weekly
+acceptance criterion.

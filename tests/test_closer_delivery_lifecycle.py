@@ -69,6 +69,7 @@ class OfflineDelivery:
 
         monkeypatch.setattr(adapter, "_execute_profile_route", semantic_route)
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "brain-state"))
+        monkeypatch.setenv("ORCH_STORAGE_STATE_DIR", str(tmp_path / "storage-state"))
         monkeypatch.setattr(claims, "claim", lambda *a, **kw: True)
         monkeypatch.setattr(claims, "release", lambda *a, **kw: True)
         monkeypatch.setattr(claims, "update_metadata", lambda *a, **kw: True)

@@ -1,0 +1,57 @@
+{
+  "provenance": "Public authenticated marker excerpts from complete13-comment inventory; model report prose omitted, all6 machine records retained.",
+  "repo": "stranske/Orchestrator",
+  "pr": {
+    "number": 703,
+    "headRefOid": "068e8eed9573f89e743048e10de05e079e05b5ba",
+    "mergeCommit": {
+      "oid": "9d9bfc829c010ed4189121109ff5540833a523d5"
+    },
+    "comments": {
+      "nodes": [
+        {
+          "author": {
+            "login": "github-actions[bot]"
+          },
+          "url": "https://github.com/stranske/Orchestrator/pull/703#issuecomment-6374490092",
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"run_id\":\"40022321553\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"request_sha256\":\"eda1786bb5b0f4b38ca1804ff03934e9973ce9e5cd4e90a67f680c87ba50ebe3\",\"material_sha256\":\"fe1cfd976b35bca127e3f456cc2cdc81fa64f500ed97a353ceaf9fb3c1160ed7\",\"event_id\":\"360dade57a6a8368971f8b23eec75f62fdaf0f51fda296bdd8b2a5b36085248e\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->"
+        },
+        {
+          "author": {
+            "login": "github-actions[bot]"
+          },
+          "url": "https://github.com/stranske/Orchestrator/pull/703#issuecomment-6374514805",
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"run_id\":\"40022321553\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"validated_no_evaluation\",\"retry_kind\":\"known_no_evaluation\",\"retryable\":true,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"request_sha256\":\"eda1786bb5b0f4b38ca1804ff03934e9973ce9e5cd4e90a67f680c87ba50ebe3\",\"material_sha256\":\"fe1cfd976b35bca127e3f456cc2cdc81fa64f500ed97a353ceaf9fb3c1160ed7\",\"event_id\":\"360dade57a6a8368971f8b23eec75f62fdaf0f51fda296bdd8b2a5b36085248e\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+        },
+        {
+          "author": {
+            "login": "github-actions[bot]"
+          },
+          "url": "https://github.com/stranske/Orchestrator/pull/703#issuecomment-6376945371",
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"run_id\":\"40041004009\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"request_sha256\":\"eda1786bb5b0f4b38ca1804ff03934e9973ce9e5cd4e90a67f680c87ba50ebe3\",\"material_sha256\":\"fe1cfd976b35bca127e3f456cc2cdc81fa64f500ed97a353ceaf9fb3c1160ed7\",\"event_id\":\"360dade57a6a8368971f8b23eec75f62fdaf0f51fda296bdd8b2a5b36085248e\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->"
+        },
+        {
+          "author": {
+            "login": "github-actions[bot]"
+          },
+          "url": "https://github.com/stranske/Orchestrator/pull/703#issuecomment-6376987980",
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"run_id\":\"40041004009\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"request_sha256\":\"eda1786bb5b0f4b38ca1804ff03934e9973ce9e5cd4e90a67f680c87ba50ebe3\",\"material_sha256\":\"fe1cfd976b35bca127e3f456cc2cdc81fa64f500ed97a353ceaf9fb3c1160ed7\",\"event_id\":\"360dade57a6a8368971f8b23eec75f62fdaf0f51fda296bdd8b2a5b36085248e\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->"
+        },
+        {
+          "author": {
+            "login": "github-actions[bot]"
+          },
+          "url": "https://github.com/stranske/Orchestrator/pull/703#issuecomment-6377917205",
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"run_id\":\"40048053849\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/orchestrator\",\"pr\":\"703\",\"head_sha\":\"068e8eed9573f89e743048e10de05e079e05b5ba\",\"evaluated_sha\":\"9d9bfc829c010ed4189121109ff5540833a523d5\",\"request_sha256\":\"eda1786bb5b0f4b38ca1804ff03934e9973ce9e5cd4e90a67f680c87ba50ebe3\",\"material_sha256\":\"f770ebe857a0b5ec24595770aceb4f0f30a1e9c89294edf032ce1b4d089eacd8\",\"event_id\":\"e2cc29708662920c0c7371262f7096299223a120a1588116569da8ca3d03cd4f\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"anthropic\",\"model\":\"claude-sonnet-5-5\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\"}} -->"
+        },
+        {
+          "author": {
+            "login": "github-actions[bot]"
+          },
+          "url": "https://github.com/stranske/Orchestrator/pull/703#issuecomment-6377926101",
+          "body": "<!-- verifier-corpus-decision/v1 {\"assessment_identity\": {\"canonical\": true, \"mode\": \"evaluate\", \"model\": \"claude-sonnet-5-5\", \"model2\": \"\", \"provider\": \"anthropic\"}, \"ci_failed\": false, \"evaluated_sha\": \"9d9bfc829c010ed4189121109ff5540833a523d5\", \"head_sha\": \"068e8eed9573f89e743048e10de05e079e05b5ba\", \"pr\": \"703\", \"provider_verdicts\": [\"PASS\"], \"repo\": \"stranske/Orchestrator\", \"run_attempt\": \"1\", \"run_id\": \"40048053849\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"PASS\", \"verification_event\": {\"evaluated_sha\": \"9d9bfc829c010ed4189121109ff5540833a523d5\", \"event_id\": \"e2cc29708662920c0c7371262f7096299223a120a1588116569da8ca3d03cd4f\", \"head_sha\": \"068e8eed9573f89e743048e10de05e079e05b5ba\", \"material_sha256\": \"f770ebe857a0b5ec24595770aceb4f0f30a1e9c89294edf032ce1b4d089eacd8\", \"pr\": \"703\", \"repo\": \"stranske/orchestrator\", \"request_sha256\": \"eda1786bb5b0f4b38ca1804ff03934e9973ce9e5cd4e90a67f680c87ba50ebe3\", \"schema\": \"verification-event/v1\"}} -->"
+        }
+      ]
+    }
+  }
+}

@@ -112,14 +112,16 @@ def logical_run(run):
     }
 
 
-def observation(endpoint, value=None, *, error=None, root=None, reference="legacy:unresolved"):
+def observation(
+    endpoint, value=None, *, error=None, root=None, reference="legacy:unresolved", deadline=None
+):
     result = {
         "endpoint": endpoint,
         "status": "unavailable" if error else "observed",
         "sha256": digest({"error_type": type(error).__name__} if error else logical(value)),
     }
     if root is not None and error is None:
-        result["raw"] = Store(root).retain(
+        result["raw"] = Store(root, deadline=deadline).retain(
             json.dumps(logical(value), sort_keys=True).encode(), "json", reference=reference
         )
     return result
@@ -324,7 +326,9 @@ def attribute(
     endpoint = f"repos/{repo}/actions/runs/{rid}/artifacts?per_page=100"
     try:
         inventory = api(endpoint)
-        reads.append(observation(endpoint, inventory, root=read_root, reference=reference))
+        reads.append(
+            observation(endpoint, inventory, root=read_root, reference=reference, deadline=deadline)
+        )
         rows = inventory.get("artifacts")
         if (
             not isinstance(rows, list)
@@ -380,7 +384,7 @@ def attribute(
             or hashlib.sha256(data).hexdigest() != sha
         ):
             return "pending", f"archive digest verification for run {rid}"
-        store = Store(root)
+        store = Store(root, deadline=deadline)
         archive_ref = store.retain(data, "zip", reference=reference, expired=bool(a.get("expired")))
         parsed = evidence._native_manifest_from_archive(
             data,
@@ -417,6 +421,7 @@ def attribute(
                 },
                 root=read_root,
                 reference=reference,
+                deadline=deadline,
             )
         )
         if len(parsed) != 1:

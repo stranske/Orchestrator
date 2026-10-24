@@ -370,7 +370,7 @@ class RetrospectiveEvidenceTests(unittest.TestCase):
         assert packet["disputed_finding"] == {
             "ref": finding["url"],
             "body": finding["body"],
-            "decision": decision,
+            "decision": {**decision, "_lifecycle_history": [decision]},
         }
         assert packet["ground_truth_evidence"]["head_sha"] == decision["head_sha"]
         assert packet["ground_truth_evidence"]["merge_sha"] == decision["evaluated_sha"]
