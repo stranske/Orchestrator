@@ -90,3 +90,8 @@ The sleep-only timing fixture is not eligible-work throughput evidence. Active-w
 supported desktop/controller qualification, installed helper migration, and a real approved
 low-effort response reaching a guarded queue action remain required. The installed generation,
 explicit pauses, existing claims, quotas, and uncertain ledgers have not been replaced or cleared.
+
+
+### Current verifier outcome and incomplete reads
+
+An older terminal-incomplete chain with no semantic verdict must not veto a complete, admitted canonical review of the exact same repository, PR, head and merge. Existing applicability rules may supersede that older chain when every old node matches the complete anchor's request digest or material digest and predates it. Material binds code/diff, CI hard gate and required selectors; equal material does not mean unchanged requirements. The new full review assesses the revised authoritative request. Both digests changing, actual verdict conflicts, advisory or unadmitted results, newer observations and ambiguous causal chains retain their guards. All input markers remain in history; source-issue outcome ownership is unchanged.
