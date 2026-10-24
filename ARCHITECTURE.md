@@ -456,8 +456,15 @@ requests and 81.5k input tokens in the pay-as-you-go ledger (the key the login i
 subscription meter (under 1% to 1%) and added nothing there. So `_agent_runtime_prelude("muse")` unsets the
 variable by name, and `adapters.auth_health("muse")` reads that record so `capacity._classify` sheds the seat when the login is
 missing or has no active subscription (an unreadable record is not a failure). Meta documents the credential
-order as the env key, then a stored key, then the stored browser session; whether a stored key can coexist
-with the login is unverified, so the gate admits only an OAuth login record and refuses any other mechanism.
+order as the env key, then a stored key, then the stored browser session. Verified 2026-10-19 on Muse
+Code 1.4.10 in a disposable Debian container with `TBH_CREDENTIAL_BACKEND=file`: starting from a synthetic
+OAuth-shaped fixture (`providers.meta` held `mechanism`, `storage`, `obtained_via`, `subs_active`,
+`user_email`; no real login or credentials were mounted; device-code `muse login` was started but not
+browser-approved),
+`muse auth set --api-key-stdin` replaced that block with `providers.meta` containing only `api_key` (no
+`mechanism` field). A stored key **replaces** the login; the seeded OAuth fields do not coexist. This probe establishes the file-backend
+replacement operation, not a completed real OAuth login; `muse logout` documents one saved credential per provider. The gate admits only an OAuth login record (no `api_key` field) and refuses any
+other shape. See `docs/reports/muse-credential-replacement-20261019/`.
 `agent_auth_check` counts the seat usable only when the login records an active
 subscription (`subs_active`), reading the file's shape without logging credential values. The child uses
 an isolated `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and temporary

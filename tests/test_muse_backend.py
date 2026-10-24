@@ -739,15 +739,49 @@ def test_muse_capacity_sheds_on_an_inactive_subscription_and_keeps_an_active_one
 def test_muse_record_that_is_not_an_oauth_login_is_not_admitted(tmp_path, monkeypatch):
     """The CLI keeps ONE saved credential per provider (`muse logout` removes 'API key or account
     login'), so a key saved with `muse auth set` replaces the login record instead of sitting
-    beside it. The gate admits only mechanism == oauth with an active subscription, so a record
-    that is not an OAuth login cannot pass. (Whether a stored key could ever COEXIST with a login
-    and take precedence is unverified: pinned here only as far as the record itself goes.)"""
+    beside it. The gate admits only mechanism == oauth with an active subscription."""
     path = _muse_login(tmp_path, monkeypatch, mechanism="api_key", active=True)
     assert agent_auth_check._credential_file_state("muse")["key_present"] is False
     assert adapters.auth_health("muse")["authenticated"] is False
     monkeypatch.setattr(capacity, "_shed", lambda agent: False)
     assert capacity._classify("muse", capacity.AGENTS["muse"], None)[0] == capacity.SHED
     assert path.exists()
+
+
+def test_muse_gate_refuses_the_record_shape_a_stored_key_leaves(tmp_path, monkeypatch):
+    """Post-`muse auth set` shape from the retained disposable Linux fixture probe (Muse 1.4.10):
+    schema_version plus providers.meta.api_key only — no mechanism or subs_active."""
+    path = tmp_path / "auth.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": {"meta": {"api_key": "not-a-real-key-fake-fake-fake"}},
+            }
+        )
+    )
+    monkeypatch.setitem(agent_auth_check.CREDENTIAL_FILES, "muse", (path, "subs_active"))
+    state = agent_auth_check._credential_file_state("muse")
+    assert state["present"] is True and state["key_present"] is False, state
+    assert adapters.auth_health("muse")["authenticated"] is False
+    # A hand-edited hybrid (not produced by `muse auth set`, but the precedence risk under review)
+    # must not pass a gate that only checks subs_active.
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "providers": {
+                    "meta": {
+                        "api_key": "not-a-real-key-fake-fake-fake",
+                        "mechanism": "oauth",
+                        "subs_active": True,
+                    }
+                },
+            }
+        )
+    )
+    hybrid = agent_auth_check._credential_file_state("muse")
+    assert hybrid["key_present"] is False, hybrid
 
 
 def test_muse_subscription_receipt_survives_actual_ledger_reconciliation(tmp_path, monkeypatch):
