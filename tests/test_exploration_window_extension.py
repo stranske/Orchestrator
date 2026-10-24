@@ -167,6 +167,9 @@ def test_late_first_tick_refreshes_window_before_default_rate(
         (tmp_path / "exploration-window.json").write_text(
             json.dumps({"extended": True, "end": "20261215"})
         )
+    state = tmp_path / "exploration-window.json"
+    before = state.read_bytes() if state.exists() else None
+    brain_before = brain.read_bytes()
     text = (paths.REPO_ROOT / "orchestrate.sh").read_text()
     start = text.index("# ORCH-ANCHOR: exploration-window-start")
     snippet = text[start : text.index("# ORCH-ANCHOR: exploration-window-end", start)]
@@ -196,9 +199,8 @@ def test_late_first_tick_refreshes_window_before_default_rate(
         check=True,
     )
     assert result.stdout == expected
-    window = json.loads((tmp_path / "exploration-window.json").read_text())
-    assert window["extended"] is (already_extended or min(epsilon, thompson) < 30)
-    assert window["decided_at"].startswith(day)
+    assert (state.read_bytes() if state.exists() else None) == before
+    assert brain.read_bytes() == brain_before
 
 
 def test_export_decides_window_before_build_at_one_instant(tmp_path, monkeypatch):
@@ -298,3 +300,73 @@ def test_corrupt_brain_keeps_extended_state_without_inventing_counts(tmp_path):
     assert window["n_by_policy"] == {"epsilon-greedy": None, "thompson-hybrid": None}
     assert "unmeasured" in window["errors"][0]
     assert brain.read_bytes() == b"not sqlite"
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_real_preview_cli_does_not_write_or_run_export(tmp_path, existing):
+    brain = tmp_path / "brain.db"
+    _brain(brain, 29, 40)
+    state_dir = tmp_path / "state"
+    if existing:
+        state_dir.mkdir()
+        (state_dir / "exploration-window.json").write_text('{"end":"20261117","extended":false}')
+    before = {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(paths.REPO_ROOT / "src" / "route_weights_export.py"),
+            "--preview-exploration-window",
+            "--feedback-db",
+            str(brain),
+            "--state-dir",
+            str(state_dir),
+            "--as-of",
+            str(_ts("2026-11-18")),
+        ],
+        env=dict(
+            os.environ,
+            HOME=str(tmp_path),
+            ORCH_STATE_DIR=str(state_dir),
+            ORCH_LOCAL_RUNTIME=str(tmp_path),
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == "20261215 20261118\n"
+    assert result.stderr == ""
+    assert {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    } == before
+    assert state_dir.exists() is existing
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_real_recurrence_prologue_does_not_write_window(tmp_path, monkeypatch, existing):
+    import capability_recurrence_check as recurrence
+
+    brain = tmp_path / "brain.db"
+    _brain(brain, 29, 40)
+    state_dir = tmp_path / "state"
+    if existing:
+        state_dir.mkdir()
+        (state_dir / "exploration-window.json").write_text('{"end":"20261215","extended":true}')
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("ORCH_DIR", str(paths.REPO_ROOT))
+    monkeypatch.setenv("ORCH_FEEDBACK_DB", str(brain))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.delenv("ORCH_EXPLORATION_RATE", raising=False)
+    monkeypatch.setattr(recurrence, "ORCHESTRATE", paths.REPO_ROOT / "orchestrate.sh")
+    before = {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    }
+    env, status = recurrence._tick_env_attempt()
+    assert status["reason"] == "ok"
+    assert env["ORCH_EXPLORATION_RATE"] == "0.20"
+    assert {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    } == before
+    assert state_dir.exists() is existing

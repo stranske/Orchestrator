@@ -69,8 +69,10 @@ def _now() -> str:
     )
 
 
-def update_exploration_window(db_path: Path, state_dir: Path, *, now: int | None = None) -> dict:
-    """Persist the window decision from a read-only switch snapshot, including unchanged exports."""
+def update_exploration_window(
+    db_path: Path, state_dir: Path, *, now: int | None = None, persist: bool = True
+) -> dict:
+    """Compute the shared read-only switch decision; ordinary exports also persist it."""
     timestamp = int(dt.datetime.now(dt.timezone.utc).timestamp()) if now is None else now
     instant = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc)
     path = state_dir / "exploration-window.json"
@@ -115,7 +117,8 @@ def update_exploration_window(db_path: Path, state_dir: Path, *, now: int | None
     }
     if errors:
         window["errors"] = errors
-    write_document(path, window)
+    if persist:
+        write_document(path, window)
     return window
 
 
@@ -1163,9 +1166,9 @@ def main() -> int:
     parser.add_argument("--feedback-db", type=Path)
     parser.add_argument("--as-of", type=int, help="UTC decision instant shared with this tick")
     parser.add_argument(
-        "--refresh-exploration-window",
+        "--preview-exploration-window",
         action="store_true",
-        help="refresh only the local exploration decision; print end and UTC day",
+        help="read-only preview of the exploration decision; print end and UTC day",
     )
     parser.add_argument("--comparative-report", action="store_true")
     parser.add_argument(
@@ -1226,9 +1229,11 @@ def main() -> int:
     timestamp = args.as_of
     if timestamp is None:
         timestamp = int(dt.datetime.fromisoformat(_now().replace("Z", "+00:00")).timestamp())
-    window = update_exploration_window(db_path, state_dir, now=timestamp)
+    window = update_exploration_window(
+        db_path, state_dir, now=timestamp, persist=not args.preview_exploration_window
+    )
     day = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).strftime("%Y%m%d")
-    if args.refresh_exploration_window:
+    if args.preview_exploration_window:
         print(window["end"], day)
         return 0
     # Match the tick's window default even for a standalone export. Never replace an

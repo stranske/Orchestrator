@@ -82,11 +82,12 @@ Refusals exit non-zero and leave the remote untouched; cadence logs the reason p
 refusals. Publish commits record `db=<resolved path> source_version=<n> by=<git user.name>`,
 with `orchestrator-export` as the identity fallback. The local shadow remains available for diagnosis.
 
-Before selecting the tick's exploration default, `orchestrate.sh` runs the local-only
-`--refresh-exploration-window --as-of <UTC epoch seconds>` operation. It uses the existing
+Before selecting the tick's exploration default, `orchestrate.sh` runs the read-only
+`--preview-exploration-window --as-of <UTC epoch seconds>` operation. It uses the existing
 per-policy sample decision (30 per policy), retaining the owner's November 17 end or one-time
 December 15 extension. Missing or unreadable switch evidence stays unmeasured. The later hourly
-export receives the same `--as-of` instant and refreshes the decision before building its document.
+export receives the same `--as-of` instant and persists the decision before building its document.
+Read-only recurrence inspection can replay the tick prologue without creating or changing window state.
 An explicit `ORCH_EXPLORATION_RATE` still takes precedence. Standalone exports apply the same window
 default without leaving a changed environment behind. Weekly review counts switches through the
 retained `decided_at` instant, inclusively; legacy state without that field uses the review clock,
