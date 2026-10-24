@@ -78,32 +78,6 @@ export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
 # completed, and 7 labelled issues closed with no PR from the labelled agent (4 delivered by codex
 # keepalive or by hand; re-measured 2026-10-04), while keepalive ran 1,239 rounds without it.
 export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
-# ORCH-ANCHOR: exploration-window-start
-# 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
-# Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
-_orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.argv[1]))["end"]; print(end if isinstance(end, str) and len(end) == 8 else "")' \
-  "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/exploration-window.json" 2>/dev/null || true)"
-if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
-  _orch_exploration_end=20261117
-fi
-# Preview current measured counts BEFORE applying the default, without writes.
-# The exporter uses this same instant later, rather than a second wall-clock read.
-_orch_exploration_day="$(date -u +%Y%m%d)"
-if [[ -f "${ORCH:-}/route_weights_export.py" ]]; then
-  _orch_exploration_as_of="$(date -u +%s)"
-  _orch_exploration_decision="$(python3 "$ORCH/route_weights_export.py" \
-    --preview-exploration-window --as-of "$_orch_exploration_as_of" \
-    --state-dir "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}" 2>/dev/null || true)"
-  if [[ "$_orch_exploration_decision" =~ ^([0-9]{8})\ ([0-9]{8})$ ]]; then
-    _orch_exploration_end="${BASH_REMATCH[1]}"
-    _orch_exploration_day="${BASH_REMATCH[2]}"
-  fi
-fi
-# Only the window default expires; explicit caller overrides remain supported.
-if [[ "$_orch_exploration_day" -le "$_orch_exploration_end" ]]; then
-  export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
-fi
-# ORCH-ANCHOR: exploration-window-end
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
 # turns ON the in-loop pace/defer in durability_sweep/keepalive/langsmith (each a no-op when unset).
@@ -345,6 +319,38 @@ if [[ "$mode" == "active" ]]; then
       ;;
   esac
 fi
+
+# ORCH-ANCHOR: exploration-window-start
+# 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
+# Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
+_orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.argv[1]))["end"]; print(end if isinstance(end, str) and len(end) == 8 else "")' \
+  "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/exploration-window.json" 2>/dev/null || true)"
+if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
+  _orch_exploration_end=20261117
+fi
+# Decide current measured counts BEFORE applying the default. Inspection never writes.
+# A later full export samples its own fresh clock for current capacity evidence.
+_orch_exploration_day="$(date -u +%Y%m%d)"
+if [[ -f "${ORCH:-}/route_weights_export.py" ]]; then
+  _orch_exploration_as_of="$(date -u +%s)"
+  _orch_exploration_operation=--preview-exploration-window
+  # A real tick retains its same-tick extension; bash-c inspection is read-only.
+  if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    _orch_exploration_operation=--refresh-exploration-window
+  fi
+  _orch_exploration_decision="$(python3 "$ORCH/route_weights_export.py" \
+    "$_orch_exploration_operation" --as-of "$_orch_exploration_as_of" \
+    --state-dir "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}" 2>/dev/null || true)"
+  if [[ "$_orch_exploration_decision" =~ ^([0-9]{8})\ ([0-9]{8})$ ]]; then
+    _orch_exploration_end="${BASH_REMATCH[1]}"
+    _orch_exploration_day="${BASH_REMATCH[2]}"
+  fi
+fi
+# Only the window default expires; explicit caller overrides remain supported.
+if [[ "$_orch_exploration_day" -le "$_orch_exploration_end" ]]; then
+  export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
+fi
+# ORCH-ANCHOR: exploration-window-end
 
 # ORCH-ANCHOR: heartbeat-export ------------------------------------------------------------------
 # `capabilities.production_heartbeat` and `daily_heartbeat` are NO-OPS unless
@@ -1166,7 +1172,6 @@ if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
   route_weights_export_start=$(date -u +%s)
   echo "  [cadence] route weights export start $(date -u +%Y-%m-%dT%H:%M:%SZ) duration=0"
   if python3 "$ORCH/route_weights_export.py" --publish --state-dir "$STAMP_DIR" \
-       --as-of "${_orch_exploration_as_of:-$(date -u +%s)}" \
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
     sed -n '/^\[cadence\] capacity publish held:/p' "$STAMP_DIR/route-weights-export.log"

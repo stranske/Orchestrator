@@ -147,6 +147,7 @@ def test_export_refreshes_window_even_when_publication_is_unchanged(tmp_path, mo
     assert published[0]["start"] == "2026-10-17"
 
 
+@pytest.mark.parametrize("invocation", ["inspection", "real-file"])
 @pytest.mark.parametrize(
     "day,epsilon,thompson,already_extended,override,expected",
     [
@@ -159,7 +160,7 @@ def test_export_refreshes_window_even_when_publication_is_unchanged(tmp_path, mo
     ],
 )
 def test_late_first_tick_refreshes_window_before_default_rate(
-    tmp_path, day, epsilon, thompson, already_extended, override, expected
+    tmp_path, day, epsilon, thompson, already_extended, override, expected, invocation
 ):
     brain = tmp_path / "brain.db"
     _brain(brain, epsilon, thompson)
@@ -191,15 +192,27 @@ def test_late_first_tick_refreshes_window_before_default_rate(
     env.pop("ORCH_EXPLORATION_RATE", None)
     if override is not None:
         env["ORCH_EXPLORATION_RATE"] = override
+    script = snippet + '\nprintf "%s" "${ORCH_EXPLORATION_RATE-unset}"'
+    if invocation == "real-file":
+        tick = tmp_path / "tick.sh"
+        tick.write_text(script)
+        command = ["/bin/bash", "-eu", str(tick)]
+    else:
+        command = ["/bin/bash", "-euc", script]
     result = subprocess.run(
-        ["/bin/bash", "-euc", snippet + '\nprintf "%s" "${ORCH_EXPLORATION_RATE-unset}"'],
+        command,
         env=env,
         capture_output=True,
         text=True,
         check=True,
     )
     assert result.stdout == expected
-    assert (state.read_bytes() if state.exists() else None) == before
+    if invocation == "inspection":
+        assert (state.read_bytes() if state.exists() else None) == before
+    else:
+        window = json.loads(state.read_text())
+        assert window["extended"] is (already_extended or min(epsilon, thompson) < 30)
+        assert window["decided_at"].startswith(day)
     assert brain.read_bytes() == brain_before
 
 
@@ -370,3 +383,83 @@ def test_real_recurrence_prologue_does_not_write_window(tmp_path, monkeypatch, e
         str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
     } == before
     assert state_dir.exists() is existing
+
+
+def test_real_tick_extension_survives_samples_improving_before_export(tmp_path, monkeypatch):
+    brain = tmp_path / "brain.db"
+    _brain(brain, 29, 40)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ORCH_EXPLORATION_RATE", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "route_weights_export.py",
+            "--feedback-db",
+            str(brain),
+            "--refresh-exploration-window",
+            "--as-of",
+            str(_ts("2026-11-18")),
+        ],
+    )
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **kw: None)
+    assert export.main() == 0
+    assert json.loads((tmp_path / "exploration-window.json").read_text())["extended"] is True
+    _brain(brain, 30, 40)
+    export._fixture_db(brain)
+    build = export.build_document
+    monkeypatch.setattr(
+        export, "build_document", lambda *a, **kw: build(*a, **kw, include_capacity=False)
+    )
+    monkeypatch.setattr(export, "_now", lambda: "2026-11-18T00:01:00Z")
+    monkeypatch.setattr(sys, "argv", ["route_weights_export.py", "--feedback-db", str(brain)])
+    assert export.main() == 0
+    window = json.loads((tmp_path / "exploration-window.json").read_text())
+    document = json.loads((tmp_path / "route-weights-export.json").read_text())
+    assert window["extended"] is True
+    assert window["n_by_policy"] == {"epsilon-greedy": 30, "thompson-hybrid": 40}
+    assert window["decided_at"] == document["generated_at"] == "2026-11-18T00:01:00Z"
+    assert document["exploration"]["rate"] == 0.20
+
+
+def test_recurrence_from_external_cwd_previews_late_window_without_orch_dir(tmp_path, monkeypatch):
+    import capability_recurrence_check as recurrence
+
+    brain = tmp_path / "brain.db"
+    _brain(brain, 29, 40)
+    fake_date = tmp_path / "date"
+    fake_date.write_text(
+        '#!/bin/bash\ncase "$*" in\n'
+        '"-u +%Y%m%d") echo 20261118;;\n'
+        f'"-u +%s") echo {_ts("2026-11-18")};;\n'
+        '"+%Y-%m-%d") echo 2026-11-18;;\n'
+        "*) exit 2;;\nesac\n"
+    )
+    fake_date.chmod(0o755)
+    external = tmp_path / "external-caller"
+    external.mkdir()
+    monkeypatch.chdir(external)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.path.dirname(sys.executable)}:{os.environ['PATH']}")
+    monkeypatch.setenv("ORCH_FEEDBACK_DB", str(brain))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "absent-state"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "absent-runtime"))
+    monkeypatch.delenv("ORCH_DIR", raising=False)
+    monkeypatch.delenv("ORCH_EXPLORATION_RATE", raising=False)
+    monkeypatch.setattr(recurrence, "ORCHESTRATE", paths.REPO_ROOT / "orchestrate.sh")
+    caller_env = dict(os.environ)
+    before = {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    }
+    env, status = recurrence._tick_env_attempt()
+    assert status["reason"] == "ok"
+    assert env.get("ORCH_EXPLORATION_RATE") == "0.20"
+    assert env["ORCH_DIR"] == str(paths.REPO_ROOT.resolve())
+    assert dict(os.environ) == caller_env
+    assert {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    } == before
+    assert not (tmp_path / "absent-state").exists()
+    assert not (tmp_path / "absent-runtime").exists()

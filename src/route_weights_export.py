@@ -1170,6 +1170,11 @@ def main() -> int:
         action="store_true",
         help="read-only preview of the exploration decision; print end and UTC day",
     )
+    parser.add_argument(
+        "--refresh-exploration-window",
+        action="store_true",
+        help="persist only the exploration decision; print end and UTC day",
+    )
     parser.add_argument("--comparative-report", action="store_true")
     parser.add_argument(
         "--publish-lag", action="store_true", help="read-only local/published pool states"
@@ -1233,7 +1238,7 @@ def main() -> int:
         db_path, state_dir, now=timestamp, persist=not args.preview_exploration_window
     )
     day = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).strftime("%Y%m%d")
-    if args.preview_exploration_window:
+    if args.preview_exploration_window or args.refresh_exploration_window:
         print(window["end"], day)
         return 0
     # Match the tick's window default even for a standalone export. Never replace an

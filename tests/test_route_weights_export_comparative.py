@@ -699,3 +699,36 @@ def test_every_nonoptimal_status_suppresses_even_computed_ranks(status):
     export._attach_comparative_ranks(rows, result, "implement")
     assert rows[0]["comparative_rank"] is None
     assert rows[0]["comparative_status"] == status + ": " + result["reasons"][0]
+
+
+def test_normal_export_uses_fresh_clock_for_post_tick_capacity(tmp_path, monkeypatch):
+    database, snapshot = fixture(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    # The earlier tick decision must not pin a later full capacity document.
+    monkeypatch.setenv("_orch_exploration_as_of", str(NOW - 60))
+    monkeypatch.setattr(
+        export,
+        "_now",
+        lambda: export.dt.datetime.fromtimestamp(NOW, export.dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    )
+    monkeypatch.setattr(export, "_current_capacity_snapshot", lambda: snapshot)
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["route_weights_export.py", "--feedback-db", str(database), "--state-dir", str(tmp_path)],
+    )
+    assert export.main() == 0
+    document = json.loads((tmp_path / "route-weights-export.json").read_text())
+    assert document["comparative"]["status"] == "optimal"
+    assert document["comparative"]["inputs"]["pacing_observed_at"] == NOW
+    # The existing guard continues to reject a genuinely future observation.
+    stale_clock = export.build_document(database, now=NOW - 60, capacity_snapshot=snapshot)
+    assert stale_clock["comparative"]["status"] == "inputs_unmeasured"
+    assert any(
+        "in the future" in row.get("reason", "")
+        for row in stale_clock["comparative"]["inputs"]["cost_source_by_agent"].values()
+    )
