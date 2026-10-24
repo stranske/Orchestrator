@@ -386,13 +386,17 @@ def audit(
             row = {"class": "unmeasured"}
         rows.append({"label": label, **row})
     offenders = [row["label"] for row in rows if row["class"] in BAD]
+    other = [row["label"] for row in rows if row["class"] == "other"]
+    bad = len(offenders) + len(other)
+    if not rows and not needs:
+        needs.append(">=1 matching job")
     return {
         "status": "unmeasured" if needs else "measured",
         "jobs": len(rows),
-        "bad": len(offenders),
+        "bad": bad,
         "offenders": offenders,
-        "drainable": len(offenders),
-        "other": [row["label"] for row in rows if row["class"] == "other"],
+        "drainable": bad,
+        "other": other,
         "rows": rows,
         "needs": needs,
     }
@@ -403,19 +407,26 @@ def names(items: list[str]) -> str:
 
 
 def format_line(report: dict) -> str:
-    if report.get("status") != "measured":
+    if report.get("jobs") is None:
         return "Python standard: unmeasured — would need " + "; ".join(
             report.get("needs") or ["an audit snapshot"]
         )
-    if not report["bad"] and not report.get("other"):
+    if report["jobs"] == 0:
+        return "Python standard: unmeasured — would need " + "; ".join(
+            report.get("needs") or [">=1 matching job"]
+        )
+    if report["jobs"] and not report["bad"] and report.get("status") == "measured":
         return f"Python standard: all {report['jobs']} scheduled entrypoints resolve to 3.14/3.13 (drained)"
+    state = "blocking" if report["bad"] else "unmeasured"
+    other = report.get("other", [])
     line = (
-        f"Python standard: {report['bad']}/{report['jobs']} scheduled entrypoints on 3.9/anaconda (blocking); "
-        f"offenders: {names(report['offenders']) or 'none'}; drainable: {report['drainable']} "
+        f"Python standard: {report['bad']}/{report['jobs']} scheduled entrypoints on unsupported Python ({state}); "
+        f"offenders: {names(report['offenders']) or 'none'}; "
+        f"other: {len(other)} ({names(other) or 'none'}); drainable: {report['drainable']} "
         "(each is a one-line change: see ~/.codex/orchestrator/python-migration/inventory.md)"
     )
-    if report.get("other"):
-        line += f"; other unsupported Python (blocking): {names(report['other'])}"
+    if report.get("status") != "measured":
+        line += "; unmeasured: " + "; ".join(report.get("needs") or ["an audit snapshot"])
     return line
 
 

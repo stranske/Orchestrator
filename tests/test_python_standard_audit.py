@@ -54,7 +54,7 @@ def fleet(tmp_path):
         ("/opt/anaconda3/bin/python3", "anaconda-3.12", 1),
         ("/opt/anaconda3/bin/python", "anaconda-3.12", 1),
         ("/standard/python3", "standard", 0),
-        ("/other/python3", "other", 0),
+        ("/other/python3", "other", 1),
     ],
 )
 def test_direct_jobs_use_interpreters_own_versions(fleet, interpreter, category, bad):
@@ -166,7 +166,7 @@ def test_script_simple_path_assignment_changes_bare_resolution(fleet):
 def test_dynamic_script_path_is_unmeasured(fleet):
     job, script, measure, _, _ = fleet
     job("dynamic", ["/bin/bash", script('PATH="$UNKNOWN/bin:$PATH"\npython3 task.py')])
-    assert "unmeasured — would need" in audit.format_line(measure())
+    assert "unmeasured: com.stranske.dynamic:" in audit.format_line(measure())
 
 
 def test_offender_names_truncate_with_remainder(fleet):
@@ -187,13 +187,66 @@ def test_missing_directory_is_not_measured_zero(tmp_path):
     assert "(drained)" not in audit.format_line(report)
 
 
-def test_empty_existing_directory_is_measured_zero(fleet):
+def test_empty_existing_directory_is_unmeasured(fleet):
     report = fleet[2]()
-    assert report["status"] == "measured" and report["jobs"] == 0
-    assert (
-        audit.format_line(report)
-        == "Python standard: all 0 scheduled entrypoints resolve to 3.14/3.13 (drained)"
-    )
+    assert report["status"] == "unmeasured" and report["jobs"] == 0
+    assert audit.format_line(report) == "Python standard: unmeasured — would need >=1 matching job"
+
+
+def test_other_remains_drainable_after_legacy_jobs_fixed(fleet, monkeypatch, capsys):
+    job, _, measure, _, _ = fleet
+    for number in range(8):
+        job(str(number), ["/usr/bin/python3", "-c", "pass"])
+    other = job("other", ["/other/python3", "-c", "pass"])
+    before = measure()
+    assert before["bad"] == before["drainable"] == 9
+    assert "9/9 scheduled entrypoints" in audit.format_line(before)
+    for number in range(8):
+        job(str(number), ["/standard/python3", "-c", "pass"])
+    report = measure()
+    assert report["bad"] == report["drainable"] == 1
+    assert report["offenders"] == []
+    line = audit.format_line(report)
+    assert "1/9 scheduled entrypoints on unsupported Python (blocking)" in line
+    assert f"other: 1 ({other})" in line
+    assert "drainable: 1" in line
+    with monkeypatch.context() as patch:
+        patch.setattr(audit, "audit", lambda: report)
+        assert audit.main([]) == 0
+        assert capsys.readouterr().out.strip() == line
+        assert audit.main(["--json"]) == 0
+        assert json.loads(capsys.readouterr().out)["bad"] == 1
+    job("other", ["/standard/python3", "-c", "pass"])
+    drained = measure()
+    assert drained["bad"] == drained["drainable"] == 0
+    assert "(drained)" in audit.format_line(drained)
+    assert "blocking" not in audit.format_line(drained)
+
+
+@pytest.mark.parametrize("bad", [0, 1])
+def test_unreadable_plist_preserves_known_offenders(fleet, monkeypatch, bad):
+    job, _, measure, _, directory = fleet
+    interpreter = "/usr/bin/python3" if bad else "/standard/python3"
+    offender = job("known", [interpreter, "-c", "pass"])
+    job("unreadable", ["/standard/python3", "-c", "pass"])
+    original = audit.Path.read_bytes
+
+    def read_bytes(path):
+        if path == directory / "unreadable.plist":
+            raise PermissionError("fixture unreadable plist")
+        return original(path)
+
+    monkeypatch.setattr(audit.Path, "read_bytes", read_bytes)
+    report = measure()
+    assert report["status"] == "unmeasured"
+    assert report["bad"] == report["drainable"] == bad
+    line = audit.format_line(report)
+    assert f"{bad}/1 scheduled entrypoints" in line
+    assert f"offenders: {offender if bad else 'none'}" in line
+    assert f"drainable: {bad}" in line
+    assert ("blocking" in line) == bool(bad)
+    assert "unmeasured: readable plist unreadable.plist (PermissionError)" in line
+    assert "(drained)" not in line
 
 
 def test_resolver_failure_preserves_job_and_reports_unmeasured(fleet):
