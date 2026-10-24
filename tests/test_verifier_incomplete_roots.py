@@ -160,18 +160,21 @@ def test_pending_attempt_of_fresh_event_does_not_resurrect_obsolete_root():
 
 
 def test_recovery_selector_is_one_string_input_and_forwarded_without_shell_interpolation():
-    import yaml
+    import re
 
-    p = Path(__file__).parents[1] / ".github/workflows/agents-verifier.yml"
-    data = yaml.load(p.read_text(), Loader=yaml.BaseLoader)
-    inputs = data["on"]["workflow_dispatch"]["inputs"]
-    assert len(inputs) <= 10  # GitHub's actual dispatch contract, not three new scalar slots.
-    assert inputs["verification_recovery"]["type"] == "string"
-    assert inputs["verification_recovery"]["default"] == ""
-    assert (
-        data["jobs"]["verifier"]["with"]["verification_recovery"]
-        == "${{ inputs.verification_recovery || '' }}"
-    )
+    source = (Path(__file__).parents[1] / ".github/workflows/agents-verifier.yml").read_text()
+    # This non-package repository has no PyYAML runtime dependency. Check the
+    # actual authored mapping's fixed indentation; GitHub validates YAML syntax.
+    dispatch = re.search(r"(?ms)^  workflow_dispatch:\n    inputs:\n(.*?)(?=^[^ ]|\Z)", source)
+    assert dispatch is not None
+    inputs = re.findall(r"(?m)^      ([a-z_]+):$", dispatch[1])
+    assert len(inputs) == len(set(inputs)) and len(inputs) <= 10
+    assert "verification_recovery" in inputs
+    recovery = re.search(r"(?m)^      verification_recovery:\n((?:        [^\n]*\n)+)", dispatch[1])
+    assert recovery is not None
+    assert "        type: string\n" in recovery[1]
+    assert "        default: ''\n" in recovery[1]
+    assert "      verification_recovery: ${{ inputs.verification_recovery || '' }}\n" in source
 
 
 def test_full_703_history_updates_current_outcome_and_retains_original_failed_reads(
