@@ -68,6 +68,11 @@ on:
         required: false
         type: string
         default: ''
+      verification_recovery:
+        description: 'Provider-free retained-output selector JSON: run_id, run_attempt, artifact_id'
+        required: false
+        type: string
+        default: ''
       evidence_profile:
         description: 'Bounded input limits; expanded retries documented input truncation only'
         required: false
@@ -411,6 +416,7 @@ jobs:
       verification_event: ${{ inputs.verification_event || '' }}
       verification_material: ${{ inputs.verification_material || '' }}
       verification_predecessor: ${{ inputs.verification_predecessor || '' }}
+      verification_recovery: ${{ inputs.verification_recovery || '' }}
     secrets:
       CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
