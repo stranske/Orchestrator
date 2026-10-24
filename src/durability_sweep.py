@@ -200,9 +200,12 @@ def _current_durability(run_id: str) -> str:
 
 
 def _verifier_claims() -> tuple[dict, dict]:
-    """(claims, inherited): every merged outcome resolved to an explicit PR. A local run credited
-    with a REPLACEMENT's merge (`outcomes.REPLACEMENT_CREDIT`: the lane rehomed its closed PR at
-    the same head) INHERITS that PR from the run that is the PR's own, so it is kept apart."""
+    """(PR owners, delivery references): resolve each merged outcome's explicit delivery.
+
+    A source-issue run references its delivery PR; it is not that PR's own run.
+    Keep that historical credit, like replacement credit, as a fallback when no
+    direct PR owner exists. A PR verdict never certifies the source issue's scope.
+    """
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.run_id,r.target,r.source,COALESCE(o.notes,'') "
@@ -213,6 +216,7 @@ def _verifier_claims() -> tuple[dict, dict]:
     inherited: dict[tuple[str, int], set[str]] = {}
     for run_id, target, source, notes in rows:
         repo, number = provision.parse_target(str(target or ""))
+        target_number = number
         if not repo:
             continue
         claims = found
@@ -221,7 +225,7 @@ def _verifier_claims() -> tuple[dict, dict]:
             if not explicit:
                 continue
             repo, number = provision.parse_target(explicit)
-            if notes.startswith(outcomes.REPLACEMENT_CREDIT):
+            if notes.startswith(outcomes.REPLACEMENT_CREDIT) or number != target_number:
                 claims = inherited
         if number is not None:
             claims.setdefault((repo.lower(), int(number)), set()).add(str(run_id))
@@ -229,10 +233,11 @@ def _verifier_claims() -> tuple[dict, dict]:
 
 
 def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
-    """Resolve every merged outcome to an explicit PR before attributing evidence. A run that
-    inherited a replacement's PR is a candidate only when no other run claims it: two claims
-    credit nobody, so the replacement's own keepalive run would lose the verifier evidence it had
-    before the inheritance existed."""
+    """Prefer a PR's own projection over source-issue/replacement delivery references.
+
+    Multiple owners (or multiple references without an owner) remain ambiguous.
+    Selection neither deletes delivery credit nor marks source requirements PASS.
+    """
     found, inherited = _verifier_claims()
     for key, run_ids in inherited.items():
         found.setdefault(key, run_ids)
