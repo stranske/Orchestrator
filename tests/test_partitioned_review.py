@@ -1,12 +1,102 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import dispatcher
+import exploration_evidence_plan
 import partitioned_review as review
+import periodic_report
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime(monkeypatch, tmp_path):
+    """Keep review fixtures and any optional runtime paths out of the live ledger."""
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+
+
+def test_module_selftest_exercises_hermetic_review_boundaries(monkeypatch):
+    """The module's selftest must keep its offloads local to its supplied stub."""
+
+    started = []
+
+    def forbidden(*args, **kwargs):
+        started.append((args, kwargs))
+        raise AssertionError("partitioned review selftest must not start a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    review._selftest()
+    assert started == []
+
+
+def test_periodic_report_selftest_remains_local(monkeypatch):
+    """Regression coverage for report aggregation must not launch a subprocess.
+
+    The report's capacity read is the one external seam: with no cached capacity.json it runs
+    capacity.build(), which launches five agent CLIs 192 times (measured on a clean machine),
+    so this test passed or failed with the host. It is stubbed; the rest must stay local.
+    """
+
+    started = []
+
+    def forbidden(*args, **kwargs):
+        started.append((args, kwargs))
+        raise AssertionError("periodic report selftest must not start a subprocess")
+
+    monkeypatch.setattr(
+        exploration_evidence_plan, "_capacity_snapshot", lambda *_a, **_k: {"agents": {}}
+    )
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    periodic_report._selftest()
+    assert started == []
+
+
+def test_review_schema_rejects_corrupted_transport_shapes(tmp_path):
+    """Malformed review transport data must fail closed at every validation boundary."""
+    corpus = _corpus([_item("CW-transport", "source-pr-1")])
+    plan = review.partition_corpus(corpus, max_prompt_chars=12_000)
+    partition = plan["partitions"][0]
+    assert "must be a JSON object" in review.validate_corpus(None)[0]
+    assert "must be a non-empty list" in review._source_ref_errors([], "ref")[0]
+    assert "must be an object" in review._source_ref_errors([None], "ref")[0]
+    assert review._string_list("no", "x") == ["x must be a list"]
+
+    malformed_plan = dict(plan)
+    malformed_plan["partitions"] = [None]
+    errors = review.validate_plan(malformed_plan)
+    assert any("must contain exactly" in error for error in errors)
+    assert review.validate_plan(None) == ["plan must be a JSON object"]
+
+    result = _result(plan, partition)
+    broken = json.loads(json.dumps(result))
+    broken["schema_version"] = 0
+    broken["review_id"] = "wrong"
+    broken["partition_id"] = "wrong"
+    broken["partition_digest"] = "wrong"
+    broken["summary"] = ""
+    broken["categories"]["intentional_adapters"] = "not-a-list"
+    broken["categories"]["removed_product_surfaces"].append({"item_id": "CW-transport"})
+    errors = review.validate_partition_result(broken, plan, partition)
+    # Each corrupted field must be reported by name: a bare "must equal" is also produced by the
+    # schema_version check, so it could not tell the three identity checks apart.
+    for key in ("schema_version", "review_id", "partition_id", "partition_digest"):
+        assert any(error.startswith(f"result.{key} must equal") for error in errors), key
+    assert "result.categories.intentional_adapters must be a list" in errors
+    assert any(
+        "removed_product_surfaces" in error and "missing keys" in error for error in errors
+    ), errors
+    assert review._validate_envelope(None, plan, partition) == ["envelope must be a JSON object"]
+
+    with pytest.raises(ValueError, match="invalid plan"):
+        review.run_plan(
+            {}, agent="test", cwd=tmp_path, results_dir=tmp_path, offload_fn=lambda *_a, **_k: {}
+        )
+    with pytest.raises(ValueError, match="timeout"):
+        review.synthesize_results(plan, results_dir=tmp_path, timeout=0)
 
 
 def _corpus(items: list[dict]) -> dict:
