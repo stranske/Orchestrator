@@ -5473,9 +5473,11 @@ def _validate_stop_finite(
                 receipt=item.get("queue_receipt"),
                 evidence=result.get("pending_evidence"),
             )
+            resource = item.get("resource_evidence")
             valid = (
                 proof is not None
-                and (item.get("resource_evidence") or {}).get("accepted_verifier_request") == proof
+                and isinstance(resource, Mapping)
+                and resource.get("accepted_verifier_request") == proof
             )
             unverified_inner_wait = not valid
         if valid and status == "held" and item.get("deferred_reason") == "validated_inner_wait":

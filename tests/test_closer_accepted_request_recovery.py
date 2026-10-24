@@ -11,8 +11,10 @@ from test_closer_pipeline_frontier import _accepted_request_round
 
 import closer_finite_reentry as recovery
 import closer_pipeline as pipeline
+import closer_queue as queue
 import closer_resources as resources
 import closer_stage_continuation as continuation
+from closer_frontier_policy import action_identity, make_frontier
 
 
 def case(tmp_path):
@@ -160,9 +162,67 @@ def test_recovery_cas_and_live_owner_lock_do_not_change_unknown_row(tmp_path):
     )
 
 
-def test_recovered_request_uses_normal_causal_successor_after_fresh_result(tmp_path):
+@pytest.mark.parametrize("duplicate_frontier", [False, True])
+def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
+    tmp_path, duplicate_frontier
+):
     path, target, frontier, posts, inner, _before = case(tmp_path)
     reconcile(path, target, frontier)
+    if duplicate_frontier:
+        binding = {"pr_target": target, "source_targets": [], "head": "a" * 40, "merge": "b" * 40}
+        frontier = make_frontier(
+            [target],
+            owner=frontier["owner"],
+            frontier_id="later-duplicate-wait",
+            bindings={
+                target: {
+                    "revision": "rev-1",
+                    "action_id": action_identity(target, "rev-1", "wait", binding),
+                }
+            },
+        )
+        receipt = queue.run_round(
+            inner["path"],
+            [target],
+            lambda _t: {
+                "target": target,
+                "revision": "rev-1",
+                "eligible": False,
+                "action": "wait",
+                "reason": "same verification request already accepted",
+                "next_trigger": "authenticated verifier result",
+                "operation_binding": binding,
+                "evidence": {"target": target, **binding},
+            },
+            lambda *_: pytest.fail("duplicate frontier must not POST"),
+            finite_frontier=frontier,
+            frontier_target=target,
+            deadline=None,
+            request_timeout_seconds=10,
+            receipt_reserve_seconds=0,
+            max_operation_retries=0,
+        )
+        state = pipeline._load(path)
+        original = next(iter(state["frontiers"].values()))["items"][target]
+        item = copy.deepcopy(original)
+        item["results"]["act"]["queue_receipt"] = receipt
+        item["queue_receipt"] = receipt
+        proof = queue.accepted_verifier_wait_proof(
+            inner["path"],
+            target,
+            frontier=frontier,
+            receipt=receipt,
+            evidence=item["results"]["act"]["pending_evidence"],
+        )
+        assert proof and proof["operation_frontier"] != frontier["frontier_id"]
+        item["resource_evidence"] = {"accepted_verifier_request": proof}
+        state["frontiers"][frontier["frontier_id"]] = {
+            "schema": "closer-pipeline-frontier/v2",
+            "finite_frontier": frontier,
+            "run_id": "duplicate-wait-run",
+            "items": {target: item},
+        }
+        pipeline._save(path, state)
     canonical = tmp_path / "canonical.json"
     assignment = {"target": target, "fingerprint": "frozen-original"}
     canonical.write_text(json.dumps({"targets": [assignment]}))
@@ -195,3 +255,14 @@ def test_recovered_request_uses_normal_causal_successor_after_fresh_result(tmp_p
     assert result["execution_targets"] == [target] and posts == ["POST"]
     successor = pipeline._load(path)["stage_successors"][result["finite_frontier"]["frontier_id"]]
     assert "items" not in successor and "results" not in successor
+
+
+def test_malformed_accepted_wait_resource_proof_refuses_stop_without_crashing(tmp_path):
+    path, target, frontier, _posts, _inner, _before = case(tmp_path)
+    reconcile(path, target, frontier)
+    state = pipeline._load(path)
+    state["frontiers"][frontier["frontier_id"]]["items"][target]["resource_evidence"] = ["bad"]
+    pipeline._save(path, state)
+    assert not pipeline.validate_stop(
+        path, [target], finite_frontier=frontier, frontier_target=target
+    )["valid"]

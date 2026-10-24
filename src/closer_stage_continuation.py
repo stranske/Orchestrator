@@ -165,10 +165,11 @@ def create_successor(
                     receipt=receipt,
                     evidence=act.get("pending_evidence"),
                 )
+                resource = item.get("resource_evidence")
                 if (
                     accepted_proof is None
-                    or (item.get("resource_evidence") or {}).get("accepted_verifier_request")
-                    != accepted_proof
+                    or not isinstance(resource, Mapping)
+                    or resource.get("accepted_verifier_request") != accepted_proof
                 ):
                     raise ValueError("accepted predecessor request proof differs")
             # Match the native finite-progress validator's pipeline->queue order.
@@ -177,8 +178,9 @@ def create_successor(
             with queue._ledger_lock(action_path, cutoff=float(now()) + 1, now=now) as locked:
                 if not locked or hashlib.sha256(action_path.read_bytes()).hexdigest() != queue_sha:
                     raise ValueError("validated predecessor queue changed during stage admission")
+                queue_document = queue._read_state(action_path)
                 qstate = queue.state_for_frontier(
-                    queue._read_state(action_path), old["frontier_id"], expected_policy=old
+                    queue_document, old["frontier_id"], expected_policy=old
                 )
                 qitem = (qstate.get("items") or {}).get(target) if qstate else None
                 accounting = receipt.get("accounting")
@@ -190,10 +192,25 @@ def create_successor(
                 if len(rows) != 1 or not isinstance(qitem, Mapping):
                     raise ValueError("predecessor queue accounting is missing")
                 row = rows[0]
+                operation_policy = old
+                operation_id = row.get("operation_id")
+                if accepted_proof is not None:
+                    # A duplicate request can wait in a later frontier while
+                    # retaining the one accepted POST in its original namespace.
+                    original = queue.state_for_frontier(
+                        queue_document, accepted_proof["operation_frontier"]
+                    )
+                    operation_policy = policy.validate_frontier(
+                        queue_document["frontiers"][accepted_proof["operation_frontier"]]["policy"]
+                    )
+                    qitem = original["items"].get(target)
+                    if not isinstance(qitem, Mapping):
+                        raise ValueError("accepted request operation namespace is missing")
+                    operation_id = accepted_proof["operation_id"]
                 operations = [qitem.get("operation"), *(qitem.get("operation_history") or [])]
                 completed = []
                 for op in operations:
-                    if not isinstance(op, Mapping) or op.get("id") != row.get("operation_id"):
+                    if not isinstance(op, Mapping) or op.get("id") != operation_id:
                         continue
                     revision, action, binding = (
                         op.get("revision"),
@@ -209,15 +226,15 @@ def create_successor(
                     identity = policy.action_identity(target, revision, action, binding)
                     if (
                         op.get("status") == "completed"
-                        and op.get("finite_frontier") == old
-                        and op.get("revision") == old["bindings"][target]["revision"]
-                        and identity == old["bindings"][target]["action_id"]
+                        and op.get("finite_frontier") == operation_policy
+                        and op.get("revision") == operation_policy["bindings"][target]["revision"]
+                        and identity == operation_policy["bindings"][target]["action_id"]
                     ):
                         completed.append(op)
                 progress = _progress(receipt, row)
                 if not (
                     len(completed) == 1
-                    and row.get("operation_status") == "completed"
+                    and (accepted_proof is not None or row.get("operation_status") == "completed")
                     and receipt.get("stop_valid") is True
                     and (
                         accepted_proof is not None
@@ -270,6 +287,8 @@ def create_successor(
                     "target": target,
                     "fresh_binding": fresh["bindings"][target],
                 }
+                if accepted_proof is not None:
+                    causal["accepted_request"] = dict(accepted_proof)
                 frontier_id = "stage-successor-" + _digest(causal)
                 bindings = {target: fresh["bindings"][target]}
                 successor = policy.make_frontier(
