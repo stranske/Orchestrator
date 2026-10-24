@@ -48,16 +48,38 @@ def test_advisor_selftests_restore_existing_surface_bindings(monkeypatch, surfac
 
     assert advisor.SURFACE_BINDINGS[surface] == original
 
+    # THE OPPOSITE STATE. `SURFACE_BINDINGS` is a module global, so a temporary binding that is
+    # not removed again leaks into every later test in the process. Start from "no such binding"
+    # and require that the selftest leaves none behind.
+    monkeypatch.delitem(advisor.SURFACE_BINDINGS, surface)
 
-def test_front_door_reports_missing_ledger_rows_and_returns(monkeypatch):
-    """Missing prerequisites are reported instead of exercising a live ledger."""
+    selftest()
+
+    assert surface not in advisor.SURFACE_BINDINGS
+
+
+def test_front_door_reports_missing_ledger_rows_and_returns(monkeypatch, tmp_path):
+    """Missing prerequisites are reported, by name, instead of exercising a live ledger."""
     reported = []
-    monkeypatch.setattr(advisor.env_prereq, "runnable", lambda gaps, _check: False)
+    # `capabilities.REG` is fixed when the module is imported, so the fixture's environment
+    # variables cannot move it. Point it at an empty ledger so the three rows the front door
+    # needs are absent on every machine, whatever the machine's own ledger holds.
+    monkeypatch.setattr(advisor.capabilities, "REG", tmp_path / "empty" / "capabilities.json")
     monkeypatch.setattr(
         advisor.env_prereq,
         "report_gaps",
-        lambda name, gaps: reported.append((name, gaps)),
+        lambda name, gaps: reported.append((name, list(gaps))),
     )
 
+    def ran_past_the_gate(*_args, **_kwargs):
+        pytest.fail("the front door kept running after reporting its missing prerequisites")
+
+    monkeypatch.setattr(advisor, "advise", ran_past_the_gate)
+
     assert advisor._selftest_front_door() is None
-    assert reported == [("capability_advisor.py front-door", [])]
+
+    assert [name for name, _gaps in reported] == ["capability_advisor.py front-door"]
+    gaps = reported[0][1]
+    assert len(gaps) == 1, gaps
+    for row in ("offload", "codemod-campaign", "testgen-lane"):
+        assert row in gaps[0], (row, gaps[0])
