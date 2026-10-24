@@ -60,9 +60,9 @@ def test_late_outcome_lookup_does_not_cross_experiment_boundaries(monkeypatch):
         lambda **_kwargs: [
             {
                 "experiment_id": "advice:other",
-                "late_outcomes": {},
+                "late_outcomes": {"cap": {"direction": "landed"}},
                 "late_outcome_orphans": {},
-                "useful": [],
+                "useful": ["cap"],
                 "not_useful": [],
             },
             {
@@ -117,7 +117,10 @@ def test_switch_and_declared_fact_fallbacks_preserve_unknowns(monkeypatch):
         "switch_states",
         lambda **_kwargs: (_ for _ in ()).throw(OSError("unavailable")),
     )
-    assert "unreadable" in propensity.read_switches()
+    switches = propensity.read_switches()
+    assert switches["held_off"] == []
+    assert switches["on_but_idle"] == []
+    assert "unreadable" in switches
 
     class BrokenRows:
         def get(self, _key, _default=None):
@@ -187,5 +190,6 @@ def test_unreadable_outcome_lines_are_reported_not_dropped(tmp_path):
     store = propensity.consult_outcomes_path(ledger)
     store.write_text('{"direction":"landed"}\nnot-json\n')
     rows = propensity.load_consult_outcomes(ledger)
+    assert rows[0] == {"direction": "landed"}
     assert rows[-1]["direction"] == "unreadable"
     assert rows[-1]["unreadable_lines"] == 1
