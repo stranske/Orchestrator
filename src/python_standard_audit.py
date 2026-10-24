@@ -20,7 +20,7 @@ PREFIXES = ("com.stranske.", "com.openai.codex.", "com.codex.")
 BAD = {"system-3.9", "anaconda-3.12"}
 PYTHON = re.compile(r"(?:.*/)?python(?:3(?:\.\d+)?)?$")
 STANDARD = re.compile(r"py-standard\.sh|standard-python|STANDARD_PYTHON")
-HEREDOC = re.compile(r"<<(-?)\s*(['\"]?)([\w]+)\2")
+HEREDOC = re.compile(r"(?<!<)<<(-?)(?!<)\s*(['\"]?)([\w-]+)\2")
 
 
 @dataclass(frozen=True)
@@ -157,6 +157,8 @@ def references(text: str, path: str, home: Path, *, shell: bool = True) -> list[
                 r"|(?<![\w./-])python3?(?![\w.-])",
                 token,
             )
+            if PYTHON.fullmatch(token):
+                interpreters = [token]
             for interpreter in interpreters:
                 if standard and interpreter in ("python", "python3"):
                     continue
@@ -282,6 +284,7 @@ def audit(
             OSError,
             ValueError,
             TypeError,
+            SyntaxError,
             tokenize.TokenError,
             subprocess.SubprocessError,
         ) as exc:

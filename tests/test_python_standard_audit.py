@@ -291,7 +291,7 @@ def test_multiline_quotes_continuations_and_substitutions(fleet):
     job, script, measure, calls, _ = fleet
     entry = script(
         "#!/bin/bash\nresult=$(python3 -c '\nprint(1)\n')\n"
-        "exec /opt/anaconda3/bin/python3.12 \\\n+ task.py\n"
+        "exec /opt/anaconda3/bin/python3.12 \\\n task.py\n"
     )
     job("multiline", ["/bin/bash", entry])
     report = measure()
@@ -310,6 +310,27 @@ def test_home_reference_expands_before_interpreter_extraction(fleet):
 def test_deep_non_python_paths_do_not_backtrack_or_become_interpreters(tmp_path):
     deep = "/" + "/".join(["directory"] * 60) + "/entry.sh"
     assert audit.references(f'exec "{deep}"', audit.DEFAULT_PATH, tmp_path) == []
+
+
+def test_quoted_interpreter_path_preserves_spaces(fleet):
+    job, script, measure, calls, directory = fleet
+    interpreter = str(directory.parent / "My Environment/bin/python3")
+    job("spaces", ["/bin/bash", script(f'exec "{interpreter}" task.py')])
+    assert measure()["rows"][0]["class"] == "standard"
+    assert calls[0][0] == interpreter
+
+
+def test_here_string_is_not_a_heredoc(fleet):
+    job, script, measure, _, _ = fleet
+    job("here-string", ["/bin/bash", script('cat <<< "hello"\n/usr/bin/python3 task.py')])
+    assert measure()["bad"] == 1
+
+
+def test_invalid_python_source_is_unmeasured(fleet):
+    job, script, measure, _, _ = fleet
+    entry = script("if True:\n    pass\n  bad_indent\n", "invalid.py")
+    job("invalid", ["/standard/python3", entry])
+    assert measure()["status"] == "unmeasured"
 
 
 def test_script_path_assignment_after_login_is_not_reset(fleet):
