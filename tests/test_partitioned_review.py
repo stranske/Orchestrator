@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import dispatcher
+import exploration_evidence_plan
 import partitioned_review as review
 import periodic_report
 
@@ -33,7 +34,12 @@ def test_module_selftest_exercises_hermetic_review_boundaries(monkeypatch):
 
 
 def test_periodic_report_selftest_remains_local(monkeypatch):
-    """Regression coverage for report aggregation must not launch a subprocess."""
+    """Regression coverage for report aggregation must not launch a subprocess.
+
+    The report's capacity read is the one external seam: with no cached capacity.json it runs
+    capacity.build(), which launches five agent CLIs 192 times (measured on a clean machine),
+    so this test passed or failed with the host. It is stubbed; the rest must stay local.
+    """
 
     started = []
 
@@ -41,6 +47,9 @@ def test_periodic_report_selftest_remains_local(monkeypatch):
         started.append((args, kwargs))
         raise AssertionError("periodic report selftest must not start a subprocess")
 
+    monkeypatch.setattr(
+        exploration_evidence_plan, "_capacity_snapshot", lambda *_a, **_k: {"agents": {}}
+    )
     monkeypatch.setattr(subprocess, "run", forbidden)
     periodic_report._selftest()
     assert started == []
@@ -72,9 +81,14 @@ def test_review_schema_rejects_corrupted_transport_shapes(tmp_path):
     broken["categories"]["intentional_adapters"] = "not-a-list"
     broken["categories"]["removed_product_surfaces"].append({"item_id": "CW-transport"})
     errors = review.validate_partition_result(broken, plan, partition)
-    assert any("must equal" in error for error in errors)
-    assert any("must be a list" in error for error in errors)
-    assert any("missing keys" in error for error in errors)
+    # Each corrupted field must be reported by name: a bare "must equal" is also produced by the
+    # schema_version check, so it could not tell the three identity checks apart.
+    for key in ("schema_version", "review_id", "partition_id", "partition_digest"):
+        assert any(error.startswith(f"result.{key} must equal") for error in errors), key
+    assert "result.categories.intentional_adapters must be a list" in errors
+    assert any(
+        "removed_product_surfaces" in error and "missing keys" in error for error in errors
+    ), errors
     assert review._validate_envelope(None, plan, partition) == ["envelope must be a JSON object"]
 
     with pytest.raises(ValueError, match="invalid plan"):
