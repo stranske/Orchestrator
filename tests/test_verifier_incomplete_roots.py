@@ -241,3 +241,167 @@ def test_unbound_or_mismatched_admission_does_not_supersede_history(assessment):
     fresh = decision(2, "PASS", verification_event=event("e"))
     fresh["assessment_identity"] = assessment
     assert verifier.applicable_decision([fresh], [old]) is None
+
+
+@pytest.mark.parametrize(
+    "admission",
+    [
+        None,
+        {
+            "schema": "verifier-result-admission/v1",
+            "mode": "evaluate",
+            "payload_sha256": "bad",
+            "execution_receipt_sha256": "b" * 64,
+        },
+    ],
+)
+def test_malformed_admitted_legacy_marker_cannot_resurrect_older_pass(admission):
+    prior = original_decision(1, "PASS")
+    invalid = original_decision(2, "PASS", result_admission=admission)
+    pr = {
+        "number": 7,
+        "headRefOid": "a" * 40,
+        "mergeCommit": {"oid": "b" * 40},
+        "comments": {
+            "nodes": [
+                {
+                    "author": {"login": "github-actions[bot]"},
+                    "url": "https://github.com/o/r/pull/7#issuecomment-1",
+                    "body": "\n".join(
+                        f"<!-- {verifier.MARKER} {json.dumps(row)} -->" for row in [prior, invalid]
+                    ),
+                }
+            ]
+        },
+    }
+    assert verifier.decision_from_pr("o/r", pr) is None
+    assert verifier.decision_from_pr("o/r", pr, include_pending=True)["status"] == "unusable"
+
+
+def test_foreign_admission_failure_does_not_mask_this_prs_valid_legacy_pass():
+    prior = original_decision(1, "PASS")
+    foreign = original_decision(2, "PASS", pr="8", result_admission=None)
+    pr = {
+        "number": 7,
+        "headRefOid": "a" * 40,
+        "mergeCommit": {"oid": "b" * 40},
+        "comments": {
+            "nodes": [
+                {
+                    "author": {"login": "github-actions[bot]"},
+                    "url": "https://github.com/o/r/pull/7#issuecomment-1",
+                    "body": "\n".join(
+                        f"<!-- {verifier.MARKER} {json.dumps(row)} -->" for row in [prior, foreign]
+                    ),
+                }
+            ]
+        },
+    }
+    assert verifier.decision_from_pr("o/r", pr)["verdict"] == "PASS"
+
+
+def test_compare_admission_supersedes_older_incomplete_root():
+    old = incomplete()
+    fresh = decision(2, "PASS", verification_event=event("e"), provider_verdicts=["PASS", "PASS"])
+    fresh["assessment_identity"].update(mode="compare", provider="")
+    fresh["result_admission"]["mode"] = "compare"
+    assert verifier.applicable_decision([fresh], [old]) is fresh
+
+
+def pr_records(rows):
+    return {
+        "number": 7,
+        "headRefOid": "a" * 40,
+        "mergeCommit": {"oid": "b" * 40},
+        "comments": {
+            "nodes": [
+                {
+                    "author": {"login": "github-actions[bot]"},
+                    "url": f"https://github.com/o/r/pull/7#issuecomment-{index}",
+                    "body": f"<!-- {verifier.MARKER} {json.dumps(row)} -->",
+                }
+                for index, row in enumerate(rows, 1)
+            ]
+        },
+    }
+
+
+def malformed_marker(kind):
+    if kind == "legacy":
+        return original_decision(2, "PASS", result_admission=None)
+    value = decision(2, "PASS", verification_event=event("e"))
+    value["verification_event"]["event_id"] = "malformed"
+    return value
+
+
+@pytest.mark.parametrize("bad_kind", ["legacy", "event"])
+@pytest.mark.parametrize("repair_kind", ["legacy", "event"])
+@pytest.mark.parametrize("same_run_retry", [False, True])
+def test_fresh_valid_repair_supersedes_ordered_invalid_observation(
+    bad_kind, repair_kind, same_run_retry
+):
+    prior = original_decision(1, "PASS")
+    bad = malformed_marker(bad_kind)
+    fresh = decision(2 if same_run_retry else 3, "PASS", run_attempt="2" if same_run_retry else "1")
+    if repair_kind == "event":
+        fresh.update(
+            verification_event=event("f"),
+            predecessor_event_id=verifier.verification_events.legacy_id(prior),
+        )
+    records = [prior, bad, fresh]
+    before = copy.deepcopy(records)
+    selected = verifier.decision_from_pr("o/r", pr_records(records), include_pending=True)
+    assert selected["verdict"] == "PASS" and selected["run_id"] == fresh["run_id"]
+    observations = [
+        row
+        for row in selected["_lifecycle_history"]
+        if row["schema"] == verifier.OBSERVATION_SCHEMA
+    ]
+    assert len(observations) == 1 and observations[0]["run_id"] == "2"
+    assert "verdict" not in observations[0]
+    assert observations[0]["source_url"].endswith("#issuecomment-2")
+    assert records == before
+
+
+def test_observation_ingestion_cannot_resurrect_stale_pass_or_erase_fresh_repair(
+    monkeypatch, tmp_path
+):
+    import feedback
+
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    feedback.record_run("r", "o/r#7", "implement", "codex", source="keepalive")
+    feedback.record_outcome("r", merged=True)
+    old = original_decision(1, "PASS")
+    bad = malformed_marker("legacy")
+    fresh = decision(
+        3,
+        "PASS",
+        verification_event=event("f"),
+        predecessor_event_id=verifier.verification_events.legacy_id(old),
+    )
+
+    def parse(records):
+        return verifier.decision_from_pr("o/r", pr_records(records), include_pending=True)
+
+    def current():
+        with feedback._conn() as connection:
+            return connection.execute(
+                "SELECT verifier_verdict FROM outcomes WHERE run_id='r'"
+            ).fetchone()[0]
+
+    assert verifier.record_decision("r", "o/r", 7, parse([old]))
+    verifier.record_decision("r", "o/r", 7, parse([old, bad]))
+    assert current() is None
+    verifier.record_decision("r", "o/r", 7, parse([old]))
+    assert current() is None  # Out-of-order old input cannot erase the observation.
+    assert verifier.record_decision("r", "o/r", 7, parse([old, bad, fresh]))
+    assert current() == "PASS"
+    verifier.record_decision("r", "o/r", 7, parse([old, bad]))
+    assert current() == "PASS"  # An old invalid observation cannot erase its repair.
+    with feedback._conn() as connection:
+        rows = connection.execute(
+            "SELECT payload_json FROM completion_events WHERE run_id='r' AND producer='verifier_evidence'"
+        ).fetchall()
+    history = [json.loads(row[0])["verification"]["decision"] for row in rows]
+    assert len(history) == 3
+    assert sum(row["schema"] == verifier.OBSERVATION_SCHEMA for row in history) == 1

@@ -35,3 +35,11 @@ record remains retained. Actual verdict conflicts, changed requirements, newer
 pending or incomplete attempts, malformed events and missing predecessors still
 prevent an unsupported PASS. A new pending attempt of the selected event or its
 explicit successor masks the previous terminal outcome until that attempt settles.
+
+
+Malformed evidence with a known run and attempt is retained as a non-voting
+observation, including its source URL and raw marker hash. It masks older or
+same-attempt results, but a later authenticated repair can supersede it. The
+existing completion history retains these observations so delayed old inputs
+cannot resurrect a stale PASS or erase a newer repair. Evidence whose identity
+cannot be ordered remains unknown until its provenance is recovered.
