@@ -26,6 +26,17 @@ def isolated_runtime(monkeypatch, tmp_path):
     """Every target reads and writes only the test's disposable runtime."""
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
+    # `preflight` and `prepare` read the live capacity probe when no snapshot is passed, and the probe can
+    # start `ccusage` or `npx -y ccusage@latest` (a process and the network) on any host that has them.
+    # The seam is stubbed for every test; the ones that care pass an explicit snapshot.
+    monkeypatch.setattr(
+        bridge.capacity,
+        "build",
+        lambda *_args, **_kwargs: {"generated_at": 1_000, "agents": {"codex": {"state": "ok"}}},
+    )
+    # The pool-usage read defaults to the module's LEDGER path, fixed at import: on the owner's machine
+    # that is the real capacity ledger. Point it at a file that does not exist.
+    monkeypatch.setattr(bridge.capacity, "LEDGER", tmp_path / "capacity-ledger.ndjson")
 
 
 def _manifest(tmp_path):
