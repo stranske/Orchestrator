@@ -1467,7 +1467,7 @@ def _row_problem(row):
     return None
 
 
-def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
+def scope_snapshot(state_path: str | Path, *, workspaces=None, inventory_owner=None) -> dict:
     """Census original bytes without ledger writes, callbacks or recovery.
 
     The short shared inventory lock observes atomic shard identity publication;
@@ -1479,12 +1479,12 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
     census = _Census(path, workspaces)
     if original.is_symlink():
         census.reasons.append("aliased_state_leaf")
-    from closer_resources import inventory_lock, scoped_root
+    from closer_resources import inventory_census, scoped_root
 
     try:
         if not path.parent.is_dir():
             raise ValueError("missing_source_parent")
-        with inventory_lock(scoped_root(path)):
+        with inventory_census(scoped_root(path), owner=inventory_owner):
             for collect in (
                 census.raw_index,
                 census.ledger,
@@ -1521,7 +1521,9 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
     return {**value, "snapshot_sha256": _digest(value)}
 
 
-def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect") -> str | None:
+def scope_problem(
+    snapshot: dict, target: str, resource_keys, *, purpose="effect", inventory_owner=None
+) -> str | None:
     """Check complete prepared aliases; never interpret missing scope as disjoint.
 
     The integrator must prove inventory completeness from its retained prepared
@@ -1546,6 +1548,7 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
         if (
             scope_snapshot(
                 snapshot["state_path"],
+                inventory_owner=inventory_owner,
                 workspaces={
                     "schema": WORKSPACE_SCHEMA,
                     "historical": snapshot.get("workspaces", {}),

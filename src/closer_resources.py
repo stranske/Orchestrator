@@ -195,6 +195,7 @@ def default_resource_keys(target: str) -> list[str]:
 
 
 _INVENTORY_REQUEST = threading.local()
+_INVENTORY_OWNERS = threading.local()
 
 
 @contextlib.contextmanager
@@ -279,10 +280,31 @@ def inventory_lock(root, *, exclusive=False, deadline=None, now=time.time):
                     if now() >= deadline or time.monotonic() >= monotonic_limit:
                         raise ResourceBlocked("inventory lock exceeded finite request window")
                     time.sleep(min(_POLL_SECONDS, max(0.0, monotonic_limit - time.monotonic())))
+        token = object()
+        owners = getattr(_INVENTORY_OWNERS, "active", {})
+        _INVENTORY_OWNERS.active = owners
+        owners[token] = (root.resolve(), os.getpid())
         try:
-            yield
+            yield token
         finally:
+            owners.pop(token, None)
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def inventory_census(root, *, owner=None):
+    """Read within an explicitly supplied live inventory owner, or acquire normally.
+
+    A capability is valid only while its originating lock is held by this thread
+    and process for this exact physical root. Ordinary locks stay non-reentrant.
+    """
+    if owner is None:
+        with inventory_lock(root):
+            yield
+        return
+    if getattr(_INVENTORY_OWNERS, "active", {}).get(owner) != (Path(root).resolve(), os.getpid()):
+        raise ResourceBlocked("invalid caller-owned inventory census")
+    yield
 
 
 def open_root(state_path, *, pipeline_schema, pin=None, deadline=None, now=time.time):
