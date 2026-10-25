@@ -16,7 +16,7 @@ import re
 import time
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, TypeGuard
 
 SCHEMA = "closer-role-qualification/v1"
 BOUNDED_CLASSIFICATION = "bounded_classification"
@@ -50,7 +50,7 @@ def _text(value: Any) -> bool:
     return isinstance(value, str) and bool(value) and value == value.strip()
 
 
-def _finite(value: Any) -> bool:
+def _finite(value: Any) -> TypeGuard[int | float]:
     try:
         return type(value) in (int, float) and math.isfinite(value)
     except OverflowError:

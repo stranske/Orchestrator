@@ -964,7 +964,10 @@ def automatic_profile_within_cap(profile: dict[str, Any]) -> bool:
     cap = tier_ceiling(agent)
     if cap is None:
         return True
-    registered = execution_profiles.PROFILE_REGISTRY.get(profile.get("profile_id"))
+    profile_id = profile.get("profile_id")
+    if not isinstance(profile_id, str):
+        return False
+    registered = execution_profiles.PROFILE_REGISTRY.get(profile_id)
     if not registered or any(
         profile.get(key) != registered.get(key) for key in ("agent", "requested_model")
     ):

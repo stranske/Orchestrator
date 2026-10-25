@@ -2414,10 +2414,14 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         if agent == "codex" and execution_profiles.codex_operator_tier_override(mode):
             return None
         if agent == "codex":
-            selected = execution_profiles.get_profile(
+            preferred_profile = execution_profiles.get_profile(
                 execution_profiles.default_codex_profile("offload", mode)
             )
-            return selected if adapters.automatic_profile_within_cap(selected) else None
+            return (
+                preferred_profile
+                if adapters.automatic_profile_within_cap(preferred_profile)
+                else None
+            )
         # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
         # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
         # offload burned Pro" -- and selecting from ALL offload-capable profiles silently overrode
