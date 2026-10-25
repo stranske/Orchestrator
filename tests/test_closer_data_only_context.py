@@ -330,6 +330,9 @@ def test_real_native_prompt_supplies_full_nonissue_request_beyond_optional_sampl
 
 
 def assessment_capacity(monkeypatch, obstruction):
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
     claude = execution_profiles.get_profile("claude-sonnet-5-5-low")
     gemini = execution_profiles.get_profile("gemini-4-argon-low")
     selected = [claude, gemini]
