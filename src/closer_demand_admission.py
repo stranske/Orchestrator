@@ -97,6 +97,10 @@ def _constant(value):
     raise _Refused(f"assignment: non-finite JSON constant {value}")
 
 
+def _json_float(value: str) -> float:
+    return _number(float(value), "assignment JSON float")
+
+
 def _timestamp(value: Any, name: str) -> float:
     if isinstance(value, str):
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -186,7 +190,10 @@ def admit_in_transaction(
             "assignment: raw digest mismatch",
         )
         assignment = json.loads(
-            assignment_bytes, object_pairs_hook=_pairs, parse_constant=_constant
+            assignment_bytes,
+            object_pairs_hook=_pairs,
+            parse_constant=_constant,
+            parse_float=_json_float,
         )
         _require(isinstance(assignment, dict), "assignment: object required")
         _require(

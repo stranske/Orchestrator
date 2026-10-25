@@ -307,3 +307,21 @@ def test_wrapper_storage_uncertainty_propagates(case):
             qualified_package=PACKAGE,
             now=NOW,
         )
+
+
+@pytest.mark.parametrize("fragment", [b'"extra":1e400', b'"extra":{"nested":[-1e400]}'])
+def test_overflowed_float_anywhere_in_valid_assignment_refuses(case, fragment):
+    doc, assignment, raw, request = case
+    changed = raw.rstrip()[:-1] + b"," + fragment + b"}"
+    request["assignment_sha256"] = hashlib.sha256(changed).hexdigest()
+    before = copy.deepcopy(doc)
+    assert call((doc, assignment, changed, request))["status"] == "refused"
+    assert doc == before
+
+
+def test_overflowed_float_in_target_extra_refuses(case):
+    doc, assignment, raw, request = case
+    changed = raw.replace(b'"target": "Org/Repo#1",', b'"target": "Org/Repo#1", "extra":1e400,')
+    assert changed != raw
+    request["assignment_sha256"] = hashlib.sha256(changed).hexdigest()
+    assert call((doc, assignment, changed, request))["status"] == "refused"
