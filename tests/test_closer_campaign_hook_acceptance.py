@@ -167,7 +167,8 @@ old=ns['_load_pinned_closer_campaign']()
 assert old is not None
 old.RUNTIME_VERSION='old-cache'
 path=Path(old.__file__)
-path.write_text(path.read_text()+'\\nRUNTIME_VERSION="new-disk"\\n')
+path.write_text(path.read_text()+chr(10)+'RUNTIME_VERSION="new-disk"'+chr(10))
+compile(path.read_text(), str(path), 'exec')
 manifest_path=Path(ns['CLOSER_CAMPAIGN_MANIFEST'])
 manifest=json.loads(manifest_path.read_text())
 manifest['modules']['closer_campaign.py']=hashlib.sha256(path.read_bytes()).hexdigest()
