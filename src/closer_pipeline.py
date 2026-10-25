@@ -76,6 +76,20 @@ def _register_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
         following = launcher.f_locals.get("following")
         child = launcher.f_locals.get("child")
         driver_args = caller.f_locals.get("args")
+        proposal = launcher.f_locals.get("proposal")
+        applied = launcher.f_locals.get("applied")
+        guard_readmission = bool(
+            isinstance(proposal, dict)
+            and proposal.get("kind") == "native_guard_readmission"
+            and isinstance(applied, dict)
+            and applied.get("status") == "applied"
+            and driver_args is original_args
+            and caller.f_locals.get("finite_frontier") == proposal.get("frontier")
+            and caller.f_locals.get("targets") == launcher.f_locals.get("targets")
+            and proposal.get("target") in caller.f_locals.get("targets", [])
+            and proposal.get("assignment_path")
+            == str(Path(getattr(original_args, "assignment", "")).absolute())
+        )
         if (
             parent is None
             or main_admitted is None
@@ -84,17 +98,29 @@ def _register_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
             or parent.f_locals.get("backend") is not backend
             or launcher.f_locals.get("backend") is not backend
             or original_args is not parent.f_locals.get("args")
-            or following is None
-            or following is not driver_args
-            or not isinstance(child, dict)
-            or caller.f_locals.get("finite_frontier") != child.get("finite_frontier")
-            or caller.f_locals.get("targets") != child.get("execution_targets")
+            or (
+                not guard_readmission
+                and (
+                    following is None
+                    or following is not driver_args
+                    or not isinstance(child, dict)
+                    or caller.f_locals.get("finite_frontier") != child.get("finite_frontier")
+                    or caller.f_locals.get("targets") != child.get("execution_targets")
+                )
+            )
             or getattr(original_args, "finite_frontier", None)
             != launcher.f_locals.get("predecessor")
-            or {key: value for key, value in vars(following).items() if key != "finite_frontier"}
-            != {
-                key: value for key, value in vars(original_args).items() if key != "finite_frontier"
-            }
+            or (
+                not guard_readmission
+                and {
+                    key: value for key, value in vars(following).items() if key != "finite_frontier"
+                }
+                != {
+                    key: value
+                    for key, value in vars(original_args).items()
+                    if key != "finite_frontier"
+                }
+            )
         ):
             raise ValueError("finite successor requires the exact CLI-owned child/backend")
         launcher = parent
@@ -4207,8 +4233,13 @@ def _run_pipeline_finite(
                     closer_finite_reentry.ready(path, frontier, target, item)
                     consumed = item.pop("reentry_ready")
                     item.update(status="pending", stage_status="queued")
-                    if consumed.get("kind") == "scope_no_callback_readmission":
+                    if consumed.get("kind") in {
+                        "scope_no_callback_readmission",
+                        "native_guard_readmission",
+                    }:
                         item["scope_readmission_consumed"] = consumed
+                        if consumed.get("kind") == "native_guard_readmission":
+                            item["results"].pop("act", None)
                         # The original no-start proof remains in immutable audits
                         # and history; it cannot describe this new running request.
                         for key in (
@@ -4346,6 +4377,12 @@ def _run_pipeline_finite(
                         "frontier_binding": frontier["bindings"][target],
                         "state_path": str(path),
                         "pipeline_run_id": run_id,
+                        "guard_readmission": (
+                            item.get("scope_readmission_consumed")
+                            if item.get("scope_readmission_consumed", {}).get("kind")
+                            == "native_guard_readmission"
+                            else None
+                        ),
                         "action_state_path": str(
                             path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
                         ),
