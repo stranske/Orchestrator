@@ -5,9 +5,11 @@ import time
 from closer_role_support import install_synthetic_role_verdict
 from test_closer_batch_interpretation import OfflineDelivery, callbacks_for
 from test_closer_disposition import TARGET
+from test_closer_evidence_recovery import recovery_callbacks
 
 import adapters
 import closer_dispatcher as closer
+import closer_evidence_recovery as recovery
 import dispatcher
 import execution_profiles
 
@@ -55,3 +57,42 @@ def test_nonfinite_tool_boundary_refusal_is_owned_pending_not_invalid_run(tmp_pa
     assert result["classification"] == "assessment_transport_unavailable"
     assert result["pending_evidence"]["transport_refusal"]["run_id"] is None
     assert result["authority"] is False
+
+
+def test_known_not_started_transport_refusal_releases_only_its_collection_attempt(
+    tmp_path, monkeypatch
+):
+    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
+    target = context["prepare"]["snapshot"]["target"]
+    original_offload = dispatcher.offload
+    refusals = []
+
+    def refused(*args, **kwargs):
+        refusals.append(kwargs)
+        return {
+            "exit": 2,
+            "run_id": None,
+            "unsupported_assessment_tool_boundary": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+        }
+
+    monkeypatch.setattr(dispatcher, "offload", refused)
+    first = callbacks["interpret"](target, context)
+    assert first["classification"] == "assessment_transport_unavailable"
+    assert len(refusals) == 1 and refusals[0]["data_only"] is True
+    assert not calls and not refreshes
+    snapshot = context["prepare"]["snapshot"]
+    store = recovery.RecoveryStore(tmp_path / "state.json.evidence")
+    with store.locked(recovery.digest(recovery.binding(snapshot))) as journal:
+        assert len(journal["attempts"]) == 1
+        assert next(iter(journal["attempts"].values()))["state"] == "not_started"
+
+    # The same unchanged packet can now use the restored confined transport;
+    # no new observation or artificial retry token is needed for a proven
+    # no-spawn refusal. The real recovery journal and rescreen remain active.
+    monkeypatch.setattr(dispatcher, "offload", original_offload)
+    second = callbacks["interpret"](target, context)
+    assert second["evidence_recovery"]["outcome"] == "recovered"
+    assert len(calls) == 2 and refreshes == [{"diff_files"}]
+    assert second["authority"] is False
