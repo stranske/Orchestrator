@@ -755,7 +755,11 @@ def _backend(manifest_path: str, doc: Mapping[str, Any]):
         dispatcher.GitHub(deadline=time.time() + 120),
         state_path=Path(cfg["dispatch_state"]),
         apply=False,
-        workers=False,
+        # Evaluate the ordinary successor route without suppressing NON_PASS
+        # applicability merely because this collector performs no execution.
+        # apply=False remains the execution fence; fresh native PREPARE still
+        # owns role qualification, capacity and all guarded action admission.
+        workers=True,
         runtime_binding=binding_from_manifest(manifest_path),
         require_runtime_binding=True,
     )
@@ -817,12 +821,6 @@ def _probe_ci(
 
     snapshot = _backend(manifest_path, doc).observe(record["target"])
     snapshot["observed_at"] = time.time()
-    prepared = (row.get("results") or {}).get("prepare", {})
-    original = prepared.get("snapshot") or {}
-    if snapshot.get("head") != original.get("head") or snapshot.get("merge") != original.get(
-        "merge"
-    ):
-        raise ValueError("CI follow-up head or merge identity changed")
     if record["release_proof"]["kind"] != "accepted_verifier_terminal":
         return {"status": "waiting", "reason": "fresh CI requires a normally admitted new frontier"}
     source = Path(record["source"]["state_path"])
@@ -839,6 +837,10 @@ def _probe_ci(
     )
     if accepted is None:
         raise ValueError("CI hold lacks original accepted request proof")
+    # PREPARE's compact snapshot intentionally omits merge. The authenticated
+    # original queue request, rather than that summary, binds both identities.
+    if any(snapshot.get(name) != accepted.get(name) for name in ("head", "merge")):
+        raise ValueError("CI follow-up head or merge identity changed")
     terminal = followup.terminal_proof(action_path, record["target"], accepted, snapshot)
     if terminal is None:
         return {

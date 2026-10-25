@@ -4760,29 +4760,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             events = receipt.get("events")
             if not isinstance(events, list):
                 return None
-            submitted = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "operation_submitted"
-                and event.get("target") == target
-                and event.get("operation_id") == operation.get("id")
-                and event.get("action") == operation.get("action")
-                for event in events
-            )
-            advanced = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "action_advanced"
-                and event.get("target") == target
-                and event.get("action") == operation.get("action")
-                and isinstance(event.get("revision"), str)
-                and event["revision"]
-                and event["revision"] != operation.get("revision")
-                for event in events
-            )
-            # The queue may refresh metadata again after the first action
-            # transition. Its validated final row need not repeat that first
-            # revision; the exact completed operation and both causal events do.
+            # Shared exact event validation also authenticates a completed
+            # verification POST's same-pass result-wait boundary.
             if (operation.get("action") == "merge" and row.get("action") == "merge") or not (
-                submitted and advanced
+                closer_queue.completed_progress_events(receipt, target, operation)
             ):
                 return None
             progress_key = digest(
@@ -7385,20 +7366,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     },
                     "queue_receipt": receipt,
                 }
-        if finite_frontier is not None:
-            progress = verified_finite_partial_progress(target, action_state, row, receipt)
-            if progress is not None:
-                return progress
         if (
             receipt.get("stop_valid") is True
-            and row.get("eligible") is False
             and row.get("status") in {"deferred", "ineligible"}
             and row.get("action") in {"wait", "collect_evidence"}
-            and reason
-            in {
-                "same verification request already accepted",
-                "collect terminal or unattributed verifier evidence; do not rerun",
-            }
+            and (
+                (
+                    row.get("eligible") is False
+                    and reason
+                    in {
+                        "same verification request already accepted",
+                        "collect terminal or unattributed verifier evidence; do not rerun",
+                    }
+                )
+                or verified_finite_partial_progress(target, action_state, row, receipt) is not None
+            )
         ):
             inner = queue_item_readback(action_state, target)
             fresh = inner.get("evidence") if isinstance(inner, dict) else None
@@ -7408,26 +7390,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 and inner.get("observation_freshness") == "fresh"
                 and inner.get("revision") == row.get("revision")
                 and fresh.get("target") == target
-                and current.select(fresh)[1] == reason
+                and current.select(fresh)[1] == inner.get("reason")
+                and inner.get("reason")
+                in {
+                    "same verification request already accepted",
+                    "collect terminal or unattributed verifier evidence; do not rerun",
+                }
                 and fresh.get("head") == prep_snapshot.get("head")
                 and fresh.get("merge") == prep_snapshot.get("merge")
                 else None
             )
             if isinstance(accepted, dict):
+                pending_evidence = {
+                    "event_id": accepted["request_basis"],
+                    "operation_id": accepted["operation_id"],
+                    "target": target,
+                    "head": fresh["head"],
+                    "merge": fresh["merge"],
+                    "observed_revision": row["revision"],
+                }
+                proof = (
+                    closer_queue.accepted_verifier_wait_proof(
+                        action_state,
+                        target,
+                        frontier=finite_frontier,
+                        receipt=receipt,
+                        evidence=pending_evidence,
+                    )
+                    if finite_frontier is not None
+                    else None
+                )
+                if finite_frontier is not None and proof is None:
+                    accepted = None
+            if isinstance(accepted, dict):
                 return {
                     "status": "pending",
                     "pending_kind": "external_event",
                     "next_trigger": "authenticated verifier result or supported request reconciliation",
-                    "pending_evidence": {
-                        "event_id": accepted["request_basis"],
-                        "operation_id": accepted["operation_id"],
-                        "target": target,
-                        "head": fresh["head"],
-                        "merge": fresh["merge"],
-                        "observed_revision": row["revision"],
-                    },
+                    "pending_evidence": pending_evidence,
                     "queue_receipt": receipt,
                 }
+        # An authenticated accepted request is an owned result wait even when
+        # this same queue pass also advanced the original POST. Preserve its
+        # typed wait before the general finite partial-progress fallback.
+        if finite_frontier is not None:
+            progress = verified_finite_partial_progress(target, action_state, row, receipt)
+            if progress is not None:
+                return progress
         if (
             receipt.get("stop_valid")
             and row.get("eligible")

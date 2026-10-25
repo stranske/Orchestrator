@@ -928,6 +928,31 @@ def validate_stop(
         )
 
 
+def completed_progress_events(receipt, target, operation):
+    """Exact submitted/advanced causal events shared by finite progress and waits."""
+    events = receipt.get("events")
+    if not isinstance(events, list):
+        return False
+    return any(
+        isinstance(event, Mapping)
+        and event.get("kind") == "operation_submitted"
+        and event.get("target") == target
+        and event.get("operation_id") == operation.get("id")
+        and event.get("action") == operation.get("action")
+        for event in events
+    ) and any(
+        isinstance(event, Mapping)
+        and event.get("kind") == "action_advanced"
+        and event.get("target") == target
+        and event.get("action") == operation.get("action")
+        and event.get("operation_id", operation.get("id")) == operation.get("id")
+        and isinstance(event.get("revision"), str)
+        and bool(event["revision"])
+        and event["revision"] != operation.get("revision")
+        for event in events
+    )
+
+
 def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evidence):
     """Authenticate a completed request awaiting its result, never a no-effect retry.
 
@@ -978,15 +1003,37 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
             row = matched[0]
             item = selected["items"][target]
             snapshot = item.get("evidence") or {}
+            accepted_reasons = {
+                "same verification request already accepted",
+                "collect terminal or unattributed verifier evidence; do not rerun",
+            }
+            legacy_wait = (
+                row.get("eligible") is False
+                and row.get("action") in {"wait", "collect_evidence"}
+                and row.get("reason") in accepted_reasons
+                and row.get("status") in {"deferred", "ineligible"}
+            )
+            progress_wait = (
+                row.get("eligible") is True
+                and row.get("action") == "collect_evidence"
+                and row.get("reason") == "pass_limit"
+                and row.get("status") == "deferred"
+                and row.get("operation_status") == "completed"
+                and row.get("operation_id") == evidence["operation_id"]
+                and item.get("eligible") is True
+                and item.get("action") == row.get("action")
+                and item.get("revision") == row.get("revision")
+                and snapshot.get("revision") == row.get("revision")
+                and item.get("reason") in accepted_reasons
+                and item.get("provider_outcome_uncertain") in (None, False)
+                and item.get("recovery_barrier") is None
+                and all(
+                    item.get(key) in (None, False)
+                    for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                )
+            )
             if (
-                row.get("eligible") is not False
-                or row.get("action") not in {"wait", "collect_evidence"}
-                or row.get("reason")
-                not in {
-                    "same verification request already accepted",
-                    "collect terminal or unattributed verifier evidence; do not rerun",
-                }
-                or row.get("status") not in {"deferred", "ineligible"}
+                not (legacy_wait or progress_wait)
                 or item.get("observation_freshness") != "fresh"
                 or evidence.get("observed_revision") != row.get("revision")
                 or snapshot.get("target") != target
@@ -1014,6 +1061,15 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
                 expected = policy["bindings"].get(target) or {}
                 if (
                     operation.get("finite_frontier") == policy
+                    and (
+                        not progress_wait
+                        or (
+                            policy == frontier
+                            and (selected["items"][target].get("operation") or {}).get("id")
+                            == operation.get("id")
+                            and completed_progress_events(receipt, target, operation)
+                        )
+                    )
                     and operation.get("revision") == expected.get("revision")
                     and action_identity(
                         target, operation.get("revision"), operation.get("action"), binding

@@ -281,6 +281,8 @@ def test_accepted_post_and_general_green_ci_do_not_prove_verifier_terminal(tmp_p
         lambda *a, **k: {
             "schema": "closer-accepted-verifier-wait/v1",
             "operation_id": "operation-original",
+            "head": snapshot["head"],
+            "merge": snapshot["merge"],
         },
     )
     result = holds._probe_ci(record, "offline-manifest.json", obj.read(), row)
