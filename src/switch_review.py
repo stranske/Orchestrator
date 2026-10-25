@@ -61,6 +61,7 @@ from pathlib import Path
 
 import capabilities
 import paths
+import python_standard_audit
 
 # How long a switch may sit unreviewed before the question comes back.
 REVIEW_DAYS = 7
@@ -1734,6 +1735,7 @@ def review(
     sources: Mapping[str, str] | None = None,
     value_chain_inputs: dict | None = None,
     credential_exposure_report: dict | None = None,
+    python_standard_report: dict | None = None,
     feature_goals_fn=None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why.
@@ -1834,6 +1836,8 @@ def review(
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
         "weekly_pacing": weekly_pacing_check(now=now),
+        # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
+        "python_standard": python_standard_report,
         # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
         # put it. FYI only, real clock, never counted in `raise_count`.
         "worktree_git_refusals": worktree_git_refusals(),
@@ -2364,6 +2368,7 @@ def format_report(rep: dict) -> str:
         lines += format_gate_expiry(expiry)
     if rep.get("weekly_pacing") is not None:
         lines += [rep["weekly_pacing"], ""]
+    lines += [python_standard_audit.format_line(rep.get("python_standard") or {}), ""]
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
@@ -3186,6 +3191,7 @@ def main(argv: list[str]) -> int:
         sources=sources,
         value_chain_inputs=value_chain_inputs,
         credential_exposure_report=credential_exposure(),
+        python_standard_report=python_standard_audit.snapshot(),
     )
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.

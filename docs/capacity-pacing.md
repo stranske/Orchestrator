@@ -404,6 +404,31 @@ decisions with recorded exits, and the `switch_review.py --text-out` monitor row
 for `windowed-capacity-policy` with `acted_on > 0` and `outcome > 0`. This live
 check is separate from the repository's offline tests.
 
+## Python standard audit (#668)
+
+The weekly `switch_review.py --text-out PATH` sweep also prints one `Python standard:`
+health line beside the capacity health sections. The read-only launchd audit counts
+`com.stranske.`, `com.openai.codex.`, and `com.codex.` entrypoints on unsupported Python,
+including Python 3.9, anaconda 3.12 and `other` versions. The JSON `bad` and `drainable`
+counts include all known unsupported jobs; the line names at most five legacy
+offenders with `+N more`, prints a separate `other: n (<names>)`, and reports the one-line
+migration count and `~/.codex/orchestrator/python-migration/inventory.md` reference.
+For the 2026-10-31 check this count must be zero; the drained line requires no known
+unsupported versions or missing measurements and at least one matching job. An empty
+population prints `unmeasured — would need >=1 matching job`. Partial measurements
+retain known counts and offenders alongside `unmeasured: <missing measurements>`;
+zero known bad jobs never print `blocking`. Non-Python jobs remain in the job
+population without adding offenders. Missing LaunchAgents (including CI), unreadable
+scripts/plists, dynamic PATHs, or failed lookups always identify the missing
+measurement, never print drained. `python3 src/python_standard_audit.py [--json]` exposes the same
+snapshot, classifications and interpreter evidence independently. Bare Python lookup
+runs in a controlled shell with the job's PATH and login flag; simple script PATH
+assignments are followed. This is entry-script inspection, not execution tracing of
+arbitrary descendants, shell branches, or dynamically constructed commands. Standard
+selector references count as standard intent; independent bare or hard-coded legacy
+references still win. The
+audit never edits launchd jobs, runs their bodies, or changes scheduling gates.
+
 ## Relay monitor population (#812)
 
 The `windowed-capacity-policy` row in `switch_review.py --text-out` measures relay
