@@ -479,11 +479,13 @@ def recheck_merged(
         if allow_command_checks is None
         else bool(allow_command_checks)
     )
+    interpreter = None
     try:
         current = copy.deepcopy(spec)
         context = current.setdefault("runtime_context", {})
         context["worktree"] = str(merged_worktree)
-        context["python_interpreter"] = _worktree_interpreter(merged_worktree)
+        interpreter = _worktree_interpreter(merged_worktree)
+        context["python_interpreter"] = interpreter
         for criterion in current.get("acceptance_criteria", []):
             for check in criterion.get("checks", []):
                 if check.get("type") == "deliberate_break":
@@ -608,7 +610,12 @@ def recheck_merged(
             "transcript": json.dumps(run, indent=2, default=str),
         }
     except Exception as exc:
-        return {"result": "UNRUNNABLE", "reason": "tool_error", "transcript": str(exc)}
+        return {
+            "result": "UNRUNNABLE",
+            "reason": "tool_error",
+            "interpreter": interpreter,
+            "transcript": str(exc),
+        }
 
 
 def post_merge_summary() -> dict:

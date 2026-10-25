@@ -12,8 +12,11 @@ import unittest
 import venv
 import zipfile
 from contextlib import contextmanager
+from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
+
+from packaging.requirements import Requirement
 
 import backlog
 import durability_sweep
@@ -557,8 +560,109 @@ class PostMergeBreakTests(unittest.TestCase):
         ):
             result = gate.recheck_merged(spec, self.checkout)
         self.assertEqual((result["result"], result["reason"]), ("UNRUNNABLE", "tool_error"))
+        self.assertIsNone(result["interpreter"])
         verify.assert_not_called()
         self.assertFalse((self.checkout / ".venv").exists())
+
+    def test_runner_error_preserves_selected_worktree_interpreter(self):
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
+        )
+        interpreter = str(self.checkout / ".venv/bin/python")
+        with (
+            patch.object(gate, "_worktree_interpreter", return_value=interpreter),
+            patch.object(runtime_ac, "run_verification", side_effect=RuntimeError("runner failed")),
+        ):
+            result = gate.recheck_merged(spec, self.checkout)
+        self.assertEqual((result["result"], result["reason"]), ("UNRUNNABLE", "tool_error"))
+        self.assertEqual(result["interpreter"], interpreter)
+        self.assertIn("runner failed", result["transcript"])
+
+    def test_fresh_worktree_installs_repository_and_runs_pytest_offline(self):
+        # Repackage the test runner's installed pytest and its dependencies so the
+        # real provisioning path can run without network access or a shared venv.
+        wheelhouse = self.root / "wheels"
+        wheelhouse.mkdir()
+        pending = ["pytest"]
+        copied = set()
+        while pending:
+            name = pending.pop()
+            distribution = metadata.distribution(name)
+            name = distribution.metadata["Name"]
+            if name in copied:
+                continue
+            copied.add(name)
+            for requirement in distribution.requires or []:
+                requirement = Requirement(requirement)
+                if requirement.marker is None or requirement.marker.evaluate():
+                    pending.append(requirement.name)
+            tag = next(
+                line.removeprefix("Tag: ")
+                for line in distribution.read_text("WHEEL").splitlines()
+                if line.startswith("Tag: ")
+            )
+            filename = f"{name.replace('-', '_')}-{distribution.version}-{tag}.whl"
+            with zipfile.ZipFile(wheelhouse / filename, "w") as archive:
+                for entry in distribution.files:
+                    if ".." not in entry.parts and entry.suffix != ".pyc":
+                        archive.write(distribution.locate_file(entry), str(entry))
+
+        package = self.checkout / "src/runtime_delivery"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("DELIVERED = True\n")
+        (self.checkout / "pyproject.toml").write_text(
+            '[project]\nname = "runtime-delivery"\nversion = "1.0"\n'
+            '[build-system]\nrequires = []\nbuild-backend = "delivery_backend"\n'
+            'backend-path = ["."]\n'
+        )
+        # A stdlib-only backend installs the actual checkout's source, avoiding a
+        # dependency on setuptools being present in the host or the new venv.
+        (self.checkout / "delivery_backend.py").write_text(
+            "from pathlib import Path\nimport zipfile\n\n"
+            "def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\n"
+            "    filename = 'runtime_delivery-1.0-py3-none-any.whl'\n"
+            "    with zipfile.ZipFile(Path(wheel_directory) / filename, 'w') as archive:\n"
+            "        archive.write('src/runtime_delivery/__init__.py', "
+            "'runtime_delivery/__init__.py')\n"
+            "        archive.writestr('runtime_delivery-1.0.dist-info/METADATA', "
+            "'Metadata-Version: 2.1\\nName: runtime-delivery\\nVersion: 1.0\\n')\n"
+            "        archive.writestr('runtime_delivery-1.0.dist-info/WHEEL', "
+            "'Wheel-Version: 1.0\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n')\n"
+            "        archive.writestr('runtime_delivery-1.0.dist-info/RECORD', '')\n"
+            "    return filename\n"
+        )
+        interpreter = str(self.checkout / ".venv/bin/python")
+        tests = self.checkout / "tests"
+        tests.mkdir()
+        child = (
+            "import sys, runtime_delivery; "
+            f"assert sys.executable == {interpreter!r}; "
+            f"assert runtime_delivery.__file__.startswith({str(self.checkout / '.venv')!r}); "
+            "assert runtime_delivery.DELIVERED"
+        )
+        (tests / "test_delivery.py").write_text(
+            "import subprocess, sys\n\n"
+            "def test_installed_delivery():\n"
+            f"    subprocess.run([sys.executable, '-c', {child!r}], "
+            f"cwd={str(self.root)!r}, check=True)\n"
+        )
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
+        )
+        self.assertFalse((self.checkout / ".venv").exists())
+        with patch.dict(
+            os.environ,
+            PIP_NO_INDEX="1",
+            PIP_FIND_LINKS=str(wheelhouse),
+            PYTHONPATH="/scheduler/src",
+        ):
+            result = gate.recheck_merged(spec, self.checkout)
+        self.assertEqual(result["result"], "PASS", result)
+        self.assertEqual(result["interpreter"], interpreter)
+        row = json.loads(result["transcript"])["check_results"][0]
+        self.assertEqual(row["interpreter"], interpreter)
+        self.assertEqual(shlex.split(row["command"])[0], interpreter)
+        self.assertIn("1 passed", row["stdout_tail"])
 
     def test_tool_only_pyproject_does_not_require_a_distribution(self):
         (self.checkout / "pyproject.toml").write_text("[tool.black]\nline-length = 100\n")
@@ -776,6 +880,7 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(summary["errors"], [])
         self.assertIn(["gh", "api", "repos/owner/repo/issues/1"], calls)
         self.assertFalse(any("PATCH" in call for call in calls))
+        self.assertFalse(any("labels[]=runtime-ac:reopened" in call for call in calls))
         payload = self.post_merge_payloads()[0]
         self.assertFalse(payload["reopened"])
         self.assertTrue(payload["already_open"])

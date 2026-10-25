@@ -1509,19 +1509,20 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                             else:
                                 raise RuntimeError("source issue state unavailable")
                             persist()
-                        _, error = gh(
-                            [
-                                "gh",
-                                "api",
-                                "-X",
-                                "POST",
-                                f"repos/{repo}/issues/{issue_number}/labels",
-                                "-f",
-                                "labels[]=runtime-ac:reopened",
-                            ]
-                        )
-                        if error:
-                            raise RuntimeError(error)
+                        if result.get("reopened"):
+                            _, error = gh(
+                                [
+                                    "gh",
+                                    "api",
+                                    "-X",
+                                    "POST",
+                                    f"repos/{repo}/issues/{issue_number}/labels",
+                                    "-f",
+                                    "labels[]=runtime-ac:reopened",
+                                ]
+                            )
+                            if error:
+                                raise RuntimeError(error)
                 result["delivery_complete"] = True
                 persist()
         except Exception as exc:
