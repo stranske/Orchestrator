@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -22,6 +23,113 @@ FINAL_SCHEMA = "native-descendant-receipts-finalized/v1"
 CONTINUATION_SCHEMA = "native-descendant-continuation/v1"
 MAX_LEAVES = 1024
 MAX_BYTES = 4 * 1024 * 1024
+# One scan includes the existing native package/interpreter pin checks and
+# conservative framework rereads. Neither bound grows with campaign history.
+MAX_HISTORY_BYTES = 32 * MAX_BYTES
+MAX_HISTORY_ROWS = 64
+
+
+class _HistoryBudgetExceeded(ValueError):
+    """A cumulative history bound cannot be ignored as one missing proof."""
+
+
+class _HistoryBudget:
+    def __init__(self):
+        self.bytes_left = MAX_HISTORY_BYTES
+        self.rows_left = MAX_HISTORY_ROWS
+        self.reserved = {}
+        self._authority_value = None
+        self.campaign_doc = None
+        self.campaign_path = None
+
+    def reserve_path(self, path, *, copies=1):
+        """Precharge bounded framework rereads; changing sources fail closed."""
+        path = _physical(path)
+        current = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(current.st_mode):
+            raise ValueError("descendant history source is not a regular file")
+        amount = current.st_size * copies
+        if amount > self.bytes_left:
+            raise _HistoryBudgetExceeded(
+                f"descendant history source byte budget exhausted ({path.name}: {amount}>{self.bytes_left})"
+            )
+        self.bytes_left -= amount
+        identity = tuple(
+            getattr(current, key)
+            for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        )
+        if path in self.reserved and self.reserved[path] != identity:
+            raise ValueError("descendant history source changed during validation")
+        self.reserved[path] = identity
+
+    def verify_sources(self):
+        for path, expected in self.reserved.items():
+            current = path.stat(follow_symlinks=False)
+            actual = tuple(
+                getattr(current, key)
+                for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            )
+            if not stat.S_ISREG(current.st_mode) or actual != expected:
+                raise ValueError("descendant history source changed during validation")
+
+    def authority(self, cfg):
+        if self._authority_value is None:
+            # The unchanged native validator hashes these pins repeatedly.
+            # Reserve its reads once per scan, then retain the verified snapshot.
+            manifest_path = _physical(cfg["runtime_manifest"])
+            manifest = json.loads(self.read(manifest_path))
+            self.reserve_path(manifest_path, copies=3)
+            for name in manifest.get("modules") or {}:
+                self.reserve_path(Path(manifest["module_dir"]) / name)
+            public = manifest.get("public_runtime_descriptor")
+            if public:
+                self.reserve_path(Path(manifest["module_dir"]) / public)
+                self.reserve_path(
+                    Path(manifest["portable"]["package_root"]) / "closer-core-package.json"
+                )
+            context = cfg["native_admission"]
+            contract = manifest["mechanism_contract"]
+            root = _physical(contract["observation_root"])
+            for key in ("wrapper", "interpreter"):
+                self.reserve_path(contract[key]["path"], copies=8)
+            for path in (manifest.get("policy") or {}).get("toml_sha256", {}):
+                self.reserve_path(path, copies=16)
+            self.reserve_path(root / context["nonce"] / "admission.json")
+            self.reserve_path(context["assignment"]["path"], copies=3)
+            self.reserve_path(context["report"]["path"], copies=2)
+            if "workspace_config" in context:
+                self.reserve_path(context["workspace_config"]["path"])
+            self.reserve_path(root / "supervisor.key", copies=8)
+            worker_id = Path(cfg["native_worker"]["result"]).stem
+            self.reserve_path(root / context["nonce"] / ("worker-" + worker_id + ".json"))
+            self._authority_value = _authority(cfg)
+            self.verify_sources()
+        return self._authority_value
+
+    def read(self, path, limit=MAX_BYTES):
+        import closer_native_observer as native
+
+        # A failed/oversized read spends its allowance too; malformed workers
+        # cannot reset the shared budget by raising a recoverable proof error.
+        allowance = min(limit, self.bytes_left)
+        if allowance <= 0:
+            raise _HistoryBudgetExceeded("descendant history byte budget exhausted")
+        try:
+            raw = native._bounded_bytes(path, allowance)
+        except (OSError, ValueError, RuntimeError):
+            self.bytes_left -= allowance
+            if self.bytes_left <= 0:
+                raise _HistoryBudgetExceeded("descendant history byte budget exhausted") from None
+            raise
+        self.bytes_left -= len(raw)
+        return raw
+
+    def rows(self, count):
+        if count > self.rows_left:
+            raise _HistoryBudgetExceeded("descendant history leaf validation budget exhausted")
+        self.rows_left -= count
+
+
 _ROUND = re.compile(r"[0-9a-f]{16,64}")
 
 
@@ -99,7 +207,7 @@ def _authority(cfg):
     return manifest, context, native.contract(manifest)[3], cohort
 
 
-def _receipt(cfg, ref, targets, frontier):
+def _receipt(cfg, ref, targets, frontier, *, _history_budget=None):
     import closer_resources as resources
 
     pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
@@ -110,8 +218,13 @@ def _receipt(cfg, ref, targets, frontier):
     path = root / "rounds" / (rid + ".json")
     if str(path) != ref.get("receipt_path") or _physical(path) != path:
         raise ValueError("descendant receipt path differs")
+    if _history_budget is not None:
+        _history_budget.reserve_path(path, copies=2)  # direct read + validate_stop reread
+        _history_budget.reserve_path(root / "contract.json")
     receipt, sha = resources.read_round_receipt(path)
     verdict = resources.validate_stop(pipeline, rid, targets)
+    if _history_budget is not None:
+        _history_budget.verify_sources()
     if not (
         receipt.get("schema") == "closer-pipeline-receipt/v1"
         and receipt.get("mode") == "resource_scoped"
@@ -255,18 +368,24 @@ def _write_signed(path, record, root):
     return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def _read_signed(cfg, ref):
+def _read_signed(cfg, ref, *, _history_budget=None):
     import closer_mechanisms as mechanisms
     import closer_native_observer as native
 
-    _manifest, _context, root, cohort = _authority(cfg)
+    _manifest, _context, root, cohort = (
+        _history_budget.authority(cfg) if _history_budget is not None else _authority(cfg)
+    )
     path = _physical(ref["path"])
     if path.parent.parent != root or path.name not in {
         "descendant-receipts.json",
         "descendant-receipts-finalized.json",
     }:
         raise ValueError("descendant bundle escapes original observer root")
-    raw = native._bounded_bytes(path, MAX_BYTES)
+    raw = (
+        _history_budget.read(path)
+        if _history_budget is not None
+        else native._bounded_bytes(path, MAX_BYTES)
+    )
     signed = json.loads(raw)
     record = signed["record"]
     if not (
@@ -281,17 +400,30 @@ def _read_signed(cfg, ref):
     return record
 
 
-def _actual_known_worker(cfg, record, ref, *, allow_unknown=False):
+def _actual_known_worker(cfg, record, ref, *, allow_unknown=False, _history_budget=None):
     import closer_campaign as campaign
     import closer_mechanisms as mechanisms
     import closer_native_observer as native
 
-    manifest, _context, root, _cohort = _authority(cfg)
+    manifest, _context, root, _cohort = (
+        _history_budget.authority(cfg) if _history_budget is not None else _authority(cfg)
+    )
     worker = record["worker"]
     result_path = _physical(worker["result"])
-    result = native._read(result_path)
+    result_raw = (
+        _history_budget.read(result_path)
+        if _history_budget is not None
+        else native._bounded_bytes(result_path, MAX_BYTES)
+    )
+    result = json.loads(result_raw)
     worker_id = result_path.stem
-    doc = campaign.Campaign(_physical(worker["state"])).read()
+    state_path = _physical(worker["state"])
+    if _history_budget is not None and state_path == _history_budget.campaign_path:
+        doc = _history_budget.campaign_doc
+    else:
+        if _history_budget is not None:
+            _history_budget.reserve_path(state_path)
+        doc = campaign.Campaign(state_path).read()
     workers = (doc or {}).get("workers", [])
     if (
         not isinstance(workers, list)
@@ -300,12 +432,18 @@ def _actual_known_worker(cfg, record, ref, *, allow_unknown=False):
     ):
         raise ValueError("descendant worker registry is malformed or exceeds bound")
     matches = [item for item in workers if item.get("worker_id") == worker_id]
-    handoff = native._read(root / record["admission_nonce"] / ("worker-" + worker_id + ".json"))
+    handoff_path = root / record["admission_nonce"] / ("worker-" + worker_id + ".json")
+    handoff = (
+        json.loads(_history_budget.read(handoff_path))
+        if _history_budget is not None
+        else native._read(handoff_path)
+    )
     original = handoff["record"]
     detail = json.loads(result["detail"])
     if not (
         len(matches) == 1
         and str(result_path) == str(campaign.result_path(Path(worker["state"]), worker_id))
+        and worker.get("state") == record["cohort"]["campaign"]["state"]
         and doc.get("owner") == record["cohort"]["campaign"]["owner"]
         and doc.get("campaign_id") == record["cohort"]["campaign"]["campaign_id"]
         and matches[0].get("state") == "terminal"
@@ -326,7 +464,7 @@ def _actual_known_worker(cfg, record, ref, *, allow_unknown=False):
         and worker.get("mechanism") == "native-handoff/v1"
         and worker.get("runtime-manifest") == str(Path(cfg["runtime_manifest"]))
         and doc.get("release_pin") == manifest["package_digest"]
-        and original.get("binding") == native.binding(manifest)
+        and original.get("binding") == _cohort["runtime_binding"]
         and original.get("admission") == record["admission"]
         and result.get("native_admission") == record["admission"]
         and hmac.compare_digest(
@@ -338,12 +476,12 @@ def _actual_known_worker(cfg, record, ref, *, allow_unknown=False):
     return {
         "worker_id": worker_id,
         "result_path": str(result_path),
-        "result_sha256": hashlib.sha256(native._bounded_bytes(result_path, MAX_BYTES)).hexdigest(),
+        "result_sha256": hashlib.sha256(result_raw).hexdigest(),
         "bundle_ref": dict(ref),
     }
 
 
-def _validate_covered(cfg, rows):
+def _validate_covered(cfg, rows, *, _history_budget=None):
     """Validate covered historical prefixes without asserting they remain active."""
     import closer_pipeline as pipeline
     import closer_resources as resources
@@ -358,6 +496,36 @@ def _validate_covered(cfg, rows):
             raise ValueError("descendant covered foreign target")
         shard = resources.shard_dir(root, target) / "state.json"
         actions = shard.parent / "state.actions" / (pipeline._digest(target) + ".json")
+        if _history_budget is not None:
+            # Existing lineage validation is at most eight hops. Reserve a
+            # conservative 32 reads of each mutable source, plus legacy inputs
+            # used by the unchanged resource validator; never multiply by workers.
+            _history_budget.reserve_path(shard, copies=32)
+            if actions.exists():
+                _history_budget.reserve_path(actions, copies=32)
+            for legacy in (
+                Path(cfg["dispatch_state"]),
+                Path(str(cfg["dispatch_state"]) + ".pipeline.json"),
+            ):
+                if legacy.exists():
+                    _history_budget.reserve_path(legacy, copies=4)
+            # linked_chain only reads the already-reserved in-memory shard and
+            # bounds traversal to eight validated hops. active_leaf subsequently
+            # opens retained proof files outside the live shard/queue: charge
+            # those exact references before entering that framework read path.
+            indexed = pipeline._load(shard)
+            indexed_chain, _current, _entry = stages.linked_chain(
+                indexed, cfg["finite_frontier"], target
+            )
+            for hop in indexed_chain:
+                lineage = hop["record"]["stage_predecessor"]
+                if lineage.get("kind") != "ci_no_effect_wait":
+                    continue
+                _history_budget.reserve_path(lineage["original_queue"]["path"], copies=2)
+                prep = (hop["item"].get("results") or {}).get("prepare") or {}
+                snapshot = prep.get("snapshot_ref")
+                if snapshot is not None:
+                    _history_budget.reserve_path(snapshot["path"], copies=2)
         leaf = stages.active_leaf(shard, actions, cfg["finite_frontier"], target)
         chain = leaf["chain"]
         matches = [
@@ -374,7 +542,13 @@ def _validate_covered(cfg, rows):
         state = pipeline._load(shard)
         entry = state["frontiers"][covered["frontier"]["frontier_id"]]
         row = entry["items"][target]
-        receipt, _verdict = _receipt(cfg, covered["receipt_ref"], [target], covered["frontier"])
+        receipt, _verdict = _receipt(
+            cfg,
+            covered["receipt_ref"],
+            [target],
+            covered["frontier"],
+            _history_budget=_history_budget,
+        )
         if (
             covered["source_row_sha256"] != _digest(row)
             or covered["chain_sha256"] != _digest(links)
@@ -384,15 +558,15 @@ def _validate_covered(cfg, rows):
             raise ValueError("descendant historical receipt/source/lineage changed")
 
 
-def observed_leaves(cfg, ref, *, require_finalized=True):
+def observed_leaves(cfg, ref, *, require_finalized=True, _history_budget=None):
     """Read actual terminal-worker evidence, never a self-signed bundle alone.
 
     Returns every covered prefix; consumers select active rows. UNKNOWN is only
     observable with require_finalized=False, and never supplies historical release.
     """
-    record = _read_signed(cfg, ref)
+    record = _read_signed(cfg, ref, _history_budget=_history_budget)
     if record.get("schema") == FINAL_SCHEMA:
-        sealed = _read_signed(cfg, record["sealed_bundle"])
+        sealed = _read_signed(cfg, record["sealed_bundle"], _history_budget=_history_budget)
         if sealed.get("schema") != SCHEMA or record.get("sealed_sha256") != _digest(sealed):
             raise ValueError("descendant finalized bundle no longer binds original receipt")
         if any(item["domain"] == "unknown" for item in sealed["leaves"]):
@@ -401,17 +575,29 @@ def observed_leaves(cfg, ref, *, require_finalized=True):
         if require_finalized or record.get("schema") != SCHEMA:
             raise ValueError("descendant bundle has no actual cleanup finalization")
         sealed = record
-    source = _actual_known_worker(cfg, record, ref, allow_unknown=not require_finalized)
-    _validate_covered(cfg, sealed["leaves"])
+    if _history_budget is not None:
+        rows = sealed["leaves"]
+        if not isinstance(rows, list):
+            raise ValueError("descendant historical leaves are malformed")
+        _history_budget.rows(len(rows))  # Reserve BEFORE any expensive row/source validation.
+    source = _actual_known_worker(
+        cfg, record, ref, allow_unknown=not require_finalized, _history_budget=_history_budget
+    )
+    _validate_covered(cfg, sealed["leaves"], _history_budget=_history_budget)
+    if _history_budget is not None:
+        _history_budget.verify_sources()
     return [{**copy.deepcopy(row), "source_worker": source} for row in sealed["leaves"]]
 
 
-def _history(cfg):
+def _history(cfg, requested_round_ids=None):
     import closer_campaign as campaign
-    import closer_native_observer as native
 
     worker = cfg["native_worker"]
-    doc = campaign.Campaign(_physical(worker["state"])).read()
+    budget = _HistoryBudget()
+    state_path = _physical(worker["state"])
+    budget.reserve_path(state_path)
+    doc = campaign.Campaign(state_path).read()
+    budget.campaign_path, budget.campaign_doc = state_path, doc
     if (
         not isinstance(doc, Mapping)
         or not isinstance(doc.get("workers"), list)
@@ -420,7 +606,12 @@ def _history(cfg):
     ):
         raise ValueError("descendant worker history exceeds bound")
     leaves = []
-    for prior in doc.get("workers", []):
+    seen_bundles = set()
+    seen_receipts = set()
+    remaining = set(requested_round_ids) if requested_round_ids is not None else None
+    if remaining == set():
+        return leaves
+    for prior in reversed(doc.get("workers", [])):
         if prior.get("state") != "terminal" or prior.get("outcome") not in {
             "ok",
             "scoped_continuation",
@@ -431,11 +622,33 @@ def _history(cfg):
         if not path.exists():
             continue
         try:
-            result = native._read(_physical(path))
+            result = json.loads(budget.read(_physical(path)))
             detail = json.loads(result["detail"])
             ref = detail.get("descendant_bundle")
             if isinstance(ref, Mapping):
-                leaves.extend(observed_leaves(cfg, ref))
+                identity = (ref.get("path"), ref.get("sha256"))
+                if identity in seen_bundles:
+                    continue
+                seen_bundles.add(identity)
+                for row in observed_leaves(cfg, ref, _history_budget=budget):
+                    reference = row["receipt_ref"]
+                    round_id = reference["round_id"]
+                    receipt_key = (
+                        row["target"],
+                        reference["receipt_path"],
+                        reference["receipt_sha256"],
+                    )
+                    if (
+                        remaining is None or round_id in remaining
+                    ) and receipt_key not in seen_receipts:
+                        leaves.append(row)
+                        seen_receipts.add(receipt_key)
+                    if remaining is not None:
+                        remaining.discard(round_id)
+                if remaining == set():
+                    break
+        except _HistoryBudgetExceeded:
+            raise  # Exhaustion is an owned hold, never partial historical authority.
         except (OSError, ValueError, TypeError, KeyError):
             continue  # Missing historical proof never supplies a release.
     return leaves
@@ -464,7 +677,8 @@ def seal_bundle(cfg, candidate, watermark):
     ):
         raise ValueError("descendant original B watermark changed")
     refs = candidate.get("descendant_receipts", [])
-    history = _history(cfg) if any(ref.get("round_id") in watermark[2] for ref in refs) else []
+    requested_history = {ref.get("round_id") for ref in refs if ref.get("round_id") in watermark[2]}
+    history = _history(cfg, requested_history) if requested_history else []
     leaves = _leaves(cfg, refs, watermark[2], history)
     if not leaves:
         return None

@@ -98,3 +98,20 @@ def test_actual_signed_leaf_wait_remains_owned_on_restart_without_terminal_bridg
     assert Path(row["source"]["state_path"]).read_bytes() == before_source
     assert action_path.read_bytes() == before_queue
     assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0
+
+
+def test_actual_authenticated_descendant_metrics_count_completed_request_branch(
+    native_descendant_world,
+):
+    import time
+
+    from closer_stage_feedback import summarize_efficiency
+
+    obj, doc, _row, manifest = captured(native_descendant_world)
+    receipts = holds.validated_receipts(obj, doc, manifest)
+    assert len(receipts) == 3
+    result = summarize_efficiency(receipts, holds=doc["hold_followups"].values(), now=time.time())
+    assert result["observed_branches"]["denominator"] == 2, result["observed_branches"]
+    assert result["observed_branches"]["deterministic_zero_reasoning"] == 2
+    assert result["model_runs"]["count"] == 0
+    assert result["independent_outcomes"]["false_acceptance_rate"] is None

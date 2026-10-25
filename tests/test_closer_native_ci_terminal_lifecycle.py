@@ -102,6 +102,13 @@ def terminal(world, monkeypatch):
         "ci_failed": False,
         "verification_event": event,
         "verification_request_basis": op["result"]["verification_request_basis"],
+        "assessment_identity": {
+            "mode": "compare",
+            "provider": "anthropic",
+            "model": "",
+            "model2": "",
+            "canonical": True,
+        },
     }
     w.snapshot["verifier"] = marker
     w.snapshot["verifier_lifecycle"] = copy.deepcopy(marker)
@@ -130,6 +137,7 @@ def terminal(world, monkeypatch):
         pytest.fail("read-only terminal follow-up attempted an offload")
 
     import dispatcher as offloader
+
     monkeypatch.setattr(offloader, "offload", forbidden)
     observer = holds._backend(cfg["runtime_manifest"], doc)
     assert observer.apply is False and observer.workers is True
@@ -152,7 +160,7 @@ def terminal(world, monkeypatch):
 
 @pytest.mark.parametrize("crash", [False, True], ids=["terminal", "restart-after-intent"])
 def test_actual_signed_leaf_terminal_rearms_only_original_full_cohort(
-    native_descendant_world, monkeypatch, crash
+    native_descendant_world, monkeypatch, crash, capsys
 ):
     w, cfg, obj, manifest, held, source, queue_path = terminal(native_descendant_world, monkeypatch)
     before_source, before_queue = source.read_bytes(), queue_path.read_bytes()
@@ -184,4 +192,36 @@ def test_actual_signed_leaf_terminal_rearms_only_original_full_cohort(
     assert rearmed["hold_followups"][held["hold_id"]]["status"] == "consumed"
     assert holds.rearm(obj, obj.read(), manifest)["generation"] == 2
     assert source.read_bytes() == before_source and queue_path.read_bytes() == before_queue
+    assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0
+    original_row = copy.deepcopy(
+        pipeline._load(source)["frontiers"][held["frontier"]["frontier_id"]]["items"][
+            held["target"]
+        ]
+    )
+    # The next canonical coordinator has no qualified classifier in this
+    # synthetic case. It must create its fresh successor/PREPARE and stop at
+    # that explicit role hold, without reusing the prior accepted ACT.
+    monkeypatch.setattr(dispatcher, "_profile_exception_qualified", lambda *_a, **_k: False)
+    dispatcher.main(w.argv)
+    followed = json.loads(capsys.readouterr().out)
+    state = pipeline._load(source)
+    links = state["stage_successors"]
+    children = [
+        value
+        for value in links.values()
+        if value["stage_predecessor"]["predecessor_frontier_id"] == held["frontier"]["frontier_id"]
+    ]
+    assert len(children) == 1, followed.get("merge_verification_successors")
+    child = children[0]["finite_frontier"]
+    fresh = state["frontiers"][child["frontier_id"]]["items"][held["target"]]
+    assert fresh["results"]["prepare"]["revision"] == "terminal-correlated-current"
+    assert fresh["results"]["prepare"]["snapshot_ref"]
+    assert fresh["status"] == "held" and fresh["stage"] == "interpret", fresh
+    pending = fresh["results"]["interpret"]
+    assert pending["classification"] == "role_qualification_unavailable"
+    assert pending["pending_evidence"]["target"] == held["target"]
+    assert pending["pending_evidence"]["revision"] == child["bindings"][held["target"]]["revision"]
+    assert (
+        state["frontiers"][held["frontier"]["frontier_id"]]["items"][held["target"]] == original_row
+    )
     assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0
