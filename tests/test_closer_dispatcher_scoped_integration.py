@@ -28,6 +28,7 @@ def start(tmp_path, name, **kw):
         "common": str(tmp_path / "common"),
         "state": str(tmp_path / "state"),
         "target": "o/r#1",
+        "simulated_tool_free": bool(kw.get("postverify")),
         **kw,
     }
     child_path = ""
@@ -181,6 +182,23 @@ def test_cli_cross_process_same_profile_pool_never_overlaps(tmp_path):
     receipt = finish(first)
     assert receipt["targets"]["o/r#1"]["status"] == "uncertain"
     assert not receipt["validation"]["valid"]
+
+
+def test_fake_gemini_offload_requires_explicit_simulated_tool_free_boundary(tmp_path):
+    import adapters
+
+    # The parent process keeps the actual unsupported transport refusal. Only
+    # the separately spawned fake-provider harness may replace that boundary.
+    assert adapters.data_only_problem("gemini", "assess") is not None
+    common = tmp_path / "common"
+    common.mkdir()
+    (common / "capacity.json").write_text(json.dumps(report(["gemini-3.8-flash-low"])))
+    receipt = finish(start(tmp_path, "a", shadow=False, postverify=True, simulated_tool_free=False))
+    assert "offload_enter" not in events(tmp_path / "a")
+    row = receipt["targets"]["o/r#1"]
+    assert row["status"] != "completed"
+    assert row["results"]["interpret"]["classification"] == "assessment_transport_unavailable"
+    assert adapters.data_only_problem("gemini", "assess") is not None
 
 
 @pytest.mark.parametrize("agent", d._EXCEPTION_ELIGIBLE_AGENTS)
@@ -523,6 +541,7 @@ def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
     rows = [json.loads(x) for x in (tmp_path / "a" / "events.jsonl").read_text().splitlines()]
     calls = [x["profile"] for x in rows if x["event"] == "offload_enter"]
     assert len(calls) == expected_calls
+    assert all(x["data_only"] is True for x in rows if x["event"] == "offload_enter")
     pools = [profiles.get_profile(p)["capacity_pool_ids"][0] for p in calls]
     assert len(set(pools)) == len(pools)
     assert receipt["targets"]["o/r#1"]["status"] == "deferred"
