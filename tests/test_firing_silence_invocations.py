@@ -115,7 +115,7 @@ def test_the_rail_exercise_cadence_records_its_run_as_an_invocation(tick, monkey
 def test_the_route_weights_export_records_its_run_as_an_invocation(tick, monkeypatch, tmp_path):
     assert _silences(tick, monkeypatch, "route-weights-export") == ["never_fired"]
     monkeypatch.setattr(
-        route_weights_export, "build_document", lambda *_a: {"source_version": "fixture"}
+        route_weights_export, "build_document", lambda *_a, **_kw: {"source_version": "fixture"}
     )
     monkeypatch.setattr(route_weights_export, "write_document", lambda *_a: True)
     monkeypatch.setattr(sys, "argv", ["route_weights_export.py", "--state-dir", str(tmp_path)])
