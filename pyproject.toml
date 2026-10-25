@@ -138,6 +138,3 @@ line-length = 100
 # [tool.ruff] table here.
 extend-exclude = "^/tests/rail_exercises/"
 force-exclude = "^/tests/rail_exercises/"
-
-[project.optional-dependencies]
-dev = ["PyYAML==6.0.3"]
