@@ -418,7 +418,7 @@ def _ledger_ineligible(
     except Exception:
         return "ledger_unreadable"
     own_id = binding.get("capability_id")
-    cap = None
+    cap: Mapping[str, Any] | None = None
     for key, row in rows.items():
         if not isinstance(row, Mapping):
             # The binding's own row is unreadable: it cannot prove the row is
@@ -757,7 +757,7 @@ def _selftest() -> None:
         ledger = root / "corrupt-ledger.json"
         import capabilities
 
-        payload = {
+        payload: dict[str, Any] = {
             "schema_version": capabilities.SCHEMA_VERSION,
             "capabilities": {"unrelated": "corrupt"},
         }

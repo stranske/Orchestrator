@@ -315,6 +315,8 @@ def invoke_compiled_target(
             or not all(isinstance(row, Mapping) for row in invocations)
         ):
             return {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+        limit = 1
+        recent = 0
         try:
             limit = int((policy or {}).get("tasks_per_day") or 1)
             canary_rows = [row for row in invocations if row.get("lifecycle_stage") == "canary"]
