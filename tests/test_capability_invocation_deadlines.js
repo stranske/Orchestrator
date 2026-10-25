@@ -138,3 +138,68 @@ for (const entrypoint of ['compiled', 'direct']) {
     }
   }
 }
+
+// The caller's environment snapshot must govern both ledger-only admission and
+// admission with a binding, even when the ambient process has the opposite value.
+const exerciseEnvironment = `
+import copy
+import json
+import os
+import sys
+
+import capability_lifecycle as lifecycle
+
+case = json.loads(sys.argv[1])
+name = "ORCH_CUSTOM_CAPABILITY_STOP"
+disabled = case["disabled"]
+binding = {"artifact": {}, "lifecycle_policy": {}}
+for kind in lifecycle.TARGET_CONTRACTS:
+    cap = lifecycle._record(
+        "fixture:" + kind, kind, predecessor="baseline:" + kind,
+        matcher={}, expiry=1000,
+    )
+    # A row may declare a different switch from the conventional per-kind name.
+    cap["kill_switch"] = case["declaration"]
+    for target in (None, binding):
+        for ambient, snapshot, expected in (
+            (disabled, {}, None),
+            (disabled, {name: "enabled"}, None),
+            ("enabled", {name: disabled}, "kill_switch"),
+            (disabled, None, "kill_switch"),
+            ("enabled", None, None),
+        ):
+            os.environ[name] = ambient
+            before = copy.deepcopy((cap, target, snapshot))
+            reason = lifecycle._invocation_ineligible(cap, target, 100, snapshot)
+            assert reason == expected, (kind, target, ambient, snapshot, reason, expected)
+            assert (cap, target, snapshot) == before, "eligibility mutated caller inputs"
+print("environment snapshot controls passed")
+`;
+
+for (const [label, declaration, disabled] of [
+  ['string', 'ORCH_CUSTOM_CAPABILITY_STOP=paused', 'paused'],
+  ['disabled_value mapping', { env: 'ORCH_CUSTOM_CAPABILITY_STOP', disabled_value: 'paused' }, 'paused'],
+  ['value mapping', { env: 'ORCH_CUSTOM_CAPABILITY_STOP', value: 'paused' }, 'paused'],
+  ['default mapping', { env: 'ORCH_CUSTOM_CAPABILITY_STOP' }, '1'],
+]) {
+  test(`eligibility environment snapshot: ${label}`, (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'invocation-environment-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const child = spawnSync(python, [
+      '-c', exerciseEnvironment, JSON.stringify({ declaration, disabled }),
+    ], {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH,
+        PYTHONPATH: modules,
+        PYTHONDONTWRITEBYTECODE: '1',
+        ORCH_LOCAL_RUNTIME: directory,
+        ORCH_CAPABILITY_HEARTBEATS: '0',
+      },
+      encoding: 'utf8',
+      timeout: 10000,
+    });
+    assert.equal(child.status, 0, child.error?.message || child.stderr || child.stdout);
+    assert.equal(child.stdout.trim(), 'environment snapshot controls passed');
+  });
+}
