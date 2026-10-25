@@ -226,6 +226,95 @@ def _branch_latency(
         return None
 
 
+def _completed_verifier_request(
+    row: Mapping[str, Any], target: str, head: Any, frontier: Any
+) -> bool:
+    """Count retained, authenticated POST progress, never its downstream result.
+
+    The producer's resource proof already checked the original durable operation.
+    This pure read-side join checks its exact receipt and causal events again;
+    pending callback metadata alone is insufficient and grants no authority.
+    """
+    resource = row.get("resource_evidence")
+    proof = resource.get("accepted_verifier_request") if isinstance(resource, Mapping) else None
+    results = row.get("results")
+    act = results.get("act") if isinstance(results, Mapping) else None
+    if not all(isinstance(value, Mapping) for value in (proof, act, frontier)):
+        return False
+    queue = act.get("queue_receipt")
+    evidence = act.get("pending_evidence")
+    if not isinstance(queue, Mapping) or not isinstance(evidence, Mapping):
+        return False
+    raw = json.dumps(queue, sort_keys=True, separators=(",", ":")).encode()
+    operation = proof.get("operation_id")
+    if not (
+        row.get("status") == "held"
+        and row.get("deferred_reason") == "accepted_verifier_request"
+        and act.get("status") == "pending"
+        and act.get("pending_kind") == "external_event"
+        and proof.get("schema") == "closer-accepted-verifier-wait/v1"
+        and proof.get("target") == target
+        and proof.get("head") == head
+        and _head(head)
+        and _head(proof.get("merge"))
+        and _identity_text(operation)
+        and proof.get("receipt_operation_id") == operation
+        and proof.get("operation_frontier") == frontier.get("frontier_id")
+        and _identity_text(proof.get("operation_frontier"))
+        and frontier.get("targets") == [target]
+        and _identity_text(proof.get("observed_revision"))
+        and isinstance(proof.get("event_id"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", proof["event_id"])
+        and all(
+            evidence.get(key) == proof.get(key)
+            for key in ("target", "head", "merge", "event_id", "operation_id", "observed_revision")
+        )
+        and proof.get("queue_receipt_sha256") == hashlib.sha256(raw).hexdigest()
+        and row.get("queue_receipt") == queue
+        and queue.get("valid") is True
+        and queue.get("stop_valid") is True
+    ):
+        return False
+    accounting = queue.get("accounting")
+    events = queue.get("events")
+    if not isinstance(accounting, list) or not isinstance(events, list):
+        return False
+    matches = [
+        entry
+        for entry in accounting
+        if isinstance(entry, Mapping) and entry.get("target") == target
+    ]
+    if len(matches) != 1:
+        return False
+    entry = matches[0]
+    return bool(
+        entry.get("operation_id") == operation
+        and entry.get("operation_status") == "completed"
+        and entry.get("eligible") is True
+        and entry.get("status") == "deferred"
+        and entry.get("reason") == "pass_limit"
+        and entry.get("action") == "collect_evidence"
+        and entry.get("revision") == proof.get("observed_revision")
+        and any(
+            isinstance(event, Mapping)
+            and event.get("kind") == "operation_submitted"
+            and event.get("target") == target
+            and event.get("operation_id") == operation
+            and event.get("action") == "post_merge_verify"
+            for event in events
+        )
+        and any(
+            isinstance(event, Mapping)
+            and event.get("kind") == "action_advanced"
+            and event.get("target") == target
+            and event.get("operation_id", operation) == operation
+            and event.get("revision") == proof.get("observed_revision")
+            and event.get("action") == "post_merge_verify"
+            for event in events
+        )
+    )
+
+
 def summarize_efficiency(
     receipts: Iterable[Mapping[str, Any]],
     *,
@@ -321,7 +410,9 @@ def summarize_efficiency(
         retained.pop(receipt_identity, None)
         reject("conflicting_receipt")
 
-    branch_rows: dict[tuple[str, str, str], tuple[str, Mapping[str, Any], Any, float, bool]] = {}
+    branch_rows: dict[
+        tuple[str, str, str], tuple[str, Mapping[str, Any], Any, float, bool, Any]
+    ] = {}
     branch_conflicts: set[tuple[str, str, str]] = set()
     for _, receipt in retained.values():
         for target, row in receipt["targets"].items():
@@ -366,6 +457,8 @@ def summarize_efficiency(
                     "work_key": row.get("work_key"),
                     "stage": row.get("stage"),
                     "stage_status": row.get("stage_status"),
+                    "resource_evidence": row.get("resource_evidence"),
+                    "finite_frontier": receipt.get("finite_frontier"),
                 }
             )
             assert fingerprint is not None
@@ -377,6 +470,7 @@ def summarize_efficiency(
                 head,
                 float(receipt["finished_at"]),
                 "run_ids" in receipt,
+                receipt.get("finite_frontier"),
             )
     for branch_key in branch_conflicts:
         branch_rows.pop(branch_key, None)
@@ -385,7 +479,14 @@ def summarize_efficiency(
     models: dict[str, tuple[str, Any]] = {}
     model_conflicts: set[str] = set()
     branches: list[tuple[str, set[str], bool, float | None]] = []
-    for (_run, target, _revision), (_, row, head, finished, native) in branch_rows.items():
+    for (_run, target, _revision), (
+        _,
+        row,
+        head,
+        finished,
+        native,
+        frontier,
+    ) in branch_rows.items():
         results = row["results"]
         ids: set[str] = set()
         for stage_name in ("interpret", "exception", "act"):
@@ -414,7 +515,14 @@ def summarize_efficiency(
         is_direct = bool(
             classification in _DIRECT_BRANCHES
             and isinstance(act, Mapping)
-            and act.get("status") in {"completed", "progress"}
+            and (
+                act.get("status") in {"completed", "progress"}
+                or (
+                    native
+                    and classification == "deterministic_post_merge_verify"
+                    and _completed_verifier_request(row, target, head, frontier)
+                )
+            )
         )
         elapsed = _branch_latency(row, finished, native=native)
         if (native or "stage_results" in row) and elapsed is None:

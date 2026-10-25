@@ -1,0 +1,84 @@
+{
+  "evidence_kind": "synthetic_external_boundaries_actual_authenticated_local_producers",
+  "provider_calls": 0,
+  "deployment": false,
+  "summary": {
+    "schema": "closer-efficiency-summary/v1",
+    "freshness": "historical_freshness_unverified",
+    "observed_branches": {
+      "denominator": 2,
+      "deterministic_zero_reasoning": 2,
+      "with_retained_model_runs": 0,
+      "excluded_waits": 1
+    },
+    "model_runs": {
+      "ids": [],
+      "count": 0,
+      "bindings": {},
+      "stage_event_coverage": null
+    },
+    "observed_latency_seconds": {
+      "total_or_null": null,
+      "measured_runs": 0,
+      "total_runs": 0,
+      "coverage": null,
+      "status": "unknown"
+    },
+    "observed_cost_usd": {
+      "total_or_null": null,
+      "measured_runs": 0,
+      "total_runs": 0,
+      "coverage": null,
+      "status": "unknown"
+    },
+    "branch_stage_latency_seconds": {
+      "deterministic_merge": {
+        "total_or_null": 0.1619553565979004,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_post_merge_verify": {
+        "total_or_null": 0.17110013961791992,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_wait": {
+        "total_or_null": 0.14616084098815918,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      }
+    },
+    "independent_outcomes": {
+      "measured_runs": 0,
+      "false_acceptance_measured_runs": 0,
+      "false_acceptance_count": null,
+      "false_acceptance_rate": null,
+      "rework_measured_runs": 0,
+      "rework_count": null,
+      "rework_rate": null
+    },
+    "holds": {
+      "active": 1,
+      "due": 1,
+      "escalated": 0,
+      "unowned": 0,
+      "aged": 0,
+      "oldest_age_seconds": 1.0204699039459229
+    },
+    "rejected": {},
+    "counterfactual_savings_usd": null,
+    "authority": false
+  },
+  "negative_join_cases": 14,
+  "source_hashes": {
+    "src/closer_stage_feedback.py": "ba4118741684bb8c5052408b1532df7fbcaeb8842ea4afefbab8dbf6cbbed3a7",
+    "/private/tmp/orchestrator-category46-acceptance/tests/test_closer_acceptance_metrics_composition.py": "0e8aa49fde81b34729a89d4f986dda1b2dc900770ed840c7933cc41a5e7e68e2"
+  },
+  "scope": "CI wait excluded; completed merge and POST counted; verifier outcome unmeasured"
+}
