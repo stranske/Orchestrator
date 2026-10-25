@@ -6019,7 +6019,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         "new observation or explicit targeted retry; unchanged collection made no progress"
                     )
                     return pending
-            elif not readiness["ready"] and not data_only:
+            elif not readiness["ready"]:
                 return evidence_pending(target, prep, readiness)
         if prior_wait is None and (
             raw_packet is None
@@ -6033,7 +6033,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     **(readiness or {}),
                     "ready": False,
                     "evaluation_ready": False,
-                    "gaps": ["valid retained exact-target assessment packet is unavailable"],
+                    "gaps": list(
+                        dict.fromkeys(
+                            [*(readiness or {}).get("gaps", []), "packet:invalid_or_unavailable"]
+                        )
+                    ),
                 },
             )
         admission = backend.campaign_admission(
@@ -6374,6 +6378,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and result.get("exit") == 2
             and result.get("outcome_uncertain") is False
         ):
+            if collection_attempt:
+                recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")
             pending = assessment_transport_pending(target, prep.get("revision"))
             pending["pending_evidence"]["transport_refusal"] = result
             return pending
