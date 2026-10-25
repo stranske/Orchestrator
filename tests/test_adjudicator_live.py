@@ -351,6 +351,127 @@ def test_certification_keeps_the_qualified_prompt_size_refusal(world, monkeypatc
         )
 
 
+def test_named_tests_exclude_code_spans_and_include_commands_outside_acceptance(world):
+    assert live._named_test_commands(
+        ["`src/foo.py` uses `ORCH_X` and `True`; run `python3 -m pytest tests/test_extra.py`."]
+    ) == ["python3 -m pytest tests/test_extra.py"]
+    assert live._named_test_commands(["```bash\npytest tests/test_extra.py\n```"]) == [
+        "pytest tests/test_extra.py"
+    ]
+    row = {
+        "target": "owner/repo#1",
+        "packet": live.retro.build_packet(
+            {"target": "owner/repo#1"}, live._evidence_for(world["sha"])
+        ),
+    }
+    body = live.AC_BODY + "\n## Validation\nRun `pytest tests/test_extra.py`.\n"
+    case = live.certify(
+        row,
+        world["path"].parent / "repo",
+        {"number": 1, "headRefOid": world["sha"], "body": body},
+        runtime_events_reader=lambda: [],
+    )
+    execution = live.roles._collected_snapshot(case)["ground_truth_evidence"][
+        "live_execution_evidence"
+    ]
+    assert execution["unknowns"] == [
+        "tests/test_proof.py::test_proof",
+        "pytest tests/test_extra.py",
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        {},
+        {"total_count": True, "check_runs": []},
+        {"total_count": "1", "check_runs": []},
+        {"total_count": -1, "check_runs": []},
+        {"total_count": 1, "check_runs": [None]},
+        {"total_count": 1, "check_runs": [{"id": 1, "conclusion": "success"}]},
+        {"total_count": 1, "check_runs": [{"name": "unit", "conclusion": "success"}]},
+        {"total_count": 1, "check_runs": [{"id": True, "name": "unit", "conclusion": "success"}]},
+    ],
+)
+def test_malformed_check_run_evidence_is_rejected(response):
+    with pytest.raises(ValueError):
+        live._check_run_evidence("owner/repo#1", "a" * 40, lambda _args: response, lambda _url: "")
+
+
+def test_check_run_pagination_cannot_end_before_total_count():
+    pages = iter(
+        [
+            {"total_count": 2, "check_runs": [{"id": 1, "name": "unit", "conclusion": "success"}]},
+            {"total_count": 2, "check_runs": []},
+        ]
+    )
+    with pytest.raises(ValueError, match="before total_count"):
+        live._check_run_evidence(
+            "owner/repo#1", "a" * 40, lambda _args: next(pages), lambda _url: ""
+        )
+
+
+def test_log_failure_is_explicit_and_exhausted_budget_skips_detail_calls(monkeypatch):
+    calls = []
+
+    def reader(args):
+        calls.append(args[1])
+        if "/commits/" in args[1]:
+            return {
+                "total_count": 1,
+                "check_runs": [{"id": 7, "name": "unit", "conclusion": "failure"}],
+            }
+        return {"details_url": "https://github.com/owner/repo/actions/runs/9/job/7"}
+
+    def unavailable(_url):
+        raise RuntimeError("log unavailable")
+
+    runs = live._check_run_evidence("owner/repo#1", "a" * 40, reader, unavailable)
+    assert runs[0]["log_unavailable"] == "Actions job log unavailable"
+    assert runs[0]["log_provenance"]["sha"] == "a" * 40
+    calls.clear()
+    monkeypatch.setattr(live, "EXECUTION_EVIDENCE_BYTES", 0)
+    runs = live._check_run_evidence("owner/repo#1", "a" * 40, reader, unavailable)
+    assert len(calls) == 1
+    assert runs[0]["log_unavailable"] == "execution evidence budget exhausted"
+
+
+def test_no_named_commands_skip_events_and_malformed_event_reader_is_rejected():
+    def never():
+        pytest.fail("No runtime-event scan is needed without a named test")
+
+    common = {
+        "github_reader": lambda _args: {"total_count": 0, "check_runs": []},
+        "runtime_events_reader": never,
+    }
+    assert (
+        live._execution_evidence({"target": "owner/repo#1"}, "a" * 40, ["`True`"], **common)[
+            "unknowns"
+        ]
+        == []
+    )
+    with pytest.raises(ValueError, match="malformed evidence"):
+        live._execution_evidence(
+            {"target": "owner/repo#1"},
+            "a" * 40,
+            ["`pytest test_proof.py`"],
+            **{**common, "runtime_events_reader": lambda: None},
+        )
+
+
+def test_certification_refuses_a_packet_without_ground_truth(world):
+    with pytest.raises(ValueError, match="ground-truth evidence"):
+        live.certify(
+            {
+                "target": "owner/repo#1",
+                "packet": {"disputed_finding": {"decision": {"evaluated_sha": world["sha"]}}},
+            },
+            world["path"].parent / "repo",
+            {"number": 1, "headRefOid": world["sha"], "body": live.AC_BODY},
+        )
+
+
 def test_the_kill_switch_and_the_limit_hold(world):
     off = live.run_live(**{**world["common"], "env": {live.LIVE_SWITCH: "off"}})
     assert off["disabled"] and not world["path"].exists()

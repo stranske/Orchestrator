@@ -101,12 +101,26 @@ def _changed_paths(repository: Path, sha: str) -> list[str]:
 
 
 def _named_test_commands(criteria: list[str]) -> list[str]:
-    """Return explicit command literals from acceptance criteria in their stated order."""
+    """Return explicit test invocations or pytest node IDs, excluding ordinary code spans."""
     commands: list[str] = []
     for criterion in criteria:
-        for command in re.findall(r"`([^`]+)`", criterion):
+        literals = re.findall(r"(?<!`)`([^`\n]+)`(?!`)", criterion)
+        for block in re.findall(r"```[^\n]*\n(.*?)```", criterion, re.DOTALL):
+            literals.extend(block.splitlines())
+        for command in literals:
             command = command.strip()
-            if command and command not in commands:
+            try:
+                tokens = shlex.split(command)
+            except ValueError:
+                continue
+            if tokens[:2] in (["uv", "run"], ["poetry", "run"], ["pipenv", "run"]):
+                tokens = tokens[2:]
+            executable = Path(tokens[0]).name if tokens else ""
+            invocation = executable == "pytest" or (
+                re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable)
+                and tokens[1:3] in (["-m", "pytest"], ["-m", "unittest"])
+            )
+            if (invocation or re.fullmatch(r"\S+\.py::\S+", command)) and command not in commands:
                 commands.append(command)
     return commands
 
@@ -165,7 +179,7 @@ def _check_run_evidence(
             raise ValueError("GitHub check-run page is malformed")
         if total is None:
             raw_total = response.get("total_count")
-            if not isinstance(raw_total, int) or raw_total < 0:
+            if type(raw_total) is not int or raw_total < 0:
                 raise ValueError("GitHub check-run total is unavailable")
             total = raw_total
         for check in page_runs:
@@ -182,16 +196,21 @@ def _check_run_evidence(
             api_url = check.get("url")
             if not isinstance(api_url, str) or not api_url.strip():
                 check_id = check.get("id")
-                if not isinstance(check_id, int):
+                if type(check_id) is not int:
                     raise ValueError("GitHub check-run lacks API provenance")
                 api_url = f"https://api.github.com/repos/{repo}/check-runs/{check_id}"
-            item = {
+            item: dict[str, Any] = {
                 "name": name,
                 "conclusion": conclusion,
                 "sha": sha,
                 "api_url": api_url,
             }
             if isinstance(conclusion, str) and conclusion.lower() in FAILED_CHECK_CONCLUSIONS:
+                remaining = max(0, EXECUTION_EVIDENCE_BYTES - log_bytes)
+                if not remaining:
+                    item["log_unavailable"] = "execution evidence budget exhausted"
+                    runs.append(item)
+                    continue
                 try:
                     detail = reader(["api", api_url])
                 except (OSError, RuntimeError, subprocess.SubprocessError):
@@ -199,16 +218,15 @@ def _check_run_evidence(
                     runs.append(item)
                     continue
                 details_url = detail.get("details_url") if isinstance(detail, dict) else None
-                endpoint = _actions_log_endpoint(repo, details_url)
-                if endpoint is None:
+                log_endpoint = _actions_log_endpoint(repo, details_url)
+                if log_endpoint is None:
                     item["log_unavailable"] = "Actions job URL unavailable"
                 else:
-                    item["log_provenance"] = {"api_url": endpoint, "sha": sha}
-                    remaining = max(0, EXECUTION_EVIDENCE_BYTES - log_bytes)
+                    item["log_provenance"] = {"api_url": log_endpoint, "sha": sha}
                     if remaining:
                         try:
                             log_tail = _tail(
-                                log_reader(endpoint), min(remaining, CHECK_RUN_LOG_TAIL_BYTES)
+                                log_reader(log_endpoint), min(remaining, CHECK_RUN_LOG_TAIL_BYTES)
                             )
                         except (OSError, RuntimeError, subprocess.SubprocessError):
                             item["log_unavailable"] = "Actions job log unavailable"
@@ -302,6 +320,7 @@ def _execution_evidence(
     sha: str,
     criteria: list[str],
     *,
+    body: str | None = None,
     github_reader: Callable[[list[str]], dict] | None = None,
     runtime_events_reader: Callable[[], list[dict]] | None = None,
     log_reader: Callable[[str], str] | None = None,
@@ -310,12 +329,14 @@ def _execution_evidence(
     github_reader = retro._gh_json if github_reader is None else github_reader
     log_reader = _github_log_tail if log_reader is None else log_reader
     target = str(row.get("target") or "")
-    commands = _named_test_commands(criteria)
-    events = (
-        _runtime_events_for_sha(target, sha)
-        if runtime_events_reader is None
-        else runtime_events_reader()
-    )
+    commands = _named_test_commands([body] if body is not None else criteria)
+    events = []
+    if commands:
+        events = (
+            _runtime_events_for_sha(target, sha)
+            if runtime_events_reader is None
+            else runtime_events_reader()
+        )
     if not isinstance(events, list):
         raise ValueError("runtime-AC event reader returned malformed evidence")
     command_results = []
@@ -374,6 +395,7 @@ def certify(
         row,
         sha,
         criteria,
+        body=body,
         github_reader=github_reader,
         runtime_events_reader=runtime_events_reader,
         log_reader=log_reader,
@@ -438,6 +460,7 @@ def run_live(
     runner: Callable[..., dict] | None = None,
     provider: Callable[[str, str], Any] | None = None,
     snapshot_reader: Callable[[str], dict] | None = None,
+    github_reader: Callable[[list[str]], dict] | None = None,
     timeout: int = retro.DISPATCH_TIMEOUT_S,
 ) -> dict:
     """One bounded live pass; idempotent per dispute (case id = run + both verdicts)."""
@@ -490,7 +513,12 @@ def run_live(
                 raise ValueError("dispute carries no exact evaluated commit")
             with provider(dispute["target"], sha) as repository:
                 repository = Path(repository)
-                case = certify(entry, repository, snapshot_reader(dispute["target"]))
+                case = certify(
+                    entry,
+                    repository,
+                    snapshot_reader(dispute["target"]),
+                    github_reader=github_reader,
+                )
                 entry["certification"] = {
                     "status": "certified",
                     "evaluated_sha": sha,
@@ -748,6 +776,12 @@ def _selftest() -> None:
                 calls.append(kw)
                 assert kw["source"] == "live" and kw["dispatch"] is True
                 assert isinstance(kw["case"], roles.CollectedAdjudicationCase)
+                execution = roles._collected_snapshot(kw["case"])["ground_truth_evidence"][
+                    "live_execution_evidence"
+                ]
+                assert execution["check_runs"][0]["sha"] == sha
+                assert execution["check_runs"][0]["name"] == "selftest-unit"
+                assert execution["unknowns"] == ["tests/test_proof.py::test_proof"]
                 return {
                     "backend_run_id": "backend-live",
                     "backend": "stub",
@@ -770,6 +804,10 @@ def _selftest() -> None:
                 evidence_reader=lambda _row: _evidence_for(sha),
                 runner=runner,
                 provider=provider,
+                github_reader=lambda _args: {
+                    "total_count": 1,
+                    "check_runs": [{"id": 1, "name": "selftest-unit", "conclusion": "success"}],
+                },
             )
             first = run_live(snapshot_reader=lambda _t: snapshot, **common)
             assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 1, 0), first
