@@ -27,7 +27,7 @@ class PostMergeBreakTests(unittest.TestCase):
     def setUp(self):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
-        root = Path(scratch.name)
+        root = Path(scratch.name).resolve()
         self.root = root
         self.checkout = root / "checkout"
         self.checkout.mkdir()
@@ -633,7 +633,7 @@ class PostMergeBreakTests(unittest.TestCase):
 
     def test_recheck_uses_installed_repository_for_child_process_outside_worktree(self):
         environment = self.checkout / ".venv"
-        venv.EnvBuilder(with_pip=True).create(environment)
+        venv.EnvBuilder(with_pip=True, symlinks=True).create(environment)
         interpreter = str(environment / "bin/python")
         # Build a local repository wheel without a build backend or network access.
         wheel = self.root / "runtime_delivery-1.0-py3-none-any.whl"
