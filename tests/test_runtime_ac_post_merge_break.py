@@ -641,17 +641,29 @@ class PostMergeBreakTests(unittest.TestCase):
         tests = self.checkout / "tests"
         tests.mkdir()
         child = (
-            "import sys, runtime_delivery; "
-            f"assert sys.executable == {interpreter!r}; "
+            "import sys, runtime_delivery; from pathlib import Path; "
+            f"assert str(Path(sys.executable).parent) == {str(Path(interpreter).parent)!r}; "
+            f"assert sys.prefix == {str(self.checkout / '.venv')!r}; "
             f"assert runtime_delivery.__file__.startswith({str(self.checkout / '.venv')!r}); "
             "assert runtime_delivery.DELIVERED"
         )
         (tests / "test_delivery.py").write_text(
-            "import subprocess, sys\n\n"
-            "def test_installed_delivery():\n"
-            f"    subprocess.run([sys.executable, '-c', {child!r}], "
+            "import subprocess, sys\nimport pytest\n\n"
+            "@pytest.mark.parametrize('launcher', [sys.executable, 'python3'])\n"
+            "def test_installed_delivery(launcher):\n"
+            f"    assert sys.executable == {interpreter!r}\n"
+            f"    subprocess.run([launcher, '-c', {child!r}], "
             f"cwd={str(self.root)!r}, check=True)\n"
         )
+        scheduler = self.root / "scheduler"
+        scheduler_bin = scheduler / "bin"
+        scheduler_bin.mkdir(parents=True)
+        scheduler_python = scheduler_bin / "python3"
+        scheduler_python.write_text("#!/bin/sh\nexit 93\n")
+        scheduler_python.chmod(0o755)
+        scheduler_source = scheduler / "src"
+        scheduler_source.mkdir()
+        (scheduler_source / "runtime_delivery.py").write_text("DELIVERED = False\n")
         spec = runtime_ac.author_issue_spec(
             "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
         )
@@ -660,7 +672,10 @@ class PostMergeBreakTests(unittest.TestCase):
             os.environ,
             PIP_NO_INDEX="1",
             PIP_FIND_LINKS=str(wheelhouse),
-            PYTHONPATH="/scheduler/src",
+            PATH=str(scheduler_bin) + os.pathsep + os.environ.get("PATH", ""),
+            PYTHONPATH=str(scheduler_source),
+            PYTHONHOME=str(scheduler / "unavailable-python"),
+            VIRTUAL_ENV=str(scheduler),
         ):
             result = gate.recheck_merged(spec, self.checkout)
         self.assertEqual(result["result"], "PASS", result)
@@ -668,7 +683,7 @@ class PostMergeBreakTests(unittest.TestCase):
         row = json.loads(result["transcript"])["check_results"][0]
         self.assertEqual(row["interpreter"], interpreter)
         self.assertEqual(shlex.split(row["command"])[0], interpreter)
-        self.assertIn("1 passed", row["stdout_tail"])
+        self.assertIn("2 passed", row["stdout_tail"])
 
     def test_tool_only_pyproject_does_not_require_a_distribution(self):
         (self.checkout / "pyproject.toml").write_text("[tool.black]\nline-length = 100\n")
