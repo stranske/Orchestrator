@@ -3,6 +3,7 @@
 import copy
 import json
 import random
+from types import SimpleNamespace
 
 import pytest
 from test_closer_role_qualification import NOW, record
@@ -23,7 +24,7 @@ def offline(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
-    monkeypatch.setattr(roles.time, "time", lambda: NOW)
+    monkeypatch.setattr(roles, "time", SimpleNamespace(time=lambda: NOW))
     monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {})
     monkeypatch.setattr(adapters, "DATA_ONLY_CLAUDE_SHA256", "b" * 64)
     monkeypatch.setattr(
@@ -87,10 +88,10 @@ def test_campaign_and_dispatcher_apply_the_same_classification_role(tmp_path, mo
     profile, capacity = setup(monkeypatch, "claude-sonnet-5-5-high", roles.BOUNDED_CLASSIFICATION)
     path = tmp_path / "capacity.json"
     path.write_text(json.dumps(capacity))
-    selected = campaign.select_route(path, router=router, profiles=profiles)
+    selected = campaign.select_route(path, now=NOW, router=router, profiles=profiles)
     assert selected == {"agent": "claude", "profile_id": profile["profile_id"]}
     monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {})
-    assert "hold" in campaign.select_route(path, router=router, profiles=profiles)
+    assert "hold" in campaign.select_route(path, now=NOW, router=router, profiles=profiles)
 
 
 def test_adjudication_qualification_does_not_qualify_repair(monkeypatch):

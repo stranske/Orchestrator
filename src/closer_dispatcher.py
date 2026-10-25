@@ -3053,8 +3053,13 @@ class Closer:
             "Do not contact GitHub, publish, merge, close issues, claim targets, change control-plane state, "
             "or invoke other agents. Return concrete source references, original Tasks/AC coverage, "
             "findings and uncertainties. No completion authority transfers. "
-            "Report workspace git HEAD before assessing implementation. If it differs from observed head, "
-            "mark local workspace/code findings UNVERIFIED. You may still analyze only the exact retained "
+            + (
+                "Report workspace git HEAD before assessing implementation. If it differs from observed head, "
+                "mark local workspace/code findings UNVERIFIED. "
+                if repair
+                else "This read-only data-only worker cannot inspect the workspace; do not make local workspace/code findings. "
+            )
+            + "You may still analyze only the exact retained "
             "current-head patch and CI receipt excerpts explicitly supplied in the exception evidence envelope; "
             "do not infer implementation status from canonical-main code, checkout/fetch, or claim acceptance. "
             + (
@@ -5897,13 +5902,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "content"
         ) or {}
         admitted_snapshot, _packet = full_snapshot(prep)
-        data_only = finite_frontier is not None
-        if data_only and (
-            raw_packet is None
-            or raw_packet.get("target") != target
-            or raw_packet.get("head") != admitted_snapshot.get("head")
-        ):
-            raise RuntimeError("data-only interpretation requires a valid exact-target packet")
+        data_only = True
         dependency = (
             assignment_dependency(
                 args.assignment, target, expected_fingerprint=prep.get("assignment_fingerprint")
@@ -6022,6 +6021,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     return pending
             elif not readiness["ready"] and not data_only:
                 return evidence_pending(target, prep, readiness)
+        if prior_wait is None and (
+            raw_packet is None
+            or raw_packet.get("target") != target
+            or raw_packet.get("head") != admitted_snapshot.get("head")
+        ):
+            return evidence_pending(
+                target,
+                prep,
+                {
+                    **(readiness or {}),
+                    "ready": False,
+                    "evaluation_ready": False,
+                    "gaps": ["valid retained exact-target assessment packet is unavailable"],
+                },
+            )
         admission = backend.campaign_admission(
             target, admitted_snapshot, max(0, min(120, int(context["deadline"] - time.time())))
         )

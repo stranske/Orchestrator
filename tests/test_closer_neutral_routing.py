@@ -3,7 +3,9 @@
 import random
 
 import pytest
+from closer_role_support import fixture_role_verdict
 
+import closer_role_qualification as roles
 import execution_profiles
 import router
 
@@ -33,7 +35,7 @@ def test_each_qualified_provider_can_do_substantive_work(task, agent):
     selected = pick(task, capacity(), only={agent}, rng=random.Random(3))
     assert selected["agent"] == agent
     profile = execution_profiles.get_profile(selected["selected_profile_id"])
-    assert profile["profile_id"] in execution_profiles.PROFILE_REGISTRY
+    assert fixture_role_verdict(profile, roles.TASK_ROLES[task])
     assert profile["permission_mode"] == "workspace-write"
     assert selected["neutral_prior"] is True
 
@@ -51,7 +53,10 @@ def test_routine_job_uses_qualified_profiles_and_missing_profile_never_falls_bac
     cap = capacity()
     for n in range(12):
         selected = pick("closer_interpret", cap, rng=random.Random(n))
-        assert selected["selected_profile_id"] in execution_profiles.PROFILE_REGISTRY
+        assert fixture_role_verdict(
+            execution_profiles.get_profile(selected["selected_profile_id"]),
+            roles.BOUNDED_CLASSIFICATION,
+        )
     cap["profiles"] = {}
     assert pick("closer_interpret", cap) is None
 
