@@ -6,7 +6,6 @@ from test_closer_native_observer import host as host
 
 import closer_campaign as campaign
 import closer_mechanisms as mechanisms
-import closer_native_observer as native
 
 
 def tick_without_model(fixture, launches):
@@ -22,46 +21,6 @@ def tick_without_model(fixture, launches):
         pid_alive=lambda *_: True,
         max_steps=1,
     )
-
-
-def test_actual_tick_launches_native_round_without_a_model_route(capacity_host, monkeypatch):
-    import closer_role_qualification as roles
-
-    monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {})
-    monkeypatch.setattr(roles, "is_runtime_qualified", lambda *_: False)
-    launches = []
-    result = tick_without_model(capacity_host, launches)
-    assert result[0]["kind"] == "launched", result
-    assert len(launches) == 1
-    assert "--agent" not in launches[0] and "--profile-id" not in launches[0]
-    assert "worker" in launches[0]
-    manifest = capacity_host[0]
-    context = native._CURRENT_ADMISSION[str(native.contract(manifest)[3])]["context"]
-    from pathlib import Path
-
-    report = native._read(Path(context["report"]["path"]))
-    assert report["control_plane_only"] is True and report["profiles"] == {}
-
-
-def test_stale_signed_native_admission_cannot_launch_zero_model_round(capacity_host, monkeypatch):
-    manifest, path, obj, doc, _source, clock, _invocation = capacity_host
-    admission = native.publish_admission(manifest, path, obj.path, doc)
-    clock[0] += 601
-    monkeypatch.setattr(native, "publish_admission", lambda *_: admission)
-    launches = []
-    result = tick_without_model(capacity_host, launches)
-    assert result[0]["kind"] == "held", result
-    assert "expired" in result[0]["reason"]
-    assert launches == []
-
-
-def test_absent_native_admission_does_not_grant_zero_model_launch(capacity_host, monkeypatch):
-    monkeypatch.setattr(native, "publish_admission", lambda *_: None)
-    launches = []
-    result = tick_without_model(capacity_host, launches)
-    assert result[0]["kind"] == "wait", result
-    assert result[0]["reason"] == "capacity_exhausted"
-    assert launches == []
 
 
 def test_existing_tick_owns_unknown_wrapper_without_pipeline_row_and_escalates(capacity_host):
@@ -222,111 +181,37 @@ def test_role_registry_event_wakes_owned_hold_before_next_schedule(tmp_path, mon
     assert only_hold(obj)["attempts"] == 2
 
 
-@pytest.mark.parametrize("changed", [None, "unrelated-event", "pending", "run", "attempt"])
-def test_explicit_original_request_terminal_bridge_routes_only_exact_terminal_to_fresh_frontier(
+@pytest.mark.parametrize(
+    "changed", [None, "unrelated-basis", "legacy-input", "pending", "lifecycle"]
+)
+def test_original_sent_correlation_accepts_only_current_authenticated_terminal(
     tmp_path, monkeypatch, changed
 ):
-    import json
-    from types import SimpleNamespace
+    from test_closer_verifier_request_correlation import terminal_world
 
-    from test_closer_hold_safety_contracts import TARGET, only_hold, world
+    import closer_verifier_followup as followup
 
-    import closer_hold_followup as holds
-    import closer_queue as queue
-    import verification_events
-    from closer_frontier_policy import action_identity, make_frontier
+    path, target, accepted, observation = terminal_world(tmp_path)
+    if changed == "unrelated-basis":
+        observation["verifier"]["verification_request_basis"] = "f" * 64
+    elif changed == "legacy-input":
+        import json
 
-    obj, paths, _manifest = world(tmp_path, kind="accepted")
-    record = only_hold(obj)
-    row = holds._source_row(record)[1]
-    repo, number = TARGET.split("#")
-    event = {
-        "schema": verification_events.SCHEMA,
-        "repo": repo,
-        "pr": number,
-        "head_sha": "a" * 40,
-        "evaluated_sha": "b" * 40,
-        "request_sha256": "c" * 64,
-        "material_sha256": "d" * 64,
-    }
-    event["event_id"] = verification_events.event_id(event)
-    bridge = {
-        "schema": "closer-verifier-terminal-binding/v1",
-        "operation_id": "operation-original",
-        "target": TARGET,
-        "head": "a" * 40,
-        "merge": "b" * 40,
-        "request_basis": "e" * 64,
-        "event_id": event["event_id"],
-        "run_id": 50001,
-        "run_attempt": 1,
-    }
-    binding = {"head": "a" * 40, "merge": "b" * 40, "verification_terminal_binding": bridge}
-    frontier = make_frontier(
-        [TARGET],
-        owner=record["owner"],
-        frontier_id=record["frontier"]["frontier_id"],
-        bindings={
-            TARGET: {
-                "revision": "revision-1",
-                "action_id": action_identity(TARGET, "revision-1", "post_merge_verify", binding),
-            }
-        },
-    )
-    record["frontier"] = frontier
-    action_path = paths[TARGET].parent / "state.actions" / (holds._digest(TARGET) + ".json")
-    original = json.loads(action_path.read_text())
-    bucket = original["frontiers"][frontier["frontier_id"]]
-    bucket["policy"] = frontier
-    operation = bucket["items"][TARGET]["operation"]
-    operation.update(
-        binding=binding,
-        finite_frontier=frontier,
-        status="completed",
-        result={"verification_request_basis": "e" * 64},
-    )
-    action_path.write_text(json.dumps(original))
-    proof = {
-        "operation_frontier": frontier["frontier_id"],
-        "operation_id": "operation-original",
-        "head": "a" * 40,
-        "merge": "b" * 40,
-        "event_id": "e" * 64,
-    }
-    assert holds._terminal_bridge(action_path, TARGET, proof) == bridge
-    marker = {
-        "schema": "verifier-corpus-decision/v1",
-        "repo": repo,
-        "pr": number,
-        "head_sha": "a" * 40,
-        "evaluated_sha": "b" * 40,
-        "run_id": "50001",
-        "run_attempt": 1,
-        "provider_verdicts": ["PASS"],
-        "ci_failed": False,
-        "verdict": "PASS",
-        "verification_event": event,
-    }
-    if changed == "unrelated-event":
-        event["material_sha256"] = "f" * 64
-        event["event_id"] = verification_events.event_id(event)
+        document = json.loads(path.read_text())
+        document["frontiers"][accepted["operation_frontier"]]["items"][target]["operation"][
+            "result"
+        ]["verification_post_accepted"].pop("correlation_input")
+        path.write_text(json.dumps(document))
     elif changed == "pending":
-        marker["verdict"] = "PENDING"
-    elif changed == "run":
-        marker["run_id"] = "50002"
-    elif changed == "attempt":
-        marker["run_attempt"] = 2
-    snapshot = {"target": TARGET, "head": "a" * 40, "merge": "b" * 40, "verifier": marker}
-    monkeypatch.setattr(holds, "_backend", lambda *a: SimpleNamespace(observe=lambda *a: snapshot))
-    monkeypatch.setattr(queue, "accepted_verifier_wait_proof", lambda *a, **k: proof)
-    result = holds._probe_ci(record, "offline", obj.read(), row)
-    if changed is None:
-        assert result["status"] == "escalated"
-        assert result["escalation_reason"] == "terminal_observed_requires_fresh_frontier"
+        observation["verifier"]["verdict"] = "PENDING"
+    elif changed == "lifecycle":
+        observation["verifier_lifecycle"]["run_attempt"] = "2"
+    result = followup.terminal_proof(path, target, accepted, observation, now=1000)
+    assert (result is not None) == (changed is None)
+    if result:
+        assert result["operation_id"] == accepted["operation_id"]
+        assert result["request_basis"] == accepted["event_id"]
         assert result["authority"] is False
-        assert result["proof"]["terminal_result"]["event_id"] == bridge["event_id"]
-    else:
-        assert result["status"] == "waiting"
 
 
 @pytest.mark.parametrize("resolution", ["unknown", "confirmed_not_started", "completed"])

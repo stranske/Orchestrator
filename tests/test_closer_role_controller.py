@@ -23,13 +23,23 @@ def tick_without_model(fixture, launches):
     )
 
 
-def test_actual_tick_launches_native_round_without_a_model_route(capacity_host):
+def test_actual_tick_launches_native_round_without_a_model_route(capacity_host, monkeypatch):
+    import closer_role_qualification as roles
+
+    monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {})
+    monkeypatch.setattr(roles, "is_runtime_qualified", lambda *_: False)
     launches = []
     result = tick_without_model(capacity_host, launches)
     assert result[0]["kind"] == "launched", result
     assert len(launches) == 1
     assert "--agent" not in launches[0] and "--profile-id" not in launches[0]
     assert "worker" in launches[0]
+    manifest = capacity_host[0]
+    context = native._CURRENT_ADMISSION[str(native.contract(manifest)[3])]["context"]
+    from pathlib import Path
+
+    report = native._read(Path(context["report"]["path"]))
+    assert report["control_plane_only"] is True and report["profiles"] == {}
 
 
 def test_stale_signed_native_admission_cannot_launch_zero_model_round(capacity_host, monkeypatch):

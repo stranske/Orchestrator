@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from test_closer_reasoning_boundary import native_world as native_world
+from test_closer_runtime_binding import bundle as bundle
 from test_closer_stage_continuation import case as _successor_case
 
 import closer_dispatcher as dispatcher
@@ -501,9 +502,48 @@ def test_public_finite_main_verifies_selected_merge_despite_foreign_history(
 
 
 def test_public_cli_continues_accepted_request_after_result_without_replaying_post(
-    public_merge_world, capsys, monkeypatch
+    public_merge_world, capsys, monkeypatch, bundle
 ):
+    from test_closer_runtime_binding import Contents
+
+    import closer_runtime_binding as runtime
+
     w = public_merge_world
+    monkeypatch.setattr(bundle.runtime, "fetch_live_pr_labels", lambda *_: [])
+    contents = Contents()
+
+    def core_transport(method, path, body):
+        if method == "GET" and path == "/repos/owner/repo/pulls/12":
+            return {
+                "head": {"sha": w.snapshot["head"]},
+                "merged": w.snapshot["state"] == "MERGED",
+                "merge_commit_sha": w.snapshot["merge"],
+            }
+        return contents(method, path, body)
+
+    worker_toml = w.root / "core-worker.toml"
+    worker_toml.write_text('status = "ACTIVE"\n')
+    monkeypatch.setattr(runtime, "_POLICY_READERS", {})
+    runtime.register_policy_reader(
+        "followup-fixture",
+        lambda: {
+            "source": "controller-app-readback",
+            "observed_at": time.time(),
+            "worker_toml_digests": {str(worker_toml): runtime._hash(worker_toml)},
+            "controller_status": "ACTIVE",
+            "worker_statuses": ["ACTIVE"],
+        },
+    )
+    core_binding = runtime.RuntimeBinding(
+        bundle,
+        {"worker_tomls": [str(worker_toml)], "reader_id": "followup-fixture"},
+        transport=core_transport,
+    )
+    monkeypatch.setattr(runtime, "binding_from_manifest", lambda *_: core_binding)
+    manifest_file = w.root / "test-runtime.json"
+    manifest_file.write_text("{}")
+    w.argv += ["--runtime-manifest", str(manifest_file)]
+    w.argv[w.argv.index("--coordinator-contract-pin") + 1] = json.dumps(pipeline.scoped_capability())
     dispatcher.main(w.argv)
     initial = json.loads(capsys.readouterr().out)
     requested = initial["merge_verification_successors"]["owner/repo#12"]
@@ -605,6 +645,27 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
         "provider_verdicts": ["CONCERNS"],
         "ci_failed": False,
     }
+    import verification_events
+
+    marker = w.snapshot["verifier"]
+    event = {
+        "schema": verification_events.SCHEMA,
+        "repo": "owner/repo",
+        "pr": "12",
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "request_sha256": "c" * 64,
+        "material_sha256": "e" * 64,
+    }
+    event["event_id"] = verification_events.event_id(event)
+    marker["verification_event"] = event
+    marker["verification_request_basis"] = operation["result"]["verification_request_basis"]
+    w.snapshot["verifier_lifecycle"] = copy.deepcopy(marker)
+    assert operation["result"]["core_request_correlation"]
+    assert (
+        operation["result"]["verification_post_accepted"]["correlation_input"]
+        == marker["verification_request_basis"]
+    )
     w.snapshot["verifier_runs"][0].update(status="completed", conclusion="success")
     w.snapshot["revision"] = "authenticated-terminal-result"
     original_transport = dispatcher.gh_capacity.gh_run
@@ -633,6 +694,13 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     assert following["lineage"]["finite_frontier"] != accepted_frontier
     assert len(w.merges) == len(w.verifies) == 1
     assert all(path.read_bytes() == original for path, original in w.originals.items())
+    dispatcher.main(w.argv)
+    restarted = json.loads(capsys.readouterr().out)
+    assert len(w.merges) == len(w.verifies) == 1
+    assert (
+        restarted["merge_verification_successors"][target]["lineage"]["finite_frontier"]
+        == following["lineage"]["finite_frontier"]
+    )
 
 
 @pytest.mark.parametrize("guard_mode", ["blocked", "uncertain"])

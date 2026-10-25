@@ -602,7 +602,7 @@ def test_finite_act_pending_requires_and_accepts_exact_queue_proof(tmp_path):
     assert receipt["valid"] and receipt["stop_valid"]
 
 
-def _accepted_request_round(tmp_path, *, change_evidence=None, pipeline_path=None):
+def _accepted_request_round(tmp_path, *, change_evidence=None, pipeline_path=None, effect=None):
     target = "acme/repo#42"
     binding = {"pr_target": target, "source_targets": [], "head": "a" * 40, "merge": "b" * 40}
     frontier = make_frontier(
@@ -648,6 +648,8 @@ def _accepted_request_round(tmp_path, *, change_evidence=None, pipeline_path=Non
 
         def execute(*_args, **_kwargs):
             posts.append("POST")
+            if effect is not None:
+                return effect(*_args, **_kwargs)
             return {
                 "status": "completed",
                 "verification_request_basis": "c" * 64,
@@ -695,7 +697,17 @@ def _accepted_request_round(tmp_path, *, change_evidence=None, pipeline_path=Non
         }
 
     path = pipeline_path or tmp_path / "accepted.json"
-    result = _run(path, target, frontier, now=time.time, act=act)
+    result = _run(
+        path,
+        target,
+        frontier,
+        now=time.time,
+        act=act,
+        prepare=lambda *_: {
+            "revision": "rev-1",
+            "snapshot": {"target": target, "head": binding["head"], "merge": binding["merge"]},
+        },
+    )
     return path, target, frontier, posts, retained, result
 
 

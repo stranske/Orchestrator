@@ -172,6 +172,13 @@ def create_successor(
                     or resource.get("accepted_verifier_request") != accepted_proof
                 ):
                     raise ValueError("accepted predecessor request proof differs")
+                import closer_verifier_followup
+
+                terminal = closer_verifier_followup.terminal_proof(
+                    action_path, target, accepted_proof, observation, now=now()
+                )
+                if terminal is None:
+                    raise ValueError("accepted predecessor lacks current correlated terminal proof")
             # Match the native finite-progress validator's pipeline->queue order.
             # Public validation releases its queue lock; CAS those exact bytes,
             # then retain the queue lock through successor store publication.
@@ -291,6 +298,7 @@ def create_successor(
                 }
                 if accepted_proof is not None:
                     causal["accepted_request"] = dict(accepted_proof)
+                    causal["accepted_terminal"] = terminal
                 frontier_id = "stage-successor-" + _digest(causal)
                 bindings = {target: fresh["bindings"][target]}
                 successor = policy.make_frontier(

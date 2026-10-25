@@ -418,7 +418,9 @@ def _probe(
     *,
     campaign: Any = None,
 ) -> dict[str, Any]:
-    """Concrete deterministic reads only. No execute/offload/provider-submission API."""
+    """Deterministic follow-up only; may settle the original Core fence via CAS.
+
+    Never calls execute/offload/provider-submission APIs."""
     if record.get("reentry_intent") is not None:
         return _apply_no_start(record, manifest, manifest_path, doc, campaign)
     if record["source"].get("kind") == "campaign_worker":
@@ -464,7 +466,7 @@ def _probe(
     if kind in {"role_qualified", "capacity_available"}:
         return _apply_no_start(record, manifest, manifest_path, doc, campaign)
     if kind in {"accepted_verifier_terminal", "ci_terminal"}:
-        return _probe_ci(record, manifest_path, doc, row)
+        return _probe_ci(record, manifest_path, doc, row, campaign=campaign, manifest=manifest)
     return {"status": "waiting", "reason": "unsupported release proof"}
 
 
@@ -801,12 +803,20 @@ def _probe_action(
 
 
 def _probe_ci(
-    record: Mapping[str, Any], manifest_path: str, doc: Mapping[str, Any], row: Mapping[str, Any]
+    record: Mapping[str, Any],
+    manifest_path: str,
+    doc: Mapping[str, Any],
+    row: Mapping[str, Any],
+    *,
+    campaign: Any = None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     import closer_pipeline as pipeline
     import closer_queue as queue
+    import closer_verifier_followup as followup
 
     snapshot = _backend(manifest_path, doc).observe(record["target"])
+    snapshot["observed_at"] = time.time()
     prepared = (row.get("results") or {}).get("prepare", {})
     original = prepared.get("snapshot") or {}
     if snapshot.get("head") != original.get("head") or snapshot.get("merge") != original.get(
@@ -820,59 +830,71 @@ def _probe_ci(
         source.parent / f"{source.stem}.actions" / f"{pipeline._digest(record['target'])}.json"
     )
     action = (row.get("results") or {}).get("act") or {}
-    proof = queue.accepted_verifier_wait_proof(
+    accepted = queue.accepted_verifier_wait_proof(
         action_path,
         record["target"],
         frontier=record["frontier"],
         receipt=action.get("queue_receipt"),
         evidence=action.get("pending_evidence"),
     )
-    if proof is None:
+    if accepted is None:
         raise ValueError("CI hold lacks original accepted request proof")
-    bridge = _terminal_bridge(action_path, record["target"], proof)
-    if bridge is None:
+    terminal = followup.terminal_proof(action_path, record["target"], accepted, snapshot)
+    if terminal is None:
         return {
             "status": "waiting",
-            "reason": "original accepted request lacks authenticated terminal event/run/attempt bridge",
+            "reason": "original sent correlation lacks a current authenticated terminal event/run/attempt",
         }
-    marker = snapshot.get("verifier") or {}
-    event = marker.get("verification_event") or {}
-    run_id, attempt = marker.get("run_id"), marker.get("run_attempt")
-    import verification_events
-    import verifier_evidence
-
-    repo, number = record["target"].split("#")
-    if not (
-        verifier_evidence.decision_matches_identity(
-            marker, repo, int(number), proof["head"], proof["merge"]
-        )
-        and verification_events.valid_event(event, repo, int(number), proof["head"], proof["merge"])
-        and event.get("event_id") == bridge["event_id"]
-        and str(run_id) == str(bridge["run_id"])
-        and attempt == bridge["run_attempt"]
-    ):
+    if campaign is None or manifest is None:
         return {
             "status": "waiting",
-            "reason": "terminal verifier identity differs from original request bridge",
+            "reason": "terminal follow-up requires bound campaign admission",
+        }
+    existing = record.get("terminal_followup_intent")
+    if existing is not None:
+        if existing.get("terminal") != terminal or existing.get("accepted_request") != accepted:
+            raise ValueError("terminal follow-up identity changed after durable intent")
+        _validate_terminal_intent(campaign, doc, manifest, record, existing)
+        intent = existing
+    else:
+        intent = {
+            "schema": "closer-verifier-terminal-intent/v1",
+            "terminal": terminal,
+            "accepted_request": accepted,
+            "source": copy.deepcopy(record["source"]),
+            "campaign_id": record["campaign_id"],
+            "owner": record["owner"],
+            "generation": doc.get("generation", 1),
+            "release_pin": record["release_pin"],
+            "config_sha256": record["config_sha256"],
+            "terminal_boundary": _native_terminal_boundary(campaign, doc, manifest, record),
         }
 
+        def persist(value):
+            held = value["hold_followups"][record["hold_id"]]
+            _assert_bound(value, held)
+            if (
+                held.get("status") != "checking"
+                or held.get("last_check_id") != record["last_check_id"]
+                or held.get("terminal_followup_intent") is not None
+                or not _probe_allowed(value)
+                or value.get("workers") != doc.get("workers")
+            ):
+                raise ValueError("campaign changed before terminal follow-up intent")
+            _source_row(held)
+            _validate_terminal_boundary(
+                campaign, value, manifest, held, intent["terminal_boundary"]
+            )
+            held["terminal_followup_intent"] = intent
+
+        campaign.update(persist)
     return {
-        "status": "escalated",
-        "escalation_reason": "terminal_observed_requires_fresh_frontier",
-        "authority": False,
+        "status": "released",
         "proof": {
             "kind": "accepted_verifier_terminal",
-            "accepted_request": proof,
-            "terminal_result": {
-                "event_id": event["event_id"],
-                "run_id": run_id,
-                "run_attempt": attempt,
-                "marker_sha256": _digest(marker),
-            },
-            "fresh_observation": {
-                key: snapshot.get(key)
-                for key in ("target", "revision", "head", "merge", "observed_at")
-            },
+            "terminal": terminal,
+            "intent_sha256": _digest(intent),
+            "authority": False,
         },
     }
 
@@ -897,6 +919,24 @@ def _probe_allowed(doc: Mapping[str, Any]) -> bool:
             worker.get("state") not in {"active", "launched"} for worker in doc.get("workers", [])
         )
     )
+
+
+def _validate_terminal_intent(campaign, doc, manifest, record, intent):
+    if not isinstance(intent, Mapping) or not (
+        intent.get("schema") == "closer-verifier-terminal-intent/v1"
+        and all(
+            intent.get(key) == record.get(key)
+            for key in ("campaign_id", "owner", "release_pin", "config_sha256")
+        )
+        and intent.get("generation") == doc.get("generation", 1)
+        and intent.get("source") == record["source"]
+        and isinstance(intent.get("terminal"), Mapping)
+        and isinstance(intent.get("accepted_request"), Mapping)
+        and intent["terminal"].get("operation_id") == intent["accepted_request"].get("operation_id")
+        and intent["terminal"].get("request_basis") == intent["accepted_request"].get("event_id")
+    ):
+        raise ValueError("terminal follow-up intent identity changed")
+    _validate_terminal_boundary(campaign, doc, manifest, record, intent.get("terminal_boundary"))
 
 
 def release_probe(
@@ -1015,7 +1055,11 @@ def release_probe(
 def rearm(
     campaign: Any, doc: dict[str, Any], manifest: Mapping[str, Any], *, now: float | None = None
 ) -> dict[str, Any]:
-    """Rearm the SAME native cohort after an audited known-no-start release."""
+    """Rearm the SAME full native cohort for no-start or correlated terminal follow-up.
+
+    A completed ACT is preserved. Its next native coordinator uses the existing
+    stage-successor route and fresh PREPARE, never replay of the original effect.
+    """
     import closer_campaign as campaigns
     import closer_finite_reentry as reentry
 
@@ -1038,10 +1082,49 @@ def rearm(
         ):
             continue
         _assert_bound(doc, record)
+        terminal_intent = record.get("terminal_followup_intent")
+        if isinstance(terminal_intent, Mapping):
+            import closer_verifier_followup as followup
+
+            _validate_terminal_intent(campaign, doc, manifest, record, terminal_intent)
+            _entry, original_row = _source_row(record)
+            snapshot = _backend(str(doc["worker_config"]["runtime_manifest"]), doc).observe(
+                record["target"]
+            )
+            snapshot["observed_at"] = time.time()
+            source = Path(record["source"]["state_path"])
+            action_path = (
+                source.parent / f"{source.stem}.actions" / f"{_digest(record['target'])}.json"
+            )
+            import closer_queue as queue
+
+            original_action = (original_row.get("results") or {}).get("act") or {}
+            fresh_request = queue.accepted_verifier_wait_proof(
+                action_path,
+                record["target"],
+                frontier=record["frontier"],
+                receipt=original_action.get("queue_receipt"),
+                evidence=original_action.get("pending_evidence"),
+            )
+            if fresh_request != terminal_intent["accepted_request"]:
+                raise ValueError("original accepted request changed before native rearm")
+            fresh_terminal = followup.terminal_proof(
+                action_path, record["target"], fresh_request, snapshot
+            )
+            if fresh_terminal is None or fresh_terminal != terminal_intent.get("terminal"):
+                raise ValueError("terminal result or fresh successor binding changed before rearm")
+            ready.append(
+                {
+                    "hold_id": record["hold_id"],
+                    "kind": "accepted_verifier_terminal",
+                    "intent_sha256": _digest(terminal_intent),
+                }
+            )
+            continue
         intent = record.get("reentry_intent")
         if not isinstance(intent, Mapping):
-            # Only persisted known-no-start intent may rearm this frontier.
-            # Accepted-CI terminal observations use fresh-frontier escalation.
+            # Only a concrete durable release intent may rearm this frontier.
+            # Missing historical correlation remains owned waiting work.
             continue
         _validate_terminal_boundary(
             campaign, doc, manifest, record, intent.get("terminal_boundary")
@@ -1095,6 +1178,13 @@ def rearm(
         # row under campaign admission serialization, before opening a cohort.
         for released in ready:
             record = value["hold_followups"][released["hold_id"]]
+            if released.get("kind") == "accepted_verifier_terminal":
+                terminal_intent = record["terminal_followup_intent"]
+                _validate_terminal_intent(campaign, value, manifest, record, terminal_intent)
+                _source_row(record)
+                if _digest(terminal_intent) != released["intent_sha256"]:
+                    raise ValueError("terminal sidecar changed before native rearm")
+                continue
             intent = record["reentry_intent"]
             _validate_terminal_boundary(
                 campaign, value, manifest, record, intent["terminal_boundary"]
@@ -1145,54 +1235,6 @@ def rearm(
                     record["rearmed_at"] = current
 
     return campaign.update(transition)
-
-
-def _terminal_bridge(path: Path, target: str, proof: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Only an original action-bound native bridge links POST to terminal execution.
-
-    Request-basis digests and verification-event IDs are different identities.
-    Current producers without this bridge remain owned waiting/escalation work.
-    """
-    import re
-
-    import closer_queue as queue
-    from closer_frontier_policy import action_identity, validate_frontier
-
-    try:
-        document = queue._read_state(path)
-        frontier_id = proof["operation_frontier"]
-        bucket = document["frontiers"][frontier_id]
-        frontier = validate_frontier(bucket["policy"])
-        operation = bucket["items"][target]["operation"]
-        binding, result = operation["binding"], operation["result"]
-        bridge = binding.get("verification_terminal_binding")
-        if not isinstance(bridge, dict) or not (
-            bridge.get("schema") == "closer-verifier-terminal-binding/v1"
-            and operation.get("id") == proof["operation_id"] == bridge.get("operation_id")
-            and operation.get("status") == "completed"
-            and operation.get("action") == "post_merge_verify"
-            and operation.get("finite_frontier") == frontier
-            and operation.get("revision") == frontier["bindings"][target]["revision"]
-            and action_identity(target, operation["revision"], operation["action"], binding)
-            == frontier["bindings"][target]["action_id"]
-            and bridge.get("target") == target
-            and all(
-                bridge.get(key) == proof.get(key) == binding.get(key) for key in ("head", "merge")
-            )
-            and bridge.get("request_basis")
-            == result.get("verification_request_basis")
-            == proof.get("event_id")
-            and isinstance(bridge.get("event_id"), str)
-            and re.fullmatch(r"[0-9a-f]{64}", bridge["event_id"])
-            and type(bridge.get("run_id")) is int
-            and bridge["run_id"] > 0
-            and type(bridge.get("run_attempt")) is int
-            and bridge["run_attempt"] > 0
-        ):
-            return None
-        return copy.deepcopy(bridge)
-    except (OSError, ValueError, TypeError, KeyError):
-        return None
 
 
 def consume(
@@ -1321,8 +1363,9 @@ def consume(
                 raise ValueError("hold changed during follow-up")
             # Only the concrete reentry probe may add its durable intent while
             # this check is running. All other concurrent row mutations refuse.
-            base = {k: v for k, v in row.items() if k != "reentry_intent"}
-            expected = {k: v for k, v in checking.items() if k != "reentry_intent"}
+            sidecars = {"reentry_intent", "terminal_followup_intent"}
+            base = {k: v for k, v in row.items() if k not in sidecars}
+            expected = {k: v for k, v in checking.items() if k not in sidecars}
             if base != expected:
                 raise ValueError("hold changed during follow-up read")
             row.update(status=answer["status"], last_result=answer)

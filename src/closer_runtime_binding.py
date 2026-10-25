@@ -868,6 +868,26 @@ class RuntimeBinding:
                             "status": "blocked",
                             "reason": "invalid prepared verification mutation",
                         }
+                correlation = (
+                    (verification_mutation or {})
+                    .get("fields", {})
+                    .get("inputs[verification_request_basis]")
+                )
+                if correlation is not None:
+                    if (
+                        mutation["mutation_kind"] != "workflow_dispatch"
+                        or correlation != mutation["request_basis"]
+                    ):
+                        return {
+                            "status": "not_started",
+                            "reason": "verification correlation input differs",
+                        }
+                    mutation["correlation_input"] = correlation
+                    import closer_verifier_followup
+
+                    native_binding["verification_source_requirements"] = (
+                        closer_verifier_followup.source_requirements(snapshot)
+                    )
                 if mutation["mutation_kind"] == "workflow_dispatch" and not (
                     callable(getattr(self.bundle.runtime, "reject_not_accepted", None))
                     and callable(getattr(self.bundle.runtime, "VerificationRequestRejected", None))
@@ -941,6 +961,43 @@ class RuntimeBinding:
             except Exception:
                 recovered = {}
             if recovered.get("status") == "completed":
+                # Retain correlation only from this ACTUAL acknowledged POST and
+                # its exact succeeded original Core intent. An old succeeded
+                # fence without this native_result never gets upgraded here.
+                acknowledged = result.get("verification_post_accepted")
+                try:
+                    settled = adapter.store.read(adapter.target_fence_key(spec))
+                    original = (settled.get("mutation_intent") or {}).get("native_binding")
+                    if (
+                        isinstance(acknowledged, dict)
+                        and acknowledged.get("mutation_kind") == "workflow_dispatch"
+                        and acknowledged.get("correlation_input")
+                        == acknowledged.get("request_basis")
+                        and re.fullmatch(
+                            r"[0-9a-f]{64}", str(acknowledged.get("correlation_input"))
+                        )
+                        and settled.get("status") == "succeeded"
+                        and settled.get("action") == "verify_request"
+                        and isinstance(original, dict)
+                        and original.get("queue_operation_id") == operation["id"]
+                        and original.get("verification_mutation") == acknowledged
+                        and settled["guard_versions"].get("native_binding") == sha256_json(original)
+                        and settled["operation_key"]
+                        == self.bundle.runtime.canonical_operation_key(ospec)
+                    ):
+                        result["core_request_correlation"] = {
+                            "schema": "closer-core-request-correlation/v1",
+                            "operation_id": operation["id"],
+                            "core_operation_key": settled["operation_key"],
+                            "core_target_fence_key": settled["target_fence_key"],
+                            "core_package_digest": self.bundle.namespace.removeprefix(
+                                "_closer_core_"
+                            ),
+                            "native_binding": original,
+                            "native_binding_sha256": sha256_json(original),
+                        }
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                    pass  # Missing proof is unknown correlation, not resend authority.
                 return {**result, **recovered}
         return {
             "status": "unknown" if outcome in {"ok", "unknown"} else "blocked",

@@ -2727,85 +2727,84 @@ class Closer:
         if result is not None:
             return result
         repo, number = target.split("#")
-        initial_redispatch = repeat_request is None and (
-            "verify:compare" in snapshot.get("labels", [])
-            or snapshot.get("native_diagnostic_reference")
-        )
-        if repeat_request is not None or initial_redispatch:
-            # The reusable collector validates actual merged subject/material and
-            # dedups exact event+assessment. A POST timeout remains UNKNOWN.
-            try:
-                repository = self.gh.api(f"repos/{repo}")
-            except RoundCapacityDeferred as exc:
-                import closer_verifier_boundary as boundary
+        # Only NEW normally admitted requests reach this producer. Existing
+        # accepted/unknown requests remain in their original queue/Core fence.
+        # Deployment requires the qualified matching consumer input interface;
+        # an HTTP 422 is known-not-started, never fallback to a second route.
+        # The reusable collector validates actual merged subject/material and
+        # dedups exact event+assessment. A POST timeout remains UNKNOWN.
+        try:
+            repository = self.gh.api(f"repos/{repo}")
+        except RoundCapacityDeferred as exc:
+            import closer_verifier_boundary as boundary
 
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "capacity_deferred",
-                    [],
-                    ["authoritative GitHub capacity recovery before metadata read"],
-                    control={
-                        "kind": "capacity",
-                        "resource": exc.resource,
-                        "throttle": exc.throttle,
-                        "observed_at": exc.observed_at,
-                        "reset_at_epoch": exc.reset_at_epoch,
-                    },
-                )
-            except RoundDeadlineExhausted as exc:
-                import closer_verifier_boundary as boundary
+            return boundary.pending(
+                snapshot,
+                target,
+                "capacity_deferred",
+                [],
+                ["authoritative GitHub capacity recovery before metadata read"],
+                control={
+                    "kind": "capacity",
+                    "resource": exc.resource,
+                    "throttle": exc.throttle,
+                    "observed_at": exc.observed_at,
+                    "reset_at_epoch": exc.reset_at_epoch,
+                },
+            )
+        except RoundDeadlineExhausted as exc:
+            import closer_verifier_boundary as boundary
 
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "request_deadline",
-                    [],
-                    ["fresh owned metadata read after request deadline"],
-                    control={
-                        "kind": "request_deadline",
-                        "deadline": exc.deadline,
-                        "remaining_seconds": exc.remaining_seconds,
-                    },
-                )
-            except Exception as exc:
-                return {
-                    "status": "not_started",
-                    "reason": f"verifier repository metadata unavailable: {type(exc).__name__}",
-                    "next_trigger": "authoritative repository metadata recovery",
-                }
-            branch = repository.get("default_branch") if isinstance(repository, dict) else None
-            if not isinstance(branch, str) or not branch:
-                return {
-                    "status": "not_started",
-                    "reason": "verifier workflow default branch unavailable",
-                    "next_trigger": "authoritative repository metadata",
-                }
-            inputs = {"ref": branch, "inputs[pr_number]": number, "inputs[mode]": "compare"}
-            if repeat_request is not None:
-                inputs.update(
-                    {
-                        "inputs[verification_material]": json.dumps(
-                            repeat_request["material"], separators=(",", ":")
-                        ),
-                        "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
-                    }
-                )
+            return boundary.pending(
+                snapshot,
+                target,
+                "request_deadline",
+                [],
+                ["fresh owned metadata read after request deadline"],
+                control={
+                    "kind": "request_deadline",
+                    "deadline": exc.deadline,
+                    "remaining_seconds": exc.remaining_seconds,
+                },
+            )
+        except Exception as exc:
             return {
-                "mutation_kind": "workflow_dispatch",
-                "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
-                "fields": inputs,
-                "request_basis": self.verification_request_basis(snapshot),
-                "verification_predecessor": (
-                    repeat_request["predecessor_event_id"] if repeat_request else None
-                ),
-                "material_selectors": repeat_request["material"] if repeat_request else [],
+                "status": "not_started",
+                "reason": f"verifier repository metadata unavailable: {type(exc).__name__}",
+                "next_trigger": "authoritative repository metadata recovery",
             }
+        branch = repository.get("default_branch") if isinstance(repository, dict) else None
+        if not isinstance(branch, str) or not branch:
+            return {
+                "status": "not_started",
+                "reason": "verifier workflow default branch unavailable",
+                "next_trigger": "authoritative repository metadata",
+            }
+        inputs = {
+            "ref": branch,
+            "inputs[pr_number]": number,
+            "inputs[mode]": "compare",
+            # Inert correlation, not semantic event identity or retry authority.
+            "inputs[verification_request_basis]": self.verification_request_basis(snapshot),
+        }
+        if repeat_request is not None:
+            inputs.update(
+                {
+                    "inputs[verification_material]": json.dumps(
+                        repeat_request["material"], separators=(",", ":")
+                    ),
+                    "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
+                }
+            )
         return {
-            "mutation_kind": "label",
-            "endpoint": f"repos/{repo}/issues/{number}/labels",
-            "fields": {"labels[]": "verify:compare"},
+            "mutation_kind": "workflow_dispatch",
+            "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
+            "fields": inputs,
             "request_basis": self.verification_request_basis(snapshot),
+            "verification_predecessor": (
+                repeat_request["predecessor_event_id"] if repeat_request else None
+            ),
+            "material_selectors": repeat_request["material"] if repeat_request else [],
         }
 
     def submit_verify(self, target, snapshot, prepared):
@@ -2833,6 +2832,13 @@ class Closer:
             "verification_post_accepted": {
                 "mutation_kind": prepared["mutation_kind"],
                 "request_basis": prepared["request_basis"],
+                **(
+                    {"correlation_input": prepared["request_basis"]}
+                    if prepared.get("mutation_kind") == "workflow_dispatch"
+                    and prepared.get("fields", {}).get("inputs[verification_request_basis]")
+                    == prepared["request_basis"]
+                    else {}
+                ),
             },
             "verification_predecessor": prepared.get("verification_predecessor"),
             "material_selectors": prepared.get("material_selectors", []),
@@ -8357,6 +8363,20 @@ def _run_merge_verification_successors(args, backend, result, targets):
                     "reason": "fresh merged identity unavailable or changed",
                 }
                 continue
+            if accepted_wait:
+                import closer_verifier_followup
+
+                if (
+                    closer_verifier_followup.terminal_proof(
+                        action_path, target, accepted_proof, observation
+                    )
+                    is None
+                ):
+                    continuations[target] = {
+                        "status": "held",
+                        "reason": "accepted request lacks current correlated terminal proof",
+                    }
+                    continue
             if observation.get("eligible") is not True or (
                 observation.get("action") == op.get("action")
                 if accepted_wait
