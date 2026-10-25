@@ -222,6 +222,14 @@ def terminal_proof(
         repo, number = subject.split("#")
         if not (
             isinstance(marker, dict)
+            # This producer requests compare; event identity alone omits mode.
+            and isinstance(marker.get("assessment_identity"), Mapping)
+            and marker["assessment_identity"].get("canonical") is True
+            and marker["assessment_identity"].get("mode") == "compare"
+            and all(
+                isinstance(marker["assessment_identity"].get(key), str)
+                for key in ("provider", "model", "model2")
+            )
             and marker.get("_request_correlation_unusable") is not True
             and verifier_evidence.decision_matches_identity(
                 marker, repo, int(number), accepted["head"], accepted["merge"]

@@ -116,6 +116,13 @@ def terminal_world(tmp_path, target=TARGET):
         "provider_verdicts": ["PASS"],
         "ci_failed": False,
         "verdict": "PASS",
+        "assessment_identity": {
+            "canonical": True,
+            "mode": "compare",
+            "provider": "",
+            "model": "",
+            "model2": "",
+        },
         "verification_request_basis": BASIS,
     }
     observation = {
@@ -526,6 +533,13 @@ def _terminal_marker(target, head, merge, basis):
         "provider_verdicts": ["PASS"],
         "ci_failed": False,
         "verdict": "PASS",
+        "assessment_identity": {
+            "canonical": True,
+            "mode": "compare",
+            "provider": "",
+            "model": "",
+            "model2": "",
+        },
         "verification_request_basis": basis,
     }
 
