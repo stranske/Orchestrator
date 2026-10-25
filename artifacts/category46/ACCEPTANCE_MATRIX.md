@@ -14,6 +14,17 @@ modules and existing test files are untouched. New acceptance test, offline
 measurement adapter, fixture, and evidence files are additive. See
 `source-bindings.json` for file hashes and test result bindings.
 
+## Six-category readiness
+
+| Category | Owner | Concrete evidence / remaining gate |
+|---|---|---|
+| 1. Decision contracts and confined corrective routing | Core / execution-contract writer | Existing deterministic and refusal cases pass. New named-criterion/mechanical contracts need integrated composition and their actual owner/executor consumers. |
+| 2. Model qualification | Candidate qualification owner | Role filters and shared pools tested; exact production profile/transport qualification remains unmet. |
+| 3. Durable recovery | Core / hold writer | Selected release/rearm/expiry/unknown-fence tests pass; aggregate-history correction and escalation delivery/ack consumer remain unmet. |
+| 4. Combined acceptance | This branch, core owns final broad run | 73 selected causal cases and 70 metrics/plumbing cases pass on the recorded base plus scoped correction; installed end-to-end proof remains unmet. |
+| 5. Existing hook deployment | Deployment-preparation owner | Installer tests are preparation; current demand admission, qualified package and actual authorized installed receipt remain unmet. |
+| 6. Efficiency measurement | This branch | Existing metrics reused; POST undercount corrected; representative fixture and adapter tested. Matched live baseline, repeat-classification join, missed-wake and escalation-ack data remain unmeasured. |
+
 | Plan requirement | Evidence at this version | Assessment / next owner |
 |---|---|---|
 | pp1–2: retain coordinator responsibilities, task/AC identity and valid stopping | Source campaign/hold consumer and actual CI→merge→POST receipt inspected; selected restart test passes. | Partial source evidence. Core owns complete named decision/corrective handoff integration. Original task completion is not inferred. |
