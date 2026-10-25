@@ -197,13 +197,19 @@ def _relay_weight_token(value: Any) -> str:
 
 
 def _relay_candidate_weight(row: Mapping[str, Any]) -> str:
-    """Prefer the receipt's top-level routing_weight (unmeasured-preferred puts 1.0 there)."""
+    """Prefer measured routing_weight; absent measurement logs neutral 1.
+
+    Matches ``router._pacing_choice`` (unmetered seats compete at weight 1.0).
+    Legacy Cursor receipts used to emit ``cursor:unknown`` when ``pacing`` was
+    absent, which failed the #891 weights half of the Oct 27 pass even after
+    pick-agent started printing ``log_fields``.
+    """
     if "routing_weight" in row and row.get("routing_weight") is not None:
         return _relay_weight_token(row.get("routing_weight"))
     pace = row.get("pacing")
     if isinstance(pace, Mapping) and pace.get("routing_weight") is not None:
         return _relay_weight_token(pace.get("routing_weight"))
-    return "unknown"
+    return "1"
 
 
 def _relay_candidate_state(row: Mapping[str, Any]) -> str:
@@ -224,10 +230,10 @@ def relay_log_fields_from_decision(
     """Importer-valid ``weights`` / ``states`` tokens from pick-agent decision JSON.
 
     Host ``handoff-relay.sh`` must not re-derive weights from nested ``pacing`` alone:
-    Cursor-top ``unmeasured-preferred`` receipts put a neutral ``routing_weight`` on the
-    candidate itself while ``pacing`` stays absent — a nested-only jq path logs
-    ``*:unknown`` and the weekly #812 pass never sees measured consumption (owner
-    2026-10-23). Candidate order follows the relay's candidates list.
+    issue #891's neutral Cursor receipt puts ``routing_weight`` 1.0 on the candidate
+    while ``pacing`` stays absent — a nested-only path logs ``cursor:unknown`` and the
+    weekly pass never sees numeric consumption (owner 2026-10-23). Candidate order
+    follows the relay's candidates list.
     """
     names = [part for part in candidates.split(",") if part]
     if not names or not set(names) <= _RELAY_PACING_AGENTS:
