@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import venv
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -62,6 +64,9 @@ class PostMergeBreakTests(unittest.TestCase):
         ).strip()
 
     def merged_spec(self, *, delivered, hollow=False):
+        # These verdict/delivery fixtures reuse pytest's installed environment;
+        # environment provisioning has its own isolated tests below.
+        (self.checkout / ".venv").symlink_to(sys.prefix, target_is_directory=True)
         (self.checkout / "behavior.py").write_text(f"DELIVERED = {delivered!r}\n")
         tests = self.checkout / "tests"
         tests.mkdir()
@@ -106,6 +111,7 @@ class PostMergeBreakTests(unittest.TestCase):
         proof = json.loads(run["check_results"][0]["stdout_tail"])
         self.assertEqual(proof["base_ref"], "HEAD^")
         self.assertEqual(Path(proof["worktree"]).resolve(), self.checkout.resolve())
+        self.assertEqual(shlex.split(proof["green"]["cmd"])[0], result["interpreter"])
         return result, proof
 
     def sweep_case(
@@ -118,6 +124,7 @@ class PostMergeBreakTests(unittest.TestCase):
         fail_comment_after_post=False,
         fail_reopen=False,
         issue_already_open=False,
+        merge_ci_green=False,
     ):
         spec, head = self.merged_spec(delivered=delivered, hollow=hollow)
         target = "owner/repo#2"
@@ -152,6 +159,19 @@ class PostMergeBreakTests(unittest.TestCase):
 
         def gh(args):
             calls.append(args)
+            if args[1:3] == ["api", "graphql"]:
+                return {
+                    "data": {
+                        "repository": {
+                            "object": {
+                                "oid": head,
+                                "statusCheckRollup": {
+                                    "state": "SUCCESS" if merge_ci_green else "FAILURE"
+                                },
+                            }
+                        }
+                    }
+                }, None
             if args[1:3] == ["pr", "view"]:
                 return {
                     "state": "MERGED",
@@ -240,6 +260,7 @@ class PostMergeBreakTests(unittest.TestCase):
         payload = payloads[0]
         self.assertEqual(payload["result"], "FAIL")
         self.assertTrue(payload["reopened"] and payload["delivery_complete"])
+        self.assertEqual(payload["interpreter"], str(self.checkout / ".venv/bin/python"))
         self.assertEqual(len(comments), 1)
         self.assertTrue(comments[0]["body"].startswith(f"runtime-AC post-merge FAIL on {head}"))
         transcript = Path(payload["transcript_path"]).read_text()
@@ -453,7 +474,10 @@ class PostMergeBreakTests(unittest.TestCase):
                         }
                     ],
                 }
-                with patch.object(runtime_ac, "run_verification", return_value=run):
+                with (
+                    patch.object(runtime_ac, "run_verification", return_value=run),
+                    patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+                ):
                     result = gate.recheck_merged(spec, self.checkout)
                 self.assertEqual(result["result"], "UNRUNNABLE")
 
@@ -484,22 +508,182 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(result["reason"], "environment_mismatch")
         self.assertEqual(result["interpreter"], "/opt/anaconda3/bin/python3")
 
-    def test_worktree_interpreter_falls_back_when_anaconda_is_unavailable(self):
-        for available in (True, False):
-            with (
-                self.subTest(anaconda_available=available),
-                patch.object(
-                    Path,
-                    "is_file",
-                    autospec=True,
-                    side_effect=lambda path: available
-                    and str(path) == "/opt/anaconda3/bin/python3",
-                ),
-            ):
+    def test_worktree_interpreter_bootstraps_repository_and_test_dependencies(self):
+        (self.checkout / "pyproject.toml").write_text(
+            '[project]\nname = "delivery"\nversion = "1"\n'
+            '[project.optional-dependencies]\ntest = ["pytest"]\ndev = []\n'
+        )
+        (self.checkout / "requirements.txt").touch()
+        interpreter = str(self.checkout / ".venv/bin/python")
+        with (
+            patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
+            patch.dict(os.environ, PYTHONPATH="/scheduler/src", PYTHONHOME="/scheduler/python"),
+        ):
+            self.assertEqual(gate._worktree_interpreter(self.checkout), interpreter)
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0], [sys.executable, "-m", "venv", str(self.checkout / ".venv")])
+        self.assertEqual(
+            commands[1],
+            [
+                interpreter,
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "pytest",
+                "-r",
+                str(self.checkout / "requirements.txt"),
+                ".[dev,test]",
+            ],
+        )
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["cwd"], str(self.checkout))
+            self.assertNotIn("PYTHONPATH", call.kwargs["env"])
+            self.assertNotIn("PYTHONHOME", call.kwargs["env"])
+
+    def test_failed_environment_setup_never_runs_checks_or_leaves_partial_venv(self):
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
+        )
+
+        def fail_install(command, **kwargs):
+            (self.checkout / ".venv/bin").mkdir(parents=True, exist_ok=True)
+            (self.checkout / ".venv/bin/python").touch()
+            return subprocess.CompletedProcess(command, 1 if "pip" in command else 0)
+
+        with (
+            patch.object(subprocess, "run", side_effect=fail_install),
+            patch.object(runtime_ac, "run_verification") as verify,
+        ):
+            result = gate.recheck_merged(spec, self.checkout)
+        self.assertEqual((result["result"], result["reason"]), ("UNRUNNABLE", "tool_error"))
+        verify.assert_not_called()
+        self.assertFalse((self.checkout / ".venv").exists())
+
+    def test_tool_only_pyproject_does_not_require_a_distribution(self):
+        (self.checkout / "pyproject.toml").write_text("[tool.black]\nline-length = 100\n")
+        with patch.object(
+            subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+        ) as run:
+            interpreter = gate._worktree_interpreter(self.checkout)
+        self.assertEqual(
+            run.call_args.args[0],
+            [interpreter, "-m", "pip", "install", "--disable-pip-version-check", "pytest"],
+        )
+
+    def test_merge_ci_must_belong_to_the_merge_commit(self):
+        sha = "a" * 40
+        for oid, state, expected in (
+            (sha, "SUCCESS", True),
+            (sha, "PENDING", False),
+            (sha, "FAILURE", False),
+            ("b" * 40, "SUCCESS", False),
+        ):
+            with self.subTest(oid=oid, state=state):
+                response = {
+                    "data": {
+                        "repository": {
+                            "object": {
+                                "oid": oid,
+                                "statusCheckRollup": {"state": state},
+                            }
+                        }
+                    }
+                }
                 self.assertEqual(
-                    gate._worktree_interpreter(self.checkout),
-                    "/opt/anaconda3/bin/python3" if available else sys.executable,
+                    durability_sweep._merged_ci_green(
+                        "owner/repo", sha, lambda _: (response, None)
+                    ),
+                    expected,
                 )
+        self.assertFalse(durability_sweep._merged_ci_green("owner/repo", sha, lambda _: ({}, None)))
+
+    def test_python_and_pytest_launchers_use_worktree_environment_without_coverage(self):
+        interpreter = str(self.checkout / ".venv/bin/python")
+        for launcher in ("python3", "/scheduler/bin/python3.12", "pytest", "/scheduler/bin/pytest"):
+            with self.subTest(launcher=launcher):
+                args = [launcher]
+                if "python" in launcher:
+                    args.extend(["-m", "pytest"])
+                args.extend(["tests", "--cov=delivery", "--cov-report", "term"])
+                check = {"id": "AC1", "type": "command", "command": shlex.join(args)}
+                with (
+                    patch.object(
+                        subprocess,
+                        "run",
+                        return_value=subprocess.CompletedProcess([], 0, "1 passed", ""),
+                    ) as run,
+                    patch.dict(
+                        os.environ, PYTHONPATH="/scheduler/src", PYTEST_ADDOPTS="--cov=delivery -q"
+                    ),
+                ):
+                    result = runtime_ac._run_command_check(
+                        check, cwd=self.checkout, timeout=10, python_interpreter=interpreter
+                    )
+                self.assertEqual(result["status"], "PASS")
+                self.assertEqual(
+                    run.call_args.args[0],
+                    [interpreter, "-m", "pytest", "-p", "no:cov", "-o", "addopts=", "tests"],
+                )
+                env = run.call_args.kwargs["env"]
+                self.assertEqual(env["PATH"].split(os.pathsep)[0], str(Path(interpreter).parent))
+                self.assertEqual(env["VIRTUAL_ENV"], str(self.checkout / ".venv"))
+                self.assertEqual(env["PYTHONPATH"], os.pathsep.join(("src", ".")))
+                self.assertEqual(env["PYTEST_ADDOPTS"], "-q")
+
+    def test_recheck_uses_installed_repository_for_child_process_outside_worktree(self):
+        environment = self.checkout / ".venv"
+        venv.EnvBuilder(with_pip=True).create(environment)
+        interpreter = str(environment / "bin/python")
+        # Build a local repository wheel without a build backend or network access.
+        wheel = self.root / "runtime_delivery-1.0-py3-none-any.whl"
+        metadata = "runtime_delivery-1.0.dist-info"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            archive.writestr("runtime_delivery/__init__.py", "DELIVERED = True\n")
+            archive.writestr(
+                f"{metadata}/METADATA",
+                "Metadata-Version: 2.1\nName: runtime_delivery\nVersion: 1.0\n",
+            )
+            archive.writestr(
+                f"{metadata}/WHEEL",
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+            archive.writestr(f"{metadata}/RECORD", "")
+        subprocess.run(
+            [interpreter, "-m", "pip", "install", "--no-index", str(wheel)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        child = (
+            "import json, sys, runtime_delivery; "
+            "print(json.dumps([sys.executable, sys.prefix, runtime_delivery.__file__, "
+            "runtime_delivery.DELIVERED]))"
+        )
+        parent = (
+            "import subprocess, sys; "
+            f"subprocess.run([sys.executable, '-c', {child!r}], cwd={str(self.root)!r}, check=True)"
+        )
+        (self.checkout / "check_child.py").write_text(parent)
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
+        )
+        spec["acceptance_criteria"][0]["checks"][0]["command"] = shlex.join(
+            ["python3", "check_child.py"]
+        )
+        spec["acceptance_criteria"][0]["evidence_required"] = ["command_output"]
+        with patch.dict(os.environ, PYTHONPATH="/scheduler/src"):
+            result = gate.recheck_merged(spec, self.checkout)
+        self.assertEqual(result["result"], "PASS", result)
+        self.assertEqual(result["interpreter"], interpreter)
+        run = json.loads(result["transcript"])
+        row = run["check_results"][0]
+        self.assertEqual(row["interpreter"], interpreter)
+        executable, prefix, package_path, delivered = json.loads(row["stdout_tail"])
+        self.assertEqual(executable, interpreter)
+        self.assertEqual(prefix, str(environment))
+        self.assertTrue(Path(package_path).is_relative_to(environment))
+        self.assertTrue(delivered)
 
     def test_worktree_interpreter_preserves_repository_environment(self):
         environment = self.checkout / ".venv"
@@ -529,9 +713,62 @@ class PostMergeBreakTests(unittest.TestCase):
                 }
             ],
         }
-        with patch.object(runtime_ac, "run_verification", return_value=run):
+        with (
+            patch.object(runtime_ac, "run_verification", return_value=run),
+            patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+        ):
             result = gate.recheck_merged(spec, self.checkout, merge_ci_green=True)
         self.assertEqual(result["result"], "FAIL")
+
+    def test_environment_classification_preserves_assertion_failures(self):
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Inspect the delivered behavior.\n"
+        )
+        environment = {
+            "type": "command",
+            "status": "FAIL",
+            "returncode": 1,
+            "stderr_tail": "2 failed\nsubprocess.CalledProcessError: Command ['/other/python3']",
+        }
+        assertion = {
+            "type": "command",
+            "status": "FAIL",
+            "returncode": 1,
+            "stdout_tail": "1 failed\nAssertionError: delivery is wrong",
+        }
+        deliberate = {
+            "type": "deliberate_break",
+            "status": "FAIL",
+            "stdout_tail": json.dumps({"verdict": "FAIL_BROKEN", "green": environment}),
+        }
+        child_import = {
+            **environment,
+            "stderr_tail": "2 failed\nsubprocess.run([sys.executable, '-c', ...])\nModuleNotFoundError: missing dependency",
+        }
+        direct_import = {**environment, "stderr_tail": "2 failed\nModuleNotFoundError: product bug"}
+        for rows, green, expected in (
+            ([environment], False, "FAIL"),
+            ([environment, assertion], True, "FAIL"),
+            ([deliberate], True, "UNRUNNABLE"),
+            ([child_import], True, "UNRUNNABLE"),
+            ([direct_import], True, "FAIL"),
+        ):
+            with (
+                self.subTest(rows=rows, green=green),
+                patch.object(gate, "_worktree_interpreter", return_value="/repo/.venv/bin/python"),
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={
+                        "gate": {"verdict": "FAIL"},
+                        "check_results": rows,
+                    },
+                ),
+            ):
+                result = gate.recheck_merged(spec, self.checkout, merge_ci_green=green)
+            self.assertEqual(result["result"], expected)
+            if expected == "UNRUNNABLE":
+                self.assertEqual(result["reason"], "environment_mismatch")
 
     def test_already_open_issue_is_not_counted_as_reopened(self):
         run, calls, _comments, _provisions, _head = self.sweep_case(issue_already_open=True)
@@ -539,3 +776,37 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(summary["errors"], [])
         self.assertIn(["gh", "api", "repos/owner/repo/issues/1"], calls)
         self.assertFalse(any("PATCH" in call for call in calls))
+        payload = self.post_merge_payloads()[0]
+        self.assertFalse(payload["reopened"])
+        self.assertTrue(payload["already_open"])
+        self.assertEqual(gate.post_merge_summary()["reopened"], 0)
+        self.assertIn("reopened 0", gate.format_post_merge_summary(gate.post_merge_summary()))
+
+    def test_environment_mismatch_never_reopens_with_green_merge_ci(self):
+        run, calls, comments, _provisions, head = self.sweep_case(merge_ci_green=True)
+        verification = {
+            "gate": {"verdict": "FAIL"},
+            "check_results": [
+                {
+                    "type": "command",
+                    "status": "FAIL",
+                    "returncode": 1,
+                    "stderr_tail": "2 failed\nsubprocess.CalledProcessError: Command ['/other/python3']",
+                }
+            ],
+        }
+        with (
+            patch.object(runtime_ac, "run_verification", return_value=verification),
+            patch.object(gate, "_worktree_interpreter", return_value="/repo/.venv/bin/python"),
+        ):
+            self.assertEqual(run(), {"rechecked": 1, "errors": []})
+        payload = self.post_merge_payloads()[0]
+        self.assertEqual(
+            (payload["result"], payload["reason"]), ("UNRUNNABLE", "environment_mismatch")
+        )
+        self.assertFalse(payload["reopened"])
+        self.assertTrue(payload["delivery_complete"])
+        self.assertEqual(comments, [])
+        self.assertFalse(any("PATCH" in call for call in calls))
+        query = next(call for call in calls if call[1:3] == ["api", "graphql"])
+        self.assertIn("sha=" + head, query)

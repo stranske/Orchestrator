@@ -14,10 +14,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -393,8 +395,13 @@ def observe_shadow_spec(
 
 
 def _worktree_interpreter(worktree: str | Path) -> str:
-    """Return the checked-out repository's selected Python, never PATH's python3."""
-    root = Path(worktree)
+    """Use a repository venv, provisioning one from this checkout when absent.
+
+    Disposable git worktrees do not inherit the canonical checkout's untracked
+    environment. Bootstrap with the scheduler's interpreter, but never run checks
+    with it or expose its site-packages to the repository.
+    """
+    root = Path(worktree).resolve()
     for name in (".venv", "venv"):
         environment = root / name
         interpreter = environment / "bin" / "python"
@@ -402,8 +409,55 @@ def _worktree_interpreter(worktree: str | Path) -> str:
             return str(interpreter)
         if environment.exists():
             raise RuntimeError(f"selected repository interpreter is unavailable: {interpreter}")
-    preferred = Path("/opt/anaconda3/bin/python3")
-    return str(preferred) if preferred.is_file() else sys.executable
+    environment = root / ".venv"
+    interpreter = environment / "bin" / "python"
+    metadata = root / "pyproject.toml"
+    project = tomllib.loads(metadata.read_text(encoding="utf-8")) if metadata.is_file() else {}
+    distribution = any(key in project for key in ("project", "build-system")) or bool(
+        project.get("tool", {}).get("poetry")
+    )
+    distribution = distribution or any(
+        (root / name).is_file() for name in ("setup.py", "setup.cfg")
+    )
+    requirements = ["pytest"]
+    for name in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt"):
+        if (root / name).is_file():
+            requirements.extend(["-r", str(root / name)])
+    if distribution:
+        extras = project.get("project", {}).get("optional-dependencies", {})
+        selected = sorted(set(extras) & {"dev", "test", "tests"})
+        requirements.append(".[" + ",".join(selected) + "]" if selected else ".")
+    setup_env = os.environ.copy()
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+        setup_env.pop(key, None)
+    try:
+        for command in (
+            [sys.executable, "-m", "venv", str(environment)],
+            [
+                str(interpreter),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                *requirements,
+            ],
+        ):
+            completed = subprocess.run(
+                command,
+                cwd=str(root),
+                env=setup_env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if completed.returncode:
+                raise RuntimeError("repository environment setup failed")
+    except Exception:
+        # A partially installed environment must never be selected by a retry.
+        shutil.rmtree(environment, ignore_errors=True)
+        raise
+    return str(interpreter)
 
 
 def recheck_merged(
@@ -455,7 +509,7 @@ def recheck_merged(
             )
 
         def delivery_failed(row):
-            if row.get("status") != "FAIL":
+            if row.get("status") != "FAIL" or environment_mismatch(row):
                 return False
             if row.get("type") == "deliberate_break":
                 try:
@@ -478,14 +532,19 @@ def recheck_merged(
 
         def environment_mismatch(row):
             """Recognize the runner's child-Python import failure, not a product assertion."""
-            if not merge_ci_green or not assertion_failed(row):
+            if not merge_ci_green or row.get("status") != "FAIL":
                 return False
             candidate = row
             if row.get("type") == "deliberate_break":
                 try:
-                    candidate = json.loads(row.get("stdout_tail") or "{}").get("green") or {}
+                    proof = json.loads(row.get("stdout_tail") or "{}")
                 except ValueError:
                     return False
+                if not isinstance(proof, dict) or proof.get("verdict") != "FAIL_BROKEN":
+                    return False
+                candidate = proof.get("green") or {}
+            if not isinstance(candidate, dict) or not assertion_failed(candidate):
+                return False
             output = "\n".join(
                 str(candidate.get(key) or "") for key in ("stdout_tail", "stderr_tail")
             )
@@ -495,13 +554,14 @@ def recheck_merged(
                 return False
             return bool(
                 re.search(
-                    r"CalledProcessError.*(?:python|Python)|ModuleNotFoundError", output, re.I
+                    r"CalledProcessError[^\n]*(?:python|Python)|"
+                    r"(?:subprocess\.|sys\.executable)[\s\S]*ModuleNotFoundError",
+                    output,
+                    re.I,
                 )
             )
 
-        if any(environment_mismatch(r) for r in executable):
-            result = "UNRUNNABLE"
-        elif any(delivery_failed(r) for r in executable):
+        if any(delivery_failed(r) for r in executable):
             result = "FAIL"
         elif (
             executable
@@ -1563,6 +1623,8 @@ def _selftest() -> None:
         # non-PASS executable result under that same gate, or any other gate verdict, is
         # UNRUNNABLE (incomplete). Measured 2026-10-16: three green rechecks read UNRUNNABLE
         # because the rule demanded a gate PASS no mixed spec can produce.
+        # The stubbed runner needs no dependency installation or network access.
+        (Path(tmp) / ".venv").symlink_to(sys.prefix, target_is_directory=True)
         saved_run_verification = runtime_ac.run_verification
 
         def stub(payload):

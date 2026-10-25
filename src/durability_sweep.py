@@ -1220,6 +1220,38 @@ def classify_durability(
     }
 
 
+def _merged_ci_green(repo: str, sha: str, gh) -> bool:
+    """Read the aggregate CI state on the merge commit, rather than the PR head."""
+    owner, name = repo.split("/", 1)
+    query = """query($owner:String!,$name:String!,$sha:GitObjectID!){
+      repository(owner:$owner,name:$name){object(oid:$sha){... on Commit{
+        oid statusCheckRollup{state}
+      }}}
+    }"""
+    response, error = gh(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            "query=" + query,
+            "-f",
+            "owner=" + owner,
+            "-f",
+            "name=" + name,
+            "-f",
+            "sha=" + sha,
+        ]
+    )
+    if error or not isinstance(response, dict) or response.get("errors"):
+        return False
+    try:
+        commit = response["data"]["repository"]["object"]
+        return commit["oid"] == sha and commit["statusCheckRollup"]["state"] == "SUCCESS"
+    except (KeyError, TypeError):
+        return False
+
+
 def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
     """Recheck known merged deliveries, including those already judged durable.
 
@@ -1271,7 +1303,7 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                         "--repo",
                         repo,
                         "--json",
-                        "state,mergeCommit,closingIssuesReferences,statusCheckRollup",
+                        "state,mergeCommit,closingIssuesReferences",
                     ]
                 )
                 if error or not isinstance(pr, dict):
@@ -1351,13 +1383,8 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                             )
                             if actual.returncode or actual.stdout.strip() != sha:
                                 raise RuntimeError("checkout does not match merge commit")
-                            checks = pr.get("statusCheckRollup") or []
-                            merge_ci_green = bool(checks) and all(
-                                row.get("conclusion") in {"SUCCESS", "SKIPPED", "NEUTRAL"}
-                                for row in checks
-                            )
                             observation = runtime_ac_gate.recheck_merged(
-                                spec, worktree, merge_ci_green=merge_ci_green
+                                spec, worktree, merge_ci_green=_merged_ci_green(repo, sha, gh)
                             )
                     except Exception as exc:
                         observation = {
@@ -1368,6 +1395,7 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                     result = {
                         "result": observation["result"],
                         "reason": observation.get("reason"),
+                        "interpreter": observation.get("interpreter"),
                         "issue": issue,
                         "merge_sha": sha,
                         "reopened": False,
@@ -1461,8 +1489,9 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                             if error or not isinstance(issue_state, dict):
                                 raise RuntimeError(error or "source issue state unavailable")
                             if issue_state.get("state") == "open":
+                                result["reopened"] = False
                                 result["already_open"] = True
-                            else:
+                            elif issue_state.get("state") == "closed":
                                 _, error = gh(
                                     [
                                         "gh",
@@ -1477,6 +1506,8 @@ def _post_merge_rechecks(*, dry_run: bool, gh, now: int, spec_dir=None) -> dict:
                                 if error:
                                     raise RuntimeError(error)
                                 result["reopened"] = True
+                            else:
+                                raise RuntimeError("source issue state unavailable")
                             persist()
                         _, error = gh(
                             [

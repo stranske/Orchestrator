@@ -658,7 +658,13 @@ def _local_verify_command(check: dict[str, Any], runtime_context: dict[str, Any]
         "--base-ref",
         base_ref,
         "--test-cmd",
-        shlex.join(_pytest_without_coverage(shlex.split(check["test_cmd"]))),
+        shlex.join(
+            _pytest_without_coverage(
+                _repository_python(
+                    shlex.split(check["test_cmd"]), runtime_context.get("python_interpreter")
+                )
+            )
+        ),
     ]
     for path in check.get("test_paths") or []:
         parts.extend(["--test-path", path])
@@ -1157,23 +1163,36 @@ def _completed_result(
     }
 
 
+def _repository_python(argv: list[str], interpreter: str | None) -> list[str]:
+    """Bind Python launchers, including pytest console scripts, to the checkout."""
+    if not interpreter or not argv:
+        return argv
+    name = Path(argv[0]).name
+    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", name):
+        return [interpreter, *argv[1:]]
+    if name in {"pytest", "pytest.exe"}:
+        return [interpreter, "-m", "pytest", *argv[1:]]
+    return argv
+
+
 def _run_command_check(
     check: dict[str, Any], *, cwd: Path, timeout: int, python_interpreter: str | None = None
 ) -> dict[str, Any]:
     started = time.time()
-    argv = shlex.split(check["command"])
+    argv = _repository_python(shlex.split(check["command"]), python_interpreter)
     normalized = _pytest_without_coverage(argv)
     run_env = os.environ.copy()
-    if python_interpreter and Path(argv[0]).name in {"python", "python3"}:
-        argv[0] = python_interpreter
-        normalized = argv
-        # A source-layout checkout is not necessarily installed into the selected interpreter.
-        # The recheck still runs its chosen environment, while its import path names only this
-        # exact merged checkout rather than the scheduler's source tree.
-        source = str(cwd / "src")
-        run_env["PYTHONPATH"] = os.pathsep.join(
-            [entry for entry in (source, str(cwd), run_env.get("PYTHONPATH")) if entry]
+    if python_interpreter:
+        # Children launched by name must select the same venv as sys.executable.
+        # Discard scheduler import paths so they cannot mask a missing repo dependency.
+        run_env["PATH"] = (
+            str(Path(python_interpreter).parent) + os.pathsep + run_env.get("PATH", "")
         )
+        run_env["VIRTUAL_ENV"] = str(Path(python_interpreter).parent.parent)
+        run_env.pop("PYTHONHOME", None)
+        # Keep these relative: local_verify also runs the tests in an extracted
+        # base tree, whose imports must come from that tree rather than the merge.
+        run_env["PYTHONPATH"] = os.pathsep.join(("src", "."))
     if normalized != argv or _is_pytest(argv):
         run_env["PYTEST_ADDOPTS"] = shlex.join(
             _strip_coverage_options(shlex.split(run_env.get("PYTEST_ADDOPTS", "")))
