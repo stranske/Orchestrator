@@ -1911,6 +1911,73 @@ def _data_only_claude_eligibility_binary() -> str:
         return verified
 
 
+# Installed-source findings are candidate metadata, never execution authority.
+# Do not turn an advertised flag, environment override or fixture success into
+# a native no-tools fence. A real supported builder needs a separate reviewed
+# immutable runtime and confinement contract before this refusal can change.
+_NON_CLAUDE_DATA_ONLY_GAPS = {
+    "cursor": (
+        "empty allowed-tools is an unverified remote header, not a local execution fence",
+        "hook loading is independent of workspace-context exclusion",
+        "no complete MCP/hooks/no-fallback launch contract is established",
+        "wrapper identity omits bundled node, JavaScript and native dependency closure",
+    ),
+    "vibe": (
+        "tool deny-all requires a cleared allowlist and does not prevent custom module imports",
+        "user/project agent and config discovery require an unqualified sterile runtime",
+        "launcher identity omits interpreter, imported packages and environment precedence",
+        "mistral-medium-3.5 resolves to a mutable upstream alias, not served-model evidence",
+    ),
+    "gemini": (
+        "print/plan/sandbox and slash-command disabling do not disable all tools",
+        "no complete MCP/hooks/project-context/no-fallback launch contract is established",
+    ),
+    "muse": (
+        "selective tool disables and empty preset do not establish a universal tool fence",
+        "no complete MCP/hooks/project-context/no-fallback launch contract is established",
+        "auto-updating wrapper and selected native payload require separate immutable identities",
+    ),
+}
+
+
+def non_claude_data_only_boundary(agent: str, mode: str | None = "assess") -> dict[str, Any]:
+    """Pure fail-closed builder admission; never probes auth, CLIs or config.
+
+    This reports transport engineering gaps, not model capability or entitlement.
+    All currently inspected non-Claude candidates remain unsupported. The return
+    value is diagnostic evidence only and cannot enable a command or a role.
+    """
+    if agent == "claude":
+        raise ValueError("Claude retains its independent installed-binary confinement gate")
+    gaps = list(
+        _NON_CLAUDE_DATA_ONLY_GAPS.get(
+            agent, ("no reviewed data-only builder and complete native confinement contract",)
+        )
+    )
+    problem = (
+        "data-only transport requires explicit assess mode"
+        if mode != "assess"
+        else f"data-only tool boundary unsupported for {agent}: " + "; ".join(gaps)
+    )
+    return {
+        "agent": agent,
+        "transport": "offload",
+        "mode": mode,
+        "status": "unsupported",
+        "command_available": False,
+        "native_confinement_qualified": False,
+        "model_suitability": "not_assessed",
+        "entitlement": "unknown",
+        "evidence_kind": (
+            "installed_source_metadata_only"
+            if agent in _NON_CLAUDE_DATA_ONLY_GAPS
+            else "no_reviewed_transport_evidence"
+        ),
+        "unresolved_controls": gaps,
+        "problem": problem,
+    }
+
+
 def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
 
@@ -1920,7 +1987,7 @@ def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     if mode != "assess":
         return "data-only transport requires explicit assess mode"
     if agent != "claude":
-        return f"data-only tool boundary unsupported for {agent}"
+        return non_claude_data_only_boundary(agent, mode)["problem"]
     try:
         _data_only_claude_eligibility_binary()
     except (OSError, ValueError) as exc:
