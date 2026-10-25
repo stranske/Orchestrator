@@ -167,21 +167,22 @@ def test_single_model_agents_pin_nothing():
 
 
 # ---------------------------------------------------------------------------
-# Scarce-seat ceiling: cap routine spend WITHOUT deleting the frontier option.
+# Explicit caps remain available; routine Claude work has no default ceiling.
 # ---------------------------------------------------------------------------
 
 
-def test_claude_routine_work_is_capped_at_mid():
-    """Owner policy: claude's weekly is frequently the binding constraint, so routine
-    'full' work runs Sonnet 5.5 rather than Opus 5.5."""
-    assert adapters.tier_ceiling("claude") == "mid"
-    assert adapters.effective_tier("claude", "full") == "mid"
+def test_claude_routine_full_work_has_no_implicit_sonnet_ceiling(monkeypatch):
+    """Current owner policy permits the named full-tier Opus model routinely."""
+    monkeypatch.delenv("ORCH_CLAUDE_MAX_TIER", raising=False)
+    assert adapters.tier_ceiling("claude") is None
+    assert adapters.effective_tier("claude", "full") == "full"
     argv = adapters.build_command("claude", "x", mode="full")
-    assert argv[argv.index("--model") + 1] == adapters.MODEL_TIERS["claude"]["mid"], argv
+    assert argv[argv.index("--model") + 1] == adapters.MODEL_TIERS["claude"]["full"], argv
 
 
-def test_ceiling_never_raises_a_tier():
+def test_ceiling_never_raises_a_tier(monkeypatch):
     """A cap must only ever lower spend — cheap work must not get promoted to the ceiling."""
+    monkeypatch.setenv("ORCH_CLAUDE_MAX_TIER", "mid")
     for tier in ("cheap", "mid"):
         assert adapters.effective_tier("claude", tier) == tier
 
@@ -191,13 +192,15 @@ def test_frontier_model_stays_reachable_three_ways(monkeypatch):
     Capping routine spend must not delete the option."""
     # 1. the tier map still names it
     assert adapters.MODEL_TIERS["claude"]["full"] == "claude-opus-5-5"
-    # 2. raising the ceiling reaches it
+    # 2. an explicit full ceiling permits it
     monkeypatch.setenv("ORCH_CLAUDE_MAX_TIER", "full")
     assert adapters.effective_tier("claude", "full") == "full"
     argv = adapters.build_command("claude", "x", mode="full")
     assert argv[argv.index("--model") + 1] == "claude-opus-5-5", argv
-    monkeypatch.delenv("ORCH_CLAUDE_MAX_TIER")
-    # 3. an explicit requested_model bypasses the ceiling entirely
+    # 3. an explicitly requested model keeps its identity even with a routine cap
+    monkeypatch.setenv("ORCH_CLAUDE_MAX_TIER", "mid")
+    capped = adapters.build_command("claude", "x", mode="full")
+    assert capped[capped.index("--model") + 1] == "claude-sonnet-5-5", capped
     argv = adapters.build_command("claude", "x", mode="full", requested_model="claude-opus-5-5")
     assert argv[argv.index("--model") + 1] == "claude-opus-5-5", argv
 
@@ -216,11 +219,16 @@ def test_ceiling_env_override_can_lower_any_seat(monkeypatch):
     assert argv[argv.index("--model") + 1] == adapters.MODEL_TIERS["codex"]["cheap"], argv
 
 
-def test_capacity_reports_the_ceiling_not_the_uncapped_model():
-    """The snapshot must not advertise a model routine routing will never spend."""
+@pytest.mark.parametrize("cap", [None, "mid"])
+def test_capacity_reports_uncapped_full_or_an_explicit_ceiling(monkeypatch, cap):
+    """The snapshot must agree with the actual default or explicit spend policy."""
+    if cap is None:
+        monkeypatch.delenv("ORCH_CLAUDE_MAX_TIER", raising=False)
+    else:
+        monkeypatch.setenv("ORCH_CLAUDE_MAX_TIER", cap)
     tiers = capacity._tier_models("claude")
-    assert tiers["full"] == adapters.MODEL_TIERS["claude"]["mid"], tiers
-    assert capacity._tier_ceiling("claude") == "mid"
+    assert tiers["full"] == adapters.MODEL_TIERS["claude"][cap or "full"], tiers
+    assert capacity._tier_ceiling("claude") == cap
 
 
 # ---------------------------------------------------------------------------
@@ -276,15 +284,16 @@ def test_tiers_are_distinct_and_ordered_cheap_to_full():
 def test_build_command_honours_every_tier(tmp_path, monkeypatch):
     """The pin must actually reach argv — a tier map nothing dispatches is dead code.
 
-    Expectations are stated post-ceiling, because that is what really dispatches: claude is
-    capped at `mid`, so its `full` lane sends Sonnet 5.5 (see the scarce-seat ceiling tests).
+    Without an explicit cap, each tier reaches its own named model, including Claude Opus full.
     The workspace is the test's own directory, not the shared `/tmp`: where the state dir lives
     under `/tmp` (CI's bare exec mirror), `/tmp` holds it and no agent may be granted it.
     """
     monkeypatch.setenv("ORCH_MODEL_PROBE", "0")  # Literal-pin wiring, not a live rename probe.
+    for agent in ("CODEX", "CLAUDE", "GEMINI"):
+        monkeypatch.delenv("ORCH_" + agent + "_MAX_TIER", raising=False)
     expected = {
         "codex": ("gpt-6-luna", "gpt-5.6-terra", "gpt-6.1-sol"),
-        "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-sonnet-5-5"),
+        "claude": ("claude-haiku-4-5", "claude-sonnet-5-5", "claude-opus-5-5"),
         "gemini": ("gemini-3.8-flash-low", "gemini-3.8-flash-high", "gemini-4-argon-high"),
     }
     for agent, models in expected.items():
@@ -1415,16 +1424,24 @@ def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(
         binary.chmod(0o700)
         monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", binary)
         monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN_EXPLICIT", True)
+    import closer_role_qualification as roles
+
     profiles = execution_profiles.profiles_for_agent(agent, transport="local")
-    efforts = router.ROUTE_TABLE[task_type]["reasoning_efforts"]
-    family = "gpt-6.1-sol" if agent == "codex" else "gemini-4-argon"
-    chosen = next(
-        p
-        for p in profiles
-        if p["requested_model"].startswith(family)
-        and p["reasoning_effort"] in efforts
-        and p["permission_mode"] == "workspace-write"
+    role = roles.TASK_ROLES[task_type]
+    assert router.ROUTE_TABLE[task_type]["closer_role"] == role
+    assert "reasoning_efforts" not in router.ROUTE_TABLE[task_type]
+    chosen = execution_profiles.get_profile(
+        "codex-6.1-sol-high" if agent == "codex" else "gemini-4-argon-high"
     )
+    role_checks = []
+
+    def fixture_role_oracle(profile, requested_role):
+        # Explicitly qualify only this synthetic test cohort. A real semantic
+        # role record is tested independently; effort never grants this verdict.
+        role_checks.append((profile["profile_id"], requested_role))
+        return profile["profile_id"] == chosen["profile_id"] and requested_role == role
+
+    monkeypatch.setattr(roles, "is_runtime_qualified", fixture_role_oracle)
     cap = {
         "agents": {agent: {"state": "ok"}},
         "profiles": {p["profile_id"]: {"state": "ok"} for p in profiles},
@@ -1440,6 +1457,7 @@ def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(
         profile_seed=7,
     )
     assert selected is not None
+    assert (chosen["profile_id"], role) in role_checks
     assert selected["selected_profile_id"] == chosen["profile_id"]
     assert selected["mode"] == TIER_POLICY[task_type]
     argv = adapters.build_command(

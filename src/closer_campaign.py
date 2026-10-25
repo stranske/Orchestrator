@@ -2523,7 +2523,24 @@ def tick(
         )
         route = route_fn(capacity)
         capacity_ok = bool(route.get("agent"))
-        if admission is not None and capacity_ok:
+        if admission is not None and granularity(doc) == "round":
+            from closer_native_observer import validate_admission
+
+            try:
+                validate_admission(manifest, admission, for_effects=True)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                report.append(
+                    {
+                        "campaign": path.name,
+                        "kind": "held",
+                        "reason": f"native control-plane admission held: {exc}",
+                    }
+                )
+                continue
+            # A round launches the deterministic coordinator, not this model.
+            # Private reasoning still needs its own qualified role and capacity.
+            capacity_ok = True
+        if admission is not None and route.get("agent"):
             import execution_profiles
 
             selected_id = route.get("profile_id")
