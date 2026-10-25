@@ -366,7 +366,10 @@ def summary(path: Path | None = None) -> dict:
                 rows.append(row)
             except (ValueError, TypeError):
                 malformed += 1
-    totals = {arm: {"judged": 0, "merged_durable": 0} for arm in ("triage", "rule")}
+    totals = {
+        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0}
+        for arm in ("triage", "rule")
+    }
     live_rows = [row for row in rows if row.get("triage_valid") and row.get("live_proposal")]
     if not live_rows:
         return {
@@ -379,31 +382,76 @@ def summary(path: Path | None = None) -> dict:
             ),
             **totals,
         }
+    consumed = _read_rows(consumed_path())
+    linked = linked_consumptions(consumed)
+
+    def grade_run(conn, arm: str, run_id: str | None, since_ts: float) -> None:
+        if not run_id:
+            totals[arm]["no_delivery"] += 1
+            return
+        found = conn.execute(
+            "SELECT o.merged,o.durability,o.failure_class FROM outcomes o "
+            "JOIN runs r ON r.run_id=o.run_id WHERE o.run_id=? AND r.ts > ?",
+            (run_id, since_ts),
+        ).fetchone()
+        if (
+            found
+            and found[1] not in (None, "pending")
+            and found[2] not in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES
+        ):
+            totals[arm]["judged"] += 1
+            totals[arm]["merged_durable"] += int(found[0] == 1 and found[1] == "durable")
+
+    def rule_run_id(conn, target: str, since_ts: float) -> str | None:
+        repo, _, issue = target.rpartition("#")
+        if not repo or not issue.isdigit():
+            return None
+        covers = [
+            cover
+            for cover in outcomes._read_pr_covers().values()
+            if cover.get("repo") == repo and int(issue) in cover.get("covers", [])
+        ]
+        if not covers:
+            return None
+        for cover in sorted(covers, key=lambda row: (row.get("ts", 0), row["pr"]), reverse=True):
+            found = conn.execute(
+                "SELECT run_id FROM runs WHERE target=? AND mode != 'role' AND ts > ? "
+                "ORDER BY ts DESC,run_id DESC LIMIT 1",
+                (f"{repo}#{cover['pr']}", since_ts),
+            ).fetchone()
+            if found:
+                return found[0]
+        return None
+
     with feedback._conn() as conn:
         for row in live_rows:
             # Invalid/fallback output is never a triage observation, nor a paired comparison.
             if not row.get("triage_valid") or not row.get("live_proposal"):
                 continue
-            picks = {
-                "rule": row.get("rule_pick"),
-                "triage": next(iter(row.get("triage_top_three") or []), None),
-            }
-            for arm, target in picks.items():
-                if not target:
-                    continue
-                found = conn.execute(
-                    "SELECT o.merged,o.durability,o.failure_class FROM runs r "
-                    "JOIN outcomes o ON o.run_id=r.run_id WHERE r.target=? "
-                    "AND r.mode != 'role' AND r.ts > ? ORDER BY r.ts DESC LIMIT 1",
-                    (target, row["ts"] / 1_000_000_000),
-                ).fetchone()
-                if (
-                    found
-                    and found[1] not in (None, "pending")
-                    and (found[2] not in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES)
-                ):
-                    totals[arm]["judged"] += 1
-                    totals[arm]["merged_durable"] += int(found[0] == 1 and found[1] == "durable")
+            triage_pick = next(iter(row.get("triage_top_three") or []), None)
+            if triage_pick:
+                triage_links = [
+                    linked.get(consumption_key(receipt), {})
+                    for receipt in consumed
+                    if receipt.get("role_run_id") == row.get("role_run_id")
+                    and receipt.get("picked") == triage_pick
+                ]
+                for link in triage_links:
+                    if link.get("status") == "followed":
+                        grade_run(
+                            conn,
+                            "triage",
+                            link.get("run_id"),
+                            row["ts"] / 1_000_000_000,
+                        )
+            rule_pick = row.get("rule_pick")
+            if rule_pick:
+                grade_run(
+                    conn,
+                    "rule",
+                    rule_run_id(conn, rule_pick, row["ts"] / 1_000_000_000),
+                    row["ts"] / 1_000_000_000,
+                )
     return {
         "cycles": len(rows),
         "malformed_rows": malformed,
@@ -477,9 +525,10 @@ def summary_line(path: Path | None = None) -> str:
     def percent(arm):
         count = data[arm]["judged"]
         return (
-            f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged)"
+            f"{100 * data[arm]['merged_durable'] / count:.1f}% ({count} judged) "
+            f"[{data[arm]['no_delivery']} no delivery]"
             if count
-            else "n/a (0 judged)"
+            else f"n/a (0 judged) [{data[arm]['no_delivery']} no delivery]"
         )
 
     return (

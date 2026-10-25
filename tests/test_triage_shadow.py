@@ -341,8 +341,92 @@ def test_summary_counts_only_known_durable_target_outcomes(brain, monkeypatch):
     assert triage_shadow.summary(path)["triage"]["judged"] == 0
     feedback.record_outcome("worker", durability="durable")
     result = triage_shadow.summary(path)
-    assert result["triage"] == {"judged": 1, "merged_durable": 1}
-    assert result["rule"]["judged"] == 0
+    assert result["triage"] == {"judged": 0, "merged_durable": 0, "no_delivery": 0}
+    assert result["rule"] == {"judged": 0, "merged_durable": 0, "no_delivery": 1}
+
+
+def test_followed_pick_is_graded_through_linked_run(brain):
+    path = brain / "rows.jsonl"
+    row = {
+        "schema_version": 1,
+        "ts": 100_000_000_000,
+        "triage_valid": True,
+        "live_proposal": True,
+        "role_run_id": "triage-role",
+        "rule_pick": "stranske/Orchestrator#1",
+        "triage_top_three": ["stranske/Orchestrator#3"],
+    }
+    path.write_text(json.dumps(row) + "\n")
+    receipt = {
+        "ts": 101_000_000_000,
+        "consumption_id": "followed-pick",
+        "role_run_id": "triage-role",
+        "picked": "stranske/Orchestrator#3",
+    }
+    triage_shadow._append(triage_shadow.consumed_path(), receipt)
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {"consumption_id": "followed-pick", "status": "followed", "run_id": "keepalive-run"},
+    )
+    feedback.record_run(
+        "keepalive-run",
+        "stranske/Orchestrator#77",
+        "implement",
+        "codex",
+        mode="remote",
+        source="keepalive",
+        pr_number=77,
+        ts=102,
+    )
+    feedback.record_outcome("keepalive-run", merged=True, durability="durable")
+    assert triage_shadow.summary(path)["triage"] == {
+        "judged": 1,
+        "merged_durable": 1,
+        "no_delivery": 0,
+    }
+
+
+def test_rule_pick_is_graded_through_covering_pr_run(brain):
+    path = brain / "rows.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "ts": 100_000_000_000,
+                "triage_valid": True,
+                "live_proposal": True,
+                "rule_pick": "stranske/Orchestrator#1",
+                "triage_top_three": [],
+            }
+        )
+        + "\n"
+    )
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {
+            "repo": "stranske/Orchestrator",
+            "pr": 77,
+            "covers": [1],
+            "ts": 101,
+            "final": True,
+        },
+    )
+    feedback.record_run(
+        "rule-keepalive-run",
+        "stranske/Orchestrator#77",
+        "implement",
+        "codex",
+        mode="remote",
+        source="keepalive",
+        pr_number=77,
+        ts=102,
+    )
+    feedback.record_outcome("rule-keepalive-run", merged=True, durability="durable")
+    assert triage_shadow.summary(path)["rule"] == {
+        "judged": 1,
+        "merged_durable": 1,
+        "no_delivery": 0,
+    }
 
 
 def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):
@@ -358,11 +442,25 @@ def test_summary_does_not_credit_an_outcome_before_the_live_cycle(brain):
                 "ts": 100_000_000_000,
                 "triage_valid": True,
                 "live_proposal": True,
+                "role_run_id": "triage-role",
                 "rule_pick": "stranske/Orchestrator#1",
                 "triage_top_three": ["stranske/Orchestrator#3"],
             }
         )
         + "\n"
+    )
+    triage_shadow._append(
+        triage_shadow.consumed_path(),
+        {
+            "ts": 101_000_000_000,
+            "consumption_id": "old-run-pick",
+            "role_run_id": "triage-role",
+            "picked": "stranske/Orchestrator#3",
+        },
+    )
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {"consumption_id": "old-run-pick", "status": "followed", "run_id": "old"},
     )
     assert triage_shadow.summary(path)["triage"]["judged"] == 0
     with feedback._conn() as conn:
