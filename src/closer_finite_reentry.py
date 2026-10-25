@@ -702,7 +702,101 @@ def _accepted_request_boundary(path, frontier, target, row):
     return {"path": str(inner), "sha256": sha, "accepted_request": proof}
 
 
-def plan(state_path, *, frontier, target, event, source_receipts=None):
+def _scope_readmission(root, path, frontier, target, entry, row, *, inventory_owner=None):
+    """Prove exact no-start lineage and fresh admission, never effect authority."""
+    import closer_dispatcher
+    import closer_quarantine
+
+    history = row.get("reentry_history")
+    if not isinstance(history, list) or not history or not isinstance(history[-1], dict):
+        raise ValueError("scope_readmission_requires_applied_audit")
+    previous = history[-1]
+    origin_path = (
+        root / "reentry-audit" / (_digest([frontier, target, previous.get("event")]) + ".json")
+    )
+    origin, origin_sha = _read(origin_path)
+    proposal = origin.get("plan", {})
+    before = origin.get("before", {})
+    if (
+        origin.get("schema") != SCHEMA
+        or origin.get("status") != "applied"
+        or not isinstance(proposal, dict)
+        or not isinstance(before, dict)
+        or proposal.get("kind") != "pre_callback_scope_refusal"
+        or proposal.get("stage") != "act"
+        or proposal.get("frontier") != frontier
+        or proposal.get("target") != target
+        or proposal.get("state_path") != str(path)
+        or proposal.get("plan_sha256") != previous.get("plan_sha256")
+        or _digest({k: v for k, v in proposal.items() if k != "plan_sha256"})
+        != proposal.get("plan_sha256")
+        or origin.get("after") != row
+        or origin.get("after_sha256") != _digest(row)
+        or row.get("status") != "held"
+        or row.get("stage") != "act"
+        or row.get("stage_status") != "completed"
+        or row.get("deferred_reason") != "scope_quarantined"
+        or row.get("resource_evidence", {}).get("confirmed_not_started") is not True
+        or row.get("scope_proof") != proposal.get("scope_proof")
+        or row.get("revision") != frontier["bindings"][target]["revision"]
+        or any(key in row.get("results", {}) for key in ("act", "exception", "reconcile"))
+    ):
+        raise ValueError("scope_readmission_audit_does_not_bind_current_hold")
+    proof_ref = _scope_proof(root, path, target, entry, before, caller_path=path)
+    proof = _receipt(proof_ref)
+    if proof_ref != proposal.get("scope_proof") or not resources.valid_scope_refusal(
+        path, target, row, entry["run_id"]
+    ):
+        raise ValueError("scope_readmission_refusal_proof_changed")
+    keys = proof.get("keys")
+    if (
+        proof.get("purpose") != "remote_effect"
+        or not isinstance(keys, list)
+        or not keys
+        or keys != sorted(set(keys))
+        or proof.get("reason") not in {"quarantined_resource:" + key for key in keys}
+    ):
+        raise ValueError("unsupported_scope_readmission_refusal")
+    results = row["results"]
+    prep = results.get("prepare", {})
+    context = {**results, "revision": row["revision"]}
+    snapshot = _receipt(prep.get("snapshot_ref"))
+    if not closer_dispatcher._remote_only_effect(target, context):
+        raise ValueError("scope_readmission_requires_bound_native_remote_effect")
+    old_scope = proof["snapshot"]
+    workspaces = {
+        "schema": closer_quarantine.WORKSPACE_SCHEMA,
+        "historical": old_scope.get("workspaces", {}),
+        "execution": old_scope.get("execution_workspaces", {}),
+    }
+    derived = closer_dispatcher._prepared_resource_keys(
+        target, prep, snapshot, {}, infer_workspace=False
+    )
+    expected = resources._scope_keys(target, context, lambda *_: derived, infer_workspaces=False)
+    if keys != expected:
+        raise ValueError("scope_readmission_prepared_keys_changed")
+    inner = _inner_boundary(path, target)
+    if inner != proposal.get("inner_boundary"):
+        raise ValueError("scope_readmission_inner_boundary_changed")
+    current = closer_quarantine.scope_snapshot(
+        old_scope["state_path"], workspaces=workspaces, inventory_owner=inventory_owner
+    )
+    problem = closer_quarantine.scope_problem(
+        current, target, keys, purpose="remote_effect", inventory_owner=inventory_owner
+    )
+    if problem:
+        raise ValueError("scope_readmission_still_refused:" + problem)
+    return {
+        "origin_audit": {"path": str(origin_path), "sha256": origin_sha},
+        "scope_proof": proof_ref,
+        "inner_boundary": inner,
+        "keys": keys,
+        "purpose": "remote_effect",
+        "fresh_scope_admitted": True,
+    }
+
+
+def plan(state_path, *, frontier, target, event, source_receipts=None, _inventory_owner=None):
     """Read-only plan. A trigger is explicit evidence, never new action authority."""
     path = _physical(state_path)
     root = _physical(path.parent.parent.parent)
@@ -775,7 +869,20 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
     if not isinstance(stage, str):
         raise ValueError("malformed_request_stage")
     kind = None
-    if row.get("error") == "action wait lacks exact verified no-effect queue proof":
+    readmission = None
+    if (
+        row.get("status") == "held"
+        and stage == "act"
+        and row.get("stage_status") == "completed"
+        and row.get("deferred_reason") == "scope_quarantined"
+        and not row.get("error")
+    ):
+        readmission = _scope_readmission(
+            root, path, frontier, target, entry, row, inventory_owner=_inventory_owner
+        )
+        proof = readmission["scope_proof"]
+        kind = "scope_no_callback_readmission"
+    elif row.get("error") == "action wait lacks exact verified no-effect queue proof":
         inner = _accepted_request_boundary(path, frontier, target, row)
         kind = "accepted_verifier_request_receipt"
     elif (
@@ -838,6 +945,7 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
             "transport": transport,
             "retained_results": results,
             "scope_reason": row.get("error") if proof else None,
+            **({"scope_readmission": readmission} if readmission else {}),
         }
     )
     if any(
@@ -862,6 +970,8 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
         "acceptance_authority": False,
         "global_stop_authority": False,
     }
+    if readmission:
+        result["scope_readmission"] = readmission
     if kind in {"native_pre_queue_refusal", "native_prewrite_verifier_refusal"}:
         result["source_receipts"] = source_receipts
     return {**result, "plan_sha256": _digest(result)}
@@ -894,14 +1004,21 @@ def _accepted_receipt_transaction(path, frontier, target, audit):
         raise ValueError("malformed_reentry_audit_plan")
     proposal = proposal or {}
     accepted = proposal.get("kind") == "accepted_verifier_request_receipt"
+    scope_readmission = proposal.get("kind") == "scope_no_callback_readmission" or (
+        row.get("stage") == "act"
+        and row.get("status") == "held"
+        and row.get("deferred_reason") == "scope_quarantined"
+        and not row.get("error")
+    )
     if (
         not accepted
+        and not scope_readmission
         and row.get("error") != "action wait lacks exact verified no-effect queue proof"
     ):
         yield
         return
     inner = _physical(path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json")
-    if not inner.is_file():
+    if not inner.is_file() and not scope_readmission:
         raise ValueError("accepted_request_inner_queue_missing")
     with closer_queue._ledger_lock(inner, cutoff=time.time() + 1, now=time.time) as locked:
         if not locked:
@@ -919,7 +1036,9 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
     key = _digest([frontier, target, event])
     audit = root / "reentry-audit" / (key + ".json")
     with _exclusive(path.with_name(path.name + ".runlock")), _exclusive(path.parent / "lease.lock"):
-        with resources.inventory_lock(root, exclusive=True, deadline=time.time() + 10):
+        with resources.inventory_lock(
+            root, exclusive=True, deadline=time.time() + 10
+        ) as inventory_owner:
             with pipeline._locked(path, timeout_seconds=10), _accepted_receipt_transaction(
                 path, frontier, target, audit
             ):
@@ -945,6 +1064,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                                 target=target,
                                 event=event,
                                 source_receipts=source_receipts,
+                                _inventory_owner=inventory_owner,
                             )
                             if fresh["plan_sha256"] != expected_plan_sha256:
                                 raise ValueError("prepared_reentry_inputs_changed")
@@ -966,6 +1086,7 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                     target=target,
                     event=event,
                     source_receipts=source_receipts,
+                    _inventory_owner=inventory_owner,
                 )
                 if proposal["plan_sha256"] != expected_plan_sha256:
                     raise ValueError("reentry_plan_changed")
@@ -1008,6 +1129,13 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                         },
                     )
                     row.pop("reentry_ready", None)
+                elif proposal["kind"] == "scope_no_callback_readmission":
+                    row.update(status="held", stage_status="queued")
+                    row["reentry_ready"] = {
+                        "event": event,
+                        "plan_sha256": expected_plan_sha256,
+                        "kind": "scope_no_callback_readmission",
+                    }
                 elif proposal["stage"] in {"act", "exception"}:
                     # No effect occurred, but the real historical scope is still
                     # unavailable. Reconciliation cannot turn that into readiness.
@@ -1120,9 +1248,35 @@ def ready(state_path, frontier, target, row):
         or proposal.get("plan_sha256") != marker.get("plan_sha256")
         or audit.get("after_sha256") != _digest(row)
         or not isinstance(row.get("stage"), str)
-        or row["stage"] not in {"prepare", "interpret"}
+        or (
+            row["stage"] not in {"prepare", "interpret"}
+            and not (
+                row["stage"] == "act"
+                and proposal.get("kind") == "scope_no_callback_readmission"
+                and marker.get("kind") == "scope_no_callback_readmission"
+            )
+        )
     ):
         raise ValueError("reentry_audit_does_not_bind_ready_row")
+    if proposal.get("kind") == "scope_no_callback_readmission":
+        if _digest({k: v for k, v in proposal.items() if k != "plan_sha256"}) != proposal.get(
+            "plan_sha256"
+        ):
+            raise ValueError("scope_readmission_plan_changed")
+        state, _ = _read(path)
+        entry = _entry(state, frontier)
+        before = audit.get("before")
+        if not isinstance(before, dict):
+            raise ValueError("scope_readmission_missing_origin")
+        fresh = _scope_readmission(root, path, frontier, target, entry, before)
+        expected = proposal.get("scope_readmission", {})
+        # The new row/lease changes census bytes. Require fresh success with the
+        # same exact lineage and aliases, not a stale snapshot hash equality.
+        if any(
+            fresh.get(key) != expected.get(key)
+            for key in ("origin_audit", "scope_proof", "inner_boundary", "keys", "purpose")
+        ):
+            raise ValueError("scope_readmission_binding_changed")
     return True
 
 

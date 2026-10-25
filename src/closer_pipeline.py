@@ -4205,8 +4205,19 @@ def _run_pipeline_finite(
                     import closer_finite_reentry
 
                     closer_finite_reentry.ready(path, frontier, target, item)
-                    item.pop("reentry_ready")
+                    consumed = item.pop("reentry_ready")
                     item.update(status="pending", stage_status="queued")
+                    if consumed.get("kind") == "scope_no_callback_readmission":
+                        item["scope_readmission_consumed"] = consumed
+                        # The original no-start proof remains in immutable audits
+                        # and history; it cannot describe this new running request.
+                        for key in (
+                            "deferred_reason",
+                            "deferred_next_trigger",
+                            "scope_proof",
+                            "resource_evidence",
+                        ):
+                            item.pop(key, None)
                 if item.get("stage_status") == "running":
                     item.update(
                         status="unknown",
@@ -4381,6 +4392,26 @@ def _run_pipeline_finite(
                         )
                         if scope_refusal is not None:
                             current["scope_refusal"] = scope_refusal
+                            candidate = {**current, "scope_proof": scope_refusal}
+                            if (
+                                stage == "act"
+                                and current.get("scope_readmission_consumed", {}).get("kind")
+                                == "scope_no_callback_readmission"
+                                and closer_resources.valid_scope_refusal(
+                                    path, target, candidate, run_id
+                                )
+                            ):
+                                current.update(
+                                    status="held",
+                                    stage_status="completed",
+                                    deferred_reason="scope_quarantined",
+                                    deferred_next_trigger="reconcile_scope_before_retry",
+                                    scope_proof=scope_refusal,
+                                    resource_evidence={
+                                        "scope_refusal": scope_refusal,
+                                        "confirmed_not_started": True,
+                                    },
+                                )
 
                     mutate_frontier(fail, request_deadline=window["deadline"])
                     continue

@@ -267,3 +267,21 @@ the existing causal stage-successor path. It rechecks current assignment and
 admission, preserves request provenance, and starts normal preparation without
 copying old acceptance results. Missing proof or an active owner remains a
 per-target hold.
+
+An applied, exact no-callback ACT scope-refusal audit may also request fresh
+admission through that same plan/apply interface after its original quarantine
+is no longer relevant. This is limited to the retained `quarantined_resource`
+refusal of a bound native remote action: the current row must equal the audited
+after-image, its immutable preparation and aliases must still match, and the
+inner queue must contain no effect or provider history. A fresh successful
+remote scope census is required at planning, commit and READY consumption.
+A new event name alone is never progress. The transaction retains the original
+frontier, completed preparation/interpretation, refusal proof and audit history.
+
+The resulting queued ACT is consumed only by a live normal production lease.
+Its normal resource reservation and scope guard still run before the callback;
+a newly conflicting claim keeps that action held with authenticated no-start
+proof. Unknown effects, changed identities, local/workspace refusals and missing
+or changed audits remain outside this continuation. The short inventory census
+can use only the explicit lifetime/thread/process/root-bound capability yielded
+by its caller's existing inventory lock; ordinary locks remain non-reentrant.
