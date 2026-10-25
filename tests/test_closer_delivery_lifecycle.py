@@ -46,6 +46,8 @@ class OfflineDelivery:
             labels=[],
             verifier=None,
             verifier_history_complete=True,
+            head_branch="codex/issue-2-offline",
+            head_repository="owner/repo",
         )
         self.refresh()
         self.deadline = time.time() + 600
@@ -56,7 +58,18 @@ class OfflineDelivery:
             )
         self.archive = stream.getvalue()
         monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+
+        # These lifecycle tests simulate routing. Real profile/pool execution is
+        # covered separately through test_closer_dispatcher_scoped_integration.
+        def semantic_route(route, invoke, *, load, **_kwargs):
+            try:
+                return invoke(route), route
+            finally:
+                adapter._release_route_load(route, load)
+
+        monkeypatch.setattr(adapter, "_execute_profile_route", semantic_route)
         monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "brain-state"))
+        monkeypatch.setenv("ORCH_STORAGE_STATE_DIR", str(tmp_path / "storage-state"))
         monkeypatch.setattr(claims, "claim", lambda *a, **kw: True)
         monkeypatch.setattr(claims, "release", lambda *a, **kw: True)
         monkeypatch.setattr(claims, "update_metadata", lambda *a, **kw: True)
@@ -202,7 +215,9 @@ class OfflineDelivery:
             self.refresh()
             return SimpleNamespace(returncode=0, stdout=json.dumps(result))
         assert command[1].endswith("merge_guard.py")
-        assert command[2:] == [TARGET, "--expected-head", HEAD, "--confirm-merge"]
+        assert command[2] == TARGET
+        assert command[2:6] == [TARGET, "--expected-head", HEAD, "--confirm-merge"]
+        assert set(command[6:]) == {"--skip-immediate-advisory", "--remote-only"}
         assert 0 < timeout <= 600
         self.guard_calls.append(command)
         self.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
@@ -303,7 +318,7 @@ class OfflineDelivery:
             holds=lambda: set(),
         )
 
-    def run(self):
+    def run(self, *, blocker_fn=None):
         self.deadline = time.time() + 600
         # A process restart has no injected coordinator decisions or live objects.
         # Only production pipeline/inner ledgers and the external snapshot persist.
@@ -313,6 +328,7 @@ class OfflineDelivery:
             apply=True,
             workers=True,
             run_fn=self.backend.run_fn,
+            blocker_fn=blocker_fn,
         )
         self.backend.campaign_admission = lambda *a, **kw: {"allowed": True, "timeout": 60}
         args = SimpleNamespace(state=str(self.root / "queue.json"), max_workers=1, shadow=False)
@@ -326,7 +342,7 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     delivery = OfflineDelivery(tmp_path, monkeypatch)
     result = delivery.run()
     assert len(delivery.guard_calls) == 1, result
-    assert delivery.provider_calls
+    assert not delivery.provider_calls  # Objective premerge path never calls a model.
     assert delivery.current["state"] == "MERGED"
     assert "verify:compare" in delivery.current["labels"]
     assert closer_pipeline.validate_stop(
@@ -382,6 +398,8 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
 @pytest.mark.parametrize("barrier", ["wrong_attempt", "changed_head", "provider_uncertain"])
 def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypatch, barrier):
     delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
+    delivery.supply_native_pass(monkeypatch)
     if barrier == "wrong_attempt":
         delivery.invalid_proof = True
     elif barrier == "provider_uncertain":
@@ -398,7 +416,8 @@ def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypat
         monkeypatch.setattr(dispatcher, "offload", head_changes_after_assessment)
     result = delivery.run()
     assert not delivery.guard_calls, result
-    assert delivery.current["state"] == "OPEN"
+    assert delivery.current["state"] == "MERGED"
+    assert not delivery.closure_calls
     state = delivery.state()
     serialized = json.dumps(state)
     if barrier == "wrong_attempt":
@@ -417,7 +436,7 @@ def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypat
         assert len(inner_paths) == 1
         inner = json.loads(inner_paths[0].read_text())
         assert inner["items"][TARGET]["evidence"]["head"] == "e" * 40
-        assert inner["items"][TARGET]["action"] != "merge"
+        assert inner["items"][TARGET]["action"] != "close_source"
 
 
 def test_unknown_merge_transport_outcome_is_durable_and_never_repeated(tmp_path, monkeypatch):
@@ -460,12 +479,46 @@ def test_pending_current_head_ci_waits_then_resumes_positive_merge(tmp_path, mon
     assert delivery.current["state"] == "MERGED"
 
 
-def test_human_hold_blocks_positive_evidence_without_provider_or_action(tmp_path, monkeypatch):
+@pytest.mark.parametrize("label", ["agents:paused", "agents:auto-pilot-pause"])
+@pytest.mark.parametrize("where", ["pr", "source"])
+def test_explicit_pause_blocks_positive_evidence_without_provider_or_action(
+    tmp_path, monkeypatch, label, where
+):
     delivery = OfflineDelivery(tmp_path, monkeypatch)
-    delivery.current["labels"] = ["needs-human"]
+    if where == "pr":
+        delivery.current["labels"] = [label]
+    else:
+        delivery.current["sources"][0]["labels"] = [label]
     delivery.refresh()
     result = delivery.run()
     assert not delivery.guard_calls
     assert not delivery.provider_calls
     assert delivery.current["sources"][0]["state"] == "open"
-    assert "needs-human" in json.dumps(result)
+    assert label in json.dumps(result)
+
+
+def test_generic_needs_human_label_preserves_objective_merge_and_verifier_successor(
+    tmp_path, monkeypatch
+):
+    delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery.current["labels"] = ["needs-human"]
+    delivery.refresh()
+    result = delivery.run()
+    assert len(delivery.guard_calls) == 1, result
+    assert not delivery.provider_calls
+    assert delivery.current["state"] == "MERGED"
+    assert "verify:compare" in delivery.current["labels"]
+    assert delivery.current["sources"][0]["state"] == "open"
+
+
+def test_confirmed_human_owner_blocker_still_prevents_positive_delivery(tmp_path, monkeypatch):
+    delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery.current["labels"] = ["needs-human"]
+    delivery.refresh()
+    result = delivery.run(
+        blocker_fn=lambda: {TARGET: {"reason": "owner confirmed required human input"}}
+    )
+    assert not delivery.guard_calls
+    assert not delivery.provider_calls
+    assert delivery.current["sources"][0]["state"] == "open"
+    assert "scoped owner blocker " + TARGET in json.dumps(result)

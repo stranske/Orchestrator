@@ -74,7 +74,8 @@ fi
 chmod +x "$MIRROR"/orchestrate.sh
 extra=0
 mkdir -p "$MIRROR/experiments" "$MIRROR/data" "$MIRROR/config"
-# Source snapshots, not mirror-local state. Remove the previous copies before the conditional copy
+# Immutable source snapshots; mutable registry defaults live in ORCH_LOCAL_RUNTIME.
+# Remove the previous source copies before the conditional copy
 # so a file deleted from the repository cannot keep influencing the mirror, and leave every other
 # mirror-local marker in these directories (experiments/.last-ship-gate, say) alone.
 rm -f \

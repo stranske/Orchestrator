@@ -86,7 +86,57 @@ def test_real_adapter_refusal_persists_and_restart_has_no_offload_or_action(
     # Produce each reason through the real original-criteria integrator, then use
     # the actual adapter act callback, native queue and outer pipeline together.
     snap, _packet, ref, prep, interpreted = fixture(tmp_path / "packet")
-    snap.update(state="OPEN", draft=False, mergeable="MERGEABLE", labels=[], active_threads=0)
+    # An unresolved acceptance finding must hold post-verifier source closure;
+    # it is no longer a reason to route an otherwise green premerge PR to a model.
+    import json
+
+    import verifier_evidence
+
+    merge = "d" * 40
+    marker = {
+        "schema": verifier_evidence.MARKER,
+        "repo": "owner/repo",
+        "pr": 12,
+        "head_sha": snap["head"],
+        "evaluated_sha": merge,
+        "run_id": "34",
+        "run_attempt": "1",
+        "provider_verdicts": ["PASS"],
+        "verdict": "PASS",
+        "ci_failed": False,
+    }
+    native_pass = verifier_evidence.decision_from_pr(
+        "owner/repo",
+        {
+            "number": 12,
+            "state": "MERGED",
+            "headRefOid": snap["head"],
+            "mergeCommit": {"oid": merge},
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": "github-actions[bot]"},
+                        "url": "https://github.com/owner/repo/pull/12#issuecomment-34",
+                        "body": "<!-- "
+                        + verifier_evidence.MARKER
+                        + " "
+                        + json.dumps(marker)
+                        + " -->",
+                    }
+                ]
+            },
+        },
+    )
+    assert native_pass and native_pass["evaluated_sha"] == merge
+    snap.update(
+        state="MERGED",
+        merge=merge,
+        verifier=native_pass,
+        draft=False,
+        mergeable="MERGEABLE",
+        labels=[],
+        active_threads=0,
+    )
     if reason == "substantive_or_ambiguous_finding":
         interpreted["proposal"].update(
             classification="uncertain", substantive_needs=["Original criterion is ambiguous"]

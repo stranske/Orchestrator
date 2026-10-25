@@ -1,0 +1,169 @@
+test_role_failure_keeps_deterministic_tags_and_original_assignment (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_role_failure_keeps_deterministic_tags_and_original_assignment) ... FAIL
+
+======================================================================
+FAIL: test_role_failure_keeps_deterministic_tags_and_original_assignment (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_role_failure_keeps_deterministic_tags_and_original_assignment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 88, in test_role_failure_keeps_deterministic_tags_and_original_assignment
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        result["role_activation"],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        {"error": "role store unavailable", "prompt": "repo prompt"},
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: {'error': 'role store unavailable', 'prompt': ''} != {'error': 'role store unavailable', 'prompt': 'repo prompt'}
+- {'error': 'role store unavailable', 'prompt': ''}
++ {'error': 'role store unavailable', 'prompt': 'repo prompt'}
+?                                                +++++++++++
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)
+
+test_accepted_and_rejected_lineage_deduplicates_without_mutating_input (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_accepted_and_rejected_lineage_deduplicates_without_mutating_input) ... FAIL
+
+======================================================================
+FAIL: test_accepted_and_rejected_lineage_deduplicates_without_mutating_input (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_accepted_and_rejected_lineage_deduplicates_without_mutating_input)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 117, in test_accepted_and_rejected_lineage_deduplicates_without_mutating_input
+    self.assertEqual(result["influenced_by_role_run_ids"], ["prior", "accepted"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['prior', 'prior', 'accepted', 'accepted'] != ['prior', 'accepted']
+
+First differing element 1:
+'prior'
+'accepted'
+
+First list contains 2 additional elements.
+First extra element 2:
+'accepted'
+
+- ['prior', 'prior', 'accepted', 'accepted']
++ ['prior', 'accepted']
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)
+
+test_profile_overrides_and_commit_boundary_reach_command_builder (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_profile_overrides_and_commit_boundary_reach_command_builder) ... FAIL
+
+======================================================================
+FAIL: test_profile_overrides_and_commit_boundary_reach_command_builder (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_profile_overrides_and_commit_boundary_reach_command_builder)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 142, in test_profile_overrides_and_commit_boundary_reach_command_builder
+    self.command.assert_called_once_with(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        "cursor",
+        ^^^^^^^^^
+    ...<8 lines>...
+        commits_in_worktree=True,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/unittest/mock.py", line 998, in assert_called_once_with
+    return self.assert_called_with(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/unittest/mock.py", line 986, in assert_called_with
+    raise AssertionError(_error_message()) from cause
+AssertionError: expected call not found.
+Expected: build_command('cursor', 'persona\n\nrole prompt', None, cwd=PosixPath('/tmp/dispatcher-plan-ssqiwr92/checkout'), profile={'profile_id': 'fixture-profile', 'requested_model': 'profile-model'}, transport='local', permission_mode='workspace-write', reasoning_effort='high', requested_model='explicit-model', commits_in_worktree=True)
+  Actual: build_command('cursor', 'persona\n\nrole prompt', None, cwd=PosixPath('/tmp/dispatcher-plan-ssqiwr92/checkout'), profile={'profile_id': 'fixture-profile', 'requested_model': 'profile-model'}, transport='local', permission_mode=None, reasoning_effort='high', requested_model='explicit-model', commits_in_worktree=True)
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)
+
+test_unbuildable_command_skips_instead_of_returning_a_spawnable_plan (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_unbuildable_command_skips_instead_of_returning_a_spawnable_plan) ... FAIL
+
+======================================================================
+FAIL: test_unbuildable_command_skips_instead_of_returning_a_spawnable_plan (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_unbuildable_command_skips_instead_of_returning_a_spawnable_plan)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 159, in test_unbuildable_command_skips_instead_of_returning_a_spawnable_plan
+    self.assertIsNone(self.plan())
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+AssertionError: {} is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+
+test_unexpected_command_failure_is_not_disguised_as_an_unknown_agent (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_unexpected_command_failure_is_not_disguised_as_an_unknown_agent) ... FAIL
+
+======================================================================
+FAIL: test_unexpected_command_failure_is_not_disguised_as_an_unknown_agent (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_unexpected_command_failure_is_not_disguised_as_an_unknown_agent)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 164, in test_unexpected_command_failure_is_not_disguised_as_an_unknown_agent
+    with self.assertRaisesRegex(OSError, "adapter unavailable"):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: OSError not raised
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+
+test_dry_run_predicts_missing_worktree_without_provisioning (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_dry_run_predicts_missing_worktree_without_provisioning) ... FAIL
+
+======================================================================
+FAIL: test_dry_run_predicts_missing_worktree_without_provisioning (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_dry_run_predicts_missing_worktree_without_provisioning)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 170, in test_dry_run_predicts_missing_worktree_without_provisioning
+    self.assertTrue(result["worktree_missing"])
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+
+test_existing_git_file_is_a_present_worktree_in_dry_run (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_existing_git_file_is_a_present_worktree_in_dry_run) ... FAIL
+
+======================================================================
+FAIL: test_existing_git_file_is_a_present_worktree_in_dry_run (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_existing_git_file_is_a_present_worktree_in_dry_run)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 178, in test_existing_git_file_is_a_present_worktree_in_dry_run
+    self.assertFalse(self.plan()["worktree_missing"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 1 test in 0.004s
+
+FAILED (failures=1)
+
+test_gemini_receives_the_resolved_workspace_after_role_activation (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_gemini_receives_the_resolved_workspace_after_role_activation) ... FAIL
+
+======================================================================
+FAIL: test_gemini_receives_the_resolved_workspace_after_role_activation (test_dispatcher_plan_boundaries.DispatchPlanBoundaries.test_gemini_receives_the_resolved_workspace_after_role_activation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/Orchestrator/Orchestrator/tests/test_dispatcher_plan_boundaries.py", line 191, in test_gemini_receives_the_resolved_workspace_after_role_activation
+    workspace_prompt.assert_called_once_with("persona\n\nrole prompt", self.cwd)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/unittest/mock.py", line 998, in assert_called_once_with
+    return self.assert_called_with(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/unittest/mock.py", line 986, in assert_called_with
+    raise AssertionError(_error_message()) from cause
+AssertionError: expected call not found.
+Expected: _gemini_workspace_prompt('persona\n\nrole prompt', PosixPath('/tmp/dispatcher-plan-8ka5zgw6/checkout'))
+  Actual: _gemini_workspace_prompt('persona\n\nrole prompt', PosixPath('/tmp/dispatcher-plan-8ka5zgw6/checkout-alias'))
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)

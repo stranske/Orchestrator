@@ -1,0 +1,269 @@
+# Gap-directed closer evidence recovery
+
+## Active verification inventory read progress
+
+Before requesting verification, the native preflight reads every page of each
+active-run status. An inconsistent count/page result gets one bounded fresh
+read; a still-incomplete, duplicate or malformed inventory remains a typed
+no-POST wait. A real same-target active run still prevents another request.
+
+A retained finite frontier does not poll or rewrite that wait on replay. After
+an authoritative complete inventory establishes read progress, the existing
+native observer and frontier builder may create the next request frontier.
+Its normal prewrite checks run again. The old frontier and its no-POST proof
+remain history; uncertain consequential operations are never reset this way.
+
+## Original titles and safely represented requirements
+
+Source rows distinguish the original title digest from the retained masked-display
+digest through `closer-source-title-transform/v1`. The acquisition-time record is
+recomputed against the bound current original source at readiness; a forged record,
+changed body/source identity, missing bytes or truncation cannot establish readiness.
+Credential masking remains applied to the display title.
+
+For objective MERGE only, an exact nonempty unchanged original body supplies the
+request needed to evaluate merge eligibility, even when it is freeform. A valid
+masked-title transform then remains explicit unresolved context, with no claim
+that all title meaning was preserved. No masked original title text is copied
+into another field, and no Tasks/AC heading requirement is introduced. Empty,
+redacted or truncated bodies, source drift and forged transform records still
+block. Post-verification full-source acceptance retains the necessary title
+transform hold. This is an action-specific minimum screen, never acceptance PASS.
+
+The data-only model context projects out optional `title_transform` audit metadata
+so it cannot displace the original request body or named necessary evidence. Its
+`content_projection` explicitly names the omitted field and full source size;
+the complete packet, source revision, original/display digests and retained audit
+remain unchanged. A projected model context is not a claim that all packet bytes
+were inspected, and the original content budget and missing-input rules remain.
+
+The finite production closer uses one readiness rail and the existing low-agent,
+exception and action paths. Collection is a task variant of `closer_interpret`,
+not another evaluator, acceptance standard, queue or scheduler. Legacy generic
+callback drivers keep their prior admission policy.
+
+## Minimum evidence versus completed proof
+
+`closer_evidence.action_evidence_readiness` retains its raw-input `ready` result
+and adds `requirements` and `evaluation_ready`. The latter asks whether the
+closer can evaluate this action. It does not require that acceptance has already
+been demonstrated. Original request identity/body and usable action-specific raw
+inputs remain necessary. For example, retained current-head code can support
+investigation without every CI artifact or a diagnostic verifier report. The
+existing closer still judges the original criteria, NON_PASS accounting and
+sufficiency. `acceptance_ok`, the revision-bound action queue, merge guard and
+native verifier retain all effect authority.
+
+| Necessity | Meaning | Routing |
+|---|---|---|
+| necessary | This action cannot be evaluated without the named input | Bounded second-pass collection; unresolved gaps affect this item/action |
+| useful | Can improve judgment, but an assessment is possible now | Standard closer; no retrieval hold |
+| nice_to_have | Additional validation/context | Suggestion; no retrieval hold |
+| possibly_useful | Speculative future context | Recorded suggestion; no default fetch |
+
+Model-requested extras use the same classification. A necessary extra must name
+one exact supported locator and a specific question tied to an original criterion
+(or its SHA256) or current finding ID. One job log can be necessary. A request for
+all artifacts cannot become globally mandatory. The native reader verifies the
+job's run, PR association and exact head before reading logs, retains raw bytes,
+and applies credential redaction and a bounded tail window for oversized logs,
+with the retained window explicit. A verified bounded partial
+log can support evaluation; its omissions remain explicit for the closer to judge.
+This is delivery for evaluation, not a claim that the question or criterion is
+already proved. Unsupported locators confer
+no necessity. A well-formed optional suggestion cannot enter `substantive_needs`
+merely because its exact explanatory string was included there.
+
+## Recovery and re-entry
+
+1. PREPARE delivers the retained snapshot and packet.
+2. INTERPRET runs the same screen. Sufficient packets reach normal closer agents.
+3. A missing necessary input invokes the existing low route with a collection
+   contract naming the gaps and prior observations. The agent selects supported
+   reads and classifies the cause; deterministic native collectors perform them.
+4. Only selected sections refresh. Verified unrelated sections, including their
+   unavailable observations, survive. Necessary exact-job reads become retained
+   `requested_evidence`, with head/run/attempt and content provenance.
+5. Refresh and re-screen. Recovered preparation references are checked against
+   the same target/head/revision before normal interpretation, exception or ACT
+   uses them. A changed source/head/review revision requires a new frontier.
+6. Remaining gaps become named per-item dependencies. Partial progress remains
+   available to the next invocation. No collection result grants acceptance.
+
+The journal lives beneath the existing evidence directory, in `recovery/`.
+Completed metadata/page reads and downloaded archives are checkpointed in the
+same revision scope before subsequent requests. Archives reuse the existing
+content-addressed file rather than adding another ZIP copy. Individual log
+observations survive a later page/read deferral and are reattached on re-entry.
+It does not rewrite queue/campaign/UNKNOWN history. A started collection is
+recorded before dispatch. Unchanged requirements and retained raw observations
+cannot purchase another collection. Error wording, clocks and manifest churn are
+not progress. Actual new retained evidence, a changed source/check/review revision,
+a changed collector implementation, or an explicit `--evidence-retry-token`
+provides a new trigger. A known authoritative GitHub capacity reset resumes the
+saved completed plan, without another collection-model request. Interrupted idempotent reads without reset metadata resume their saved plan in a
+new request under the existing throttle. A known pre-provider deadline is
+retryable; an invocation with an uncertain outcome remains held. Successful
+recovery is committed before assessment re-entry, so a later assessment failure
+cannot discard recovered sections.
+
+Existing request deadlines, process ownership, concurrency, capacity and hung-read
+protections remain. There is no added aggregate elapsed-work budget, all-artifact
+completion requirement, or whole-lane hold. If the current request cannot also
+run normal assessment, the next request uses the retained recovery progress.
+Bounded assessment-context omissions remain explicit; retained paths do not claim
+that a tool-free model inspected their bytes.
+
+## Systematic upstream reporting
+
+Confirmed collector defects are grouped by upstream owner/component/root cause,
+with affected cases and before/after packet digests. Current confirmation recipes
+cover demonstrated downloader-binding and review-pagination omissions followed by
+restored, bound raw evidence. A model label alone is not confirmation. Other
+unconfirmed producer/parser candidates remain retained cause observations for
+source-owner investigation. Transient fetch failure, legitimate absence and
+competing delivery PRs are not automatically bugs.
+
+After processing, one reporting pass searches existing issues and PRs, consults
+the improvement log through its accessor, and reuses the existing duplicate
+matcher, complete-search guard and durable pre-POST writer. Related candidates
+need root-cause confirmation. Matching upstream work receives updated grouped comments in bounded case batches; otherwise one issue is created in the authorized Orchestrator or
+Workflows repository. Uncertain creates reconcile before another POST; failed or
+incomplete searches cannot establish absence. Reporting failure and upstream
+repair never change an individually recovered PR's eligibility or completion.
+
+This extends the collector/runtime boundary owned by Orchestrator. Portable
+Workflows action safeguards are unchanged. The implementation composes PRs 857
+and 858; combined-tree release verification and installation remain with the
+release owner. Focused offline tests use synthetic data and transport boundaries.
+
+### Cause annotations and retrieval capabilities
+
+A collection plan may classify causes for every produced packet section, including
+`prior_dispositions`, `checks`, and `test_coverage_artifacts`. Cause annotations use
+the packet producer's section inventory plus the delivery-inventory rail. They do
+not authorize retrieval, make optional evidence necessary, or establish a producer
+defect. Retrieval requests retain their separate, smaller coordinator-supported
+section contract and requirement/criterion validation. Unknown or malformed cause
+classifications remain recoverable per-item validation failures.
+
+## Repeat verification and current outcomes
+
+Initial requests and repaired deliveries use the same hosted collector, input
+screen, configured verifier agents and result publisher. An already-applied
+`verify:compare` label with no applicable result is dispatched through the
+existing workflow inputs; adding the label again would not start another run.
+Completed repository-wide workflow history is optional diagnostic evidence, not
+an admission dependency. Complete active inventory, an exact current PR read,
+relevant active requests and native uncertain-operation fences remain required.
+Historical archive acquisition is explicit (`verification_snapshot` with
+`include_history=True`) and cannot delay ordinary initial observation.
+
+`verification-event/v1` binds the actual delivery PR's head/merge, authentic
+request revision and collector-resolved material. Its predecessor records causal
+history without making unchanged evidence a new event. Optional log packaging,
+transport metadata and collection timestamps do not create material progress.
+Specific necessary material selectors are re-authenticated by the hosted
+collector. Accounting a finding is not declaring it PASS: a retained, evaluable
+unresolved question can return through `post_merge_verify`. Legacy reports have
+no comparable material digest, so same-SHA re-entry additionally needs genuine
+retained necessary recovery progress. Selecting an old artifact or changing a
+packet's serialization alone is insufficient.
+
+Current status follows a unique applicable authenticated event chain. Pending,
+incomplete, conflicting or orphan events cannot restore an old PASS. Exact
+attempts remain immutable in the existing Brain completion-event history;
+out-of-order arrivals do not replace a newer applicable result. A known
+no-evaluation input failure may retry the same bound event. An existing or
+uncertain evaluation must first recover its retained result. A POST timeout
+remains uncertain; explicit unsupported-input HTTP422 is known not started.
+
+A later fix's code is evaluated as its actual merged delivery. Existing explicit
+linked-descendant ancestry selection is reused. An old PR number cannot evaluate
+arbitrary later code, and a repair's PASS does not rewrite the old PR's historical
+verdict. Missing authentic delivery lineage remains a named collection task.
+
+The optional repeat inputs require the reviewed Workflows producer and synced
+consumer contract; ordinary initial requests do not. Cross-language digest
+fixtures and offline lifecycle tests cover request/result/Brain/closure
+composition without provider calls. Workflows' separately recorded historical
+CI-owner provenance limitation (the #872 case) is not waived by this contract.
+
+Native verification dispatch prepares a bound core packet without fetching optional
+diffs, review conversations or ordinary CI archives. Their sections explicitly say
+`request_status: not_requested`; this grants no acceptance proof. Both scheduler
+paths and scoped pool admission recognize only registered native callbacks with
+an immutable validated deterministic packet. They use IO capacity, retain target
+and local-state ownership checks, and do not claim a product checkout. Pinned
+workspace mappings remain intact; physical checkout checks occur before a callback
+that consumes the checkout. A changed frozen finite action holds before collection
+or model work and requires a fresh frontier.
+
+If the native invocation has no qualifying model profile, its existing local scoped
+capacity publication may explicitly qualify only the control plane. That report has
+literal `control_plane_only: true`, no model profiles/pools or trial grants, and does
+not replace shared model-capacity publications. Model work remains capacity-blocked.
+Attribution retention and admission locks use the request deadline; contention
+returns a named pre-POST wait while preserving the current holder and evidence.
+After a supervised child starts, each ledger bind/finish/recovery uses a fresh
+bounded lock budget so legitimate child runtime cannot expire its own cleanup.
+Contended cleanup preserves the reservation for supported recovery.
+
+An authenticated pending event can re-enter this same path when its advertised
+execution binding, exact terminal run/attempt, complete jobs inventory and second
+run read prove every known evaluator step was skipped after the pending marker
+was recorded. Missing bindings, incomplete inventories and started evaluators
+remain scoped recovery; age is never a no-start proof. The original pending
+marker is unchanged. A transient read proof enters the existing operation binding,
+and an accepted dispatch receipt prevents another request for that same event
+before a new authenticated attempt or supported request reconciliation.
+
+Attempt metadata is read from the exact attempt endpoint, independently of the
+latest run. Each intervening terminal attempt needs explicit skipped-evaluator
+proof, with bounded complete job inventories and fresh metadata reads. A hosted
+collector may recognize only its own authenticated current collection attempt;
+native callers cannot exempt an active attempt. Later proved no-evaluation
+attempts support recovery without relabeling the original pending marker or
+superseding an independently accepted dispatch that still needs reconciliation.
+Optional job metadata never creates a new request identity.
+
+The shared Core intent binds whether verification adds its initial label or submits
+an exact workflow request, including the request-basis digest. Read admission runs
+before that intent. An old label cannot acknowledge a later workflow dispatch;
+only its explicit accepted POST response proves request submission. Evaluation and
+acceptance still require the authenticated terminal result. An explicit HTTP 422
+on the bound workflow request uses Core's typed live-owner rejection transition,
+retaining the original intent and rejection proof for supported retry. A timeout
+or crash without authoritative rejection/acceptance evidence remains uncertain.
+
+The synced consumer's complete exported collector is exercised by the normal
+Python Gate through its retained Node contract fixture. An action-inapplicable
+`not_requested` packet placeholder is not a fetched observation and is collected
+when a later action actually needs that section. Current lifecycle feedback is
+refreshed in bounded fair batches, including previously PASS outcomes; its
+SQLite-scoped cursor is advisory and cannot override an authenticated result.
+
+
+## Accepted verification requests are external waits
+
+A completed native verification POST can be followed immediately by an observation
+that the same request is already accepted. This is a known effect awaiting its
+result, not a no-effect retry boundary. The finite pipeline validates the exact
+queue receipt, target/head/merge, request basis, operation and immutable frontier
+before holding for the authenticated result. A changed or uncertain operation
+stays unresolved. Re-entering the same frontier never repeats the POST.
+
+Older outer rows may instead record `action wait lacks exact verified no-effect
+queue proof` despite a completed accepted request. The existing
+`closer_finite_reentry.py` plan/apply interface supports this narrowly identified
+receipt correction. Its plan must authenticate the retained inner receipt and
+accepted operation; apply uses the target/run/inventory/state locks and exact
+plan hash, retains the previous UNKNOWN row in audit history, and changes only
+the outer classification to held. It grants neither retry nor acceptance
+authority, and does not rewrite the inner operation or unrelated history.
+
+Once fresh normal observation selects a different action after the request, use
+the existing causal stage-successor path. It rechecks current assignment and
+admission, preserves request provenance, and starts normal preparation without
+copying old acceptance results. Missing proof or an active owner remains a
+per-target hold.

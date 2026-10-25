@@ -549,3 +549,36 @@ def test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming(tmp_path:
 @pytest.mark.parametrize("seconds,text", [(842, "14m02s"), (5400, "1h30m"), (504000, "5d20h")])
 def test_durations_read_at_the_scale_they_happened(seconds: int, text: str) -> None:
     assert tick_watchdog.fmt_duration(seconds) == text
+
+
+@pytest.mark.parametrize("failure", ["write", "flush"])
+def test_drain_is_durable_before_an_unavailable_log_sink(tmp_path: Path, failure: str) -> None:
+    class UnavailableLog:
+        def write(self, _text):
+            record = _record(tmp_path)
+            assert record.get("drain") == "kill 200"
+            assert record["oldest_command"]["pid"] == 200
+            assert [row["pid"] for row in record["crossings"]] == [200]
+            if failure == "write":
+                raise BrokenPipeError("log consumer unavailable")
+
+        def flush(self):
+            assert _record(tmp_path).get("drain") == "kill 200"
+            raise BrokenPipeError("log consumer unavailable")
+
+    procs = tick_watchdog.parse_ps(_table([(100, 1, "bash tick"), (200, 100, "python blocked")]))
+    with pytest.raises(BrokenPipeError):
+        tick_watchdog.watch(
+            state_dir=tmp_path,
+            tick_pid=100,
+            tick_started="Fri Oct 2 01:36:00 2026",
+            armer_pid=-1,
+            tick_alert_s=3600,
+            command_alert_s=0,
+            poll_s=0,
+            snapshot_fn=lambda: procs,
+            clock=lambda: 1,
+            max_polls=1,
+            out=UnavailableLog(),
+        )
+    assert _record(tmp_path)["drain"] == "kill 200"

@@ -16,19 +16,22 @@ Simple/legible (design §11). `--selftest` validates command construction offlin
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import execution_profiles
 import worktree_git
@@ -1174,6 +1177,13 @@ def _models_in_jsonl(path: Path, *, limit_bytes: int = 4_000_000) -> list[str]:
     return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
 
 
+def _claude_models_in_jsonl(path: Path) -> list[str]:
+    """A failed read is identity uncertainty, never permission to credit an older log."""
+    with path.open("r", errors="ignore") as handle:
+        blob = handle.read(4_000_000)
+    return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
+
+
 def _codex_rollout_for(workspace: str | Path, started_ts: int | None, window_s: int) -> Path | None:
     """The rollout file whose session ran in `workspace`.
 
@@ -1421,19 +1431,41 @@ def cli_reported_model(
             "reason": None,
         }
     if agent == "claude":
-        directory = _claude_project_dir(workspace)
-        if not directory.is_dir():
-            return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
-        newest = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for path in newest[:4]:
-            model = _first_real_model(_models_in_jsonl(path))
-            if model:
-                return {
-                    "model": model,
-                    "cli_version": None,
-                    "source": str(path),
-                    "reason": None,
-                }
+        try:
+            directory = _claude_project_dir(workspace)
+            try:
+                directory_stat = directory.stat()
+            except FileNotFoundError:
+                return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+            if not stat.S_ISDIR(directory_stat.st_mode):
+                return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+            # Path.is_dir/glob suppress some OSErrors on supported Python versions.
+            # Explicit stat/scandir keeps denied/disappearing discovery unresolved.
+            with os.scandir(directory) as entries:
+                newest = sorted(
+                    (
+                        (Path(entry.path), entry.stat().st_mtime)
+                        for entry in entries
+                        if entry.name.endswith(".jsonl")
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+            for path, _mtime in newest[:4]:
+                model = _first_real_model(_claude_models_in_jsonl(path))
+                if model:
+                    return {
+                        "model": model,
+                        "cli_version": None,
+                        "source": str(path),
+                        "reason": None,
+                    }
+        except OSError as exc:
+            # Identity enrichment must remain unresolved when its store cannot be read,
+            # including a valid cwd whose encoded Claude key exceeds NAME_MAX.
+            # Never substitute a requested model or a neighbouring workspace.
+            reason = errno.errorcode.get(exc.errno or 0, "UNKNOWN")
+            return {**blank, "reason": f"claude_transcript_probe_oserror:{reason}"}
         return {**blank, "reason": "claude_transcript_named_no_real_model"}
     return {**blank, "reason": f"no_cli_identity_reader_for_agent:{agent}"}
 
@@ -1767,6 +1799,71 @@ def apply_write_boundary(
     return [SANDBOX_EXEC, "-p", seatbelt_write_profile(protect, allow), *out]
 
 
+# The complete data-only controls below were inspected in this installed CLI's
+# embedded help. An upgrade must be requalified; unknown flags are not a tool fence.
+DATA_ONLY_CLAUDE_SHA256 = "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+
+
+def _data_only_claude_binary() -> str:
+    name = shutil.which("claude")
+    if not name:
+        raise ValueError("data-only Claude CLI is absent")
+    path = Path(name).resolve(strict=True)
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 256 * 1024 * 1024:
+        raise ValueError("data-only Claude CLI is not a bounded regular binary")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        remaining = before.st_size
+        while remaining:
+            chunk = stream.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                raise ValueError("data-only Claude CLI changed during qualification")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if stream.read(1):
+            raise ValueError("data-only Claude CLI changed during qualification")
+        opened = os.fstat(stream.fileno())
+    after = path.stat()
+
+    def identity(info):
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+        )
+
+    if (
+        identity(before) != identity(opened)
+        or identity(opened) != identity(after)
+        or digest.hexdigest() != DATA_ONLY_CLAUDE_SHA256
+    ):
+        raise ValueError("data-only Claude CLI controls are not qualified for this binary")
+    return str(path)
+
+
+def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
+    """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
+
+    Model/effort/profile authorization remains the caller's normal responsibility.
+    Unsupported here does not declare the provider unavailable for ordinary work.
+    """
+    if mode != "assess":
+        return "data-only transport requires explicit assess mode"
+    if agent != "claude":
+        return f"data-only tool boundary unsupported for {agent}"
+    try:
+        _data_only_claude_binary()
+    except (OSError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 def build_command(
     agent: str,
     prompt: str,
@@ -1783,6 +1880,7 @@ def build_command(
     prompt_via_stdin: bool = False,
     prompt_file: str | Path | None = None,
     write_roots: list[str] | None = None,
+    data_only: bool = False,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
 
@@ -1797,6 +1895,14 @@ def build_command(
     under workspace-write then also gets exactly the git paths that needs
     (`codex_worktree_git_roots`). Offloads are told never to commit, so they never pass it.
     """
+    data_only_binary = None
+    if data_only:
+        problem = data_only_problem(agent, mode)
+        if problem:
+            raise ValueError(problem)
+        if transport != "offload" or not prompt_via_stdin or prompt:
+            raise ValueError("data-only transport requires a self-contained stdin offload")
+        data_only_binary = _data_only_claude_binary()
     selected_profile = execution_profiles.get_profile(profile) if profile is not None else None
     if selected_profile:
         if selected_profile["agent"] != agent:
@@ -1871,13 +1977,49 @@ def build_command(
             cmd += ["--output-last-message", out_file]
         return cmd + [prompt]
     if agent == "claude":
-        cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions"]
-        if requested_model:
-            cmd += ["--model", requested_model]
-        else:
-            tiered = _tier_model("claude", mode)
-            if tiered:
-                cmd += ["--model", tiered]
+        cmd = (
+            [
+                # The data_only branch above qualified and assigned this path.
+                cast(str, data_only_binary),
+                "-p",
+                "--input-format",
+                "text",
+                "--safe-mode",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                '{"mcpServers":{}}',
+                "--setting-sources",
+                "",
+                "--settings",
+                '{"disableAllHooks":true}',
+                "--disable-slash-commands",
+                "--no-session-persistence",
+            ]
+            if data_only
+            else ["claude", "-p", prompt, "--dangerously-skip-permissions"]
+        )
+        model = requested_model or _tier_model("claude", mode)
+        if model:
+            cmd += ["--model", model]
+        if reasoning_effort is not None:
+            # Sonnet 5.5 effort support verified in Claude's model-config docs.
+            # v1 high-profile history is not retroactively evidence of this flag.
+            if (
+                model != "claude-sonnet-5-5"
+                or not isinstance(reasoning_effort, str)
+                or reasoning_effort
+                not in {
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                }
+            ):
+                raise ValueError("unsupported explicit Claude model/reasoning effort")
+            cmd += ["--effort", reasoning_effort]
         return cmd
     if agent == "cursor":
         # OFFLOADS ASK FOR stream-json SO THE RUN REPORTS ITS OWN MODEL. cursor's `system/init`
@@ -1945,6 +2087,19 @@ def build_command(
         ]
         if requested_model:
             cmd += ["--model", requested_model]
+        if reasoning_effort is not None:
+            if not isinstance(reasoning_effort, str) or reasoning_effort not in {
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra",
+            }:
+                raise ValueError("unsupported explicit Muse reasoning effort")
+            cmd += ["--reasoning-effort", reasoning_effort]
         if prompt_file is not None:
             return cmd + ["--prompt-file", str(prompt_file)]
         return cmd + [prompt]
@@ -2190,11 +2345,16 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
     muse runs on the owner's SUBSCRIPTION LOGIN, and `META_API_KEY` always overrides that login, so
     it never reaches a muse process: a COPY of the effective environment (the process env when none
     was supplied) without the key. The caller's mapping is never mutated. Every other agent's
-    environment is returned exactly as given, including None (inherit). The detached wrapper in
+    environment is returned as given unless a validated storage job owns native TMPDIR. The detached wrapper in
     `dispatcher._agent_runtime_prelude` does the same for the offload and delegate paths.
     """
+    from storage_lifecycle import owned_agent_tmpdir
+
+    owned_tmp = owned_agent_tmpdir(agent, env)
     if agent != "muse":
-        return env
+        if owned_tmp is None:
+            return env
+        return {**(os.environ if env is None else env), "TMPDIR": str(owned_tmp)}
     scrubbed = dict(os.environ if env is None else env)
     scrubbed.pop("META_API_KEY", None)
     runtime = AGENT_RUNTIME / "muse"
@@ -2216,7 +2376,7 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
             "XDG_CONFIG_HOME": str(runtime / ".config"),
             "XDG_STATE_HOME": str(runtime / ".local/state"),
             "XDG_DATA_HOME": str(runtime / ".local/share"),
-            "TMPDIR": str(runtime / "tmp"),
+            "TMPDIR": str(owned_tmp if owned_tmp is not None else runtime / "tmp"),
         }
     )
     return scrubbed
@@ -2403,7 +2563,22 @@ def dispatch(
     that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
     refuse_broad_workspace(agent, cwd)
-    process_env = agent_subprocess_env(agent, env)
+    from storage_lifecycle import StorageBlocked
+
+    try:
+        process_env = agent_subprocess_env(agent, env)
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "mode": mode,
+            "exit": 2,
+            "changed_files": False,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     muse_prompt = muse_prompt_file(prompt) if agent == "muse" else None
     try:
         cmd = build_command(
@@ -3110,7 +3285,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
     finally:
         globals()["HOME"], globals()["AGENT_RUNTIME"] = _saved_muse_home, _saved_muse_runtime
-    assert agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
+    _vibe_env = agent_subprocess_env("vibe", None)
+    assert _vibe_env is None or (
+        os.environ.get("ORCH_STORAGE_RUN_ROOT")
+        and Path(_vibe_env["TMPDIR"]).is_relative_to(Path(os.environ["ORCH_STORAGE_RUN_ROOT"]))
+    ), "owned storage changes only native TMPDIR"
     import json as _mj
     import tempfile as _mt
 

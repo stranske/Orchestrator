@@ -1118,3 +1118,27 @@ def test_namespaced_junit_stream_counts_children_before_clearing(tmp_path):
         "errors": 1,
         "skipped": 1,
     }
+
+
+def test_request_title_uses_existing_source_redaction_boundary(tmp_path):
+    import closer_dispatcher
+
+    source = closer_dispatcher._request_source(
+        TARGET,
+        {
+            "title": "API token: supersecretvalue",
+            "body": "## Tasks\n- Preserve behavior",
+            "state": "OPEN",
+            "labels": [],
+        },
+        kind="pr_request",
+        via="github_pr_body",
+    )
+    section = evidence._source_section([source], tmp_path)
+    row = section["content"][0]
+    assert section["status"] == "partial"
+    assert section["reason"] == "credential-like values redacted"
+    assert row["redaction_applied"] and row["credential_pattern_present"]
+    assert "supersecretvalue" not in json.dumps(section)
+    assert "supersecretvalue" not in Path(row["title_retained"]["path"]).read_text()
+    assert row["title_sha256"] == hashlib.sha256(source["title"].encode()).hexdigest()

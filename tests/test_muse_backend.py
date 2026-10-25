@@ -507,7 +507,10 @@ def test_muse_has_an_offload_profile_in_its_existing_subscription_pool():
     import execution_profiles
 
     profiles = execution_profiles.profiles_for_agent("muse", transport="offload")
-    assert [p["profile_id"] for p in profiles] == ["muse-wonder-1.0"], profiles
+    assert [p["profile_id"] for p in profiles] == [
+        "muse-wonder-1.0",
+        "muse-wonder-1.0-low",
+    ], profiles
     pool = execution_profiles.CAPACITY_POOLS["muse-subscription"]
     assert pool["agent"] == "muse" and pool["tier"] == "flat", pool
     argv = adapters.build_command("muse", "x", requested_model="muse-wonder-1.0")
@@ -547,6 +550,10 @@ def test_muse_direct_dispatch_scrubs_the_key_from_a_copied_environment(tmp_path,
     cleaned = adapters.agent_subprocess_env("muse", supplied)
     assert "META_API_KEY" not in cleaned and cleaned["PATH"] == "/usr/bin", cleaned
     assert supplied["META_API_KEY"] == fake, "the caller's mapping must not be mutated"
+    # This assertion pins the legacy no-storage-context default; inherited valid
+    # release-job routing is covered separately by native storage composition.
+    for key in ("ORCH_STORAGE_RUN_ROOT", "ORCH_STORAGE_RUN_ID", "ORCH_STORAGE_OWNER_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
     assert adapters.agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
     assert adapters.agent_subprocess_env("vibe", supplied) is supplied, "other agents are untouched"
     # Wiring pin: dispatch passes the effective env, once.

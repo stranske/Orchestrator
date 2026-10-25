@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import threading
@@ -10,6 +11,86 @@ import pytest
 import closer_pipeline
 import closer_queue
 from closer_pipeline import run_pipeline, validate_stop
+
+
+def test_expired_deadline_reports_admission_expired_not_lock(tmp_path):
+    path = tmp_path / "expired.json"
+    clock = {"now": 100.0}
+    receipt = run_pipeline(
+        path,
+        ["o/r#1"],
+        **callbacks(),
+        capacity_fn=lambda: {},
+        deadline=clock["now"] - 1,
+        now=lambda: clock["now"],
+    )
+    assert receipt["reason"] == "admission_deadline_expired"
+    assert receipt["reason"] != "coordinator_lock_unavailable"
+    assert receipt["deadline"] == clock["now"] - 1
+    assert receipt["now"] == clock["now"]
+    assert receipt["authority"] is False
+    assert receipt["targets"] == {}
+    assert not path.exists()
+    assert not path.with_name(path.name + ".runlock").exists()
+
+
+def test_deadline_expires_between_precheck_and_lock_attempt(tmp_path, monkeypatch):
+    path = tmp_path / "expired-before-attempt.json"
+    observed = iter([99, 100, 101])
+
+    def no_lock_attempt(*args):
+        pytest.fail("no flock attempt is allowed after the deadline")
+
+    monkeypatch.setattr(fcntl, "flock", no_lock_attempt)
+    receipt = closer_pipeline._run_pipeline_impl(
+        path,
+        ["o/r#1"],
+        **callbacks(),
+        capacity_fn=lambda: {},
+        deadline=100,
+        now=lambda: next(observed),
+    )
+    assert receipt["reason"] == "admission_deadline_expired"
+    assert receipt["deadline"] == 100
+    assert receipt["now"] == 101
+    assert not path.exists()
+
+
+def test_contended_lock_still_reports_lock_unavailable(tmp_path, monkeypatch):
+    import closer_pipeline as cp
+
+    logical_now = [1_000_000.0]
+
+    def advance_sleep(_duration):
+        logical_now[0] += 0.03
+
+    monkeypatch.setattr(cp.time, "sleep", advance_sleep)
+    path = tmp_path / "contended.json"
+    with path.with_name(path.name + ".runlock").open("a+") as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        receipt = run_pipeline(
+            path,
+            ["o/r#1"],
+            **callbacks(),
+            capacity_fn=lambda: {},
+            deadline=logical_now[0] + 0.05,
+            now=lambda: logical_now[0],
+        )
+        assert receipt["reason"] == "coordinator_lock_unavailable"
+        assert receipt["authority"] is False
+        assert receipt["targets"] == {}
+        assert not path.exists()
+
+
+def test_nan_deadline_is_rejected_before_admission_expiry(tmp_path):
+    with pytest.raises(ValueError, match="finite epoch timestamp"):
+        run_pipeline(
+            tmp_path / "nan-deadline.json",
+            ["o/r#1"],
+            **callbacks(),
+            capacity_fn=lambda: {},
+            deadline=float("nan"),
+        )
 
 
 class FakeRoundDeadlineExhausted(TimeoutError):
@@ -2812,18 +2893,41 @@ def test_resumed_backlog_priority_preserves_other_interpretations(
     assert validate_stop(path, ["a", "b", "z"])["valid"]
 
 
-def test_capacity_shape_fails_closed(tmp_path):
-    cb = callbacks()
+@pytest.mark.parametrize("invalid_io", [-1, True, 1.5, "1", None])
+def test_capacity_shape_fails_closed(tmp_path, monkeypatch, invalid_io):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    monkeypatch.setenv("ORCH_CLOSER_COORDINATOR_MODE", "legacy")
+    started = []
+
+    def forbid(*args, **kwargs):
+        started.append((args, kwargs))
+        raise AssertionError("invalid capacity must not start work")
+
+    monkeypatch.setattr("subprocess.run", forbid)
+    monkeypatch.setattr("subprocess.Popen", forbid)
+    monkeypatch.setattr("socket.create_connection", forbid)
+    monkeypatch.setattr("socket.socket.connect", forbid)
+    cb = {stage: forbid for stage in ("prepare", "interpret", "act", "exception")}
+
+    # Capacity validation is independent of setup/fsync speed on a busy CI runner.
+    def now():
+        return 1_800_000_000.0
+
     receipt = run_pipeline(
         tmp_path / "state.json",
         ["a"],
         **cb,
-        capacity_fn=lambda: {"io": -1, "low": 1, "exception": 1},
-        deadline=time.time() + 0.05,
+        capacity_fn=lambda: {"io": invalid_io, "low": 1, "exception": 1},
+        deadline=now() + 10,
+        now=now,
     )
     assert receipt["targets"]["a"]["status"] == "failed"
-    assert receipt["metrics"]["capacity_samples"][0]["error"]
-    assert not validate_stop(tmp_path / "state.json", ["a"])["valid"]
+    error = "ValueError: capacity io must be a non-negative integer"
+    assert receipt["metrics"]["capacity_samples"][0]["error"] == error
+    assert receipt["targets"]["a"]["error"] == "capacity_unavailable:" + error
+    assert not validate_stop(tmp_path / "state.json", ["a"], now=now)["valid"]
+    assert started == []
 
 
 def test_missing_capacity_lane_is_unknown_not_measured_zero(tmp_path):

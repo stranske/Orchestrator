@@ -44,6 +44,7 @@ OWNED_FILES = (
     "IMPROVEMENT_BACKLOG.md",
     "orchestrator-loop.svg",  # read by tests/test_orchestrator_loop_svg.js
     "repo_review_registry.json",
+    # Optional source snapshots remain sealed; live registries default outside this tree.
     "experiments/hypotheses.json",
     "experiments/features.json",
     "experiments/repo_knowledge.json",

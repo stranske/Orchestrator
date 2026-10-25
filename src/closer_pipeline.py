@@ -14,10 +14,14 @@ import json
 import math
 import os
 import tempfile
+import threading
 import time
+import weakref
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+
+import closer_resources
 
 SCHEMA = "closer-pipeline/v1"
 UNBOUND_UNCERTAIN_PROVIDER_ERROR = "provider_outcome_uncertainty_without_valid_bound_run"
@@ -37,6 +41,135 @@ READ_BARRIER_ERROR = "expired read deferral lacks a verified terminal resource b
 READ_ORIGIN_BARRIER_ERROR = "expired read retained a historical wait from another revision"
 READ_INTERRUPTED_BARRIER_ERROR = "interrupted read lacks a verified terminal boundary"
 READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
+
+# Finite mode is supported only for the concrete callbacks constructed inside the
+# production dispatcher. A code-object or caller-supplied marker is insufficient:
+# this weak set records the actual function objects created by that exact driver
+# invocation, before resource admission can write an intent.
+_FINITE_DISPATCHER_CALLBACKS: weakref.WeakSet = weakref.WeakSet()
+
+
+def _register_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
+    """Register actual dispatcher-created callbacks; never a public opt-in flag."""
+    import inspect
+
+    frame = inspect.currentframe()
+    caller = frame.f_back if frame is not None else None
+    dispatcher_globals = caller.f_globals if caller is not None else {}
+    driver = dispatcher_globals.get("_run_staged_pipeline")
+    if caller is None or driver is None or caller.f_code is not driver.__code__:
+        raise ValueError("finite callbacks may only be registered by the production dispatcher")
+    launcher = caller.f_back
+    main_admitted = dispatcher_globals.get("_main_admitted")
+    backend = caller.f_locals.get("backend")
+    successor = dispatcher_globals.get("_run_merge_verification_successors")
+    if (
+        launcher is not None
+        and successor is not None
+        and launcher.f_code is successor.__code__
+        and launcher.f_globals is dispatcher_globals
+    ):
+        # Only the existing CLI-owned causal successor may reuse this backend.
+        # A similarly named function or caller-provided opt-in confers no trust.
+        parent = launcher.f_back
+        original_args = launcher.f_locals.get("args")
+        following = launcher.f_locals.get("following")
+        child = launcher.f_locals.get("child")
+        driver_args = caller.f_locals.get("args")
+        if (
+            parent is None
+            or main_admitted is None
+            or parent.f_code is not main_admitted.__code__
+            or parent.f_globals is not dispatcher_globals
+            or parent.f_locals.get("backend") is not backend
+            or launcher.f_locals.get("backend") is not backend
+            or original_args is not parent.f_locals.get("args")
+            or following is None
+            or following is not driver_args
+            or not isinstance(child, dict)
+            or caller.f_locals.get("finite_frontier") != child.get("finite_frontier")
+            or caller.f_locals.get("targets") != child.get("execution_targets")
+            or getattr(original_args, "finite_frontier", None)
+            != launcher.f_locals.get("predecessor")
+            or {key: value for key, value in vars(following).items() if key != "finite_frontier"}
+            != {
+                key: value for key, value in vars(original_args).items() if key != "finite_frontier"
+            }
+        ):
+            raise ValueError("finite successor requires the exact CLI-owned child/backend")
+        launcher = parent
+    if (
+        launcher is None
+        or main_admitted is None
+        or launcher.f_code is not main_admitted.__code__
+        or launcher.f_locals.get("backend") is not backend
+        or launcher.f_globals is not dispatcher_globals
+        or type(backend) is not dispatcher_globals.get("Closer")
+        or type(getattr(backend, "gh", None)) is not dispatcher_globals.get("GitHub")
+    ):
+        raise ValueError("finite callbacks require the exact CLI-constructed dispatcher backend")
+    if backend is None:
+        raise ValueError("finite callbacks require a dispatcher backend")
+    import gh_capacity
+
+    if (
+        backend.offload_fn is not None
+        or backend.run_fn is not dispatcher_globals.get("bounded_run")
+        or backend.gh.api_fn is not gh_capacity.gh_run
+        or backend.worker.__func__ is not dispatcher_globals["Closer"].worker
+        or backend.select.__func__ is not dispatcher_globals["Closer"].select
+        or getattr(backend.blocker_fn, "__code__", None) is None
+        or backend.blocker_fn.__globals__ is not dispatcher_globals
+        or backend.blocker_fn.__code__.co_qualname != "_main_admitted.<locals>.read_blockers"
+        or getattr(backend.assignment_guard_fn, "__code__", None) is None
+        or backend.assignment_guard_fn.__globals__ is not dispatcher_globals
+        or backend.assignment_guard_fn.__code__.co_qualname != "_main_admitted.<locals>.<lambda>"
+    ):
+        raise ValueError("finite dispatcher backend contains an unsupported transport override")
+    expected = {"prepare", "interpret", "exception", "act"}
+    if set(callbacks) not in (expected, expected | {"reconcile"}):
+        raise ValueError("finite dispatcher callback set is incomplete")
+    source = str(Path(dispatcher_globals["__file__"]).resolve())
+    driver_args = caller.f_locals.get("args")
+    selected_frontier = caller.f_locals.get("finite_frontier")
+    for name in sorted(expected):
+        callback = callbacks[name]
+        code = getattr(callback, "__code__", None)
+        closure = dict(zip(code.co_freevars, callback.__closure__ or ())) if code else {}
+        captured = {key: cell.cell_contents for key, cell in closure.items()}
+        if (
+            not callable(callback)
+            or code is None
+            or callback.__globals__ is not dispatcher_globals
+            or Path(code.co_filename).resolve() != Path(source)
+            or code.co_qualname != f"_run_staged_pipeline.<locals>.{name}"
+            or ("backend" in captured and captured["backend"] is not backend)
+            or ("args" in captured and captured["args"] is not driver_args)
+            or ("finite_frontier" in captured and captured["finite_frontier"] != selected_frontier)
+        ):
+            raise ValueError(f"finite {name} callback is not the dispatcher-owned stage driver")
+    reconcile = callbacks.get("reconcile")
+    if reconcile is not None and (
+        not callable(reconcile)
+        or getattr(reconcile, "__globals__", None) is not dispatcher_globals
+        or getattr(getattr(reconcile, "__code__", None), "co_qualname", None)
+        != "_run_staged_pipeline.<locals>.reconcile_action"
+    ):
+        raise ValueError("finite reconcile callback is not dispatcher-owned")
+    for callback in callbacks.values():
+        if callback is not None:
+            _FINITE_DISPATCHER_CALLBACKS.add(callback)
+
+
+def _require_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
+    expected = ("prepare", "interpret", "exception", "act")
+    if any(callbacks.get(name) not in _FINITE_DISPATCHER_CALLBACKS for name in expected):
+        raise ValueError(
+            "finite frontier requires the exact registered production dispatcher callbacks"
+        )
+    reconcile = callbacks.get("reconcile")
+    if reconcile is not None and reconcile not in _FINITE_DISPATCHER_CALLBACKS:
+        raise ValueError("finite reconcile requires the registered production dispatcher callback")
 
 
 def _interrupted_read(previous: Mapping[str, Any], item: Mapping[str, Any]) -> bool:
@@ -171,6 +304,8 @@ def _valid_inner_wait(
     trigger: Any,
     proof: Any,
     *,
+    frontier_id: str | None = None,
+    finite_frontier: Mapping[str, Any] | None = None,
     now: Callable[[], float] = time.time,
 ) -> bool:
     """Bind a terminal inner wait to its durable, current one-target receipt."""
@@ -218,6 +353,28 @@ def _valid_inner_wait(
 
     import closer_queue
 
+    proof_frontier_id = proof.get("frontier_id")
+    proof_frontier = proof.get("finite_frontier")
+    if (
+        frontier_id is not None and (not isinstance(frontier_id, str) or not frontier_id.strip())
+    ) or (
+        proof_frontier_id is not None
+        and (not isinstance(proof_frontier_id, str) or not proof_frontier_id.strip())
+    ):
+        return False
+    if frontier_id is not None and proof_frontier_id not in {None, frontier_id}:
+        return False
+    selected_frontier_id = frontier_id or proof_frontier_id
+    if selected_frontier_id is not None and (
+        not isinstance(selected_frontier_id, str) or not selected_frontier_id.strip()
+    ):
+        return False
+    if selected_frontier_id is not None and (
+        not isinstance(proof_frontier, Mapping)
+        or proof_frontier.get("frontier_id") != selected_frontier_id
+        or (finite_frontier is not None and dict(proof_frontier) != dict(finite_frontier))
+    ):
+        return False
     inner_path = pipeline_path.parent / f"{pipeline_path.stem}.actions" / f"{_digest(target)}.json"
     if proof.get("inner_path") != str(inner_path) or not inner_path.is_file():
         return False
@@ -226,13 +383,27 @@ def _valid_inner_wait(
             if not locked:
                 return False
             state = closer_queue._read_state(inner_path)
-            round_state = state.get("round", {})
+            if selected_frontier_id is None:
+                round_state = state.get("round", {})
+                items = state.get("items", {})
+                validation_state = state
+            else:
+                selected_state = closer_queue.state_for_frontier(
+                    state,
+                    selected_frontier_id,
+                    expected_policy=finite_frontier or proof_frontier,
+                )
+                if selected_state is None:
+                    return False
+                validation_state = selected_state
+                round_state = validation_state["round"]
+                items = validation_state["items"]
             receipt = round_state.get("receipt")
-            item = state.get("items", {}).get(target)
+            item = items.get(target) if isinstance(items, Mapping) else None
             if not isinstance(receipt, Mapping) or not isinstance(item, Mapping):
                 return False
             checked = closer_queue._validate_data(
-                state,
+                validation_state,
                 receipt,
                 assignment_targets=[target],
                 now_value=float(now()),
@@ -501,6 +672,7 @@ def _bounded(value: Any, *, limit: int = 128 * 1024) -> Any:
 
 
 AUDIT_ARCHIVE_SCHEMA = "closer-invalid-stop-audit-archive/v1"
+NATIVE_WAIT_AUDIT_SCHEMA = "closer-native-wait-continuation-audit/v1"
 
 
 def _audit_archive_dir(path: Path) -> Path:
@@ -571,7 +743,9 @@ def _resolved_audit_history(path: Path, previous: Mapping[str, Any]) -> list[dic
         raise ValueError("invalid pipeline audit history")
     archived = _archived_history(path, previous.get("invalid_stop_archive"))
     if archived and (
-        not local or local[0].get("schema") != "closer-expired-invalid-round-recovery/v1"
+        not local
+        or local[0].get("schema")
+        not in {"closer-expired-invalid-round-recovery/v1", NATIVE_WAIT_AUDIT_SCHEMA}
     ):
         raise ValueError("pipeline audit archive lost its origin")
     return local[:1] + archived + local[1:] if archived else local
@@ -637,6 +811,10 @@ def _stage_audit_history(
 
 def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
     """Retain only facts needed to resume/reconcile across generations."""
+    if item.get("deferred_reason") == "scope_quarantined":
+        # A not-started proof binds the full inputs and the exact original row.
+        # Compacting it would destroy the only lineage permitting fresh admission.
+        return _bounded(item, limit=256 * 1024)
     keys = (
         "status",
         "stage",
@@ -658,6 +836,7 @@ def _carry_item(item: Mapping[str, Any]) -> dict[str, Any]:
         "recovery_excluded",
         "known_completed_action",
         "carried",
+        "scope_proof",
     )
     carried = {key: item[key] for key in keys if key in item}
     results: dict[str, Any] = {}
@@ -730,6 +909,90 @@ def _legacy_failed_act_wait_proof(path: Path, target: str, item: Mapping[str, An
         and item.get("error") == "act returned unsupported or missing status"
         and _retained_blocked_act_wait_proof(path, target, item)
     )
+
+
+def _validated_wait_audit_origin(history, target, item):
+    """Find the immutable origin for an already native-validated retained wait."""
+    results = item.get("results")
+    act = results.get("act") if isinstance(results, Mapping) else None
+    if (
+        not isinstance(act, Mapping)
+        or not isinstance(item.get("identity"), str)
+        or not item["identity"].strip()
+        or not isinstance(item.get("revision"), str)
+        or not item["revision"]
+    ):
+        return None
+    for record in history:
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("schema") not in {
+            "closer-expired-invalid-round-recovery/v1",
+            NATIVE_WAIT_AUDIT_SCHEMA,
+        }:
+            continue
+        source = record.get("source_run_id")
+        rows = record.get("targets")
+        row = rows.get(target) if isinstance(rows, Mapping) else None
+        digest = row.get("item_sha256") if isinstance(row, Mapping) else None
+        if (
+            isinstance(source, str)
+            and bool(source.strip())
+            and isinstance(digest, str)
+            and len(digest) == 64
+            and all(char in "0123456789abcdef" for char in digest)
+            and row.get("recovery") == "validated_inner_wait"
+            and row.get("act_result") == act
+            and row.get("revision") == item.get("revision")
+            and row.get("identity") == item.get("identity")
+        ):
+            return {"previous_run_id": source, "previous_item_sha256": digest}
+    return None
+
+
+def _native_wait_origin_record(path, target, item, previous, source_run_id, prior_stop, now):
+    """Record a current observed no-operation boundary; never label it expired."""
+    if (
+        item.get("known_completed_action") is True
+        or item.get("provider_outcome_uncertain")
+        or item.get("recovery_barrier") is not None
+        or not _legacy_failed_act_wait_proof(path, target, item)
+    ):
+        return None
+    try:
+        act = _bounded(item["results"]["act"], limit=32 * 1024)
+        row = {
+            "item_sha256": _digest(item),
+            "status": item.get("status"),
+            "stage": item.get("stage"),
+            "revision": item.get("revision"),
+            "identity": item.get("identity"),
+            "work_key": item.get("work_key"),
+            "error": item.get("error"),
+            "resource_evidence": item.get("resource_evidence"),
+            "provider_outcome_uncertain": item.get("provider_outcome_uncertain"),
+            "recovery_barrier": item.get("recovery_barrier"),
+            "act_result": act,
+            "act_receipt_sha256": _digest(act["queue_receipt"]),
+            "recovery": "validated_inner_wait",
+        }
+        return _bounded(
+            {
+                "schema": NATIVE_WAIT_AUDIT_SCHEMA,
+                "boundary": "validated_nonmutating_native_wait",
+                "acceptance_authority": False,
+                "source_run_id": source_run_id,
+                "source_created": previous.get("created"),
+                "source_deadline": previous.get("deadline"),
+                "source_assignment": list(previous.get("assignment", [])),
+                "recorded_at": now(),
+                "prior_stop": prior_stop,
+                "targets": {target: row},
+            },
+            limit=512 * 1024,
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _historical_validated_wait_result(
@@ -939,6 +1202,7 @@ def _audited_retained_wait(
         proof.get("reason"),
         proof.get("next_trigger"),
         proof,
+        frontier_id=proof.get("frontier_id"),
         now=lambda: historical_now,
     )
 
@@ -1490,6 +1754,43 @@ def _valid_read_recovery_barrier(
     return False
 
 
+def _completed_prepare_capacity_observation(
+    previous: Mapping[str, Any], item: Any, run_id: str, now_value: float
+) -> bool:
+    """Bind a result-free read deferral to its terminal scheduling receipt only."""
+    if not isinstance(item, Mapping):
+        return False
+    summary = previous.get("receipt_summary")
+    resource = item.get("resource_evidence")
+    capacity = resource.get("github_capacity") if isinstance(resource, Mapping) else None
+    observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+    finished = summary.get("finished_at") if isinstance(summary, Mapping) else None
+    return (
+        item.get("status") == "deferred"
+        and item.get("stage") == "prepare"
+        and item.get("deferred_reason") == "github_capacity"
+        and item.get("results") == {}
+        and item.get("known_completed_action") is not True
+        and not item.get("provider_outcome_uncertain")
+        and item.get("recovery_barrier") is None
+        and isinstance(summary, Mapping)
+        and summary.get("schema") == "closer-pipeline-receipt/v1"
+        and summary.get("run_id") == run_id
+        and summary.get("deadline") == previous["deadline"]
+        and isinstance(finished, (int, float))
+        and not isinstance(finished, bool)
+        and math.isfinite(float(finished))
+        and float(previous["created"]) <= finished <= now_value
+        and isinstance(observed, (int, float))
+        and not isinstance(observed, bool)
+        and float(previous["created"]) <= observed <= min(finished, float(previous["deadline"]))
+        and isinstance(capacity, Mapping)
+        and _valid_github_capacity_evidence(resource, observed)
+        and item.get("deferred_next_trigger")
+        == f"retry_after_github_reset:{float(capacity['reset_at_epoch']):.3f}"
+    )
+
+
 def _expired_invalid_round_recovery(
     prior_stop: Mapping[str, Any],
     previous: Mapping[str, Any],
@@ -1527,7 +1828,17 @@ def _expired_invalid_round_recovery(
         or not math.isfinite(float(previous["created"]))
         or float(previous["created"]) > float(previous["deadline"])
         or not isinstance(previous.get("invalid_stop_history", []), list)
-        or (previous.get("receipt_summary") and not previous.get("invalid_stop_history"))
+        or (
+            previous.get("receipt_summary")
+            and not previous.get("invalid_stop_history")
+            and not (
+                rows
+                and all(
+                    _completed_prepare_capacity_observation(previous, item, run_id, now_value)
+                    for item in rows.values()
+                )
+            )
+        )
     ):
         return False, set(), set(), set(), set(), {}
 
@@ -1707,15 +2018,19 @@ def _expired_invalid_round_recovery(
         ):
             resource = item.get("resource_evidence")
             if not _valid_github_capacity_evidence(resource, historical_now):
-                # An interrupted round has no terminal timestamp. Validate its
-                # read-only throttle at its own in-round observation, rather
-                # than requiring the old reset window to remain fresh forever.
+                # A throttle can expire before a terminal receipt is written.
+                # Its original observation proves only read scheduling, never
+                # today's stop or an action. Completed rounds additionally need
+                # an exact receipt binding and a wholly unstarted prepare row.
                 capacity = (
                     resource.get("github_capacity") if isinstance(resource, Mapping) else None
                 )
                 observed = capacity.get("observed_at") if isinstance(capacity, Mapping) else None
+                completed_unstarted_prepare = _completed_prepare_capacity_observation(
+                    previous, item, run_id, now_value
+                )
                 if not (
-                    summary is None
+                    (summary is None or completed_unstarted_prepare)
                     and isinstance(observed, (int, float))
                     and not isinstance(observed, bool)
                     and float(previous["created"]) <= observed <= float(previous["deadline"])
@@ -1778,6 +2093,7 @@ def _expired_invalid_round_recovery(
                     proof.get("reason") if isinstance(proof, Mapping) else None,
                     item.get("deferred_next_trigger"),
                     proof,
+                    frontier_id=proof.get("frontier_id") if isinstance(proof, Mapping) else None,
                     now=lambda: historical_now,
                 )
             ):
@@ -1887,6 +2203,23 @@ def _expired_invalid_round_recovery(
             ):
                 return False, set(), set(), set(), set(), {}
             uncertain.add(target)
+        elif (
+            previous.get("receipt_summary") is None
+            and status in {"queued", "running"}
+            and stage in {"act", "reconcile"}
+            and not item.get("provider_outcome_uncertain")
+            and item.get("recovery_barrier") is None
+            and item.get("known_completed_action") is not True
+            and all(
+                isinstance(item.get(key), str) and item[key]
+                for key in ("revision", "identity", "work_key")
+            )
+        ):
+            # A missing callback return is an unknown effect, never a retry.
+            # Retain its exact running row in the audit; only the successor's
+            # projection enters the existing original-operation reconciliation.
+            uncertain.add(target)
+            expected.add(f"actionable_pipeline_work:{target}:{stage}")
         elif (
             status == "uncertain"
             and stage in {"act", "reconcile"}
@@ -2087,18 +2420,41 @@ def _expired_invalid_round_recovery(
 
 
 def _empty() -> dict[str, Any]:
-    return {"schema": SCHEMA, "runs": {}, "carry": {}, "cache": {}}
+    return {"schema": SCHEMA, "runs": {}, "carry": {}, "cache": {}, "frontiers": {}}
 
 
 @contextlib.contextmanager
-def _locked(path: Path):
+def _locked(path: Path, *, timeout_seconds: float | None = None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_name(path.name + ".lock").open("a+") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if timeout_seconds is None:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        else:
+            if (
+                isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds)
+                or timeout_seconds <= 0
+            ):
+                raise ValueError("finite state-lock timeout must be positive and finite")
+            deadline = time.monotonic() + float(timeout_seconds)
+            while True:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise _FiniteStateLockTimeout("finite pipeline state lock timed out")
+                    time.sleep(min(0.025, remaining))
         try:
             yield
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+class _FiniteStateLockTimeout(TimeoutError):
+    """A finite-mode coordinator could not safely read or persist its journal."""
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -2116,10 +2472,29 @@ def _load(path: Path) -> dict[str, Any]:
         raise ValueError("malformed pipeline state")
     doc.setdefault("carry", {})
     doc.setdefault("cache", {})
+    doc.setdefault("frontiers", {})
+    if not isinstance(doc["frontiers"], dict):
+        raise ValueError("malformed finite frontier namespace")
     return doc
 
 
 def _save(path: Path, doc: Mapping[str, Any]) -> None:
+    if (
+        path.name == "state.json"
+        and path.parent.parent.name == "targets"
+        and path.parent.parent.parent.name.endswith(".scoped")
+    ):
+        # The census binds all source bytes; unrelated short shard commits must
+        # not invalidate every other target's admission under concurrent load.
+        with closer_resources.inventory_lock(path.parent.parent.parent, exclusive=True):
+            return _save_snapshot(path, doc)
+    return _save_snapshot(path, doc)
+
+
+def _save_snapshot(path: Path, doc: Mapping[str, Any]) -> None:
+    fence = closer_resources.fence_for(path)
+    if fence is not None:
+        fence()  # scoped mode: a stale or expired lease holder must not commit
     # Serialize once, compactly: the scheduler persists the whole state on
     # every stage launch/completion, so re-encoding it pretty-printed for
     # every write made large assignments quadratic in wall time. Readers
@@ -2136,6 +2511,8 @@ def _save(path: Path, doc: Mapping[str, Any]) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
+        if fence is not None:
+            fence()  # serialization/fsync may have crossed the lease deadline
         os.replace(temp, path)
         dfd = os.open(path.parent, os.O_RDONLY)
         try:
@@ -2204,6 +2581,8 @@ def _run_pipeline_impl(
         raise ValueError("priority targets must belong to the current assignment")
     if not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         raise ValueError("deadline must be an epoch timestamp")
+    if not math.isfinite(float(deadline)):
+        raise ValueError("deadline must be a finite epoch timestamp")
     bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
     if any(isinstance(v, bool) or not isinstance(v, int) or v < 1 for v in bounds.values()):
         raise ValueError("pool ceilings must be positive integers")
@@ -2215,27 +2594,80 @@ def _run_pipeline_impl(
     }
     if reconcile is not None:
         callbacks["reconcile"] = (reconcile, "io")
+
+    def stage_lane(stage, target, item):
+        # Running work retains the lane actually reserved at submission, even
+        # when its retained packet changes or becomes unreadable before completion.
+        if item.get("status") == "running":
+            for scheduled in futures.values():
+                if scheduled[0] == target:
+                    return scheduled[5]
+        callback, lane = callbacks[stage]
+        if stage == "interpret":
+            import closer_dispatcher
+
+            callback = closer_resources.native_interpretation_callback(callback)
+            try:
+                remote = closer_dispatcher.native_stage_remote_only(
+                    target, item.get("results", {}), stage, callback
+                )
+            except (
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                RecursionError,
+            ) as exc:
+                item.update(
+                    status="failed",
+                    error="native_readiness_unavailable:" + type(exc).__name__,
+                    deferred_next_trigger="restore_bound_native_input",
+                )
+                item["metrics"]["errors"] += 1
+                return None
+            if remote:
+                return "io"
+        return lane
+
     assignment = sorted(target_list)
+    observed_at = now()
+    if float(deadline) <= observed_at:
+        return {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": False,
+            "status": "deferred",
+            "reason": "admission_deadline_expired",
+            "deadline": float(deadline),
+            "now": observed_at,
+            "continuation_required": True,
+            "finished_at": observed_at,
+            "targets": {},
+        }
     run_guard = path.with_name(path.name + ".runlock")
     run_guard.parent.mkdir(parents=True, exist_ok=True)
     run_lock = run_guard.open("a+")
     acquired = False
+    contended = False
     while now() < float(deadline):
         try:
             fcntl.flock(run_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             acquired = True
             break
         except BlockingIOError:
+            contended = True
             time.sleep(min(0.025, max(0.0, float(deadline) - now())))
     if not acquired:
         run_lock.close()
+        observed_at = now()
         return {
             "schema": "closer-pipeline-receipt/v1",
             "authority": False,
             "status": "deferred",
-            "reason": "coordinator_lock_unavailable",
+            "reason": "coordinator_lock_unavailable" if contended else "admission_deadline_expired",
+            **({} if contended else {"deadline": float(deadline), "now": observed_at}),
             "continuation_required": True,
-            "finished_at": now(),
+            "finished_at": observed_at,
             "targets": {},
         }
     if _run_lock_ref is not None:
@@ -2279,6 +2711,14 @@ def _run_pipeline_impl(
                 previous_assignment = previous.get("assignment", [])
                 if float(previous.get("deadline", 0)) <= now():
                     for old_item in previous.get("targets", {}).values():
+                        if (
+                            previous.get("receipt_summary") is None
+                            and old_item.get("status") in {"queued", "running"}
+                            and old_item.get("stage") in {"act", "reconcile"}
+                        ):
+                            # Recovery records the actual interrupted boundary;
+                            # mutate only the successor's reconciliation view.
+                            continue
                         if (
                             previous.get("receipt_summary") is None
                             and old_item.get("stage") in {"prepare", "interpret", "exception"}
@@ -2387,6 +2827,11 @@ def _run_pipeline_impl(
                     "metrics": {"capacity_samples": [], "peak_active": {}},
                 },
             )
+            try:
+                origin_history = _resolved_audit_history(path, previous) if previous else []
+            except (ValueError, OSError):
+                # Unavailable immutable history cannot establish a wait origin.
+                origin_history = []
             if prior_invalid_stop_evidence is not None:
                 run["prior_invalid_stop_evidence"] = prior_invalid_stop_evidence
                 if recovered_wait_targets and previous is not None:
@@ -2415,8 +2860,47 @@ def _run_pipeline_impl(
                                 else None
                             )
                         )
+                        available_origins = []
+                        if isinstance(recovery_audit, Mapping) and isinstance(
+                            recovery_audit.get("history_entry"), Mapping
+                        ):
+                            available_origins.append(recovery_audit["history_entry"])
+                        available_origins.extend(origin_history)
+                        origin = _validated_wait_audit_origin(available_origins, target, old_item)
+                        if origin is None and (
+                            not recovery_audit or recovery_audit.get("native_wait_provenance_only")
+                        ):
+                            observed = _native_wait_origin_record(
+                                path, target, old_item, previous, previous_run_id, prior_stop, now
+                            )
+                            if observed is not None:
+                                if recovery_audit:
+                                    recovery_audit["history_entry"]["targets"].update(
+                                        observed["targets"]
+                                    )
+                                else:
+                                    recovery_audit = {
+                                        "history_entry": observed,
+                                        "native_wait_provenance_only": True,
+                                    }
+                                origin = _validated_wait_audit_origin(
+                                    [recovery_audit["history_entry"]], target, old_item
+                                )
+                        if origin is None:
+                            return {
+                                "schema": "closer-pipeline-receipt/v1",
+                                "authority": False,
+                                "status": "blocked",
+                                "reason": "validated_wait_audit_origin_unavailable",
+                                "target": target,
+                                "continuation_required": True,
+                                "finished_at": now(),
+                                "targets": {},
+                            }
+                        if origin["previous_run_id"] == previous_run_id:
+                            origin = {"previous_item_sha256": origin["previous_item_sha256"]}
                         wait_records[target] = {
-                            "previous_item_sha256": _digest(previous["targets"][target]),
+                            **origin,
                             "restored_wait_view": old_item is not previous["targets"][target],
                             "previous_error": old_item.get("error"),
                             "revision": old_item.get("revision"),
@@ -2437,12 +2921,6 @@ def _run_pipeline_impl(
                         "targets": wait_records,
                     }
             if previous is not None:
-                try:
-                    origin_history = _resolved_audit_history(path, previous)
-                except (ValueError, OSError):
-                    # The ordinary archive-staging error path below reports the
-                    # unavailable history; it cannot authorize origin reuse.
-                    origin_history = []
                 retained_read_targets = {
                     target
                     for target, item in previous.get("targets", {}).items()
@@ -2534,6 +3012,8 @@ def _run_pipeline_impl(
                     # this fully proven native wait as provenance, not authority.
                     latest[old_target] = previous["targets"][old_target]
             carried = []
+            scope_origins = {}
+            scope_carry = {}
             for old_target, old_item in latest.items():
                 # An old non-action failure outside today's assignment remains
                 # in the immutable audit, not in today's work queue.
@@ -2544,6 +3024,30 @@ def _run_pipeline_impl(
                 ):
                     continue
                 item = _bounded(old_item)
+                if (
+                    old_target not in assignment
+                    and item.get("deferred_reason") == "scope_quarantined"
+                ):
+                    origins = [
+                        (name, old_run)
+                        for name, old_run in state["runs"].items()
+                        if old_run.get("targets", {}).get(old_target) == old_item
+                        and closer_resources.valid_scope_refusal(path, old_target, old_item, name)
+                    ]
+                    if len(origins) != 1:
+                        return {
+                            "schema": "closer-pipeline-receipt/v1",
+                            "authority": False,
+                            "status": "blocked",
+                            "reason": "scope_refusal_origin_unavailable",
+                            "targets": {},
+                            "continuation_required": True,
+                            "finished_at": now(),
+                        }
+                    origin_id, origin_run = origins[0]
+                    scope_origins[origin_id] = origin_run
+                    scope_carry[old_target] = item
+                    continue
                 if recovery_audit is not None and old_target in recovery_uncertain:
                     item.update(
                         status="uncertain",
@@ -2612,6 +3116,42 @@ def _run_pipeline_impl(
                     item.update(status="uncertain", deferred_next_trigger="reconcile_before_retry")
                 if old_target in assignment:
                     item.pop("recovery_excluded", None)
+                    if item.get("deferred_reason") == "scope_quarantined":
+                        origins = [
+                            (name, old_run)
+                            for name, old_run in state["runs"].items()
+                            if old_run.get("targets", {}).get(old_target) == old_item
+                            and closer_resources.valid_scope_refusal(
+                                path, old_target, old_item, name
+                            )
+                        ]
+                        if len(origins) != 1:
+                            return {
+                                "schema": "closer-pipeline-receipt/v1",
+                                "authority": False,
+                                "status": "blocked",
+                                "reason": "scope_refusal_origin_unavailable",
+                                "targets": {},
+                                "continuation_required": True,
+                                "finished_at": now(),
+                            }
+                        origin_id, origin_run = origins[0]
+                        scope_origins[origin_id] = origin_run
+                        run.setdefault("prior_scope_refusals", {})[old_target] = {
+                            "source_run_id": origin_id,
+                            "item_sha256": _digest(old_item),
+                            "scope_proof": old_item["scope_proof"],
+                        }
+                        # Project a fresh scheduling view only after proving
+                        # this exact callback never started. Retain its full
+                        # original run and proof, without rebinding either.
+                        for field in (
+                            "scope_proof",
+                            "deferred_reason",
+                            "deferred_next_trigger",
+                            "error",
+                        ):
+                            item.pop(field, None)
                     if item.get("status") not in {"uncertain", "failed"} or (
                         item.get("status") == "failed" and old_target not in recovery_quarantined
                     ):
@@ -2635,8 +3175,8 @@ def _run_pipeline_impl(
                 run["prior_stop"] = _bounded(prior_stop, limit=64 * 1024)
             # Keep only a small run history; unresolved targets are additionally
             # copied into the top-level carry ledger before old runs are trimmed.
-            state["runs"] = {run_id: run}
-            state["carry"] = {}
+            state["runs"] = {**scope_origins, run_id: run}
+            state["carry"] = scope_carry
         # A resumed invocation cannot silently extend its original budget.
         active_deadline = min(float(deadline), float(run["deadline"]))
         for target in target_list:
@@ -2685,7 +3225,7 @@ def _run_pipeline_impl(
         lane: ThreadPoolExecutor(max_workers=bounds[lane], thread_name_prefix=f"closer-{lane}")
         for lane in bounds
     }
-    futures: dict[Future[Any], tuple[str, str, str, str | None, float]] = {}
+    futures: dict[Future[Any], tuple[str, str, str, str | None, float, str]] = {}
     active: dict[str, int] = {lane: 0 for lane in bounds}
     started = now()
     capacity_samples: list[dict[str, Any]] = []
@@ -2744,8 +3284,7 @@ def _run_pipeline_impl(
             # Resolve completions immediately and persist before finding more work.
             done = [f for f in futures if f.done()]
             for future in done:
-                target, stage, key, cache_key, launched = futures.pop(future)
-                lane = callbacks[stage][1]
+                target, stage, key, cache_key, launched, lane = futures.pop(future)
                 active[lane] -= 1
                 elapsed = max(0.0, now() - launched)
                 try:
@@ -2754,7 +3293,9 @@ def _run_pipeline_impl(
                         raise ValueError("callback must return an object")
                     error = None
                 except Exception as exc:  # recorded as evidence, never acceptance
-                    if (
+                    if isinstance(exc, closer_resources.ScopeBlocked):
+                        value, error = {"_scope_not_started": exc.proof, "reason": str(exc)}, None
+                    elif (
                         stage == "prepare"
                         and round_deadline_exception is not None
                         and isinstance(exc, round_deadline_exception)
@@ -2775,13 +3316,13 @@ def _run_pipeline_impl(
                     ):
                         throttle = getattr(exc, "throttle", None)
                         resource_name = getattr(exc, "resource", None)
-                        observed_at = getattr(exc, "observed_at", None)
+                        capacity_observed_at = getattr(exc, "observed_at", None)
                         reset_at = getattr(exc, "reset_at_epoch", None)
                         evidence = {
                             "github_capacity": {
                                 "throttle": throttle,
                                 "resource": resource_name,
-                                "observed_at": observed_at,
+                                "observed_at": capacity_observed_at,
                                 "reset_at_epoch": reset_at,
                             }
                         }
@@ -2800,6 +3341,24 @@ def _run_pipeline_impl(
                         )
                         return
                     item["metrics"].setdefault("stage_seconds", {})[stage] = elapsed
+                    if value.get("_scope_not_started"):
+                        # This typed signal is emitted only by the pre-callback
+                        # resource gate. No provider/effect was invoked; it cannot
+                        # discharge any historical outcome or authorize a retry.
+                        item.update(
+                            status="deferred",
+                            deferred_reason="scope_quarantined",
+                            deferred_next_trigger="reconcile_scope_before_retry",
+                            scope_proof=value["_scope_not_started"],
+                            error=value.get("reason"),
+                        )
+                        if stage == "reconcile":
+                            # A refused reconciliation proves nothing about the
+                            # earlier action. Keep that original unknown alive.
+                            item.update(
+                                status="uncertain", deferred_next_trigger="reconcile_before_retry"
+                            )
+                        return
                     if now() > active_deadline:
                         item["metrics"]["late_seconds"] = max(0.0, now() - active_deadline)
                     if value.get("_not_started_deadline") is True:
@@ -2922,6 +3481,40 @@ def _run_pipeline_impl(
                         }
                     item.pop("error", None)
                     item["status"] = "queued"
+                    # Admission guards may stop before any provider call. Preserve
+                    # that exact event dependency instead of escalating it to the
+                    # strong-worker lane or advancing to an action.
+                    if (
+                        stage in {"interpret", "exception"}
+                        and value.get("status") == "pending"
+                        and value.get("pending_kind") in {"ci", "async_operation", "external_event"}
+                        and isinstance(value.get("next_trigger"), str)
+                        and isinstance(value.get("pending_evidence"), Mapping)
+                    ):
+                        evidence_value = value.get("pending_evidence")
+                        kind_value = value.get("pending_kind")
+                        evidence = evidence_value if isinstance(evidence_value, Mapping) else None
+                        kind = kind_value if isinstance(kind_value, str) else ""
+                        id_fields = {
+                            "ci": "check_run_id",
+                            "async_operation": "operation_id",
+                            "external_event": "event_id",
+                        }
+                        has_id = id_fields.get(kind)
+                        event_id = evidence.get(has_id) if evidence is not None and has_id else None
+                        if evidence is not None and isinstance(event_id, str) and event_id:
+                            # A pending interpretation is a wake-up point,
+                            # not a reusable semantic decision. The next
+                            # invocation must rerun the admission check.
+                            if cache_key:
+                                doc.get("cache", {}).pop(cache_key, None)
+                            item.update(
+                                status="pending",
+                                pending_kind=kind,
+                                deferred_next_trigger=value["next_trigger"],
+                                pending_evidence=dict(evidence),
+                            )
+                            return
                     if stage == "prepare":
                         prior_revision = item.get("revision")
                         item["revision"] = value.get("revision")
@@ -2963,44 +3556,6 @@ def _run_pipeline_impl(
                                     deferred_next_trigger="fresh_capacity_report",
                                 )
                             return
-                        # Admission guards may stop before any provider call. Preserve
-                        # that exact event dependency instead of escalating it to the
-                        # strong-worker lane or advancing to an action.
-                        if (
-                            value.get("status") == "pending"
-                            and value.get("pending_kind")
-                            in {"ci", "async_operation", "external_event"}
-                            and isinstance(value.get("next_trigger"), str)
-                            and isinstance(value.get("pending_evidence"), Mapping)
-                        ):
-                            evidence_value = value.get("pending_evidence")
-                            kind_value = value.get("pending_kind")
-                            evidence = (
-                                evidence_value if isinstance(evidence_value, Mapping) else None
-                            )
-                            kind = kind_value if isinstance(kind_value, str) else ""
-                            id_fields = {
-                                "ci": "check_run_id",
-                                "async_operation": "operation_id",
-                                "external_event": "event_id",
-                            }
-                            has_id = id_fields.get(kind)
-                            event_id = (
-                                evidence.get(has_id) if evidence is not None and has_id else None
-                            )
-                            if evidence is not None and isinstance(event_id, str) and event_id:
-                                # A pending interpretation is a wake-up point,
-                                # not a reusable semantic decision. The next
-                                # invocation must rerun the admission check.
-                                if cache_key:
-                                    doc.get("cache", {}).pop(cache_key, None)
-                                item.update(
-                                    status="pending",
-                                    pending_kind=kind,
-                                    deferred_next_trigger=value["next_trigger"],
-                                    pending_evidence=dict(evidence),
-                                )
-                                return
                         if (
                             value.get("status") == "deferred"
                             and value.get("reason") == "provider_failure"
@@ -3226,7 +3781,9 @@ def _run_pipeline_impl(
                     candidate_stage = candidate_item.get("stage")
                     if candidate_item.get("status") != "queued" or candidate_stage not in callbacks:
                         continue
-                    candidate_lane = callbacks[candidate_stage][1]
+                    candidate_lane = stage_lane(candidate_stage, candidate, candidate_item)
+                    if candidate_lane is None:
+                        continue
                     if candidate_lane != "io":
                         other_lanes.append(candidate)
                     elif candidate_stage == "prepare":
@@ -3247,8 +3804,8 @@ def _run_pipeline_impl(
                     advancing_work = any(
                         item.get("status") in {"queued", "running"}
                         and item.get("stage") in {"interpret", "exception"}
-                        and cap[callbacks[item["stage"]][1]] > 0
-                        for item in rows.values()
+                        and cap.get(stage_lane(item["stage"], candidate_target, item) or "", 0) > 0
+                        for candidate_target, item in rows.items()
                     )
                     if advancing_work:
                         io_slots -= 1
@@ -3272,7 +3829,10 @@ def _run_pipeline_impl(
                     stage = item.get("stage")
                     if stage not in callbacks:
                         continue
-                    callback, lane = callbacks[stage]
+                    callback = callbacks[stage][0]
+                    lane = stage_lane(stage, target, item)
+                    if lane is None:
+                        continue
                     if active[lane] >= min(cap[lane], bounds[lane]):
                         item["metrics"]["waits"] += 1
                         continue
@@ -3282,6 +3842,7 @@ def _run_pipeline_impl(
                         "identity": item.get("identity", target),
                         "deadline": active_deadline,
                         "state_path": str(path),
+                        "pipeline_run_id": run_id,
                         "action_state_path": str(
                             path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
                         ),
@@ -3339,6 +3900,9 @@ def _run_pipeline_impl(
                         _save_state_locked(path, state)
                         continue
                     item.update(status="running", work_key=key, last_scheduled=now())
+                    scope_lease = closer_resources.fence_identity(path)
+                    if scope_lease is not None:
+                        item["scope_lease"] = scope_lease
                     _save_state_locked(path, state)
 
                     def invoke(cb=callback, name=target, ctx=safe_context):
@@ -3369,7 +3933,7 @@ def _run_pipeline_impl(
                             future.set_result(cached_value)
                     if not isinstance(cached, Mapping):
                         future = executors[lane].submit(invoke)
-                    futures[future] = (target, stage, key, cache_key, now())
+                    futures[future] = (target, stage, key, cache_key, now(), lane)
                     active[lane] += 1
                     peak_active[lane] = max(peak_active[lane], active[lane])
                 _save(path, state)
@@ -3383,7 +3947,9 @@ def _run_pipeline_impl(
                     for target, item in current_state["targets"].items():
                         if item.get("status") != "queued" or item.get("stage") not in callbacks:
                             continue
-                        lane = callbacks[item["stage"]][1]
+                        lane = stage_lane(item["stage"], target, item)
+                        if lane is None:
+                            continue
                         if capacity_error:
                             item.update(
                                 status="failed",
@@ -3480,6 +4046,8 @@ def _run_pipeline_impl(
                 carry[target] = _carry_item(item)
         receipt = {
             "schema": "closer-pipeline-receipt/v1",
+            # Admitted past the deadline/lock gate; deferred paths set authority False.
+            "authority": True,
             "run_id": run_id,
             "deadline": run["deadline"],
             "elapsed_seconds": max(0.0, now() - started),
@@ -3498,7 +4066,941 @@ def _run_pipeline_impl(
         return receipt
 
 
-def run_pipeline(
+def _run_pipeline_finite(
+    state_path: str | Path,
+    targets: Iterable[str],
+    *,
+    prepare,
+    interpret,
+    act,
+    exception,
+    reconcile=None,
+    capacity_fn,
+    finite_frontier,
+    frontier_target: str | None = None,
+    request_timeout_seconds: float = 120.0,
+    cancelled_fn=None,
+    paused_fn=None,
+    max_io_workers: int = 1,
+    max_low_workers: int = 1,
+    max_exception_workers: int = 1,
+    now: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    """Run a new immutable frontier with bounded per-stage request windows.
+
+    This is an explicit policy branch. Legacy runs retain their numeric aggregate
+    deadline and recovery rules. A callback stage is durably marked running before
+    invocation; after interruption that stage is UNKNOWN and is never replayed.
+    """
+    from closer_frontier_policy import request_window, validate_frontier
+
+    path = Path(state_path)
+    selected = list(targets)
+    frontier = validate_frontier(finite_frontier)
+    if frontier_target is not None:
+        if selected != [frontier_target] or frontier_target not in frontier["targets"]:
+            raise ValueError("finite pipeline target differs from the immutable frontier")
+    elif selected != frontier["targets"]:
+        raise ValueError("finite pipeline assignment differs from the immutable frontier")
+    if len({closer_resources.canonical_target(target) for target in selected}) != len(selected):
+        raise ValueError("finite pipeline targets must be canonically unique")
+    request_window(now(), request_timeout_seconds)
+    bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 1
+        for value in bounds.values()
+    ):
+        raise ValueError("finite pipeline pool ceilings must be positive integers")
+    callbacks = {
+        "prepare": (prepare, "io"),
+        "interpret": (interpret, "low"),
+        "exception": (exception, "exception"),
+        "act": (act, "io"),
+    }
+    if reconcile is not None:
+        callbacks["reconcile"] = (reconcile, "io")
+    run_id = _digest(["finite-frontier/v2", frontier["frontier_id"], frontier["owner"]])[:32]
+    lock_path = path.with_name(path.name + ".runlock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    run_lock = lock_path.open("a+")
+    try:
+        fcntl.flock(run_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        run_lock.close()
+        return {
+            "schema": "closer-pipeline-receipt/v1",
+            "run_id": run_id,
+            "assignment": selected,
+            "finite_frontier": frontier,
+            "valid": False,
+            "stop_valid": False,
+            "status": "held",
+            "continuation_required": True,
+            "targets": {},
+        }
+
+    lane_by_stage = {name: lane for name, (_callback, lane) in callbacks.items()}
+    rows: dict[str, dict[str, Any]] = {}
+
+    @contextlib.contextmanager
+    def finite_journal_lock(request_deadline: float | None = None):
+        deadline_value = (
+            request_window(now(), request_timeout_seconds)["deadline"]
+            if request_deadline is None
+            else request_deadline
+        )
+        remaining = deadline_value - float(now())
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise _FiniteStateLockTimeout("finite pipeline state lock window already expired")
+        with closer_resources.inventory_request(deadline_value, now=now):
+            with _locked(path, timeout_seconds=remaining):
+                yield
+
+    def mutate_frontier(change, *, request_deadline: float | None = None) -> None:
+        with finite_journal_lock(request_deadline):
+            state = _load(path)
+            entries = state.setdefault("frontiers", {})
+            entry = entries.get(frontier["frontier_id"])
+            if entry is None:
+                entry = {
+                    "schema": "closer-pipeline-frontier/v2",
+                    "run_id": run_id,
+                    "finite_frontier": frontier,
+                    "created_at": now(),
+                    "items": {},
+                }
+                entries[frontier["frontier_id"]] = entry
+            if (
+                entry.get("schema") != "closer-pipeline-frontier/v2"
+                or entry.get("run_id") != run_id
+                or entry.get("finite_frontier") != frontier
+            ):
+                raise ValueError("finite pipeline frontier identity changed")
+            existing_items = entry.get("items")
+            if not isinstance(existing_items, dict) or set(existing_items).difference(
+                frontier["targets"]
+            ):
+                raise ValueError("finite pipeline frontier contains a foreign target")
+            change(entry)
+            entry["updated_at"] = now()
+            _save(path, state)
+
+    def control_status(target):
+        if cancelled_fn is not None and cancelled_fn():
+            return "cancelled"
+        if paused_fn is not None and paused_fn():
+            return "paused"
+        return None
+
+    try:
+        # Claim all selected target rows before callbacks. Existing in-flight stages
+        # are held UNKNOWN; only a known completed stage may advance after restart.
+        def initialize(entry):
+            items = entry.setdefault("items", {})
+            for target in selected:
+                item = items.setdefault(
+                    target,
+                    {
+                        "status": "pending",
+                        "stage": "prepare",
+                        "results": {},
+                        "metrics": {"requests": 0},
+                    },
+                )
+                if item.get("reentry_ready") is not None:
+                    import closer_finite_reentry
+
+                    closer_finite_reentry.ready(path, frontier, target, item)
+                    item.pop("reentry_ready")
+                    item.update(status="pending", stage_status="queued")
+                if item.get("stage_status") == "running":
+                    item.update(
+                        status="unknown",
+                        error="process_interrupted_during_finite_request",
+                        deferred_next_trigger="manual_reconciliation",
+                    )
+                    item["stage_status"] = "unknown"
+            rows.update({target: dict(items[target]) for target in selected})
+
+        mutate_frontier(initialize)
+
+        for target in selected:
+            while True:
+                with finite_journal_lock():
+                    state = _load(path)
+                    entry = state["frontiers"][frontier["frontier_id"]]
+                    stored_items = entry.get("items")
+                    if not isinstance(stored_items, dict) or set(stored_items).difference(
+                        frontier["targets"]
+                    ):
+                        raise ValueError("finite pipeline frontier contains a foreign target")
+                    item = entry["items"][target]
+                    if item.get("status") in {
+                        "completed",
+                        "held",
+                        "paused",
+                        "cancelled",
+                        "capacity_blocked",
+                        "unknown",
+                        "failed",
+                    }:
+                        rows[target] = dict(item)
+                        break
+                    stage = item.get("stage")
+                    if stage not in callbacks:
+                        item.update(status="held", error="unsupported_finite_stage")
+                        _save(path, state)
+                        rows[target] = dict(item)
+                        break
+                    stop = control_status(target)
+                    if stop:
+                        item.update(status=stop, stage_status=stop)
+                        item["deferred_next_trigger"] = "resume_after_operator_action"
+                        _save(path, state)
+                        rows[target] = dict(item)
+                        break
+                    try:
+                        capacity = _capacity(capacity_fn)
+                    except Exception as exc:
+                        item.update(
+                            status="capacity_blocked",
+                            error=f"capacity_unavailable:{type(exc).__name__}",
+                        )
+                        item["deferred_next_trigger"] = "fresh_capacity_report"
+                        _save(path, state)
+                        rows[target] = dict(item)
+                        break
+                    lane = lane_by_stage[stage]
+                    if stage == "interpret":
+                        import closer_dispatcher
+
+                        original = closer_resources.native_interpretation_callback(
+                            callbacks[stage][0]
+                        )
+                        try:
+                            remote = closer_dispatcher.native_stage_remote_only(
+                                target, item.get("results", {}), stage, original
+                            )
+                        except (
+                            OSError,
+                            ValueError,
+                            TypeError,
+                            KeyError,
+                            AttributeError,
+                            RecursionError,
+                        ) as exc:
+                            item.update(
+                                status="held",
+                                stage_status="held",
+                                error="native_readiness_unavailable:" + type(exc).__name__,
+                                deferred_next_trigger="restore_bound_native_input",
+                            )
+                            _save(path, state)
+                            rows[target] = dict(item)
+                            break
+                        if remote:
+                            lane = "io"  # Native interpretation invokes no model.
+                    if capacity.get(lane, 0) < 1:
+                        item.update(
+                            status="capacity_blocked",
+                            deferred_reason="worker_capacity",
+                            deferred_next_trigger="capacity_recheck",
+                            resource_evidence={
+                                "capacity": {
+                                    "lane": lane,
+                                    "available": capacity.get(lane, 0),
+                                    "sampled_at": now(),
+                                }
+                            },
+                        )
+                        _save(path, state)
+                        rows[target] = dict(item)
+                        break
+                    window = request_window(now(), request_timeout_seconds)
+                    item.update(
+                        status="running",
+                        stage_status="running",
+                        stage_started_at=window["started_at"],
+                        stage_deadline=window["deadline"],
+                        last_scheduled=window["started_at"],
+                    )
+                    item.setdefault("metrics", {})["requests"] = (
+                        int(item.setdefault("metrics", {}).get("requests", 0)) + 1
+                    )
+                    scope_lease = closer_resources.fence_identity(path)
+                    if scope_lease is not None:
+                        item["scope_lease"] = scope_lease
+                    context = {
+                        **item.get("results", {}),
+                        "revision": item.get("revision"),
+                        "identity": item.get("identity", target),
+                        "deadline": window["deadline"],
+                        "request_started_at": window["started_at"],
+                        "request_timeout_seconds": request_timeout_seconds,
+                        "finite_frontier": frontier,
+                        "frontier_binding": frontier["bindings"][target],
+                        "state_path": str(path),
+                        "pipeline_run_id": run_id,
+                        "action_state_path": str(
+                            path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
+                        ),
+                        "work_key": _digest(
+                            [target, stage, item.get("revision"), frontier["bindings"][target]]
+                        ),
+                    }
+                    item["work_key"] = context["work_key"]
+                    with closer_resources.inventory_request(window["deadline"], now=now):
+                        _save(path, state)
+                    rows[target] = dict(item)
+
+                callback = callbacks[stage][0]
+                try:
+                    result = callback(target, _bounded(context, limit=256 * 1024))
+                    if not isinstance(result, Mapping):
+                        raise ValueError("callback must return an object")
+                    result = _bounded(dict(result), limit=CALLBACK_RESULT_BYTES)
+                except Exception as exc:
+                    # Model/provider stages may have started a billable request
+                    # before transport loss. Preserve that unresolved attempt as
+                    # UNKNOWN so a later frontier cannot silently repeat it.
+                    terminal = (
+                        "unknown"
+                        if stage in {"interpret", "exception", "act", "reconcile"}
+                        else "held"
+                    )
+                    error_text = f"{type(exc).__name__}: {str(exc)[:200]}"
+                    scope_refusal = (
+                        dict(exc.proof) if isinstance(exc, closer_resources.ScopeBlocked) else None
+                    )
+
+                    def fail(entry):
+                        current = entry["items"][target]
+                        current.update(
+                            status=terminal,
+                            stage_status=terminal,
+                            error=error_text,
+                            deferred_next_trigger=(
+                                "manual_reconciliation"
+                                if terminal == "unknown"
+                                else "operator_review"
+                            ),
+                        )
+                        if scope_refusal is not None:
+                            current["scope_refusal"] = scope_refusal
+
+                    mutate_frontier(fail, request_deadline=window["deadline"])
+                    continue
+
+                # An elapsed request window never authorizes a second attempt. A late
+                # read is held; a late action is UNKNOWN because an effect may exist.
+                if now() >= window["deadline"]:
+                    terminal = (
+                        "unknown"
+                        if stage in {"interpret", "exception", "act", "reconcile"}
+                        else "held"
+                    )
+
+                    def late(entry):
+                        current = entry["items"][target]
+                        current.setdefault("late_results", {})[stage] = result
+                        current.update(
+                            status=terminal,
+                            stage_status=terminal,
+                            error="finite request window expired",
+                            deferred_next_trigger=(
+                                "manual_reconciliation"
+                                if terminal == "unknown"
+                                else "fresh_observation"
+                            ),
+                        )
+
+                    mutate_frontier(late, request_deadline=window["deadline"])
+                    continue
+
+                def complete_stage(entry):
+                    current = entry["items"][target]
+                    current.setdefault("results", {})[stage] = result
+                    current.setdefault("stage_results", {})[stage] = {
+                        "status": "completed",
+                        "started_at": window["started_at"],
+                        "finished_at": now(),
+                        "deadline": window["deadline"],
+                        "work_key": context["work_key"],
+                    }
+                    current["stage_status"] = "completed"
+                    if stage == "prepare":
+                        revision = result.get("revision")
+                        expected = frontier["bindings"][target]["revision"]
+                        if revision != expected:
+                            current.update(status="held", error="frontier revision binding differs")
+                        elif result.get("finite_binding_changed"):
+                            current.update(
+                                status="held",
+                                error="frontier action binding differs",
+                                deferred_next_trigger="fresh finite frontier",
+                            )
+                        else:
+                            current.update(
+                                status="pending",
+                                revision=revision,
+                                identity=result.get("identity", target),
+                                stage="interpret",
+                            )
+                    elif stage == "interpret":
+                        if (
+                            result.get("status") in {"uncertain", "unknown", "running", "submitted"}
+                            or result.get("provider_outcome_uncertain") is not None
+                        ):
+                            current.update(
+                                status="unknown", error="interpretation outcome is unresolved"
+                            )
+                            current["deferred_next_trigger"] = result.get(
+                                "next_trigger", "manual_reconciliation"
+                            )
+                        elif result.get("classification") == "capacity_deferred" or (
+                            result.get("status") == "deferred"
+                            and result.get("reason") == "worker_capacity"
+                        ):
+                            current.update(
+                                status="capacity_blocked",
+                                deferred_reason=result.get("reason", "capacity"),
+                            )
+                            current["deferred_next_trigger"] = result.get(
+                                "next_trigger", "capacity_recheck"
+                            )
+                        elif result.get("status") == "pending":
+                            pending_kind = result.get("pending_kind")
+                            pending_evidence = result.get("pending_evidence")
+                            pending_field = {
+                                "ci": "check_run_id",
+                                "async_operation": "operation_id",
+                                "external_event": "event_id",
+                            }.get(pending_kind)
+                            pending_revision = (
+                                pending_evidence.get("observed_revision")
+                                or pending_evidence.get("revision")
+                                if isinstance(pending_evidence, Mapping)
+                                else None
+                            )
+                            assignment_hold = (
+                                pending_kind == "external_event"
+                                and isinstance(pending_evidence, Mapping)
+                                and isinstance(pending_evidence.get("fingerprint"), str)
+                                and bool(pending_evidence["fingerprint"])
+                                and pending_evidence.get("execution_state") not in {None, "active"}
+                            )
+                            pending_identifier = (
+                                pending_evidence.get(pending_field)
+                                if isinstance(pending_evidence, Mapping) and pending_field
+                                else None
+                            )
+                            valid_pending_identifier = (
+                                type(pending_identifier) is int and pending_identifier > 0
+                                if pending_kind == "ci"
+                                else isinstance(pending_identifier, str)
+                                and bool(pending_identifier.strip())
+                            )
+                            if (
+                                pending_field
+                                and isinstance(pending_evidence, Mapping)
+                                and pending_evidence.get("target") == target
+                                and valid_pending_identifier
+                                and (pending_revision == current.get("revision") or assignment_hold)
+                                and isinstance(result.get("next_trigger"), str)
+                                and result["next_trigger"].strip()
+                            ):
+                                current.update(
+                                    status="held",
+                                    deferred_reason=f"pending_{pending_kind}",
+                                )
+                                current["deferred_next_trigger"] = result["next_trigger"]
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="interpretation pending result lacks exact event evidence",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
+                        elif result.get("status") == "deferred":
+                            evidence = result.get("resource_evidence")
+                            if (
+                                result.get("reason") == "provider_failure"
+                                and isinstance(result.get("next_trigger"), str)
+                                and result["next_trigger"].strip()
+                                and _valid_provider_failure(evidence)
+                            ):
+                                current.update(
+                                    status="held",
+                                    deferred_reason="provider_failure",
+                                    resource_evidence=dict(evidence),
+                                )
+                                current["deferred_next_trigger"] = result["next_trigger"]
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="interpretation deferral lacks validated no-effect evidence",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
+                        elif result.get("substantive_needs"):
+                            current.update(status="pending", stage="exception")
+                        elif result.get("substantive_needs") == []:
+                            current.update(status="pending", stage="act")
+                        else:
+                            current.update(
+                                status="held",
+                                error="interpretation lacks explicit substantive_needs",
+                            )
+                    elif stage == "exception":
+                        if (
+                            result.get("status") in {"uncertain", "unknown", "running", "submitted"}
+                            or result.get("provider_outcome_uncertain") is not None
+                        ):
+                            current.update(
+                                status="unknown", error="exception outcome is unresolved"
+                            )
+                            current["deferred_next_trigger"] = result.get(
+                                "next_trigger", "manual_reconciliation"
+                            )
+                        elif result.get("status") in {"failed", "deferred", "pending"}:
+                            current.update(
+                                status=(
+                                    "capacity_blocked"
+                                    if result.get("reason") == "worker_capacity"
+                                    else "held"
+                                ),
+                                error=result.get("reason", "exception did not produce a route"),
+                            )
+                            current["deferred_next_trigger"] = result.get(
+                                "next_trigger", "operator_review"
+                            )
+                        else:
+                            current.update(status="pending", stage="act")
+                    elif stage == "act":
+                        status = result.get("status")
+                        if status == "completed" and result.get("target_complete") is True:
+                            current.update(status="completed", stage_status="completed")
+                        elif status == "completed" and result.get("target_complete") is False:
+                            # A finite target may make one verified queue transition
+                            # without finishing its overall workflow. Preserve that
+                            # proof and stop this frontier; only a newly reviewed
+                            # frontier may schedule the next transition.
+                            queue_receipt = result.get("queue_receipt")
+                            progress_key = result.get("progress_key")
+                            action_state_path = context.get("action_state_path")
+                            verified_progress = False
+                            if (
+                                isinstance(action_state_path, str)
+                                and isinstance(queue_receipt, Mapping)
+                                and isinstance(progress_key, str)
+                                and progress_key
+                            ):
+                                try:
+                                    import closer_queue
+
+                                    checked = closer_queue.validate_stop(
+                                        action_state_path,
+                                        [target],
+                                        receipt=queue_receipt,
+                                        frontier_id=frontier["frontier_id"],
+                                    )
+                                    queue_state = closer_queue._read_state(Path(action_state_path))
+                                    queue_frontier_state = closer_queue.state_for_frontier(
+                                        queue_state,
+                                        frontier["frontier_id"],
+                                        expected_policy=frontier,
+                                    )
+                                    queue_item = (
+                                        queue_frontier_state.get("items", {}).get(target)
+                                        if isinstance(queue_frontier_state, Mapping)
+                                        else None
+                                    )
+                                    accounting = queue_receipt.get("accounting")
+                                    queue_row = (
+                                        next(
+                                            (
+                                                row
+                                                for row in accounting
+                                                if isinstance(row, Mapping)
+                                                and row.get("target") == target
+                                            ),
+                                            None,
+                                        )
+                                        if isinstance(accounting, list)
+                                        else None
+                                    )
+                                    expected_progress_key = (
+                                        hashlib.sha256(
+                                            json.dumps(
+                                                {
+                                                    "revision": queue_row.get("revision"),
+                                                    "action": queue_row.get("action"),
+                                                    "operation_id": queue_row.get("operation_id"),
+                                                    "operation_status": queue_row.get(
+                                                        "operation_status"
+                                                    ),
+                                                    "events": queue_receipt.get("events", [])[-8:],
+                                                },
+                                                sort_keys=True,
+                                            ).encode()
+                                        ).hexdigest()
+                                        if isinstance(queue_row, Mapping)
+                                        else None
+                                    )
+                                    operation_id = (
+                                        queue_row.get("operation_id")
+                                        if isinstance(queue_row, Mapping)
+                                        else None
+                                    )
+                                    operations = []
+                                    if isinstance(queue_item, Mapping):
+                                        operations.append(queue_item.get("operation"))
+                                        history = queue_item.get("operation_history", [])
+                                        if isinstance(history, list):
+                                            operations.extend(history)
+                                    completed_original_action = False
+                                    if isinstance(operation_id, str) and operation_id:
+                                        from closer_frontier_policy import action_identity
+
+                                        for operation in operations:
+                                            if not isinstance(operation, Mapping):
+                                                continue
+                                            revision = operation.get("revision")
+                                            action = operation.get("action")
+                                            binding = operation.get("binding")
+                                            try:
+                                                identity = action_identity(
+                                                    target, revision, action, binding
+                                                )
+                                            except (TypeError, ValueError):
+                                                continue
+                                            if (
+                                                operation.get("id") == operation_id
+                                                and operation.get("status") == "completed"
+                                                and operation.get("finite_frontier") == frontier
+                                                and operation.get("revision")
+                                                == frontier["bindings"][target]["revision"]
+                                                and identity
+                                                == frontier["bindings"][target]["action_id"]
+                                            ):
+                                                completed_original_action = True
+                                                break
+                                    verified_progress = bool(
+                                        checked.get("valid")
+                                        and checked.get("stop_valid")
+                                        and queue_receipt.get("stop_valid")
+                                        and isinstance(queue_row, Mapping)
+                                        and queue_row.get("eligible") is True
+                                        and (
+                                            queue_row.get("status") in {"completed", "observed"}
+                                            or (
+                                                queue_row.get("status") == "deferred"
+                                                and queue_row.get("reason") == "pass_limit"
+                                            )
+                                        )
+                                        and queue_row.get("operation_status") == "completed"
+                                        and completed_original_action
+                                        and expected_progress_key == progress_key
+                                    )
+                                except (OSError, TypeError, ValueError, KeyError):
+                                    verified_progress = False
+                            if verified_progress:
+                                current.update(
+                                    status="held",
+                                    stage_status="completed",
+                                    progress_key=progress_key,
+                                    deferred_next_trigger="new_frontier_required",
+                                    error="verified partial action progress; new frontier required",
+                                )
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="partial action progress lacks an exact verified queue receipt",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
+                        elif status in {"uncertain", "running", "submitted", "unknown", "failed"}:
+                            current.update(status="unknown", error="action outcome is unresolved")
+                            current["deferred_next_trigger"] = result.get(
+                                "next_trigger", "manual_reconciliation"
+                            )
+                        elif status == "deferred" and result.get("reason") == "worker_capacity":
+                            current.update(
+                                status="capacity_blocked", deferred_reason="worker_capacity"
+                            )
+                            current["deferred_next_trigger"] = result.get(
+                                "next_trigger", "capacity_recheck"
+                            )
+                        elif status in {"pending", "deferred", "blocked", "not_started"}:
+                            # A status label alone cannot prove no effect. Require
+                            # the exact inner queue stop receipt and a matching
+                            # accounting row before classifying the wait as held.
+                            action_state_path = context.get("action_state_path")
+                            queue_receipt = result.get("queue_receipt")
+                            reason = result.get("reason")
+                            trigger = result.get("next_trigger")
+                            row = None
+                            proof_ok = False
+                            accepted_request_proof = None
+                            if (
+                                isinstance(action_state_path, str)
+                                and isinstance(queue_receipt, Mapping)
+                                and isinstance(trigger, str)
+                                and trigger.strip()
+                            ):
+                                try:
+                                    import closer_queue
+
+                                    checked = closer_queue.validate_stop(
+                                        action_state_path,
+                                        [target],
+                                        receipt=queue_receipt,
+                                        frontier_id=frontier["frontier_id"],
+                                    )
+                                    rows = queue_receipt.get("accounting")
+                                    row = (
+                                        next(
+                                            (
+                                                value
+                                                for value in rows
+                                                if isinstance(value, Mapping)
+                                                and value.get("target") == target
+                                            ),
+                                            None,
+                                        )
+                                        if isinstance(rows, list)
+                                        else None
+                                    )
+                                    proof_ok = bool(
+                                        checked.get("valid")
+                                        and checked.get("stop_valid")
+                                        and queue_receipt.get("stop_valid") is True
+                                        and isinstance(row, Mapping)
+                                        and row.get("operation_status")
+                                        not in {
+                                            "running",
+                                            "submitted",
+                                            "uncertain",
+                                        }
+                                    )
+                                    if status == "pending":
+                                        kind = result.get("pending_kind")
+                                        evidence = result.get("pending_evidence")
+                                        field = {
+                                            "ci": "check_run_id",
+                                            "async_operation": "operation_id",
+                                            "external_event": "event_id",
+                                        }.get(kind)
+                                        identifier = (
+                                            evidence.get(field)
+                                            if isinstance(evidence, Mapping) and field
+                                            else None
+                                        )
+                                        wait_proof = None
+                                        if kind == "external_event":
+                                            accepted_request_proof = (
+                                                closer_queue.accepted_verifier_wait_proof(
+                                                    action_state_path,
+                                                    target,
+                                                    frontier=frontier,
+                                                    receipt=queue_receipt,
+                                                    evidence=evidence,
+                                                )
+                                            )
+                                        if (
+                                            kind == "external_event"
+                                            and row.get("reason") == "verifier_resource_wait"
+                                        ):
+                                            wait_state = closer_queue.state_for_frontier(
+                                                closer_queue._read_state(Path(action_state_path)),
+                                                frontier["frontier_id"],
+                                                expected_policy=frontier,
+                                            )
+                                            wait_proof = closer_queue.verifier_resource_wait_proof(
+                                                wait_state["items"][target].get("operation"), target
+                                            )
+                                        valid_identifier = (
+                                            type(identifier) is int and identifier > 0
+                                            if kind == "ci"
+                                            else isinstance(identifier, str)
+                                            and bool(identifier.strip())
+                                        )
+                                        proof_ok = bool(
+                                            proof_ok
+                                            and field
+                                            and isinstance(evidence, Mapping)
+                                            and evidence.get("target") == target
+                                            and valid_identifier
+                                            and evidence.get("observed_revision")
+                                            == row.get("revision")
+                                            and (
+                                                (
+                                                    kind in {"ci", "async_operation"}
+                                                    and row.get("eligible") is False
+                                                    and row.get("action") == "wait"
+                                                )
+                                                or (
+                                                    kind == "external_event"
+                                                    and accepted_request_proof is not None
+                                                )
+                                                or (
+                                                    kind == "external_event"
+                                                    and row.get("action") == "collect_evidence"
+                                                    and row.get("reason")
+                                                    == "collect terminal or unattributed verifier evidence; do not rerun"
+                                                )
+                                                or (
+                                                    kind == "external_event"
+                                                    and row.get("reason")
+                                                    == "verifier_resource_wait"
+                                                    and row.get("operation_status")
+                                                    == "resource_wait"
+                                                    and wait_proof is not None
+                                                    and evidence.get("event_id")
+                                                    == closer_queue.verifier_resource_wait_event(
+                                                        wait_proof
+                                                    )
+                                                    and evidence.get("blocking_run")
+                                                    == wait_proof["blocking_run"]
+                                                    and evidence.get("head") == wait_proof["head"]
+                                                    and evidence.get("merge") == wait_proof["merge"]
+                                                )
+                                            )
+                                        )
+                                    elif reason == "validated_inner_wait":
+                                        resource = result.get("resource_evidence")
+                                        proof = (
+                                            resource.get("inner_wait")
+                                            if isinstance(resource, Mapping)
+                                            else None
+                                        )
+                                        prepared = context.get("prepare")
+                                        snapshot = (
+                                            prepared.get("snapshot")
+                                            if isinstance(prepared, Mapping)
+                                            else None
+                                        )
+                                        proof_ok = bool(
+                                            proof_ok
+                                            and isinstance(proof, Mapping)
+                                            and _valid_inner_wait(
+                                                path,
+                                                target,
+                                                context.get("revision"),
+                                                snapshot,
+                                                proof.get("reason"),
+                                                trigger,
+                                                proof,
+                                                frontier_id=frontier["frontier_id"],
+                                                finite_frontier=frontier,
+                                            )
+                                        )
+                                    else:
+                                        proof_ok = bool(
+                                            proof_ok
+                                            and row.get("reason") == reason
+                                            and reason in closer_queue.RESOURCE_DEFERRALS
+                                            and reason
+                                            not in {"operation_running", "repo_operation_running"}
+                                        )
+                                except (OSError, TypeError, ValueError, KeyError):
+                                    proof_ok = False
+                            if proof_ok:
+                                current.update(
+                                    status="held",
+                                    deferred_reason=(
+                                        "accepted_verifier_request"
+                                        if accepted_request_proof is not None
+                                        else reason or result.get("pending_kind")
+                                    ),
+                                    queue_receipt=dict(queue_receipt),
+                                )
+                                if accepted_request_proof is not None:
+                                    current["resource_evidence"] = {
+                                        "accepted_verifier_request": accepted_request_proof
+                                    }
+                                if reason == "validated_inner_wait":
+                                    evidence = result.get("resource_evidence")
+                                    if isinstance(evidence, Mapping):
+                                        current["resource_evidence"] = dict(evidence)
+                                current["deferred_next_trigger"] = trigger
+                            else:
+                                current.update(
+                                    status="unknown",
+                                    error="action wait lacks exact verified no-effect queue proof",
+                                )
+                                current["deferred_next_trigger"] = "manual_reconciliation"
+                        else:
+                            current.update(
+                                status="unknown", error="action returned an unsupported outcome"
+                            )
+                            current["deferred_next_trigger"] = "manual_reconciliation"
+
+                mutate_frontier(complete_stage, request_deadline=window["deadline"])
+
+        with finite_journal_lock():
+            state = _load(path)
+            entry = state["frontiers"][frontier["frontier_id"]]
+            rows = {target: dict(entry["items"][target]) for target in selected}
+            _save(path, state)
+        frontier_terminal = all(
+            row.get("status") in {"completed", "held", "paused", "cancelled", "capacity_blocked"}
+            for row in rows.values()
+        )
+        accepted = frontier_terminal and all(
+            row.get("status") == "completed" for row in rows.values()
+        )
+        return {
+            "schema": "closer-pipeline-receipt/v1",
+            "run_id": run_id,
+            "assignment": selected,
+            "finite_frontier": frontier,
+            "targets": rows,
+            "status": "completed" if accepted else "held" if frontier_terminal else "unknown",
+            "valid": frontier_terminal
+            and not any(row.get("status") == "unknown" for row in rows.values()),
+            "stop_valid": frontier_terminal
+            and not any(row.get("status") == "unknown" for row in rows.values()),
+            "continuation_required": not frontier_terminal,
+            "finished_at": now(),
+        }
+    except _FiniteStateLockTimeout:
+        # If intent was already written, leave its durable stage_status=running
+        # untouched. Restart converts that exact in-flight stage to UNKNOWN, so
+        # a possibly submitted action cannot be replayed. The local receipt is
+        # also fail-closed and does not claim a terminal stop.
+        for target in selected:
+            row = rows.get(target, {})
+            if row.get("stage_status") == "running" or row.get("status") == "running":
+                row.update(
+                    status="unknown",
+                    stage_status="unknown",
+                    error="finite state journal lock unavailable after intent",
+                    deferred_next_trigger="manual_reconciliation",
+                )
+            else:
+                row.setdefault("status", "held")
+            rows[target] = row
+        return {
+            "schema": "closer-pipeline-receipt/v1",
+            "run_id": run_id,
+            "assignment": selected,
+            "finite_frontier": frontier,
+            "targets": rows,
+            "status": (
+                "unknown"
+                if any(row.get("status") == "unknown" for row in rows.values())
+                else "held"
+            ),
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "error": "finite state journal lock timed out",
+        }
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(run_lock.fileno(), fcntl.LOCK_UN)
+        run_lock.close()
+
+
+def _run_pipeline_legacy(
     state_path: str | Path,
     targets: Iterable[str],
     *,
@@ -3516,11 +5018,12 @@ def run_pipeline(
     round_deadline_exception: type[BaseException] | None = None,
     round_capacity_exception: type[BaseException] | None = None,
     now: Callable[[], float] = time.time,
+    _terminal_boundary: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the scheduler while guaranteeing its process lease is always released."""
     held: list[Any] = []
     try:
-        return _run_pipeline_impl(
+        receipt = _run_pipeline_impl(
             state_path,
             targets,
             prepare=prepare,
@@ -3539,6 +5042,12 @@ def run_pipeline(
             now=now,
             _run_lock_ref=held,
         )
+        # Keep the process runlock across durable stop validation and this owner's
+        # alias cleanup. A successor must not observe a completed run while its
+        # still-live predecessor is between receipt persistence and advertisement release.
+        if _terminal_boundary is not None and held and not held[0].closed:
+            _terminal_boundary(receipt)
+        return receipt
     finally:
         if held:
             run_lock = held[0]
@@ -3548,21 +5057,159 @@ def run_pipeline(
                 run_lock.close()
 
 
+def run_pipeline(state_path: str | Path, targets: Iterable[str], **kwargs: Any) -> dict[str, Any]:
+    """Run the scheduler. ``coordinator_mode`` is ``legacy`` (default; one round lock and one
+    shared ledger) or ``resource_scoped`` (opt-in; per-target leases and shards, see
+    ``closer_resources.run_scoped``). Unset, it reads ``ORCH_CLOSER_COORDINATOR_MODE``."""
+    mode = closer_resources.resolve_mode(kwargs.pop("coordinator_mode", None))
+    contract_pin = kwargs.pop("coordinator_contract_pin", None)
+    admission = kwargs.pop("coordination_admission", None)
+    finite_frontier = kwargs.pop("finite_frontier", None)
+    if finite_frontier is not None and mode != "resource_scoped":
+        raise ValueError("finite frontier requires explicit resource_scoped coordination")
+    if finite_frontier is not None:
+        _require_dispatcher_finite_callbacks(kwargs)
+    if mode == "legacy":
+        if contract_pin is not None:
+            raise ValueError("coordinator_contract_pin applies to resource_scoped mode only")
+        assigned = list(targets)
+        canonical = [closer_resources.canonical_target(t) for t in assigned]
+        if len(set(canonical)) != len(canonical):
+            raise ValueError("targets must be unique when compared canonically")
+        resource_keys = kwargs.pop("resource_keys", None)
+        kwargs.pop("pool_lease", None)
+        kwargs.pop("quarantine_workspaces", None)
+        now = kwargs.get("now", time.time)
+        owner = f"legacy:{os.getpid()}:{threading.get_ident()}:{now()}"
+        with contextlib.ExitStack() as gates:
+            held_rows = {}
+            gated_targets = []
+            for target in sorted(assigned, key=closer_resources.canonical_target):
+                try:
+                    gates.enter_context(
+                        closer_resources.admission_gate(
+                            admission, state_path, target, mode="legacy"
+                        )
+                    )
+                    gated_targets.append(target)
+                except closer_resources.ResourceBlocked:
+                    held_rows[target] = closer_resources._fenced_row("resource_contested")
+            fenced_rows, runnable = closer_resources.rollback_fence(state_path, gated_targets)
+            fenced_rows.update(held_rows)
+            if not runnable:
+                return closer_resources.legacy_refusal_receipt(
+                    state_path, assigned, fenced_rows, float(kwargs.get("deadline", 0)), now
+                )
+            original_act = kwargs["act"]
+
+            def guarded_act(target, ctx):
+                if (
+                    resource_keys is None
+                    and not closer_resources.scoped_root(state_path).exists()
+                    and not closer_resources.unknown_reservations(
+                        closer_resources.scoped_root(state_path)
+                    )
+                ):
+                    return original_act(target, ctx)
+                if resource_keys is None:
+                    with closer_resources.mutation_reservation(
+                        state_path,
+                        target,
+                        ctx,
+                        None,
+                        owner=owner,
+                        deadline=kwargs["deadline"],
+                        now=now,
+                    ):
+                        return original_act(target, ctx)
+                keys = [
+                    *closer_resources.default_resource_keys(target),
+                    *resource_keys(target, ctx),
+                ]
+                with closer_resources.legacy_reserve(
+                    closer_resources.scoped_root(state_path),
+                    keys,
+                    target=target,
+                    owner=owner,
+                    deadline=kwargs["deadline"],
+                    now=now,
+                    causal_binding={
+                        "pipeline_run_id": ctx["pipeline_run_id"],
+                        "revision": ctx["revision"],
+                        "identity": ctx["identity"],
+                        "work_key": ctx["work_key"],
+                    },
+                ):
+                    return original_act(target, ctx)
+
+            kwargs["act"] = guarded_act
+
+            def terminal_boundary(receipt):
+                # Preserve legacy's existing known asynchronous waits. Its advertisement
+                # ends only after the durable ledger validates those native continuation
+                # proofs. Scoped Core intents still require their COMPLETE receipt.
+                if resource_keys is not None and _validate_stop_legacy(
+                    state_path, runnable, now=now
+                ).get("valid"):
+                    closer_resources.release_legacy_boundary(
+                        closer_resources.scoped_root(state_path), owner
+                    )
+                for target, row in receipt.get("targets", {}).items():
+                    if row.get("status") == "completed":
+                        closer_resources.release_target(
+                            closer_resources.scoped_root(state_path), target, owner=owner
+                        )
+
+            receipt = _run_pipeline_legacy(
+                state_path, runnable, _terminal_boundary=terminal_boundary, **kwargs
+            )
+            if fenced_rows:
+                receipt["targets"] = {**receipt.get("targets", {}), **fenced_rows}
+                receipt["scoped_rollback"] = {"fenced_targets": sorted(fenced_rows), "drainable": 0}
+            return receipt
+    return closer_resources.run_scoped(
+        state_path,
+        targets,
+        contract_pin=contract_pin,
+        coordination_admission=admission,
+        **({"finite_frontier": finite_frontier} if finite_frontier is not None else {}),
+        **kwargs,
+    )
+
+
+def validate_stop_scoped(
+    state_path: str | Path,
+    round_id: str,
+    assignment_targets: Iterable[str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """``validate_stop`` for one named resource-scoped round (see closer_resources.validate_stop)."""
+    return closer_resources.validate_stop(state_path, round_id, assignment_targets, **kwargs)
+
+
+def scoped_capability() -> dict[str, Any]:
+    """Version-pin capability for a release installer (integration unproved here)."""
+    return closer_resources.capability(SCHEMA)
+
+
 def _save_state_locked(path: Path, state: Mapping[str, Any]) -> None:
     """Persist a state already read while holding the coordinator lock."""
     _save(path, state)
 
 
-def validate_stop(
+def _validate_stop_legacy(
     state_path: str | Path,
     assignment_targets: Iterable[str] | None = None,
     *,
     now: Callable[[], float] = time.time,
+    expected_run_id: str | None = None,
 ) -> dict[str, Any]:
     """Validate outer pipeline accounting and whether continuation is due.
 
     This deliberately accepts only ``closer-pipeline/v1``. Legacy
     ``closer-queue/v1`` state remains owned by closer_queue.validate_stop.
+    A supplied expected_run_id selects only that exact existing assignment/run;
+    native proof still validates at its original path with no latest fallback.
     """
     path = Path(state_path)
     reasons: list[str] = []
@@ -3580,6 +5227,7 @@ def validate_stop(
         for key, value in state["runs"].items()
         if isinstance(value, Mapping)
         and (supplied is None or value.get("assignment") == sorted(supplied))
+        and (expected_run_id is None or key == expected_run_id)
     ]
     if not matches:
         return {
@@ -3687,9 +5335,15 @@ def validate_stop(
                 "pending_ci",
                 "github_capacity",
                 "validated_inner_wait",
+                "scope_quarantined",
             }
             if reason not in allowed or not isinstance(trigger, str) or not trigger:
                 reasons.append(f"unverified_deferral:{target}")
+            elif reason == "scope_quarantined" and not (
+                trigger == "reconcile_scope_before_retry"
+                and closer_resources.valid_scope_refusal(path, target, item, run_id)
+            ):
+                reasons.append(f"unverified_scope_refusal:{target}")
             elif reason == "deadline_exhausted" and now() < float(deadline):
                 reasons.append(f"premature_deadline_deferral:{target}")
             elif reason == "deadline_exhausted" and not _valid_deadline_evidence(
@@ -3736,6 +5390,7 @@ def validate_stop(
                     proof.get("reason") if isinstance(proof, Mapping) else None,
                     trigger,
                     proof,
+                    frontier_id=proof.get("frontier_id") if isinstance(proof, Mapping) else None,
                     now=now,
                 ):
                     reasons.append(f"unverified_inner_wait:{target}")
@@ -3769,3 +5424,151 @@ def validate_stop(
         "deadline": float(deadline),
         "reasons": reasons,
     }
+
+
+def _validate_stop_finite(
+    state_path: str | Path,
+    assignment_targets: Iterable[str] | None,
+    *,
+    finite_frontier,
+    frontier_target: str,
+    expected_run_id: str | None = None,
+    now: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    """Validate one exact target receipt from an immutable finite frontier."""
+    from closer_frontier_policy import validate_frontier
+
+    try:
+        frontier = validate_frontier(finite_frontier)
+        if frontier_target not in frontier["targets"]:
+            raise ValueError("target is outside finite frontier")
+        if assignment_targets is not None and list(assignment_targets) != [frontier_target]:
+            raise ValueError("finite frontier assignment differs")
+        state = _load(Path(state_path))
+        entry = state.get("frontiers", {}).get(frontier["frontier_id"])
+        if (
+            not isinstance(entry, Mapping)
+            or entry.get("schema") != "closer-pipeline-frontier/v2"
+            or entry.get("finite_frontier") != frontier
+            or (expected_run_id is not None and entry.get("run_id") != expected_run_id)
+        ):
+            raise ValueError("no exact finite frontier receipt")
+        item = entry.get("items", {}).get(frontier_target)
+        if not isinstance(item, Mapping):
+            raise ValueError("finite frontier target row missing")
+        status = item.get("status")
+        terminal = status in {"completed", "held", "paused", "cancelled", "capacity_blocked"}
+        unknown = status == "unknown"
+        valid = terminal and not unknown
+        unverified_inner_wait = False
+        if (
+            valid
+            and status == "held"
+            and item.get("deferred_reason") == "accepted_verifier_request"
+        ):
+            import closer_queue
+
+            action_path = (
+                Path(state_path).parent
+                / f"{Path(state_path).stem}.actions"
+                / f"{_digest(frontier_target)}.json"
+            )
+            results = item.get("results")
+            result = results.get("act") if isinstance(results, Mapping) else None
+            result = result if isinstance(result, Mapping) else {}
+            proof = closer_queue.accepted_verifier_wait_proof(
+                action_path,
+                frontier_target,
+                frontier=frontier,
+                receipt=item.get("queue_receipt"),
+                evidence=result.get("pending_evidence"),
+            )
+            resource = item.get("resource_evidence")
+            valid = (
+                proof is not None
+                and result.get("status") == "pending"
+                and result.get("pending_kind") == "external_event"
+                and isinstance(resource, Mapping)
+                and resource.get("accepted_verifier_request") == proof
+            )
+            unverified_inner_wait = not valid
+        if valid and status == "held" and item.get("deferred_reason") == "validated_inner_wait":
+            resource = item.get("resource_evidence")
+            proof = resource.get("inner_wait") if isinstance(resource, Mapping) else None
+            prepared = item.get("results", {}).get("prepare", {})
+            snapshot = prepared.get("snapshot") if isinstance(prepared, Mapping) else None
+            valid = _valid_inner_wait(
+                Path(state_path),
+                frontier_target,
+                item.get("revision"),
+                snapshot,
+                proof.get("reason") if isinstance(proof, Mapping) else None,
+                item.get("deferred_next_trigger"),
+                proof,
+                frontier_id=frontier["frontier_id"],
+                finite_frontier=frontier,
+                now=now,
+            )
+            unverified_inner_wait = not valid
+        return {
+            "valid": valid,
+            "stop_valid": valid,
+            "run_id": entry["run_id"],
+            "assignment": [frontier_target],
+            "targets": {frontier_target: dict(item)},
+            "finite_frontier": frontier,
+            "continuation_required": not valid,
+            "reasons": (
+                []
+                if valid
+                else [
+                    (
+                        "finite_frontier_unverified_inner_wait"
+                        if unverified_inner_wait
+                        else f"finite_frontier_{status or 'unaccounted'}"
+                    )
+                ]
+            ),
+        }
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return {
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "reasons": [f"invalid_finite_frontier_receipt:{exc}"],
+        }
+
+
+def validate_stop(state_path, assignment_targets=None, **kwargs):
+    """Legacy accounting plus the common mutation-intent fence (never ignore unknowns)."""
+    finite_frontier = kwargs.pop("finite_frontier", None)
+    frontier_target = kwargs.pop("frontier_target", None)
+    if finite_frontier is not None:
+        if not isinstance(frontier_target, str) or not frontier_target:
+            result = {
+                "valid": False,
+                "stop_valid": False,
+                "continuation_required": True,
+                "reasons": ["finite_frontier_target_missing"],
+            }
+        else:
+            result = _validate_stop_finite(
+                state_path,
+                assignment_targets,
+                finite_frontier=finite_frontier,
+                frontier_target=frontier_target,
+                **kwargs,
+            )
+    else:
+        result = _validate_stop_legacy(state_path, assignment_targets, **kwargs)
+    unknown = closer_resources.unknown_reservations(closer_resources.scoped_root(state_path))
+    if unknown:
+        result = {
+            **result,
+            "valid": False,
+            "stop_valid": False,
+            "continuation_required": True,
+            "reasons": [*result.get("reasons", []), "unresolved_resource_reservations"],
+            "unknown_reservations": unknown,
+        }
+    return result

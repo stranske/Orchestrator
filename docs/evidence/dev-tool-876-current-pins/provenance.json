@@ -1,0 +1,8 @@
+{
+  "measured_at": "2026-10-22T23:51:15.954016+00:00",
+  "source_commit": "c28b6c3ab24ab3db06b2834d3fc383bfac44bd91",
+  "python": "3.12.2 | packaged by conda-forge | (main, Feb 16 2024, 20:54:21) [Clang 16.0.6 ]",
+  "script_sha256": "2b06e57331a505296b32ca89bfdaba065e58f313edefb68f6640419339e6c401",
+  "pins_sha256": "bac9a0ca6866e10bd506fc1b6ba3b05c340abe5b62773f362d54a9fc93ae2503",
+  "limits": "Actual collector measurements; required full tests and coverage remain separate CI gates."
+}

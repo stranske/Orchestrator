@@ -1,5 +1,23 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured dependency closeout toolchain — 2026-10-22
+
+<!-- measured-with: black=26.10.1 ruff=0.17.2 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.0 -->
+
+The complete selected nine-pin bundle was installed in an isolated Python 3.12.2
+virtual environment and strictly measured against source
+`c28b6c3ab24ab3db06b2834d3fc383bfac44bd91`.
+Ruff reported zero findings, Black left 652 files unchanged, mypy checked 158
+source files with no errors, and the collector's Coverage startup probe reported
+zero errors. The collector reported no version or setup problems.
+
+[Strict report](evidence/dev-tool-876-current-pins/report.json),
+[actual commands and output](evidence/dev-tool-876-current-pins/commands.json),
+and [source and tool provenance](evidence/dev-tool-876-current-pins/provenance.json)
+retain the measurements. The startup probe does not establish full-suite or
+combined-coverage acceptance; those remain required native CI checks. Earlier
+measurements and all enforcement settings remain intact.
+
 ## Measured dependency PR #655 toolchain — 2026-10-18
 
 <!-- measured-with: black=26.10.1 ruff=0.17.1 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->

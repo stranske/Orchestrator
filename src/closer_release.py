@@ -197,7 +197,7 @@ class ReleaseRecord:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
 
-        verifier_env = _child_env(python)
+        verifier_env = _verification_env(python, mirror)
         source_head = _run(
             ["git", "-C", str(source), "rev-parse", "HEAD"],
             env=verifier_env,
@@ -274,7 +274,7 @@ class ReleaseRecord:
                     str(digest_file),
                     str(source),
                 ],
-                env=_child_env(python),
+                env=verifier_env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 timeout=timeout,
@@ -546,6 +546,31 @@ def _child_env(python: Path) -> dict[str, str]:
     ):
         env.pop(name, None)
     env["PYTHON"] = str(python)
+    return env
+
+
+def _verification_env(python: Path, mirror: Path) -> dict[str, str]:
+    """Share byte admission and claim the logical publication target, not a candidate.
+
+    Existing nonparticipating writers still need explicit coordinator handoff;
+    this environment is not proof that a legacy verifier stopped.
+    """
+    env = _child_env(python)
+    for name in (
+        "ORCH_STORAGE_ENTRY_PID",
+        "ORCH_STORAGE_RUN_ID",
+        "ORCH_STORAGE_RUN_ROOT",
+        "ORCH_STORAGE_OWNER_TOKEN",
+    ):
+        env.pop(name, None)
+    runtime = Path(env.get("ORCH_LOCAL_RUNTIME", str(Path.home() / ".codex/orchestrator")))
+    env["ORCH_STORAGE_STATE_DIR"] = env.get(
+        "ORCH_STORAGE_STATE_DIR", str(runtime / ".storage-lifecycle")
+    )
+    logical = mirror.expanduser().absolute()
+    env["VERIFY_BEFORE_SYNC_OWNER_KEY"] = "publication:" + str(
+        logical.parent.resolve() / logical.name
+    )
     return env
 
 

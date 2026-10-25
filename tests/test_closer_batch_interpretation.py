@@ -7,7 +7,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_closer_delivery_lifecycle import OfflineDelivery
+from test_closer_delivery_lifecycle import OfflineDelivery as _OfflineDelivery
 from test_closer_disposition import TARGET
 
 import closer_dispatcher as adapter
@@ -16,17 +16,55 @@ import dispatcher
 import execution_profiles
 
 
+class OfflineDelivery(_OfflineDelivery):
+    """These parser/transport units assess post-verifier acceptance, not premerge."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        super().__init__(tmp_path, monkeypatch)
+        self.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
+        self.refresh()
+        # Parse a trusted bot marker through the native verifier validator; the
+        # retained original criteria still require real current-head proof below.
+        self.supply_native_pass(monkeypatch)
+        assert self.current["verifier"]["evaluated_sha"] == self.current["merge"]
+        assert self.backend.dispositions == {}
+
+
 def install_strong_capacity(monkeypatch):
     monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 2, "low": 1, "exception": 1})
-    monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda _: "offline-strong")
     monkeypatch.setattr(
-        adapter,
-        "_fresh_capacity_report",
-        lambda: {
-            "profiles": {"offline-strong": {"state": "ok", "capacity_pool_ids": ["offline-pool"]}},
-            "pools": {"offline-pool": {"state": "ok"}},
-        },
+        execution_profiles, "default_codex_profile", lambda *_a, **_k: "offline-strong"
     )
+    report = {
+        "generated_at": time.time(),
+        "agents": {
+            agent: {"state": "ok"}
+            for agent in ("codex", "claude", "gemini", "cursor", "vibe", "muse")
+        },
+        "profiles": {"offline-strong": {"state": "ok", "capacity_pool_ids": ["offline-pool"]}},
+        "pools": {"offline-pool": {"state": "ok"}},
+    }
+    monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: report)
+
+    def exception_route(**kwargs):
+        load = kwargs.get("load") or {}
+        pools = ["offline-pool"]
+        if any(load.get("pool:" + pool, 0) for pool in pools):
+            return (None, "busy")
+        load["codex"] = load.get("codex", 0) + 1
+        for pool in pools:
+            load["pool:" + pool] = load.get("pool:" + pool, 0) + 1
+        return (
+            {
+                "agent": "codex",
+                "profile_id": "offline-strong",
+                "pools": pools,
+                "mode": "assess",
+            },
+            "available",
+        )
+
+    monkeypatch.setattr(adapter, "_exception_route", exception_route)
 
 
 def callbacks_for(delivery, monkeypatch):
@@ -404,7 +442,8 @@ def test_batch_large_low_and_strong_cross_full_pipeline_with_proofs_loaded_again
     receipt = delivery.run()
     assert strong_calls == [1], json.dumps(receipt)
     assert validated == ["accepted", "accepted"]  # Callback and action independently validate.
-    assert len(delivery.guard_calls) == 1, receipt
+    assert delivery.guard_calls == [], receipt
+    assert len(delivery.closure_calls) == 1 and delivery.closure_calls[0]["closed"] == 1
     item = receipt["targets"][TARGET]
     assert not item.get("error"), item
     assert captured["interpret"][0]["proposal_ref"]

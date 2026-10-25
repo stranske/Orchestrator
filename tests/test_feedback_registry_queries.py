@@ -172,3 +172,67 @@ def test_role_selector_metrics_preserve_no_match_and_rejection_signals():
         "evidence_readiness": "collecting",
         "profile_fit": "insufficient_role_runs",
     }
+
+
+def test_model_epoch_cost_telemetry_and_review_rounds_are_isolated(tmp_path):
+    epochs = tmp_path / "epochs.json"
+    epochs.write_text(json.dumps({"epochs": {"codex": {"since": "2026-01-02T00:00:00Z"}}}))
+    assert feedback.model_epoch_floor("codex", 1, epochs) == 1_767_312_000
+    assert feedback.model_epoch_floor("missing", 7, epochs) == 7
+    epochs.write_text("not json")
+    assert feedback.model_epoch_floor("codex", 7, epochs) == 7
+
+    feedback.record_run("complete", "owner/repo#7", "implement", "codex", ts=10)
+    feedback.record_run("partial", "owner/repo#8", "implement", "codex", ts=11)
+    feedback.record_cost("complete", cost_usd=2, tokens_in=1000, tokens_out=1000, source="ccusage")
+    feedback.record_cost("partial", cost_usd=1, tokens_in=1000, tokens_out=1000, source="ledger")
+    with feedback._conn() as conn:
+        telemetry = feedback._cost_telemetry(conn, ["codex", "missing"], 0)
+    assert telemetry["codex"]["valid"] is True
+    assert telemetry["codex"]["complete_rows"] == 1
+    assert telemetry["missing"]["coverage"] is None
+    assert feedback._cost_coverage_note(telemetry["codex"]) == "cost_cov=50%"
+
+    feedback.record_review_round("complete", "owner/repo#7", 1, "PASS", "codex", "abc")
+    assert feedback.review_round_rows() == [("complete", "owner/repo#7", 1, "PASS", "codex", 1)]
+
+
+def test_learning_population_and_cost_telemetry_reject_incomplete_or_implausible_data(monkeypatch):
+    monkeypatch.setenv("ORCH_RELEARN_FLEET_ROWS", "0")
+    assert feedback._learning_population() == "experimental"
+    assert "='experimental'" in feedback._learning_assignment_sql()
+    monkeypatch.setenv("ORCH_RELEARN_FLEET_ROWS", "1")
+    assert feedback._learning_population() == "fleet"
+    assert "'assigned'" in feedback._learning_assignment_sql()
+
+    feedback.record_run("thin", "owner/repo#10", "implement", "cursor", ts=10)
+    feedback.record_cost("thin", cost_usd=1, tokens_in=1, tokens_out=1, source="ccusage")
+    feedback.record_run("partial", "owner/repo#11", "implement", "claude", ts=11)
+    feedback.record_cost("partial", cost_usd=1, tokens_in=1000, tokens_out=1000, source="ledger")
+    with feedback._conn() as conn:
+        telemetry = feedback._cost_telemetry(conn, ["cursor", "claude"], 0)
+    assert telemetry["cursor"]["valid"] is False
+    assert "implausible" in telemetry["cursor"]["reason"]
+    assert telemetry["claude"]["valid"] is False
+    assert "no complete-source" in telemetry["claude"]["reason"]
+
+
+def test_owner_questions_and_work_item_subject_preserve_scope_and_expiry():
+    assert feedback.work_item_subject(" owner/repo#9 ") == "owner/repo#9"
+    assert feedback.work_item_subject("owner/repo") is None
+    with pytest.raises(ValueError):
+        feedback.record_owner_question("", "continue")
+
+    first = feedback.record_owner_question("Ship?", "hold", repo="owner/repo", expires_days=0)
+    assert first["deduped"] is False
+    assert feedback.record_owner_question("Ship?", "hold", repo="owner/repo")["deduped"] is True
+    other = feedback.record_owner_question("Ship?", "proceed", repo="other/repo", expires_days=0)
+    assert other["deduped"] is False
+    assert feedback.open_owner_questions()[0]["question"] == "Ship?"
+    assert feedback.expire_owner_questions(1_700_000_001) == 2
+    assert feedback.owner_decisions_for(repo="owner/repo") == [
+        {"question": "Ship?", "decision": "hold", "source": "default_ratified"}
+    ]
+    assert feedback.owner_decisions_for(repo="other/repo") == [
+        {"question": "Ship?", "decision": "proceed", "source": "default_ratified"}
+    ]

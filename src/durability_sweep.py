@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -199,9 +200,12 @@ def _current_durability(run_id: str) -> str:
 
 
 def _verifier_claims() -> tuple[dict, dict]:
-    """(claims, inherited): every merged outcome resolved to an explicit PR. A local run credited
-    with a REPLACEMENT's merge (`outcomes.REPLACEMENT_CREDIT`: the lane rehomed its closed PR at
-    the same head) INHERITS that PR from the run that is the PR's own, so it is kept apart."""
+    """(PR owners, delivery references): resolve each merged outcome's explicit delivery.
+
+    A source-issue run references its delivery PR; it is not that PR's own run.
+    Keep that historical credit, like replacement credit, as a fallback when no
+    direct PR owner exists. A PR verdict never certifies the source issue's scope.
+    """
     with feedback._conn() as c:
         rows = c.execute(
             "SELECT r.run_id,r.target,r.source,COALESCE(o.notes,'') "
@@ -212,6 +216,7 @@ def _verifier_claims() -> tuple[dict, dict]:
     inherited: dict[tuple[str, int], set[str]] = {}
     for run_id, target, source, notes in rows:
         repo, number = provision.parse_target(str(target or ""))
+        target_number = number
         if not repo:
             continue
         claims = found
@@ -220,7 +225,7 @@ def _verifier_claims() -> tuple[dict, dict]:
             if not explicit:
                 continue
             repo, number = provision.parse_target(explicit)
-            if notes.startswith(outcomes.REPLACEMENT_CREDIT):
+            if notes.startswith(outcomes.REPLACEMENT_CREDIT) or number != target_number:
                 claims = inherited
         if number is not None:
             claims.setdefault((repo.lower(), int(number)), set()).add(str(run_id))
@@ -228,10 +233,11 @@ def _verifier_claims() -> tuple[dict, dict]:
 
 
 def _merged_verifier_candidates() -> dict[tuple[str, int], set[str]]:
-    """Resolve every merged outcome to an explicit PR before attributing evidence. A run that
-    inherited a replacement's PR is a candidate only when no other run claims it: two claims
-    credit nobody, so the replacement's own keepalive run would lose the verifier evidence it had
-    before the inheritance existed."""
+    """Prefer a PR's own projection over source-issue/replacement delivery references.
+
+    Multiple owners (or multiple references without an owner) remain ambiguous.
+    Selection neither deletes delivery credit nor marks source requirements PASS.
+    """
     found, inherited = _verifier_claims()
     for key, run_ids in inherited.items():
         found.setdefault(key, run_ids)
@@ -254,13 +260,10 @@ def verifier_candidate_run_ids(
 
 
 def _missing_verifier_runs() -> list[tuple[str, str, int]]:
-    """Include already-durable rows: verification often arrives after merge."""
+    """Refresh exact unique deliveries, including previously NON_PASS durable rows."""
     candidates = _merged_verifier_candidates()
     with feedback._conn() as c:
-        missing = {
-            row[0]
-            for row in c.execute("SELECT run_id FROM outcomes WHERE verifier_verdict IS NULL")
-        }
+        missing = {row[0] for row in c.execute("SELECT run_id FROM outcomes WHERE merged=1")}
     return [
         (run_id, repo, number)
         for (repo, number), run_ids in candidates.items()
@@ -270,27 +273,116 @@ def _missing_verifier_runs() -> list[tuple[str, str, int]]:
     ]
 
 
+VERIFIER_REFRESH_BATCH = 50
+
+
+def _verifier_refresh_batch(rows):
+    """A non-authoritative fair cursor scoped to the actual connected database."""
+    with feedback._conn() as connection:
+        databases = connection.execute("PRAGMA database_list").fetchall()
+    database = next((row[2] for row in databases if row[1] == "main" and row[2]), None)
+    path = Path(database + ".verifier-refresh.json") if database else None
+    cursor = ""
+    problem = None
+    if path is not None:
+        try:
+            if path.stat().st_size > 4096:
+                raise ValueError("refresh cursor exceeds bound")
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict) or not isinstance(value.get("after"), str):
+                raise ValueError("refresh cursor malformed")
+            cursor = value["after"]
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            problem = type(exc).__name__
+    ordered = sorted(rows)
+    start = next((i for i, row in enumerate(ordered) if row[0] > cursor), 0)
+    rotated = ordered[start:] + ordered[:start]
+    return rotated[:VERIFIER_REFRESH_BATCH], path, problem
+
+
+def _save_verifier_refresh_cursor(path, row):
+    if path is None:
+        return None
+    temporary = None
+    try:
+        descriptor, temporary = tempfile.mkstemp(prefix=".verifier-refresh-", dir=path.parent)
+        with os.fdopen(descriptor, "w") as handle:
+            json.dump({"after": row[0]}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        return None
+    except OSError as exc:
+        return type(exc).__name__
+    finally:
+        if temporary is not None:
+            try:
+                Path(temporary).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def refresh_verifier_verdicts(*, dry_run: bool = False, _fetch_fn=None) -> dict:
-    """Patch exact-merge verifier evidence without changing durability state."""
-    fetch = _fetch_fn or verifier_evidence.fetch_decisions
-    rows = _missing_verifier_runs()
+    """Bounded fair exact-merge lifecycle refresh, including later invalidated PASS."""
+    fetch = _fetch_fn or verifier_evidence.fetch_lifecycle
+    candidates = _missing_verifier_runs()
+    rows, cursor_path, cursor_problem = _verifier_refresh_batch(candidates)
     by_repo: dict[str, set[int]] = {}
     for _run_id, repo, number in rows:
         by_repo.setdefault(repo, set()).add(number)
-    decisions = {
-        (repo, number): decision
-        for repo, numbers in by_repo.items()
-        for number, decision in fetch(repo, sorted(numbers)).items()
-    }
+    decisions = {}
+    fetch_errors = {}
+    attempted_repos = set()
+    for repo, numbers in by_repo.items():
+        attempted_repos.add(repo)
+        try:
+            decisions.update(
+                {
+                    (repo, number): decision
+                    for number, decision in fetch(repo, sorted(numbers)).items()
+                }
+            )
+        except Exception as exc:
+            fetch_errors[repo] = type(exc).__name__
+            import closer_evidence
+
+            if closer_evidence._is_round_control_exception(exc):
+                break
+    attempted = [row for row in rows if row[1] in attempted_repos]
     recorded = 0
     for run_id, repo, number in rows:
         decision = decisions.get((repo, number))
-        if not isinstance(decision, dict) or decision.get("verdict") not in {"PASS", "NON_PASS"}:
+        if not isinstance(decision, dict):
             continue
-        if not dry_run:
-            feedback.record_outcome(run_id, verifier_verdict=decision["verdict"])
-        recorded += 1
-    return {"verifier_checked": len(rows), "verifier_recorded": recorded}
+        valid = verifier_evidence.decision_matches_identity(
+            decision, repo, number, decision.get("head_sha"), decision.get("evaluated_sha")
+        ) or verifier_evidence._valid_state(
+            decision, repo, number, decision.get("head_sha"), decision.get("evaluated_sha")
+        )
+        if not valid and not verifier_evidence.is_unusable_observation(decision, repo, number):
+            continue
+        if dry_run:
+            recorded += 1
+        elif verifier_evidence.record_decision(run_id, repo, number, decision):
+            recorded += 1
+    completed_prefix = []
+    for row in rows:
+        if row[1] not in attempted_repos:
+            break
+        completed_prefix.append(row)
+    if completed_prefix and not dry_run:
+        cursor_problem = (
+            _save_verifier_refresh_cursor(cursor_path, completed_prefix[-1]) or cursor_problem
+        )
+    return {
+        "verifier_checked": len(attempted),
+        "verifier_recorded": recorded,
+        "verifier_remaining": max(0, len(candidates) - len(attempted)),
+        **({"verifier_cursor_error": cursor_problem} if cursor_problem else {}),
+        **({"verifier_refresh_errors": fetch_errors} if fetch_errors else {}),
+    }
 
 
 def _explicit_merged_pr_target(target: str, notes: str | None) -> str | None:

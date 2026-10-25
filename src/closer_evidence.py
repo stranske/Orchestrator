@@ -31,6 +31,16 @@ MAX_RUNS = 150
 MAX_FILES = 200
 MAX_ARCHIVE_BYTES = 8_000_000
 MAX_UNCOMPRESSED_BYTES = 16_000_000
+# Canonical sealed transport inputs are not model section content.
+MAX_NATIVE_INPUT_BYTES = MAX_UNCOMPRESSED_BYTES
+NATIVE_INPUT_COMPONENTS = frozenset(
+    {
+        "verifier-input-manifest.json",
+        "verifier-context.md",
+        "verifier-pr-diff.patch",
+        "verifier-diff-summary.md",
+    }
+)
 MAX_ARTIFACTS = 20
 MAX_PACKET_ARCHIVES = 20
 MAX_PACKET_ARCHIVE_BYTES = 8_000_000
@@ -106,6 +116,11 @@ def _retained_section_valid(section: Any, *, allow_partial: bool = False) -> boo
         allow_partial and section.get("status") == "partial" and section.get("truncated") is False
     ):
         return False
+    return _retained_section_payload_valid(section)
+
+
+def _retained_section_payload_valid(section: dict) -> bool:
+    """Check immutable storage without granting any completeness status."""
     if section.get("sha256") != _section_hash(section):
         return False
     ref = section.get("retained")
@@ -119,6 +134,42 @@ def _retained_section_valid(section: Any, *, allow_partial: bool = False) -> boo
         return False
     expected = {k: v for k, v in section.items() if k != "retained"}
     return raw == expected
+
+
+def _redaction_only_review(section: Any) -> bool:
+    if (
+        not isinstance(section, dict)
+        or section.get("status") != "partial"
+        or section.get("reason") != "credential-like values redacted"
+        or section.get("truncated") is not False
+        or section.get("provenance", {}).get("pagination_complete") is not True
+        or not _retained_section_valid(section, allow_partial=True)
+    ):
+        return False
+    rows = section.get("content")
+    if not isinstance(rows, list) or not rows:
+        return False
+    comments = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or row.get("comments_complete") is not True
+            or row.get("comments_has_next_page") is True
+            or not isinstance(row.get("comments"), list)
+        ):
+            return False
+        comments.extend(row["comments"])
+    return (
+        bool(comments)
+        and any(isinstance(c, dict) and c.get("redaction_applied") is True for c in comments)
+        and all(
+            isinstance(c, dict)
+            and c.get("truncated") is False
+            and isinstance(c.get("body_retained"), dict)
+            and c["body_retained"].get("truncated") is False
+            for c in comments
+        )
+    )
 
 
 def _safe_text(value: Any, limit: int = MAX_TEXT_BYTES) -> tuple[str, bool]:
@@ -140,6 +191,85 @@ def _redact_credentials(text: str) -> tuple[str, bool]:
         r"(?i)((?:token|password|secret|authorization|api[_-]?key)(\s*[:=]\s*))([^\s,;]+)"
     )
     return pattern.subn(r"\1[REDACTED]", text)[0], bool(pattern.search(text))
+
+
+def _title_transform(original: str) -> dict:
+    """Bind original and masked display bytes without claiming they are equal.
+
+    No original masked text is copied into an alternate field. This attests the
+    acquisition transform, never that unknown title meaning was preserved.
+    """
+    bounded, cut = _safe_text(original)
+    displayed, redacted = _redact_credentials(bounded)
+    return {
+        "schema": "closer-source-title-transform/v1",
+        "original_sha256": hashlib.sha256(original.encode("utf-8", "replace")).hexdigest(),
+        "display_sha256": hashlib.sha256(displayed.encode("utf-8", "replace")).hexdigest(),
+        "redaction_applied": redacted,
+        "truncated": cut,
+        "meaning_status": "unavailable" if cut or redacted else "original",
+        "acceptance_authority": False,
+        "text_is_untrusted": True,
+    }
+
+
+def _title_provenance_valid(row: dict, source: dict, *, allow_display_transform=False) -> bool:
+    original = source.get("title") or ""
+    expected = _title_transform(original)
+    displayed, _ = _redact_credentials(_safe_text(original)[0])
+    ref = row.get("title_retained")
+    if not isinstance(ref, dict):
+        return False
+    if "title_transform" not in row:
+        # Existing untransformed packets retain their exact original-byte contract.
+        return bool(
+            row.get("title") == original
+            and row.get("title_sha256") == hashlib.sha256(original.encode()).hexdigest()
+            and _retained_ref_valid(ref)
+            and ref.get("sha256") == row.get("title_sha256")
+            and ref.get("bytes") == len(original.encode())
+            and ref.get("truncated") is False
+        )
+    return bool(
+        row.get("title_transform") == expected
+        and (expected["meaning_status"] == "original" or allow_display_transform)
+        and row.get("title") == displayed
+        and row.get("title_sha256") == expected["original_sha256"]
+        and _retained_ref_valid(ref)
+        and ref.get("sha256") == expected["display_sha256"]
+        and ref.get("bytes") == len(displayed.encode("utf-8", "replace"))
+        and ref.get("truncated") is False
+    )
+
+
+def _merge_title_display_only(section: dict, sources) -> bool:
+    """Objective merge can evaluate a complete body without knowing masked title meaning."""
+    rows = section.get("content")
+    if not (
+        section.get("status") == "partial"
+        and section.get("reason") == "credential-like values redacted"
+        and section.get("provenance", {}).get("source_digest") == _hash(sources)
+        and _retained_section_valid(section, allow_partial=True)
+        and isinstance(sources, list)
+        and sources
+        and isinstance(rows, list)
+        and len(rows) == len(sources)
+    ):
+        return False
+    return all(
+        isinstance(row, dict)
+        and isinstance(source, dict)
+        and row.get("target") == source.get("target")
+        and isinstance(source.get("body"), str)
+        and source["body"].strip()
+        and row.get("body") == source["body"]
+        and row.get("body_sha256") == hashlib.sha256(source["body"].encode()).hexdigest()
+        and _retained_ref_valid(row.get("body_retained"))
+        and row["body_retained"].get("sha256") == row["body_sha256"]
+        and row["body_retained"].get("truncated") is False
+        and _title_provenance_valid(row, source, allow_display_transform=True)
+        for row, source in zip(rows, sources)
+    )
 
 
 def _section(
@@ -282,7 +412,361 @@ def validate_packet(packet: Any) -> bool:
             for name, section in sections.items()
         ):
             return False
+    collection = packet.get("collection_result")
+    if collection is not None:
+        if (
+            not isinstance(collection, dict)
+            or collection.get("schema") != "closer-evidence-collection/v1"
+            or collection.get("status") not in {"ready", "pending", "diagnostic", "deterministic"}
+            or collection.get("evaluation_ready") is not (collection.get("status") == "ready")
+            or collection.get("acceptance_authority") is not False
+            or collection.get("action") != packet.get("collection_action")
+            or not isinstance(collection.get("readiness"), dict)
+        ):
+            return False
+        readiness = collection["readiness"]
+        if (
+            readiness.get("schema") != "closer-action-evidence-readiness/v1"
+            or readiness.get("action") != collection["action"]
+            or (
+                collection["status"] == "ready"
+                and (
+                    readiness.get("ready") is not True
+                    or readiness.get("mode")
+                    not in {"acceptance", "repair", "review", "nonpass_triage"}
+                )
+            )
+            or (collection["status"] == "pending" and readiness.get("ready") is not False)
+            or (collection["status"] == "diagnostic" and collection["action"] is not None)
+        ):
+            return False
     return True
+
+
+def action_evidence_readiness(
+    snapshot: Any, packet: Any, action: Any, *, retained_dir: str | Path | None = None
+) -> dict:
+    try:
+        verdict = _action_evidence_readiness(snapshot, packet, action, retained_dir=retained_dir)
+        from closer_evidence_recovery import classify_requirements
+
+        return classify_requirements(verdict, snapshot, packet, retained_dir=retained_dir)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return {
+            "schema": "closer-action-evidence-readiness/v1",
+            "ready": False,
+            "action": action,
+            "mode": "unavailable",
+            "gaps": ["evidence:malformed_or_unavailable_raw_inputs"],
+        }
+
+
+def _action_evidence_readiness(
+    snapshot: Any, packet: Any, action: Any, *, retained_dir: str | Path | None = None
+) -> dict:
+    """Admit useful model work, never acceptance, from existing typed raw inputs.
+
+    Packet integrity alone permits missing sections. This separate rail refuses
+    known collection gaps before spending on their semantic interpretation. It
+    does not infer which tests a prose criterion needs or certify their sufficiency.
+    """
+    verdict: dict[str, Any] = {
+        "schema": "closer-action-evidence-readiness/v1",
+        "ready": False,
+        "action": action,
+        "mode": "acceptance",
+        "gaps": [],
+    }
+    gaps: list[str] = verdict["gaps"]
+    try:
+        valid = validate_packet(packet)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        valid = False
+    if not valid or not isinstance(snapshot, dict):
+        gaps.append("packet:invalid_or_unavailable")
+        return verdict
+    if action in {"complete", "wait", "post_merge_verify"}:
+        verdict.update(ready=True, mode="deterministic")
+        return verdict
+    if action not in {
+        "collect_evidence",
+        "merge",
+        "close_source",
+        "review",
+        "respond_review",
+        "repair",
+        "disposition",
+    }:
+        gaps.append("action:unsupported_model_assessment")
+    subject = _subject_target(snapshot)
+    if snapshot.get("kind") != "pr" or packet.get("subject_pr") != subject:
+        inventory = snapshot.get("delivery_links") or {}
+        if isinstance(inventory, dict):
+            verdict["delivery_links"] = inventory
+        status = (
+            inventory.get("status", "unidentified")
+            if isinstance(inventory, dict)
+            else "unidentified"
+        )
+        gaps.append("delivery_pr:" + str(status))
+    if packet.get("target") != snapshot.get("target"):
+        gaps.append("packet:target_mismatch")
+    for key in ("head", "base"):
+        value = snapshot.get(key)
+        if not isinstance(value, str) or not SHA.fullmatch(value):
+            gaps.append("delivery:" + key + "_missing")
+        elif packet.get(key) != value:
+            gaps.append("packet:" + key + "_mismatch")
+    sections = packet["sections"]
+
+    def retained(name: str, *, partial: bool = False) -> bool:
+        section = sections.get(name)
+        if not _retained_section_valid(section, allow_partial=partial):
+            status = section.get("status") if isinstance(section, dict) else "missing"
+            gaps.append(name + ":unavailable_or_unverified:" + str(status))
+            verdict.setdefault("section_reasons", {})[name] = {
+                "status": status,
+                "reason": section.get("reason") if isinstance(section, dict) else "section missing",
+            }
+            return False
+        return True
+
+    sources = snapshot.get("sources")
+    if not isinstance(sources, list) or not sources:
+        gaps.append("source:original_inventory_missing")
+    elif packet["bindings"].get("source") != _hash(sources):
+        gaps.append("source:inventory_binding_mismatch")
+    original_source = sections.get("source") or {}
+    merge_title_display_only = action == "merge" and _merge_title_display_only(
+        original_source, sources
+    )
+    if merge_title_display_only:
+        verdict["unresolved_title_meaning"] = [
+            {
+                "target": row["target"],
+                "gap": "source:title_meaning_unavailable",
+                "necessity": "useful",
+                "transform": row["title_transform"],
+                "acceptance_authority": False,
+            }
+            for row in original_source["content"]
+            if row.get("title_transform", {}).get("meaning_status") == "unavailable"
+        ]
+    if (
+        not merge_title_display_only
+        and original_source.get("status") in {"partial", "truncated"}
+        and original_source.get("reason")
+        in {
+            "credential-like values redacted",
+            "source count/body byte bound reached",
+            "section byte limit exceeded",
+        }
+        and original_source.get("provenance", {}).get("source_digest") == _hash(sources)
+        and _retained_section_payload_valid(original_source)
+    ):
+        verdict["mode"] = "source_transform"
+        verdict["dependency"] = {
+            "schema": "closer-source-transform-dependency/v1",
+            "kind": "senior_source_transform",
+            "target": snapshot.get("target"),
+            "revision": snapshot.get("revision"),
+            "source_status": original_source["status"],
+            "reason": original_source["reason"],
+            "source_ref": original_source["retained"],
+            "source_sha256": original_source["sha256"],
+            "original_source_sha256": packet["bindings"].get("source"),
+            "next_trigger": "senior source resolution supplies a complete criteria-preserving safely representable original source bound to this source identity",
+        }
+    if retained("source", partial=merge_title_display_only):
+        rows = sections["source"].get("content")
+        if (
+            not isinstance(rows, list)
+            or not rows
+            or not isinstance(sources, list)
+            or [row.get("target") for row in rows if isinstance(row, dict)]
+            != [row.get("target") for row in sources if isinstance(row, dict)]
+            or sections["source"].get("provenance", {}).get("source_digest") != _hash(sources)
+            or any(
+                not isinstance(row, dict)
+                or not row.get("body")
+                or row.get("body") != source.get("body")
+                or row.get("body_sha256") != hashlib.sha256(row["body"].encode()).hexdigest()
+                or not _retained_ref_valid(row.get("body_retained"))
+                or row["body_retained"].get("sha256") != row.get("body_sha256")
+                or row["body_retained"].get("bytes") != len(row["body"].encode())
+                or row.get("body_retained", {}).get("truncated") is not False
+                or (
+                    "title" in source
+                    and not _title_provenance_valid(
+                        row, source, allow_display_transform=merge_title_display_only
+                    )
+                )
+                for row, source in zip(rows, sources)
+            )
+        ):
+            gaps.append("source:original_bodies_unavailable")
+    if gaps:
+        return verdict
+    if action == "merge":
+        # Only identity and preserved original request are packet prerequisites.
+        # Objective live merge checks remain in the native selector/merge guard;
+        # post-verification acceptance proof is not a pre-merge evidence rail.
+        verdict.update(ready=True, mode="deterministic")
+        return verdict
+    if action in {"review", "respond_review"}:
+        verdict["mode"] = "review"
+        if packet["bindings"].get("reviews") != _hash(snapshot.get("review_revision")):
+            gaps.append("review_conversations:revision_binding_mismatch")
+        if retained(
+            "review_conversations",
+            partial=_redaction_only_review(sections.get("review_conversations")),
+        ):
+            reviews = sections["review_conversations"]
+            comments = [
+                comment for row in reviews.get("content", []) for comment in row["comments"]
+            ]
+            if (
+                reviews.get("provenance", {}).get("review_revision")
+                != snapshot.get("review_revision")
+                or reviews.get("provenance", {}).get("pagination_complete") is not True
+                or reviews.get("truncated") is not False
+                or any(
+                    row.get("comments_complete") is not True
+                    or row.get("comments_has_next_page") is True
+                    for row in reviews.get("content", [])
+                )
+                or not comments
+                or any(
+                    not isinstance(comment.get("body"), str)
+                    or comment.get("truncated") is not False
+                    or not _retained_ref_valid(comment.get("body_retained"))
+                    or comment["body_retained"].get("truncated") is not False
+                    or comment["body_retained"].get("sha256")
+                    != hashlib.sha256(comment["body"].encode()).hexdigest()
+                    or comment["body_retained"].get("bytes") != len(comment["body"].encode())
+                    for comment in comments
+                )
+            ):
+                gaps.append("review_conversations:raw_comments_missing_or_unbound")
+    else:
+        from closer_disposition import (
+            _native_resolution_index,
+            _native_section_metadata,
+            _receipt_index,
+        )
+
+        root = Path(retained_dir) if retained_dir is not None else None
+        verifier = snapshot.get("verifier")
+        import verifier_evidence
+
+        repo, number = subject.rsplit("#", 1)
+        trusted_identity = verifier_evidence.decision_matches_identity(
+            verifier, repo, int(number), snapshot.get("head"), snapshot.get("merge")
+        )
+        if snapshot.get("state") == "MERGED" and not trusted_identity:
+            verdict["mode"] = "native_diagnostic"
+            native = sections.get("native_merge_verifier") or {}
+            verdict["section_reasons"] = {
+                "native_merge_verifier": {
+                    "status": native.get("status"),
+                    "reason": native.get("reason"),
+                }
+            }
+            gaps.append("native_merge_verifier:trusted_bound_verdict_missing")
+        elif isinstance(verifier, dict) and verifier.get("verdict") not in {None, "PASS"}:
+            verdict["mode"] = "nonpass_triage"
+            native = sections.get("native_merge_verifier") or {}
+            verdict["section_reasons"] = {
+                "native_merge_verifier": {
+                    "status": native.get("status"),
+                    "reason": native.get("reason"),
+                }
+            }
+            if (
+                root is None
+                or _native_section_metadata(packet, verifier) is None
+                or not retained("native_merge_verifier", partial=True)
+                or not _native_resolution_index(packet, root, verifier)
+            ):
+                gaps.append("native_merge_verifier:bound_raw_nonpass_missing")
+        else:
+            verdict["mode"] = "repair" if action == "repair" else "acceptance"
+            diff_ok = retained("diff_files", partial=True)
+            diff = sections["diff_files"].get("content")
+            if diff_ok and (
+                not isinstance(diff, dict)
+                or diff.get("base") != packet["base"]
+                or diff.get("head") != packet["head"]
+            ):
+                gaps.append("diff_files:delivery_binding_mismatch")
+            if retained("checks"):
+                checks = sections["checks"]
+                if (
+                    checks.get("provenance", {}).get("head_bound") is not True
+                    or checks.get("content", {}).get("head") != packet["head"]
+                    or checks.get("content", {}).get("aggregate_state") is None
+                    or checks.get("content", {}).get("aggregate_state") != snapshot.get("checks")
+                ):
+                    gaps.append("checks:current_head_binding_missing")
+            index = _receipt_index(packet, root) if root is not None else {}
+            # Reuse the existing per-file admission rules, including usable raw
+            # receipts inside partial envelopes. Neither all-section completion
+            # nor an invented required-check topology is an admission condition.
+            if not index:
+                gaps.append("evidence:usable_raw_code_or_ci_missing")
+    verdict["ready"] = not gaps
+    return verdict
+
+
+def readiness_summary(readiness: dict, *, packet_ref=None, inventory_ref=None) -> dict:
+    """Bound callback metadata; immutable packet/section refs retain all proof."""
+    summary = {
+        key: readiness[key]
+        for key in (
+            "schema",
+            "ready",
+            "evaluation_ready",
+            "requirements",
+            "action",
+            "mode",
+            "gaps",
+            "section_reasons",
+            "dependency",
+            "unresolved_title_meaning",
+        )
+        if key in readiness
+    }
+    summary.update(packet_ref=packet_ref, inventory_ref=inventory_ref)
+    inventory = readiness.get("delivery_links")
+    if isinstance(inventory, dict):
+        candidates = inventory.get("candidates")
+        candidates = candidates if isinstance(candidates, list) else []
+        summary["delivery_links"] = {
+            key: inventory.get(key) for key in ("status", "reason", "source", "complete")
+        }
+        summary["delivery_links"].update(
+            candidates=candidates[:8],
+            candidate_count=len(candidates),
+            candidates_complete=len(candidates) <= 8,
+            summary_only=True,
+            inventory_ref=inventory_ref,
+        )
+    return summary
+
+
+def collection_summary(packet: dict, packet_ref: dict) -> dict | None:
+    collection = packet.get("collection_result")
+    if not isinstance(collection, dict):
+        return None
+    inventory_ref = (packet.get("sections", {}).get("delivery_inventory") or {}).get("retained")
+    summary = {
+        key: collection[key]
+        for key in ("schema", "status", "action", "evaluation_ready", "acceptance_authority")
+    }
+    summary["readiness"] = readiness_summary(
+        collection["readiness"], packet_ref=packet_ref, inventory_ref=inventory_ref
+    )
+    return summary
 
 
 def update_packet(
@@ -340,6 +824,8 @@ def _semantic_cache_key(packet: dict) -> str:
         "base": packet.get("base"),
         "sections": semantic_sections,
     }
+    if "collection_action" in packet:
+        payload["collection_action"] = packet["collection_action"]
     return "closer-evidence-semantic/v1:" + _hash(payload)
 
 
@@ -367,24 +853,45 @@ def _source_section(sources: list, root: Path) -> dict:
         body, redacted = _redact_credentials(body)
         retained_bytes = body.encode("utf-8", "replace")[:MAX_TEXT_BYTES]
         ref = _retain_bytes(root, retained_bytes, "txt")
-        credential_signal = redacted or _has_credential_pattern(body)
+        original_title = str(source.get("title") or "")
+        title, title_cut = _safe_text(original_title)
+        title, title_redacted = _redact_credentials(title)
+        title_bytes = original_title.encode("utf-8", "replace")
+        title_transform = _title_transform(original_title)
+        title_ref = _retain_bytes(root, title.encode("utf-8", "replace")[:MAX_TEXT_BYTES], "txt")
+        credential_signal = (
+            redacted
+            or title_redacted
+            or _has_credential_pattern(body)
+            or _has_credential_pattern(title)
+        )
         rows.append(
             {
                 "target": source.get("target"),
+                "kind": source.get("kind", "issue"),
+                "provenance": source.get("provenance"),
+                "request_revision": source.get("request_revision"),
+                "title": title,
+                "title_sha256": hashlib.sha256(title_bytes).hexdigest(),
+                "title_transform": title_transform,
+                "title_retained": {
+                    **title_ref,
+                    "truncated": title_cut or len(title_bytes) > MAX_TEXT_BYTES,
+                },
                 "body": body,
                 "body_sha256": hashlib.sha256(original_bytes).hexdigest(),
                 "body_retained": {**ref, "truncated": cut or len(original_bytes) > MAX_TEXT_BYTES},
                 "requirements": _requirements(body),
                 "state": source.get("state"),
                 "labels": source.get("labels", [])[:100],
-                "truncated": cut,
+                "truncated": cut or title_cut,
                 "credential_pattern_present": credential_signal,
-                "redaction_applied": redacted,
+                "redaction_applied": redacted or title_redacted,
                 "text_is_untrusted": True,
             }
         )
-        truncated_any |= cut
-        redacted_any |= redacted
+        truncated_any |= cut or title_cut
+        redacted_any |= redacted or title_redacted
     status = "truncated" if truncated_any else "partial" if redacted_any else "complete"
     return _section(
         status,
@@ -483,6 +990,12 @@ def _diff_section(snapshot: dict, api: Callable, deadline: float, root: Path) ->
 
 
 def _review_section(snapshot: dict, review_threads_fetch, deadline: float, root: Path) -> dict:
+    if snapshot.get("kind") != "pr":
+        return _section(
+            "missing",
+            reason="PR review history is not applicable without an identified delivery PR",
+            provenance={"applicable": False, "source": "issue-only delivery inventory"},
+        )
     threads = snapshot.get("threads")
     if review_threads_fetch is not None:
         try:
@@ -1239,9 +1752,77 @@ def _recognized_json(doc: Any) -> dict | None:
     return None
 
 
-def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
+class NativeInputCaptureError(ValueError):
+    """A required sealed transport component needs bounded, recoverable acquisition."""
+
+
+def _native_manifest_presentation(capture: dict) -> dict:
+    """Keep full authenticated bytes in raw storage, not a model section."""
+    manifest = capture["manifest"]
+    size = len(_bytes(manifest))
+    if size <= MAX_TEXT_BYTES:
+        return capture
+    fields = (
+        "schema",
+        "capture_kind",
+        "repository",
+        "pr",
+        "head_sha",
+        "merge_sha",
+        "source_run_id",
+        "source_run_attempt",
+        "context_sha256",
+        "diff_sha256",
+        "diff_summary_sha256",
+        "mode",
+        "requested_provider",
+        "input_limits",
+    )
+    projected = {
+        k: manifest[k] for k in fields if k in manifest and len(_bytes(manifest[k])) <= 8000
+    }
+    return {
+        **capture,
+        "manifest": projected,
+        "manifest_projection": {
+            "kind": "identity-and-input-digests",
+            "full_content_bytes": capture["raw"]["bytes"],
+            "supplied_fields": sorted(projected),
+            "omitted_field_count": len(manifest) - len(projected),
+            "full_content_ref": capture["raw"],
+            "acceptance_authority": False,
+        },
+    }
+
+
+def native_capture_artifact_names(run_id: str | int) -> tuple[str, str]:
+    """Exact producer capture families; names grant no identity/verdict authority."""
+    return (f"comparison-results-{run_id}", f"evaluation-results-{run_id}")
+
+
+def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) -> list[dict]:
     """Read native manifests and exact known verifier report files from an archive."""
+    supplied_retain = retain
+    if supplied_retain is None:
+        retain = _retain_bytes
+    else:
+
+        def retain(root, data, suffix):
+            try:
+                return supplied_retain(root, data, suffix)
+            except OSError as exc:
+                from closer_attribution_store import AttributionStorageWait
+
+                # A supplied retention sink failing is not a malformed ZIP.
+                # Preserve a typed storage cause without leaking exception paths.
+                raise AttributionStorageWait(
+                    "attribution retention I/O unavailable",
+                    accounting={"error_type": type(exc).__name__, "errno": exc.errno},
+                ) from exc
+
     manifests = []
+    if len(archive) > MAX_ARCHIVE_BYTES:
+        raise NativeInputCaptureError("native input transport limit: compressed archive")
     try:
         with zipfile.ZipFile(io.BytesIO(archive)) as zf:
             infos = zf.infolist()
@@ -1249,28 +1830,60 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                 len(infos) > MAX_FILES
                 or sum(item.file_size for item in infos) > MAX_UNCOMPRESSED_BYTES
             ):
-                return []
+                raise NativeInputCaptureError(
+                    "native input transport limit: archive entries or expansion"
+                )
             files = {}
             manifest_candidates = []
+            native_names = set()
+            actual_total = 0
+
+            def read_entry(info, limit):
+                nonlocal actual_total
+                with zf.open(info) as stream:
+                    raw = stream.read(limit + 1)
+                if len(raw) > limit or len(raw) != info.file_size:
+                    raise NativeInputCaptureError(
+                        "native input transport limit or size mismatch: "
+                        + PurePosixPath(info.filename).name[:100]
+                    )
+                actual_total += len(raw)
+                if actual_total > MAX_UNCOMPRESSED_BYTES:
+                    raise NativeInputCaptureError("native input transport limit: actual expansion")
+                return raw
+
             for info in infos:
                 path = PurePosixPath(info.filename)
-                if (
-                    info.is_dir()
-                    or path.is_absolute()
-                    or ".." in path.parts
-                    or info.file_size > MAX_SECTION_BYTES
-                ):
+                if path.name in NATIVE_INPUT_COMPONENTS and not info.is_dir():
+                    # An unsafe competing path cannot shadow a canonical identity input.
+                    if path.name in native_names:
+                        raise NativeInputCaptureError(
+                            "native input component ambiguous: " + path.name
+                        )
+                    native_names.add(path.name)
+                    if path.is_absolute() or ".." in path.parts:
+                        raise NativeInputCaptureError(
+                            "native input canonical path invalid: " + path.name
+                        )
+                if info.is_dir() or path.is_absolute() or ".." in path.parts:
+                    continue
+                canonical = path.name in NATIVE_INPUT_COMPONENTS
+                limit = MAX_NATIVE_INPUT_BYTES if canonical else MAX_SECTION_BYTES
+                if info.file_size > limit:
+                    if canonical:
+                        raise NativeInputCaptureError("native input transport limit: " + path.name)
                     continue
                 if path.suffix.lower() != ".json":
                     if path.name in {
                         "comparison-comment.md",
+                        "evaluation-comment.md",
                         "verifier-diff-summary.md",
                         "verifier-context.md",
                         "verifier-pr-diff.patch",
                     }:
-                        files[path.name] = zf.read(info)
+                        files[path.name] = read_entry(info, limit)
                     continue
-                raw = zf.read(info)
+                raw = read_entry(info, limit)
                 files[path.name] = raw
                 try:
                     doc = json.loads(raw)
@@ -1285,30 +1898,46 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                 row: dict[str, Any] = {
                     "path": path_name,
                     "manifest": doc,
-                    "raw": _retain_bytes(root, raw, "json"),
+                    "raw": retain(root, raw, "json"),
                     "receipts": [],
                     "omissions": [],
                 }
-                report = files.get("comparison.json")
+                report_names = [
+                    name for name in ("comparison.json", "evaluation.json") if name in files
+                ]
+                report_name = (
+                    report_names[0]
+                    if len(report_names) == 1
+                    else "evaluation.json" if doc.get("mode") == "evaluate" else "comparison.json"
+                )
+                report = files.get(report_name) if len(report_names) == 1 else None
+                evaluation_report = report_name == "evaluation.json"
                 if report is not None:
                     try:
                         report_doc = json.loads(report)
                     except (ValueError, UnicodeDecodeError):
-                        row["omissions"].append(
-                            {"path": "comparison.json", "reason": "invalid JSON"}
-                        )
+                        row["omissions"].append({"path": report_name, "reason": "invalid JSON"})
                     else:
-                        report_ref = _retain_bytes(root, report, "json")
+                        report_ref = retain(root, report, "json")
                         findings = []
                         provider_results = []
-                        if isinstance(report_doc, dict) and isinstance(
-                            report_doc.get("results"), list
-                        ):
-                            raw_results = report_doc["results"]
+                        raw_results = (
+                            [report_doc]
+                            if evaluation_report and isinstance(report_doc, dict)
+                            else report_doc.get("results") if isinstance(report_doc, dict) else None
+                        )
+                        if evaluation_report and not isinstance(report_doc, dict):
+                            row["omissions"].append(
+                                {
+                                    "path": report_name,
+                                    "reason": "evaluation result is not an object",
+                                }
+                            )
+                        if isinstance(raw_results, list):
                             if len(raw_results) > MAX_NATIVE_RESULTS:
                                 row["omissions"].append(
                                     {
-                                        "path": "comparison.json",
+                                        "path": report_name,
                                         "reason": "provider result count cap reached",
                                     }
                                 )
@@ -1318,7 +1947,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                 if not isinstance(result, dict):
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "provider result entry is not an object",
                                         }
                                     )
@@ -1332,11 +1961,14 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                     "summary": summary,
                                     "text_is_untrusted": True,
                                 }
+                                if evaluation_report:
+                                    provider["used_llm"] = result.get("used_llm")
+                                    provider["error"] = _safe_text(result.get("error"), 8000)[0]
                                 provider_results.append(provider)
                                 if summary_cut:
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "provider summary text truncated",
                                         }
                                     )
@@ -1344,7 +1976,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                 if not isinstance(concerns, list):
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "provider concern list missing or invalid",
                                         }
                                     )
@@ -1352,7 +1984,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                 if len(concerns) > 100:
                                     row["omissions"].append(
                                         {
-                                            "path": "comparison.json",
+                                            "path": report_name,
                                             "reason": "per-provider concern count cap reached",
                                         }
                                     )
@@ -1361,7 +1993,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                         if not concern_cap_reached:
                                             row["omissions"].append(
                                                 {
-                                                    "path": "comparison.json",
+                                                    "path": report_name,
                                                     "reason": "aggregate concern count cap reached",
                                                 }
                                             )
@@ -1380,7 +2012,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                     if text_cut:
                                         row["omissions"].append(
                                             {
-                                                "path": "comparison.json",
+                                                "path": report_name,
                                                 "reason": "provider concern text truncated",
                                             }
                                         )
@@ -1396,7 +2028,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                     else:
                                         row["omissions"].append(
                                             {
-                                                "path": "comparison.json",
+                                                "path": report_name,
                                                 "reason": "provider concern has no text",
                                             }
                                         )
@@ -1423,17 +2055,27 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                                     )
                         row["receipts"].append(
                             {
-                                "kind": "native-comparison",
-                                "path": "comparison.json",
+                                "kind": (
+                                    "native-evaluation"
+                                    if evaluation_report
+                                    else "native-comparison"
+                                ),
+                                "path": report_name,
+                                **(
+                                    {
+                                        "acceptance_authority": False,
+                                        "resolution_authority": False,
+                                        "text_is_untrusted": True,
+                                    }
+                                    if evaluation_report
+                                    else {}
+                                ),
                                 "results_count": (
-                                    len(report_doc.get("results", []))
-                                    if isinstance(report_doc, dict)
-                                    and isinstance(report_doc.get("results"), list)
-                                    else None
+                                    len(raw_results) if isinstance(raw_results, list) else None
                                 ),
                                 "aggregate_report_excerpt": _safe_text(
                                     (
-                                        report_doc.get("report")
+                                        report_doc.get("summary" if evaluation_report else "report")
                                         if isinstance(report_doc, dict)
                                         else ""
                                     ),
@@ -1446,10 +2088,23 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                         )
                 else:
                     row["omissions"].append(
-                        {"path": "comparison.json", "reason": "native comparison report missing"}
+                        {
+                            "path": (
+                                "comparison.json/evaluation.json"
+                                if len(report_names) > 1
+                                else report_name
+                            ),
+                            "reason": (
+                                "native reports ambiguous"
+                                if len(report_names) > 1
+                                else f"native {'evaluation' if evaluation_report else 'comparison'} report missing"
+                            ),
+                        }
                     )
                 known_files = (
                     ("comparison-comment.md", "native-comparison-comment", None, False),
+                    ("evaluation-comment.md", "native-evaluation-comment", None, False),
+                    ("evaluation-execution.json", "native-evaluation-execution", None, False),
                     (
                         "verifier-diff-summary.md",
                         "native-verifier-diff-summary",
@@ -1480,19 +2135,248 @@ def _native_manifest_from_archive(archive: bytes, root: Path) -> list[dict]:
                         "kind": kind,
                         "path": filename,
                         "manifest_hash_verified": expected is not None,
-                        "raw": _retain_bytes(
+                        "raw": retain(
                             root, content, "patch" if filename.endswith(".patch") else "txt"
                         ),
                         "sha256": actual,
                     }
+                    if kind.startswith("native-evaluation"):
+                        receipt.update(
+                            acceptance_authority=False,
+                            resolution_authority=False,
+                            text_is_untrusted=True,
+                        )
                     if filename.endswith(".md"):
                         receipt["excerpt"] = content[:8000].decode("utf-8", "replace")
                         receipt["text_is_untrusted"] = True
                     row["receipts"].append(receipt)
                 manifests.append(row)
-    except (zipfile.BadZipFile, OSError, RuntimeError):
+    except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
+        from closer_attribution_store import AttributionStorageWait
+
+        if isinstance(exc, AttributionStorageWait):
+            raise
         return []
     return manifests
+
+
+def _native_diagnostic_section(
+    snapshot,
+    api,
+    deadline,
+    root,
+    artifact_fetch,
+    download_budget,
+    *,
+    known_run=None,
+    semantic_reference=None,
+):
+    """Retain existing exact-delivery corpus without inventing a trusted verdict."""
+    target = _subject_target(snapshot)
+    repo, _, number = target.partition("#")
+    head, merge = snapshot.get("head"), snapshot.get("merge")
+    import closer_verifier_boundary as boundary
+
+    semantic_bound = (
+        isinstance(semantic_reference, dict)
+        and isinstance(known_run, dict)
+        and semantic_reference.get("subject_pr") == target
+        and semantic_reference.get("head") == head
+        and semantic_reference.get("merge") == merge
+        and isinstance(semantic_reference.get("archive_digest"), str)
+        and re.fullmatch("[0-9a-f]{64}", semantic_reference["archive_digest"]) is not None
+        and boundary.logical_run(known_run)
+        == boundary.logical_run(semantic_reference.get("run", {}))
+    )
+    content: dict[str, Any] = {
+        "evidence_type": "native-verifier-diagnostic",
+        "acceptance_authority": False,
+        "resolution_authority": False,
+        "runs": [],
+        "artifacts": [],
+        "unavailable": [],
+    }
+    reason = "trusted native verdict missing or unsupported; retained corpus is diagnostic only"
+    if (
+        not isinstance(head, str)
+        or not SHA.fullmatch(head)
+        or not isinstance(merge, str)
+        or not SHA.fullmatch(merge)
+        or artifact_fetch is None
+    ):
+        return _section("missing", content, reason=reason)
+    budget = (
+        download_budget
+        if download_budget is not None
+        else {
+            "archives_remaining": MAX_PACKET_ARCHIVES,
+            "bytes_remaining": MAX_PACKET_ARCHIVE_BYTES,
+        }
+    )
+    try:
+        if time.monotonic() >= deadline:
+            return _section(
+                "pending", content, reason="native diagnostic collection deadline reached"
+            )
+        doc = (
+            {"workflow_runs": [known_run], "total_count": 1}
+            if known_run is not None
+            else api(
+                f"repos/{repo}/actions/workflows/agents-verifier.yml/runs?head_sha={head}&per_page=100"
+            )
+        )
+        rows = doc.get("workflow_runs")
+        if not isinstance(rows, list):
+            return _section("unknown", content, reason="native diagnostic run inventory malformed")
+        candidates = [
+            row
+            for row in rows
+            if isinstance(row, dict) and (semantic_bound or row.get("head_sha") == head)
+        ]
+        if len(candidates) > 3 or doc.get("total_count", len(rows)) > len(rows):
+            return _section(
+                "unknown", content, reason="native diagnostic run inventory bound exceeded"
+            )
+        for candidate in candidates:
+            run_id = str(candidate.get("id", ""))
+            if not run_id.isdigit() or time.monotonic() >= deadline:
+                content["unavailable"].append(
+                    {"run_id": run_id, "reason": "run identity or deadline unavailable"}
+                )
+                break
+            run = known_run if known_run is not None else api(f"repos/{repo}/actions/runs/{run_id}")
+            actual_repo = str((run.get("repository") or {}).get("full_name") or "")
+            if (
+                str(run.get("id")) != run_id
+                or (not semantic_bound and run.get("head_sha") != head)
+                or not isinstance(run.get("head_sha"), str)
+                or not SHA.fullmatch(run["head_sha"])
+                or actual_repo.lower() != repo.lower()
+                or run.get("path") != ".github/workflows/agents-verifier.yml"
+                or run.get("event") not in {"workflow_dispatch", "pull_request_target"}
+                or run.get("status") != "completed"
+                or type(run.get("run_attempt")) is not int
+                or run["run_attempt"] < 1
+            ):
+                content["unavailable"].append(
+                    {"run_id": run_id, "reason": "native diagnostic run identity mismatch"}
+                )
+                continue
+            content["runs"].append(
+                {
+                    key: run.get(key)
+                    for key in (
+                        "id",
+                        "run_attempt",
+                        "head_sha",
+                        "status",
+                        "conclusion",
+                        "event",
+                        "path",
+                    )
+                }
+            )
+            if time.monotonic() >= deadline:
+                break
+            inventory = api(f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
+            artifacts = inventory.get("artifacts", [])
+            if not isinstance(artifacts, list) or inventory.get(
+                "total_count", len(artifacts)
+            ) > len(artifacts):
+                content["unavailable"].append(
+                    {"run_id": run_id, "reason": "native diagnostic artifact inventory incomplete"}
+                )
+                continue
+            matches = [
+                a
+                for a in artifacts
+                if isinstance(a, dict) and a.get("name") in native_capture_artifact_names(run_id)
+            ]
+            if len(matches) != 1:
+                content["unavailable"].append(
+                    {"run_id": run_id, "reason": "native comparison corpus missing or ambiguous"}
+                )
+                continue
+            artifact = matches[0]
+            if (
+                (artifact.get("expired") and not semantic_bound)
+                or time.monotonic() >= deadline
+                or budget["archives_remaining"] <= 0
+                or budget["bytes_remaining"] <= 0
+            ):
+                content["unavailable"].append(
+                    {
+                        "run_id": run_id,
+                        "artifact_id": artifact.get("id"),
+                        "reason": "native corpus expired or original collection bound exhausted",
+                    }
+                )
+                continue
+            limit = min(MAX_ARCHIVE_BYTES, budget["bytes_remaining"])
+            archive = artifact_fetch(artifact, deadline=deadline, max_bytes=limit)
+            if not isinstance(archive, bytes) or len(archive) > limit:
+                raise ValueError("native diagnostic archive byte cap exceeded")
+            budget["archives_remaining"] -= 1
+            budget["bytes_remaining"] -= len(archive)
+            if (
+                semantic_bound
+                and hashlib.sha256(archive).hexdigest() != semantic_reference["archive_digest"]
+            ):
+                content["unavailable"].append(
+                    {"run_id": run_id, "reason": "semantic archive digest changed"}
+                )
+                continue
+            archive_ref = _retain_bytes(root, archive, "zip")
+            parsed = _native_manifest_from_archive(archive, root)
+            bound = [
+                row
+                for row in parsed
+                if (
+                    str(row["manifest"].get("repository", "")).lower() == repo.lower()
+                    and str(row["manifest"].get("pr")) == number
+                    and row["manifest"].get("merge_sha") == merge
+                    and str(row["manifest"].get("source_run_id")) == run_id
+                )
+            ]
+            content["artifacts"].append(
+                {
+                    "id": artifact.get("id"),
+                    "run_id": int(run_id),
+                    "observed_run_attempt": run["run_attempt"],
+                    "artifact_run_attempt": None,
+                    "artifact_attempt_status": "unknown",
+                    "head_sha": run["head_sha"],
+                    "evaluated_sha": merge,
+                    "archive": archive_ref,
+                    "identity_bound": len(bound) == 1,
+                    "input_snapshots": [_native_manifest_presentation(row) for row in bound],
+                }
+            )
+    except Exception as exc:
+        if _is_round_control_exception(exc):
+            raise
+        content["unavailable"].append(
+            {
+                "reason": (
+                    str(exc)
+                    if isinstance(exc, NativeInputCaptureError)
+                    else "native diagnostic lookup failed"
+                ),
+                "error_type": type(exc).__name__,
+            }
+        )
+    return _section(
+        "unknown",
+        content,
+        reason=reason,
+        provenance={
+            "repository": repo,
+            "pr": number,
+            "head_sha": head,
+            "evaluated_sha": merge,
+            "acceptance_proof": False,
+        },
+    )
 
 
 def _native_verifier_section(
@@ -1502,12 +2386,67 @@ def _native_verifier_section(
     root: Path,
     artifact_fetch=None,
     download_budget: dict | None = None,
+    *,
+    native_archive_root=None,
 ) -> dict:
     """Collect exact merge-bound verifier input only for a trusted NON_PASS marker."""
     marker = snapshot.get("verifier")
     target = _subject_target(snapshot)
     repo, _, number = target.partition("#")
     merge, head = snapshot.get("merge"), snapshot.get("head")
+    reference = snapshot.get("native_diagnostic_reference")
+    if isinstance(reference, dict) and not marker:
+        import closer_verifier_boundary as boundary
+
+        try:
+            expected = reference["run"]
+            run = api(f"repos/{repo}/actions/runs/{expected['id']}")
+            if (
+                reference.get("subject_pr") != target
+                or reference.get("head") != head
+                or reference.get("merge") != merge
+                or boundary.logical_run(run) != boundary.logical_run(expected)
+            ):
+                return _section(
+                    "unknown", reason="native diagnostic reference changed before collection"
+                )
+            reads: list[dict[str, Any]] = []
+            relation, requirement = boundary.attribute(
+                run,
+                snapshot,
+                api,
+                artifact_fetch,
+                Path(native_archive_root) if native_archive_root is not None else root,
+                deadline=deadline,
+                reads=reads,
+            )
+            archive_read: dict[str, Any] = next(
+                (r for r in reversed(reads) if r["endpoint"].startswith("archive:")), {}
+            )
+            if relation != "same" or not archive_read.get("endpoint", "").endswith(
+                "sha256:" + str(reference.get("archive_digest"))
+            ):
+                return _section(
+                    "unknown",
+                    {"retained_reads": reads},
+                    reason=requirement or "native diagnostic archive changed",
+                )
+            return _native_diagnostic_section(
+                snapshot,
+                api,
+                deadline,
+                root,
+                artifact_fetch,
+                download_budget,
+                known_run=run,
+                semantic_reference=reference,
+            )
+        except Exception as exc:
+            if _is_round_control_exception(exc):
+                raise
+            return _section(
+                "unknown", reason=f"native diagnostic reference unavailable: {type(exc).__name__}"
+            )
     if (
         not isinstance(marker, dict)
         or marker.get("schema") != "verifier-corpus-decision/v1"
@@ -1519,6 +2458,13 @@ def _native_verifier_section(
         or not SHA.fullmatch(merge)
         or marker.get("evaluated_sha") != merge
     ):
+        if snapshot.get("state") == "MERGED" and (
+            "verify:compare" in snapshot.get("labels", [])
+            or snapshot.get("verifier_run_identity_unknown")
+        ):
+            return _native_diagnostic_section(
+                snapshot, api, deadline, root, artifact_fetch, download_budget
+            )
         return _section(
             "missing", reason="no trusted exact-identity NON_PASS marker for current merged PR"
         )
@@ -1548,11 +2494,17 @@ def _native_verifier_section(
             or run.get("status") != "completed"
             or actual_repo.lower() != repo.lower()
         ):
-            return _section(
-                "unknown",
-                {"verifier": marker},
-                reason="native run repository/workflow/event/attempt identity mismatch",
+            diagnostic = _native_diagnostic_section(
+                snapshot, api, deadline, root, artifact_fetch, download_budget, known_run=run
             )
+            if isinstance(diagnostic.get("content"), dict):
+                diagnostic["content"]["trusted_marker_observation"] = marker
+                diagnostic["content"]["trusted_marker_mismatch"] = True
+                diagnostic["reason"] = (
+                    "native run repository/workflow/event/attempt identity mismatch; retained corpus is diagnostic only"
+                )
+                diagnostic["sha256"] = _section_hash(diagnostic)
+            return diagnostic
         if time.monotonic() >= deadline:
             return _section("pending", {"verifier": marker}, reason="collection deadline reached")
         artifacts_doc = api(f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
@@ -1608,12 +2560,18 @@ def _native_verifier_section(
                 found = _native_manifest_from_archive(archive, root)
                 receipts = []
                 for item in found:
+                    presented = _native_manifest_presentation(item)
                     receipts.append(
                         {
                             "kind": "native-input-manifest",
                             "path": item["path"],
-                            "manifest": item["manifest"],
+                            "manifest": presented["manifest"],
                             "raw": item["raw"],
+                            **(
+                                {"manifest_projection": presented["manifest_projection"]}
+                                if "manifest_projection" in presented
+                                else {}
+                            ),
                         }
                     )
                     receipts.extend(item.get("receipts", []))
@@ -1645,7 +2603,11 @@ def _native_verifier_section(
                 entry = {
                     **ident,
                     "status": "unknown",
-                    "reason": f"artifact fetch failed: {type(exc).__name__}",
+                    "reason": (
+                        str(exc)
+                        if isinstance(exc, NativeInputCaptureError)
+                        else f"artifact fetch failed: {type(exc).__name__}"
+                    ),
                 }
                 artifacts.append(entry)
                 missing.append(entry)
@@ -1681,11 +2643,17 @@ def _native_verifier_section(
             k: run.get(k)
             for k in ("id", "run_attempt", "status", "conclusion", "head_sha", "event", "path")
         }
+        presented = _native_manifest_presentation(manifests[0])
         content = {
             "verifier": marker,
             "run": native_run,
             "artifacts": artifacts,
-            "input_manifest": {**manifest, "raw": manifest_ref},
+            "input_manifest": {**presented["manifest"], "raw": manifest_ref},
+            **(
+                {"input_manifest_projection": presented["manifest_projection"]}
+                if "manifest_projection" in presented
+                else {}
+            ),
             "unavailable": missing,
             "evidence_type": "evaluated-merge-verifier-non-pass",
             "proof_status": "resolution-only",
@@ -1734,6 +2702,10 @@ def collect_evidence(
     dispositions: dict | None = None,
     artifact_fetch=None,
     review_threads_fetch=None,
+    action: str | None = None,
+    refresh_sections: set[str] | None = None,
+    supplemental_sections: dict | None = None,
+    native_archive_root: str | Path | None = None,
 ) -> dict:
     """Create an incremental evidence packet.
 
@@ -1779,6 +2751,12 @@ def collect_evidence(
         ):
             return None
         section = prior_packet["sections"].get(name)
+        if (
+            isinstance(section, dict)
+            and isinstance(section.get("provenance"), dict)
+            and section["provenance"].get("request_status") == "not_requested"
+        ):
+            return None
         if allow_partial and name == "review_conversations":
             provenance = section.get("provenance", {}) if isinstance(section, dict) else {}
             if (
@@ -1787,6 +2765,37 @@ def collect_evidence(
             ):
                 return None
         return section if _retained_section_valid(section, allow_partial=allow_partial) else None
+
+    def preserved(name):
+        if (
+            refresh_sections is None
+            or name in refresh_sections
+            or not prior_ok
+            or prior_packet is None
+        ):
+            return None
+        if prior_packet.get("capture_revision") != snapshot.get("revision"):
+            return None
+        binding_name, binding = (
+            {
+                "source": ("source", _hash(sources)),
+                "review_conversations": ("reviews", _hash(snapshot.get("review_revision"))),
+            }
+        ).get(name, ("identity", expected_identity))
+        if prior_packet["bindings"].get(binding_name) != binding:
+            return None
+        section = prior_packet["sections"].get(name)
+        if (
+            isinstance(section, dict)
+            and isinstance(section.get("provenance"), dict)
+            and section["provenance"].get("request_status") == "not_requested"
+        ):
+            return None
+        # A verified missing/partial observation is progress too. Keep its raw
+        # section and failure reason until an explicit requirement selects it.
+        if not isinstance(section, dict) or not _retained_section_payload_valid(section):
+            return None
+        return section
 
     cached_source = prior_section("source", "source", _hash(sources), allow_partial=True)
     cached_diff = prior_section("diff_files", "identity", expected_identity)
@@ -1824,11 +2833,77 @@ def collect_evidence(
         "archives_remaining": MAX_PACKET_ARCHIVES,
         "bytes_remaining": MAX_PACKET_ARCHIVE_BYTES,
     }
+    # Fetch the action's required native input before optional ordinary CI can
+    # consume the shared archive budget. This never starts or retries a verifier.
+    native_first = snapshot.get("state") == "MERGED" and action in {
+        "collect_evidence",
+        "disposition",
+    }
+    native_section = preserved("native_merge_verifier") or (
+        _native_verifier_section(
+            snapshot,
+            api,
+            deadline,
+            root,
+            artifact_fetch,
+            shared_budget,
+            native_archive_root=native_archive_root,
+        )
+        if native_first
+        else None
+    )
+    minimum_dispatch = action in {"post_merge_verify", "wait", "complete"}
+
+    def retained_or_not_requested(name):
+        if (
+            prior_ok
+            and prior_packet
+            and prior_packet.get("capture_revision") == snapshot.get("revision")
+        ):
+            binding_name, binding = (
+                ("reviews", _hash(snapshot.get("review_revision")))
+                if name == "review_conversations"
+                else ("identity", expected_identity)
+            )
+            section = prior_packet["sections"].get(name)
+            if (
+                prior_packet["bindings"].get(binding_name) == binding
+                and isinstance(section, dict)
+                and _retained_section_payload_valid(section)
+                and (name != "diff_files" or cached_diff is not None)
+                and (name != "review_conversations" or cached_reviews is not None)
+            ):
+                return section
+        return not_requested()
+
+    def not_requested():
+        return _section(
+            "missing",
+            None,
+            provenance={"request_status": "not_requested", "action": action},
+            reason="optional enrichment not requested for native verification dispatch",
+        )
+
     sections = {
-        "source": cached_source or _source_section(sources, root),
-        "diff_files": cached_diff or _diff_section(snapshot, api, deadline, root),
-        "review_conversations": cached_reviews
-        or _review_section(snapshot, review_threads_fetch, deadline, root),
+        "source": preserved("source") or cached_source or _source_section(sources, root),
+        "diff_files": (
+            retained_or_not_requested("diff_files")
+            if minimum_dispatch
+            else preserved("diff_files")
+            or (None if refresh_sections and "diff_files" in refresh_sections else cached_diff)
+            or _diff_section(snapshot, api, deadline, root)
+        ),
+        "review_conversations": (
+            retained_or_not_requested("review_conversations")
+            if minimum_dispatch
+            else preserved("review_conversations")
+            or (
+                None
+                if refresh_sections and "review_conversations" in refresh_sections
+                else cached_reviews
+            )
+            or _review_section(snapshot, review_threads_fetch, deadline, root)
+        ),
         "prior_dispositions": _section(
             "complete" if dispositions else "missing",
             dispositions or None,
@@ -1844,23 +2919,71 @@ def collect_evidence(
             },
             reason=None if snapshot.get("checks") is not None else "no current-head check rollup",
         ),
-        "ci_artifacts": _artifact_section(
-            snapshot,
-            api,
-            deadline,
-            root,
-            artifact_fetch,
-            (
-                prior_packet.get("sections", {}).get("ci_artifacts")
-                if prior_ok and prior_packet
-                else None
-            ),
-            shared_budget,
+        "ci_artifacts": (
+            retained_or_not_requested("ci_artifacts")
+            if minimum_dispatch
+            else preserved("ci_artifacts")
+            or _artifact_section(
+                snapshot,
+                api,
+                deadline,
+                root,
+                artifact_fetch,
+                (
+                    prior_packet.get("sections", {}).get("ci_artifacts")
+                    if prior_ok and prior_packet
+                    else None
+                ),
+                shared_budget,
+            )
         ),
-        "native_merge_verifier": _native_verifier_section(
-            snapshot, api, deadline, root, artifact_fetch, shared_budget
+        "native_merge_verifier": (
+            retained_or_not_requested("native_merge_verifier")
+            if minimum_dispatch
+            else (
+                native_section
+                if native_section is not None
+                else _native_verifier_section(
+                    snapshot,
+                    api,
+                    deadline,
+                    root,
+                    artifact_fetch,
+                    shared_budget,
+                    native_archive_root=native_archive_root,
+                )
+            )
         ),
     }
+    if (
+        prior_ok
+        and prior_packet
+        and prior_packet.get("capture_revision") == snapshot.get("revision")
+    ):
+        for name in ("requested_evidence",):
+            prior_extra = prior_packet["sections"].get(name)
+            if isinstance(prior_extra, dict) and _retained_section_payload_valid(prior_extra):
+                sections[name] = prior_extra
+    for name, section in (supplemental_sections or {}).items():
+        if name != "requested_evidence" or not isinstance(section, dict):
+            raise ValueError("unsupported supplemental collection section")
+        sections[name] = section
+    inventory = snapshot.get("delivery_links")
+    if inventory is not None:
+        sections["delivery_inventory"] = _section(
+            (
+                "complete"
+                if isinstance(inventory, dict) and inventory.get("status") == "resolved"
+                else "missing"
+            ),
+            inventory,
+            provenance={"source": "exact source delivery inventory", "acceptance_authority": False},
+            reason=(
+                inventory.get("reason")
+                if isinstance(inventory, dict)
+                else "malformed delivery inventory"
+            ),
+        )
     ci = sections["ci_artifacts"]
     receipts = [
         receipt
@@ -1917,6 +3040,8 @@ def collect_evidence(
         "sections": sections,
         "section_digests": {k: v["sha256"] for k, v in sections.items()},
         "history": [],
+        "collection_action": action,
+        "capture_revision": snapshot.get("revision"),
     }
     packet["semantic_cache_key"] = _semantic_cache_key(packet)
     packet = update_packet(previous, packet)
@@ -1929,6 +3054,25 @@ def collect_evidence(
     for name, section in packet["sections"].items():
         section["sha256"] = packet["section_digests"][name]
     manifest = {"section_files": {k: v["retained"] for k, v in packet["sections"].items()}}
+    packet["manifest"] = {**manifest, "packet_sha256": _packet_hash(packet)}
+    readiness = action_evidence_readiness(snapshot, packet, action, retained_dir=root)
+    status = (
+        "diagnostic"
+        if action is None
+        else (
+            "deterministic"
+            if readiness.get("mode") == "deterministic" and readiness["ready"]
+            else "ready" if readiness["ready"] else "pending"
+        )
+    )
+    packet["collection_result"] = {
+        "schema": "closer-evidence-collection/v1",
+        "status": status,
+        "evaluation_ready": status == "ready",
+        "acceptance_authority": False,
+        "action": action,
+        "readiness": readiness,
+    }
     packet["manifest"] = {**manifest, "packet_sha256": _packet_hash(packet)}
     # The manifest is not part of its own digest and is a separate immutable file.
     _atomic_write(

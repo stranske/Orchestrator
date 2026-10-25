@@ -9,13 +9,15 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
+import sqlite3
 import sys
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import credential_redaction
 
@@ -157,6 +159,170 @@ def parse_relay_reset_at(text: str, *, now: int | None = None) -> int | None:
     return reset_at if reset_at > int(now or time.time()) else None
 
 
+def generate_relay_decision_id(
+    *, when: datetime | None = None, pid: int | None = None, random_hex: str | None = None
+) -> str:
+    """Coordinator token shape for one pacing decision: ``<utc>-<pid>-<random>``.
+
+    Compact UTC (no ``:``) keeps the token a single log field. The importer and
+    ``record-lane-round --relay-decision-id`` accept any nonempty no-whitespace
+    token up to ``feedback.RELAY_DECISION_ID_MAX_CHARS`` (176 after the
+    ``relay-pacing:id:`` run-id prefix); this helper is the documented production
+    form. Prefer the ``generate-relay-decision-id`` CLI so the relay does not need
+    ``$ORCH`` on ``PYTHONPATH``.
+    """
+    stamp = (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    token = random_hex if random_hex is not None else secrets.token_hex(4)
+    if not token or any(char.isspace() for char in token) or len(token) > 32:
+        raise ValueError("random_hex must be a nonempty token of at most 32 characters")
+    return f"{stamp}-{pid if pid is not None else os.getpid()}-{token}"
+
+
+_RELAY_PACING_AGENTS = frozenset({"codex", "claude", "claude_code", "cursor", "muse"})
+
+
+def _relay_weight_token(value: Any) -> str:
+    """Compact numeric weight for the pacing log, or unknown when unmeasured."""
+    if value is None or isinstance(value, bool):
+        return "unknown"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / inf
+        return "unknown"
+    if number == int(number):
+        return str(int(number))
+    return f"{number:g}"
+
+
+def _relay_candidate_weight(row: Mapping[str, Any]) -> str:
+    """Prefer the receipt's top-level routing_weight (unmeasured-preferred puts 1.0 there)."""
+    if "routing_weight" in row and row.get("routing_weight") is not None:
+        return _relay_weight_token(row.get("routing_weight"))
+    pace = row.get("pacing")
+    if isinstance(pace, Mapping) and pace.get("routing_weight") is not None:
+        return _relay_weight_token(pace.get("routing_weight"))
+    return "unknown"
+
+
+def _relay_candidate_state(row: Mapping[str, Any]) -> str:
+    state = row.get("state")
+    if isinstance(state, str) and state.strip():
+        return state.strip()
+    pace = row.get("pacing")
+    if isinstance(pace, Mapping):
+        nested = pace.get("state")
+        if isinstance(nested, str) and nested.strip():
+            return nested.strip()
+    return "unknown"
+
+
+def relay_log_fields_from_decision(
+    decision: Mapping[str, Any], *, candidates: str
+) -> dict[str, str]:
+    """Importer-valid ``weights`` / ``states`` tokens from pick-agent decision JSON.
+
+    Host ``handoff-relay.sh`` must not re-derive weights from nested ``pacing`` alone:
+    Cursor-top ``unmeasured-preferred`` receipts put a neutral ``routing_weight`` on the
+    candidate itself while ``pacing`` stays absent — a nested-only jq path logs
+    ``*:unknown`` and the weekly #812 pass never sees measured consumption (owner
+    2026-10-23). Candidate order follows the relay's candidates list.
+    """
+    names = [part for part in candidates.split(",") if part]
+    if not names or not set(names) <= _RELAY_PACING_AGENTS:
+        raise ValueError("candidates must be a nonempty list of supported agents")
+    by_agent: dict[str, Mapping[str, Any]] = {}
+    raw = decision.get("candidates")
+    if isinstance(raw, list):
+        for row in raw:
+            if not isinstance(row, Mapping):
+                continue
+            agent = row.get("agent")
+            if isinstance(agent, str) and agent in _RELAY_PACING_AGENTS:
+                by_agent[agent] = row
+    weights = []
+    states = []
+    for name in names:
+        row = by_agent.get(name, {"agent": name})
+        weights.append(f"{name}:{_relay_candidate_weight(row)}")
+        states.append(f"{name}:{_relay_candidate_state(row)}")
+    policy = decision.get("policy")
+    return {
+        "weights": ",".join(weights),
+        "states": ",".join(states),
+        "policy": policy if isinstance(policy, str) and policy.strip() else "unmeasured",
+    }
+
+
+def append_relay_pacing_decision(
+    *,
+    source: str,
+    lane: str,
+    candidates: str,
+    chosen: str,
+    weights: str,
+    states: str,
+    fallback: str,
+    decision_id: str | None = None,
+    log: Path | None = None,
+    when: datetime | None = None,
+) -> str:
+    """Append one importer-valid pacing line with a decision_id; return that id.
+
+    Call at relay decision time so ``relay-pacing.log`` and the later
+    ``record-lane-round --relay-decision-id`` share one token without hand-formatting
+    the log line. Omitting ``decision_id`` generates the documented
+    ``<utc>-<pid>-<random>`` shape.
+    """
+    import feedback
+
+    if source not in _RELAY_PACING_AGENTS:
+        raise ValueError("source must be a supported relay agent")
+    if lane not in {"opener", "closer"}:
+        raise ValueError("lane must be opener or closer")
+    if fallback not in {"yes", "no"}:
+        raise ValueError("fallback must be yes or no")
+    cand_list = [part for part in candidates.split(",") if part]
+    if not cand_list or chosen not in cand_list or not set(cand_list) <= _RELAY_PACING_AGENTS:
+        raise ValueError("candidates must include chosen and only supported agents")
+    for label, value in (
+        ("weights", weights),
+        ("states", states),
+        ("candidates", candidates),
+        ("chosen", chosen),
+    ):
+        if not value or any(char.isspace() for char in value):
+            raise ValueError(f"{label} must be a nonempty no-whitespace token")
+    token = decision_id if decision_id is not None else generate_relay_decision_id(when=when)
+    if (
+        not token
+        or len(token) > feedback.RELAY_DECISION_ID_MAX_CHARS
+        or any(char.isspace() for char in token)
+    ):
+        raise ValueError(
+            "decision_id must be a nonempty token of at most "
+            f"{feedback.RELAY_DECISION_ID_MAX_CHARS} characters"
+        )
+    stamp = (
+        (when or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    line = (
+        f"{stamp} decision_id={token} source={source} lane={lane} "
+        f"candidates={candidates} chosen={chosen} weights={weights} "
+        f"states={states} fallback={fallback}\n"
+    )
+    path = (
+        log
+        if log is not None
+        else Path(os.environ.get("HANDOFF_PACING_LOG", str(HANDOFF / "relay-pacing.log")))
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line)
+    return token
+
+
 def record_lane_round(
     *,
     agent: str,
@@ -166,12 +332,13 @@ def record_lane_round(
     exit_status: int,
     output_file: Path,
     ts: int | None = None,
+    relay_decision_id: str | None = None,
 ) -> dict[str, Any]:
     """Persist every relay exit and shed only on a nonzero authoritative failure."""
     import feedback
 
-    if agent not in {"codex", "claude"}:
-        raise ValueError("agent must be codex or claude")
+    if agent not in {"codex", "claude", "cursor", "muse"}:
+        raise ValueError("agent must be codex, claude, cursor or muse")
     if not surface.strip():
         raise ValueError("surface must be nonempty")
     if not output_file.is_file() or output_file.stat().st_size > 128 * 1024:
@@ -182,8 +349,22 @@ def record_lane_round(
     authoritative = exit_status != 0 and confidence == "high"
     error_class = subcategory if authoritative else ("none" if exit_status == 0 else "unknown")
     decision_id = feedback.record_lane_round(
-        agent, lane, receiver_reason, exit_status, error_class, timestamp
+        agent,
+        lane,
+        receiver_reason,
+        exit_status,
+        error_class,
+        timestamp,
+        relay_decision_id=relay_decision_id,
     )
+    # The installed relay already invokes this exit hook. Mirror sync activates the join
+    # without editing a host-owned launcher. Telemetry failure must not hide a provider incident.
+    try:
+        pacing = feedback.ingest_relay_pacing(
+            Path(os.environ.get("HANDOFF_PACING_LOG", HANDOFF / "relay-pacing.log")), now=timestamp
+        )
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        pacing = {"status": "unavailable", "reason": str(exc)}
     incident = None
     if authoritative:
         incident = record_incident(
@@ -198,6 +379,7 @@ def record_lane_round(
         )
     return {
         "decision_id": decision_id,
+        "relay_pacing": pacing,
         "error_class": error_class,
         "incident_id": incident.get("incident_id") if incident else None,
         "shed": bool(incident and incident.get("shed")),
@@ -704,17 +886,74 @@ def main(argv: list[str]) -> int:
     lane_parser = subparsers.add_parser(
         "record-lane-round", help="record a detached handoff relay round"
     )
-    lane_parser.add_argument("--agent", choices=("codex", "claude"), required=True)
+    lane_parser.add_argument(
+        "--agent", choices=("codex", "claude", "cursor", "muse"), required=True
+    )
     lane_parser.add_argument("--surface", required=True)
     lane_parser.add_argument("--lane", choices=("opener", "closer"), required=True)
     lane_parser.add_argument("--receiver-reason")
     lane_parser.add_argument("--exit", dest="exit_status", type=int, required=True)
     lane_parser.add_argument("--output-file", type=Path, required=True)
     lane_parser.add_argument("--ts", type=int)
+    lane_parser.add_argument("--relay-decision-id")
+    subparsers.add_parser(
+        "generate-relay-decision-id",
+        help="print one <utc>-<pid>-<random> token for the relay pacing log",
+    )
+    append_parser = subparsers.add_parser(
+        "append-relay-pacing-decision",
+        help="append one decision_id= pacing log line; print the token",
+    )
+    append_parser.add_argument("--source", required=True)
+    append_parser.add_argument("--lane", choices=("opener", "closer"), required=True)
+    append_parser.add_argument("--candidates", required=True)
+    append_parser.add_argument("--chosen", required=True)
+    append_parser.add_argument("--weights", required=True)
+    append_parser.add_argument("--states", required=True)
+    append_parser.add_argument("--fallback", choices=("yes", "no"), required=True)
+    append_parser.add_argument("--decision-id")
+    append_parser.add_argument("--log", type=Path)
+    append_parser.add_argument("--ts", type=int, help="UTC epoch second for the log stamp")
+    format_parser = subparsers.add_parser(
+        "format-relay-pacing-fields",
+        help="turn pick-agent decision JSON (stdin) into weights=/states= log tokens",
+    )
+    format_parser.add_argument("--candidates", required=True)
     subparsers.add_parser("summary", help="summarize the append-only incident ledger")
     args = parser.parse_args(argv)
     if args.selftest:
         return _selftest()
+    if args.command == "generate-relay-decision-id":
+        print(generate_relay_decision_id())
+        return 0
+    if args.command == "format-relay-pacing-fields":
+        try:
+            payload = json.loads(sys.stdin.read())
+            if not isinstance(payload, dict):
+                raise ValueError("decision JSON must be an object")
+            print(json.dumps(relay_log_fields_from_decision(payload, candidates=args.candidates)))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+        return 0
+    if args.command == "append-relay-pacing-decision":
+        try:
+            when = datetime.fromtimestamp(args.ts, timezone.utc) if args.ts is not None else None
+            token = append_relay_pacing_decision(
+                source=args.source,
+                lane=args.lane,
+                candidates=args.candidates,
+                chosen=args.chosen,
+                weights=args.weights,
+                states=args.states,
+                fallback=args.fallback,
+                decision_id=args.decision_id,
+                log=args.log,
+                when=when,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(token)
+        return 0
     if args.command == "classify":
         evidence = args.evidence if args.evidence is not None else sys.stdin.read()
         print(json.dumps(get_structured_evidence(evidence, "unknown", "cli"), sort_keys=True))
@@ -756,6 +995,7 @@ def main(argv: list[str]) -> int:
                 exit_status=args.exit_status,
                 output_file=args.output_file,
                 ts=args.ts,
+                relay_decision_id=args.relay_decision_id,
             )
         except (OSError, ValueError) as exc:
             parser.error(str(exc))

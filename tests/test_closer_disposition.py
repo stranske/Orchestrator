@@ -188,6 +188,7 @@ def fixture(
     }
     interpretation = {"actual": {"exit": 0, "run_id": "actual-run-7"}, "proposal": proposal}
     prep = {
+        "proposal": {"action": "collect_evidence"},
         "revision": snap["revision"],
         "producer_sha256": packet["producer_sha256"],
         "evidence_summary": {"section_digests": packet["section_digests"]},

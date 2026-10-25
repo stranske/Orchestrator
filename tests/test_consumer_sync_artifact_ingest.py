@@ -958,6 +958,101 @@ def test_end_to_end_idempotency(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     ]["subjects"] == ["stranske/template"]
 
 
+def test_unregistered_cohort_repo_is_skipped_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A requested repo missing from the registry is skipped with a reason, not fatal.
+
+    orchestrate.sh passed stranske/Collab-Admin, which Maint 68 does not register, and the ingest
+    raised on it, so the daily step failed on every tick from 2026-10-07 (Orchestrator#742).
+    """
+    state_dir = tmp_path / "state"
+    ledger_path = tmp_path / "capabilities.json"
+    capabilities.save({}, ledger_path)
+
+    plan = valid_plan()
+    handoff = valid_handoff(plan)
+    handoff["run_ref"] = "github-actions:stranske/Workflows:12345:1"
+    handoff["handoff_id"] = stable_hash(
+        "consumer-sync-shadow-handoff",
+        {k: handoff[k] for k in handoff if k != "handoff_id"},
+    )
+    artifact_zip_bytes = make_zip(
+        {
+            "consumer-sync-plan.json": json.dumps(plan),
+            "handoff.json": json.dumps(handoff),
+        }
+    )
+    repo_tree, repo_blobs = consumer_sync_artifact_ingest.make_tree_responses(
+        {".github/workflows/new.yml": "hello old"}
+    )
+    run_list = {"workflow_runs": [{"id": 12345, "run_attempt": 1, "conclusion": "success"}]}
+    artifact_list = {
+        "artifacts": [
+            {"id": 9999, "name": "consumer-sync-shadow-evidence-12345-1", "expired": False}
+        ]
+    }
+
+    def mock_gh(args: list[str]) -> str | bytes:
+        cmd = " ".join(args)
+        if "stranske/Collab-Admin" in cmd:
+            raise AssertionError(f"An unregistered repo must not be read: {cmd}")
+        if "health-69-consumer-sync-shadow-evidence.yml/runs?status=success" in cmd:
+            return json.dumps(run_list)
+        if "runs/12345/artifacts" in cmd:
+            return json.dumps(artifact_list)
+        if "artifacts/9999/zip" in cmd:
+            return artifact_zip_bytes
+        if "repos/stranske/Template/git/trees/" in cmd:
+            return json.dumps(repo_tree)
+        if "repos/stranske/Template/git/blobs/" in cmd:
+            return json.dumps(repo_blobs[cmd.rsplit("/", 1)[-1]])
+        if "repos/stranske/Template" in cmd:
+            return json.dumps({"default_branch": "main"})
+        raise ValueError(f"Unexpected mock gh command: {cmd}")
+
+    monkeypatch.setattr(consumer_sync_artifact_ingest, "GH_COMMAND_MOCK", mock_gh)
+    # The registry lacks one of the two requested repos.
+    monkeypatch.setattr(consumer_sync_artifact_ingest, "TEST_REGISTRY", ["stranske/template"])
+
+    rc = consumer_sync_artifact_ingest.main(
+        [
+            "ingest",
+            "--state-dir",
+            str(state_dir),
+            "--ledger",
+            str(ledger_path),
+            "--repository",
+            "stranske/Template",
+            "--repository",
+            "stranske/Collab-Admin",
+            "--mode",
+            "shadow",
+            "--now",
+            "100",
+        ]
+    )
+    assert rc == 0
+    assert "Skipping stranske/Collab-Admin: not in the registered consumer repos list." in (
+        capsys.readouterr().err
+    )
+
+    # The registered repo was still ingested.
+    cap = capabilities.load(ledger_path, create=False)[consumer_sync_shadow.CAPABILITY_ID]
+    outputs = [e for e in cap["event_history"] if e.get("type") == "output"]
+    subjects = {(e.get("metadata") or {}).get("subject_id") for e in outputs}
+    assert "stranske/template" in subjects
+    assert "stranske/collab-admin" not in subjects
+
+
+def test_orchestrate_sh_passes_only_registered_cohort_repos() -> None:
+    """The hardcoded ingest cohort in orchestrate.sh must not name the deregistered Collab-Admin."""
+    script = (Path(__file__).resolve().parents[1] / "orchestrate.sh").read_text(encoding="utf-8")
+    start = script.index('consumer_sync_artifact_ingest.py" ingest')
+    end = script.index("consumer-sync-artifact-ingest.log", start)
+    assert "Collab-Admin" not in script[start:end]
+
+
 def test_module_selftests():
     consumer_sync_artifact_ingest.run_selftests()
 

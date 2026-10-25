@@ -8,18 +8,48 @@ counts only `profile_selection` rows.
 
 The relay hook belongs in `~/.codex/bin/handoff-relay.sh`, after the receiver
 process exits and before it prints the `RELAY exit=` trailer. That script is
-outside this repository and is not changed by this PR. With `$relay_log`,
-`$status`, `$next_lane`, `$other_agent` and `$ORCH` set by the relay, the hook is:
+outside this repository and is not changed by this PR. The relay supplies
+`$relay_log`, `$status`, `$next_lane`, `$other_agent` and `$ORCH`, plus `$source`,
+`$candidates`, `$chosen`, `$weights`, `$states` and `$fallback` from the pacing
+decision. The append helper replaces the relay's existing `relay-pacing.log`
+writer; do not also emit a legacy pacing line for the same decision. The hook is:
 
 ```bash
+# At decision time (before dispatch): prefer pick-agent stderr log_fields (or format-relay-pacing-fields)
+# so Cursor-top unmeasured-preferred receipts keep numeric weights instead of nested-pacing *:unknown.
+# weights="$(printf '%s' "$decision_json" | python3 "$ORCH/rate_incidents.py" format-relay-pacing-fields \
+#   --candidates "$candidates" | python3 -c 'import json,sys; print(json.load(sys.stdin)["weights"])')"
+# Append an importer-valid line with decision_id=<id>.
+# Replace the existing pacing-log writer with this call; do not also write a legacy line.
+# Requires $source, $candidates, $chosen, $weights, $states and $fallback from the decision.
+# Invoke the script by path (same as record-lane-round) so $ORCH need not be on PYTHONPATH.
+# On failure leave decision_id empty and omit --relay-decision-id rather than aborting.
+decision_id="$(python3 "$ORCH/rate_incidents.py" append-relay-pacing-decision \
+  --source "$source" --lane "$next_lane" \
+  --candidates "$candidates" --chosen "$chosen" \
+  --weights "$weights" --states "$states" --fallback "$fallback")" || decision_id=""
+# After the receiver exits:
 tail -n 40 "$relay_log" > "$tail"
-python3 "$ORCH/rate_incidents.py" record-lane-round --agent "${other_agent/claude_code/claude}" --surface handoff-relay --lane "$next_lane" --exit "$status" --output-file "$tail"
+python3 "$ORCH/rate_incidents.py" record-lane-round \
+  --agent "${other_agent/claude_code/claude}" --surface handoff-relay --lane "$next_lane" \
+  --exit "$status" --output-file "$tail" \
+  ${decision_id:+--relay-decision-id "$decision_id"}
 ```
+
+Prefer `append-relay-pacing-decision` over hand-editing the pacing log: it generates the
+token, writes `decision_id=<id>` in the field order the importer accepts, and prints the
+same token for the exit hook. `capacity.py pick-agent` prints `log_fields.weights` /
+`log_fields.states` on stderr (using top-level `routing_weight` when present).
+Cursor-top pick behavior is tracked separately in #891. `format-relay-pacing-fields`
+rebuilds those tokens from the same JSON when the host script does not yet read `log_fields`. `generate-relay-decision-id`
+remains available when the relay must emit the id into an existing log writer.
 
 Set `$tail` to a private temporary file and remove it after the call. Pass
 `--receiver-reason "$reason"` when the relay has retained its actual routing
 reason; otherwise the stored value is NULL. The optional `--ts` accepts a UTC
-epoch second for replay or testing.
+epoch second for replay or testing. Prefer `--relay-decision-id` so interleaved
+opener/closer rounds join by explicit ID; omit it when generation failed or for
+legacy lines (empty tokens are rejected and would drop the round).
 
 Every exit writes a decision row. Exit zero writes no incident, even if a
 successful summary quotes a rate-limit message. A nonzero exit creates an
@@ -35,3 +65,49 @@ offset suffixes and full month names are accepted. If the time is missing, malfo
 past, the existing six-hour cooldown applies. A later valid reset time extends
 the shed marker through that time. Operators should configure the relay host's
 timezone to match the provider display timezone.
+
+
+## Relay pacing consumption (#812)
+
+The existing exit hook now also reads `HANDOFF_PACING_LOG`, defaulting to
+`$HANDOFF_DIR/relay-pacing.log` (`~/.codex/handoff/relay-pacing.log` without an override).
+After merge and mirror sync, no additional launcher installation is required.
+`feedback.ingest_relay_pacing(path, now=epoch)` also permits offline replays into
+an explicitly selected `ORCH_FEEDBACK_DB`. Do not run replays against the production Brain.
+
+The capability owner is **windowed-capacity-policy**; the value-chain row printed by
+`switch_review.py --text-out PATH` is its only grading surface. No capability is added.
+Each valid log line is a sanitized decision event with source, chosen, candidates,
+states, weights, lane and boolean fallback, including `fallback=yes`. Identical log
+lines share a content-derived ID. Only a single decision between successive observed
+exits in that lane, with a matching chosen agent, earns an accepted edge to the
+lane-round ID. Codex, Claude (`claude_code` in logs), Cursor and Muse are supported.
+Multiple decisions, timestamp ties, a changed receiver, or an absent round never earn
+credit. Binding is one-to-one even when an older round arrives late. The round hook
+commits the lane-round row first; the importer then writes events and edges in its
+own transaction. Rereading does not add counts or change the decision's original window.
+Settled events are not rewritten. Pending decisions survive log rotation, and only
+rounds since the oldest unresolved decision are matched, preserving the preceding
+exit boundary. Sorted timestamp lookup avoids quadratic history scans under the
+Brain write lock.
+
+The target completion event records `completed` (exit zero), `rate-limited`
+(nonzero plus authoritative capacity evidence), or `failed` (other nonzero).
+These observed terminal results count as `outcome` in the capacity row. Operational
+`outcome_success` increments only for joined rounds with `status=completed` and
+`exit_status=0`; failed, rate-limited and lane-busy exits earn none. They are not
+PR acceptance evidence and never synthesize a durable-delivery verdict — durable
+PR edges on the same row still use the existing lifecycle predicate and remain
+part of the combined `success_scope`.
+Import errors are returned as `relay_pacing.status=unavailable` in the hook receipt;
+provider-incident recording still runs. Missing logs report `absent`.
+
+For the 2026-10-27 check, `switch_review.py --text-out` prints a `relay pass
+(2026-10-27):` line under the capacity row. It compares version-exact relay joins
+(`relay_acted_on`) to independent log demand within ±5%, and requires
+`usable ≥ relay_acted_on` and `outcome ≥ relay_acted_on`. Durable-delivery edges on
+the same row are retained separately and do not inflate the join count. Before the
+check date the line reads `pending`. Inspect `completion_events` with producer
+`feedback.relay_pacing` for unjoined decisions and chosen-agent outcome payloads. A
+fixture pass does not establish one-day production consumption or the weekly
+acceptance criterion.

@@ -1325,12 +1325,17 @@ def producer_derivation_proof(tmp_path, monkeypatch):
     # A dependency visible ONLY in the consumer environment must collect in RED.
     import venv
 
-    venv.EnvBuilder(system_site_packages=True, with_pip=False).create(canon / ".venv")
+    # Symlinks preserve the shared-library lookup for python-build-standalone interpreters.
+    venv.EnvBuilder(system_site_packages=True, with_pip=False, symlinks=True).create(
+        canon / ".venv"
+    )
     consumer_python = canon / ".venv/bin/python"
     site = subprocess.check_output(
         [str(consumer_python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
         text=True,
     ).strip()
+    # Nested venvs inherit base packages, so expose pytest from the current runner's venv too.
+    (Path(site) / "test_runner.pth").write_text(str(Path(pytest.__file__).parent.parent) + "\n")
     (Path(site) / "consumer_only_731.py").write_text("VALUE = 'fixed'\n")
     root = tmp_path / "derived-experiment"
     root.mkdir()

@@ -178,6 +178,16 @@ def world(tmp_path: Path) -> dict:
     src.mkdir()
     (src / "orchestrate.sh").write_text("echo tick\n")
     (src / "base.py").write_text("BASE = True\n")
+    # Stand in for storage admission like the copy/verification stand-ins above.
+    # Real storage concurrency, capacity and retirement are tested independently.
+    (src / "storage_lifecycle.py").write_text("""import os, subprocess, sys
+if sys.argv[1] == "staged":
+    sys.exit(0)
+command = sys.argv[sys.argv.index("--") + 1:]
+env = dict(os.environ, ORCH_STORAGE_RUN_ID="fake")
+sys.exit(subprocess.run(["bash", "-c", 'export ORCH_STORAGE_ENTRY_PID=$$; exec "$@"',
+                        "storage-entry", *command], env=env).returncode)
+""")
     _git(src, "init", "-q")
     _git(src, "add", "-A")
     _git(src, "commit", "-q", "-m", "init")
@@ -222,6 +232,67 @@ def _run(world: dict, *args: str, **env: str) -> tuple[subprocess.CompletedProce
             key, _, value = line.partition("=")
             record[key] = value
     return result, record
+
+
+@pytest.mark.parametrize("code", [0, 7])
+def test_real_storage_supervisor_wraps_bash_copy_stage_and_terminal_result(world, code):
+    # Exercise the real supervisor/admission/staged CLI with the existing tiny
+    # copier/verifier. Only host-wide inspection is injected (unit-tested in
+    # test_storage_lifecycle); no test requires OS process-list privileges.
+    implementation = str(paths.MODULE_DIR / "storage_lifecycle.py")
+    helper = world["src"] / "storage_lifecycle.py"
+    helper.write_text(f"""import importlib.util, functools
+spec = importlib.util.spec_from_file_location("real_storage", {implementation!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.run_job = functools.partial(module.run_job, probe=lambda _: None)
+raise SystemExit(module.main())
+""")
+    _git(world["src"], "add", "-A")
+    _git(world["src"], "commit", "-qm", "real supervisor fixture")
+    before = (world["state"] / "capabilities.json").read_bytes()
+    result, record = _run(
+        world,
+        PYTHON=sys.executable,
+        VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR",
+        CI="true",
+        FAKE_TREE="BARE EXEC MIRROR",
+        FAKE_VERIFY_RC=str(code),
+    )
+    assert result.returncode == (0 if code == 0 else 1), result.stdout + result.stderr
+    files = list((world["state"] / ".storage-lifecycle/receipts").glob("*.json"))
+    assert len(files) == 1
+    saved = json.loads(files[0].read_text())
+    assert saved["remaining"] == saved["peak"]  # real authenticated staged callback
+    assert saved["source_unchanged"] is True
+    assert not (Path(saved["root"]) / "tmp").exists()
+    assert (world["state"] / "capabilities.json").read_bytes() == before
+    if code == 0:
+        assert saved["status"] == "retired" and not Path(saved["root"]).exists()
+    else:
+        assert saved["status"] == "fixtures_retired_failure_retained"
+        assert Path(record["verify_runtime"]).is_dir()
+
+
+@pytest.mark.parametrize("ci,expected_floor", [("", 27 * 1024**3), ("true", 0)])
+def test_bare_label_alone_does_not_bypass_local_launch_floor(world, ci, expected_floor):
+    implementation = str(paths.MODULE_DIR / "storage_lifecycle.py")
+    helper = world["src"] / "storage_lifecycle.py"
+    helper.write_text(f"""import importlib.util, functools
+spec = importlib.util.spec_from_file_location("real_storage", {implementation!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.run_job = functools.partial(module.run_job, free=lambda _: 0)
+raise SystemExit(module.main())
+""")
+    _git(world["src"], "add", "-A")
+    _git(world["src"], "commit", "-qm", "admission-only fixture")
+    result, record = _run(
+        world, PYTHON=sys.executable, CI=ci, VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR"
+    )
+    assert result.returncode != 0
+    assert f'"floor_bytes": {expected_floor}' in result.stderr
+    assert not record  # Never starts the copier or verifier.
 
 
 def test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched(world):
@@ -690,6 +761,8 @@ def test_the_real_first_load_registers_a_declared_row_the_live_ledger_lacks(worl
     import capabilities
 
     for module in paths.MODULE_DIR.glob("*.py"):
+        if module.name == "storage_lifecycle.py":
+            continue  # keep this fixture's storage-admission stand-in
         (world["src"] / module.name).write_bytes(module.read_bytes())
     _git(world["src"], "add", "-A")
     _git(world["src"], "commit", "-q", "-m", "the real modules")

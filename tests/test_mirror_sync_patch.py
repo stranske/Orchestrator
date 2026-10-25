@@ -52,6 +52,8 @@ def wrapper_world(tmp_path: Path) -> dict[str, Path]:
     pre.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
+        '[[ "$VERIFY_BEFORE_SYNC_OWNER_KEY" == "$EXPECTED_STORAGE_OWNER" ]]\n'
+        '[[ "$ORCH_STORAGE_STATE_DIR" == "$EXPECTED_STORAGE_LEDGER" ]]\n'
         '[[ "$1" == --snapshot-out ]]\n'
         'out="$2"\n'
         '[[ "$3" == --digest-out ]]\n'
@@ -112,6 +114,11 @@ def _run(world: dict[str, Path], **env: str) -> subprocess.CompletedProcess:
         "FAKE_MIRROR": str(world["mirror"]),
         "FAKE_SNAPSHOT": str(world["staged"]),
         "FAKE_RECORD": str(world["record"]),
+        "EXPECTED_STORAGE_OWNER": "publication:"
+        + str(world["mirror"].parent.resolve() / world["mirror"].name),
+        "EXPECTED_STORAGE_LEDGER": env.get(
+            "ORCH_STORAGE_STATE_DIR", str(world["home"] / ".codex/orchestrator/.storage-lifecycle")
+        ),
     }
     return subprocess.run(
         ["bash", str(world["wrapper"])],

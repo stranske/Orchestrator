@@ -456,6 +456,19 @@ def test_presync_says_whether_ci_verified_the_shipped_tree(
 ) -> None:
     """FYI only: the verdict stays the copier's own, whatever this line says."""
     _write(source / "src" / "verify.py", FAKE_VERIFY)
+    # Keep this copy-contract fixture independent of host capacity/inspection;
+    # the real storage supervisor has separate tiny integration coverage.
+    _write(
+        source / "src" / "storage_lifecycle.py",
+        """import os, subprocess, sys
+if sys.argv[1] == "staged":
+    sys.exit(0)
+command = sys.argv[sys.argv.index("--") + 1:]
+sys.exit(subprocess.run(["bash", "-c", 'export ORCH_STORAGE_ENTRY_PID=$$; exec "$@"',
+                        "storage-entry", *command],
+                       env=dict(os.environ, ORCH_STORAGE_RUN_ID="fake")).returncode)
+""",
+    )
     _git(source, "add", "-A")
     _git(source, "commit", "-q", "-m", "fake verify")
     bin_dir = tmp_path / "bin"
