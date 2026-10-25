@@ -402,7 +402,8 @@ def _worktree_interpreter(worktree: str | Path) -> str:
             return str(interpreter)
         if environment.exists():
             raise RuntimeError(f"selected repository interpreter is unavailable: {interpreter}")
-    return "/opt/anaconda3/bin/python3"
+    preferred = Path("/opt/anaconda3/bin/python3")
+    return str(preferred) if preferred.is_file() else sys.executable
 
 
 def recheck_merged(
@@ -493,7 +494,9 @@ def recheck_merged(
             if re.search(r"\bAssertionError\b|\bassert(?:ion)?\s", output, re.I):
                 return False
             return bool(
-                re.search(r"CalledProcessError.*(?:python|Python)|ModuleNotFoundError", output, re.I)
+                re.search(
+                    r"CalledProcessError.*(?:python|Python)|ModuleNotFoundError", output, re.I
+                )
             )
 
         if any(environment_mismatch(r) for r in executable):

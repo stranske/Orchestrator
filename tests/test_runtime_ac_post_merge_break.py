@@ -475,11 +475,41 @@ class PostMergeBreakTests(unittest.TestCase):
                 }
             ],
         }
-        with patch.object(runtime_ac, "run_verification", return_value=run):
+        with (
+            patch.object(runtime_ac, "run_verification", return_value=run),
+            patch.object(gate, "_worktree_interpreter", return_value="/opt/anaconda3/bin/python3"),
+        ):
             result = gate.recheck_merged(spec, self.checkout, merge_ci_green=True)
         self.assertEqual(result["result"], "UNRUNNABLE")
         self.assertEqual(result["reason"], "environment_mismatch")
         self.assertEqual(result["interpreter"], "/opt/anaconda3/bin/python3")
+
+    def test_worktree_interpreter_falls_back_when_anaconda_is_unavailable(self):
+        for available in (True, False):
+            with (
+                self.subTest(anaconda_available=available),
+                patch.object(
+                    Path,
+                    "is_file",
+                    autospec=True,
+                    side_effect=lambda path: available
+                    and str(path) == "/opt/anaconda3/bin/python3",
+                ),
+            ):
+                self.assertEqual(
+                    gate._worktree_interpreter(self.checkout),
+                    "/opt/anaconda3/bin/python3" if available else sys.executable,
+                )
+
+    def test_worktree_interpreter_preserves_repository_environment(self):
+        environment = self.checkout / ".venv"
+        (environment / "bin").mkdir(parents=True)
+        interpreter = environment / "bin" / "python"
+        interpreter.touch()
+        self.assertEqual(gate._worktree_interpreter(self.checkout), str(interpreter))
+        interpreter.unlink()
+        with self.assertRaisesRegex(RuntimeError, "selected repository interpreter is unavailable"):
+            gate._worktree_interpreter(self.checkout)
 
     def test_genuine_assertion_wins_over_spawned_interpreter_error(self):
         spec = runtime_ac.author_issue_spec(
