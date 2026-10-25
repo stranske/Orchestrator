@@ -2495,19 +2495,13 @@ def _save_snapshot(path: Path, doc: Mapping[str, Any]) -> None:
     fence = closer_resources.fence_for(path)
     if fence is not None:
         fence()  # scoped mode: a stale or expired lease holder must not commit
-    # Serialize once, compactly: the scheduler persists the whole state on
-    # every stage launch/completion, so re-encoding it pretty-printed for
-    # every write made large assignments quadratic in wall time. Readers
-    # only ever ``json.loads`` this file, so the layout is not a contract.
-    encoded = json.dumps(
-        doc, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
-    )
+    encoded = json.dumps(doc, ensure_ascii=False, allow_nan=False)
     if len(encoded.encode()) > 8 * 1024 * 1024:
         raise ValueError("pipeline state exceeds 8 MiB; retain large evidence externally")
     fd, temp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(encoded)
+            json.dump(doc, stream, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
