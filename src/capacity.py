@@ -1455,8 +1455,8 @@ def main(argv):
                 for agent in args.candidates.split(",")
             ],
         }
-        # Host relay must use these tokens (not nested pacing alone): Cursor-top
-        # unmeasured-preferred puts routing_weight on the candidate while pacing is absent.
+        # Host relay must use these tokens (not nested pacing alone): #891's neutral
+        # Cursor puts routing_weight on the candidate while pacing is absent.
         import rate_incidents
 
         try:

@@ -82,6 +82,19 @@ Refusals exit non-zero and leave the remote untouched; cadence logs the reason p
 refusals. Publish commits record `db=<resolved path> source_version=<n> by=<git user.name>`,
 with `orchestrator-export` as the identity fallback. The local shadow remains available for diagnosis.
 
+After authentication and watchdog setup, `orchestrate.sh` uses
+`--refresh-exploration-window --as-of <UTC epoch seconds>` to persist the existing
+per-policy sample decision before selecting the tick's exploration default. It retains the owner's
+November 17 end or one-time December 15 extension (30 samples per policy). Missing or unreadable
+switch evidence stays unmeasured. Read-only recurrence inspection replays the exact same marked
+shell block using `--preview-exploration-window`, without creating or changing window state.
+The later hourly export captures its own fresh instant for current capacity evidence, refreshing
+the window before building its document; an extension selected earlier in the tick remains sticky.
+An explicit `ORCH_EXPLORATION_RATE` still takes precedence. Standalone exports apply the same window
+default without leaving a changed environment behind. Weekly review counts switches through the
+retained `decided_at` instant, inclusively; legacy state without that field uses the review clock,
+and a malformed decision instant leaves the count unknown.
+
 The additive `exploration` block carries the weekly mode, sampled challengers, and a
 `policy_version` identifying the exported policy. `keepalive_outcomes.py` joins trusted runner
 dispatch timestamps to the export branch's commit history and records that tag, mode, weight

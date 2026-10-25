@@ -302,7 +302,11 @@ python3() {{
         check=True,
         capture_output=True,
         text=True,
-        env={"STAMP_DIR": str(tmp_path), "ORCH": str(tmp_path)},
+        env={
+            "STAMP_DIR": str(tmp_path),
+            "ORCH": str(tmp_path),
+            "_orch_exploration_as_of": "1794960000",
+        },
     )
     calls = (tmp_path / "export-args").read_text().splitlines()
     assert calls[:4] == [

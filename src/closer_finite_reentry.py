@@ -12,6 +12,8 @@ import copy
 import fcntl
 import hashlib
 import json
+import os
+import threading
 import time
 from pathlib import Path
 
@@ -34,6 +36,12 @@ PREWRITE_TERMINAL_QUEUE_SHA256 = "982e77c188cd938bbf00d0f25bf8962799fa6cf0bda3ba
 PREWRITE_TERMINAL_PIPELINE_SHA256 = (
     "a1c69515a1947bd9a0a705ac69543a180aa1db98d7c3120c2026639da0c8b7a0"
 )
+# Immutable producer/consumer contract for an invoked guard's preflight refusal.
+MERGE_GUARD_CANDIDATE = "f16b568c6e3f5876bb2f91900e21b11820114b6a"
+MERGE_GUARD_SOURCE_SHA256 = "315d88c1b3067ff58de28a60b0a3ba08c73734d7faf543afe7fd3bef1de28bca"
+MERGE_GUARD_QUEUE_SHA256 = "6364b944e4b4dcab1d725eda6a5fcaf39ab1c7cf3b9f00200785966d848a81c7"
+MERGE_GUARD_PIPELINE_SHA256 = "0371e7970fb88a595e64ab6d23f14011e7b378846e5a78ec55688888e64790e7"
+MERGE_GUARD_SCRIPT_SHA256 = "6e3c6d682cba153e07141df4f3c3dae87dae876acc4ab8c4d54e6af78b1f45e4"
 PREWRITE_ERROR = "RuntimeError: inner closer queue did not prove a valid continuation boundary"
 PRE_QUEUE_ERRORS = frozenset(
     f"RuntimeError: legacy {status} operation lacks external-run or live-owner proof; "
@@ -293,19 +301,63 @@ def _prewrite_contract(candidate):
             "reason": "collect existing verifier result before spending again",
             "source_alias": True,
         }
+    if candidate == MERGE_GUARD_CANDIDATE:
+        return {
+            "candidate": candidate,
+            "source": MERGE_GUARD_SOURCE_SHA256,
+            "queue": MERGE_GUARD_QUEUE_SHA256,
+            "pipeline": MERGE_GUARD_PIPELINE_SHA256,
+            "guard": MERGE_GUARD_SCRIPT_SHA256,
+            "action": "merge",
+            "source_alias": False,
+        }
     raise ValueError("unproven_terminal_native_source")
 
 
 def _native_pre_queue_source(
     path, frontier, target, entry, row, lease, receipts, *, prewrite=False
 ):
-    if not isinstance(receipts, dict) or set(receipts) != {"lifecycle", "installation"}:
+    if not isinstance(receipts, dict) or set(receipts) not in (
+        {"lifecycle", "installation"},
+        {"lifecycle", "installation", "invocation"},
+    ):
         raise ValueError("native_pre_queue_source_receipts_required")
     lifecycle = _receipt(receipts["lifecycle"])
     installation = _receipt(receipts["installation"])
     source = lifecycle.get("source_identity")
     verification = installation.get("verification")
     contract = _prewrite_contract(installation.get("candidate_sha")) if prewrite else None
+    merge_refusal = bool(contract and contract.get("action") == "merge")
+    if merge_refusal:
+        if not isinstance(source, dict) or not isinstance(verification, dict):
+            raise ValueError("unproven_native_merge_guard_installation")
+        # This released caller recorded a hash-bound installed readback and a
+        # separately retained argv, rather than duplicating them in lifecycle.
+        readback = _receipt(
+            {
+                "path": source.get("installed_receipt") if isinstance(source, dict) else None,
+                "sha256": (
+                    source.get("installed_receipt_sha256") if isinstance(source, dict) else None
+                ),
+            }
+        )
+        invocation = _receipt(receipts.get("invocation"))
+        if (
+            readback.get("installed_source") != contract["candidate"]
+            or readback.get("installed_generation") != installation.get("installed_generation")
+            or readback.get("snapshot_digest") != verification.get("snapshot_digest")
+            or readback.get("matches_strict_verified_payload") is not True
+            or source.get("snapshot_digest") != readback.get("snapshot_digest")
+            or Path(source.get("qualified_module", "")).parent.name != readback.get("mirror_target")
+        ):
+            raise ValueError("unproven_native_merge_guard_installation")
+        # Local projection only: original lifecycle/invocation bytes stay intact.
+        lifecycle = copy.deepcopy(lifecycle)
+        source = lifecycle["source_identity"]
+        source["installed_generation"] = readback["installed_generation"]
+        source["logical_command"] = invocation.get("command")
+    elif set(receipts) != {"lifecycle", "installation"}:
+        raise ValueError("unexpected_native_source_receipt")
     if (
         lifecycle.get("schema") != "direct-finite-storage/v2"
         or lifecycle.get("status") != "retired"
@@ -340,6 +392,7 @@ def _native_pre_queue_source(
         for name, expected in {
             "closer_queue.py": contract["queue"],
             "closer_pipeline.py": contract["pipeline"],
+            **({"merge_guard.py": contract["guard"]} if merge_refusal else {}),
         }.items():
             selected = _physical(module.parent / name)
             if (
@@ -375,7 +428,7 @@ def _native_pre_queue_source(
         "target": target,
         "revision": row.get("revision"),
         "head": snapshot.get("head"),
-        "action": "post_merge_verify" if prewrite else "merge",
+        "action": "post_merge_verify" if prewrite and not merge_refusal else "merge",
     }
     if (
         row.get("status") != "unknown"
@@ -399,7 +452,11 @@ def _native_pre_queue_source(
         or not isinstance(prep.get("proposal"), dict)
         or prep["proposal"].get("action") != contract["action"]
         or interpretation.get("classification")
-        != ("deterministic_post_merge_verify" if prewrite else "deterministic_merge")
+        != (
+            "deterministic_post_merge_verify"
+            if prewrite and not merge_refusal
+            else "deterministic_merge"
+        )
         or interpretation.get("authority") is not False
         or interpretation.get("substantive_needs") != []
     ):
@@ -496,6 +553,17 @@ def _native_prewrite_inner(path, frontier, target, row, *, contract):
             )
         ):
             raise ValueError("native_prewrite_subject_association_not_proven")
+    merge_refusal = contract.get("action") == "merge"
+    action = "merge" if merge_refusal else "post_merge_verify"
+    if merge_refusal:
+        import merge_guard
+
+        if (
+            not isinstance(op, dict)
+            or not isinstance(op.get("result"), dict)
+            or not merge_guard.preflight_refusal(op["result"].get("result"), subject)
+        ):
+            raise ValueError("native_merge_guard_preflight_not_proven")
     if (
         doc.get("schema") != "closer-queue/v1"
         or not isinstance(bucket, dict)
@@ -507,22 +575,31 @@ def _native_prewrite_inner(path, frontier, target, row, *, contract):
         or not isinstance(round_state, dict)
         or item.get("operation_history") != []
         or op.get("status") != "failed"
-        or op.get("outcome") != "deferred"
-        or op.get("action") != "post_merge_verify"
+        or op.get("outcome") != ("blocked" if merge_refusal else "deferred")
+        or op.get("action") != action
         or op.get("finite_frontier") != frontier
         or op.get("revision") != row.get("revision")
         or op.get("attempts") != 1
         or not isinstance(op.get("id"), str)
         or not op["id"]
-        or set(op.get("result", {})) != {"reason", "run_id"}
-        or op["result"].get("reason") != contract["reason"]
-        or type(op["result"].get("run_id")) is not int
-        or op["result"]["run_id"] <= 0
+        or (
+            set(op.get("result", {})) != {"result"}
+            if merge_refusal
+            else (
+                set(op.get("result", {})) != {"reason", "run_id"}
+                or op["result"].get("reason") != contract["reason"]
+                or type(op["result"].get("run_id")) is not int
+                or op["result"]["run_id"] <= 0
+            )
+        )
         or binding.get("pr_target") != subject
         or binding.get("head") != snapshot.get("head")
         or binding.get("merge") != snapshot.get("merge")
-        or not isinstance(snapshot.get("merge"), str)
-        or len(snapshot["merge"]) != 40
+        or (
+            snapshot.get("merge") is not None
+            if merge_refusal
+            else not isinstance(snapshot.get("merge"), str) or len(snapshot["merge"]) != 40
+        )
         or item.get("revision") != row.get("revision")
         or item.get("deferred_reason") != "operation_failed"
         or round_state.get("status") != "finished"
@@ -565,7 +642,7 @@ def _native_prewrite_inner(path, frontier, target, row, *, contract):
         )
         or len(submitted) != 1
         or submitted[0].get("target") != target
-        or submitted[0].get("action") != "post_merge_verify"
+        or submitted[0].get("action") != action
         or submitted[0].get("operation_id") != op["id"]
         or not isinstance(receipt, dict)
         or receipt.get("valid") is not False
@@ -581,7 +658,7 @@ def _native_prewrite_inner(path, frontier, target, row, *, contract):
         != [
             {
                 "target": target,
-                "action": "post_merge_verify",
+                "action": action,
                 "eligible": True,
                 "next_trigger": "inspect_operation_failure",
                 "observation_freshness": "fresh",
@@ -623,9 +700,13 @@ def _native_prewrite_inner(path, frontier, target, row, *, contract):
         "operation_id": op["id"],
         "operation_sha256": _digest(op),
         "next_trigger": (
-            f"github-verifier-result:{subject}:{op['result']['run_id']}:identity-reconciled"
-            if contract["source_alias"]
-            else f"github-verifier-resource:{target.split('#')[0]}:{op['result']['run_id']}:terminal"
+            "refresh_merge_guard_before_action"
+            if merge_refusal
+            else (
+                f"github-verifier-result:{subject}:{op['result']['run_id']}:identity-reconciled"
+                if contract["source_alias"]
+                else f"github-verifier-resource:{target.split('#')[0]}:{op['result']['run_id']}:terminal"
+            )
         ),
     }
     if contract["source_alias"]:
@@ -638,6 +719,7 @@ def _retire_native_boundary(root, path, target, frontier, record):
         "native_pre_queue_refusal",
         "native_prewrite_verifier_refusal",
         "accepted_verifier_request_receipt",
+        "native_merge_guard_refusal",
     }:
         return
     state, _ = _read(path)
@@ -646,6 +728,7 @@ def _retire_native_boundary(root, path, target, frontier, record):
     if record["plan"].get("kind") in {
         "native_prewrite_verifier_refusal",
         "accepted_verifier_request_receipt",
+        "native_merge_guard_refusal",
     }:
         inner = record["plan"]["inner_boundary"]
         if _read(inner["path"])[1] != inner["sha256"]:
@@ -702,7 +785,296 @@ def _accepted_request_boundary(path, frontier, target, row):
     return {"path": str(inner), "sha256": sha, "accepted_request": proof}
 
 
-def plan(state_path, *, frontier, target, event, source_receipts=None):
+def _scope_readmission(root, path, frontier, target, entry, row, *, inventory_owner=None):
+    """Prove exact no-start lineage and fresh admission, never effect authority."""
+    import closer_dispatcher
+    import closer_quarantine
+
+    history = row.get("reentry_history")
+    if not isinstance(history, list) or not history or not isinstance(history[-1], dict):
+        raise ValueError("scope_readmission_requires_applied_audit")
+    previous = history[-1]
+    origin_path = (
+        root / "reentry-audit" / (_digest([frontier, target, previous.get("event")]) + ".json")
+    )
+    origin, origin_sha = _read(origin_path)
+    proposal = origin.get("plan", {})
+    before = origin.get("before", {})
+    if (
+        origin.get("schema") != SCHEMA
+        or origin.get("status") != "applied"
+        or not isinstance(proposal, dict)
+        or not isinstance(before, dict)
+        or proposal.get("kind") != "pre_callback_scope_refusal"
+        or proposal.get("stage") != "act"
+        or proposal.get("frontier") != frontier
+        or proposal.get("target") != target
+        or proposal.get("state_path") != str(path)
+        or proposal.get("plan_sha256") != previous.get("plan_sha256")
+        or _digest({k: v for k, v in proposal.items() if k != "plan_sha256"})
+        != proposal.get("plan_sha256")
+        or origin.get("after") != row
+        or origin.get("after_sha256") != _digest(row)
+        or row.get("status") != "held"
+        or row.get("stage") != "act"
+        or row.get("stage_status") != "completed"
+        or row.get("deferred_reason") != "scope_quarantined"
+        or row.get("resource_evidence", {}).get("confirmed_not_started") is not True
+        or row.get("scope_proof") != proposal.get("scope_proof")
+        or row.get("revision") != frontier["bindings"][target]["revision"]
+        or any(key in row.get("results", {}) for key in ("act", "exception", "reconcile"))
+    ):
+        raise ValueError("scope_readmission_audit_does_not_bind_current_hold")
+    proof_ref = _scope_proof(root, path, target, entry, before, caller_path=path)
+    proof = _receipt(proof_ref)
+    if proof_ref != proposal.get("scope_proof") or not resources.valid_scope_refusal(
+        path, target, row, entry["run_id"]
+    ):
+        raise ValueError("scope_readmission_refusal_proof_changed")
+    keys = proof.get("keys")
+    if (
+        proof.get("purpose") != "remote_effect"
+        or not isinstance(keys, list)
+        or not keys
+        or keys != sorted(set(keys))
+        or proof.get("reason") not in {"quarantined_resource:" + key for key in keys}
+    ):
+        raise ValueError("unsupported_scope_readmission_refusal")
+    results = row["results"]
+    prep = results.get("prepare", {})
+    context = {**results, "revision": row["revision"]}
+    snapshot = _receipt(prep.get("snapshot_ref"))
+    if not closer_dispatcher._remote_only_effect(target, context):
+        raise ValueError("scope_readmission_requires_bound_native_remote_effect")
+    old_scope = proof["snapshot"]
+    workspaces = {
+        "schema": closer_quarantine.WORKSPACE_SCHEMA,
+        "historical": old_scope.get("workspaces", {}),
+        "execution": old_scope.get("execution_workspaces", {}),
+    }
+    derived = closer_dispatcher._prepared_resource_keys(
+        target, prep, snapshot, {}, infer_workspace=False
+    )
+    expected = resources._scope_keys(target, context, lambda *_: derived, infer_workspaces=False)
+    if keys != expected:
+        raise ValueError("scope_readmission_prepared_keys_changed")
+    inner = _inner_boundary(path, target)
+    if inner != proposal.get("inner_boundary"):
+        raise ValueError("scope_readmission_inner_boundary_changed")
+    current = closer_quarantine.scope_snapshot(
+        old_scope["state_path"], workspaces=workspaces, inventory_owner=inventory_owner
+    )
+    problem = closer_quarantine.scope_problem(
+        current, target, keys, purpose="remote_effect", inventory_owner=inventory_owner
+    )
+    if problem:
+        raise ValueError("scope_readmission_still_refused:" + problem)
+    return {
+        "origin_audit": {"path": str(origin_path), "sha256": origin_sha},
+        "scope_proof": proof_ref,
+        "inner_boundary": inner,
+        "keys": keys,
+        "purpose": "remote_effect",
+        "fresh_scope_admitted": True,
+    }
+
+
+_GUARD_READ_SEAL = object()
+_guard_now = time.time
+
+
+class _GuardAdmission:
+    """Caller-owned READ result; cannot be supplied by serialized plan inputs."""
+
+    def __init__(self, path, row, assignment, value):
+        self.seal = _GUARD_READ_SEAL
+        self.pid, self.thread = os.getpid(), threading.get_ident()
+        self.path, self.row_sha = str(path), _digest(row)
+        self.assignment = str(_physical(assignment))
+        self.assignment_sha = _read(assignment)[1]
+        self.value, self.read_at = value, time.monotonic()
+
+
+def _guard_admission(path, target, row, assignment, frontier):
+    """Fresh original guard admission; no effect / verdict or source-equivalence grant."""
+    import closer_dispatcher as dispatcher
+    import closer_frontier_policy
+    import merge_guard
+
+    if assignment is None:
+        raise ValueError("guard_readmission_requires_current_assignment")
+    rows = dispatcher.assignment_rows_from_file(assignment)
+    expected = row["results"]["prepare"].get("assignment_fingerprint")
+    if target not in rows or dispatcher.assignment_dependency(
+        assignment, target, expected_fingerprint=expected
+    ):
+        raise ValueError("guard_readmission_assignment_changed")
+    backend = dispatcher.Closer(
+        dispatcher.GitHub(
+            deadline=time.time() + closer_frontier_policy.MAX_REQUEST_TIMEOUT_SECONDS
+        ),
+        state_path=path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json",
+        apply=False,
+        workers=False,
+    )
+    backend.finite_frontier = frontier
+    observed = backend.observe(target)
+    head = row["results"]["prepare"]["native_effect_contract"]["head"]
+    if (
+        observed.get("eligible") is not True
+        or observed.get("action") != "merge"
+        or observed.get("revision") != row.get("revision")
+        or observed.get("head") != head
+    ):
+        raise ValueError("guard_readmission_requires_fresh_immutable_binding")
+    report = merge_guard.read_only_admission(observed.get("pr_target", target), head)
+    if not (
+        report.get("blocked") is False
+        and report.get("dry_run") is True
+        and report.get("admission_complete") is True
+        and report.get("remote_only_guard_final", {}).get("remote_only") is True
+        and report.get("remote_only_guard_final", {}).get("runtime_ac_required") is False
+    ):
+        raise ValueError("guard_readmission_still_refused")
+    final = report["final_preflight"]
+    value = {
+        "target": target,
+        "head": head,
+        "revision": observed["revision"],
+        "assignment_row_sha256": _digest(rows[target]),
+        "preflight": {
+            k: final.get(k)
+            for k in (
+                "head",
+                "active_threads",
+                "check_state",
+                "review_not_before",
+                "review_anchor",
+                "review_floor_remaining_seconds",
+            )
+        },
+        "metadata_sha256": _digest(report["metadata"]),
+        "remote_only_guard": report["remote_only_guard_final"],
+        "review_loop": report["review_loop_final"],
+        "guard_source_sha256": hashlib.sha256(Path(merge_guard.__file__).read_bytes()).hexdigest(),
+    }
+    return _GuardAdmission(path, row, assignment, value)
+
+
+def _guard_readmission(
+    root, path, frontier, target, entry, row, assignment, *, read=None, inventory_owner=None
+):
+    import closer_dispatcher as dispatcher
+    import closer_frontier_policy
+    import closer_quarantine as quarantine
+    import closer_queue as queue
+
+    act = row.get("results", {}).get("act", {})
+    if not (
+        row.get("status") == "held"
+        and row.get("stage") == "act"
+        and row.get("stage_status") == "completed"
+        and not row.get("error")
+        and row.get("deferred_reason") == "merge_guard_refused"
+        and act.get("status") == "deferred"
+        and act.get("reason") == "merge_guard_refused"
+    ):
+        raise ValueError("not_a_typed_guard_hold")
+    inner = _physical(path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json")
+    doc, sha = _read(inner)
+    state = queue.state_for_frontier(doc, frontier["frontier_id"], expected_policy=frontier)
+    receipt = act.get("queue_receipt")
+    if not isinstance(state, dict) or not isinstance(receipt, dict):
+        raise ValueError("guard_readmission_missing_receipt")
+    checked = queue._validate_data(
+        state, receipt, assignment_targets=[target], now_value=time.time(), holder_fn=lambda _: None
+    )
+    item = state["items"][target]
+    operation = item.get("operation")
+    proof = queue.merge_guard_refusal_proof(operation, target)
+    if (
+        not checked.get("stop_valid")
+        or proof is None
+        or state["round"].get("receipt") != receipt
+        or operation.get("finite_frontier") != frontier
+        or operation.get("revision") != frontier["bindings"][target]["revision"]
+        or closer_frontier_policy.action_identity(
+            target, operation["revision"], "merge", operation["binding"]
+        )
+        != frontier["bindings"][target]["action_id"]
+        or any(
+            queue.merge_guard_refusal_proof(old, target) is None
+            for old in item.get("operation_history", [])
+        )
+    ):
+        raise ValueError("guard_readmission_effect_boundary_unproven")
+    before_callback = {**row, "results": {k: v for k, v in row["results"].items() if k != "act"}}
+    original = _scope_proof(
+        root, path, target, entry, before_callback, caller_path=path, admitted=True
+    )
+    original_scope = _receipt(original)
+    context = {**before_callback["results"], "revision": row["revision"]}
+    if not dispatcher._remote_only_effect(target, context):
+        raise ValueError("guard_readmission_not_remote_only")
+    snapshot = _receipt(context["prepare"]["snapshot_ref"])
+    derived = dispatcher._prepared_resource_keys(
+        target, context["prepare"], snapshot, {}, infer_workspace=False
+    )
+    keys = resources._scope_keys(target, context, lambda *_: derived, infer_workspaces=False)
+    if keys != original_scope.get("keys"):
+        raise ValueError("guard_readmission_prepared_keys_changed")
+    old_scope = original_scope["snapshot"]
+    current = quarantine.scope_snapshot(
+        old_scope["state_path"],
+        workspaces={
+            "schema": quarantine.WORKSPACE_SCHEMA,
+            "historical": old_scope.get("workspaces", {}),
+            "execution": old_scope.get("execution_workspaces", {}),
+        },
+        inventory_owner=inventory_owner,
+    )
+    problem = quarantine.scope_problem(
+        current, target, keys, purpose="remote_effect", inventory_owner=inventory_owner
+    )
+    if problem:
+        raise ValueError("guard_readmission_scope_refused:" + problem)
+    if read is None:
+        read = _guard_admission(path, target, row, assignment, frontier)
+    if not (
+        type(read) is _GuardAdmission
+        and read.seal is _GUARD_READ_SEAL
+        and read.pid == os.getpid()
+        and read.thread == threading.get_ident()
+        and read.path == str(path)
+        and read.row_sha == _digest(row)
+        and read.assignment == str(_physical(assignment))
+        and read.assignment_sha == _read(assignment)[1]
+        and 0
+        <= time.monotonic() - read.read_at
+        <= closer_frontier_policy.MAX_REQUEST_TIMEOUT_SECONDS
+    ):
+        raise ValueError("guard_readmission_read_not_current")
+    return {
+        "original_admission": original,
+        "inner_boundary": {"path": str(inner), "sha256": sha},
+        "operation_id": operation["id"],
+        "guard_admission": read.value,
+        "keys": keys,
+        "purpose": "remote_effect",
+    }
+
+
+def plan(
+    state_path,
+    *,
+    frontier,
+    target,
+    event,
+    source_receipts=None,
+    assignment_path=None,
+    _inventory_owner=None,
+    _guard_read=None,
+):
     """Read-only plan. A trigger is explicit evidence, never new action authority."""
     path = _physical(state_path)
     root = _physical(path.parent.parent.parent)
@@ -775,7 +1147,35 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
     if not isinstance(stage, str):
         raise ValueError("malformed_request_stage")
     kind = None
-    if row.get("error") == "action wait lacks exact verified no-effect queue proof":
+    readmission = None
+    guard_readmission = None
+    if row.get("deferred_reason") == "merge_guard_refused" and stage == "act":
+        guard_readmission = _guard_readmission(
+            root,
+            path,
+            frontier,
+            target,
+            entry,
+            row,
+            assignment_path,
+            read=_guard_read,
+            inventory_owner=_inventory_owner,
+        )
+        inner = guard_readmission["inner_boundary"]
+        kind = "native_guard_readmission"
+    elif (
+        row.get("status") == "held"
+        and stage == "act"
+        and row.get("stage_status") == "completed"
+        and row.get("deferred_reason") == "scope_quarantined"
+        and not row.get("error")
+    ):
+        readmission = _scope_readmission(
+            root, path, frontier, target, entry, row, inventory_owner=_inventory_owner
+        )
+        proof = readmission["scope_proof"]
+        kind = "scope_no_callback_readmission"
+    elif row.get("error") == "action wait lacks exact verified no-effect queue proof":
         inner = _accepted_request_boundary(path, frontier, target, row)
         kind = "accepted_verifier_request_receipt"
     elif (
@@ -804,7 +1204,14 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
             path, frontier, target, entry, row, lease, source_receipts, prewrite=True
         )
         proof = _scope_proof(root, path, target, entry, row, caller_path=state_path, admitted=True)
-        kind = "native_prewrite_verifier_refusal"
+        kind = (
+            "native_merge_guard_refusal"
+            if _prewrite_contract(_receipt(source_receipts["installation"])["candidate_sha"]).get(
+                "action"
+            )
+            == "merge"
+            else "native_prewrite_verifier_refusal"
+        )
     elif row.get("error") in PRE_QUEUE_ERRORS:
         source_receipts = _native_pre_queue_source(
             path, frontier, target, entry, row, lease, source_receipts
@@ -828,8 +1235,12 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
             row,
             contract=_prewrite_contract(_receipt(source_receipts["installation"])["candidate_sha"]),
         )
-        if kind == "native_prewrite_verifier_refusal"
-        else inner if kind == "accepted_verifier_request_receipt" else _inner_boundary(path, target)
+        if kind in {"native_prewrite_verifier_refusal", "native_merge_guard_refusal"}
+        else (
+            inner
+            if kind in {"accepted_verifier_request_receipt", "native_guard_readmission"}
+            else _inner_boundary(path, target)
+        )
     )
     trigger_fingerprint = _digest(
         {
@@ -838,6 +1249,8 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
             "transport": transport,
             "retained_results": results,
             "scope_reason": row.get("error") if proof else None,
+            **({"scope_readmission": readmission} if readmission else {}),
+            **({"guard_readmission": guard_readmission} if guard_readmission else {}),
         }
     )
     if any(
@@ -862,7 +1275,16 @@ def plan(state_path, *, frontier, target, event, source_receipts=None):
         "acceptance_authority": False,
         "global_stop_authority": False,
     }
-    if kind in {"native_pre_queue_refusal", "native_prewrite_verifier_refusal"}:
+    if readmission:
+        result["scope_readmission"] = readmission
+    if guard_readmission:
+        result["guard_readmission"] = guard_readmission
+        result["assignment_path"] = str(_physical(assignment_path))
+    if kind in {
+        "native_pre_queue_refusal",
+        "native_prewrite_verifier_refusal",
+        "native_merge_guard_refusal",
+    }:
         result["source_receipts"] = source_receipts
     return {**result, "plan_sha256": _digest(result)}
 
@@ -894,32 +1316,64 @@ def _accepted_receipt_transaction(path, frontier, target, audit):
         raise ValueError("malformed_reentry_audit_plan")
     proposal = proposal or {}
     accepted = proposal.get("kind") == "accepted_verifier_request_receipt"
+    scope_readmission = proposal.get("kind") == "scope_no_callback_readmission" or (
+        row.get("stage") == "act"
+        and row.get("status") == "held"
+        and row.get("deferred_reason") == "scope_quarantined"
+        and not row.get("error")
+    )
+    guard_readmission = (
+        proposal.get("kind") == "native_guard_readmission"
+        or row.get("deferred_reason") == "merge_guard_refused"
+    )
     if (
         not accepted
+        and not scope_readmission
+        and not guard_readmission
         and row.get("error") != "action wait lacks exact verified no-effect queue proof"
     ):
         yield
         return
     inner = _physical(path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json")
-    if not inner.is_file():
+    if not inner.is_file() and not scope_readmission:
         raise ValueError("accepted_request_inner_queue_missing")
     with closer_queue._ledger_lock(inner, cutoff=time.time() + 1, now=time.time) as locked:
         if not locked:
             raise resources.ResourceBlocked("active_accepted_request_queue_writer")
-        if accepted and _read(inner)[1] != proposal["inner_boundary"]["sha256"]:
+        if (accepted or proposal.get("kind") == "native_guard_readmission") and _read(inner)[
+            1
+        ] != proposal["inner_boundary"]["sha256"]:
             raise ValueError("accepted_request_queue_changed_before_commit")
         yield
 
 
-def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_receipts=None):
+def apply(
+    state_path,
+    *,
+    frontier,
+    target,
+    event,
+    expected_plan_sha256,
+    source_receipts=None,
+    assignment_path=None,
+):
     """CAS one target under existing target/run/inventory/state ownership locks."""
     path = _physical(state_path)
     frontier = validate_frontier(frontier)
     root = _physical(path.parent.parent.parent)
     key = _digest([frontier, target, event])
     audit = root / "reentry-audit" / (key + ".json")
+    guard_read = None
+    pending_state, _ = _read(path)
+    pending_row = _entry(pending_state, frontier)["items"][target]
+    if pending_row.get("deferred_reason") == "merge_guard_refused" and (
+        not audit.exists() or _read(audit)[0].get("status") == "prepared"
+    ):
+        guard_read = _guard_admission(path, target, pending_row, assignment_path, frontier)
     with _exclusive(path.with_name(path.name + ".runlock")), _exclusive(path.parent / "lease.lock"):
-        with resources.inventory_lock(root, exclusive=True, deadline=time.time() + 10):
+        with resources.inventory_lock(
+            root, exclusive=True, deadline=time.time() + 10
+        ) as inventory_owner:
             with pipeline._locked(path, timeout_seconds=10), _accepted_receipt_transaction(
                 path, frontier, target, audit
             ):
@@ -945,6 +1399,9 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                                 target=target,
                                 event=event,
                                 source_receipts=source_receipts,
+                                assignment_path=assignment_path,
+                                _guard_read=guard_read,
+                                _inventory_owner=inventory_owner,
                             )
                             if fresh["plan_sha256"] != expected_plan_sha256:
                                 raise ValueError("prepared_reentry_inputs_changed")
@@ -966,6 +1423,9 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                     target=target,
                     event=event,
                     source_receipts=source_receipts,
+                    assignment_path=assignment_path,
+                    _guard_read=guard_read,
+                    _inventory_owner=inventory_owner,
                 )
                 if proposal["plan_sha256"] != expected_plan_sha256:
                     raise ValueError("reentry_plan_changed")
@@ -1008,6 +1468,16 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                         },
                     )
                     row.pop("reentry_ready", None)
+                elif proposal["kind"] in {
+                    "scope_no_callback_readmission",
+                    "native_guard_readmission",
+                }:
+                    row.update(status="held", stage_status="queued")
+                    row["reentry_ready"] = {
+                        "event": event,
+                        "plan_sha256": expected_plan_sha256,
+                        "kind": proposal["kind"],
+                    }
                 elif proposal["stage"] in {"act", "exception"}:
                     # No effect occurred, but the real historical scope is still
                     # unavailable. Reconciliation cannot turn that into readiness.
@@ -1035,12 +1505,15 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                             "source_receipts": proposal["source_receipts"],
                             "confirmed_no_effect": True,
                         }
-                    elif proposal["kind"] == "native_prewrite_verifier_refusal":
+                    elif proposal["kind"] in {
+                        "native_prewrite_verifier_refusal",
+                        "native_merge_guard_refusal",
+                    }:
                         # The callback ran and returned before POST. Preserve the
                         # original failed inner operation byte for byte; this is
                         # terminal classification, never a retry permission.
                         row.update(
-                            deferred_reason="native_prewrite_verifier_refusal",
+                            deferred_reason=proposal["kind"],
                             deferred_next_trigger=proposal["inner_boundary"]["next_trigger"],
                         )
                         row["resource_evidence"] = {
@@ -1066,6 +1539,17 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                     "status": "prepared",
                     "at": time.time(),
                 }
+                if proposal["kind"] == "native_guard_readmission":
+                    import closer_evidence
+
+                    boundary = proposal["inner_boundary"]
+                    raw = Path(boundary["path"]).read_bytes()
+                    if hashlib.sha256(raw).hexdigest() != boundary["sha256"]:
+                        raise ValueError("guard_queue_changed_before_audit")
+                    ref = closer_evidence._retain_bytes(
+                        root / "reentry-audit" / "inner", raw, "json"
+                    )
+                    record["inner_before"] = {k: ref[k] for k in ("path", "sha256")}
                 audit.parent.mkdir(parents=True, exist_ok=True)
                 resources._atomic_write(audit, record)
                 pipeline._save_snapshot(path, state)
@@ -1079,6 +1563,65 @@ def apply(state_path, *, frontier, target, event, expected_plan_sha256, source_r
                     "stage": row["stage"],
                     "row_status": row["status"],
                 }
+
+
+def guard_queue_readmission(context, inner_path, frontier, target, inner_sha):
+    """Consume only an audited modern no-command retry in its live native ACT."""
+    if not isinstance(context, dict) or context.get("finite_frontier") != frontier:
+        return False
+    marker = context.get("guard_readmission")
+    if not isinstance(marker, dict) or marker.get("kind") != "native_guard_readmission":
+        return False
+    try:
+        path = _physical(context["state_path"])
+        root = path.parent.parent.parent
+        expected_inner = path.parent / f"{path.stem}.actions" / f"{pipeline._digest(target)}.json"
+        if _physical(inner_path) != expected_inner:
+            return False
+        audit_path = (
+            root / "reentry-audit" / (_digest([frontier, target, marker["event"]]) + ".json")
+        )
+        audit, _ = _read(audit_path)
+        proposal = audit["plan"]
+        state, _ = _read(path)
+        row = _entry(state, frontier)["items"][target]
+        identity = resources.fence_identity(path)
+        fence = resources.fence_for(path)
+        if identity is None or fence is None:
+            return False
+        fence()
+        return bool(
+            audit.get("schema") == SCHEMA
+            and audit.get("status") == "applied"
+            and proposal.get("kind") == "native_guard_readmission"
+            and proposal.get("frontier") == frontier
+            and proposal.get("target") == target
+            and proposal.get("state_path") == str(path)
+            and proposal.get("plan_sha256") == marker.get("plan_sha256")
+            and _digest({k: v for k, v in proposal.items() if k != "plan_sha256"})
+            == proposal["plan_sha256"]
+            and proposal["inner_boundary"] == {"path": str(inner_path), "sha256": inner_sha}
+            and audit.get("after_sha256") == _digest(audit["after"])
+            and _read(audit["inner_before"]["path"])[1]
+            == inner_sha
+            == audit["inner_before"]["sha256"]
+            and row.get("status") == "running"
+            and row.get("stage") == "act"
+            and row.get("stage_status") == "running"
+            and row.get("scope_readmission_consumed") == marker
+            and row.get("work_key") == context.get("work_key")
+            and identity is not None
+            and row.get("scope_lease") == identity
+            and row.get("recovery_barrier") is None
+            and row.get("provider_outcome_uncertain") in (None, False)
+            and row.get("reentry_history", [])[-1].get("plan_sha256") == proposal["plan_sha256"]
+            and all(
+                row["results"].get(k) == audit["before"]["results"].get(k)
+                for k in ("prepare", "interpret")
+            )
+        )
+    except (OSError, ValueError, TypeError, KeyError, IndexError, resources.ResourceBlocked):
+        return False
 
 
 def ready(state_path, frontier, target, row):
@@ -1120,9 +1663,49 @@ def ready(state_path, frontier, target, row):
         or proposal.get("plan_sha256") != marker.get("plan_sha256")
         or audit.get("after_sha256") != _digest(row)
         or not isinstance(row.get("stage"), str)
-        or row["stage"] not in {"prepare", "interpret"}
+        or (
+            row["stage"] not in {"prepare", "interpret"}
+            and not (
+                row["stage"] == "act"
+                and proposal.get("kind")
+                in {"scope_no_callback_readmission", "native_guard_readmission"}
+                and marker.get("kind") == proposal.get("kind")
+            )
+        )
     ):
         raise ValueError("reentry_audit_does_not_bind_ready_row")
+    if proposal.get("kind") == "native_guard_readmission":
+        state, _ = _read(path)
+        fresh = _guard_readmission(
+            root,
+            path,
+            frontier,
+            target,
+            _entry(state, frontier),
+            audit["before"],
+            proposal.get("assignment_path"),
+        )
+        if fresh != proposal.get("guard_readmission"):
+            raise ValueError("guard_readmission_current_binding_changed")
+    if proposal.get("kind") == "scope_no_callback_readmission":
+        if _digest({k: v for k, v in proposal.items() if k != "plan_sha256"}) != proposal.get(
+            "plan_sha256"
+        ):
+            raise ValueError("scope_readmission_plan_changed")
+        state, _ = _read(path)
+        entry = _entry(state, frontier)
+        before = audit.get("before")
+        if not isinstance(before, dict):
+            raise ValueError("scope_readmission_missing_origin")
+        fresh = _scope_readmission(root, path, frontier, target, entry, before)
+        expected = proposal.get("scope_readmission", {})
+        # The new row/lease changes census bytes. Require fresh success with the
+        # same exact lineage and aliases, not a stale snapshot hash equality.
+        if any(
+            fresh.get(key) != expected.get(key)
+            for key in ("origin_audit", "scope_proof", "inner_boundary", "keys", "purpose")
+        ):
+            raise ValueError("scope_readmission_binding_changed")
     return True
 
 
@@ -1132,6 +1715,7 @@ def main(argv=None):
     parser.add_argument("--frontier", required=True, help="frozen finite-frontier/v2 JSON file")
     parser.add_argument("--target", required=True)
     parser.add_argument("--event", required=True)
+    parser.add_argument("--assignment", help="current canonical assignment for guard readmission")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--expected-plan-sha256")
     parser.add_argument(
@@ -1145,6 +1729,8 @@ def main(argv=None):
         common = {"frontier": frontier, "target": args.target, "event": args.event}
         if args.source_receipts_json:
             common["source_receipts"], _ = _read(args.source_receipts_json)
+        if args.assignment:
+            common["assignment_path"] = args.assignment
         result = (
             apply(args.state, **common, expected_plan_sha256=args.expected_plan_sha256)
             if args.apply

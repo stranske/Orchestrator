@@ -300,6 +300,10 @@ class _Census:
         self.preparations: dict[tuple[str, Any], list[tuple[dict, Any]]] = {}
         self.observations: list[dict[str, Any]] = []
         self.raw_records: dict[str, Any] = {}
+        # Reuse already-read, hash-registered run bytes for admission proofs;
+        # never reparse a large shared ledger once per quarantined target.
+        self.read_wait_origins: dict[tuple[str, str], dict] = {}
+        self.read_wait_audits: dict[tuple[str, str], list[dict] | None] = {}
         self.workspaces = {}
         self.execution_workspaces = {}
         try:
@@ -688,6 +692,9 @@ class _Census:
                 "closure_reason": closure_reason,
                 "explicit_original_keys": sorted(explicit_original_keys),
                 "remote_scope_narrowable": narrowable,
+                "remote_terminal_read_wait": self.remote_read_barrier_wait(
+                    source, run_id, original_target, row
+                ),
                 "remote_advisory_only": (
                     native_queue_role(target, row) == "advisory"
                     if run_id == "native_queue"
@@ -780,6 +787,7 @@ class _Census:
             if not isinstance(rows, dict):
                 raise ValueError("unbounded_run_targets")
             self.history(run)
+            self.read_wait_origins[(str(self.path), run_id)] = run
             for target, row in rows.items():
                 canonical_target(target)
                 if isinstance(row, dict) and isinstance(row.get("results"), dict):
@@ -797,14 +805,7 @@ class _Census:
             self.quarantine(target, None, self.path, "finite", reason)
 
     def legacy_blocked_wait(self, source, target, row):
-        """Validate actual pre-fix blocked ACT without queue lock inversion.
-
-        Reuse the queue's pure receipt/accounting validator. No normalized row,
-        fabricated wait proof, claim lookup or historical state write is made.
-        """
-        import closer_pipeline as pipeline
-        import closer_queue as queue
-
+        """The original failed-ACT exception remains a strict global admission case."""
         try:
             if (
                 row.get("status") != "failed"
@@ -818,11 +819,68 @@ class _Census:
                 or row.get("known_completed_action") is True
             ):
                 return False
+            return self.terminal_wait_receipt(source, target, row)
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def remote_read_barrier_wait(self, source, run_id, target, row):
+        """An audited read barrier can prove no remote operation, not local safety.
+
+        Keep the barrier in the census. Only remote-effect projection may exclude
+        its inferred aliases; explicit intents and local ownership remain fences.
+        """
+        import closer_pipeline as pipeline
+
+        try:
+            if (
+                not isinstance(row, dict)
+                or not isinstance(row.get("recovery_barrier"), dict)
+                or row["recovery_barrier"].get("schema") != pipeline.READ_BARRIER_SCHEMA
+                or (
+                    row.get("provider_outcome_uncertain") is not None
+                    and row.get("provider_outcome_uncertain") is not False
+                )
+                or row.get("known_completed_action") is True
+                or row.get("operation") is not None
+                or row.get("operation_history", []) != []
+            ):
+                return False
+            origin = self.read_wait_origins[(str(source), run_id)]
+            if origin["targets"].get(target) != row:
+                return False
+            # The parent ledger/shard census has already registered every audit
+            # chunk in source_hashes. The shared resolver additionally verifies
+            # their immutable hashes and complete chain before using the audit.
+            key = (str(source), run_id)
+            if key not in self.read_wait_audits:
+                try:
+                    self.read_wait_audits[key] = pipeline._resolved_audit_history(source, origin)
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    # Cache failure for this one census too. Fresh censuses retry,
+                    # and no target may turn failed audit acquisition into proof.
+                    self.read_wait_audits[key] = None
+            history = self.read_wait_audits[key]
+            if history is None or not pipeline._valid_read_recovery_barrier(target, row, history):
+                return False
+            return self.terminal_wait_receipt(source, target, row, read_barrier=True)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def terminal_wait_receipt(self, source, target, row, *, read_barrier=False):
+        """Validate an actual terminal no-operation wait without queue lock inversion.
+
+        Reuse the queue's pure receipt/accounting validator. No normalized row,
+        fabricated wait proof, claim lookup or historical state write is made.
+        """
+        import closer_pipeline as pipeline
+        import closer_queue as queue
+
+        try:
             act = row["results"]["act"]
             receipt = act["queue_receipt"]
             snapshot, _ = self.verified_snapshot(_target(target), row)
-            original = row["results"]["prepare"]["snapshot"]
-            if (
+            original = row["results"]["prepare"].get("snapshot")
+            if not read_barrier and (
                 not isinstance(original, dict)
                 or any(
                     snapshot.get(k) != original.get(k)
@@ -832,16 +890,36 @@ class _Census:
                 or original.get("revision") != row.get("revision")
             ):
                 return False
-            reason, trigger = act.get("reason"), act.get("next_trigger")
-            if (
-                act.get("status") != "blocked"
-                or reason not in pipeline.EVIDENCE_REFUSAL_REASONS
-                or trigger != pipeline.EVIDENCE_REFUSAL_TRIGGER
-            ):
-                return False
             inner_path = (
                 source.parent / f"{source.stem}.actions" / f"{pipeline._digest(target)}.json"
             )
+            reason, trigger = act.get("reason"), act.get("next_trigger")
+            if (
+                read_barrier
+                and act.get("status") == "deferred"
+                and reason == "validated_inner_wait"
+            ):
+                proof = act.get("resource_evidence", {}).get("inner_wait", {})
+                if (
+                    proof.get("schema") != pipeline.INNER_WAIT_SCHEMA
+                    or proof.get("target") != target
+                    or proof.get("revision") != row.get("revision")
+                    or proof.get("head") != snapshot.get("head")
+                    or proof.get("inner_path") != str(inner_path)
+                    or proof.get("receipt_sha256") != pipeline._digest(receipt)
+                    or proof.get("acceptance_authority") is not False
+                    or act.get("acceptance_authority") is not False
+                    or proof.get("next_trigger") != trigger
+                ):
+                    return False
+                reason = proof.get("reason")
+            elif act.get("status") != "blocked":
+                return False
+            if (
+                reason not in pipeline.EVIDENCE_REFUSAL_REASONS
+                or trigger != pipeline.EVIDENCE_REFUSAL_TRIGGER
+            ):
+                return False
             native = self.read(inner_path)
             if not isinstance(native, dict) or native.get("schema") != queue.SCHEMA:
                 return False
@@ -1289,6 +1367,7 @@ class _Census:
                     if not isinstance(run, dict) or not isinstance(run.get("targets"), dict):
                         raise ValueError("malformed_shard_run")
                     self.history(run, source)
+                    self.read_wait_origins[(str(source), run_id)] = run
                     for name, row in run["targets"].items():
                         if canonical_target(name) != target:
                             raise ValueError("shard_target_mismatch")
@@ -1388,7 +1467,7 @@ def _row_problem(row):
     return None
 
 
-def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
+def scope_snapshot(state_path: str | Path, *, workspaces=None, inventory_owner=None) -> dict:
     """Census original bytes without ledger writes, callbacks or recovery.
 
     The short shared inventory lock observes atomic shard identity publication;
@@ -1400,12 +1479,12 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
     census = _Census(path, workspaces)
     if original.is_symlink():
         census.reasons.append("aliased_state_leaf")
-    from closer_resources import inventory_lock, scoped_root
+    from closer_resources import inventory_census, scoped_root
 
     try:
         if not path.parent.is_dir():
             raise ValueError("missing_source_parent")
-        with inventory_lock(scoped_root(path)):
+        with inventory_census(scoped_root(path), owner=inventory_owner):
             for collect in (
                 census.raw_index,
                 census.ledger,
@@ -1442,7 +1521,9 @@ def scope_snapshot(state_path: str | Path, *, workspaces=None) -> dict:
     return {**value, "snapshot_sha256": _digest(value)}
 
 
-def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect") -> str | None:
+def scope_problem(
+    snapshot: dict, target: str, resource_keys, *, purpose="effect", inventory_owner=None
+) -> str | None:
     """Check complete prepared aliases; never interpret missing scope as disjoint.
 
     The integrator must prove inventory completeness from its retained prepared
@@ -1467,6 +1548,7 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
         if (
             scope_snapshot(
                 snapshot["state_path"],
+                inventory_owner=inventory_owner,
                 workspaces={
                     "schema": WORKSPACE_SCHEMA,
                     "historical": snapshot.get("workspaces", {}),
@@ -1525,6 +1607,16 @@ def scope_problem(snapshot: dict, target: str, resource_keys, *, purpose="effect
                     recorded.update(item_keys)
                     if item.get("remote_advisory_only") is True:
                         item_keys = set(item.get("explicit_original_keys", []))
+                    elif item.get("remote_terminal_read_wait") is True:
+                        # A validated historical wait has no remote intent to
+                        # fence. Keep ALL original declarations and local keys.
+                        explicit = set(item.get("explicit_original_keys", []))
+                        item_keys = {
+                            held
+                            for held in item_keys
+                            if held in explicit
+                            or not held.startswith(("repo:", "pr:", "issue:", "branch:"))
+                        }
                     elif item.get("closure") == "repository_fallback" and item.get(
                         "remote_scope_narrowable", True
                     ):

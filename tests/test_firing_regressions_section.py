@@ -190,7 +190,7 @@ def test_review_and_formatter_consume_the_firing_section(monkeypatch):
 
 def _export(tmp_path, monkeypatch, *, publish=False, published=False):
     _, beats = _private_ledger(tmp_path, monkeypatch, "route-weights-export")
-    monkeypatch.setattr(export, "build_document", lambda *_a: {"source_version": 2})
+    monkeypatch.setattr(export, "build_document", lambda *_a, **_kw: {"source_version": 2})
     monkeypatch.setattr(export, "publish_document", lambda *_a, **_k: published)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(

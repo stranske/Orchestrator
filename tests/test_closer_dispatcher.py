@@ -29,6 +29,9 @@ MERGE = "b" * 40
 @pytest.fixture(autouse=True)
 def no_live_state_or_provider(monkeypatch, tmp_path):
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
+    monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "private-state"))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "private-runtime"))
 
     def semantic_route(route, invoke, *, load, **_kwargs):
         try:

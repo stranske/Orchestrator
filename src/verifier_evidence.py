@@ -307,9 +307,10 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
     """Retain history without making an older failed read govern a fresh review.
 
     Only an earlier, incomplete independent chain with no semantic verdict can
-    be superseded, and only by a complete review of the same immutable request.
-    Real verdict conflicts, newer observations and changed requirements retain
-    the ordinary causal checks below.
+    be superseded by a complete review of the same request or material, bound
+    to the exact delivery. Same material can accompany revised requirements;
+    the new admitted review, not the failed read, assesses those requirements.
+    Real verdict conflicts and newer observations retain the causal checks.
     """
     roots = [identity for identity, parent in parents.items() if parent is None]
 
@@ -345,10 +346,16 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
     ):
         return set()
 
-    def request(record):
+    def same_request_or_material(record):
         event = record["verification_event"]
-        return tuple(
-            event.get(key) for key in ("repo", "pr", "head_sha", "evaluated_sha", "request_sha256")
+        anchor = selected["verification_event"]
+        return all(
+            event.get(key) == anchor.get(key) for key in ("repo", "pr", "head_sha", "evaluated_sha")
+        ) and any(
+            isinstance(event.get(key), str)
+            and verification_events.HEX256.fullmatch(event[key])
+            and event[key] == anchor.get(key)
+            for key in ("request_sha256", "material_sha256")
         )
 
     obsolete = set()
@@ -357,11 +364,89 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
             continue
         if (
             nodes[part[-1]].get("status") == "incomplete"
-            and all(request(nodes[identity]) == request(selected) for identity in part)
+            and all(same_request_or_material(nodes[identity]) for identity in part)
             and all(_attempt(nodes[identity]) < _attempt(selected) for identity in part)
         ):
             obsolete.update(part)
     return obsolete
+
+
+def _retry_event_parents(records):
+    """Recover an omitted retry edge only from its proven no-evaluation attempt.
+
+    The immutable event identifies the same input, not a new causal branch. An
+    older authenticated no-evaluation attempt can supply its unchanged parent
+    when a later producer omits that optional field. Explicit conflicting edges,
+    mixed metadata in one attempt and an originally root event stay ambiguous.
+    Records remain untouched so the original publication is still auditable.
+    """
+    grouped = {}
+    for record in records:
+        grouped.setdefault(record["verification_event"]["event_id"], []).append(record)
+    parents = {}
+    for identity, rows in grouped.items():
+        declared = set()
+        for row in rows:
+            parent = row.get("predecessor_event_id")
+            if parent is not None and (
+                not isinstance(parent, str) or not verification_events.HEX256.fullmatch(parent)
+            ):
+                return None
+            declared.add(parent)
+        if len(declared) == 1:
+            parents[identity] = declared.pop()
+            continue
+        explicit = declared - {None}
+        if len(explicit) != 1:
+            return None
+        parent = explicit.pop()
+        omitted = [row for row in rows if row.get("predecessor_event_id") is None]
+        first_omitted = min(_attempt(row) for row in omitted)
+        linked = [row for row in rows if row.get("predecessor_event_id") == parent]
+        if any(_attempt(row) >= first_omitted for row in linked):
+            return None
+        latest_linked = max(_attempt(row) for row in linked)
+        prior = [row for row in linked if _attempt(row) == latest_linked]
+        if any("verdict" in row for row in prior) or not any(
+            row.get("status") == "incomplete"
+            and row.get("retry_kind") == "known_no_evaluation"
+            and row.get("retryable") is True
+            and row.get("failure_cause")
+            in {"validated_no_evaluation", "evaluator_step_not_invoked"}
+            and isinstance(row.get("assessment_identity"), dict)
+            and row["assessment_identity"].get("canonical") is True
+            and isinstance(row["assessment_identity"].get("mode"), str)
+            and row["assessment_identity"].get("mode") in {"evaluate", "compare"}
+            and all(
+                isinstance(row["assessment_identity"].get(key), str)
+                for key in ("provider", "model", "model2")
+            )
+            for row in prior
+        ):
+            return None
+        # Recovering an edge grants no authority to skip another attempt's
+        # uncertainty or contradictory assessment metadata. Check the complete
+        # retry history, including omitted-parent attempts, without altering it.
+        attempts = {}
+        for row in rows:
+            attempts.setdefault(_attempt(row), []).append(row)
+        for attempt_rows in attempts.values():
+            assessment = attempt_rows[0].get("assessment_identity")
+            if any(row.get("assessment_identity") != assessment for row in attempt_rows):
+                return None
+            if any(
+                row.get("status") == "incomplete"
+                and (
+                    row.get("retry_kind") != "known_no_evaluation"
+                    or row.get("retryable") is not True
+                    or row.get("failure_cause")
+                    not in {"validated_no_evaluation", "evaluator_step_not_invoked"}
+                )
+                for row in attempt_rows
+            ):
+                return None
+        parents[identity] = parent
+    return parents
 
 
 def applicable_decision(decisions, states=(), *, include_pending=False):
@@ -377,17 +462,13 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
     if not records:
         return None if _masked_by_observation(baseline, states) else baseline
     nodes = {}
-    parents = {}
+    parents = _retry_event_parents(records)
+    if parents is None:
+        return None
     terminal_events = {}
     admitted_events = {}
     for record in records:
         identity = record["verification_event"]["event_id"]
-        parent = record.get("predecessor_event_id")
-        if parent is not None and not verification_events.HEX256.fullmatch(str(parent)):
-            return None
-        if identity in parents and parents[identity] != parent:
-            return None
-        parents[identity] = parent
         if "verdict" in record and (
             identity not in terminal_events
             or _attempt(record) < _attempt(terminal_events[identity])
@@ -420,7 +501,7 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
                 return None
     # A previous incomplete read is not an acceptance verdict or an uncertain
     # consequential effect. Do not let it invalidate a later complete review of
-    # the identical request. Preserve every input record and all other branches.
+    # the same request or material. Preserve every input record and other branches.
     if baseline is None:
         for identity in _superseded_incomplete_roots(
             nodes, parents, terminal_events, admitted_events

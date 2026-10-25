@@ -25,6 +25,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -449,6 +450,88 @@ def _no_spawn(target: str, head: str, context: str, exclude: set) -> dict:
     }
 
 
+def preflight_refusal(result, target):
+    """Recognize the pre-command return, never a failed merge invocation.
+
+    The native caller separately binds the expected head and invocation. Reasons
+    remain diagnostics; their text cannot grant no-effect authority.
+    """
+    return bool(
+        isinstance(result, dict)
+        and set(result) == {"target", "dry_run", "blocked", "reason", "preflight", "merge_executed"}
+        and result.get("target") == target
+        and result.get("dry_run") is False
+        and result.get("blocked") is True
+        and result.get("merge_executed") is False
+        and isinstance(result.get("reason"), str)
+        and bool(result["reason"])
+        and isinstance(result.get("preflight"), dict)
+        and result["preflight"].get("blocked") is True
+    )
+
+
+def no_merge_command_refusal(result, target, expected_head):
+    """A typed producer boundary is removed BEFORE invoking the merge transport."""
+    return bool(
+        isinstance(result, dict)
+        and result.get("target") == target
+        and result.get("dry_run") is False
+        and result.get("blocked") is True
+        and result.get("merge_executed") is False
+        and isinstance(expected_head, str)
+        and len(expected_head) == 40
+        and result.get("no_merge_command")
+        == {
+            "schema": "merge-guard-no-command/v1",
+            "target": target,
+            "expected_head": expected_head,
+            "boundary": "before_gh_pr_merge",
+        }
+    )
+
+
+# Seams for bounded external READ transport / wall-clock tests, never generation.
+_admission_clock = time.time
+
+
+def _admission_read(command, **kwargs):
+    return subprocess.run(command, **kwargs)
+
+
+def read_only_admission(target, expected_head):
+    """Run this same guard through final checks without local/runtime/provider effects."""
+    import closer_frontier_policy
+
+    deadline = time.monotonic() + closer_frontier_policy.MAX_REQUEST_TIMEOUT_SECONDS
+
+    def read(command, **kwargs):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("guard read request deadline")
+        return _admission_read(command, timeout=remaining, **kwargs)
+
+    return guarded_merge(
+        target,
+        expected_head=expected_head,
+        remote_only=True,
+        admission_only=True,
+        skip_immediate_advisory=True,
+        metadata_fn=lambda name: pr_metadata(name, run_fn=read),
+        preflight_fn=lambda name, **kw: exact_head_merge_gate.snapshot(
+            name, run_fn=read, now_fn=_admission_clock, **kw
+        ),
+    )
+
+
+def _no_merge_command(target, expected_head):
+    return {
+        "schema": "merge-guard-no-command/v1",
+        "target": target,
+        "expected_head": expected_head,
+        "boundary": "before_gh_pr_merge",
+    }
+
+
 def guarded_merge(
     target: str,
     *,
@@ -458,6 +541,7 @@ def guarded_merge(
     confirm_merge: bool = False,
     skip_immediate_advisory: bool = False,
     remote_only: bool = False,
+    admission_only: bool = False,
     env: dict | None = None,
     spec_dir: str | Path | None = None,
     require_runtime_ac: bool = False,
@@ -472,6 +556,8 @@ def guarded_merge(
     spawn_fn=None,
     review_loop_fn=None,
 ) -> dict[str, Any]:
+    if admission_only and (confirm_merge or not remote_only):
+        raise ValueError("admission-only guard requires non-mutating remote-only invocation")
     dry_run = not confirm_merge
     skip_immediate_advisory = skip_immediate_advisory or remote_only
     if confirm_merge and not expected_head:
@@ -494,6 +580,7 @@ def guarded_merge(
                 "reason": preflight_reason,
                 "preflight": preflight,
                 "merge_executed": False,
+                "no_merge_command": _no_merge_command(target, expected_head),
             }
     cmd = build_merge_cmd(
         target, method=method, delete_branch=delete_branch, expected_head=expected_head
@@ -513,6 +600,8 @@ def guarded_merge(
         "merge_cmd": cmd,
         "merge_executed": False,
         "merge_returncode": None,
+        "preflight": preflight,
+        "no_merge_command": _no_merge_command(target, expected_head),
     }
     if gate_result["blocked"]:
         return result
@@ -564,7 +653,7 @@ def guarded_merge(
             adjudication = {"error": str(exc)[:500]}
         if adjudication is not None:
             result["adjudication"] = adjudication
-    if dry_run:
+    if dry_run and not admission_only:
         return result
 
     final_preflight = preflight_fn(target, expected_head=expected_head)
@@ -594,6 +683,13 @@ def guarded_merge(
         if str(final_meta.get("state") or "").upper() != "OPEN" or final_meta.get("is_draft"):
             return {**result, "blocked": True, "reason": "remote-only PR metadata changed"}
 
+    if admission_only:
+        result["admission_complete"] = True
+        return result
+
+    # Never retain this proof after entering the mutation transport, including
+    # a nonzero exit or exception whose remote outcome requires reconciliation.
+    result.pop("no_merge_command", None)
     merge = merge_fn(cmd, capture_output=True, text=True)
     result["merge_executed"] = True
     result["merge_returncode"] = merge.returncode

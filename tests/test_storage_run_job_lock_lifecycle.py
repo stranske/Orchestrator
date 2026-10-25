@@ -96,9 +96,11 @@ def test_uncertain_constructor_after_initial_deadline_keeps_own_and_foreign_char
 ):
     foreign = seed_foreign(job)
     monkeypatch.setattr(storage, "identity", lambda _: "original")
+    clock = [100.0]
+    monkeypatch.setattr(storage.time, "monotonic", lambda: clock[0])
 
     def uncertain(*args, **kwargs):
-        time.sleep(0.08)
+        clock[0] += 0.08
         raise OSError("constructor outcome uncertain")
 
     monkeypatch.setattr(storage.subprocess, "Popen", uncertain)

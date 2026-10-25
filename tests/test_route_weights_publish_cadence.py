@@ -35,7 +35,7 @@ def _wire(monkeypatch, tmp_path, *, changed: bool):
         sys, "argv", ["route_weights_export.py", "--publish", "--state-dir", str(tmp_path)]
     )
     monkeypatch.setattr(
-        rwe, "build_document", lambda db_path, minimum: {"source_version": 63, "weights": {}}
+        rwe, "build_document", lambda db_path, minimum, **kw: {"source_version": 63, "weights": {}}
     )
     monkeypatch.setattr(rwe, "write_document", lambda target, doc: changed)
     monkeypatch.setattr(rwe.capabilities, "daily_heartbeat", lambda *a, **k: None)
