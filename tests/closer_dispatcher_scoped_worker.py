@@ -13,14 +13,20 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
 sys.path.insert(0, str(MODULES))
 
+from closer_role_support import fixture_role_verdict  # noqa: E402
+
 import closer_dispatcher as d  # noqa: E402
 import closer_evidence  # noqa: E402
 import closer_resources  # noqa: E402
+import closer_role_qualification as role_qualification  # noqa: E402
 import dispatcher  # noqa: E402
 import router  # noqa: E402
 
 
 def main():
+    # The child simulates role admission as well as provider admission; actual
+    # role evidence/build checks are exercised in the separate role contracts.
+    role_qualification.is_runtime_qualified = fixture_role_verdict
     spec = json.loads(sys.argv[1])
     target = spec["target"]
     directory = Path(spec["directory"])

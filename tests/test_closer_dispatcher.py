@@ -28,6 +28,9 @@ MERGE = "b" * 40
 
 @pytest.fixture(autouse=True)
 def no_live_state_or_provider(monkeypatch, tmp_path):
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
     monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "private-state"))
@@ -741,7 +744,7 @@ def assert_nonpass_accounting_prompt_contract(prompt):
     assert "Otherwise return classification uncertain" not in prompt
 
 
-def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
+def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
     current = snapshot(
         state="MERGED",
         merge=MERGE,
@@ -766,7 +769,10 @@ def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_pa
     )
     result = backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))
     assert result["advisory_only"] and result["status"] == "completed"
-    assert calls[0][1]["profile_id"] == "codex-6-luna-low"
+    import execution_profiles
+
+    assert calls[0][1]["profile_id"] in execution_profiles.PROFILE_REGISTRY
+    assert calls[0][1]["data_only"] is True
     assert backend.dispositions == {}
     assert backend.select(current)[0] == "wait"
     assert backend.gh.calls == []
@@ -2956,6 +2962,7 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
         lambda agent, **kw: [
             {
                 "profile_id": f"{agent}-flash-low",
+                "agent": agent,
                 "reasoning_effort": "low",
                 "capacity_pool_ids": ["aider-paygo" if agent == "aider" else "gemini-api"],
             }

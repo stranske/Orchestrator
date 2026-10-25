@@ -94,6 +94,7 @@ class RouteSpec(TypedDict):
     agents: list[RouteEntry]
     neutral_prior: NotRequired[bool]
     reasoning_efforts: NotRequired[list[str]]
+    closer_role: NotRequired[str]
     permission_modes: NotRequired[list[str]]
 
 
@@ -234,15 +235,15 @@ ROUTE_TABLE: dict = {
 
 # Closer requirements describe the work, not a preferred provider. These cells
 # get equal priors in the existing learner; allocations are temporary decisions.
-for _closer_task, _closer_efforts in {
-    "closer_interpret": ["none", "minimal", "low"],
-    "closer_exception": ["medium", "high"],
-    "closer_repair": ["medium", "high"],
+for _closer_task, _closer_role in {
+    "closer_interpret": "bounded_classification",
+    "closer_exception": "strong_criterion_adjudication",
+    "closer_repair": "constrained_repair",
 }.items():
     ROUTE_TABLE[_closer_task] = {
         "role": "code" if _closer_task == "closer_repair" else "review",
         "neutral_prior": True,
-        "reasoning_efforts": _closer_efforts,
+        "closer_role": _closer_role,
         "permission_modes": (
             ["workspace-write"]
             if _closer_task == "closer_repair"
@@ -276,7 +277,11 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
     exact model pinned for the entry's mode.  Historical/replay callers use
     ``execution_profiles`` directly and remain able to name every profile.
     """
-    profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+    profiles = [
+        profile
+        for profile in execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+        if adapters.automatic_profile_within_cap(profile)
+    ]
     if entry["agent"] != "gemini":
         return profiles
     tier = adapters.effective_tier("gemini", entry["mode"])
@@ -288,13 +293,28 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
 
 
 def _route_profiles(entry: RouteEntry, spec: RouteSpec, transport: str) -> list[dict]:
+    role = spec.get("closer_role")
+    if role is not None:
+        import closer_role_qualification as roles
+
+        return [
+            profile
+            for profile in execution_profiles.profiles_for_agent(
+                entry["agent"], transport=transport
+            )
+            if adapters.automatic_profile_within_cap(profile)
+            and roles.is_runtime_qualified(profile, role)
+            and profile.get("permission_mode")
+            in spec.get("permission_modes", [profile.get("permission_mode")])
+        ]
     efforts = spec.get("reasoning_efforts")
     if efforts is None:
         return _automatic_profiles(entry, transport=transport)
     return [
         profile
         for profile in execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
-        if profile["reasoning_effort"] in efforts
+        if adapters.automatic_profile_within_cap(profile)
+        and profile["reasoning_effort"] in efforts
         and profile.get("permission_mode")
         in spec.get("permission_modes", [profile.get("permission_mode")])
     ]

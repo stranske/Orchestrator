@@ -567,7 +567,7 @@ def select_route(
 ) -> dict[str, Any]:
     """The provider/profile the existing router picks from an EXISTING capacity JSON.
 
-    Same rules as the dispatcher's low-effort lane: fresh and complete report (else `hold`,
+    Same role qualification as the dispatcher's classification lane: fresh and complete report (else `hold`,
     never a global `capacity.py` run), offload profiles with ok/warn profile and pool state,
     Aider excluded, every other approved agent (Gemini included) eligible. The caller
     dispatches the SAME agent/profile it records here. Seam: route through the shared Vibe
@@ -583,6 +583,9 @@ def select_route(
     if router is None or profiles is None:
         import execution_profiles as profiles  # noqa: PLW0127
         import router  # noqa: PLW0127
+    import adapters
+    import closer_role_qualification as roles
+
     usable = {"ok", "warn"}
     options: dict[str, list[dict[str, Any]]] = {}
     for agent_name, row in report["agents"].items():
@@ -594,7 +597,8 @@ def select_route(
             p
             for p in profiles.profiles_for_agent(agent_name, transport="offload")
             if str(p.get("agent", "")).casefold() != "aider"
-            and p["reasoning_effort"] in {"none", "minimal", "low"}
+            and adapters.automatic_profile_within_cap(p)
+            and roles.is_runtime_qualified(p, roles.BOUNDED_CLASSIFICATION)
             and report["profiles"].get(p["profile_id"], {}).get("state") in usable
             and p.get("capacity_pool_ids")
             and all(

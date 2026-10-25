@@ -2404,26 +2404,33 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
     smearing across three.
     """
     try:
-        profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+        profiles = [
+            p
+            for p in execution_profiles.profiles_for_agent(agent, transport="offload")
+            if adapters.automatic_profile_within_cap(p)
+        ]
         if not profiles:
             return None
         if agent == "codex" and execution_profiles.codex_operator_tier_override(mode):
             return None
         if agent == "codex":
-            return execution_profiles.get_profile(
+            selected = execution_profiles.get_profile(
                 execution_profiles.default_codex_profile("offload", mode)
             )
+            return selected if adapters.automatic_profile_within_cap(selected) else None
         # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
         # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
         # offload burned Pro" -- and selecting from ALL offload-capable profiles silently overrode
         # it: with only a Pro profile registered, every gemini read was routed to the reasoning
         # tier, and with three codex profiles it picked whichever sorted first.
         #
-        # Gemini's tier is a spend policy. A fresh automatic offload must use a
+        # Claude/Gemini tiers are spend policies. An automatic offload must use a
         # profile for the live resolved tier model, or refuse before dispatch.
         # Other agents retain the legacy fallback for their unprofiled/single-lane
         # paths.
         tier = mode if mode in adapters.MODEL_TIER_NAMES else adapters.DEFAULT_OFFLOAD_TIER
+        if agent == "claude":
+            tier = adapters.effective_tier(agent, tier)
         if agent == "gemini":
             tier = adapters.effective_tier(agent, tier)
             health = adapters.model_health(agent, tier)
@@ -2433,7 +2440,7 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         else:
             tier_model = adapters.resolve_model(agent, tier)
         tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
-        if agent == "gemini" and not tiered:
+        if agent in {"claude", "gemini"} and not tiered:
             return None
         candidate_ids = sorted(profile["profile_id"] for profile in (tiered or profiles))
         envelope = execution_profiles.select_profile(

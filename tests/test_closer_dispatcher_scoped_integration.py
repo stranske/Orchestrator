@@ -567,3 +567,11 @@ def test_legacy_runlock_covers_durable_boundary_and_owner_cleanup(tmp_path):
     assert finish(first)["targets"]["one/repo#1"]["status"] == "completed"
     assert second is not None
     assert finish(second)["targets"]["two/repo#2"]["status"] == "completed"
+
+
+@pytest.fixture(autouse=True)
+def synthetic_role_admission(monkeypatch):
+    # These tests measure process/pool boundaries with simulated providers.
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)

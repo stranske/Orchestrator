@@ -24,6 +24,9 @@ _CORE_SIBLING_ABSENT = env_prereq.core_sibling_absent()
 
 @pytest.fixture(autouse=True)
 def env(tmp_path, monkeypatch):
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_TICK", "0")
     monkeypatch.setattr("closer_runtime_binding.policy_problem", lambda policy: None)
