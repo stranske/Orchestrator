@@ -1,0 +1,36 @@
+{
+  "activation": false,
+  "capture_checks_passed": true,
+  "capture_sha256": "6096152e8f35c0ce62ba6b03ec96a096a52009bc64bc82396ad4e23b5c7dc249",
+  "cases": [
+    {
+      "case_id": "false_acceptance",
+      "kind": "false_acceptance",
+      "passed": true
+    },
+    {
+      "case_id": "injection",
+      "kind": "injection",
+      "passed": true
+    },
+    {
+      "case_id": "ordinary",
+      "kind": "ordinary",
+      "passed": true
+    },
+    {
+      "case_id": "uncertainty",
+      "kind": "uncertainty",
+      "passed": true
+    }
+  ],
+  "evidence_origin": "offline_fixture",
+  "offline_fixture_passed": true,
+  "problems": [],
+  "production_qualification_records_written": 0,
+  "profile_identity_sha256": "df24bf3c64781592182a6a972121093654e35ea6cc3629a2058bf4591b4ea5de",
+  "provider_suitability": "not_measured",
+  "role": "strong_criterion_adjudication",
+  "schema": "closer-transport-evidence/v1",
+  "suite_sha256": "f29d973c8bd94c790fe86323d99dd80395c8a00eb157b1a0a2f21f2047201ad7"
+}
