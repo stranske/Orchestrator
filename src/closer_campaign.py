@@ -2438,7 +2438,7 @@ def tick(
         from closer_native_observer import contract as native_contract
 
         py = str(native_contract(manifest)[2])
-    report = []
+    report: list[dict[str, Any]] = []
     for path in sorted(Path(root).glob("*.campaign.json")):
         campaign = Campaign(path)
         try:
@@ -2476,13 +2476,47 @@ def tick(
             continue
         admission = None
         if execution_mechanism == "native-handoff/v1":
+            import closer_hold_followup
+            from closer_native_observer import rearm_on_hold_followup
+
+            try:
+                doc = reconcile(campaign, pid_alive=pid_alive)
+                receipts = closer_hold_followup.validated_receipts(campaign, doc, manifest)
+                doc, followups = closer_hold_followup.consume(
+                    campaign, manifest, str(manifest_path)
+                )
+                report.extend({"campaign": path.name, **entry} for entry in followups)
+                doc = rearm_on_hold_followup(campaign, doc, manifest)
+                if receipts or doc.get("hold_followups"):
+                    from closer_stage_feedback import summarize_efficiency
+
+                    summary = summarize_efficiency(
+                        receipts, holds=(doc.get("hold_followups") or {}).values(), now=_now()
+                    )
+                    report.append(
+                        {
+                            "campaign": path.name,
+                            "kind": "hold_followup_summary",
+                            "efficiency": summary,
+                        }
+                    )
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                report.append(
+                    {
+                        "campaign": path.name,
+                        "kind": "held",
+                        "reason": f"native hold follow-up: {exc}",
+                    }
+                )
+                continue
+        if execution_mechanism == "native-handoff/v1":
             from closer_native_observer import (
                 capacity_contract,
                 publish_admission,
                 rearm_on_assignment_change,
             )
 
-            if capacity_contract(manifest) is not None:
+            if capacity_contract(manifest, control_plane_only=True) is not None:
                 # Fold only actual terminal results first. Unknown or live workers
                 # never receive a fresh report, assignment or execution window.
                 doc = reconcile(campaign, pid_alive=pid_alive)
@@ -2523,7 +2557,24 @@ def tick(
         )
         route = route_fn(capacity)
         capacity_ok = bool(route.get("agent"))
-        if admission is not None and capacity_ok:
+        if admission is not None and granularity(doc) == "round":
+            from closer_native_observer import validate_admission
+
+            try:
+                validate_admission(manifest, admission, for_effects=True)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                report.append(
+                    {
+                        "campaign": path.name,
+                        "kind": "held",
+                        "reason": f"native control-plane admission held: {exc}",
+                    }
+                )
+                continue
+            # A round launches the deterministic coordinator, not this model
+            # route. Private roles remain separately gated inside the pipeline.
+            capacity_ok = True
+        if admission is not None and route.get("agent"):
             import execution_profiles
 
             selected_id = route.get("profile_id")

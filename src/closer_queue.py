@@ -1140,6 +1140,86 @@ def _release_all(
     return failed
 
 
+def reconcile_only(
+    state_path: str | Path,
+    target: str,
+    operation_id: str,
+    revision: str,
+    *,
+    frontier_id: str,
+    reconcile: Callable[[str, Mapping[str, Any]], Mapping[str, Any]],
+    request_timeout_seconds: float = 120.0,
+    now: Callable[[], float] = time.time,
+) -> dict[str, Any]:
+    """Settle only one original effect fence, without selecting or submitting work.
+
+    The reconciler may CAS-settle the original Core operation after exact remote
+    readback. This is not wholly read-only, and never invokes ``execute`` or
+    manufactures a completed callback/receipt for the outer pipeline.
+    """
+    from closer_frontier_policy import action_identity, request_window, validate_frontier
+
+    if not all(
+        isinstance(value, str) and value.strip() for value in (target, operation_id, revision)
+    ):
+        raise ValueError("exact original operation identity required")
+    path = Path(state_path)
+    if path.resolve() != path or path.is_symlink():
+        raise QueueStateError("reconciliation queue path is aliased")
+    window = request_window(now(), request_timeout_seconds)
+    with _ledger_lock(path, cutoff=window["deadline"], now=now) as locked:
+        if not locked:
+            raise QueueStateError("original operation queue is busy")
+        document = _read_state(path)
+        selected = state_for_frontier(document, frontier_id)
+        assert selected is not None
+        item = selected["items"].get(target)
+        operation = item.get("operation") if isinstance(item, dict) else None
+        if not isinstance(operation, dict) or (
+            operation.get("id") != operation_id or operation.get("revision") != revision
+        ):
+            raise QueueStateError("original operation identity changed")
+        frontier = validate_frontier(document["frontiers"][frontier_id]["policy"])
+        expected = frontier["bindings"].get(target) or {}
+        action, binding = operation.get("action"), operation.get("binding")
+        if not isinstance(action, str) or not isinstance(binding, Mapping):
+            raise QueueStateError("original operation binding is invalid")
+        if (
+            operation.get("finite_frontier") != frontier
+            or expected.get("revision") != revision
+            or action_identity(target, revision, action, binding) != expected.get("action_id")
+        ):
+            raise QueueStateError("original operation binding changed")
+        if operation.get("status") == "completed":
+            return {"status": "completed", "operation_id": operation_id, "idempotent": True}
+        if operation.get("status") not in PENDING_OPERATION_STATES:
+            return {"status": operation.get("status", "unknown"), "operation_id": operation_id}
+        bounded = {
+            **operation,
+            "effect_deadline": operation.get("deadline"),
+            "deadline": window["deadline"],
+            "timeout_seconds": request_timeout_seconds,
+        }
+        resolution = reconcile(target, bounded)
+        if not isinstance(resolution, Mapping):
+            resolution = {"status": "unknown"}
+        status = resolution.get("status")
+        # Preserve failed/unknown boundaries. A no-start readback is knowledge,
+        # never permission for this consumer to resubmit the operation.
+        if status in {"completed", "confirmed_not_started"}:
+            operation["status"] = status
+            operation["reconciled_at"] = float(now())
+            operation["reconciliation"] = _json_copy(dict(resolution))
+            if status == "completed":
+                operation["completed_at"] = float(now())
+                operation["result"] = _json_copy(resolution.get("result", {}))
+            _atomic_write(path, document)
+        return {
+            "status": status if isinstance(status, str) else "unknown",
+            "operation_id": operation_id,
+        }
+
+
 def run_round(
     state_path: str | Path,
     assignment_targets: Iterable[str],

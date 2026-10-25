@@ -641,5 +641,5 @@ def test_control_plane_contract_does_not_invent_missing_model_profile(monkeypatc
     manifest = {"mechanism_contract": {"capacity_publication": publication}}
     monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
     assert native.capacity_contract(manifest, control_plane_only=True) == publication
-    with pytest.raises(mechanisms.MechanismError, match="active low"):
+    with pytest.raises(mechanisms.MechanismError, match="active qualified"):
         native.capacity_contract(manifest)

@@ -1116,7 +1116,11 @@ def plan(
         or row.get("provider_outcome_uncertain") not in (None, False)
     ):
         raise ValueError("unresolved_provider_or_recovery_boundary")
-    if not isinstance(row.get("status"), str) or row["status"] not in {"held", "unknown"}:
+    if not isinstance(row.get("status"), str) or row["status"] not in {
+        "held",
+        "unknown",
+        "capacity_blocked",
+    }:
         raise ValueError("row_not_retryable")
     results = row.get("results", {})
     if not isinstance(results, dict) or any(
@@ -1149,7 +1153,21 @@ def plan(
     kind = None
     readmission = None
     guard_readmission = None
-    if row.get("deferred_reason") == "merge_guard_refused" and stage == "act":
+    followup_proof = None
+    current_result = results.get(stage, {})
+    if row.get("stage_status") not in {"running", "unknown"} and (
+        row.get("status") == "capacity_blocked"
+        or current_result.get("classification") == "role_qualification_unavailable"
+    ):
+        import closer_hold_followup
+
+        if assignment_path is None:
+            raise ValueError("hold_followup_requires_current_assignment")
+        followup_proof = closer_hold_followup.release_probe(
+            path, frontier, target, row, assignment_path, source_receipts
+        )
+        kind = followup_proof["kind"]
+    elif row.get("deferred_reason") == "merge_guard_refused" and stage == "act":
         guard_readmission = _guard_readmission(
             root,
             path,
@@ -1225,7 +1243,7 @@ def plan(
         raise ValueError("no_supported_unstarted_boundary")
     if stage not in {"prepare", "interpret", "act", "exception"}:
         raise ValueError("unsupported_retry_stage")
-    if stage == "exception" and "exception" in results:
+    if stage == "exception" and "exception" in results and followup_proof is None:
         raise ValueError("exception_callback_result_requires_reconciliation")
     inner = (
         _native_prewrite_inner(
@@ -1249,6 +1267,7 @@ def plan(
             "transport": transport,
             "retained_results": results,
             "scope_reason": row.get("error") if proof else None,
+            **({"followup_proof": followup_proof} if followup_proof else {}),
             **({"scope_readmission": readmission} if readmission else {}),
             **({"guard_readmission": guard_readmission} if guard_readmission else {}),
         }
@@ -1275,6 +1294,10 @@ def plan(
         "acceptance_authority": False,
         "global_stop_authority": False,
     }
+    if followup_proof:
+        result["followup_proof"] = followup_proof
+        result["source_receipts"] = source_receipts
+        result["assignment_path"] = str(_physical(assignment_path))
     if readmission:
         result["scope_readmission"] = readmission
     if guard_readmission:
@@ -1468,6 +1491,15 @@ def apply(
                         },
                     )
                     row.pop("reentry_ready", None)
+                elif proposal["kind"] in {"qualified_role_followup", "available_capacity_followup"}:
+                    # This is a proven no-effect scheduling release, never reuse
+                    # old PASS/readiness. A normal live lease must run PREPARE.
+                    row.update(status="held", stage="prepare", stage_status="queued", results={})
+                    row["reentry_ready"] = {
+                        "event": event,
+                        "plan_sha256": expected_plan_sha256,
+                        "kind": proposal["kind"],
+                    }
                 elif proposal["kind"] in {
                     "scope_no_callback_readmission",
                     "native_guard_readmission",
@@ -1674,6 +1706,19 @@ def ready(state_path, frontier, target, row):
         )
     ):
         raise ValueError("reentry_audit_does_not_bind_ready_row")
+    if proposal.get("kind") in {"qualified_role_followup", "available_capacity_followup"}:
+        import closer_hold_followup
+
+        fresh = closer_hold_followup.release_probe(
+            path,
+            frontier,
+            target,
+            audit["before"],
+            proposal["assignment_path"],
+            proposal["source_receipts"],
+        )
+        if fresh != proposal.get("followup_proof"):
+            raise ValueError("hold_followup_current_binding_changed")
     if proposal.get("kind") == "native_guard_readmission":
         state, _ = _read(path)
         fresh = _guard_readmission(
