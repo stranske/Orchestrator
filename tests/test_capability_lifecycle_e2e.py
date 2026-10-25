@@ -441,19 +441,31 @@ def test_invocation_ineligible_refusals_write_nothing(
     now, ledger, registry = ctx["now"], ctx["ledger"], ctx["registry"]
     cap_id, version_id = ctx["capability_id"], ctx["version_id"]
     if case == "expired_ledger":
-        _mutate_json(ledger, "capabilities", cap_id, expiry=now - 1)
+        _mutate_json(ledger, "capabilities", cap_id, expiry=now)
     elif case == "expired_artifact":
         payload = json.loads(registry.read_text(encoding="utf-8"))
-        payload["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = now - 1
+        payload["targets"][version_id]["artifact"]["lifecycle"]["expires_at"] = now
         registry.write_text(json.dumps(payload), encoding="utf-8")
     elif case == "kill_switch":
-        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "0")
+        # Use the ledger declaration even when the conventional switch allows execution.
+        _mutate_json(ledger, "capabilities", cap_id, kill_switch="ORCH_FIXTURE_WORKFLOW_STOP=1")
+        monkeypatch.setenv("ORCH_FIXTURE_WORKFLOW_STOP", "1")
+        monkeypatch.setenv("ORCH_CAPABILITY_WORKFLOW_ENABLED", "1")
     elif case == "ledger_rollback_pending":
         _mutate_json(ledger, "capabilities", cap_id, rollback_pending={"reason": "regressed"})
     else:
         binding = capability_targets.get_binding(version_id, registry_path=registry)
         capability_targets.prepare_rollback(binding, registry_path=registry, reason="regressed")
     before = capability_targets.get_binding(version_id, registry_path=registry)
+    paths = (ledger, registry, Path(before["binding_path"]))
+    before_bytes = {path: path.read_bytes() for path in paths}
+
+    def unexpected_production(*args, **kwargs):
+        raise AssertionError("ineligible invocation must refuse before production or consumption")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", unexpected_production)
+    monkeypatch.setattr(compiler, "consume_workflow_output", unexpected_production)
+    monkeypatch.setattr(feedback, "record_capability_consumption", unexpected_production)
     result = capability_lifecycle.invoke_compiled_target(
         cap_id,
         trigger=ctx["fixture"]["trigger"],
@@ -468,6 +480,20 @@ def test_invocation_ineligible_refusals_write_nothing(
     assert after["invocations"] == before["invocations"] == []
     assert "causal_edge" not in result
     assert feedback.capability_causal_evidence(cap_id, version_id) == []
+    assert {path: path.read_bytes() for path in paths} == before_bytes
+
+    direct = capability_targets.invoke_target(
+        before,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id=f"direct:{case}",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=now,
+    )
+    assert direct == {"matched": True, "invoked": False, "reason": reason}, direct
+    assert feedback.capability_causal_evidence(cap_id, version_id) == []
+    assert {path: path.read_bytes() for path in paths} == before_bytes
 
 
 @pytest.mark.parametrize("kind", ["role", "workflow", "skill", "playbook", "gate"])
@@ -896,24 +922,43 @@ def test_compiled_invocation_malformed_ledger_expiry_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = _registered_workflow(tmp_path, monkeypatch)
-    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry="not-a-timestamp")
-    result = capability_lifecycle.invoke_compiled_target(
-        ctx["capability_id"],
-        trigger=ctx["fixture"]["trigger"],
-        target_run_id="workflow:malformed-expiry:1",
-        ledger_path=ctx["ledger"],
-        target_registry_path=ctx["registry"],
-        inputs=ctx["fixture"]["inputs"],
-        timestamp=ctx["now"],
-    )
-    assert result == {"matched": True, "invoked": False, "reason": "expired"}, result
-    assert (
-        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
-            "invocations"
-        ]
-        == []
-    )
-    assert "causal_edge" not in result
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid ledger expiry must refuse before the producer")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", forbidden)
+    monkeypatch.setattr(compiler, "consume_workflow_output", forbidden)
+    for expiry in ("not-a-timestamp", float("inf"), float("-inf"), float("nan")):
+        _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], expiry=expiry)
+        before = (ctx["ledger"].read_bytes(), ctx["registry"].read_bytes())
+        result = capability_lifecycle.invoke_compiled_target(
+            ctx["capability_id"],
+            trigger=ctx["fixture"]["trigger"],
+            target_run_id="workflow:malformed-expiry:1",
+            ledger_path=ctx["ledger"],
+            target_registry_path=ctx["registry"],
+            inputs=ctx["fixture"]["inputs"],
+            timestamp=ctx["now"],
+        )
+        direct = capability_targets.invoke_target(
+            binding,
+            trigger=ctx["fixture"]["trigger"],
+            registry_path=ctx["registry"],
+            ledger_path=ctx["ledger"],
+            inputs=ctx["fixture"]["inputs"],
+            timestamp=ctx["now"],
+        )
+        assert result == direct == {"matched": True, "invoked": False, "reason": "expired"}
+        assert (ctx["ledger"].read_bytes(), ctx["registry"].read_bytes()) == before
+        assert (
+            capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+                "invocations"
+            ]
+            == []
+        )
+        assert "causal_edge" not in result
+        assert feedback.capability_causal_evidence(ctx["capability_id"], ctx["version_id"]) == []
 
 
 def test_compiled_invocation_unreadable_ledger_refuses_without_writes(
@@ -966,6 +1011,573 @@ def test_direct_invoke_target_unreadable_ledger_refuses_without_writes(
         ]
         == []
     )
+
+
+@pytest.mark.parametrize("rollback", ["pending", 123, ["pending"]])
+def test_binding_ineligible_malformed_rollback_refuses_as_rollback_pending(rollback) -> None:
+    # A rollback declaration that is not a mapping cannot prove no rollback
+    # is pending; it must refuse as pending instead of raising AttributeError.
+    binding = {"kind": "workflow", "artifact": {}, "lifecycle_policy": {}, "rollback": rollback}
+    assert capability_targets._binding_ineligible(binding, 100, {}) == "rollback_pending"
+    cap = {"expiry": 9999999999, "kill_switch": "ORCH_CAPABILITY_WORKFLOW_ENABLED=0"}
+    assert capability_lifecycle._invocation_ineligible(cap, binding, 100, {}) == (
+        "rollback_pending"
+    )
+
+
+def test_direct_invoke_target_malformed_rollback_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id = ctx["registry"], ctx["version_id"]
+    payload = json.loads(registry.read_text(encoding="utf-8"))
+    payload["targets"][version_id]["rollback"] = "pending"
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    registry_before = registry.read_bytes()
+    ledger_before = ctx["ledger"].read_bytes()
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:malformed-rollback",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "rollback_pending"}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+    assert registry.read_bytes() == registry_before
+    assert ctx["ledger"].read_bytes() == ledger_before
+
+
+def test_ledger_ineligible_skips_unrelated_non_mapping_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ledger, registry = ctx["ledger"], ctx["registry"]
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    # Place the corrupt row first so skipping it is required to find our row.
+    payload["capabilities"] = {"unrelated-corrupt": "corrupt", **payload["capabilities"]}
+    ledger.write_text(json.dumps(payload), encoding="utf-8")
+    before = ledger.read_bytes()
+    registry_before = registry.read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=registry)
+    assert capability_targets._ledger_ineligible(binding, ledger, ctx["now"], {}) is None
+    assert ledger.read_bytes() == before
+    assert registry.read_bytes() == registry_before
+
+
+def test_ledger_ineligible_matches_own_row_by_key_when_capability_id_field_drifts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A mapping row under the binding's ledger key must still be judged even
+    # when its capability_id field no longer matches that key.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ledger, registry = ctx["ledger"], ctx["registry"]
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    own = payload["capabilities"][ctx["capability_id"]]
+    own["capability_id"] = "drifted-other-id"
+    own["rollback_pending"] = {"reason": "regressed"}
+    # Drop the version pin so lookup cannot short-circuit on version identity.
+    own.pop("capability_version_id", None)
+    ledger.write_text(json.dumps(payload), encoding="utf-8")
+    before = ledger.read_bytes()
+    registry_before = registry.read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=registry)
+    assert (
+        capability_targets._ledger_ineligible(binding, ledger, ctx["now"], {}) == "rollback_pending"
+    )
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id="direct:drifted-capability-id",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "rollback_pending"}, result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=registry)["invocations"]
+        == []
+    )
+    assert "causal_edge" not in result
+    assert ledger.read_bytes() == before
+    assert registry.read_bytes() == registry_before
+
+
+def test_direct_invoke_target_non_mapping_own_row_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    registry, version_id, ledger = ctx["registry"], ctx["version_id"], ctx["ledger"]
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    payload["capabilities"][ctx["capability_id"]] = "corrupt-row"
+    ledger.write_text(json.dumps(payload), encoding="utf-8")
+    before = ledger.read_bytes()
+    binding = capability_targets.get_binding(version_id, registry_path=registry)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=registry,
+        ledger_path=ledger,
+        target_run_id="direct:corrupt-row",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert capability_targets.get_binding(version_id, registry_path=registry)["invocations"] == []
+    assert "causal_edge" not in result
+    assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("row", ["corrupt-row", 0, "", []])
+def test_compiled_invocation_non_mapping_row_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["ledger"].read_text(encoding="utf-8"))
+    payload["capabilities"][ctx["capability_id"]] = row
+    ctx["ledger"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-row:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": False, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("status", [["canary"], {"status": "canary"}, 123])
+def test_compiled_invocation_malformed_status_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status
+) -> None:
+    # An unhashable or non-string status is a corrupt row: it must refuse
+    # with its status reason instead of raising TypeError on the set check.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], status=status)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-status:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {
+        "matched": False,
+        "invoked": False,
+        "reason": f"status:{status}",
+    }, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("version_id", [None, 123, "", "bogus"])
+def test_compiled_invocation_missing_version_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version_id
+) -> None:
+    # A row without a usable capability_version_id cannot be matched to a
+    # binding; it refuses as unreadable instead of raising KeyError.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["ledger"].read_text(encoding="utf-8"))
+    if version_id is None:
+        del payload["capabilities"][ctx["capability_id"]]["capability_version_id"]
+    else:
+        payload["capabilities"][ctx["capability_id"]]["capability_version_id"] = version_id
+    ctx["ledger"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-version:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": False, "invoked": False, "reason": "ledger_unreadable"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "kill_switch",
+    [["ORCH_CAPABILITY_WORKFLOW_ENABLED=0"], 123, "invalid-switch", {"env": ""}],
+)
+def test_compiled_invocation_malformed_kill_switch_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kill_switch
+) -> None:
+    # A kill-switch declaration that is neither a string nor a mapping cannot
+    # prove the switch is not triggered, so it refuses as kill_switch.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], kill_switch=kill_switch)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-kill-switch:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "kill_switch"}, result
+    assert "causal_edge" not in result
+    assert (
+        capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])[
+            "invocations"
+        ]
+        == []
+    )
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+def test_direct_invoke_target_malformed_ledger_kill_switch_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], kill_switch={"env": ""})
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-kill-switch",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "kill_switch"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        ["canary"],
+        {"tasks_per_day": "not-a-count"},
+        {"tasks_per_day": {"x": 1}},
+        # Non-finite quotas raise OverflowError on int(); refuse, do not raise.
+        {"tasks_per_day": float("inf")},
+        {"tasks_per_day": float("-inf")},
+    ],
+)
+def test_compiled_canary_malformed_policy_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy
+) -> None:
+    # A canary policy that cannot be parsed cannot prove quota remains; it
+    # refuses as exhausted (quota logic for well-formed policies unchanged).
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(
+        ctx["ledger"],
+        "capabilities",
+        ctx["capability_id"],
+        status="canary",
+        lifecycle_policy=policy,
+    )
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-canary-policy:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+def test_compiled_canary_corrupt_invocation_history_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], status="canary")
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    payload["targets"][ctx["version_id"]]["invocations"] = {"not": "a-list"}
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:corrupt-canary-history:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("invoked_at", [None, float("inf")])
+def test_compiled_canary_unusable_timestamp_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invoked_at
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    _mutate_json(ctx["ledger"], "capabilities", ctx["capability_id"], status="canary")
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    row = {"lifecycle_stage": "canary"}
+    if invoked_at is not None:
+        row["invoked_at"] = invoked_at
+    payload["targets"][ctx["version_id"]]["invocations"] = [row]
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="workflow:bad-canary-timestamp:1",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "canary_quota_exhausted"}
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("field", ["kind", "artifact", "binding_path"])
+def test_direct_invoke_target_missing_binding_shape_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    # A registry binding missing its kind or artifact is corrupt; direct
+    # invocation refuses as artifact_invalid instead of raising KeyError.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    del payload["targets"][ctx["version_id"]][field]
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-binding-shape",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("artifact", []),
+        ("invocations", None),
+        ("invocations", {}),
+        ("binding_path", None),
+        ("binding_path", ""),
+        ("binding_path", 17),
+    ],
+)
+def test_direct_invoke_target_corrupt_binding_values_refuse_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    payload["targets"][ctx["version_id"]][field] = value
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-binding-values",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize(
+    "binding", [None, "corrupt", [], {}, {"kind": "workflow"}, {"capability_version_id": 17}]
+)
+def test_direct_invoke_target_malformed_binding_argument_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, binding
+) -> None:
+    # A direct caller handing invoke_target a non-mapping or version-less
+    # binding gets a refusal, not a KeyError/TypeError, and nothing is written.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:malformed-binding-argument",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, result
+    assert "causal_edge" not in result
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("row", [None, "corrupt", 17, ["corrupt"]])
+def test_corrupt_registry_row_refuses_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, row
+) -> None:
+    # A registry row that is not a mapping cannot prove eligibility: both the
+    # direct and the compiled entrypoints refuse instead of raising.
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text(encoding="utf-8"))
+    payload["targets"][ctx["version_id"]] = row
+    ctx["registry"].write_text(json.dumps(payload), encoding="utf-8")
+    ledger_before = ctx["ledger"].read_bytes()
+    registry_before = ctx["registry"].read_bytes()
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    direct = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        target_run_id="direct:corrupt-registry-row",
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert direct == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, direct
+    compiled = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="compiled:corrupt-registry-row",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert compiled == {"matched": True, "invoked": False, "reason": "artifact_invalid"}, compiled
+    assert "causal_edge" not in compiled
+    assert ctx["ledger"].read_bytes() == ledger_before
+    assert ctx["registry"].read_bytes() == registry_before
+
+
+@pytest.mark.parametrize("rollback", [{}, {"phase": "unknown"}, {"phase": []}])
+def test_unknown_rollback_phase_refuses_both_entrypoints_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rollback
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    payload = json.loads(ctx["registry"].read_text())
+    payload["targets"][ctx["version_id"]]["rollback"] = rollback
+    ctx["registry"].write_text(json.dumps(payload))
+    before = (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes())
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid rollback must refuse before the producer")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", forbidden)
+    direct = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    compiled = capability_lifecycle.invoke_compiled_target(
+        ctx["capability_id"],
+        trigger=ctx["fixture"]["trigger"],
+        target_run_id="compiled:unknown-rollback",
+        ledger_path=ctx["ledger"],
+        target_registry_path=ctx["registry"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert direct == compiled == {"matched": True, "invoked": False, "reason": "rollback_pending"}
+    assert (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes()) == before
+
+
+@pytest.mark.parametrize("identity", [None, "different-version"])
+def test_loaded_binding_identity_refuses_before_producer_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identity
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    binding = capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"])
+    payload = json.loads(ctx["registry"].read_text())
+    row = payload["targets"][ctx["version_id"]]
+    row.pop("capability_version_id")
+    if identity is not None:
+        row["capability_version_id"] = identity
+    ctx["registry"].write_text(json.dumps(payload))
+    before = (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes())
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid loaded identity must refuse before the producer")
+
+    monkeypatch.setattr(compiler, "dry_run_workflow_rail", forbidden)
+    result = capability_targets.invoke_target(
+        binding,
+        trigger=ctx["fixture"]["trigger"],
+        registry_path=ctx["registry"],
+        ledger_path=ctx["ledger"],
+        inputs=ctx["fixture"]["inputs"],
+        timestamp=ctx["now"],
+    )
+    assert result == {"matched": True, "invoked": False, "reason": "artifact_invalid"}
+    assert (ctx["registry"].read_bytes(), ctx["ledger"].read_bytes()) == before
+
+
+def test_absent_binding_still_reports_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _registered_workflow(tmp_path, monkeypatch)
+    payload = json.loads(ctx["registry"].read_text())
+    del payload["targets"][ctx["version_id"]]
+    ctx["registry"].write_text(json.dumps(payload))
+    assert capability_targets.get_binding(ctx["version_id"], registry_path=ctx["registry"]) is None
+    with pytest.raises(ValueError, match="lifecycle version has no target binding"):
+        capability_lifecycle.invoke_compiled_target(
+            ctx["capability_id"],
+            trigger=ctx["fixture"]["trigger"],
+            target_run_id="missing",
+            ledger_path=ctx["ledger"],
+            target_registry_path=ctx["registry"],
+            timestamp=ctx["now"],
+        )
 
 
 def test_high_risk_candidate_uses_bounded_brain_owner_question(
