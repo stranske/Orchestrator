@@ -427,6 +427,7 @@ def test_export_includes_capacity_block(tmp_path: Path) -> None:
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
@@ -600,7 +601,7 @@ def test_publish_guard_preserves_remote_until_explicit_override(
     monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
-    monkeypatch.setattr(export, "build_document", lambda *a: document)
+    monkeypatch.setattr(export, "build_document", lambda *a, **kw: document)
     argv = [
         "route_weights_export.py",
         "--publish",
@@ -840,7 +841,7 @@ def test_failed_build_is_never_credited_as_invocation(tmp_path, monkeypatch):
         export.capabilities, "daily_heartbeat", lambda *a, **k: heartbeats.append(a)
     )
 
-    def failed_build(*args):
+    def failed_build(*args, **kwargs):
         raise RuntimeError("fixture build failed")
 
     monkeypatch.setattr(export, "build_document", failed_build)

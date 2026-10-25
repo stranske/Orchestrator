@@ -807,7 +807,7 @@ def fleet_gates(
     }
 
 
-def _exploration_window() -> dict:
+def _exploration_window(*, now: int | None = None) -> dict:
     """Read the hosted rate and policy-switch population, never equating unreadable with zero."""
     import feedback
 
@@ -821,6 +821,8 @@ def _exploration_window() -> dict:
         "switches": "UNKNOWN",
         "errors": [],
     }
+    timestamp = int(time.time()) if now is None else now
+    cutoff = None
     state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
     try:
         state = json.loads((state_dir / "exploration-window.json").read_text(encoding="utf-8"))
@@ -835,7 +837,24 @@ def _exploration_window() -> dict:
             n_by_policy=state["n_by_policy"],
         )
         window["errors"].extend(state.get("errors", []))
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # New decisions share the exporter's exact snapshot boundary. Legacy state
+        # has no retained instant; bound its count to this review's captured clock.
+        if "decided_at" in state:
+            decided_at = datetime.fromisoformat(state["decided_at"].replace("Z", "+00:00"))
+            if decided_at.tzinfo is None or decided_at.utcoffset() != timezone.utc.utcoffset(
+                decided_at
+            ):
+                raise ValueError("exploration decision instant must be UTC")
+            cutoff = int(decided_at.timestamp())
+        else:
+            cutoff = timestamp
+        if cutoff < int(start.timestamp()):
+            raise ValueError("exploration decision precedes window start")
+        window["as_of"] = (
+            datetime.fromtimestamp(cutoff, timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        cutoff = None
         window["errors"].append(f"exploration window unmeasured: {exc}")
     ok, out, reason = _gh_call(
         [
@@ -855,15 +874,16 @@ def _exploration_window() -> dict:
     except (ValueError, KeyError, TypeError) as exc:
         window["errors"].append(f"published rate: {exc}")
     try:
-        if window["start"] == "unmeasured":
-            raise ValueError("window start unmeasured")
+        if window["start"] == "unmeasured" or cutoff is None:
+            raise ValueError("window start or decision instant unmeasured")
         with closing(
             sqlite3.connect(f"{feedback.DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
         ) as conn:
             window["switches"] = conn.execute(
                 "SELECT count(*) FROM agent_switches WHERE source='policy' "
-                "AND delegation_source='route_weights_exploration' AND switched_ts>=?",
-                (int(start.timestamp()),),
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=? "
+                "AND switched_ts<=?",
+                (int(start.timestamp()), cutoff),
             ).fetchone()[0]
     except (sqlite3.Error, ValueError) as exc:
         window["errors"].append(f"exploration switches: {exc}")

@@ -1090,6 +1090,7 @@ def test_no_tick_producer_runs_above_the_heartbeat_export():
     separate question and this is the check that owns it.
     """
     import capability_activation_audit as audit
+    import paths
 
     # POSITIVE CONTROL, on synthetic text, so a parse that finds nothing cannot read as clean.
     control = audit.shell_heartbeat_gate(
@@ -1099,6 +1100,11 @@ def test_no_tick_producer_runs_above_the_heartbeat_export():
     )
     assert [m for _, m in control["before"]] == ["early.py"], control
     assert [m for _, m in control["after"]] == ["late.py"], control
+
+    # Also inspect this shipped tick, independent of any incumbent runtime path.
+    source_gate = audit.shell_heartbeat_gate((paths.REPO_ROOT / "orchestrate.sh").read_text())
+    assert all(module != "route_weights_export.py" for _, module in source_gate["before"])
+    assert any(module == "route_weights_export.py" for _, module in source_gate["after"])
 
     gate = audit.heartbeat_env_gate()
     assert gate["anchor_present"], (

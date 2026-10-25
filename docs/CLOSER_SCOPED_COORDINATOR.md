@@ -29,6 +29,15 @@ when their immutable packet/snapshot provenance and the preserving cache-writer 
 prove that they are observations. Native operation fields or history cannot borrow that
 classification. Every original row and reservation remains unchanged.
 
+An audited `closer-unverified-read-barrier/v1` may also carry a terminal, one-target
+queue wait with no operation or operation history. The census verifies the retained
+snapshot, audit chain, exact current receipt, revision and head with the existing
+validators. Only native remote-effect admission excludes that row's inferred remote
+aliases. Explicit original intent keys and every local/workspace key remain fenced;
+local effects, live independent reservations, missing/mismatched proof and genuinely
+uncertain operations retain their existing guards. This projection grants no retry,
+acceptance or historical-state mutation authority.
+
 ## Effects and provider capacity
 
 The dispatcher derives mutation aliases from prepared evidence: PR, original source issues,
@@ -81,3 +90,8 @@ The sleep-only timing fixture is not eligible-work throughput evidence. Active-w
 supported desktop/controller qualification, installed helper migration, and a real approved
 low-effort response reaching a guarded queue action remain required. The installed generation,
 explicit pauses, existing claims, quotas, and uncertain ledgers have not been replaced or cleared.
+
+
+### Current verifier outcome and incomplete reads
+
+An older terminal-incomplete chain with no semantic verdict must not veto a complete, admitted canonical review of the exact same repository, PR, head and merge. Existing applicability rules may supersede that older chain when every old node matches the complete anchor's request digest or material digest and predates it. Material binds code/diff, CI hard gate and required selectors; equal material does not mean unchanged requirements. The new full review assesses the revised authoritative request. Both digests changing, actual verdict conflicts, advisory or unadmitted results, newer observations and ambiguous causal chains retain their guards. All input markers remain in history; source-issue outcome ownership is unchanged.
