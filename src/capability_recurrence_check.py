@@ -258,10 +258,43 @@ def _tick_env_attempt() -> tuple[dict[str, str], dict]:
     except OSError as exc:  # a cloud-sync mount can fail a read that then succeeds
         return {}, {"reason": "script_unreadable", "detail": f"{type(exc).__name__}: {exc}"[:120]}
     end = next((i for i, ln in enumerate(lines) if ln.startswith("_gh_gate()")), len(lines))
-    script = "\n".join(lines[:end]) + "\nenv | grep '^ORCH_' || true\n"
+    inspection = lines[:end]
+    # Real ticks decide this policy only after auth/watchdog startup.
+    # Replay the EXACT marked shell block here, under the existing timeout, so
+    # inspection measures the same defaults without executing real tick steps.
+    window_start = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if line.startswith("# ORCH-ANCHOR: exploration-window-start")
+        ),
+        None,
+    )
+    if window_start is not None and window_start >= end:
+        window_end = next(
+            (
+                i
+                for i in range(window_start + 1, len(lines))
+                if lines[i].startswith("# ORCH-ANCHOR: exploration-window-end")
+            ),
+            None,
+        )
+        if window_end is None:
+            return {}, {
+                "reason": "script_unreadable",
+                "detail": "exploration preview block is incomplete",
+            }
+        inspection = [*inspection, *lines[window_start : window_end + 1]]
+    script = "\n".join(inspection) + "\nenv | grep '^ORCH_' || true\n"
+    # bash-c has no script filename. Supply the actual script as argument zero
+    # for its existing $0 fallback, without inventing an exported ORCH_ flag that
+    # could mask a genuinely silent prologue. Explicit ORCH_DIR still wins.
     try:
         proc = subprocess.run(
-            ["bash", "-c", script], capture_output=True, text=True, timeout=TICK_ENV_TIMEOUT
+            ["bash", "-c", script, str(ORCHESTRATE.resolve())],
+            capture_output=True,
+            text=True,
+            timeout=TICK_ENV_TIMEOUT,
         )
     except FileNotFoundError:
         return {}, {"reason": "bash_missing", "detail": "no `bash` on PATH"}
@@ -286,9 +319,11 @@ def tick_env(refresh: bool = False, *, log: bool = True) -> dict[str, str]:
     passes (so its naive default of 1 is a lie today). So bash evaluates the real prologue and we
     read the result back, rather than re-deriving the logic here and letting the two drift.
 
-    The prologue is verified side-effect-free: `set -euo pipefail`, `unset GITHUB_TOKEN`, exports
-    and echoes only. Ambient ORCH_* values still win, exactly as `${X:-default}` means they do in a
-    real tick, so an operator override is honoured rather than hidden.
+    The base prologue and exact marked exploration-preview block are read-only. The latter
+    runs after authentication/watchdog setup in a real tick; inspection replays its shared
+    shell text under the same bounded subprocess timeout, without executing real tick steps.
+    Ambient ORCH_* values still win, exactly as `${X:-default}` means they do in a real tick,
+    so an operator override is honoured rather than hidden.
 
     WHY IT RETRIES AND REPORTS A REASON. Resolving the env means running a subprocess against a
     script on a cloud-sync volume, on a machine that also runs the real tick hourly at :40. That

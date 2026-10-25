@@ -699,3 +699,70 @@ def test_every_nonoptimal_status_suppresses_even_computed_ranks(status):
     export._attach_comparative_ranks(rows, result, "implement")
     assert rows[0]["comparative_rank"] is None
     assert rows[0]["comparative_status"] == status + ": " + result["reasons"][0]
+
+
+def test_normal_export_uses_fresh_clock_for_post_tick_capacity(tmp_path, monkeypatch):
+    database, snapshot = fixture(tmp_path)
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path))
+    # The earlier tick decision must not pin a later full capacity document.
+    monkeypatch.setenv("_orch_exploration_as_of", str(NOW - 60))
+    monkeypatch.setattr(
+        export,
+        "_now",
+        lambda: export.dt.datetime.fromtimestamp(NOW, export.dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+    )
+    monkeypatch.setattr(export, "_current_capacity_snapshot", lambda: snapshot)
+    monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["route_weights_export.py", "--feedback-db", str(database), "--state-dir", str(tmp_path)],
+    )
+    assert export.main() == 0
+    document = json.loads((tmp_path / "route-weights-export.json").read_text())
+    assert document["comparative"]["status"] == "optimal"
+    assert document["comparative"]["inputs"]["pacing_observed_at"] == NOW
+    # The existing guard continues to reject a genuinely future observation.
+    stale_clock = export.build_document(database, now=NOW - 60, capacity_snapshot=snapshot)
+    assert stale_clock["comparative"]["status"] == "inputs_unmeasured"
+    assert any(
+        "in the future" in row.get("reason", "")
+        for row in stale_clock["comparative"]["inputs"]["cost_source_by_agent"].values()
+    )
+
+
+@pytest.mark.parametrize(
+    "snapshot_offset,expected",
+    [(30, "optimal"), (32, "inputs_unmeasured"), (-3601, "inputs_unmeasured")],
+)
+def test_live_capacity_uses_post_collection_clock_without_trusting_future_data(
+    tmp_path, monkeypatch, snapshot_offset, expected
+):
+    db, snapshot = fixture(tmp_path)
+    snapshot["generated_at"] = NOW + snapshot_offset
+    snapshot["ts"] = NOW + snapshot_offset
+    sampled = []
+    measured_at = []
+    measure = comparative.measure
+
+    def measured(*args, **kwargs):
+        measured_at.append(kwargs["now"])
+        return measure(*args, **kwargs)
+
+    monkeypatch.setattr(comparative, "measure", measured)
+
+    def collect():
+        sampled.append(True)
+        return snapshot
+
+    monkeypatch.setattr(export, "_current_capacity_snapshot", collect)
+    monkeypatch.setattr(export, "_now", lambda: "2027-01-15T08:00:31Z")
+    # The policy/window decision precedes the real capacity collection by31s.
+    document = export.build_document(db, now=NOW)
+    assert sampled == [True]
+    assert document["generated_at"] == "2027-01-15T08:00:00Z"
+    assert document["comparative"]["status"] == expected
+    assert measured_at == [NOW + 31]
