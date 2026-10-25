@@ -175,7 +175,7 @@ class OfflineDelivery:
         assert agent == "gemini"
         self.provider_calls.append(prompt)
         proposal = copy.deepcopy(self.proposal)
-        mandatory = json.loads(prompt.split("\n", 1)[1].split("\nBounded packet samples", 1)[0])[
+        mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
             "mandatory"
         ]
         packet = json.loads(Path(mandatory["packet_ref"]["path"]).read_text())
