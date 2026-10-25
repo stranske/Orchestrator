@@ -100,8 +100,8 @@ def test_render_preserves_existing_controller_and_has_one_hook(tmp_path):
 
 def test_existing_marker_does_not_repin_to_new_manifest(tmp_path):
     first = hook.render(SOURCE, str(tmp_path / "first.json"))
-    assert hook.render(first, str(tmp_path / "second.json")) == first
-    # A rollout must inspect the embedded path; this is not a repin API.
+    with pytest.raises(SystemExit, match="pin|manifest"):
+        hook.render(first, str(tmp_path / "second.json"))
     assert str(tmp_path / "second.json") not in first
 
 
@@ -123,9 +123,6 @@ def test_renderer_cannot_overwrite_input_controller(tmp_path):
     assert controller.read_text() == SOURCE
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Deployment blocker: existing marker silently ignores a different pin"
-)
 def test_differing_existing_pin_must_refuse_instead_of_claiming_success(tmp_path):
     first = hook.render(SOURCE, str(tmp_path / "first.json"))
     with pytest.raises(SystemExit, match="pin|manifest"):
@@ -150,10 +147,6 @@ def test_existing_substantive_dispatch_remains_whole_assignment_pipeline(tmp_pat
     assert all(flag in command for flag in ("--apply", "--workers", "--pipeline"))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Deployment blocker: same-path cached module can survive changed disk/manifest pin",
-)
 def test_changed_same_path_disk_pin_must_not_execute_cached_old_module(tmp_path):
     # Use the existing isolated subprocess fixture, never alter this pytest
     # process's imports or any installed controller/package.
@@ -177,3 +170,74 @@ loaded=ns['_load_pinned_closer_campaign']()
 print(json.dumps(loaded is None or getattr(loaded,'RUNTIME_VERSION',None)=='new-disk'))
 """
     assert invoke(controller, script) is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda source: source + hook.MARKER + "\n",
+        lambda source: source.replace(
+            "CLOSER_CAMPAIGN_MANIFEST = ", "CLOSER_CAMPAIGN_MANIFEST = object() # ", 1
+        ),
+        lambda source: source + "\nCLOSER_CAMPAIGN_MANIFEST = '/conflict'\n",
+        lambda source: source.replace("CLOSER_CAMPAIGN_MANIFEST = ", "OTHER_PIN = ", 1),
+        lambda source: source + "\nthis is invalid python !\n",
+        lambda source: source.replace(
+            "return campaign.controller_entry(argv, demand_router.main)", "return 0"
+        ),
+        lambda source: source
+        + "\ndef overwrite():\n    global CLOSER_CAMPAIGN_MANIFEST\n    CLOSER_CAMPAIGN_MANIFEST = '/conflict'\n",
+    ],
+    ids=[
+        "multiple-markers",
+        "computed-pin",
+        "multiple-bindings",
+        "missing-binding",
+        "syntax",
+        "changed-hook",
+        "nested-binding",
+    ],
+)
+def test_marked_malformed_controller_refuses(tmp_path, mutation):
+    pin = str(tmp_path / "pin.json")
+    rendered = hook.render(SOURCE, pin)
+    with pytest.raises(SystemExit, match="manifest pin rejected"):
+        hook.render(mutation(rendered), pin)
+
+
+def test_marker_without_loader_is_not_idempotent_success(tmp_path):
+    with pytest.raises(SystemExit, match="manifest pin rejected"):
+        hook.render(hook.MARKER + "\n" + SOURCE, str(tmp_path / "pin.json"))
+
+
+def test_same_binding_idempotency_normalizes_requested_path(tmp_path):
+    pin = tmp_path / "pin.json"
+    rendered = hook.render(SOURCE, str(pin))
+    assert hook.render(rendered, str(tmp_path / "subdir" / ".." / "pin.json")) == rendered
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "claims",
+        "closer_release",
+        "closer_runtime_binding",
+        "closer_campaign",
+        "router",
+        "execution_profiles",
+        "closer_distribution_package",
+    ],
+)
+def test_same_path_cached_dependency_refuses_without_import_state_mutation(tmp_path, name):
+    from test_closer_campaign_hook_loader import fixture, invoke
+
+    base, controller = fixture(tmp_path)
+    script = f"""import runpy,sys,json,types
+ns=runpy.run_path(sys.argv[1])
+foreign=types.ModuleType({name!r});foreign.__file__={str(base / (name + '.py'))!r}
+sys.modules[{name!r}]=foreign
+before=dict(sys.modules);paths=list(sys.path);bytecode=sys.dont_write_bytecode
+loaded=ns['_load_pinned_closer_campaign']()
+print(json.dumps([loaded is None,all(sys.modules.get(key) is value for key,value in before.items()),sys.path==paths,sys.dont_write_bytecode==bytecode]))
+"""
+    assert invoke(controller, script) == [True, True, True, True]

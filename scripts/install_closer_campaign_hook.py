@@ -5,12 +5,14 @@ Never edits the installed automation: it reads --controller and writes --out onl
 coordinator to review and deploy. The rendered controller loads closer_campaign (and the
 modules it imports) from the paths and sha256 digests in --manifest, never by a plain
 `import` from the controller directory, and falls back to the unchanged demand_router
-path if any digest differs. Refuses a controller of unexpected shape.
+path if any digest differs or a pinned module is already cached. Cached modules
+require a fresh controller process. Refuses unexpected or conflicting hook bindings.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import sys
 from pathlib import Path
@@ -51,8 +53,9 @@ def _load_pinned_closer_campaign():
                 return None
             if hashlib.sha256((base / name).read_bytes()).hexdigest() != digest:
                 return None
-            loaded = _sys.modules.get(_Path(name).stem)
-            if loaded is not None and _Path(getattr(loaded, "__file__", "")).resolve() != (base / name).resolve():
+            # Disk hashes cannot attest code already cached at even the same path.
+            # Never reload/delete shared imports: require a fresh controller process.
+            if _Path(name).stem in _sys.modules:
                 return None
         _sys.dont_write_bytecode = True
         # Always move the pin first, even if it was already later in the path.
@@ -63,11 +66,6 @@ def _load_pinned_closer_campaign():
             path = str(base / (name + ".py"))
             if name + ".py" not in modules:
                 return None
-            loaded = _sys.modules.get(name)
-            if loaded is not None:
-                if _Path(getattr(loaded, "__file__", "")).resolve() != _Path(path).resolve():
-                    return None
-                continue
             spec = importlib.util.spec_from_file_location(name, path)
             if spec is None or spec.loader is None:
                 return None
@@ -84,6 +82,39 @@ def _load_pinned_closer_campaign():
 
 def render(source: str, manifest_path: str) -> str:
     if MARKER in source:
+        expected = str(Path(manifest_path).resolve())
+        try:
+            tree = ast.parse(source)
+            bindings = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Name)
+                and node.id == "CLOSER_CAMPAIGN_MANIFEST"
+                and isinstance(node.ctx, ast.Store)
+            ]
+            assignments = [
+                node
+                for node in tree.body
+                if isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "CLOSER_CAMPAIGN_MANIFEST"
+            ]
+            if len(bindings) != 1 or len(assignments) != 1:
+                raise ValueError("ambiguous manifest binding")
+            pin = ast.literal_eval(assignments[0].value)
+            if not isinstance(pin, str) or pin != expected:
+                raise ValueError("manifest pin differs")
+            loader = LOADER.format(marker=MARKER, manifest=expected)
+            if (
+                source.count(MARKER) != 1
+                or source.count(loader) != 1
+                or source.count(MAIN_DEF) != 1
+                or source.count(NEW) != 1
+            ):
+                raise ValueError("unexpected pinned loader shape")
+        except (SyntaxError, ValueError, TypeError) as exc:
+            raise SystemExit(f"controller manifest pin rejected: {exc}") from exc
         return source
     if source.count(OLD) != 1 or source.count(MAIN_DEF) != 1:
         raise SystemExit(

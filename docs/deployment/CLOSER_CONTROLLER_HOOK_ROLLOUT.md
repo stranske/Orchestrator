@@ -1,6 +1,15 @@
 # Existing Closer campaign hook: staged deployment manifest
 
-Status: PREPARED, NOT AUTHORIZED FOR INSTALL, NOT PRODUCTION QUALIFIED.
+Status: SOURCE CORRECTION TESTED; NOT AUTHORIZED FOR INSTALL, NOT PRODUCTION QUALIFIED.
+
+The installer-only follow-up rejects differing/malformed marked bindings and cached
+pinned modules (including the same path), requiring a fresh controller process.
+Both prior strict expected failures were demonstrated as real failures before the
+fix and are now ordinary passing regressions. The baseline matrix below records
+the original preparation evidence; this source correction does not complete the
+remaining demand/assignment/coexistence or production qualification requirements.
+Old marked loader templates are rejected rather than silently upgraded: render
+from a reviewed unhooked controller snapshot and inspect the resulting preview.
 Category 5 baseline: Orchestrator `6b574927`; branch `codex/category5-deployment`.
 Scope: existing `closer_campaign.controller_entry/tick_safe` and
 `scripts/install_closer_campaign_hook.py`. Keep the existing Luna controller.
@@ -25,6 +34,15 @@ than treating an in-progress source branch as a qualified installable package.
 These are snapshots, not permission to restore them over newer changes. The older
 hourly :35 native route must be inventoried with its actual scheduler owner before
 cutover; wrapper inspection alone does not establish its timer or exclusivity.
+Read-only follow-up checked [issue #942](https://github.com/stranske/Orchestrator/issues/942)
+against the existing log and pinned manifest: 83 parsed launcher results, all
+`refused`; both pinned automation policy files currently mismatch their hashes.
+The issue's detailed refusal reason and launchd exit status were not independently
+re-executed here. This old path is not a known-good rollback target. Do not refresh
+its policy pins, revive it, copy receipts, or touch its UNKNOWN campaign as part
+of this installer correction. Final trigger reconciliation belongs to the exact
+qualified package and approved cutover owner.
+
 No live file, schedule, security/closure flag, or automation record was modified.
 Disk preflight: approximately 99 GiB free. Process inspection was sandbox-denied;
 only one lightweight pytest process was used, no broad suite or provider call.
@@ -48,8 +66,8 @@ A passing component test is not an observed installed automatic cycle.
 | Valid-stop | Existing queue assignment/source-revision binding test PASS | Exact deployment's pipeline receipt plus automatic-cycle substantive work |
 | Substantive integration | Acceptance verifies existing dispatcher `run --assignment --state --apply --workers --pipeline --runtime-manifest` | Preserve runtime AC, fresh evidence, review, merge guard and native verifier; do not replace dispatcher with a launch-only LLM |
 | Unqualified pin | Existing integration test PASS, no launch/fallback | Exact mechanism-specific qualification receipts |
-| Repin / repeated render | Same-pin render idempotent PASS; DIFFERING PIN EXPECTED FAILURE | `render()` silently returns marked source unchanged: must reject mismatch or fix installer under parent ownership before install |
-| Same-path cached module after package update | CAUSALLY REPRODUCED strict expected failure in isolated subprocess: new file+manifest hash, old module returned | Reject/restart fresh controller process or reviewed loader fix; same-path disk hash does not attest cached code |
+| Repin / repeated render | FIXED: same-pin valid shape idempotent; differing/malformed/multiple bindings reject | Deploy only reviewed fresh template preview; old hook templates require explicit rerender |
+| Same-path cached module after package update | FIXED: loader refuses any already-cached closure module before import-state changes | Use a fresh controller process; shared import objects are never reloaded or deleted |
 | Native provenance | Direct controller tick is not observed wrapper entry | Qualified native wrapper path or independently qualified intended mechanism, never forged native origin |
 | Old/new trigger coexistence | NOT proven | Approved exact cutover transaction and overlapping-trigger test; retain old lane ownership/unknown barriers |
 | Source closure | `ORCH_SUPERVISOR_CLOSE` gate remains unchanged | Separate explicit approval; keep opt-in off in package/worker environment |
@@ -148,9 +166,24 @@ inputs, not substitutes for this record.
 ## Handoff / remaining blockers
 
 Core owner has acknowledged no overlap for the dedicated acceptance filename.
-Only new tests and this manifest are owned here; campaign, dispatcher, hold,
-profile and execution-contract source remain with their existing owners. Installer
-repin behavior, causal same-path cached-module mismatch and fresh-admission ordering were reported to core owner; no source
-fix or live install was attempted. Final activation is pending qualified exact
+The installer, dedicated acceptance tests and this manifest are owned here; campaign, dispatcher, hold,
+profile and execution-contract source remain with their existing owners. Installer repin and cached-module defects were reported to core owner and subsequently fixed under parent-authorized installer-only ownership. Fresh-admission ordering remains a source-owner handoff. No live install was attempted. Final activation is pending qualified exact
 package, missing demand/overlap/atomic-admission evidence, and explicit deployment
 authorization. The separately denied consumer response batch remains untouched.
+
+## Installer source correction verification
+
+Both original expected failures were first run as ordinary regressions against
+the unchanged installer: 2 failed (conflicting pin did not raise; updated disk
+pin returned old cached code). With the correction, 42 focused installer/hook
+tests pass, including malformed/multiple bindings and markers, same-pin normalized
+idempotency, all seven same-path cached dependencies preserving existing import
+objects/path/bytecode setting, valid replacement Python, original loader tamper
+cases and installer input-overwrite rejection. No expected failures remain in
+the dedicated acceptance module. Ruff, Black and diff checks pass.
+
+The cache policy is intentionally conservative: even unchanged cached pinned
+modules require a fresh process. Imports of ordinary loader standard-library
+helpers may occur; pinned cached objects are never replaced or deleted. The
+installer recognizes only its current exact generated loader template for
+marked-source idempotency, and rejects old or modified templates.
