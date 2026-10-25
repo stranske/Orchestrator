@@ -345,7 +345,8 @@ def test_summary_counts_only_known_durable_target_outcomes(brain, monkeypatch):
     assert result["rule"] == {"judged": 0, "merged_durable": 0, "no_delivery": 1}
 
 
-def test_followed_pick_is_graded_through_linked_run(brain):
+@pytest.fixture
+def followed_pick(brain):
     path = brain / "rows.jsonl"
     row = {
         "schema_version": 1,
@@ -379,9 +380,93 @@ def test_followed_pick_is_graded_through_linked_run(brain):
         ts=102,
     )
     feedback.record_outcome("keepalive-run", merged=True, durability="durable")
-    assert triage_shadow.summary(path)["triage"] == {
-        "judged": 1,
+    return path
+
+
+def test_followed_pick_is_graded_through_linked_run(followed_pick):
+    result = triage_shadow.summary(followed_pick)["triage"]
+    assert result["judged"] == 1
+    assert result["merged_durable"] == 1
+    assert result["no_delivery"] == 0
+
+
+def test_each_followed_consumption_uses_its_own_run(followed_pick):
+    receipt = triage_shadow._read_rows(triage_shadow.consumed_path())[0]
+    triage_shadow._append(
+        triage_shadow.consumed_path(),
+        dict(receipt, consumption_id="second-pick", ts=103_000_000_000),
+    )
+    triage_shadow._append(
+        triage_shadow.linked_path(),
+        {"consumption_id": "second-pick", "status": "followed", "run_id": "second-run"},
+    )
+    feedback.record_run(
+        "second-run", "stranske/Orchestrator#78", "implement", "codex", mode="remote", ts=104
+    )
+    feedback.record_outcome("second-run", merged=False, durability="abandoned")
+    assert triage_shadow.summary(followed_pick)["triage"] == {
+        "judged": 2,
         "merged_durable": 1,
+        "no_delivery": 0,
+    }
+
+
+@pytest.mark.parametrize("status", ["not_followed", "unresolved", None])
+def test_only_followed_consumptions_are_graded(followed_pick, status):
+    link = triage_shadow._read_rows(triage_shadow.linked_path())[0]
+    link["status"] = status
+    triage_shadow.linked_path().write_text(json.dumps(link) + "\n")
+    assert triage_shadow.summary(followed_pick)["triage"] == {
+        "judged": 0,
+        "merged_durable": 0,
+        "no_delivery": 0,
+    }
+
+
+@pytest.mark.parametrize("run_id", [None, "missing-brain-run"])
+def test_followed_pick_without_delivery_is_reported(followed_pick, run_id):
+    link = triage_shadow._read_rows(triage_shadow.linked_path())[0]
+    link["run_id"] = run_id
+    triage_shadow.linked_path().write_text(json.dumps(link) + "\n")
+    assert triage_shadow.summary(followed_pick)["triage"] == {
+        "judged": 0,
+        "merged_durable": 0,
+        "no_delivery": 1,
+    }
+    text = triage_shadow.summary_line(followed_pick)
+    assert "triage top-1 merged+durable n/a (0 judged) [1 no delivery]" in text
+    assert "rule pick n/a (0 judged) [1 no delivery]" in text
+
+
+@pytest.mark.parametrize(
+    "durability,failure_class",
+    [(None, None), ("pending", None)]
+    + [("durable", name) for name in sorted(feedback.LEARNING_EXCLUDED_FAILURE_CLASSES)],
+)
+def test_delivery_judging_preserves_unknown_and_excluded_outcomes(
+    followed_pick, durability, failure_class
+):
+    triage_shadow._append(
+        outcomes._pr_cover_path(),
+        {"repo": "stranske/Orchestrator", "pr": 77, "covers": [1], "ts": 103, "final": True},
+    )
+    # Both arms resolve to the same delivering PR run, independently of the issue refs.
+    with feedback._conn() as conn:
+        conn.execute(
+            "UPDATE outcomes SET durability=?,failure_class=? WHERE run_id=?",
+            (durability, failure_class, "keepalive-run"),
+        )
+    result = triage_shadow.summary(followed_pick)
+    for arm in ("triage", "rule"):
+        assert result[arm] == {"judged": 0, "merged_durable": 0, "no_delivery": 0}
+
+
+def test_delivered_run_without_outcome_is_unknown(followed_pick):
+    with feedback._conn() as conn:
+        conn.execute("DELETE FROM outcomes WHERE run_id=?", ("keepalive-run",))
+    assert triage_shadow.summary(followed_pick)["triage"] == {
+        "judged": 0,
+        "merged_durable": 0,
         "no_delivery": 0,
     }
 

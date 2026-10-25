@@ -345,7 +345,7 @@ def record_cycle(
 
 
 def summary(path: Path | None = None) -> dict:
-    """Score only judged target outcomes; a merge with pending durability is unknown."""
+    """Score delivery runs; missing delivery differs from an outcome still awaiting judgment."""
     path = path or corpus_path()
     rows = []
     malformed = 0
@@ -389,13 +389,15 @@ def summary(path: Path | None = None) -> dict:
             totals[arm]["no_delivery"] += 1
             return
         found = conn.execute(
-            "SELECT o.merged,o.durability,o.failure_class FROM outcomes o "
-            "JOIN runs r ON r.run_id=o.run_id WHERE o.run_id=? AND r.ts > ?",
+            "SELECT o.merged,o.durability,o.failure_class FROM runs r "
+            "LEFT JOIN outcomes o ON o.run_id=r.run_id WHERE r.run_id=? AND r.ts > ?",
             (run_id, since_ts),
         ).fetchone()
+        if not found:
+            totals[arm]["no_delivery"] += 1
+            return
         if (
-            found
-            and found[1] not in (None, "pending")
+            found[1] not in (None, "pending")
             and found[2] not in feedback.LEARNING_EXCLUDED_FAILURE_CLASSES
         ):
             totals[arm]["judged"] += 1
