@@ -281,6 +281,9 @@ def main() -> int:
         try:
             strict_final('{"accept":true,"accept":false}')
         except ValueError:
+            print(
+                "transport_qualification selftest: valid final parsed; duplicate keys rejected (2 checks)"
+            )
             return 0
         raise AssertionError("duplicate JSON accepted")
     if not all((args.capture, args.suite, args.profile, args.role)):

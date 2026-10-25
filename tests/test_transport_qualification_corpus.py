@@ -201,3 +201,14 @@ def test_saved_corpus_and_report_are_reproducible(trial):
     reports = json.loads((FIXTURES / "representative-positive-control-reports.json").read_text())
     assert corpus == trial[0]
     assert reports[stem] == score(trial)
+
+
+def test_real_verify_runner_observes_both_selftests():
+    import verify
+
+    result = verify.run_selftests(
+        ["transport_qualification", "transport_qualification_corpus"], jobs=1
+    )
+    assert result["failed"] == {}
+    assert result["skipped"] == {}
+    assert set(result["ok"]) == {"transport_qualification", "transport_qualification_corpus"}

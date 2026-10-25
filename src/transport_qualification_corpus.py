@@ -358,7 +358,11 @@ def main() -> int:
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
-        assert len(build_corpus(roles.BOUNDED_CLASSIFICATION)["cases"]) == 48
+        for role in (roles.BOUNDED_CLASSIFICATION, roles.STRONG_CRITERION_ADJUDICATION):
+            assert len(build_corpus(role)["cases"]) == 48
+        print(
+            "transport_qualification_corpus selftest: both reasoning roles have 48 cases (2 checks)"
+        )
         return 0
     if not args.role:
         parser.error("--role required")
