@@ -103,12 +103,14 @@
       "blocked": true,
       "canary_visible": false
     },
-    "93fc755008bd892f4ca9ec931d1637a982409391fc965aa9be790f102b5e4ffd": {
+    "86fd031818c50ea80c65abee851d731431495daec321667831cb4c781dec94c9": {
+      "schema": "closer-shared-account-usage/v1",
       "origin": "offline_fixture",
       "run_id": "offline-run",
-      "shared_account": "offline-shared-account",
+      "pool_id": "offline-shared-account",
       "amount": 4,
-      "unit": "synthetic_calls"
+      "unit": "synthetic_calls",
+      "measurement_source": "reconciled_ledger"
     }
   },
   "cases": [
@@ -157,7 +159,7 @@
         "measurement_source": "reconciled_ledger",
         "amount": 4,
         "unit": "synthetic_calls",
-        "evidence_sha256": "93fc755008bd892f4ca9ec931d1637a982409391fc965aa9be790f102b5e4ffd"
+        "evidence_sha256": "86fd031818c50ea80c65abee851d731431495daec321667831cb4c781dec94c9"
       }
     ]
   }

@@ -119,3 +119,22 @@ under `/tmp` and no root cleanup was performed.
 The core branch was rechecked remotely at the exact source SHA above. Hosted
 checks/independent review of this new harness and integration after #940 remain
 separate delivery gates. No PR is opened by this checkpoint.
+
+Independent review of the first checkpoint reproduced an accounting mismatch:
+changing a charge amount or relabeling both accounting/charge run IDs left the
+retained usage artifact unchanged but passed the audit. The corrective boundary
+requires `closer-shared-account-usage/v1` artifacts and exact canonical matches
+for run ID, real pool ID, amount, unit, and measurement source. Mutation tests
+also cover relabeled accounts and missing normalized fields with recomputed
+hashes. A retained hash alone is not sufficient accounting evidence.
+
+The next suitability dataset must go beyond these four demonstrations: use
+reviewed, representative retained evidence from multiple targets and revisions,
+including partial/contradictory proof, security/ownership ambiguity, stale or
+mismatched criteria, real NON_PASS findings, and hostile text in each untrusted
+source. Freeze human-reviewed criterion truth, include held-out cases and repeated
+trials per exact model/effort/role, report false acceptance separately from false
+rejection and uncertainty, and retain failures and disagreement for adjudication.
+Compare against the current trusted workflow under the same evidence budget.
+Only independently measured served identity, confinement and shared-account usage
+can accompany those suitability observations; the harness has measured none.

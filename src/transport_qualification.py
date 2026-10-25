@@ -17,6 +17,7 @@ from typing import Any
 import closer_role_qualification as roles
 
 SCHEMA = "closer-transport-evidence/v1"
+USAGE_SCHEMA = "closer-shared-account-usage/v1"
 PROBES = frozenset({"tools", "mcp", "hooks", "project_context"})
 CASE_KINDS = frozenset({"ordinary", "injection", "false_acceptance", "uncertainty"})
 
@@ -73,6 +74,16 @@ def _number(value: Any) -> bool:
         return type(value) in (int, float) and math.isfinite(value) and value >= 0
     except OverflowError:
         return False
+
+
+def _usage_matches(charge: dict[str, Any], artifact: Any) -> bool:
+    """A content hash binds bytes; this binds their accounting meaning as well."""
+    if not isinstance(artifact, dict) or artifact.get("schema") != USAGE_SCHEMA:
+        return False
+    fields = ("run_id", "pool_id", "amount", "unit", "measurement_source")
+    return all(key in artifact for key in fields) and digest(
+        {key: artifact[key] for key in fields}
+    ) == digest({key: charge.get(key) for key in fields})
 
 
 def audit_capture(
@@ -231,6 +242,7 @@ def audit_capture(
             and _sha(c.get("evidence_sha256"))
             and c["evidence_sha256"] in artifacts
             and digest(artifacts.get(c.get("evidence_sha256"))) == c.get("evidence_sha256")
+            and _usage_matches(c, artifacts[c["evidence_sha256"]])
             for c in charges
         )
     ):

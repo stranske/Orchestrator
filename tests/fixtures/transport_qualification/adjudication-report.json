@@ -1,7 +1,7 @@
 {
   "activation": false,
   "capture_checks_passed": true,
-  "capture_sha256": "6096152e8f35c0ce62ba6b03ec96a096a52009bc64bc82396ad4e23b5c7dc249",
+  "capture_sha256": "f1f3e8301acaa43a4cd323c3c8fdadbec00b2f0b395b3a7dc73684cf1d3d696d",
   "cases": [
     {
       "case_id": "false_acceptance",

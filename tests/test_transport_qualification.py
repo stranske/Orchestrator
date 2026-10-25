@@ -226,3 +226,39 @@ def test_inventory_distinguishes_metadata_fixture_suitability_and_activation():
 def test_saved_report_is_reproducible_from_exact_fixture(trial):
     stem = "classification" if trial[1] == roles.BOUNDED_CLASSIFICATION else "adjudication"
     assert audit(trial) == load(f"{stem}-report")
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("amount", 999), ("unit", "other-unit"), ("measurement_source", "provider_usage")],
+)
+def test_charge_fields_must_match_retained_usage_artifact(trial, field, value):
+    trial[2]["accounting"]["charges"][0][field] = value
+    assert not audit(trial)["capture_checks_passed"]
+
+
+def test_accounting_and_charge_cannot_both_relabel_a_retained_run(trial):
+    trial[2]["accounting"]["run_id"] = "other-run"
+    trial[2]["accounting"]["charges"][0]["run_id"] = "other-run"
+    assert not audit(trial)["capture_checks_passed"]
+
+
+def test_profile_and_charge_cannot_both_relabel_a_retained_account(trial):
+    profile, role, capture, suite = trial
+    profile["capacity_pool_ids"] = ["other-shared-account"]
+    capture["binding"]["profile_identity"] = roles.profile_identity(profile)
+    capture["accounting"]["charges"][0]["pool_id"] = "other-shared-account"
+    assert not q.audit_capture(profile, role, capture, suite)["capture_checks_passed"]
+
+
+@pytest.mark.parametrize(
+    "field", ["schema", "run_id", "pool_id", "amount", "unit", "measurement_source"]
+)
+def test_usage_artifact_schema_is_required_even_with_recomputed_hash(trial, field):
+    charge = trial[2]["accounting"]["charges"][0]
+    artifact = deepcopy(trial[2]["artifacts"][charge["evidence_sha256"]])
+    del artifact[field]
+    sha = q.digest(artifact)
+    trial[2]["artifacts"][sha] = artifact
+    charge["evidence_sha256"] = sha
+    assert not audit(trial)["capture_checks_passed"]
