@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -15,8 +16,6 @@ from contextlib import contextmanager
 from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
-
-from packaging.requirements import Requirement
 
 import backlog
 import durability_sweep
@@ -587,15 +586,22 @@ class PostMergeBreakTests(unittest.TestCase):
         copied = set()
         while pending:
             name = pending.pop()
-            distribution = metadata.distribution(name)
+            try:
+                distribution = metadata.distribution(name)
+            except metadata.PackageNotFoundError:
+                continue
             name = distribution.metadata["Name"]
             if name in copied:
                 continue
             copied.add(name)
             for requirement in distribution.requires or []:
-                requirement = Requirement(requirement)
-                if requirement.marker is None or requirement.marker.evaluate():
-                    pending.append(requirement.name)
+                # Metadata requirements begin with their distribution name.  Copying
+                # every installed requirement is safe here: platform-specific ones
+                # simply are not installed and are skipped below.  Keep this test
+                # stdlib-only so the CI dependency declaration remains accurate.
+                match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
+                if match:
+                    pending.append(match.group())
             tag = next(
                 line.removeprefix("Tag: ")
                 for line in distribution.read_text("WHEEL").splitlines()
