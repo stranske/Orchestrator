@@ -126,12 +126,19 @@ def _named_test_commands(criteria: list[str]) -> list[str]:
 
 
 def _tail(value: object, limit: int) -> str:
-    """Keep the useful end of an API log without allowing it to dominate a packet."""
+    """Keep a valid UTF-8 log suffix within the byte budget, including its marker."""
+    if limit <= 0:
+        return ""
     text = str(value or "")
     encoded = text.encode("utf-8")
     if len(encoded) <= limit:
         return text
-    return "[... truncated ...]\n" + encoded[-limit:].decode("utf-8", errors="replace")
+    marker = "[... truncated ...]\n"
+    # Prefer useful log bytes when the remaining budget cannot hold a marker and a suffix.
+    if limit <= len(marker):
+        marker = ""
+    suffix = encoded[-(limit - len(marker)) :].decode("utf-8", errors="ignore")
+    return marker + suffix
 
 
 def _actions_log_endpoint(repo: str, details_url: object) -> str | None:
