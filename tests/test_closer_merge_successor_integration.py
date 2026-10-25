@@ -662,6 +662,13 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     event["event_id"] = verification_events.event_id(event)
     marker["verification_event"] = event
     marker["verification_request_basis"] = operation["result"]["verification_request_basis"]
+    marker["assessment_identity"] = {
+        "canonical": True,
+        "mode": "compare",
+        "provider": "",
+        "model": "",
+        "model2": "",
+    }
     w.snapshot["verifier_lifecycle"] = copy.deepcopy(marker)
     assert operation["result"]["core_request_correlation"]
     assert (

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import time
@@ -32,6 +33,7 @@ ROLES = frozenset(TASK_ROLES.values())
 # operations: the bound action plan must independently admit the exact fix.
 MECHANICAL_OPERATIONS = frozenset({"format", "lint_fix", "docstring_fix"})
 ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {}
+_LOGGER = logging.getLogger(__name__)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _IDENTITY_TEXT = (
     "profile_id",
@@ -294,6 +296,18 @@ def is_runtime_qualified(
     ):
         return False
     try:
-        return adapters.data_only_problem("claude", "assess") is None
-    except (OSError, ValueError, RuntimeError):
+        problem = adapters.data_only_problem("claude", "assess")
+        if problem is not None:
+            _LOGGER.debug(
+                "Runtime confinement probe refused profile %s role %s: %s",
+                profile_id,
+                role,
+                problem,
+            )
+            return False
+        return True
+    except (OSError, ValueError, RuntimeError) as exc:
+        _LOGGER.debug(
+            "Runtime confinement probe failed for profile %s role %s: %s", profile_id, role, exc
+        )
         return False

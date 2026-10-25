@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -1822,6 +1823,9 @@ def apply_write_boundary(
 # The complete data-only controls below were inspected in this installed CLI's
 # embedded help. An upgrade must be requalified; unknown flags are not a tool fence.
 DATA_ONLY_CLAUDE_SHA256 = "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+_DATA_ONLY_CLAUDE_PROBE_TTL_SECONDS = 5.0
+_DATA_ONLY_CLAUDE_PROBE_LOCK = threading.Lock()
+_DATA_ONLY_CLAUDE_PROBE_CACHE: dict[tuple[str, tuple[int, ...], str], float] = {}
 
 
 def _data_only_claude_binary() -> str:
@@ -1867,6 +1871,46 @@ def _data_only_claude_binary() -> str:
     return str(path)
 
 
+def _data_only_claude_probe_key() -> tuple[str, tuple[int, ...], str]:
+    name = shutil.which("claude")
+    if not name:
+        raise ValueError("data-only Claude CLI is absent")
+    path = Path(name).resolve(strict=True)
+    info = path.stat()
+    return (
+        str(path),
+        (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+        ),
+        DATA_ONLY_CLAUDE_SHA256,
+    )
+
+
+def _data_only_claude_eligibility_binary() -> str:
+    """Cache successful eligibility briefly; actual launches always rehash fully."""
+    with _DATA_ONLY_CLAUDE_PROBE_LOCK:
+        before = _data_only_claude_probe_key()
+        observed = time.monotonic()
+        cached = _DATA_ONLY_CLAUDE_PROBE_CACHE.get(before)
+        if cached is not None and 0 <= observed - cached < _DATA_ONLY_CLAUDE_PROBE_TTL_SECONDS:
+            if _data_only_claude_probe_key() != before:
+                raise ValueError("data-only Claude CLI changed during eligibility probe")
+            return before[0]
+        verified = _data_only_claude_binary()
+        if verified != before[0] or _data_only_claude_probe_key() != before:
+            raise ValueError("data-only Claude CLI changed during eligibility probe")
+        _DATA_ONLY_CLAUDE_PROBE_CACHE.clear()
+        _DATA_ONLY_CLAUDE_PROBE_CACHE[before] = time.monotonic()
+        return verified
+
+
 def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
 
@@ -1878,7 +1922,7 @@ def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     if agent != "claude":
         return f"data-only tool boundary unsupported for {agent}"
     try:
-        _data_only_claude_binary()
+        _data_only_claude_eligibility_binary()
     except (OSError, ValueError) as exc:
         return str(exc)
     return None

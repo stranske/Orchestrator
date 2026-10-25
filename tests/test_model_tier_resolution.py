@@ -33,6 +33,22 @@ import router
 # wants the host predicate has something to restore:
 #     monkeypatch.setattr(capacity, "_shed", _REAL_SHED)
 _REAL_SHED = capacity._shed
+_AUTH_PROBE_RUN_BEFORE_FIXTURES = subprocess.run
+
+
+def _enable_fully_mocked_auth_probe(monkeypatch):
+    # Only unit tests with subprocess already replaced may enable the branch.
+    assert adapters.subprocess.run is not _AUTH_PROBE_RUN_BEFORE_FIXTURES
+    monkeypatch.setattr(adapters, "_probe_env", lambda _agent: {})
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "1")
+
+
+def _require_live_probe_permission():
+    env_prereq.require(
+        None
+        if adapters._model_probe_enabled()
+        else "live auth/catalog probes explicitly disabled by ORCH_MODEL_PROBE"
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +91,7 @@ def _neutralise_host_shed_state(monkeypatch):
 def _live_advertised_models() -> list[str]:
     """Ask the installed agy CLI directly — deliberately bypasses the adapter's TTL cache so a
     stale cache entry can never satisfy this guard."""
+    _require_live_probe_permission()
     if not shutil.which("agy"):
         pytest.skip("agy CLI not installed on this box")
     try:
@@ -93,6 +110,7 @@ def _live_advertised_models() -> list[str]:
 
 def _live_cursor_models() -> list[str]:
     """Ask cursor-agent directly, with the credential file the fleet sources."""
+    _require_live_probe_permission()
     if not shutil.which("cursor-agent"):
         pytest.skip("cursor-agent CLI not installed on this box")
     models = adapters.advertised_models("cursor", refresh=True)
@@ -629,6 +647,7 @@ def test_auth_failure_is_detected(monkeypatch):
             1, "", "Error: Authentication required. Please run 'agent login' first"
         ),
     )
+    _enable_fully_mocked_auth_probe(monkeypatch)
     health = adapters.auth_health("cursor", refresh=True)
     assert health["checked"] and not health["authenticated"], health
 
@@ -638,6 +657,7 @@ def test_auth_ok_when_probe_succeeds(monkeypatch):
     monkeypatch.setattr(
         adapters.subprocess, "run", lambda *a, **k: _Proc(0, "✓ Logged in as someone@example.com")
     )
+    _enable_fully_mocked_auth_probe(monkeypatch)
     health = adapters.auth_health("cursor", refresh=True)
     assert health["authenticated"] and health["checked"], health
 
@@ -651,6 +671,7 @@ def test_exit_zero_but_failed_is_still_a_failure(monkeypatch):
         "run",
         lambda *a, **k: _Proc(0, "\x1b[33m⚠ Warning: The provided API key is invalid.\x1b[0m"),
     )
+    _enable_fully_mocked_auth_probe(monkeypatch)
     health = adapters.auth_health("cursor", refresh=True)
     assert health["checked"] and not health["authenticated"], health
     assert "\x1b[" not in health["reason"], health  # ANSI stripped for readability
@@ -659,6 +680,7 @@ def test_exit_zero_but_failed_is_still_a_failure(monkeypatch):
 def test_status_style_not_logged_in_is_caught(monkeypatch):
     monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
     monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: _Proc(0, "Not logged in"))
+    _enable_fully_mocked_auth_probe(monkeypatch)
     assert not adapters.auth_health("cursor", refresh=True)["authenticated"]
 
 
@@ -677,6 +699,7 @@ def test_nonauth_failure_is_unknown_not_unauthenticated(monkeypatch):
     monkeypatch.setattr(
         adapters.subprocess, "run", lambda *a, **k: _Proc(127, "", "command not found")
     )
+    _enable_fully_mocked_auth_probe(monkeypatch)
     health = adapters.auth_health("cursor", refresh=True)
     assert health["authenticated"] and not health["checked"], health
 
@@ -706,6 +729,7 @@ def test_presence_probe_still_detects_a_missing_credential(monkeypatch):
     """A weak probe is still worth having: absence is detectable even if validity isn't."""
     monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
     monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: _Proc(1, "", "Not logged in"))
+    _enable_fully_mocked_auth_probe(monkeypatch)
     health = adapters.auth_health("claude", refresh=True)
     assert health["checked"] and not health["authenticated"], health
 
@@ -717,6 +741,7 @@ def test_every_seat_has_some_free_signal():
     # rule is that UNKNOWN is never a failure. A seat with neither an installed CLI nor a
     # credential file therefore has no free signal by design; asserting the absence of UNKNOWN
     # on such a machine measures the machine's installation, not this chain.
+    _require_live_probe_permission()
     env_prereq.require(env_prereq.seat_has_no_free_signal())
     import agent_auth_check
 
@@ -760,6 +785,7 @@ def test_presence_pass_is_not_reported_as_verified(monkeypatch):
     """agent_auth_check must show PRESENT, not OK, for a presence-only pass."""
     monkeypatch.setattr(adapters, "_AUTH_MEMO", {})
     monkeypatch.setattr(adapters.subprocess, "run", lambda *a, **k: _Proc(0, '{"loggedIn": true}'))
+    _enable_fully_mocked_auth_probe(monkeypatch)
     import agent_auth_check
 
     assert agent_auth_check.check("claude")["verdict"] == "PRESENT"
@@ -848,12 +874,20 @@ def test_infrastructure_heartbeat_never_breaks_its_caller(monkeypatch):
         raise AssertionError("capacity.build must survive a heartbeat failure")
 
 
-def test_offload_survives_a_heartbeat_failure(monkeypatch):
+def test_offload_survives_a_heartbeat_failure(monkeypatch, tmp_path):
     """Same protection on the dispatch path: recording that a capability ran must never be able
     to prevent the work itself."""
     import capabilities as C
     import dispatcher
+    import feedback
 
+    monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "local-runtime"))
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(adapters, "HANDOFF", tmp_path)
+    monkeypatch.setattr(adapters, "LEDGER", tmp_path / "capacity.ndjson")
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+    monkeypatch.setattr(dispatcher, "REAL_HOME", tmp_path / "home")
+    monkeypatch.setattr(dispatcher, "AGENT_RUNTIME_DIR", tmp_path / "agent-runtime")
     monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
     monkeypatch.setattr(
         C,
@@ -862,7 +896,9 @@ def test_offload_survives_a_heartbeat_failure(monkeypatch):
     )
     # Harmless command so the test exercises the guard, not a real agent.
     monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *a, **k: ["printf", "ok"])
-    out = dispatcher.offload("cursor", "x", cwd="/tmp", timeout=30)
+    # Keep the real harmless subprocess and its retained receipts in disposable state.
+    monkeypatch.setattr(dispatcher, "DISPATCH_LOG_DIR", tmp_path / "dispatch-logs")
+    out = dispatcher.offload("cursor", "x", cwd=str(tmp_path), timeout=30)
     assert isinstance(out, dict) and out.get("exit") == 0, out
 
 
@@ -923,7 +959,7 @@ def test_brain_write_path_survives_a_ledger_fault(monkeypatch, tmp_path):
         feedback.DB_PATH = old
 
 
-def test_every_capability_has_a_heartbeat_call_site():
+def test_every_capability_has_a_heartbeat_call_site(tmp_path):
     """Coverage guard: a capability with no heartbeat call site can never accrue evidence at its
     own code path, so its gate is unliftable by construction. The single exception is documented:
     docs-drift-fix-agent lives in the Workflows repo, not this tree."""
@@ -938,7 +974,8 @@ def test_every_capability_has_a_heartbeat_call_site():
         ["grep", "-rn", "-A5", "heartbeat(", "--include=*.py", "."], capture_output=True, text=True
     ).stdout
     missing = []
-    for cap_id, cap in C.load().items():
+    # Reconcile current declarations into a disposable ledger, never the live ledger/lock.
+    for cap_id, cap in C.load(path=tmp_path / "capabilities.json").items():
         if cap.get("status") in C.NOT_LIVE_STATES:
             continue  # no live code path is expected to heartbeat a retired row
         if cap_id in EXTERNAL or cap_id in VARIABLE_ID or cap_id.startswith("role-"):
@@ -1470,3 +1507,21 @@ def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(
     assert argv[argv.index("--model") + 1] == chosen["requested_model"]
     assert selected["reasoning_effort"] == chosen["reasoning_effort"]
     assert selected["neutral_prior"] is True
+
+
+@pytest.mark.parametrize(
+    "probe", [_live_advertised_models, _live_cursor_models, test_every_seat_has_some_free_signal]
+)
+def test_unmocked_probe_helpers_respect_explicit_offline_setting(monkeypatch, probe):
+    monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("offline composition attempted a real auth/catalog probe")
+
+    import agent_auth_check
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(adapters, "advertised_models", forbidden)
+    monkeypatch.setattr(agent_auth_check, "check", forbidden)
+    with pytest.raises(env_prereq.MissingPrerequisite, match="explicitly disabled"):
+        probe()
