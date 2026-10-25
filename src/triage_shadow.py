@@ -367,8 +367,7 @@ def summary(path: Path | None = None) -> dict:
             except (ValueError, TypeError):
                 malformed += 1
     totals = {
-        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0}
-        for arm in ("triage", "rule")
+        arm: {"judged": 0, "merged_durable": 0, "no_delivery": 0} for arm in ("triage", "rule")
     }
     live_rows = [row for row in rows if row.get("triage_valid") and row.get("live_proposal")]
     if not live_rows:
