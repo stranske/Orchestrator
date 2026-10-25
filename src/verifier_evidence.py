@@ -307,9 +307,10 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
     """Retain history without making an older failed read govern a fresh review.
 
     Only an earlier, incomplete independent chain with no semantic verdict can
-    be superseded, and only by a complete review of the same immutable request.
-    Real verdict conflicts, newer observations and changed requirements retain
-    the ordinary causal checks below.
+    be superseded by a complete review of the same request or material, bound
+    to the exact delivery. Same material can accompany revised requirements;
+    the new admitted review, not the failed read, assesses those requirements.
+    Real verdict conflicts and newer observations retain the causal checks.
     """
     roots = [identity for identity, parent in parents.items() if parent is None]
 
@@ -345,10 +346,16 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
     ):
         return set()
 
-    def request(record):
+    def same_request_or_material(record):
         event = record["verification_event"]
-        return tuple(
-            event.get(key) for key in ("repo", "pr", "head_sha", "evaluated_sha", "request_sha256")
+        anchor = selected["verification_event"]
+        return all(
+            event.get(key) == anchor.get(key) for key in ("repo", "pr", "head_sha", "evaluated_sha")
+        ) and any(
+            isinstance(event.get(key), str)
+            and verification_events.HEX256.fullmatch(event[key])
+            and event[key] == anchor.get(key)
+            for key in ("request_sha256", "material_sha256")
         )
 
     obsolete = set()
@@ -357,7 +364,7 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
             continue
         if (
             nodes[part[-1]].get("status") == "incomplete"
-            and all(request(nodes[identity]) == request(selected) for identity in part)
+            and all(same_request_or_material(nodes[identity]) for identity in part)
             and all(_attempt(nodes[identity]) < _attempt(selected) for identity in part)
         ):
             obsolete.update(part)
@@ -420,7 +427,7 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
                 return None
     # A previous incomplete read is not an acceptance verdict or an uncertain
     # consequential effect. Do not let it invalidate a later complete review of
-    # the identical request. Preserve every input record and all other branches.
+    # the same request or material. Preserve every input record and other branches.
     if baseline is None:
         for identity in _superseded_incomplete_roots(
             nodes, parents, terminal_events, admitted_events
