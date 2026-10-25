@@ -97,6 +97,34 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def _strict_response_json(document):
+    """Reject ambiguous keys and non-finite values throughout a worker response."""
+
+    def object_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate response key")
+            result[key] = value
+        return result
+
+    def finite_float(token):
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError("non-finite response number")
+        return value
+
+    def reject_constant(_token):
+        raise ValueError("non-finite response constant")
+
+    return json.loads(
+        document,
+        object_pairs_hook=object_pairs,
+        parse_float=finite_float,
+        parse_constant=reject_constant,
+    )
+
+
 def _parse_low_proposal(output):
     """Parse one complete JSON document, optionally in one JSON code fence."""
     if not isinstance(output, str):
@@ -108,8 +136,8 @@ def _parse_low_proposal(output):
             return {}
         document = match.group(1)
     try:
-        parsed = json.loads(document)
-    except ValueError:
+        parsed = _strict_response_json(document)
+    except (ValueError, RecursionError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -118,21 +146,26 @@ def _worker_proposal(result, *, agent):
     """Read only a completed provider deliverable, never tool output in its stream."""
     output = result.get("output")
     direct = _parse_low_proposal(output)
-    if direct:
+    # One JSONL event is also a complete JSON object. It is still a transport
+    # envelope and must pass the completed-turn boundary below.
+    if direct and not (agent == "codex" and "type" in direct):
         return direct
     if agent != "codex" or not isinstance(output, str):
         return {}
     final = None
     candidate = None
+    completed = False
     events = []
     for line in output.splitlines():
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-        except ValueError:
+            event = _strict_response_json(line)
+        except (ValueError, RecursionError):
             return {}
         if not isinstance(event, dict):
+            return {}
+        if completed or event.get("type") in {"turn.failed", "turn.cancelled"}:
             return {}
         events.append(event)
         item = event.get("item")
@@ -140,6 +173,7 @@ def _worker_proposal(result, *, agent):
             if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
                 candidate = item["text"]
         if event.get("type") == "turn.completed":
+            completed = True
             final = candidate
             candidate = None
     if not events or events[-1].get("type") != "turn.completed" or candidate is not None:
