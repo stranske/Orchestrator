@@ -117,6 +117,7 @@ class PostMergeBreakTests(unittest.TestCase):
         fail_label=False,
         fail_comment_after_post=False,
         fail_reopen=False,
+        issue_already_open=False,
     ):
         spec, head = self.merged_spec(delivered=delivered, hollow=hollow)
         target = "owner/repo#2"
@@ -159,6 +160,8 @@ class PostMergeBreakTests(unittest.TestCase):
                 }, None
             if "--slurp" in args:
                 return [comments], None
+            if args == ["gh", "api", "repos/owner/repo/issues/1"]:
+                return ({"state": "open"} if issue_already_open else {"state": "closed"}), None
             if "POST" in args and args[4].endswith("/comments"):
                 comments.append({"body": args[-1].removeprefix("body=")})
                 if fail_comment_after_post and len(comments) == 1:
@@ -184,7 +187,11 @@ class PostMergeBreakTests(unittest.TestCase):
                 "SELECT payload_json FROM completion_events "
                 "WHERE producer='runtime_ac_gate' AND phase='post_merge_recheck'"
             ).fetchall()
-        return [json.loads(row[0])["runtime_ac_post_merge"] for row in rows]
+        return [
+            payload["runtime_ac_post_merge"]
+            for row in rows
+            if isinstance((payload := json.loads(row[0])).get("runtime_ac_post_merge"), dict)
+        ]
 
     def test_invalid_persisted_rows_recover_without_repeating_valid_delivery(self):
         payloads = [
@@ -279,7 +286,7 @@ class PostMergeBreakTests(unittest.TestCase):
     def test_completed_receipt_rejects_tampered_transcript(self):
         run, calls, comments, provisions, head = self.sweep_case(delivered=True)
         self.assertEqual(run(), {"rechecked": 1, "errors": []})
-        payload = self.post_merge_payloads()[0]
+        payload = self.post_merge_payloads()[-1]
         Path(payload["transcript_path"]).write_text("CORRUPTED transcript")
         writes = [call for call in calls if "POST" in call or "PATCH" in call]
         second = run()
@@ -449,3 +456,56 @@ class PostMergeBreakTests(unittest.TestCase):
                 with patch.object(runtime_ac, "run_verification", return_value=run):
                     result = gate.recheck_merged(spec, self.checkout)
                 self.assertEqual(result["result"], "UNRUNNABLE")
+
+    def test_spawned_interpreter_failure_is_not_a_delivery_fail(self):
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Inspect the delivered behavior.\n"
+        )
+        run = {
+            "gate": {"verdict": "FAIL"},
+            "check_results": [
+                {
+                    "type": "command",
+                    "status": "FAIL",
+                    "returncode": 1,
+                    "stderr_tail": (
+                        "2 failed\nsubprocess.CalledProcessError: Command "
+                        "['/opt/anaconda3/bin/python3', '-c', 'import package']' returned non-zero"
+                    ),
+                }
+            ],
+        }
+        with patch.object(runtime_ac, "run_verification", return_value=run):
+            result = gate.recheck_merged(spec, self.checkout, merge_ci_green=True)
+        self.assertEqual(result["result"], "UNRUNNABLE")
+        self.assertEqual(result["reason"], "environment_mismatch")
+        self.assertEqual(result["interpreter"], "/opt/anaconda3/bin/python3")
+
+    def test_genuine_assertion_wins_over_spawned_interpreter_error(self):
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Inspect the delivered behavior.\n"
+        )
+        run = {
+            "gate": {"verdict": "FAIL"},
+            "check_results": [
+                {
+                    "type": "command",
+                    "status": "FAIL",
+                    "returncode": 1,
+                    "stderr_tail": (
+                        "2 failed\nAssertionError: delivered behavior is wrong\n"
+                        "subprocess.CalledProcessError: Command ['/opt/anaconda3/bin/python3']"
+                    ),
+                }
+            ],
+        }
+        with patch.object(runtime_ac, "run_verification", return_value=run):
+            result = gate.recheck_merged(spec, self.checkout, merge_ci_green=True)
+        self.assertEqual(result["result"], "FAIL")
+
+    def test_already_open_issue_is_not_counted_as_reopened(self):
+        run, calls, _comments, _provisions, _head = self.sweep_case(issue_already_open=True)
+        summary = run()
+        self.assertEqual(summary["errors"], [])
+        self.assertIn(["gh", "api", "repos/owner/repo/issues/1"], calls)
+        self.assertFalse(any("PATCH" in call for call in calls))

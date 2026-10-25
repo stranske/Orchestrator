@@ -446,7 +446,14 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     if not isinstance(runtime_context, dict):
         errors.append("runtime_context must be an object when present")
         runtime_context = {}
-    for key in ("worktree", "serve_command", "health_url", "base_ref", "browser_endpoint"):
+    for key in (
+        "worktree",
+        "serve_command",
+        "health_url",
+        "base_ref",
+        "browser_endpoint",
+        "python_interpreter",
+    ):
         if (
             key in runtime_context
             and runtime_context[key] is not None
@@ -782,6 +789,7 @@ def build_dry_run_plan(spec: dict[str, Any]) -> dict[str, Any]:
             "health_url": runtime_context.get("health_url"),
             "base_ref": runtime_context.get("base_ref") or "HEAD",
             "browser_endpoint": runtime_context.get("browser_endpoint"),
+            "python_interpreter": runtime_context.get("python_interpreter"),
             "notes": runtime_context.get("notes") or [],
         },
         "acceptance_criteria": [
@@ -1149,11 +1157,23 @@ def _completed_result(
     }
 
 
-def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dict[str, Any]:
+def _run_command_check(
+    check: dict[str, Any], *, cwd: Path, timeout: int, python_interpreter: str | None = None
+) -> dict[str, Any]:
     started = time.time()
     argv = shlex.split(check["command"])
     normalized = _pytest_without_coverage(argv)
     run_env = os.environ.copy()
+    if python_interpreter and Path(argv[0]).name in {"python", "python3"}:
+        argv[0] = python_interpreter
+        normalized = argv
+        # A source-layout checkout is not necessarily installed into the selected interpreter.
+        # The recheck still runs its chosen environment, while its import path names only this
+        # exact merged checkout rather than the scheduler's source tree.
+        source = str(cwd / "src")
+        run_env["PYTHONPATH"] = os.pathsep.join(
+            [entry for entry in (source, str(cwd), run_env.get("PYTHONPATH")) if entry]
+        )
     if normalized != argv or _is_pytest(argv):
         run_env["PYTEST_ADDOPTS"] = shlex.join(
             _strip_coverage_options(shlex.split(run_env.get("PYTEST_ADDOPTS", "")))
@@ -1176,6 +1196,7 @@ def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dic
             "status": "ERROR",
             "reason": f"timed out after {timeout}s",
             "command": check.get("command"),
+            "interpreter": python_interpreter,
             "duration_s": round(time.time() - started, 3),
             "stdout_tail": _tail((exc.stdout or "") if isinstance(exc.stdout, str) else ""),
             "stderr_tail": _tail((exc.stderr or "") if isinstance(exc.stderr, str) else ""),
@@ -1187,13 +1208,16 @@ def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dic
             "status": "ERROR",
             "reason": str(exc),
             "command": check.get("command"),
+            "interpreter": python_interpreter,
             "duration_s": round(time.time() - started, 3),
             "stdout_tail": "",
             "stderr_tail": "",
         }
-    return _completed_result(
+    result = _completed_result(
         {**check, "command": shlex.join(argv)}, completed, time.time() - started
     )
+    result["interpreter"] = python_interpreter
+    return result
 
 
 def _is_pytest(argv: list[str]) -> bool:
@@ -1256,6 +1280,7 @@ def run_verification(
 
     plan = build_dry_run_plan(spec)
     cwd = Path(plan["runtime_context"]["worktree"]).resolve()
+    python_interpreter = plan["runtime_context"].get("python_interpreter")
     selected = set(check_ids) if check_ids else None
     results: list[dict[str, Any]] = []
     for check in _planned_checks_for_run(plan, selected):
@@ -1310,7 +1335,11 @@ def run_verification(
                 }
             )
             continue
-        results.append(_run_command_check(check, cwd=cwd, timeout=timeout))
+        results.append(
+            _run_command_check(
+                check, cwd=cwd, timeout=timeout, python_interpreter=python_interpreter
+            )
+        )
 
     gate = evaluate_results(spec, {"check_results": results})
     return {
@@ -1320,6 +1349,7 @@ def run_verification(
         "confirmed_run": True,
         "allow_command_checks": allow_command_checks,
         "timeout": timeout,
+        "interpreter": python_interpreter,
         "check_results": results,
         "gate": gate,
     }

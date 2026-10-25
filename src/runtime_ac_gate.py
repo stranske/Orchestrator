@@ -392,8 +392,25 @@ def observe_shadow_spec(
     return {"status": status, "blocks": False, "gate_event": event}
 
 
+def _worktree_interpreter(worktree: str | Path) -> str:
+    """Return the checked-out repository's selected Python, never PATH's python3."""
+    root = Path(worktree)
+    for name in (".venv", "venv"):
+        environment = root / name
+        interpreter = environment / "bin" / "python"
+        if interpreter.is_file():
+            return str(interpreter)
+        if environment.exists():
+            raise RuntimeError(f"selected repository interpreter is unavailable: {interpreter}")
+    return "/opt/anaconda3/bin/python3"
+
+
 def recheck_merged(
-    spec: dict, merged_worktree: str | Path, *, allow_command_checks: bool | None = None
+    spec: dict,
+    merged_worktree: str | Path,
+    *,
+    allow_command_checks: bool | None = None,
+    merge_ci_green: bool = False,
 ) -> dict:
     """Run the existing named-check/break runner; manual or missing evidence is unknown.
 
@@ -409,7 +426,9 @@ def recheck_merged(
     )
     try:
         current = copy.deepcopy(spec)
-        current.setdefault("runtime_context", {})["worktree"] = str(merged_worktree)
+        context = current.setdefault("runtime_context", {})
+        context["worktree"] = str(merged_worktree)
+        context["python_interpreter"] = _worktree_interpreter(merged_worktree)
         for criterion in current.get("acceptance_criteria", []):
             for check in criterion.get("checks", []):
                 if check.get("type") == "deliberate_break":
@@ -456,7 +475,30 @@ def recheck_merged(
             # failures must not reopen a delivered issue.
             return assertion_failed(row)
 
-        if any(delivery_failed(r) for r in executable):
+        def environment_mismatch(row):
+            """Recognize the runner's child-Python import failure, not a product assertion."""
+            if not merge_ci_green or not assertion_failed(row):
+                return False
+            candidate = row
+            if row.get("type") == "deliberate_break":
+                try:
+                    candidate = json.loads(row.get("stdout_tail") or "{}").get("green") or {}
+                except ValueError:
+                    return False
+            output = "\n".join(
+                str(candidate.get(key) or "") for key in ("stdout_tail", "stderr_tail")
+            )
+            # A real failed assertion wins when both signals occur in one test run. The
+            # environment classification is only for the isolated child-launcher failure.
+            if re.search(r"\bAssertionError\b|\bassert(?:ion)?\s", output, re.I):
+                return False
+            return bool(
+                re.search(r"CalledProcessError.*(?:python|Python)|ModuleNotFoundError", output, re.I)
+            )
+
+        if any(environment_mismatch(r) for r in executable):
+            result = "UNRUNNABLE"
+        elif any(delivery_failed(r) for r in executable):
             result = "FAIL"
         elif (
             executable
@@ -492,11 +534,14 @@ def recheck_merged(
                 reason = "commands_disabled"
             elif any(hollow(r) for r in executable):
                 reason = "hollow_break"
+            elif any(environment_mismatch(r) for r in executable):
+                reason = "environment_mismatch"
             else:
                 reason = "incomplete"
         return {
             "result": result,
             "reason": reason,
+            "interpreter": context["python_interpreter"],
             "transcript": json.dumps(run, indent=2, default=str),
         }
     except Exception as exc:
@@ -686,8 +731,11 @@ UNRUNNABLE_REASONS = (
     "hollow_break",
     "tool_error",
     "incomplete",
+    "environment_mismatch",
 )
-RUNNER_SIDE_UNRUNNABLE = frozenset({"commands_disabled", "tool_error", "incomplete"})
+RUNNER_SIDE_UNRUNNABLE = frozenset(
+    {"commands_disabled", "tool_error", "incomplete", "environment_mismatch"}
+)
 
 
 def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
