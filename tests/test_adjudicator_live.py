@@ -134,30 +134,45 @@ def test_certified_case_carries_check_runs_for_evaluated_sha(world):
             {"target": "owner/repo#1"}, live._evidence_for(world["sha"])
         ),
     }
+    row["packet"]["ground_truth_evidence"]["head_sha"] = "b" * 40
     detail_url = "https://api.github.com/repos/owner/repo/check-runs/2"
 
     def github_reader(args):
         endpoint = args[1]
         if "commits/" in endpoint:
+            assert endpoint == (
+                f"repos/owner/repo/commits/{world['sha']}/check-runs"
+                "?filter=all&per_page=100&page=1"
+            )
             return {
                 "total_count": 2,
                 "check_runs": [
                     {
                         "id": 1,
+                        "head_sha": world["sha"],
                         "name": "unit",
                         "conclusion": "success",
                         "url": "https://api.github.com/repos/owner/repo/check-runs/1",
                     },
-                    {"id": 2, "name": "lint", "conclusion": "failure", "url": detail_url},
+                    {
+                        "id": 2,
+                        "head_sha": world["sha"],
+                        "name": "lint",
+                        "conclusion": "failure",
+                        "url": detail_url,
+                    },
                 ],
             }
         assert endpoint == detail_url
-        return {"details_url": "https://github.com/owner/repo/actions/runs/9/job/2"}
+        return {
+            "head_sha": world["sha"],
+            "details_url": "https://github.com/owner/repo/actions/runs/9/job/2",
+        }
 
     case = live.certify(
         row,
         world["path"].parent / "repo",
-        {"number": 1, "headRefOid": world["sha"], "body": live.AC_BODY},
+        {"number": 1, "headRefOid": "b" * 40, "body": live.AC_BODY},
         github_reader=github_reader,
         runtime_events_reader=lambda: [
             {
@@ -204,6 +219,27 @@ def test_certified_case_carries_check_runs_for_evaluated_sha(world):
             "sha": world["sha"],
         }
     ]
+    # A response for another revision must never be relabeled with the evaluated SHA.
+    for corrupt_detail in (False, True):
+        for returned_sha in (None, "b" * 40):
+
+            def mismatched_reader(args):
+                response = github_reader(args)
+                if corrupt_detail and args[1] == detail_url:
+                    response["head_sha"] = returned_sha
+                elif not corrupt_detail and "commits/" in args[1]:
+                    response["check_runs"][0]["head_sha"] = returned_sha
+                return response
+
+            with pytest.raises(ValueError, match="revision differs from evaluated commit"):
+                live.certify(
+                    row,
+                    world["path"].parent / "repo",
+                    {"number": 1, "headRefOid": "b" * 40, "body": live.AC_BODY},
+                    github_reader=mismatched_reader,
+                    runtime_events_reader=lambda: [],
+                    log_reader=lambda _url: pytest.fail("must reject before reading a log"),
+                )
 
 
 def test_named_test_command_requires_exact_pytest_target():
@@ -225,11 +261,11 @@ def test_check_runs_keep_pending_conclusions_and_mark_non_actions_logs_unavailab
             return {
                 "total_count": 2,
                 "check_runs": [
-                    {"id": 1, "name": "pending", "conclusion": None},
-                    {"id": 2, "name": "external", "conclusion": "failure"},
+                    {"id": 1, "head_sha": "a" * 40, "name": "pending", "conclusion": None},
+                    {"id": 2, "head_sha": "a" * 40, "name": "external", "conclusion": "failure"},
                 ],
             }
-        return {"details_url": "https://example.invalid/external-check"}
+        return {"head_sha": "a" * 40, "details_url": "https://example.invalid/external-check"}
 
     runs = live._check_run_evidence(
         "owner/repo#1", "a" * 40, github_reader, lambda _endpoint: pytest.fail("no log fetch")
@@ -249,10 +285,20 @@ def test_execution_evidence_paginates_and_bounds_failure_logs(monkeypatch):
             page = int(endpoint.rsplit("=", 1)[1])
             return {
                 "total_count": 2,
-                "check_runs": [{"id": page, "name": f"job-{page}", "conclusion": "failure"}],
+                "check_runs": [
+                    {
+                        "id": page,
+                        "head_sha": "a" * 40,
+                        "name": f"job-{page}",
+                        "conclusion": "failure",
+                    }
+                ],
             }
         job = endpoint.rsplit("/", 1)[1]
-        return {"details_url": f"https://github.com/owner/repo/actions/runs/9/job/{job}"}
+        return {
+            "head_sha": "a" * 40,
+            "details_url": f"https://github.com/owner/repo/actions/runs/9/job/{job}",
+        }
 
     result = live._execution_evidence(
         {"target": "owner/repo#1"},
@@ -324,7 +370,9 @@ def test_failure_detail_unavailable_keeps_the_check_conclusion():
         if "/commits/" in args[1]:
             return {
                 "total_count": 1,
-                "check_runs": [{"id": 7, "name": "unit", "conclusion": "failure"}],
+                "check_runs": [
+                    {"id": 7, "head_sha": "a" * 40, "name": "unit", "conclusion": "failure"}
+                ],
             }
         raise RuntimeError("API temporarily unavailable")
 
@@ -395,6 +443,10 @@ def test_named_tests_exclude_code_spans_and_include_commands_outside_acceptance(
     ],
 )
 def test_malformed_check_run_evidence_is_rejected(response):
+    if isinstance(response, dict):
+        for check in response.get("check_runs", []):
+            if isinstance(check, dict):
+                check["head_sha"] = "a" * 40
     with pytest.raises(ValueError):
         live._check_run_evidence("owner/repo#1", "a" * 40, lambda _args: response, lambda _url: "")
 
@@ -402,7 +454,12 @@ def test_malformed_check_run_evidence_is_rejected(response):
 def test_check_run_pagination_cannot_end_before_total_count():
     pages = iter(
         [
-            {"total_count": 2, "check_runs": [{"id": 1, "name": "unit", "conclusion": "success"}]},
+            {
+                "total_count": 2,
+                "check_runs": [
+                    {"id": 1, "head_sha": "a" * 40, "name": "unit", "conclusion": "success"}
+                ],
+            },
             {"total_count": 2, "check_runs": []},
         ]
     )
@@ -420,9 +477,14 @@ def test_log_failure_is_explicit_and_exhausted_budget_skips_detail_calls(monkeyp
         if "/commits/" in args[1]:
             return {
                 "total_count": 1,
-                "check_runs": [{"id": 7, "name": "unit", "conclusion": "failure"}],
+                "check_runs": [
+                    {"id": 7, "head_sha": "a" * 40, "name": "unit", "conclusion": "failure"}
+                ],
             }
-        return {"details_url": "https://github.com/owner/repo/actions/runs/9/job/7"}
+        return {
+            "head_sha": "a" * 40,
+            "details_url": "https://github.com/owner/repo/actions/runs/9/job/7",
+        }
 
     def unavailable(_url):
         raise RuntimeError("log unavailable")

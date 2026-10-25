@@ -171,7 +171,8 @@ def _check_run_evidence(
     log_bytes = 0
     while total is None or len(runs) < total:
         endpoint = (
-            f"repos/{repo}/commits/{sha}/check-runs?per_page={CHECK_RUN_PAGE_SIZE}&page={page}"
+            f"repos/{repo}/commits/{sha}/check-runs?filter=all"
+            f"&per_page={CHECK_RUN_PAGE_SIZE}&page={page}"
         )
         response = reader(["api", endpoint])
         page_runs = response.get("check_runs") if isinstance(response, dict) else None
@@ -185,6 +186,8 @@ def _check_run_evidence(
         for check in page_runs:
             if not isinstance(check, dict):
                 raise ValueError("GitHub check-run entry is malformed")
+            if check.get("head_sha") != sha:
+                raise ValueError("GitHub check-run revision differs from evaluated commit")
             name = check.get("name")
             conclusion = check.get("conclusion")
             if (
@@ -217,7 +220,11 @@ def _check_run_evidence(
                     item["log_unavailable"] = "check-run detail unavailable"
                     runs.append(item)
                     continue
-                details_url = detail.get("details_url") if isinstance(detail, dict) else None
+                if not isinstance(detail, dict) or detail.get("head_sha") != sha:
+                    raise ValueError(
+                        "GitHub check-run detail revision differs from evaluated commit"
+                    )
+                details_url = detail.get("details_url")
                 log_endpoint = _actions_log_endpoint(repo, details_url)
                 if log_endpoint is None:
                     item["log_unavailable"] = "Actions job URL unavailable"
@@ -806,7 +813,14 @@ def _selftest() -> None:
                 provider=provider,
                 github_reader=lambda _args: {
                     "total_count": 1,
-                    "check_runs": [{"id": 1, "name": "selftest-unit", "conclusion": "success"}],
+                    "check_runs": [
+                        {
+                            "id": 1,
+                            "head_sha": sha,
+                            "name": "selftest-unit",
+                            "conclusion": "success",
+                        }
+                    ],
                 },
             )
             first = run_live(snapshot_reader=lambda _t: snapshot, **common)
