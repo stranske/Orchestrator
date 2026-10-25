@@ -424,6 +424,27 @@ def _retry_event_parents(records):
             for row in prior
         ):
             return None
+        # Recovering an edge grants no authority to skip another attempt's
+        # uncertainty or contradictory assessment metadata. Check the complete
+        # retry history, including omitted-parent attempts, without altering it.
+        attempts = {}
+        for row in rows:
+            attempts.setdefault(_attempt(row), []).append(row)
+        for attempt_rows in attempts.values():
+            assessment = attempt_rows[0].get("assessment_identity")
+            if any(row.get("assessment_identity") != assessment for row in attempt_rows):
+                return None
+            if any(
+                row.get("status") == "incomplete"
+                and (
+                    row.get("retry_kind") != "known_no_evaluation"
+                    or row.get("retryable") is not True
+                    or row.get("failure_cause")
+                    not in {"validated_no_evaluation", "evaluator_step_not_invoked"}
+                )
+                for row in attempt_rows
+            ):
+                return None
         parents[identity] = parent
     return parents
 

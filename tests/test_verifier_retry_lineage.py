@@ -178,3 +178,38 @@ def test_missing_retry_parent_never_repairs_real_causal_ambiguity(kind):
             )
         )
     assert verifier.applicable_decision(decisions, states) is None
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "uncertain_omitted",
+        "linked_assessment_conflict",
+        "omitted_assessment_conflict",
+        "known_no_evaluation_omitted",
+    ],
+)
+def test_recovered_edge_checks_every_retry_attempt(kind):
+    old, pending, reviewed = history()
+    states = [pending]
+    reviewed["run_id"] = "4"
+    if kind == "linked_assessment_conflict":
+        conflicting = copy.deepcopy(pending)
+        conflicting.update(status="pending")
+        conflicting["assessment_identity"]["model"] = "different-model"
+    else:
+        conflicting = copy.deepcopy(pending)
+        conflicting.pop("predecessor_event_id")
+        conflicting["run_id"] = "3"
+        if kind == "uncertain_omitted":
+            conflicting.update(retry_kind="uncertain_execution", retryable=False)
+        elif kind == "omitted_assessment_conflict":
+            contradictory = copy.deepcopy(conflicting)
+            contradictory.update(status="pending")
+            contradictory["assessment_identity"]["provider"] = "other-provider"
+            states.append(contradictory)
+    states.append(conflicting)
+    before = copy.deepcopy([old, states, reviewed])
+    result = verifier.applicable_decision([old, reviewed], states)
+    assert (result is reviewed) if kind == "known_no_evaluation_omitted" else result is None
+    assert [old, states, reviewed] == before
