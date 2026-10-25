@@ -13,7 +13,7 @@ from copy import deepcopy
 from typing import Any
 
 import closer_role_qualification as roles
-from transport_qualification import digest, strict_final
+from transport_qualification import digest, launch_problem, strict_final
 
 SCHEMA = "closer-synthetic-qualification-corpus/v1"
 STRATA = {
@@ -169,14 +169,9 @@ def build_corpus(role: str) -> dict[str, Any]:
 
 def execution_binding(profile: dict, corpus: dict, launch: dict) -> dict:
     """Bind every experiment cell to exact identity and transport build/config."""
-    from transport_qualification import _sha
-
-    if not all(
-        _sha(launch.get(key)) for key in ("binary_sha256", "adapter_sha256", "config_sha256")
-    ):
-        raise ValueError("exact launch hashes are required")
-    if launch.get("config_sha256") != digest(launch.get("config")):
-        raise ValueError("configuration snapshot hash differs")
+    problem = launch_problem(launch)
+    if problem:
+        raise ValueError(problem)
     result = {
         "profile_identity": roles.profile_identity(profile),
         "role": corpus["role"],

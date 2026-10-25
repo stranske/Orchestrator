@@ -86,6 +86,29 @@ def _usage_matches(charge: dict[str, Any], artifact: Any) -> bool:
     ) == digest({key: charge.get(key) for key in fields})
 
 
+def launch_problem(launch: Any) -> str | None:
+    """Pure shared check; launch claims still require independent observation."""
+    if not isinstance(launch, dict):
+        return "launch evidence must be an object"
+    if not (
+        isinstance(launch.get("binary_path"), str)
+        and Path(launch["binary_path"]).is_absolute()
+        and _sha(launch.get("binary_sha256"))
+        and _sha(launch.get("adapter_sha256"))
+        and launch.get("config_sha256") == digest(launch.get("config"))
+        and isinstance(launch.get("config"), dict)
+        and isinstance(launch.get("argv"), list)
+        and launch["argv"]
+        and all(isinstance(arg, str) for arg in launch["argv"])
+        and launch["argv"][0] == launch["binary_path"]
+        and launch.get("isolated_home") is True
+        and launch.get("isolated_cwd") is True
+        and launch.get("environment_allowlisted") is True
+    ):
+        return "exact binary/config/argv or isolated launch evidence missing"
+    return None
+
+
 def audit_capture(
     profile: Mapping[str, Any], role: str, capture: dict[str, Any], suite: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -127,21 +150,7 @@ def audit_capture(
     if binding.get("suite_sha256") != digest(suite):
         problems.append("frozen suite binding differs")
     launch = binding.get("launch", {})
-    if not (
-        isinstance(launch.get("binary_path"), str)
-        and Path(launch["binary_path"]).is_absolute()
-        and _sha(launch.get("binary_sha256"))
-        and _sha(launch.get("adapter_sha256"))
-        and launch.get("config_sha256") == digest(launch.get("config"))
-        and isinstance(launch.get("config"), dict)
-        and isinstance(launch.get("argv"), list)
-        and launch["argv"]
-        and all(isinstance(arg, str) for arg in launch["argv"])
-        and launch["argv"][0] == launch["binary_path"]
-        and launch.get("isolated_home") is True
-        and launch.get("isolated_cwd") is True
-        and launch.get("environment_allowlisted") is True
-    ):
+    if launch_problem(launch) is not None:
         problems.append("exact binary/config/argv or isolated launch evidence missing")
     observed = capture.get("observed", {})
     if (

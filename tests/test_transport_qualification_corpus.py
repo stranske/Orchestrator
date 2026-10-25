@@ -212,3 +212,35 @@ def test_real_verify_runner_observes_both_selftests():
     assert result["failed"] == {}
     assert result["skipped"] == {}
     assert set(result["ok"]) == {"transport_qualification", "transport_qualification_corpus"}
+
+
+@pytest.mark.parametrize(
+    "field", ["binary_path", "argv", "isolated_home", "isolated_cwd", "environment_allowlisted"]
+)
+def test_launch_fields_cannot_be_omitted_even_when_bindings_are_recomputed(trial, field):
+    binding = trial[2]
+    del binding["launch"][field]
+    binding["execution_binding_sha256"] = q.digest(
+        {k: v for k, v in binding.items() if k != "execution_binding_sha256"}
+    )
+    for row in trial[1]:
+        row["execution_binding_sha256"] = binding["execution_binding_sha256"]
+    assert not score(trial)["thresholds_passed"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("binary_path", "relative-cli"),
+        ("argv", []),
+        ("argv", "cli --tools"),
+        ("argv", ["/different/cli"]),
+        ("isolated_home", False),
+        ("isolated_cwd", 1),
+        ("environment_allowlisted", None),
+    ],
+)
+def test_malformed_launch_evidence_cannot_create_an_execution_binding(trial, field, value):
+    trial[2]["launch"][field] = value
+    with pytest.raises(ValueError):
+        c.execution_binding(trial[2]["profile_identity"], trial[0], trial[2]["launch"])

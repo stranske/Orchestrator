@@ -217,3 +217,16 @@ fence; Cursor read-only ask/plan is not tool-free; Vibe's wildcard denial needs
 an already-confined context without conflicting allows; Gemini/Muse lack
 reviewed data-only deployment/identity/usage evidence. None is currently admitted
 for live collection. No credentials, settings, transports or access were changed.
+
+Expanded-corpus review reproduced a hash-only launch gap: a caller could omit
+binary path, argv and isolated home/cwd/environment claims, recompute binding
+digests and still pass the scorecard. The corpus now reuses the original
+harness's pure `launch_problem` validator. Missing and malformed exact-launch
+fields fail even when every response binding digest is recomputed. Independent
+observation of those claims remains necessary; their presence is not proof.
+
+Hosted CI also caught a silent successful selftest exit. Both module selftests
+now emit the checked assertions, and a dedicated test runs them through the real
+`verify.run_selftests` interface with one local worker. The focused harness/corpus
+controls pass 216 tests; the inherited role/transport controls were separately
+verified after rebasing. No duplicate full local regression was launched.
