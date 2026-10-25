@@ -239,7 +239,11 @@ def _completed_verifier_request(
     proof = resource.get("accepted_verifier_request") if isinstance(resource, Mapping) else None
     results = row.get("results")
     act = results.get("act") if isinstance(results, Mapping) else None
-    if not all(isinstance(value, Mapping) for value in (proof, act, frontier)):
+    if (
+        not isinstance(proof, Mapping)
+        or not isinstance(act, Mapping)
+        or not isinstance(frontier, Mapping)
+    ):
         return False
     from closer_frontier_policy import validate_frontier
 
