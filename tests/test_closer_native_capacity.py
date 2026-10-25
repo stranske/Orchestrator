@@ -321,11 +321,14 @@ def test_real_tick_second_known_no_effect_invocation_refreshes_without_rewriting
     assert obj.read()["worker_config"]["original_deadline"] == 42
 
 
-def test_real_tick_quota_hold_does_not_launch_provider_worker(capacity_host):
-    _manifest, path, obj, *_ = capacity_host
+def test_real_tick_quota_hold_allows_only_zero_model_native_round(capacity_host, monkeypatch):
+    import closer_dispatcher
+
+    manifest, path, obj, *_ = capacity_host
     marker = Path.home() / ".codex/handoff/capacity-shed/claude"
     marker.parent.mkdir(parents=True)
     marker.write_text('{"expires_at":2000,"category":"quota"}')
+    launches = []
     result = campaign.tick(
         obj.path.parent,
         path,
@@ -333,10 +336,17 @@ def test_real_tick_quota_hold_does_not_launch_provider_worker(capacity_host):
         qualifier=lambda *_: [],
         route_fn=routed_report,
         native_probe=lambda *_: None,
-        launcher=lambda *_a: pytest.fail("no worker/provider may launch"),
+        launcher=lambda argv, _log: launches.append(argv) or 60001,
+        pid_alive=lambda *_: True,
+        max_steps=1,
     )
-    assert result[0]["kind"] == "wait" and result[0]["reason"] == "capacity_exhausted"
-    assert obj.read()["workers"] == []
+    assert result[0]["kind"] == "launched"
+    assert len(launches) == 1
+    assert "--agent" not in launches[0] and "--profile-id" not in launches[0]
+    context = native._CURRENT_ADMISSION[str(native.contract(manifest)[3])]["context"]
+    assert native.validate_admission(manifest, context, for_effects=True) == context
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", context["report"]["path"])
+    assert closer_dispatcher._pipeline_capacity() == {"io": 4, "low": 0, "exception": 0}
 
 
 def test_real_worker_consumes_signed_original_context_without_mutating_campaign_cfg(

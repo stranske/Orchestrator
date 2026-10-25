@@ -2571,8 +2571,8 @@ def tick(
                     }
                 )
                 continue
-            # A round launches the deterministic coordinator, not this model
-            # route. Private roles remain separately gated inside the pipeline.
+            # A round launches the deterministic coordinator, not this model.
+            # Private reasoning still needs its own qualified role and capacity.
             capacity_ok = True
         if admission is not None and route.get("agent"):
             import execution_profiles

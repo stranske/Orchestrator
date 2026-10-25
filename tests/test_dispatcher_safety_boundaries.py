@@ -158,10 +158,12 @@ def test_claim_offload_log_fails_loudly_after_the_bounded_collision_budget(tmp_p
 
 
 def test_select_offload_profile_refuses_unresolvable_gemini_before_selection(monkeypatch):
+    profile = dispatcher.execution_profiles.get_profile("gemini-3.8-flash-high")
+    monkeypatch.delenv("ORCH_GEMINI_MAX_TIER", raising=False)
     monkeypatch.setattr(
         dispatcher.execution_profiles,
         "profiles_for_agent",
-        lambda *_args, **_kwargs: [{"profile_id": "gemini-profile", "requested_model": "model"}],
+        lambda *_args, **_kwargs: [profile],
     )
     monkeypatch.setattr(dispatcher.adapters, "effective_tier", lambda *_: "mid")
     monkeypatch.setattr(
@@ -179,10 +181,12 @@ def test_select_offload_profile_refuses_unresolvable_gemini_before_selection(mon
 
 
 def test_select_offload_profile_uses_the_resolved_tier_and_deterministic_envelope(monkeypatch):
+    matching = dispatcher.execution_profiles.get_profile("gemini-3.8-flash-high")
     profiles = [
-        {"profile_id": "other", "requested_model": "other-model"},
-        {"profile_id": "matching", "requested_model": "resolved-model"},
+        dispatcher.execution_profiles.get_profile("gemini-4-argon-high"),
+        matching,
     ]
+    monkeypatch.delenv("ORCH_GEMINI_MAX_TIER", raising=False)
     seen = {}
     monkeypatch.setattr(
         dispatcher.execution_profiles, "profiles_for_agent", lambda *_args, **_kwargs: profiles
@@ -191,26 +195,26 @@ def test_select_offload_profile_uses_the_resolved_tier_and_deterministic_envelop
     monkeypatch.setattr(
         dispatcher.adapters,
         "model_health",
-        lambda *_: {"resolvable": True, "model": "resolved-model"},
+        lambda *_: {"resolvable": True, "model": matching["requested_model"]},
     )
 
     def select(*args, **kwargs):
         seen["args"] = args
         seen["kwargs"] = kwargs
-        return {"selected_profile_id": "matching"}
+        return {"selected_profile_id": matching["profile_id"]}
 
     monkeypatch.setattr(dispatcher.execution_profiles, "select_profile", select)
     monkeypatch.setattr(
         dispatcher.execution_profiles,
         "get_profile",
-        lambda profile_id: {"profile_id": profile_id},
+        lambda profile_id: next(p for p in profiles if p["profile_id"] == profile_id),
     )
 
-    assert dispatcher._select_offload_profile("gemini", "full") == {"profile_id": "matching"}
-    assert seen["args"][:3] == ("offload", None, ["matching"])
+    assert dispatcher._select_offload_profile("gemini", "full") == matching
+    assert seen["args"][:3] == ("offload", None, [matching["profile_id"]])
     assert seen["kwargs"] == {
         "rng_seed": 0,
-        "scores": {"matching": 0.0},
+        "scores": {matching["profile_id"]: 0.0},
         "exploration": False,
         "exploration_policy": "deterministic-offload-profile",
     }
