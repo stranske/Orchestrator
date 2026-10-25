@@ -178,6 +178,14 @@ no-evaluation input failure may retry the same bound event. An existing or
 uncertain evaluation must first recover its retained result. A POST timeout
 remains uncertain; explicit unsupported-input HTTP422 is known not started.
 
+A same-event retry retains its original predecessor. For an already published
+retry that omitted that field, the reader may recover the one unchanged edge
+from an earlier authenticated canonical, retryable no-evaluation attempt of the identical
+event. It never rewrites markers or infers a new edge for an originally root
+event, mixed metadata within one attempt, an uncertain evaluation, a missing
+ancestor or competing explicit predecessors. The normal causal-chain and
+current-result checks still apply before projecting a PR-owned outcome.
+
 A later fix's code is evaluated as its actual merged delivery. Existing explicit
 linked-descendant ancestry selection is reused. An old PR number cannot evaluate
 arbitrary later code, and a repair's PASS does not rewrite the old PR's historical
