@@ -47,6 +47,11 @@ def world(tmp_path, monkeypatch):
         yield str(tmp_path / "repo")
 
     snapshot = {"number": 1, "headRefOid": sha, "body": live.AC_BODY}
+    monkeypatch.setattr(
+        live.retro,
+        "_gh_json",
+        lambda _args: {"total_count": 0, "check_runs": []},
+    )
     common = dict(
         db=feedback.DB_PATH,
         path=tmp_path / "live.json",
@@ -120,6 +125,230 @@ def test_a_body_without_criteria_is_uncertified_and_never_dispatched(world):
     assert live.uncertified_class("something new") == "other"
     assert world["calls"] == []
     assert "explicit acceptance criteria" in result["rows"][0]["certification"]["reason"]
+
+
+def test_certified_case_carries_check_runs_for_evaluated_sha(world):
+    row = {
+        "target": "owner/repo#1",
+        "packet": live.retro.build_packet(
+            {"target": "owner/repo#1"}, live._evidence_for(world["sha"])
+        ),
+    }
+    detail_url = "https://api.github.com/repos/owner/repo/check-runs/2"
+
+    def github_reader(args):
+        endpoint = args[1]
+        if "commits/" in endpoint:
+            return {
+                "total_count": 2,
+                "check_runs": [
+                    {
+                        "id": 1,
+                        "name": "unit",
+                        "conclusion": "success",
+                        "url": "https://api.github.com/repos/owner/repo/check-runs/1",
+                    },
+                    {"id": 2, "name": "lint", "conclusion": "failure", "url": detail_url},
+                ],
+            }
+        assert endpoint == detail_url
+        return {"details_url": "https://github.com/owner/repo/actions/runs/9/job/2"}
+
+    case = live.certify(
+        row,
+        world["path"].parent / "repo",
+        {"number": 1, "headRefOid": world["sha"], "body": live.AC_BODY},
+        github_reader=github_reader,
+        runtime_events_reader=lambda: [
+            {
+                "event_id": "runtime-ac-1",
+                "target": "owner/repo#1",
+                "observed_head_sha": world["sha"],
+                "audit_evidence": [
+                    {
+                        "command": "python3 -m pytest tests/test_proof.py::test_proof",
+                        "status": "PASS",
+                        "returncode": 0,
+                    }
+                ],
+            }
+        ],
+        log_reader=lambda endpoint: (
+            "first line\nlast failing line"
+            if endpoint.endswith("/actions/jobs/2/logs")
+            else pytest.fail(f"unexpected log endpoint: {endpoint}")
+        ),
+    )
+    execution = live.roles._collected_snapshot(case)["ground_truth_evidence"][
+        "live_execution_evidence"
+    ]
+    assert execution["evaluated_sha"] == world["sha"]
+    assert [(run["name"], run["conclusion"], run["sha"]) for run in execution["check_runs"]] == [
+        ("unit", "success", world["sha"]),
+        ("lint", "failure", world["sha"]),
+    ]
+    assert execution["check_runs"][1]["api_url"] == detail_url
+    assert execution["check_runs"][1]["log_tail"].endswith("last failing line")
+    assert execution["check_runs"][1]["log_provenance"] == {
+        "api_url": "https://api.github.com/repos/owner/repo/actions/jobs/2/logs",
+        "sha": world["sha"],
+    }
+    assert execution["runtime_ac_command_results"] == [
+        {
+            "command": "tests/test_proof.py::test_proof",
+            "status": "PASS",
+            "returncode": 0,
+            "event_id": "runtime-ac-1",
+            "producer": "runtime_ac_gate",
+            "target": "owner/repo#1",
+            "sha": world["sha"],
+        }
+    ]
+
+
+def test_named_test_command_requires_exact_pytest_target():
+    assert live._same_named_test_command(
+        "tests/test_proof.py::test_proof", "python3 -m pytest tests/test_proof.py::test_proof"
+    )
+    assert not live._same_named_test_command(
+        "tests/test_proof.py::test_proof", "echo 'pytest tests/test_proof.py::test_proof'"
+    )
+    assert not live._same_named_test_command(
+        "tests/test_proof.py::test_proof",
+        "python3 -m pytest --collect-only tests/test_proof.py::test_proof",
+    )
+
+
+def test_check_runs_keep_pending_conclusions_and_mark_non_actions_logs_unavailable():
+    def github_reader(args):
+        if "commits/" in args[1]:
+            return {
+                "total_count": 2,
+                "check_runs": [
+                    {"id": 1, "name": "pending", "conclusion": None},
+                    {"id": 2, "name": "external", "conclusion": "failure"},
+                ],
+            }
+        return {"details_url": "https://example.invalid/external-check"}
+
+    runs = live._check_run_evidence(
+        "owner/repo#1", "a" * 40, github_reader, lambda _endpoint: pytest.fail("no log fetch")
+    )
+    assert runs[0]["conclusion"] is None
+    assert runs[1]["log_unavailable"] == "Actions job URL unavailable"
+
+
+def test_execution_evidence_paginates_and_bounds_failure_logs(monkeypatch):
+    monkeypatch.setattr(live, "CHECK_RUN_PAGE_SIZE", 1)
+    calls = []
+
+    def reader(args):
+        endpoint = args[1]
+        calls.append(endpoint)
+        if "/commits/" in endpoint:
+            page = int(endpoint.rsplit("=", 1)[1])
+            return {
+                "total_count": 2,
+                "check_runs": [{"id": page, "name": f"job-{page}", "conclusion": "failure"}],
+            }
+        job = endpoint.rsplit("/", 1)[1]
+        return {"details_url": f"https://github.com/owner/repo/actions/runs/9/job/{job}"}
+
+    result = live._execution_evidence(
+        {"target": "owner/repo#1"},
+        "a" * 40,
+        ["Run `python3 -m pytest tests/test_proof.py`"],
+        github_reader=reader,
+        runtime_events_reader=lambda: [],
+        log_reader=lambda _endpoint: "early\n" + "x" * 8_000 + "\nlast failure",
+    )
+    assert [row["name"] for row in result["check_runs"]] == ["job-1", "job-2"]
+    assert any("per_page=1&page=2" in endpoint for endpoint in calls)
+    assert all(row["log_tail"].endswith("last failure") for row in result["check_runs"])
+    assert all(len(row["log_tail"].encode()) < 4_200 for row in result["check_runs"])
+    assert result["runtime_ac_command_results"] == []
+    assert result["unknowns"] == ["python3 -m pytest tests/test_proof.py"]
+
+
+def test_named_command_results_reject_other_heads_and_commands():
+    command = "python3 -m pytest tests/test_proof.py"
+    event = {
+        "event_id": "right",
+        "target": "owner/repo#1",
+        "observed_head_sha": "a" * 40,
+        "audit_evidence": [{"command": command, "status": "PASS", "returncode": 0}],
+    }
+    wrong_head = {**event, "event_id": "other-head", "observed_head_sha": "b" * 40}
+    wrong_target = {**event, "event_id": "other-target", "target": "owner/other#1"}
+    wrong_command = {
+        **event,
+        "event_id": "other-command",
+        "audit_evidence": [{"command": "echo " + command, "status": "PASS"}],
+    }
+    result = live._command_result(
+        command, [wrong_head, wrong_target, wrong_command, event], "owner/repo#1", "a" * 40
+    )
+    assert result["event_id"] == "right"
+
+
+def test_exact_head_runtime_events_are_not_hidden_by_newer_unrelated_events(world):
+    payload = {
+        "runtime_ac_gate": {
+            "target": "owner/repo#1",
+            "observed_head_sha": world["sha"],
+            "audit_evidence": [{"command": "pytest test_proof.py", "status": "PASS"}],
+        }
+    }
+    with feedback._conn() as conn:
+        conn.execute(
+            "INSERT INTO completion_events "
+            "(event_id,schema_version,run_id,event_type,phase,producer,payload_json,"
+            "content_hash,created_ts,updated_ts) "
+            "VALUES ('exact-head',1,'live-1','verification','shadow','runtime_ac_gate',?,'h',1,1)",
+            (json.dumps(payload),),
+        )
+        conn.executemany(
+            "INSERT INTO completion_events "
+            "(event_id,schema_version,run_id,event_type,phase,producer,payload_json,"
+            "content_hash,created_ts,updated_ts) "
+            "VALUES (?,1,'live-1','verification','shadow','runtime_ac_gate','{}','h',2,2)",
+            [(f"unrelated-{i}",) for i in range(1_001)],
+        )
+    events = live._runtime_events_for_sha("owner/repo#1", world["sha"])
+    assert [event["event_id"] for event in events] == ["exact-head"]
+    assert events[0]["producer"] == "runtime_ac_gate"
+
+
+def test_failure_detail_unavailable_keeps_the_check_conclusion():
+    def reader(args):
+        if "/commits/" in args[1]:
+            return {
+                "total_count": 1,
+                "check_runs": [{"id": 7, "name": "unit", "conclusion": "failure"}],
+            }
+        raise RuntimeError("API temporarily unavailable")
+
+    runs = live._check_run_evidence("owner/repo#1", "a" * 40, reader, lambda _url: "")
+    assert runs[0]["conclusion"] == "failure"
+    assert runs[0]["log_unavailable"] == "check-run detail unavailable"
+
+
+def test_certification_keeps_the_qualified_prompt_size_refusal(world, monkeypatch):
+    row = {
+        "target": "owner/repo#1",
+        "packet": live.retro.build_packet(
+            {"target": "owner/repo#1"}, live._evidence_for(world["sha"])
+        ),
+    }
+    monkeypatch.setattr(
+        live, "_execution_evidence", lambda *args, **kwargs: {"oversized": "x" * 1_048_576}
+    )
+    with pytest.raises(ValueError, match="qualified prompt exceeds byte limit"):
+        live.certify(
+            row,
+            world["path"].parent / "repo",
+            {"number": 1, "headRefOid": world["sha"], "body": live.AC_BODY},
+        )
 
 
 def test_the_kill_switch_and_the_limit_hold(world):
