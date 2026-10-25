@@ -33,21 +33,21 @@
     },
     "branch_stage_latency_seconds": {
       "deterministic_merge": {
-        "total_or_null": 0.1619553565979004,
+        "total_or_null": 0.17863893508911133,
         "measured_runs": 1,
         "total_runs": 1,
         "coverage": 1.0,
         "status": "complete"
       },
       "deterministic_post_merge_verify": {
-        "total_or_null": 0.17110013961791992,
+        "total_or_null": 0.16961002349853516,
         "measured_runs": 1,
         "total_runs": 1,
         "coverage": 1.0,
         "status": "complete"
       },
       "deterministic_wait": {
-        "total_or_null": 0.14616084098815918,
+        "total_or_null": 0.1749134063720703,
         "measured_runs": 1,
         "total_runs": 1,
         "coverage": 1.0,
@@ -69,16 +69,16 @@
       "escalated": 0,
       "unowned": 0,
       "aged": 0,
-      "oldest_age_seconds": 1.0204699039459229
+      "oldest_age_seconds": 1.0237150192260742
     },
     "rejected": {},
     "counterfactual_savings_usd": null,
     "authority": false
   },
-  "negative_join_cases": 14,
+  "negative_join_cases": 21,
   "source_hashes": {
-    "src/closer_stage_feedback.py": "ba4118741684bb8c5052408b1532df7fbcaeb8842ea4afefbab8dbf6cbbed3a7",
-    "/private/tmp/orchestrator-category46-acceptance/tests/test_closer_acceptance_metrics_composition.py": "0e8aa49fde81b34729a89d4f986dda1b2dc900770ed840c7933cc41a5e7e68e2"
+    "src/closer_stage_feedback.py": "79cee7f076027d633677d5cb2347edc3e5310f502495099085cdd1251613b53d",
+    "/private/tmp/orchestrator-category46-acceptance/tests/test_closer_acceptance_metrics_composition.py": "1c756e08c478cd31dcec531db9a6837a2cd4a865955dcf275b08701cb0567cdc"
   },
   "scope": "CI wait excluded; completed merge and POST counted; verifier outcome unmeasured"
 }

@@ -94,13 +94,44 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
         "merge",
         "accounting",
         "duplicate",
+        "frontier_missing_policy",
+        "frontier_schema",
+        "frontier_owner",
+        "frontier_target_digest",
+        "frontier_binding_digest",
+        "frontier_binding_rehashed",
+        "frontier_revision_rehashed",
     ):
         bad = copy.deepcopy(receipts)
         row = next(iter(bad[post_index]["targets"].values()))
         proof = row["resource_evidence"]["accepted_verifier_request"]
         act = row["results"]["act"]
         queue = act["queue_receipt"]
-        if damage == "proof":
+        if damage.startswith("frontier_"):
+            frontier = bad[post_index]["finite_frontier"]
+            target = row["results"]["prepare"]["snapshot"]["target"]
+            if damage == "frontier_missing_policy":
+                bad[post_index]["finite_frontier"] = {
+                    "frontier_id": frontier["frontier_id"],
+                    "targets": [target],
+                }
+            elif damage == "frontier_schema":
+                frontier["schema"] = "unknown-policy"
+            elif damage == "frontier_owner":
+                frontier.pop("owner")
+            elif damage == "frontier_target_digest":
+                frontier["targets_sha256"] = "0" * 64
+            elif damage == "frontier_binding_digest":
+                frontier["bindings"][target]["action_id"] = "0" * 64
+            else:
+                if damage == "frontier_binding_rehashed":
+                    frontier["bindings"][target]["action_id"] = "invalid-action-id"
+                else:
+                    frontier["bindings"][target]["revision"] = "unrelated-revision"
+                frontier["bindings_sha256"] = hashlib.sha256(
+                    json.dumps(frontier["bindings"], sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+        elif damage == "proof":
             row.pop("resource_evidence")
         elif damage == "head":
             proof["head"] = "b" * 40
@@ -148,7 +179,7 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
                     "provider_calls": 0,
                     "deployment": False,
                     "summary": result,
-                    "negative_join_cases": 14,
+                    "negative_join_cases": 21,
                     "source_hashes": {
                         str(p): hashlib.sha256(p.read_bytes()).hexdigest()
                         for p in (Path("src/closer_stage_feedback.py"), Path(__file__))

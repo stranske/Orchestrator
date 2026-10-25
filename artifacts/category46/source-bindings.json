@@ -16,9 +16,9 @@
     "src/closer_hold_followup.py": "ececc4fc8c4739bd7e962c06e168435b3da02ca5695df9f54dc9a7c10ff03495",
     "src/closer_pipeline.py": "61b199aaa3e1c67738ccb5c7e536cb97f65bea8f656eb89c221efd8ec97b365c",
     "src/closer_queue.py": "0abd9d39c50b53165abaa29af3efa98e3da8b165e735db5b6fa2c1b0cdcd1428",
-    "src/closer_stage_feedback.py": "ba4118741684bb8c5052408b1532df7fbcaeb8842ea4afefbab8dbf6cbbed3a7",
+    "src/closer_stage_feedback.py": "79cee7f076027d633677d5cb2347edc3e5310f502495099085cdd1251613b53d",
     "tests/fixtures/closer-category46/representative-workload.json": "9e0ec5b3c1b39c8f69056140b9eb44db512b16605b5ee547a2bce915b8940159",
-    "tests/test_closer_acceptance_metrics_composition.py": "0e8aa49fde81b34729a89d4f986dda1b2dc900770ed840c7933cc41a5e7e68e2",
+    "tests/test_closer_acceptance_metrics_composition.py": "1c756e08c478cd31dcec531db9a6837a2cd4a865955dcf275b08701cb0567cdc",
     "tests/test_closer_ci_followup.py": "71991058c97dfa8b71b046cff21984961cb6268a1fd74fdda90865909d872f20",
     "tests/test_closer_efficiency_metrics.py": "ab6e8d0729aec2993f949e7af893e7b9d9ad189bf51fdcb25a08ea5964926af4",
     "tests/test_closer_hold_safety_contracts.py": "643d2087e98af84223a83b0a21ef7803308b934d84cb84df353f738809ee7cf6",
@@ -411,11 +411,30 @@
           "name": "test_public_ci_merge_verification_wait_and_restart_without_replaying_effects",
           "time": "0.993"
         }
-      ]
+      ],
+      "source_sha256": {
+        "scripts/measure_closer_acceptance.py": "4f1f4535d9ef51099cf82a65ebc870eaee61c1b6c3d05c5d63c9a683c7a86c3c",
+        "src/closer_dispatcher.py": "cd2f9b43ea13b5e2e9a1704073e6add25e94c06a013d510ccab5db2d2879c9be",
+        "src/closer_hold_followup.py": "ececc4fc8c4739bd7e962c06e168435b3da02ca5695df9f54dc9a7c10ff03495",
+        "src/closer_pipeline.py": "61b199aaa3e1c67738ccb5c7e536cb97f65bea8f656eb89c221efd8ec97b365c",
+        "src/closer_queue.py": "0abd9d39c50b53165abaa29af3efa98e3da8b165e735db5b6fa2c1b0cdcd1428",
+        "src/closer_stage_feedback.py": "ba4118741684bb8c5052408b1532df7fbcaeb8842ea4afefbab8dbf6cbbed3a7",
+        "tests/fixtures/closer-category46/representative-workload.json": "9e0ec5b3c1b39c8f69056140b9eb44db512b16605b5ee547a2bce915b8940159",
+        "tests/test_closer_acceptance_metrics_composition.py": "0e8aa49fde81b34729a89d4f986dda1b2dc900770ed840c7933cc41a5e7e68e2",
+        "tests/test_closer_ci_followup.py": "71991058c97dfa8b71b046cff21984961cb6268a1fd74fdda90865909d872f20",
+        "tests/test_closer_efficiency_metrics.py": "ab6e8d0729aec2993f949e7af893e7b9d9ad189bf51fdcb25a08ea5964926af4",
+        "tests/test_closer_hold_safety_contracts.py": "643d2087e98af84223a83b0a21ef7803308b934d84cb84df353f738809ee7cf6",
+        "tests/test_closer_pipeline.py": "94de972157d084a031e9d30f4e58b83085ba2ee9def914ff539d998542c95c03",
+        "tests/test_closer_pre_model_readiness.py": "b61725c67018d9a4ac12747e806da9436b6bd16d088112310a4e9a71ea4783e7",
+        "tests/test_closer_reasoning_boundary.py": "ff04cbf65f352a4a2d8e0b2bdfb866e153f305365d63e29673dccc8817742fcc",
+        "tests/test_closer_role_controller.py": "cdbab2104209a0e7288bf741ba27b74a779f59efb24e2df871fea9309ef37e93",
+        "tests/test_closer_role_routes.py": "3359ae22ffea05d095d305e8af41f56a328eed160faf209305ea8c6f7fceed43",
+        "tests/test_closer_stage_feedback.py": "84369af7a98741b371ff00d8f16dfe99cc86fafe97c770a91de6a5825df65f65"
+      }
     },
     {
       "path": "artifacts/category46/focused-metrics.xml",
-      "sha256": "5b3f077b234925f1031f0584658c294c2c5b37b52e9e9eac057bdcccbf3e6014",
+      "sha256": "c4d9389b374ca52f344312510dada7b01c51d709c23bb2a6df3acdcaf8ea854b",
       "suites": [
         {
           "name": "pytest",
@@ -423,8 +442,8 @@
           "failures": "0",
           "skipped": "0",
           "tests": "70",
-          "time": "6.260",
-          "timestamp": "2026-10-25T17:55:38.350029-05:00",
+          "time": "6.083",
+          "timestamp": "2026-10-25T17:59:51.281512-05:00",
           "hostname": "server.trs.private"
         }
       ],
@@ -437,7 +456,7 @@
         {
           "classname": "tests.test_closer_acceptance_metrics_composition",
           "name": "test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown",
-          "time": "5.051"
+          "time": "4.885"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
@@ -677,47 +696,47 @@
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_read_only_existing_stage_persistence_reaches_exact_receipt_summary",
-          "time": "0.054"
+          "time": "0.052"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[requested_profile_id-other-profile]",
-          "time": "0.051"
-        },
-        {
-          "classname": "tests.test_closer_efficiency_metrics",
-          "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[agent-claude]",
-          "time": "0.049"
-        },
-        {
-          "classname": "tests.test_closer_efficiency_metrics",
-          "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[task_category-other-task]",
           "time": "0.044"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
+          "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[agent-claude]",
+          "time": "0.046"
+        },
+        {
+          "classname": "tests.test_closer_efficiency_metrics",
+          "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[task_category-other-task]",
+          "time": "0.051"
+        },
+        {
+          "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[target-wrong/repo#1]",
-          "time": "0.053"
+          "time": "0.211"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[head_sha-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb]",
-          "time": "0.047"
+          "time": "0.051"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[capacity_ledger_run_id-unrelated-model]",
-          "time": "0.054"
+          "time": "0.041"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_persisted_event_bindings_and_finite_measurements_are_rechecked[observed_cost_usd-inf]",
-          "time": "0.048"
+          "time": "0.042"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_lookup_is_bounded_and_reports_truncation_and_oversized_payload",
-          "time": "0.054"
+          "time": "0.040"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
@@ -727,47 +746,47 @@
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_missing_and_old_schema_brains_remain_unavailable_without_migration",
-          "time": "0.002"
+          "time": "0.001"
         },
         {
           "classname": "tests.test_closer_efficiency_metrics",
           "name": "test_conflicting_model_identity_exposes_no_read_binding",
-          "time": "0.002"
+          "time": "0.001"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_exit_zero_is_not_quality_or_source_completion",
-          "time": "0.081"
+          "time": "0.029"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_independent_quality_idempotently_reaches_existing_learner[accepted]",
-          "time": "0.038"
+          "time": "0.030"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_independent_quality_idempotently_reaches_existing_learner[ordinary_nonpass]",
-          "time": "0.039"
+          "time": "0.029"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_malformed_response_is_negative_quality_but_unknown_is_not",
-          "time": "0.049"
+          "time": "0.032"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_unbound_events_cannot_create_quality[changes0]",
-          "time": "0.026"
+          "time": "0.022"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_unbound_events_cannot_create_quality[changes1]",
-          "time": "0.028"
+          "time": "0.022"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_unbound_events_cannot_create_quality[changes2]",
-          "time": "0.028"
+          "time": "0.023"
         },
         {
           "classname": "tests.test_closer_stage_feedback",
@@ -777,13 +796,39 @@
         {
           "classname": "tests.test_closer_stage_feedback",
           "name": "test_native_stage_quality_changes_existing_routing_posterior_without_outcome",
-          "time": "0.036"
+          "time": "0.032"
         }
-      ]
+      ],
+      "source_sha256": {
+        "scripts/measure_closer_acceptance.py": "4f1f4535d9ef51099cf82a65ebc870eaee61c1b6c3d05c5d63c9a683c7a86c3c",
+        "src/closer_dispatcher.py": "cd2f9b43ea13b5e2e9a1704073e6add25e94c06a013d510ccab5db2d2879c9be",
+        "src/closer_hold_followup.py": "ececc4fc8c4739bd7e962c06e168435b3da02ca5695df9f54dc9a7c10ff03495",
+        "src/closer_pipeline.py": "61b199aaa3e1c67738ccb5c7e536cb97f65bea8f656eb89c221efd8ec97b365c",
+        "src/closer_queue.py": "0abd9d39c50b53165abaa29af3efa98e3da8b165e735db5b6fa2c1b0cdcd1428",
+        "src/closer_stage_feedback.py": "79cee7f076027d633677d5cb2347edc3e5310f502495099085cdd1251613b53d",
+        "tests/fixtures/closer-category46/representative-workload.json": "9e0ec5b3c1b39c8f69056140b9eb44db512b16605b5ee547a2bce915b8940159",
+        "tests/test_closer_acceptance_metrics_composition.py": "1c756e08c478cd31dcec531db9a6837a2cd4a865955dcf275b08701cb0567cdc",
+        "tests/test_closer_ci_followup.py": "71991058c97dfa8b71b046cff21984961cb6268a1fd74fdda90865909d872f20",
+        "tests/test_closer_efficiency_metrics.py": "ab6e8d0729aec2993f949e7af893e7b9d9ad189bf51fdcb25a08ea5964926af4",
+        "tests/test_closer_hold_safety_contracts.py": "643d2087e98af84223a83b0a21ef7803308b934d84cb84df353f738809ee7cf6",
+        "tests/test_closer_pipeline.py": "94de972157d084a031e9d30f4e58b83085ba2ee9def914ff539d998542c95c03",
+        "tests/test_closer_pre_model_readiness.py": "b61725c67018d9a4ac12747e806da9436b6bd16d088112310a4e9a71ea4783e7",
+        "tests/test_closer_reasoning_boundary.py": "ff04cbf65f352a4a2d8e0b2bdfb866e153f305365d63e29673dccc8817742fcc",
+        "tests/test_closer_role_controller.py": "cdbab2104209a0e7288bf741ba27b74a779f59efb24e2df871fea9309ef37e93",
+        "tests/test_closer_role_routes.py": "3359ae22ffea05d095d305e8af41f56a328eed160faf209305ea8c6f7fceed43",
+        "tests/test_closer_stage_feedback.py": "84369af7a98741b371ff00d8f16dfe99cc86fafe97c770a91de6a5825df65f65"
+      }
     }
   ],
   "provider_calls": 0,
   "live_deployment": false,
   "final_broad_suite_owner": "01a17469-d258-754f-94c8-83cea105f016",
-  "red_evidence": "handoff-red.json"
+  "red_evidence": "handoff-red.json",
+  "review_correction": {
+    "finding": "unvalidated finite-frontier descriptor could inflate metric count",
+    "scope": "accounting only; no action authority",
+    "negative_join_cases": 21,
+    "production_diff": "validate_frontier plus exact branch revision join",
+    "independent_rereview": "pending owner reviewer completion"
+  }
 }

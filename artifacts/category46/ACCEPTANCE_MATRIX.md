@@ -55,7 +55,7 @@ excluded waits **2**. Correction requires the producer's authenticated resource
 proof, the exact queue receipt hash, original operation/event/head/merge/frontier
 bindings, completed queue operation and submitted/advanced events. It yields
 denominator **2**, direct **2**, excluded waits **1**, model runs **0**.
-Fourteen altered proof/binding/completion/causal-event cases remain excluded.
+Twenty-one altered proof/binding/completion/causal-event cases remain excluded.
 The summary is a read-side join over already authenticated receipts, not a new
 authentication boundary or action authority. Pending metadata alone is excluded.
 
@@ -123,3 +123,17 @@ receipt and measured matched baseline.
 Checkpoint message to parent thread `01a171a0-b25a-729e-8a45-595d3653a0c6`
 failed with **thread not found**, known not delivered. Core owner messages
 succeeded. No denied or uncertain external action was retried.
+
+## Independent review correction
+
+Review of the original accounting patch found that matching a frontier ID and
+target list alone accepted a descriptor missing its policy and bindings. The
+correction calls the existing `validate_frontier(frontier, targets=[target])`
+fail-closed and joins its bound revision to the retained branch revision. Seven
+additional joins reject missing policy, wrong schema, missing owner, target digest
+drift, binding digest drift, malformed action binding with a recomputed digest,
+and a validly rehashed but wrong branch revision. The focused metrics/plumbing
+run remains **70 PASS**, now with **21 negative joins**, in **6.11 seconds**.
+The 73-case selected acceptance result predates this narrow metrics correction;
+its original source hashes remain attached to that result in `source-bindings.json`.
+No broad rerun, live baseline, escalation acknowledgment or deployment claim is added.

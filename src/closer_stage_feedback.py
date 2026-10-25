@@ -241,6 +241,12 @@ def _completed_verifier_request(
     act = results.get("act") if isinstance(results, Mapping) else None
     if not all(isinstance(value, Mapping) for value in (proof, act, frontier)):
         return False
+    from closer_frontier_policy import validate_frontier
+
+    try:
+        frontier = validate_frontier(frontier, targets=[target])
+    except (TypeError, ValueError):
+        return False
     queue = act.get("queue_receipt")
     evidence = act.get("pending_evidence")
     if not isinstance(queue, Mapping) or not isinstance(evidence, Mapping):
@@ -262,6 +268,7 @@ def _completed_verifier_request(
         and proof.get("operation_frontier") == frontier.get("frontier_id")
         and _identity_text(proof.get("operation_frontier"))
         and frontier.get("targets") == [target]
+        and frontier["bindings"][target]["revision"] == row.get("revision")
         and _identity_text(proof.get("observed_revision"))
         and isinstance(proof.get("event_id"), str)
         and re.fullmatch(r"[0-9a-f]{64}", proof["event_id"])
