@@ -4755,29 +4755,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             events = receipt.get("events")
             if not isinstance(events, list):
                 return None
-            submitted = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "operation_submitted"
-                and event.get("target") == target
-                and event.get("operation_id") == operation.get("id")
-                and event.get("action") == operation.get("action")
-                for event in events
-            )
-            advanced = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "action_advanced"
-                and event.get("target") == target
-                and event.get("action") == operation.get("action")
-                and isinstance(event.get("revision"), str)
-                and event["revision"]
-                and event["revision"] != operation.get("revision")
-                for event in events
-            )
-            # The queue may refresh metadata again after the first action
-            # transition. Its validated final row need not repeat that first
-            # revision; the exact completed operation and both causal events do.
+            # Shared exact event validation also authenticates a completed
+            # verification POST's same-pass result-wait boundary.
             if (operation.get("action") == "merge" and row.get("action") == "merge") or not (
-                submitted and advanced
+                closer_queue.completed_progress_events(receipt, target, operation)
             ):
                 return None
             progress_key = digest(
@@ -7365,20 +7346,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     },
                     "queue_receipt": receipt,
                 }
-        if finite_frontier is not None:
-            progress = verified_finite_partial_progress(target, action_state, row, receipt)
-            if progress is not None:
-                return progress
         if (
             receipt.get("stop_valid") is True
-            and row.get("eligible") is False
             and row.get("status") in {"deferred", "ineligible"}
             and row.get("action") in {"wait", "collect_evidence"}
-            and reason
-            in {
-                "same verification request already accepted",
-                "collect terminal or unattributed verifier evidence; do not rerun",
-            }
+            and (
+                (
+                    row.get("eligible") is False
+                    and reason
+                    in {
+                        "same verification request already accepted",
+                        "collect terminal or unattributed verifier evidence; do not rerun",
+                    }
+                )
+                or verified_finite_partial_progress(target, action_state, row, receipt) is not None
+            )
         ):
             inner = queue_item_readback(action_state, target)
             fresh = inner.get("evidence") if isinstance(inner, dict) else None
@@ -7388,26 +7370,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 and inner.get("observation_freshness") == "fresh"
                 and inner.get("revision") == row.get("revision")
                 and fresh.get("target") == target
-                and current.select(fresh)[1] == reason
+                and current.select(fresh)[1] == inner.get("reason")
+                and inner.get("reason")
+                in {
+                    "same verification request already accepted",
+                    "collect terminal or unattributed verifier evidence; do not rerun",
+                }
                 and fresh.get("head") == prep_snapshot.get("head")
                 and fresh.get("merge") == prep_snapshot.get("merge")
                 else None
             )
             if isinstance(accepted, dict):
+                pending_evidence = {
+                    "event_id": accepted["request_basis"],
+                    "operation_id": accepted["operation_id"],
+                    "target": target,
+                    "head": fresh["head"],
+                    "merge": fresh["merge"],
+                    "observed_revision": row["revision"],
+                }
+                proof = (
+                    closer_queue.accepted_verifier_wait_proof(
+                        action_state,
+                        target,
+                        frontier=finite_frontier,
+                        receipt=receipt,
+                        evidence=pending_evidence,
+                    )
+                    if finite_frontier is not None
+                    else None
+                )
+                if finite_frontier is not None and proof is None:
+                    accepted = None
+            if isinstance(accepted, dict):
                 return {
                     "status": "pending",
                     "pending_kind": "external_event",
                     "next_trigger": "authenticated verifier result or supported request reconciliation",
-                    "pending_evidence": {
-                        "event_id": accepted["request_basis"],
-                        "operation_id": accepted["operation_id"],
-                        "target": target,
-                        "head": fresh["head"],
-                        "merge": fresh["merge"],
-                        "observed_revision": row["revision"],
-                    },
+                    "pending_evidence": pending_evidence,
                     "queue_receipt": receipt,
                 }
+        # An authenticated accepted request is an owned result wait even when
+        # this same queue pass also advanced the original POST. Preserve its
+        # typed wait before the general finite partial-progress fallback.
+        if finite_frontier is not None:
+            progress = verified_finite_partial_progress(target, action_state, row, receipt)
+            if progress is not None:
+                return progress
         if (
             receipt.get("stop_valid")
             and row.get("eligible")
@@ -8194,6 +8203,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
     import copy
     import fcntl
 
+    import claims
     import closer_pipeline
     import closer_resources
     import closer_stage_continuation
@@ -8205,13 +8215,184 @@ def _run_merge_verification_successors(args, backend, result, targets):
     root = closer_resources.scoped_root(root_path)
     continuations = {}
     failures = []
-    for target in targets:
+
+    def remember_receipt(ref):
+        values = result.setdefault("descendant_receipts", [])
+        identity = (ref["target"], ref["finite_frontier"]["frontier_id"])
+        values[:] = [
+            prior
+            for prior in values
+            if (prior["target"], prior["finite_frontier"]["frontier_id"]) != identity
+        ]
+        values.append(copy.deepcopy(ref))
+
+    def can_advance(native, checked, target):
+        item = (native.get("targets") or {}).get(target) or {}
+        action = (item.get("results") or {}).get("act") or {}
+        return (
+            checked.get("scoped_completion_valid", checked.get("valid")) is True
+            and action.get("status") != "pending"
+        )
+
+    pending_targets = list(targets)
+    traversed = {}
+    for target in pending_targets:
+        traversed[target] = traversed.get(target, 0) + 1
+        if traversed[target] > 8:
+            failures.append(target)
+            continuations[target] = {
+                "status": "held",
+                "reason": "bounded stage traversal exhausted",
+            }
+            continue
         child_started = False
         shard = closer_resources.shard_dir(root, target) / "state.json"
         try:
-            document = closer_pipeline._load(shard)
-            entry = (document.get("frontiers") or {}).get(predecessor["frontier_id"], {})
+            action_path = (
+                shard.parent / f"{shard.stem}.actions" / f"{closer_pipeline._digest(target)}.json"
+            )
+            leaf = closer_stage_continuation.active_leaf(shard, action_path, predecessor, target)
+            stage_predecessor = leaf["finite_frontier"]
+            entry = leaf["entry"] or {}
             item = (entry.get("items") or {}).get(target, {})
+            if (
+                item.get("status") == "unknown"
+                or item.get("stage_status") in {"running", "unknown"}
+                or item.get("provider_outcome_uncertain")
+            ):
+                continuations[target] = {
+                    "status": "unknown",
+                    "reason": "existing owned stage outcome requires reconciliation",
+                    "acceptance_authority": False,
+                }
+                failures.append(target)
+                continue
+            if leaf["pending_child"] is not None:
+                stored = leaf["pending_child"]
+                child = {
+                    "finite_frontier": stage_predecessor,
+                    "execution_targets": [target],
+                    "frontier_target": target,
+                    "predecessor": stored["stage_predecessor"],
+                    "reused": True,
+                    "acceptance_authority": False,
+                }
+                following = copy.copy(args)
+                following.finite_frontier = child["finite_frontier"]
+                child_started = True
+                native = _run_staged_pipeline(following, child["execution_targets"], backend, None)
+                checked = closer_pipeline.validate_stop_scoped(
+                    root_path, native.get("round_id"), [target]
+                )
+                native["validation"] = checked
+                ref = closer_stage_continuation.retain_receipt(
+                    shard,
+                    root_path,
+                    target=target,
+                    frontier=child["finite_frontier"],
+                    native=native,
+                )
+                if ref is not None:
+                    remember_receipt(ref)
+                if ref is not None and can_advance(native, checked, target):
+                    pending_targets.append(target)
+                continuations[target] = {
+                    "status": "resumed_stage_successor",
+                    "lineage": child,
+                    "native_result": native,
+                    "acceptance_authority": False,
+                }
+                if checked.get("valid") is not True:
+                    failures.append(target)
+                continue
+            document = closer_pipeline._load(shard)
+            ci_wait = (
+                isinstance(item, Mapping)
+                and item.get("status") == "held"
+                and item.get("stage") == "act"
+                and item.get("stage_status") == "completed"
+                and ((item.get("results") or {}).get("act") or {}).get("pending_kind") == "ci"
+            )
+            if ci_wait:
+                import closer_ci_followup
+
+                action_path = (
+                    shard.parent
+                    / f"{shard.stem}.actions"
+                    / f"{closer_pipeline._digest(target)}.json"
+                )
+                backend.gh.deadline = time.time() + args.request_timeout_seconds
+                backend.local_first = False
+                read = closer_ci_followup.read_terminal(
+                    backend, action_path, target, stage_predecessor, item, state_path=shard
+                )
+                if read["status"] != "ready":
+                    continuations[target] = {
+                        **read,
+                        "predecessor_kind": "ci_no_effect_wait",
+                        "acceptance_authority": False,
+                    }
+                    continue
+                observation = read["observation"]
+                canonical = assignment_rows_from_file(args.assignment)
+
+                def ci_admission():
+                    live = False
+                    with (shard.parent / "lease.lock").open("a+") as probe:
+                        try:
+                            fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            fcntl.flock(probe.fileno(), fcntl.LOCK_UN)
+                        except BlockingIOError:
+                            live = True
+                    return {
+                        "paused": observation.get("eligible") is not True,
+                        "dependency": assignment_dependency(
+                            args.assignment,
+                            target,
+                            expected_fingerprint=canonical[target].get("fingerprint"),
+                        ),
+                        "live_owner": live or bool(claims.holder(target)),
+                    }
+
+                child = closer_stage_continuation.create_ci_successor(
+                    shard,
+                    action_path,
+                    predecessor=stage_predecessor,
+                    target=target,
+                    terminal_read=read,
+                    canonical_path=args.assignment,
+                    canonical_row=canonical[target],
+                    admission=ci_admission,
+                )
+                following = copy.copy(args)
+                following.finite_frontier = child["finite_frontier"]
+                child_started = True
+                native = _run_staged_pipeline(following, child["execution_targets"], backend, None)
+                checked = closer_pipeline.validate_stop_scoped(
+                    root_path, native.get("round_id"), [target]
+                )
+                native["validation"] = checked
+                ref = closer_stage_continuation.retain_receipt(
+                    shard,
+                    root_path,
+                    target=target,
+                    frontier=child["finite_frontier"],
+                    native=native,
+                )
+                if ref is not None:
+                    remember_receipt(ref)
+                if ref is not None and can_advance(native, checked, target):
+                    pending_targets.append(target)
+                continuations[target] = {
+                    "status": "ci_successor",
+                    "predecessor_kind": "ci_no_effect_wait",
+                    "lineage": child,
+                    "native_result": native,
+                    "acceptance_authority": False,
+                }
+                if checked.get("valid") is not True:
+                    failures.append(target)
+                continue
             if (
                 isinstance(item, Mapping)
                 and item.get("status") == "held"
@@ -8225,7 +8406,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
                 old_rows = old_action.get("queue_receipt", {}).get("accounting", [])
                 event = "guard-admission-" + digest(
                     [
-                        predecessor,
+                        stage_predecessor,
                         target,
                         [
                             row.get("operation_id")
@@ -8235,7 +8416,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
                     ]
                 )
                 common = {
-                    "frontier": predecessor,
+                    "frontier": stage_predecessor,
                     "target": target,
                     "event": event,
                     "assignment_path": args.assignment,
@@ -8254,18 +8435,45 @@ def _run_merge_verification_successors(args, backend, result, targets):
                     continue
                 # Exactly once per ordinary caller pass. This is the SAME bound
                 # frontier, normal lease/scope admission and live final guard.
-                native = _run_staged_pipeline(args, targets, backend, None)
+                if stage_predecessor == predecessor:
+                    native = _run_staged_pipeline(args, targets, backend, None)
+                else:
+                    linked = leaf["chain"][-1]["record"]
+                    child = {
+                        "finite_frontier": stage_predecessor,
+                        "execution_targets": [target],
+                        "frontier_target": target,
+                        "predecessor": linked["stage_predecessor"],
+                        "reused": True,
+                        "acceptance_authority": False,
+                    }
+                    following = copy.copy(args)
+                    following.finite_frontier = child["finite_frontier"]
+                    native = _run_staged_pipeline(
+                        following, child["execution_targets"], backend, None
+                    )
                 checked = closer_pipeline.validate_stop_scoped(
                     root_path, native.get("round_id"), [target]
                 )
                 native["validation"] = checked
                 prior_round_id = result.get("round_id")
-                result.update(native)
-                if isinstance(result.get("action_c"), dict):
-                    result["action_c"]["round_id"] = native.get("round_id")
-                    command = result["action_c"].get("validate_stop_args", [])
-                    if "--round-id" in command:
-                        command[command.index("--round-id") + 1] = native.get("round_id")
+                if stage_predecessor == predecessor:
+                    result.update(native)
+                    if isinstance(result.get("action_c"), dict):
+                        result["action_c"]["round_id"] = native.get("round_id")
+                        command = result["action_c"].get("validate_stop_args", [])
+                        if "--round-id" in command:
+                            command[command.index("--round-id") + 1] = native.get("round_id")
+                else:
+                    ref = closer_stage_continuation.retain_receipt(
+                        shard,
+                        root_path,
+                        target=target,
+                        frontier=child["finite_frontier"],
+                        native=native,
+                    )
+                    if ref is not None:
+                        remember_receipt(ref)
                 continuations[target] = {
                     "status": "guard_readmission",
                     "audit": applied,
@@ -8278,7 +8486,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
                 # Stay in this exact CLI-owned caller frame for the normal bound
                 # merge -> verification successor; never invent callback authority.
                 document = closer_pipeline._load(shard)
-                entry = document["frontiers"][predecessor["frontier_id"]]
+                entry = document["frontiers"][stage_predecessor["frontier_id"]]
                 item = entry["items"][target]
             accepted_wait = (
                 isinstance(item, Mapping)
@@ -8310,15 +8518,15 @@ def _run_merge_verification_successors(args, backend, result, targets):
             queue_document = closer_queue._read_state(action_path)
             qstate = closer_queue.state_for_frontier(
                 queue_document,
-                predecessor["frontier_id"],
-                expected_policy=predecessor,
+                stage_predecessor["frontier_id"],
+                expected_policy=stage_predecessor,
             )
             accepted_proof = None
             if accepted_wait:
                 accepted_proof = closer_queue.accepted_verifier_wait_proof(
                     action_path,
                     target,
-                    frontier=predecessor,
+                    frontier=stage_predecessor,
                     receipt=receipt,
                     evidence=act.get("pending_evidence"),
                 )
@@ -8415,7 +8623,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
             child = closer_stage_continuation.create_successor(
                 shard,
                 action_path,
-                predecessor=predecessor,
+                predecessor=stage_predecessor,
                 target=target,
                 observation=observation,
                 canonical_path=args.assignment,
@@ -8430,6 +8638,17 @@ def _run_merge_verification_successors(args, backend, result, targets):
                 root_path, native.get("round_id"), [target]
             )
             native["validation"] = checked
+            ref = closer_stage_continuation.retain_receipt(
+                shard,
+                root_path,
+                target=target,
+                frontier=child["finite_frontier"],
+                native=native,
+            )
+            if ref is not None:
+                remember_receipt(ref)
+            if ref is not None and can_advance(native, checked, target):
+                pending_targets.append(target)
             prior_continuation = continuations.get(target)
             continuations[target] = {
                 **({"guard_readmission": prior_continuation} if prior_continuation else {}),
@@ -8442,7 +8661,7 @@ def _run_merge_verification_successors(args, backend, result, targets):
                 failures.append(target)
         except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
             # Preserve the confirmed merge separately. Once a child started,
-            # reconcile ITS durable state; never repeat the predecessor effect.
+            # reconcile ITS durable state; never repeat the stage_predecessor effect.
             continuations[target] = {
                 "status": "unknown" if child_started else "held",
                 "reason": f"verification continuation: {error}",
@@ -8454,6 +8673,27 @@ def _run_merge_verification_successors(args, backend, result, targets):
                 ),
             }
             failures.append(target)
+    # Report exact journaled active descendants on restart too. Historical
+    # references are observations only: native hooks require prior finalized
+    # authenticated coverage before accepting receipts predating B's watermark.
+    for target in targets:
+        shard = closer_resources.shard_dir(root, target) / "state.json"
+        try:
+            state = closer_pipeline._load(shard)
+            chain, _active, _entry = closer_stage_continuation.linked_chain(
+                state, predecessor, target
+            )
+            for hop in chain:
+                refs = hop["record"].get("receipt_refs") or []
+                if not refs:
+                    continue
+                ref = refs[-1]
+                remember_receipt(ref)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+            # Partial chains never gain native completion from missing coverage.
+            # The independent native hook validates the whole actual lineage.
+            if target not in failures:
+                failures.append(target)
     if continuations:
         result["merge_verification_successors"] = continuations
     if failures:

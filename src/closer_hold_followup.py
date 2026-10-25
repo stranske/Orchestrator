@@ -208,6 +208,54 @@ def _boundary(row: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def _covered_leaves(campaign, doc, manifest=None):
+    """Select only actual known native worker coverage, never nested driver JSON."""
+    import closer_campaign as campaigns
+    import closer_native_descendants as descendants
+    import closer_native_observer as native
+
+    if manifest is None:
+        manifest = campaigns.load_manifest(doc["worker_config"]["runtime_manifest"])
+    path, worker, _proof = _terminal_worker_proof(campaign, doc, manifest)
+    result = native._read(path)
+    cfg = native.result_admission_config(
+        doc["worker_config"], result["native_admission"], campaign.path, doc, worker
+    )
+    detail = json.loads(result["detail"])
+    ref = detail.get("descendant_bundle")
+    if not isinstance(ref, Mapping):
+        return {}
+    covered = {}
+    for leaf in descendants.observed_leaves(cfg, ref):
+        if leaf.get("active") is not True:
+            continue
+        target = leaf.get("target")
+        if target in covered or target not in doc["assignment_targets"]:
+            raise ValueError("native descendant coverage is ambiguous or outside cohort")
+        if leaf.get("domain") != "known_held" or not isinstance(leaf.get("source_worker"), Mapping):
+            raise ValueError("native descendant lacks known original worker coverage")
+        covered[target] = leaf
+    return covered
+
+
+def _validate_coverage_bytes(coverage):
+    """Immutable original bytes only; audited reentry may have changed live row."""
+    import closer_finite_reentry as reentry
+
+    worker = coverage["source_worker"]
+    for reference in (
+        {"path": worker["result_path"], "sha256": worker["result_sha256"]},
+        worker["bundle_ref"],
+        {
+            "path": coverage["receipt_ref"]["receipt_path"],
+            "sha256": coverage["receipt_ref"]["receipt_sha256"],
+        },
+    ):
+        _value, sha = reentry._read(reference["path"])
+        if sha != reference["sha256"]:
+            raise ValueError("original descendant authenticated bytes changed")
+
+
 def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
     """Bind actual retained pipeline rows to this campaign's durable owner."""
     import closer_finite_reentry as reentry
@@ -221,9 +269,15 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
     located = _paths(doc)
     if located is None:
         return doc
-    root, frontier = located
+    root, root_frontier = located
+    try:
+        covered = _covered_leaves(campaign, doc)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        covered = {}  # Missing descendant authority cannot select a raw leaf.
     candidates = []
-    for target in frontier["targets"]:
+    for target in root_frontier["targets"]:
+        coverage = covered.get(target)
+        frontier = coverage["frontier"] if coverage is not None else root_frontier
         path = resources.shard_dir(root, target) / "state.json"
         if not path.exists():
             continue
@@ -236,6 +290,8 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
             "capacity_blocked",
         }:
             continue
+        if coverage is not None and _digest(row) != coverage["source_row_sha256"]:
+            raise ValueError("native covered descendant row changed during capture")
         boundary = _boundary(row)
         if boundary is None:
             continue
@@ -285,6 +341,11 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
                     "state_path": str(path.resolve()),
                     "row_sha256": _digest(row),
                     "kind": "pipeline",
+                    **(
+                        {"descendant_coverage": copy.deepcopy(coverage)}
+                        if coverage is not None
+                        else {}
+                    ),
                     "operation_id": (operation or {}).get("id"),
                     "operation_revision": (operation or {}).get("revision"),
                     "callback_id": row.get("work_key")
@@ -312,6 +373,7 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
             }
         )
 
+    frontier = root_frontier
     # A crashed native wrapper may never have reached a pipeline row. It still
     # receives a bounded, owned follow-up for its ACTUAL durable worker identity.
     for worker in doc.get("workers", []):
@@ -524,10 +586,11 @@ def validated_receipts(
     import closer_native_observer as native
 
     try:
-        _path, _worker, proof = _terminal_worker_proof(campaign, doc, manifest)
+        result_path, worker, proof = _terminal_worker_proof(campaign, doc, manifest)
         if proof.get("schema") not in {
             "native-completed-round/v1",
             "native-scoped-continuation/v1",
+            "native-descendant-continuation/v1",
         }:
             return []
         raw = native._bounded_bytes(Path(proof["receipt_path"]), 32 * 1024 * 1024)
@@ -540,7 +603,35 @@ def validated_receipts(
             or receipt.get("run_ids") != proof["run_ids"]
         ):
             return []
-        return [receipt]
+        receipts = [receipt]
+        try:
+            import closer_native_descendants as descendants
+            import closer_resources as resources
+
+            result = native._read(result_path)
+            detail = json.loads(result["detail"])
+            ref = detail.get("descendant_bundle")
+            if isinstance(ref, Mapping):
+                cfg = native.result_admission_config(
+                    doc["worker_config"], result["native_admission"], campaign.path, doc, worker
+                )
+                seen = {proof["receipt_sha256"]}
+                for leaf in descendants.observed_leaves(cfg, ref):
+                    reference = leaf["receipt_ref"]
+                    child, sha = resources.read_round_receipt(Path(reference["receipt_path"]))
+                    if not (
+                        sha == reference["receipt_sha256"]
+                        and child.get("round_id") == reference["round_id"]
+                        and child.get("run_ids") == reference["run_ids"]
+                        and child.get("finite_frontier") == leaf["frontier"]
+                    ):
+                        raise ValueError("observed descendant receipt changed")
+                    if sha not in seen:
+                        receipts.append(child)
+                        seen.add(sha)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            return [receipt]  # Partial telemetry never supplies missing branch facts.
+        return receipts
     except (OSError, ValueError, RuntimeError, KeyError, TypeError):
         return []  # Missing receipt evidence remains unknown, never fabricated.
 
@@ -566,7 +657,16 @@ def _native_terminal_boundary(
         raise ValueError("exact target still has a live or uncertain owner")
     path, last, proof = _terminal_worker_proof(campaign, doc, manifest)
     _source_row(record)  # Exact original held row must still exist under that proof.
+    coverage = record["source"].get("descendant_coverage")
+    if coverage is not None:
+        actual = _covered_leaves(campaign, doc, manifest).get(record["target"])
+        if actual != coverage or actual.get("frontier") != record["frontier"]:
+            raise ValueError("original native proof does not cover this exact descendant")
+        _validate_coverage_bytes(coverage)
+    elif record["frontier"] != doc["worker_config"]["finite_frontier"]:
+        raise ValueError("nonroot hold lacks authenticated descendant coverage")
     body = {
+        **({"descendant_coverage_sha256": _digest(coverage)} if coverage is not None else {}),
         "schema": "closer-hold-terminal-boundary/v1",
         "binding": native.binding(dict(manifest)),
         "campaign": native._campaign_identity(campaign.path, doc),
@@ -620,6 +720,13 @@ def _validate_terminal_boundary(
         )
     ):
         raise ValueError("original native terminal boundary changed")
+    coverage = record["source"].get("descendant_coverage")
+    if coverage is not None:
+        if body.get("descendant_coverage_sha256") != _digest(coverage):
+            raise ValueError("original signed descendant coverage differs")
+        _validate_coverage_bytes(coverage)
+    elif record["frontier"] != doc["worker_config"]["finite_frontier"]:
+        raise ValueError("nonroot replay lacks signed descendant coverage")
     workers = doc.get("workers") or []
     if (
         not workers
@@ -755,7 +862,11 @@ def _backend(manifest_path: str, doc: Mapping[str, Any]):
         dispatcher.GitHub(deadline=time.time() + 120),
         state_path=Path(cfg["dispatch_state"]),
         apply=False,
-        workers=False,
+        # Evaluate the ordinary successor route without suppressing NON_PASS
+        # applicability merely because this collector performs no execution.
+        # apply=False remains the execution fence; fresh native PREPARE still
+        # owns role qualification, capacity and all guarded action admission.
+        workers=True,
         runtime_binding=binding_from_manifest(manifest_path),
         require_runtime_binding=True,
     )
@@ -802,6 +913,90 @@ def _probe_action(
     }
 
 
+def _probe_ci_no_effect(record, manifest_path, doc, row, *, campaign, manifest):
+    import closer_ci_followup as ci
+
+    source = Path(record["source"]["state_path"])
+    action_path = source.parent / f"{source.stem}.actions" / f"{_digest(record['target'])}.json"
+    read = ci.read_terminal(
+        _backend(manifest_path, doc),
+        action_path,
+        record["target"],
+        record["frontier"],
+        row,
+        state_path=source,
+    )
+    if read["status"] != "ready":
+        return read
+    if campaign is None or manifest is None:
+        return {
+            "status": "waiting",
+            "reason": "CI terminal follow-up requires its bound native campaign",
+        }
+    existing = record.get("ci_followup_intent")
+    if existing is not None:
+        _validate_ci_intent(campaign, doc, manifest, record, existing)
+        if read["proof"] != existing.get("terminal"):
+            raise ValueError("CI terminal changed after durable intent")
+        intent = existing
+    else:
+        intent = {
+            "schema": "closer-ci-terminal-intent/v1",
+            "terminal": read["proof"],
+            "source": copy.deepcopy(record["source"]),
+            **{
+                key: record[key] for key in ("campaign_id", "owner", "release_pin", "config_sha256")
+            },
+            "generation": doc.get("generation", 1),
+            "terminal_boundary": _native_terminal_boundary(campaign, doc, manifest, record),
+        }
+
+        def persist(value):
+            held = value["hold_followups"][record["hold_id"]]
+            _assert_bound(value, held)
+            if (
+                held.get("status") != "checking"
+                or held.get("last_check_id") != record["last_check_id"]
+                or held.get("ci_followup_intent") is not None
+                or not _probe_allowed(value)
+                or value.get("workers") != doc.get("workers")
+            ):
+                raise ValueError("campaign changed before CI follow-up intent")
+            _source_row(held)
+            _validate_ci_intent(campaign, value, manifest, held, intent)
+            held["ci_followup_intent"] = intent
+
+        campaign.update(persist)
+    return {
+        "status": "released",
+        "proof": {
+            "kind": "ci_no_effect_terminal",
+            "terminal": read["proof"],
+            "intent_sha256": _digest(intent),
+            "authority": False,
+        },
+    }
+
+
+def _validate_ci_intent(campaign, doc, manifest, record, intent):
+    if not (
+        isinstance(intent, Mapping)
+        and intent.get("schema") == "closer-ci-terminal-intent/v1"
+        and all(
+            intent.get(key) == record.get(key)
+            for key in ("campaign_id", "owner", "release_pin", "config_sha256")
+        )
+        and intent.get("generation") == doc.get("generation", 1)
+        and intent.get("source") == record["source"]
+        and isinstance(intent.get("terminal"), Mapping)
+        and intent["terminal"].get("schema") == "closer-ci-terminal-followup/v1"
+        and intent["terminal"].get("target") == record["target"]
+        and intent["terminal"].get("original_wait", {}).get("confirmed_no_effect") is True
+    ):
+        raise ValueError("CI follow-up intent identity changed")
+    _validate_terminal_boundary(campaign, doc, manifest, record, intent.get("terminal_boundary"))
+
+
 def _probe_ci(
     record: Mapping[str, Any],
     manifest_path: str,
@@ -815,14 +1010,12 @@ def _probe_ci(
     import closer_queue as queue
     import closer_verifier_followup as followup
 
+    if record["release_proof"]["kind"] == "ci_terminal":
+        return _probe_ci_no_effect(
+            record, manifest_path, doc, row, campaign=campaign, manifest=manifest
+        )
     snapshot = _backend(manifest_path, doc).observe(record["target"])
     snapshot["observed_at"] = time.time()
-    prepared = (row.get("results") or {}).get("prepare", {})
-    original = prepared.get("snapshot") or {}
-    if snapshot.get("head") != original.get("head") or snapshot.get("merge") != original.get(
-        "merge"
-    ):
-        raise ValueError("CI follow-up head or merge identity changed")
     if record["release_proof"]["kind"] != "accepted_verifier_terminal":
         return {"status": "waiting", "reason": "fresh CI requires a normally admitted new frontier"}
     source = Path(record["source"]["state_path"])
@@ -839,6 +1032,10 @@ def _probe_ci(
     )
     if accepted is None:
         raise ValueError("CI hold lacks original accepted request proof")
+    # PREPARE's compact snapshot intentionally omits merge. The authenticated
+    # original queue request, rather than that summary, binds both identities.
+    if any(snapshot.get(name) != accepted.get(name) for name in ("head", "merge")):
+        raise ValueError("CI follow-up head or merge identity changed")
     terminal = followup.terminal_proof(action_path, record["target"], accepted, snapshot)
     if terminal is None:
         return {
@@ -1082,6 +1279,34 @@ def rearm(
         ):
             continue
         _assert_bound(doc, record)
+        ci_intent = record.get("ci_followup_intent")
+        if isinstance(ci_intent, Mapping):
+            import closer_ci_followup as ci
+
+            _validate_ci_intent(campaign, doc, manifest, record, ci_intent)
+            _entry, original_row = _source_row(record)
+            source = Path(record["source"]["state_path"])
+            action_path = (
+                source.parent / f"{source.stem}.actions" / f"{_digest(record['target'])}.json"
+            )
+            read = ci.read_terminal(
+                _backend(str(doc["worker_config"]["runtime_manifest"]), doc),
+                action_path,
+                record["target"],
+                record["frontier"],
+                original_row,
+                state_path=source,
+            )
+            if read["status"] != "ready" or read["proof"] != ci_intent["terminal"]:
+                raise ValueError("CI terminal or original no-effect proof changed before rearm")
+            ready.append(
+                {
+                    "hold_id": record["hold_id"],
+                    "kind": "ci_no_effect_terminal",
+                    "intent_sha256": _digest(ci_intent),
+                }
+            )
+            continue
         terminal_intent = record.get("terminal_followup_intent")
         if isinstance(terminal_intent, Mapping):
             import closer_verifier_followup as followup
@@ -1178,6 +1403,13 @@ def rearm(
         # row under campaign admission serialization, before opening a cohort.
         for released in ready:
             record = value["hold_followups"][released["hold_id"]]
+            if released.get("kind") == "ci_no_effect_terminal":
+                intent = record["ci_followup_intent"]
+                _validate_ci_intent(campaign, value, manifest, record, intent)
+                _source_row(record)
+                if _digest(intent) != released["intent_sha256"]:
+                    raise ValueError("CI sidecar changed before native rearm")
+                continue
             if released.get("kind") == "accepted_verifier_terminal":
                 terminal_intent = record["terminal_followup_intent"]
                 _validate_terminal_intent(campaign, value, manifest, record, terminal_intent)
@@ -1363,7 +1595,7 @@ def consume(
                 raise ValueError("hold changed during follow-up")
             # Only the concrete reentry probe may add its durable intent while
             # this check is running. All other concurrent row mutations refuse.
-            sidecars = {"reentry_intent", "terminal_followup_intent"}
+            sidecars = {"reentry_intent", "terminal_followup_intent", "ci_followup_intent"}
             base = {k: v for k, v in row.items() if k not in sidecars}
             expected = {k: v for k, v in checking.items() if k not in sidecars}
             if base != expected:

@@ -66,10 +66,41 @@ runs fresh PREPARE; the original completed ACT and request queue stay unchanged.
 Unrelated comments and update timestamps do not change the semantic follow-up
 proof, while source requirements, checks, holds and unresolved review facts do.
 
-The ordinary nonaccepted CI watcher currently owns checks and deadline escalation.
-Its narrow, proven-no-effect automatic successor route remains a separate
-implementation step; it must not infer no-start from missing operation evidence.
-These source and offline test results do not claim deployment.
+## Original CI waits
+
+A pending CI callback can advance only after the exact retained check run reports
+success on the original head, all fresh checks/readiness pass, and the original
+full authored snapshot still matches. The initial queue proof is checked under
+its ledger lock and must show no operation, effect history, or uncertainty. It is
+retained with immutable queue bytes and the causal successor link. Missing proof
+never establishes no-start. Failed checks retain their exact check/test reference
+for the existing corrective lane; pending or mismatched checks remain owned.
+
+The existing CLI driver follows at most eight exact linked stage descendants per
+target, within its original cohort and normal admission. Each child runs fresh
+PREPARE and the existing guarded action. Restart reuses the same linked child;
+UNKNOWN descendants cannot allocate a new child or retry an uncertain effect.
+The root receipt and full assignment remain the native TOP boundary. Actual
+public CLI fixtures cover CI success through merge and verification wait, then
+restart with one merge and one request total and zero Closer model calls.
+
+The pinned native hook independently reads the actual descendant receipts and
+causal journal before signing a bounded immutable bundle. It retains the root
+full cohort, original admission, worker handoff and pre-run watermark. Historical
+receipt reuse requires an actual prior known worker result and finalized cleanup;
+UNKNOWN descendants remain owned UNKNOWN and cannot promote root completion.
+Campaign capture selects only the exact active leaf authenticated by that bundle.
+Raw child JSON and uncovered historical receipts supply no release authority.
+
+Offline composition covers signed native admission and cleanup, the actual CI to
+merge/request path, original Core correlation, terminal sidecar, same-full-cohort
+rearm and restart without another POST. The read-only collector evaluates normal
+successor applicability with workers enabled locally and apply disabled; executing
+through that reader still returns inventory-only. Fresh native PREPARE retains
+all model qualification, capacity and guarded-action gates. All-completed child
+lineage retains the existing root scoped-continuation boundary; this slice adds
+no global-stop authority. These source and offline test results do not claim
+deployment.
 
 ## Measurements
 
