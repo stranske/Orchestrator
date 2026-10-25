@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import xml.etree.ElementTree as ET
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Mapping
 
 import closer_evidence
@@ -559,6 +559,7 @@ def _ordinary_nonpass(
     packet: dict,
     snapshot: Mapping[str, Any],
     prep: Mapping[str, Any],
+    packet_ref: Mapping[str, Any],
 ) -> dict:
     raw = [{"finding_id": _finding_id(f), "raw": f} for f in findings]
     resolutions = proposal.get("resolutions")
@@ -600,42 +601,30 @@ def _ordinary_nonpass(
         ):
             return _result("wait", "repeat_verification_evidence_missing", raw_findings=raw)
         if action == "repair":
-            plan = resolution.get("repair_plan")
-            files = (packet["sections"]["diff_files"].get("content") or {}).get("files") or []
-            changed_paths = {
-                f.get("filename") for f in files if isinstance(f, dict) and f.get("patch_retained")
-            }
-            source_owners = {
-                s.get("target") for s in snapshot.get("sources", []) if isinstance(s, dict)
-            }
-            paths = plan.get("paths") if isinstance(plan, dict) else None
-            if (
-                status != "unresolved_mechanical"
-                or not isinstance(paths, list)
-                or not 1 <= len(paths) <= 5
-                or any(
-                    not isinstance(p, str)
-                    or not p
-                    or p not in changed_paths
-                    or PurePosixPath(p).is_absolute()
-                    or ".." in PurePosixPath(p).parts
-                    or any(part in {".git", ".codex", ".aws"} for part in PurePosixPath(p).parts)
-                    for p in paths
+            import closer_execution_contracts as contracts
+
+            admitted = None
+            try:
+                admitted = contracts.validate_mechanical_plan_identity(
+                    resolution.get("repair_plan"),
+                    snapshot=snapshot,
+                    packet=packet,
+                    packet_ref=packet_ref,
+                    retained_dir=root,
                 )
-                or plan.get("head") != packet["head"]
-                or plan.get("source_owner") not in source_owners
-                or not isinstance(plan.get("prompt"), str)
-                or not 1 <= len(plan["prompt"].strip()) <= 2000
-                or not isinstance(plan.get("expected_failure"), str)
-                or not 1 <= len(plan["expected_failure"].strip()) <= 500
-                or not _proofs_valid(
-                    resolution.get("evidence"), resolution.get("proofs"), index, root
+                refusal = contracts.ContractError(
+                    "bounded_mechanical_executor_unqualified", owner_required=True
                 )
-            ):
-                return _result("wait", "mechanical_repair_plan_unbound", raw_findings=raw)
-            if repair_plan is not None and repair_plan != plan:
-                return _result("exception", "conflicting_mechanical_repair_plans", raw_findings=raw)
-            repair_plan = plan
+            except contracts.ContractError as error:
+                refusal = error
+            pending = contracts.deterministic_refusal(refusal, snapshot)
+            pending["raw_findings"] = raw
+            pending["pending_evidence"]["finding_id"] = resolution["finding_id"]
+            if admitted is not None:
+                pending["pending_evidence"]["required_test_identity"] = admitted[
+                    "required_test_identity"
+                ]
+            return pending
     verification_request = None
     if any(r["next_guarded_action"] == "post_merge_verify" for r in resolutions):
         import verification_events
@@ -829,7 +818,7 @@ def integrate_ordinary(
     if nonpass:
         if isinstance(verifier, dict):
             index = {**index, **_native_resolution_index(packet, root, verifier)}
-        return _ordinary_nonpass(proposal, nonpass, index, root, packet, snapshot, prep)
+        return _ordinary_nonpass(proposal, nonpass, index, root, packet, snapshot, prep, packet_ref)
     expected = _expected(snapshot)
     decision = proposal.get("decision")
     rows = decision.get("criteria") if isinstance(decision, dict) else None

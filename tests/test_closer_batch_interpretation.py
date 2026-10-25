@@ -16,6 +16,71 @@ import dispatcher
 import execution_profiles
 
 
+def bound_adjudication(proposal, *, disputed=False):
+    """Name one real original criterion using its actual retained raw evidence."""
+    row = proposal["decision"]["criteria"][1]
+    proposal["adjudication_request"] = {
+        "basis": {"source": row["source"], "criterion": row["criterion"]},
+        "question": "Does this retained receipt prove the named report criterion?",
+        "evidence_refs": row["evidence"],
+    }
+    if disputed:
+        row["result"] = "UNKNOWN"
+    return proposal
+
+
+def scoped_response(proposal, request):
+    import closer_execution_contracts as contracts
+
+    row = next(
+        row
+        for row in proposal["decision"]["criteria"]
+        if row["source"] == request["basis"]["source"] and row["criterion"] == request["criterion"]
+    )
+    return {
+        "schema": contracts.RESPONSE_SCHEMA,
+        **{
+            key: request[key]
+            for key in (
+                "request_id",
+                "target",
+                "head",
+                "base",
+                "revision",
+                "packet_sha256",
+                "basis",
+            )
+        },
+        "outcome": "satisfied",
+        "reason": "The exact retained current-head receipt exercises this named criterion.",
+        "evidence": row["evidence"],
+        "proofs": row["proofs"],
+    }
+
+
+def scoped_context_response(low, context):
+    from pathlib import Path
+
+    import closer_execution_contracts as contracts
+
+    prep = context["prepare"]
+    snap = json.loads(Path(prep["snapshot_ref"]["path"]).read_bytes())
+    packet = json.loads(Path(prep["packet_ref"]["path"]).read_bytes())
+    snap["base"] = packet["base"]
+    proposal = low["proposal"]
+    explicit = proposal["adjudication_request"]
+    request = contracts.build_adjudication_request(
+        snap,
+        packet,
+        prep["packet_ref"],
+        basis=explicit["basis"],
+        question=explicit["question"],
+        evidence_refs=explicit["evidence_refs"],
+        retained_dir=Path(prep["packet_ref"]["path"]).parent.parent,
+    )
+    return scoped_response(proposal, request)
+
+
 class OfflineDelivery(_OfflineDelivery):
     """These parser/transport units assess post-verifier acceptance, not premerge."""
 
@@ -137,10 +202,12 @@ def test_batch_low_and_strong_parser_matrix(tmp_path, monkeypatch, style):
     monkeypatch.setattr(dispatcher, "offload", output)
     low = cb["interpret"](TARGET, context)
     assert low["integration_status"] == "accepted", low
+    bound_adjudication(low["proposal"])
+    context["interpret"] = low
     strong_row = {
         "exit": 0,
         "run_id": "offline:strong:1",
-        "output": json.dumps(low["proposal"]),
+        "output": json.dumps(scoped_context_response(low, context)),
         "requested_model": "offline-requested",
         "served_model_status": "unknown",
     }
@@ -178,7 +245,7 @@ def test_batch_strong_uncertain_restarts_without_duplicate(tmp_path, monkeypatch
         proposal.update(
             classification="uncertain", substantive_needs=["offline evidence ambiguity"]
         )
-        proposal["decision"]["criteria"] = []
+        bound_adjudication(proposal)
         result["output"] = json.dumps(proposal)
         return result
 
@@ -289,7 +356,13 @@ def test_batch_strong_large_native_response_is_retained_once(tmp_path, monkeypat
     install_strong_capacity(monkeypatch)
     cb, context = callbacks_for(delivery, monkeypatch)
     low = cb["interpret"](TARGET, context)
-    row = {"exit": 0, "run_id": "offline:strong:large", "output": json.dumps(low["proposal"])}
+    bound_adjudication(low["proposal"])
+    context["interpret"] = low
+    row = {
+        "exit": 0,
+        "run_id": "offline:strong:large",
+        "output": json.dumps(scoped_context_response(low, context)),
+    }
     # Native event streams retain large tool transcripts which must not duplicate
     # accepted proof inside the bounded scheduling ledger.
     row["output"] = "\n".join(
@@ -351,7 +424,7 @@ def test_batch_strong_large_native_response_is_retained_once(tmp_path, monkeypat
                     "output": '{"proposal_file":"/tmp/never-open-this","sha256":"untrusted"}',
                 },
             },
-            "worker_json_invalid",
+            "adjudication_response_scope_changed",
         ),
     ],
 )
@@ -361,9 +434,12 @@ def test_batch_strong_nondecisions_never_gain_authority(
     delivery = OfflineDelivery(tmp_path, monkeypatch)
     install_strong_capacity(monkeypatch)
     cb, context = callbacks_for(delivery, monkeypatch)
+    low = cb["interpret"](TARGET, context)
+    bound_adjudication(low["proposal"])
+    context["interpret"] = low
     monkeypatch.setattr(delivery.backend, "worker", lambda *a, **kw: worker_result)
     strong = cb["exception"](TARGET, context)
-    assert strong["validated"]["status"] in {"wait", "exception"}
+    assert strong["validated"]["status"] in {"wait", "exception", "pending"}
     assert strong["validated"]["reason"] == expected_reason
     assert strong["authority"] is False
     assert not delivery.guard_calls
@@ -388,9 +464,8 @@ def test_batch_large_low_and_strong_cross_full_pipeline_with_proofs_loaded_again
                 proof["relevance"] += (
                     " Ship the report evidence is retained in this test receipt." * 300
                 )
-        proposal.update(
-            classification="uncertain", substantive_needs=["offline ambiguous evidence"]
-        )
+        proposal.update(classification="relevant", substantive_needs=[])
+        bound_adjudication(proposal, disputed=True)
         result["output"] = json.dumps(proposal)
         assert len(result["output"]) > 32768
         return result
@@ -401,13 +476,13 @@ def test_batch_large_low_and_strong_cross_full_pipeline_with_proofs_loaded_again
     def worker(self, *args, **kw):
         strong_calls.append(1)
         proposal = copy.deepcopy(kw["advisory_context"]["interpretation"])
-        proposal.update(classification="relevant", substantive_needs=[])
+        response = scoped_response(proposal, kw["advisory_context"]["adjudication_request"])
         return {
             "status": "completed",
             "worker": {
                 "exit": 0,
                 "run_id": "offline:strong:large-full",
-                "output": json.dumps(proposal),
+                "output": json.dumps(response),
             },
         }
 
@@ -508,7 +583,8 @@ def test_batch_completed_response_retention_fault_never_repeats_provider(
                 proof["relevance"] += (
                     " Ship the report evidence is retained in this test receipt." * 300
                 )
-        proposal.update(classification="uncertain", substantive_needs=["offline ambiguity"])
+        proposal.update(classification="relevant", substantive_needs=[])
+        bound_adjudication(proposal, disputed=True)
         result.update(
             output=json.dumps(proposal),
             log="offline-native-log",
@@ -523,11 +599,11 @@ def test_batch_completed_response_retention_fault_never_repeats_provider(
     def worker(self, *args, **kw):
         strong_calls.append(1)
         proposal = copy.deepcopy(kw["advisory_context"]["interpretation"])
-        proposal.update(classification="relevant", substantive_needs=[])
+        response = scoped_response(proposal, kw["advisory_context"]["adjudication_request"])
         row = {
             "exit": 0,
             "run_id": "offline:completed-strong",
-            "output": json.dumps(proposal),
+            "output": json.dumps(response),
             "log": "offline-native-log",
             "requested_model": "offline-strong-requested",
             "served_model_status": "unknown",
@@ -639,7 +715,6 @@ def test_batch_oversized_actual_retained_file_is_rejected_before_read(tmp_path, 
 def test_batch_strong_validation_summary_cannot_replace_original_proofs(
     tmp_path, monkeypatch, tamper
 ):
-    import copy
     from pathlib import Path
 
     delivery = OfflineDelivery(tmp_path, monkeypatch)
@@ -651,15 +726,19 @@ def test_batch_strong_validation_summary_cannot_replace_original_proofs(
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
         proposal.update(classification="uncertain", substantive_needs=["offline missing proof"])
+        if tamper == "output_hash":
+            proposal.update(classification="relevant", substantive_needs=[])
+        bound_adjudication(proposal, disputed=True)
         result["output"] = json.dumps(proposal)
         return result
 
     monkeypatch.setattr(dispatcher, "offload", uncertain)
     low = cb["interpret"](TARGET, context)
-    proposal = copy.deepcopy(low["proposal"])
-    if tamper == "output_hash":
-        proposal.update(classification="relevant", substantive_needs=[])
-    row = {"exit": 0, "run_id": "offline:strong:original", "output": json.dumps(proposal)}
+    row = {
+        "exit": 0,
+        "run_id": "offline:strong:original",
+        "output": json.dumps(scoped_context_response(low, context)),
+    }
     monkeypatch.setattr(
         delivery.backend, "worker", lambda *a, **kw: {"status": "completed", "worker": row}
     )
@@ -755,7 +834,8 @@ def test_batch_completed_retained_read_fault_never_repeats_provider(
         proposal = json.loads(result["output"])
         proposal["reviewer_note"] = "x" * 18000
         if stage != "act":
-            proposal.update(classification="uncertain", substantive_needs=["offline ambiguity"])
+            proposal.update(classification="relevant", substantive_needs=[])
+            bound_adjudication(proposal, disputed=True)
         result.update(
             output=json.dumps(proposal),
             log="offline-original-low-log",
@@ -772,13 +852,13 @@ def test_batch_completed_retained_read_fault_never_repeats_provider(
             stage == "strong_act"
         ), "corrupted completed low evidence must not dispatch strong work"
         proposal = copy.deepcopy(kw["advisory_context"]["interpretation"])
-        proposal.update(classification="relevant", substantive_needs=[])
+        response = scoped_response(proposal, kw["advisory_context"]["adjudication_request"])
         return {
             "status": "completed",
             "worker": {
                 "exit": 0,
                 "run_id": "offline:strong:readback",
-                "output": json.dumps(proposal),
+                "output": json.dumps(response),
                 "log": "offline-original-strong-log",
                 "requested_model": "offline-requested-strong",
                 "served_model_status": "unknown",

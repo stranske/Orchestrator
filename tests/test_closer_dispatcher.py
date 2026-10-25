@@ -734,8 +734,10 @@ def assert_nonpass_accounting_prompt_contract(prompt):
         "preserve every raw NON_PASS verdict, and leave decision.criteria empty",
         "Accounting never grants PASS or acceptance authority",
         "Resolved duplicate/nonissue claims still require exact raw evidence/proofs",
-        "repair still requires the existing coordinator authorization",
-        "Security/high-risk findings require senior review with classification uncertain and nonempty substantive_needs",
+        "Generic model writing is unavailable",
+        "no bounded executor is currently qualified",
+        "Missing tests require collection",
+        "Security/high-risk or conflicting-authority findings require existing qualified owner review with classification uncertain and nonempty substantive_needs",
         "If any finding identity, meaning, ownership, security implication, or safe routing remains uncertain",
         "return classification uncertain with nonempty substantive_needs",
         "do not hide uncertainty to fit the accounting path",
@@ -1684,15 +1686,23 @@ def test_unsafe_or_nonspecific_repair_paths_never_admit_writing_worker(
 ):
     decision = {"repair": {"head": HEAD, "prompt": "Correct the diagnosed bug", "paths": paths}}
     backend, calls = _private_worker(tmp_path, monkeypatch, decision=decision)
+    monkeypatch.setattr(
+        adapter,
+        "_exception_route",
+        lambda **kw: pytest.fail("unbound repair must not allocate a writer"),
+    )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    assert result["status"] == "blocked"
+    assert result["status"] == "pending"
+    assert result["reason"] == "registered_required_test_missing"
+    assert result["next_guarded_action"] == "collect_evidence"
+    assert result["pending_evidence"]["target"] == TARGET
     assert calls == []
 
 
 @pytest.mark.parametrize(
-    "trusted_plan", [False, True], ids=["diagnose-only", "integrated-mechanical-plan"]
+    "trusted_plan", [False, True], ids=["diagnose-only", "legacy-mechanical-plan"]
 )
-def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
+def test_repair_uses_no_generic_writer_until_executor_and_test_are_qualified(
     tmp_path, monkeypatch, trusted_plan
 ):
     decision = (
@@ -1701,13 +1711,18 @@ def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
         else {}
     )
     backend, calls = _private_worker(tmp_path, monkeypatch, decision=decision)
-    assert backend.worker(TARGET, "repair", snapshot(), operation("repair"))["advisory_only"]
-    kwargs = calls[0][1]
-    assert kwargs["profile_id"] == (
-        "codex-5.6-terra-medium" if trusted_plan else "codex-6-luna-low"
+    monkeypatch.setattr(
+        adapter,
+        "_exception_route",
+        lambda **kw: pytest.fail("unqualified repair writer must never allocate"),
     )
-    assert kwargs["isolate"] is True
-    assert kwargs["mode"] == ("mid" if trusted_plan else "assess")
+    result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
+    assert result["status"] == "pending"
+    assert result["reason"] == "registered_required_test_missing"
+    assert result["pending_kind"] == "external_event"
+    assert result["authority"] is False
+    assert result["pending_evidence"]["revision"] == snapshot()["revision"]
+    assert calls == []
     assert backend.dispositions.get(TARGET) == decision
 
 
@@ -1800,7 +1815,15 @@ def test_repair_workspace_must_be_clean_and_match_approved_head(tmp_path, monkey
         )
 
     monkeypatch.setattr(adapter.subprocess, "run", mismatched_git)
-    assert backend.worker(TARGET, "repair", snapshot(), operation("repair"))["status"] == "deferred"
+    monkeypatch.setattr(
+        adapter, "_exception_route", lambda **kw: pytest.fail("no qualified repair executor")
+    )
+    result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
+    # Missing test/executor authority stops before any workspace invocation;
+    # physical exact-head/alias tests exercise the pure plan admission separately.
+    assert result["status"] == "pending"
+    assert result["reason"] == "registered_required_test_missing"
+    assert result["next_guarded_action"] == "collect_evidence"
     assert calls == []
 
 
@@ -2997,27 +3020,23 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
+    from test_closer_batch_interpretation import bound_adjudication
+    from test_closer_disposition import fixture
+
     import closer_evidence
     import closer_pipeline
     import dispatcher
     import execution_profiles
 
+    bound_snap, packet, bound_ref, _prep, interpretation = fixture(tmp_path / "bound-pool")
+    target = bound_snap["target"]
     current = snapshot(
+        **bound_snap,
         state="MERGED",
         merge=MERGE,
-        base="c" * 40,
         verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
     )
-    packet = {
-        "schema": "closer-evidence/v1",
-        "target": TARGET,
-        "head": HEAD,
-        "base": current["base"],
-        "producer_sha256": "d" * 64,
-        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
-        "sections": {},
-        "manifest": {"packet_sha256": "f" * 64},
-    }
+    proposal = bound_adjudication(interpretation["proposal"], disputed=True)
 
     class PreparedGitHub(FakeGitHub):
         def __init__(self, *, deadline):
@@ -3026,7 +3045,6 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
 
     monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
     monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
-    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
     monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
     monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 1, "low": 1, "exception": 1})
 
@@ -3100,22 +3118,20 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
     captured = {}
 
     def pipeline_stub(_path, _targets, **callbacks):
-        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 60})
-        retained = tmp_path / "pool-evidence-packet.json"
-        retained.write_text(json.dumps(packet))
-        prep["packet_ref"] = {
-            "path": str(retained),
-            "sha256": adapter.hashlib.sha256(retained.read_bytes()).hexdigest(),
-        }
+        prep = callbacks["prepare"](target, {"deadline": time.time() + 60})
+        prep["packet_ref"] = bound_ref
         context = {"prepare": prep, "deadline": time.time() + 60}
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(callbacks["interpret"], TARGET, context)
+            future = pool.submit(callbacks["interpret"], target, context)
             assert entered.wait(5)
             result = callbacks["exception"](
-                TARGET,
+                target,
                 {
                     "prepare": prep,
-                    "interpret": {"proposal": {}, "substantive_needs": []},
+                    "interpret": {
+                        "proposal": proposal,
+                        "substantive_needs": ["named criterion dispute"],
+                    },
                     "deadline": context["deadline"],
                     "work_key": "exception-capacity-test",
                 },
@@ -3123,11 +3139,11 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
             captured["result"] = result
             release.set()
             future.result(timeout=5)
-        return {"targets": {TARGET: {"status": "deferred"}}}
+        return {"targets": {target: {"status": "deferred"}}}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
 
     deferred = captured["result"]
     assert deferred["reason"] == "worker_capacity"
