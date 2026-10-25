@@ -371,6 +371,63 @@ def _superseded_incomplete_roots(nodes, parents, terminal_events, admitted_event
     return obsolete
 
 
+def _retry_event_parents(records):
+    """Recover an omitted retry edge only from its proven no-evaluation attempt.
+
+    The immutable event identifies the same input, not a new causal branch. An
+    older authenticated no-evaluation attempt can supply its unchanged parent
+    when a later producer omits that optional field. Explicit conflicting edges,
+    mixed metadata in one attempt and an originally root event stay ambiguous.
+    Records remain untouched so the original publication is still auditable.
+    """
+    grouped = {}
+    for record in records:
+        grouped.setdefault(record["verification_event"]["event_id"], []).append(record)
+    parents = {}
+    for identity, rows in grouped.items():
+        declared = set()
+        for row in rows:
+            parent = row.get("predecessor_event_id")
+            if parent is not None and (
+                not isinstance(parent, str) or not verification_events.HEX256.fullmatch(parent)
+            ):
+                return None
+            declared.add(parent)
+        if len(declared) == 1:
+            parents[identity] = declared.pop()
+            continue
+        explicit = declared - {None}
+        if len(explicit) != 1:
+            return None
+        parent = explicit.pop()
+        omitted = [row for row in rows if row.get("predecessor_event_id") is None]
+        first_omitted = min(_attempt(row) for row in omitted)
+        linked = [row for row in rows if row.get("predecessor_event_id") == parent]
+        if any(_attempt(row) >= first_omitted for row in linked):
+            return None
+        latest_linked = max(_attempt(row) for row in linked)
+        prior = [row for row in linked if _attempt(row) == latest_linked]
+        if any("verdict" in row for row in prior) or not any(
+            row.get("status") == "incomplete"
+            and row.get("retry_kind") == "known_no_evaluation"
+            and row.get("retryable") is True
+            and row.get("failure_cause")
+            in {"validated_no_evaluation", "evaluator_step_not_invoked"}
+            and isinstance(row.get("assessment_identity"), dict)
+            and row["assessment_identity"].get("canonical") is True
+            and isinstance(row["assessment_identity"].get("mode"), str)
+            and row["assessment_identity"].get("mode") in {"evaluate", "compare"}
+            and all(
+                isinstance(row["assessment_identity"].get(key), str)
+                for key in ("provider", "model", "model2")
+            )
+            for row in prior
+        ):
+            return None
+        parents[identity] = parent
+    return parents
+
+
 def applicable_decision(decisions, states=(), *, include_pending=False):
     """Choose a causal event, then the latest attempt *within that event*.
 
@@ -384,17 +441,13 @@ def applicable_decision(decisions, states=(), *, include_pending=False):
     if not records:
         return None if _masked_by_observation(baseline, states) else baseline
     nodes = {}
-    parents = {}
+    parents = _retry_event_parents(records)
+    if parents is None:
+        return None
     terminal_events = {}
     admitted_events = {}
     for record in records:
         identity = record["verification_event"]["event_id"]
-        parent = record.get("predecessor_event_id")
-        if parent is not None and not verification_events.HEX256.fullmatch(str(parent)):
-            return None
-        if identity in parents and parents[identity] != parent:
-            return None
-        parents[identity] = parent
         if "verdict" in record and (
             identity not in terminal_events
             or _attempt(record) < _attempt(terminal_events[identity])
