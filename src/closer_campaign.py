@@ -2488,18 +2488,35 @@ def tick(
                 report.extend({"campaign": path.name, **entry} for entry in followups)
                 doc = rearm_on_hold_followup(campaign, doc, manifest)
                 if receipts or doc.get("hold_followups"):
-                    from closer_stage_feedback import summarize_efficiency
+                    try:
+                        from closer_stage_feedback import read_stage_events, summarize_efficiency
 
-                    summary = summarize_efficiency(
-                        receipts, holds=(doc.get("hold_followups") or {}).values(), now=_now()
-                    )
-                    report.append(
-                        {
-                            "campaign": path.name,
-                            "kind": "hold_followup_summary",
-                            "efficiency": summary,
+                        stamp = _now()
+                        held = list((doc.get("hold_followups") or {}).values())
+                        preliminary = summarize_efficiency(receipts, holds=held, now=stamp)
+                        observed = read_stage_events(preliminary["model_runs"]["bindings"])
+                        summary = summarize_efficiency(
+                            receipts, stage_events=observed["events"], holds=held, now=stamp
+                        )
+                        summary["stage_event_collection"] = {
+                            key: value for key, value in observed.items() if key != "events"
                         }
-                    )
+                        report.append(
+                            {
+                                "campaign": path.name,
+                                "kind": "hold_followup_summary",
+                                "efficiency": summary,
+                            }
+                        )
+                    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                        report.append(
+                            {
+                                "campaign": path.name,
+                                "kind": "efficiency_unavailable",
+                                "reason": type(exc).__name__,
+                                "authority": False,
+                            }
+                        )
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
                 report.append(
                     {

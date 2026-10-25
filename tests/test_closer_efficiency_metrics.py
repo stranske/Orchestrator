@@ -2,6 +2,7 @@
 
 import copy
 import json
+import sqlite3
 
 import pytest
 
@@ -424,3 +425,157 @@ def test_summary_has_no_io_or_mutation(monkeypatch):
 def test_nonfinite_or_invalid_summary_clock_is_rejected(now):
     with pytest.raises(ValueError, match="finite nonnegative"):
         metrics.summarize_efficiency([], now=now)
+
+
+@pytest.fixture
+def persisted_stage_brain(tmp_path, monkeypatch):
+    """Use the existing stage writer and schema in a disposable Brain only."""
+    import feedback
+
+    database = tmp_path / "brain with spaces.db"
+    monkeypatch.setattr(feedback, "DB_PATH", database)
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *_a, **_kw: None)
+    monkeypatch.setattr(feedback.time, "time", lambda: NOW)
+    for run, cost in (("model-1", 0.25), ("unrelated-model", 99)):
+        with feedback._conn() as conn:
+            conn.execute(
+                "INSERT INTO runs(run_id,agent,task_type,routing_metadata) VALUES(?,?,?,?)",
+                (
+                    run,
+                    "codex",
+                    "closer_interpret",
+                    json.dumps(
+                        {
+                            "selected_profile_id": "codex-6-luna-low",
+                            "subject_id": TARGET,
+                        }
+                    ),
+                ),
+            )
+        for validation in (None, {"status": "accepted"}):
+            metrics.record_stage(
+                {"run_id": run, "exit": 0, "cost_usd": cost},
+                task_type="closer_interpret",
+                target=TARGET,
+                head=HEAD,
+                agent="codex",
+                profile_id="codex-6-luna-low",
+                basis={"revision": REVISION},
+                elapsed_seconds=3,
+                validation=validation,
+            )
+    return database
+
+
+def test_read_only_existing_stage_persistence_reaches_exact_receipt_summary(
+    persisted_stage_brain, monkeypatch
+):
+    import feedback
+
+    preliminary = summarize([receipt(model="model-1")])
+    assert preliminary["model_runs"]["bindings"] == {
+        "model-1": {"target": TARGET, "head_sha": HEAD}
+    }
+    before = persisted_stage_brain.read_bytes()
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("read-only lookup invoked the initializing Brain connection")
+
+    monkeypatch.setattr(feedback, "_conn", forbidden)
+    monkeypatch.setattr(feedback, "resolve_db_path", lambda: persisted_stage_brain)
+    lookup = metrics.read_stage_events(preliminary["model_runs"]["bindings"])
+    assert lookup["status"] == "complete" and lookup["returned_events"] == 2
+    assert {row["run_id"] for row in lookup["events"]} == {"model-1"}
+    assert {row["phase"] for row in lookup["events"]} == {"execution", "verification"}
+    final = summarize([receipt(model="model-1")], stage_events=lookup["events"])
+    assert final["observed_cost_usd"]["total_or_null"] == 0.25
+    assert final["observed_latency_seconds"]["total_or_null"] == 3
+    assert final["independent_outcomes"]["false_acceptance_rate"] is None
+    assert final["independent_outcomes"]["rework_rate"] is None
+    assert persisted_stage_brain.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("requested_profile_id", "other-profile"),
+        ("agent", "claude"),
+        ("task_category", "other-task"),
+        ("target", "wrong/repo#1"),
+        ("head_sha", "b" * 40),
+        ("capacity_ledger_run_id", "unrelated-model"),
+        ("observed_cost_usd", float("inf")),
+    ],
+)
+def test_persisted_event_bindings_and_finite_measurements_are_rechecked(
+    persisted_stage_brain, field, value
+):
+    import hashlib
+
+    with sqlite3.connect(persisted_stage_brain) as conn:
+        events = conn.execute(
+            "SELECT event_id,payload_json FROM completion_events WHERE run_id='model-1'"
+        ).fetchall()
+        for event_id, raw in events:
+            payload = json.loads(raw)
+            payload["closer_stage"][field] = value
+            encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            digest = "sha256:" + hashlib.sha256(encoded.encode()).hexdigest()
+            conn.execute(
+                "UPDATE completion_events SET payload_json=?,content_hash=? WHERE event_id=?",
+                (encoded, digest, event_id),
+            )
+    lookup = metrics.read_stage_events(
+        {"model-1": {"target": TARGET, "head_sha": HEAD}}, db_path=persisted_stage_brain
+    )
+    assert lookup["events"] == []
+    assert lookup["status"] == "partial" and lookup["rejected_events"] == 2
+
+
+def test_lookup_is_bounded_and_reports_truncation_and_oversized_payload(persisted_stage_brain):
+    bindings = {"model-1": {"target": TARGET, "head_sha": HEAD}}
+    truncated = metrics.read_stage_events(bindings, db_path=persisted_stage_brain, max_events=1)
+    assert truncated["status"] == "partial" and truncated["truncated"] is True
+    assert truncated["returned_events"] == 1
+    oversized = metrics.read_stage_events(
+        bindings, db_path=persisted_stage_brain, max_payload_bytes=1
+    )
+    assert oversized["status"] == "partial" and oversized["rejected_events"] == 2
+    assert oversized["events"] == []
+
+
+def test_empty_and_over_limit_run_sets_do_not_open_or_create_a_database(tmp_path, monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("empty or oversized run set attempted a database read")
+
+    monkeypatch.setattr(metrics.sqlite3, "connect", forbidden)
+    assert metrics.read_stage_events({})["status"] == "empty"
+    lookup = metrics.read_stage_events(
+        {
+            "one": {"target": TARGET, "head_sha": HEAD},
+            "two": {"target": TARGET, "head_sha": HEAD},
+        },
+        max_runs=1,
+        db_path=tmp_path / "missing.db",
+    )
+    assert lookup["status"] == "unavailable" and lookup["truncated"] is True
+
+
+def test_missing_and_old_schema_brains_remain_unavailable_without_migration(tmp_path):
+    bindings = {"model-1": {"target": TARGET, "head_sha": HEAD}}
+    missing = tmp_path / "missing.db"
+    assert metrics.read_stage_events(bindings, db_path=missing)["status"] == "unavailable"
+    assert not missing.exists()
+    empty = tmp_path / "old-schema.db"
+    sqlite3.connect(empty).close()
+    before = empty.read_bytes()
+    assert metrics.read_stage_events(bindings, db_path=empty)["status"] == "unavailable"
+    assert empty.read_bytes() == before
+
+
+def test_conflicting_model_identity_exposes_no_read_binding():
+    one = receipt(model="model-1")
+    two = receipt(run="pipeline-2", model="model-1")
+    two["targets"][TARGET]["results"]["prepare"]["snapshot"]["head"] = "b" * 40
+    summary = metrics.summarize_efficiency([one, two], now=NOW)
+    assert summary["model_runs"]["bindings"] == {}

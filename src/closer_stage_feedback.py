@@ -10,7 +10,9 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any, Callable
 
 TASKS = {"closer_interpret", "closer_exception", "closer_repair"}
@@ -597,6 +599,11 @@ def summarize_efficiency(
         "model_runs": {
             "ids": sorted(models),
             "count": len(models),
+            "bindings": {
+                run: {"target": target, "head_sha": head}
+                for run, (target, head) in sorted(models.items())
+                if _head(head)
+            },
             "stage_event_coverage": len(measurements) / len(models) if models else None,
         },
         "observed_latency_seconds": _measurement(
@@ -614,6 +621,171 @@ def summarize_efficiency(
         "counterfactual_savings_usd": None,
         "authority": False,
     }
+
+
+def read_stage_events(
+    run_bindings: Mapping[str, Mapping[str, Any]],
+    *,
+    db_path: str | Path | None = None,
+    max_runs: int = 128,
+    max_events: int = 1024,
+    max_payload_bytes: int = 32768,
+    timeout_seconds: float = 0.2,
+) -> dict[str, Any]:
+    """Bounded read-only lookup of existing Brain events for retained model runs.
+
+    Call with the pure summary's ``model_runs.bindings``. This never calls
+    feedback._conn, creates/migrates a database, scans other run history, reads
+    outcomes or interprets stage accepted/PASS as independent source evidence.
+    Returned events are narrow projections of accepted closer_stage payloads,
+    bound to persisted run/task/profile/agent/target and the supplied exact head.
+    """
+    report: dict[str, Any] = {
+        "events": [],
+        "status": "unavailable",
+        "requested_runs": len(run_bindings),
+        "returned_events": 0,
+        "rejected_events": 0,
+        "truncated": False,
+        "authority": False,
+    }
+    if (
+        type(max_runs) is not int
+        or not 1 <= max_runs <= 512
+        or type(max_events) is not int
+        or not 1 <= max_events <= 4096
+        or type(max_payload_bytes) is not int
+        or not 1 <= max_payload_bytes <= 131072
+        or _number(timeout_seconds) is None
+        or not 0 < timeout_seconds <= 1
+    ):
+        return {**report, "reason": "invalid_lookup_limits"}
+    if len(run_bindings) > max_runs:
+        return {**report, "reason": "run_limit_exceeded", "truncated": True}
+    if any(
+        not _identity_text(run)
+        or len(run) > 512
+        or not isinstance(binding, Mapping)
+        or not _identity_text(binding.get("target"))
+        or not _head(binding.get("head_sha"))
+        for run, binding in run_bindings.items()
+    ):
+        return {**report, "reason": "invalid_retained_run_binding"}
+    if not run_bindings:
+        return {**report, "status": "empty", "reason": "no_bound_model_runs"}
+    import feedback
+
+    connection: sqlite3.Connection | None = None
+    try:
+        selected_db = Path(db_path) if db_path is not None else feedback.resolve_db_path()
+        connection = sqlite3.connect(
+            selected_db.expanduser().resolve().as_uri() + "?mode=ro",
+            uri=True,
+            timeout=timeout_seconds,
+        )
+        steps = 0
+
+        def read_budget() -> int:
+            nonlocal steps
+            steps += 1
+            return int(steps > 1000)
+
+        connection.set_progress_handler(read_budget, 1000)
+        placeholders = ",".join("?" for _ in run_bindings)
+        rows = connection.execute(
+            "SELECT e.event_id,e.run_id,e.phase,e.producer,e.updated_ts,e.content_hash,"
+            "CASE WHEN length(CAST(e.payload_json AS BLOB))<=? THEN e.payload_json ELSE NULL END,"
+            "r.agent,r.task_type,"
+            "CASE WHEN length(CAST(r.routing_metadata AS BLOB))<=? THEN r.routing_metadata ELSE NULL END "
+            "FROM completion_events e JOIN runs r ON r.run_id=e.run_id "
+            "WHERE e.schema_version=? AND e.event_type='closer_stage' AND e.validation_status='accepted' "
+            "AND e.phase IN ('execution','verification') AND e.run_id IN (" + placeholders + ") "
+            "ORDER BY e.updated_ts,e.event_id LIMIT ?",
+            (
+                max_payload_bytes,
+                max_payload_bytes,
+                feedback.COMPLETION_EVENT_SCHEMA_VERSION,
+                *sorted(run_bindings),
+                max_events + 1,
+            ),
+        ).fetchall()
+        report["truncated"] = len(rows) > max_events
+        for (
+            event_id,
+            run,
+            phase,
+            producer,
+            stamp,
+            content_hash,
+            raw,
+            agent,
+            task,
+            metadata_raw,
+        ) in rows[:max_events]:
+            try:
+                payload = json.loads(raw) if isinstance(raw, str) else None
+                metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else None
+                stage = payload.get("closer_stage") if isinstance(payload, Mapping) else None
+                if (
+                    not isinstance(stage, Mapping)
+                    or _retained_json(payload) is None
+                    or not isinstance(metadata, Mapping)
+                    or content_hash
+                    != "sha256:" + hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()
+                    or run not in run_bindings
+                    or task not in TASKS
+                    or stage.get("task_category") != task
+                    or stage.get("agent") != agent
+                    or not _identity_text(stage.get("requested_profile_id"))
+                    or stage.get("requested_profile_id") != metadata.get("selected_profile_id")
+                    or stage.get("target") != run_bindings[run]["target"]
+                    or stage.get("head_sha") != run_bindings[run]["head_sha"]
+                    or str(metadata.get("subject_id", "")).casefold()
+                    != str(stage.get("target")).casefold()
+                    or stage.get("capacity_ledger_run_id") != run
+                    or _number(stamp) is None
+                    or (phase == "execution" and producer != "closer_dispatcher.worker")
+                    or (phase == "verification" and producer not in VALIDATORS)
+                    or any(
+                        stage.get(field) is not None and _number(stage.get(field)) is None
+                        for field in ("elapsed_seconds", "observed_cost_usd")
+                    )
+                ):
+                    report["rejected_events"] += 1
+                    continue
+                fields = (
+                    "task_category",
+                    "target",
+                    "head_sha",
+                    "agent",
+                    "requested_profile_id",
+                    "capacity_ledger_run_id",
+                    "elapsed_seconds",
+                    "observed_cost_usd",
+                )
+                report["events"].append(
+                    {
+                        "event_id": event_id,
+                        "run_id": run,
+                        "event_type": "closer_stage",
+                        "phase": phase,
+                        "producer": producer,
+                        "ts": stamp,
+                        "payload": {"closer_stage": {key: stage.get(key) for key in fields}},
+                    }
+                )
+            except (TypeError, ValueError, RecursionError):
+                report["rejected_events"] += 1
+        report["returned_events"] = len(report["events"])
+        report["status"] = (
+            "partial" if report["truncated"] or report["rejected_events"] else "complete"
+        )
+        return report
+    except (OSError, ValueError, sqlite3.Error):
+        return {**report, "events": [], "returned_events": 0, "reason": "brain_read_unavailable"}
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def selftest() -> None:
