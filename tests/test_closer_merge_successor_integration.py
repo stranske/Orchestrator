@@ -1003,6 +1003,7 @@ def test_followup_reader_evaluates_nonpass_route_without_execution(
     public_merge_world, capsys, monkeypatch
 ):
     import hashlib
+
     import closer_hold_followup as holds
     import dispatcher as offloader
 
