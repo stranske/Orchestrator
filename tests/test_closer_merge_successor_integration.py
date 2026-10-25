@@ -543,7 +543,9 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     manifest_file = w.root / "test-runtime.json"
     manifest_file.write_text("{}")
     w.argv += ["--runtime-manifest", str(manifest_file)]
-    w.argv[w.argv.index("--coordinator-contract-pin") + 1] = json.dumps(pipeline.scoped_capability())
+    w.argv[w.argv.index("--coordinator-contract-pin") + 1] = json.dumps(
+        pipeline.scoped_capability()
+    )
     dispatcher.main(w.argv)
     initial = json.loads(capsys.readouterr().out)
     requested = initial["merge_verification_successors"]["owner/repo#12"]
