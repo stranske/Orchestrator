@@ -1,6 +1,7 @@
 """Relay decisions earn capacity consumption only through observed, matching lane exits."""
 
 import json
+import random
 import re
 from datetime import datetime, timezone
 
@@ -1316,15 +1317,21 @@ def test_legacy_cursor_log_fields_emit_neutral_weight(monkeypatch, capsys):
     assert "unknown" not in decision["log_fields"]["weights"]
 
 
+@pytest.mark.parametrize("seed,expected_agent", [(0, "codex"), (1, "cursor")])
 def test_switch_review_text_out_usable_after_neutral_cursor_pacing(
-    tmp_path, monkeypatch, capsys, quiet_switch_review
+    tmp_path, monkeypatch, capsys, quiet_switch_review, seed, expected_agent
 ):
-    """#891 AC surface: switch_review --text-out shows windowed-capacity-policy usable N>0."""
+    """#891: either sampled seat yields numeric weights and usable evidence at review time."""
     import capacity
     import router
     import switch_review
 
     log = _setup(tmp_path, monkeypatch)
+    review_ts = monitor.RELAY_PASS_CHECK_TS
+    decision_ts = review_ts - 3600
+    monkeypatch.setenv("ORCH_EXPLORATION_RATE", "0")
+    monkeypatch.setattr(router, "random", random.Random(seed))
+    monkeypatch.setattr(capabilities, "production_heartbeat", lambda *a, **kw: None)
     snapshot = {
         "agents": {
             "codex": {
@@ -1342,13 +1349,14 @@ def test_switch_review_text_out_usable_after_neutral_cursor_pacing(
     )
     captured = capsys.readouterr()
     chosen = captured.out.strip()
+    assert chosen == expected_agent
     decision = json.loads(captured.err.strip())
     assert decision["policy"] == "posterior*pacing"
     fields = decision["log_fields"]
     assert fields["weights"] == "codex:0.8,cursor:1"
     assert "unknown" not in fields["weights"]
 
-    when = datetime.fromtimestamp(NOW - 30, timezone.utc)
+    when = datetime.fromtimestamp(decision_ts, timezone.utc)
     token = rate_incidents.append_relay_pacing_decision(
         source="codex",
         lane="opener",
@@ -1370,7 +1378,7 @@ def test_switch_review_text_out_usable_after_neutral_cursor_pacing(
             receiver_reason=None,
             exit_status=0,
             output_file=tail,
-            ts=NOW,
+            ts=decision_ts + 30,
             relay_decision_id=token,
         )["relay_pacing"]["joined"]
         == 1
@@ -1378,10 +1386,18 @@ def test_switch_review_text_out_usable_after_neutral_cursor_pacing(
 
     ledger = tmp_path / "capabilities.json"
     capabilities.register(feedback.RELAY_PACING_CAPABILITY, {"status": "wired"}, ledger)
-    inputs = monitor._brain(feedback.DB_PATH, NOW - WINDOW_DAYS_SECONDS, NOW)
+    # The weekly caller reads persisted evidence later; ingestion must not credit a reread twice.
+    assert feedback.ingest_relay_pacing(log, now=review_ts)["joined"] == 1
+    inputs = monitor.collect_inputs(
+        now=review_ts,
+        gh_fn=lambda _: (True, "{}", ""),
+        repos=[],
+        db=feedback.DB_PATH,
+        relay_log=log,
+    )
     text_out = tmp_path / "switch-review.md"
     rep = switch_review.review(
-        now=NOW,
+        now=review_ts,
         path=ledger,
         env={},
         value_chain_inputs=inputs,
@@ -1390,4 +1406,25 @@ def test_switch_review_text_out_usable_after_neutral_cursor_pacing(
     body = text_out.read_text(encoding="utf-8")
     match = re.search(r"windowed-capacity-policy:.*usable (\d+)", body)
     assert match, body
-    assert int(match.group(1)) > 0, body
+    assert int(match.group(1)) == 1, body
+    row = next(
+        r for r in rep["value_chain"]["rows"] if r["capability"] == feedback.RELAY_PACING_CAPABILITY
+    )
+    assert (row["situation_count"], row["acted_on"], row["outcome"]) == (1, 1, 1)
+    assert row["relay_pass"]["status"] == "pass"
+
+    # Replaying the same decision cannot renew its timestamp into a later weekly window.
+    expired_ts = decision_ts + WINDOW_DAYS_SECONDS + 1
+    assert feedback.ingest_relay_pacing(log, now=expired_ts)["joined"] == 1
+    expired_inputs = monitor.collect_inputs(
+        now=expired_ts,
+        gh_fn=lambda _: (True, "{}", ""),
+        repos=[],
+        db=feedback.DB_PATH,
+        relay_log=log,
+    )
+    expired_rep = switch_review.review(
+        now=expired_ts, path=ledger, env={}, value_chain_inputs=expired_inputs
+    )
+    switch_review.write_text_report(expired_rep, text_out)
+    assert re.search(r"windowed-capacity-policy:.*usable 0\b", text_out.read_text(encoding="utf-8"))
