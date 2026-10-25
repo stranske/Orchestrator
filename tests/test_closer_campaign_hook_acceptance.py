@@ -1,0 +1,178 @@
+"""Offline acceptance of the existing controller hook, not scheduler qualification.
+
+All state is temporary. The ordering/repin cases explicitly document deployment
+limitations so a green wiring result cannot be mistaken for current-demand admission.
+"""
+
+from __future__ import annotations
+
+import pytest
+from scripts import install_closer_campaign_hook as hook
+
+import closer_campaign as campaign
+
+SOURCE = (
+    "def main(argv: list[str] | None = None) -> int:\n"
+    "    import demand_router\n    return demand_router.main(argv)\n"
+)
+
+
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORCH_CLOSER_CAMPAIGN_DIR", raising=False)
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_TICK", "1")
+
+
+def test_missing_pin_never_calls_tick(tmp_path, monkeypatch):
+    monkeypatch.setattr(campaign, "tick", lambda *a: pytest.fail("no pin"))
+    assert campaign.tick_safe() == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_explicit_optout_never_calls_tick(tmp_path, monkeypatch):
+    root = tmp_path / "closer-campaigns"
+    root.mkdir()
+    (root / "pin.manifest.json").write_text("{}")
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_TICK", "0")
+    monkeypatch.setattr(campaign, "tick", lambda *a: pytest.fail("optout"))
+    assert campaign.tick_safe() == []
+
+
+def test_explicit_root_binds_state_and_pin_together(tmp_path, monkeypatch):
+    root = tmp_path / "chosen"
+    root.mkdir()
+    pin = root / "pin.manifest.json"
+    pin.write_text("{}")
+    seen = []
+    monkeypatch.setattr(campaign, "tick", lambda *args: seen.append(args) or [])
+    assert campaign.tick_safe(str(root)) == []
+    assert seen == [(root, pin)]
+
+
+def test_hook_currently_ticks_before_demand_refresh(monkeypatch):
+    # Characterization, not proof of due/no-demand gating. Deployment must supply
+    # an admission contract before enabling a campaign on the controller path.
+    seen = []
+    monkeypatch.setattr(campaign, "tick_safe", lambda: seen.append("tick"))
+
+    def fallback(argv):
+        seen.append(("demand_refresh", argv))
+        return 17
+
+    assert campaign.controller_entry(["--collect"], fallback) == 17
+    assert seen == ["tick", ("demand_refresh", ["--collect"])]
+
+
+def test_tick_failure_keeps_existing_demand_path(tmp_path, monkeypatch):
+    root = tmp_path / "closer-campaigns"
+    root.mkdir()
+    (root / "pin.manifest.json").write_text("{}")
+
+    def fail(*args):
+        raise RuntimeError("offline fixture")
+
+    monkeypatch.setattr(campaign, "tick", fail)
+    assert campaign.tick_safe() == [{"kind": "error", "reason": "RuntimeError: offline fixture"}]
+    assert campaign.controller_entry([], lambda argv: 19) == 19
+
+
+def test_explicit_campaign_command_does_not_tick_or_fallback(monkeypatch):
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("scheduled tick"))
+    monkeypatch.setattr(campaign, "main", lambda argv: 23 if argv == ["status"] else 1)
+    assert (
+        campaign.controller_entry(
+            ["closer-campaign", "status"], lambda argv: pytest.fail("fallback")
+        )
+        == 23
+    )
+
+
+def test_render_preserves_existing_controller_and_has_one_hook(tmp_path):
+    source = "# existing controller contract\n" + SOURCE
+    rendered = hook.render(source, str(tmp_path / "pin.json"))
+    assert rendered.startswith("# existing controller contract\n")
+    assert rendered.count(hook.MARKER) == 1
+    assert rendered.count("return campaign.controller_entry(argv, demand_router.main)") == 1
+    assert hook.render(rendered, str(tmp_path / "pin.json")) == rendered
+    compile(rendered, "controller.preview.py", "exec")
+
+
+def test_existing_marker_does_not_repin_to_new_manifest(tmp_path):
+    first = hook.render(SOURCE, str(tmp_path / "first.json"))
+    assert hook.render(first, str(tmp_path / "second.json")) == first
+    # A rollout must inspect the embedded path; this is not a repin API.
+    assert str(tmp_path / "second.json") not in first
+
+
+@pytest.mark.parametrize(
+    "source", [SOURCE + SOURCE, SOURCE.replace("return demand_router", "return other"), ""]
+)
+def test_unexpected_controller_shape_refuses(source):
+    with pytest.raises(SystemExit, match="expected single"):
+        hook.render(source, "/offline/pin.json")
+
+
+def test_renderer_cannot_overwrite_input_controller(tmp_path):
+    controller = tmp_path / "controller.py"
+    controller.write_text(SOURCE)
+    with pytest.raises(SystemExit):
+        hook.main(
+            ["--controller", str(controller), "--manifest", "/missing", "--out", str(controller)]
+        )
+    assert controller.read_text() == SOURCE
+
+
+@pytest.mark.xfail(
+    strict=True, reason="Deployment blocker: existing marker silently ignores a different pin"
+)
+def test_differing_existing_pin_must_refuse_instead_of_claiming_success(tmp_path):
+    first = hook.render(SOURCE, str(tmp_path / "first.json"))
+    with pytest.raises(SystemExit, match="pin|manifest"):
+        hook.render(first, str(tmp_path / "second.json"))
+
+
+def test_existing_substantive_dispatch_remains_whole_assignment_pipeline(tmp_path):
+    cfg = {
+        "assignment": str(tmp_path / "assignment.json"),
+        "dispatch_state": str(tmp_path / "queue.json"),
+        "apply": True,
+        "runtime_manifest": str(tmp_path / "runtime.json"),
+    }
+    command = campaign.dispatch_command(cfg, "/pinned/python", tmp_path)
+    assert command[:3] == ["/pinned/python", str(tmp_path / "closer_dispatcher.py"), "run"]
+    for flag, value in (
+        ("--assignment", cfg["assignment"]),
+        ("--state", cfg["dispatch_state"]),
+        ("--runtime-manifest", cfg["runtime_manifest"]),
+    ):
+        assert command[command.index(flag) + 1] == value
+    assert all(flag in command for flag in ("--apply", "--workers", "--pipeline"))
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Deployment blocker: same-path cached module can survive changed disk/manifest pin",
+)
+def test_changed_same_path_disk_pin_must_not_execute_cached_old_module(tmp_path):
+    # Use the existing isolated subprocess fixture, never alter this pytest
+    # process's imports or any installed controller/package.
+    from test_closer_campaign_hook_loader import fixture, invoke
+
+    _base, controller = fixture(tmp_path)
+    script = """import runpy,sys,json,hashlib
+from pathlib import Path
+ns=runpy.run_path(sys.argv[1])
+old=ns['_load_pinned_closer_campaign']()
+assert old is not None
+old.RUNTIME_VERSION='old-cache'
+path=Path(old.__file__)
+path.write_text(path.read_text()+'\\nRUNTIME_VERSION="new-disk"\\n')
+manifest_path=Path(ns['CLOSER_CAMPAIGN_MANIFEST'])
+manifest=json.loads(manifest_path.read_text())
+manifest['modules']['closer_campaign.py']=hashlib.sha256(path.read_bytes()).hexdigest()
+manifest_path.write_text(json.dumps(manifest))
+loaded=ns['_load_pinned_closer_campaign']()
+print(json.dumps(loaded is None or getattr(loaded,'RUNTIME_VERSION',None)=='new-disk'))
+"""
+    assert invoke(controller, script) is True
