@@ -2177,6 +2177,30 @@ class Closer:
                     raise RuntimeError(
                         "merge guard outcome unknown; inspect remote state"
                     ) from None
+                import closer_queue
+                import merge_guard
+
+                if (
+                    operation.get("native_remote_only") is True
+                    and proc.returncode == 1
+                    and merge_guard.no_merge_command_refusal(result, pr_target, fresh["head"])
+                ):
+                    return {
+                        "status": "blocked",
+                        "result": result,
+                        "merge_guard_refusal": {
+                            "schema": "closer-merge-guard-refusal/v1",
+                            "target": target,
+                            "subject_pr": pr_target,
+                            "head": fresh["head"],
+                            "revision": operation["revision"],
+                            "operation_id": operation["id"],
+                            "report_sha256": closer_queue._digest(result),
+                            "callback_invoked": True,
+                            "merge_command_invoked": False,
+                            "native_remote_only": True,
+                        },
+                    }
                 return {
                     "status": (
                         "completed"
@@ -7210,6 +7234,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             **queue_policy(target, context),
             max_workers=1,
             max_passes=1,
+            finite_readmission=context if context.get("guard_readmission") is not None else None,
         )
         row = next((r for r in receipt.get("accounting", []) if r.get("target") == target), {})
         if row.get("status") == "complete":
@@ -7918,6 +7943,9 @@ def main(argv=None):
     )
     reentry.add_argument("--state", required=True, help="exact target shard state.json")
     reentry.add_argument("--frontier", required=True, help="frozen finite-frontier/v2 JSON file")
+    reentry.add_argument(
+        "--assignment", help="current canonical assignment for typed guard readmission"
+    )
     reentry.add_argument("--target", required=True)
     reentry.add_argument("--event", required=True)
     reentry.add_argument("--apply", action="store_true")
@@ -7948,6 +7976,8 @@ def main(argv=None):
             reentry_args.extend(["--expected-plan-sha256", args.expected_plan_sha256])
         if args.source_receipts_json:
             reentry_args.extend(["--source-receipts-json", args.source_receipts_json])
+        if args.assignment:
+            reentry_args.extend(["--assignment", args.assignment])
         return closer_finite_reentry.main(reentry_args)
     if args.command == "validate-stop":
         targets = targets_from_assignment(args.assignment) if args.assignment else None
@@ -8087,6 +8117,74 @@ def _run_merge_verification_successors(args, backend, result, targets):
             document = closer_pipeline._load(shard)
             entry = (document.get("frontiers") or {}).get(predecessor["frontier_id"], {})
             item = (entry.get("items") or {}).get(target, {})
+            if (
+                isinstance(item, Mapping)
+                and item.get("status") == "held"
+                and item.get("stage") == "act"
+                and item.get("stage_status") == "completed"
+                and item.get("deferred_reason") == "merge_guard_refused"
+            ):
+                import closer_finite_reentry
+
+                old_action = item.get("results", {}).get("act", {})
+                old_rows = old_action.get("queue_receipt", {}).get("accounting", [])
+                event = "guard-admission-" + digest(
+                    [
+                        predecessor,
+                        target,
+                        [
+                            row.get("operation_id")
+                            for row in old_rows
+                            if row.get("target") == target
+                        ],
+                    ]
+                )
+                common = {
+                    "frontier": predecessor,
+                    "target": target,
+                    "event": event,
+                    "assignment_path": args.assignment,
+                }
+                try:
+                    proposal = closer_finite_reentry.plan(shard, **common)
+                    applied = closer_finite_reentry.apply(
+                        shard, **common, expected_plan_sha256=proposal["plan_sha256"]
+                    )
+                except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+                    continuations[target] = {
+                        "status": "held",
+                        "reason": "fresh guard admission: " + str(error),
+                        "next_trigger": "normal current-head guard recheck",
+                    }
+                    continue
+                # Exactly once per ordinary caller pass. This is the SAME bound
+                # frontier, normal lease/scope admission and live final guard.
+                native = _run_staged_pipeline(args, targets, backend, None)
+                checked = closer_pipeline.validate_stop_scoped(
+                    root_path, native.get("round_id"), [target]
+                )
+                native["validation"] = checked
+                prior_round_id = result.get("round_id")
+                result.update(native)
+                if isinstance(result.get("action_c"), dict):
+                    result["action_c"]["round_id"] = native.get("round_id")
+                    command = result["action_c"].get("validate_stop_args", [])
+                    if "--round-id" in command:
+                        command[command.index("--round-id") + 1] = native.get("round_id")
+                continuations[target] = {
+                    "status": "guard_readmission",
+                    "audit": applied,
+                    "prior_round_id": prior_round_id,
+                    "native_result": native,
+                }
+                if not checked.get("scoped_completion_valid", checked.get("valid")):
+                    failures.append(target)
+                    continue
+                # Stay in this exact CLI-owned caller frame for the normal bound
+                # merge -> verification successor; never invent callback authority.
+                document = closer_pipeline._load(shard)
+                entry = document["frontiers"][predecessor["frontier_id"]]
+                item = entry["items"][target]
             accepted_wait = (
                 isinstance(item, Mapping)
                 and item.get("deferred_reason") == "accepted_verifier_request"
@@ -8223,7 +8321,9 @@ def _run_merge_verification_successors(args, backend, result, targets):
                 root_path, native.get("round_id"), [target]
             )
             native["validation"] = checked
+            prior_continuation = continuations.get(target)
             continuations[target] = {
+                **({"guard_readmission": prior_continuation} if prior_continuation else {}),
                 "status": "verification_successor",
                 "predecessor_kind": "accepted_verifier_request" if accepted_wait else "merge",
                 "lineage": child,

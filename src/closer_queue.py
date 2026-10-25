@@ -56,6 +56,7 @@ RESOURCE_DEFERRALS = frozenset(
         "finite_frontier_identity_mismatch",
         "observation_failed",
         "verifier_resource_wait",
+        "merge_guard_refused",
     }
 )
 DEFAULT_RECEIPT_RESERVE_SECONDS = 15.0
@@ -117,6 +118,53 @@ def _native_verify_wait_executor(execute):
         and current.runtime_binding is None
         and not current.require_runtime_binding
     )
+
+
+def merge_guard_refusal_proof(operation, target):
+    """Retain an invoked native callback whose guard rejected before merge."""
+    import merge_guard
+
+    if not isinstance(operation, dict):
+        return None
+    result = operation.get("result")
+    binding = operation.get("binding")
+    if not isinstance(result, dict) or not isinstance(binding, dict):
+        return None
+    proof = result.get("merge_guard_refusal")
+    report = result.get("result")
+    subject = binding.get("pr_target", target)
+    expected = {
+        "schema": "closer-merge-guard-refusal/v1",
+        "target": target,
+        "subject_pr": subject,
+        "head": binding.get("head"),
+        "revision": operation.get("revision"),
+        "operation_id": operation.get("id"),
+        "report_sha256": _digest(report),
+        "callback_invoked": True,
+        "merge_command_invoked": False,
+        "native_remote_only": True,
+    }
+    if (
+        operation.get("action") == "merge"
+        and operation.get("status") == "failed"
+        and operation.get("outcome") == "blocked"
+        and isinstance(operation.get("id"), str)
+        and bool(operation["id"])
+        and isinstance(operation.get("revision"), str)
+        and isinstance(binding.get("head"), str)
+        and len(binding["head"]) == 40
+        and all(char in "0123456789abcdef" for char in binding["head"])
+        and binding.get("merge") is None
+        and isinstance(proof, dict)
+        and proof.get("callback_invoked") is True
+        and proof.get("merge_command_invoked") is False
+        and proof.get("native_remote_only") is True
+        and proof == expected
+        and merge_guard.no_merge_command_refusal(report, subject, binding["head"])
+    ):
+        return proof
+    return None
 
 
 def verifier_resource_wait_proof(operation, target):
@@ -732,6 +780,13 @@ def _validate_data(
                 or trigger != verifier_resource_wait_event(proof)
             ):
                 reasons.append(f"unverified_verifier_resource_wait:{target}")
+        elif reason == "merge_guard_refused":
+            operation = item.get("operation") if isinstance(item, dict) else None
+            if (
+                merge_guard_refusal_proof(operation, target) is None
+                or trigger != "refresh_merge_guard_before_action"
+            ):
+                reasons.append(f"unverified_merge_guard_refusal:{target}")
         elif reason == "worker_capacity":
             max_workers = round_state.get("max_workers", 0)
             active, _ = _active_operations(items)
@@ -1106,6 +1161,7 @@ def run_round(
     release_fn: Callable[[str, str], bool] | None = None,
     finite_frontier: Mapping[str, Any] | None = None,
     frontier_target: str | None = None,
+    finite_readmission: Mapping[str, Any] | None = None,
     request_timeout_seconds: float = 120.0,
 ) -> dict[str, Any]:
     """Run a fair, durable, deadline-bounded action round.
@@ -1261,6 +1317,40 @@ def run_round(
             items = state["items"]
             current_round = state.get("round", {})
         timestamp = float(now())
+        if (
+            frontier is not None
+            and current_round.get("status") == "finished"
+            and finite_readmission is not None
+        ):
+            import closer_finite_reentry
+
+            # This is not a caller flag: the original native ACT capability,
+            # live scoped lease, applied audit and exact saved queue bytes must
+            # all agree. UNKNOWN/attempted effects never obtain this audit.
+            if (
+                len(targets) == 1
+                and _native_verify_wait_executor(execute)
+                and closer_finite_reentry.guard_queue_readmission(
+                    finite_readmission,
+                    path,
+                    frontier,
+                    targets[0],
+                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                )
+            ):
+                assert frontier_bucket is not None  # validated finite namespace above
+                retained_operation = items[targets[0]].get("operation")
+                history = list(items[targets[0]].get("operation_history", []))
+                # Keep the invoked failed/no-command operation unchanged. It is
+                # history, not a confirmed-not-started intent for replay.
+                # The exact complete before-image is already immutable in the
+                # applied reentry audit; retain the normal bounded hot history.
+                items[targets[0]]["operation_history"] = (history + [retained_operation])[
+                    -MAX_OPERATION_HISTORY:
+                ]
+                items[targets[0]]["operation"] = None
+                current_round = {}
+                frontier_bucket["round"] = current_round
         if frontier is not None and current_round.get("status") == "finished":
             # A finite frontier is a single immutable selection, not a reusable
             # scheduler round. Return its retained terminal receipt (including
@@ -1978,6 +2068,16 @@ def run_round(
                             result.get("next_trigger") or "refresh_remote_before_action"
                         )
                         _defer(item, "remote_action_not_started", op["next_trigger"])
+                        stalled.add(target)
+                    elif result_status == "blocked" and "merge_guard_refusal" in stored_result:
+                        op.update(status="failed", outcome="blocked", completed_at=float(now()))
+                        if (
+                            not _native_verify_wait_executor(execute)
+                            or merge_guard_refusal_proof(op, target) is None
+                        ):
+                            raise ValueError("untrusted_native_merge_guard_refusal")
+                        op["next_trigger"] = "refresh_merge_guard_before_action"
+                        _defer(item, "merge_guard_refused", op["next_trigger"])
                         stalled.add(target)
                     else:
                         if result_status == "stale":

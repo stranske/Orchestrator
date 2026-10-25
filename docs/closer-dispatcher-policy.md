@@ -271,6 +271,35 @@ records a no-effect hold, and retires only that operation's owned reservations
 through the existing lifecycle. It never replays the old action. A fresh frontier
 must pass normal current checks before an effect can occur.
 
+An invoked native remote-only merge guard can retain a typed pre-command
+refusal: the callback ran, but the merge command did not. The guard removes its
+`merge-guard-no-command/v1` marker before entering the mutation transport, even
+when that transport later fails. Only the proven native remote-only callback may
+convert it to a bound `closer-merge-guard-refusal/v1` queue receipt and
+`merge_guard_refused` hold. A local/runtime-capable callback, failed/timeout merge
+invocation, malformed output or foreign executor cannot use this boundary. The pinned legacy merge-refusal reconciliation
+additionally requires an `invocation` reference in `--source-receipts-json` to
+join the original argv hash, installed readback, strict installation journal,
+source hashes, original scope admission and exact failed inner operation/round.
+It preserves all original inner bytes, records `confirmed_no_effect` (never
+`confirmed_not_started`), and retires only the original owner. It grants no retry
+of that frontier; a genuinely fresh changed-state frontier still passes normal
+assignment, scope, lease, exact-head and merge-guard checks.
+
+A modern typed remote-only hold is revisited by the ordinary finite `run` caller;
+it does not require a new user event or random frontier. Before a timed review
+floor expires, the guard's retained anchor/remaining-time facts are diagnostics
+and a fresh non-mutating guard read remains blocked: no ACT/merge callback is
+replayed. Once the same complete guard (including final preflight, review-loop
+and remote footprint) admits the unchanged binding, existing `finite-reentry`
+plan/apply/ready records that actual progress under current assignment, scope,
+lease and row/queue CAS. The queue consumes only that applied audit in its live
+native ACT, archives its exact previous bytes, and starts a fresh round with the
+old invoked operation retained as history. The live mutation still repeats every
+guard. Changed binding/holds, foreign owners, attempted merges and uncertainty
+cannot use this route. The normal successful merge then uses the existing
+merge-bound verification successor; none of this grants issue acceptance.
+
 Qualified native GitHub-only actions reserve their explicit PR, source and branch
 aliases without inferring a checkout dependency from repository membership.
 Local actions and explicit workspace claims retain workspace exclusion. Related
