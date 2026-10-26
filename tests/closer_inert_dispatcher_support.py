@@ -6,6 +6,7 @@ An explicit registration also admits the exact no-effect native host fixture wra
 The fixture's resolved Core source may answer one exact read-only HEAD query.
 """
 
+import contextlib
 import copy
 import hashlib
 import json
@@ -241,6 +242,23 @@ class InertCaller:
             == manifest["modules"]["closer_mechanisms.py"]
         )
         assert Path(sys.executable).resolve(strict=True) == Path(contract["interpreter"]["path"])
+        source_root = Path(closer.__file__).resolve(strict=True).parent
+        module_pins = []
+        total = 0
+        assert isinstance(manifest["modules"], dict) and manifest["modules"]
+        assert {entry.name for entry in (root / "modules").iterdir()} == set(manifest["modules"])
+        assert manifest["launcher"]["sha256"] == manifest["modules"]["closer_launcher.py"]
+        for name, expected_sha in sorted(manifest["modules"].items()):
+            assert isinstance(name, str) and Path(name).name == name and name.endswith(".py")
+            reviewed = source_root / name
+            private = root / "modules" / name
+            reviewed_bytes, _ = self._native_fixture_file(source_root, reviewed, 4 * 1024 * 1024)
+            private_bytes, _ = self._native_fixture_file(root, private, 4 * 1024 * 1024)
+            total += len(reviewed_bytes) + len(private_bytes)
+            assert total <= 32 * 1024 * 1024
+            assert hashlib.sha256(reviewed_bytes).hexdigest() == expected_sha
+            assert private_bytes == reviewed_bytes
+            module_pins.append((private, reviewed, expected_sha, len(reviewed_bytes)))
         self.native_runs = {}
         self.native_fixture = {
             "argv": ("/bin/bash", str(wrapper), "closer"),
@@ -253,6 +271,7 @@ class InertCaller:
             "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
             "observation_root": root / "native-observations",
             "binding": native.binding(manifest),
+            "module_pins": module_pins,
             "observer": observer,
             "observer_sha256": hashlib.sha256(observer_bytes).hexdigest(),
             "interpreter": sys.executable,
@@ -284,6 +303,46 @@ class InertCaller:
             assert len(raw) == meta.st_size
         return raw, (meta.st_dev, meta.st_ino)
 
+    @staticmethod
+    def _native_startup_setting(key):
+        return key.startswith("PYTHON") or key in {
+            "__PYVENV_LAUNCHER__",
+            "BASH_ENV",
+            "ENV",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "DYLD_LIBRARY_PATH",
+        }
+
+    @contextlib.contextmanager
+    def native_fixture_environment(self):
+        """Scope startup isolation to this explicit no-effect fixture invocation."""
+        with self.patch.context() as isolated:
+            for key in list(os.environ):
+                if self._native_startup_setting(key):
+                    isolated.delenv(key)
+            isolated.setenv("PYTHONNOUSERSITE", "1")
+            yield
+
+    def _native_fixture_modules_match(self):
+        registered = self.native_fixture
+        modules = registered["root"] / "modules"
+        self._native_fixture_physical(registered["root"], modules)
+        if {entry.name for entry in modules.iterdir()} != {
+            pin[0].name for pin in registered["module_pins"]
+        }:
+            return False
+        for private, reviewed, expected_sha, size in registered["module_pins"]:
+            private_bytes, _ = self._native_fixture_file(registered["root"], private, size)
+            reviewed_bytes, _ = self._native_fixture_file(reviewed.parent, reviewed, size)
+            if (
+                private_bytes != reviewed_bytes
+                or hashlib.sha256(reviewed_bytes).hexdigest() != expected_sha
+            ):
+                return False
+        return True
+
     def _native_fixture_options(self, options):
         """Recheck exact private bytes immediately before the unchanged Popen."""
         registered = self.native_fixture
@@ -297,20 +356,18 @@ class InertCaller:
         env = options.get("env")
         if not isinstance(env, dict) or env.get("HOME") != str(registered["home"]):
             return False
+        if env.get("PYTHONNOUSERSITE") != "1":
+            return False
         if any(
-            key in env
-            for key in (
-                "BASH_ENV",
-                "ENV",
-                "LD_PRELOAD",
-                "LD_LIBRARY_PATH",
-                "DYLD_INSERT_LIBRARIES",
-                "DYLD_LIBRARY_PATH",
-            )
+            self._native_startup_setting(key)
+            and (key not in {"PYTHONNOUSERSITE", "PYTHONDONTWRITEBYTECODE"} or value != "1")
+            for key, value in env.items()
         ):
             return False
         try:
             root = registered["root"]
+            if not self._native_fixture_modules_match():
+                return False
             self._native_fixture_physical(root, registered["home"])
             raw, identity = self._native_fixture_file(root, registered["wrapper"], 128 * 1024)
             if (

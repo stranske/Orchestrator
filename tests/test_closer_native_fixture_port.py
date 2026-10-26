@@ -18,12 +18,13 @@ import closer_native_observer as native
 
 
 @pytest.fixture
-def registration(host):
+def registration(host, monkeypatch):
     manifest, manifest_path, wrapper = host
     caller = object.__new__(InertCaller)
     caller.world = SimpleNamespace(
         root=manifest_path.parent, cli=manifest_path.parent / "unused-emitter"
     )
+    caller.patch = monkeypatch
     caller.children = {os.getpid()}
     caller.core_head_query = caller.core_head_revision = None
     return caller, manifest, manifest_path, wrapper
@@ -45,7 +46,11 @@ def options(caller):
         )
     )
     return {
-        "env": {"HOME": str(registered["home"]), "CLOSER_NATIVE_QUALIFICATION_REQUEST": str(path)},
+        "env": {
+            "HOME": str(registered["home"]),
+            "PYTHONNOUSERSITE": "1",
+            "CLOSER_NATIVE_QUALIFICATION_REQUEST": str(path),
+        },
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "text": True,
@@ -400,3 +405,132 @@ def test_expired_request_and_changed_pinned_reader_refuse_without_process(
         and not caller.allowed(metadata(4100))
         and not caller.allowed(metadata(4101))
     )
+
+
+def test_python_startup_injection_is_refused_before_any_process(registration, monkeypatch):
+    caller, manifest, path, wrapper = registration
+    caller.register_native_fixture(manifest, path)
+    kwargs = options(caller)
+    monkeypatch.setattr(
+        support, "REAL_POPEN", lambda *_a, **_kw: pytest.fail("startup injection reached Popen")
+    )
+    for key in (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "PYTHONSTARTUP",
+        "PYTHONINSPECT",
+        "__PYVENV_LAUNCHER__",
+    ):
+        altered = copy.deepcopy(kwargs)
+        altered["env"][key] = "/foreign/startup"
+        with pytest.raises(AssertionError, match="forbidden subprocess"):
+            caller.popen(["/bin/bash", str(wrapper), "closer"], **altered)
+
+
+def test_private_launcher_and_module_tamper_are_refused_before_any_process(
+    registration, monkeypatch
+):
+    caller, manifest, path, wrapper = registration
+    caller.register_native_fixture(manifest, path)
+    kwargs = options(caller)
+    monkeypatch.setattr(
+        support, "REAL_POPEN", lambda *_a, **_kw: pytest.fail("tampered module reached Popen")
+    )
+    for name in ("closer_launcher.py", "closer_campaign.py"):
+        module = path.parent / "modules" / name
+        original = module.read_bytes()
+        try:
+            module.write_bytes(original + b"\n# unreviewed drift\n")
+            with pytest.raises(AssertionError, match="forbidden subprocess"):
+                caller.popen(["/bin/bash", str(wrapper), "closer"], **kwargs)
+        finally:
+            module.write_bytes(original)
+
+
+def test_fixture_startup_environment_is_scoped_and_requires_user_site_disabled(
+    registration, monkeypatch
+):
+    caller, manifest, path, wrapper = registration
+    caller.register_native_fixture(manifest, path)
+    monkeypatch.setenv("PYTHONPATH", "/foreign/pythonpath")
+    monkeypatch.setenv("PYTHONHOME", "/foreign/pythonhome")
+    monkeypatch.setenv("PYTHONUSERBASE", "/foreign/usersite")
+    monkeypatch.setenv("__PYVENV_LAUNCHER__", "/foreign/launcher")
+    monkeypatch.setenv("PYTHONNOUSERSITE", "0")
+    names = (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONUSERBASE",
+        "__PYVENV_LAUNCHER__",
+        "PYTHONNOUSERSITE",
+    )
+    before = {key: os.environ.get(key) for key in names}
+    kwargs = options(caller)
+    with pytest.raises(RuntimeError, match="controlled exit"):
+        with caller.native_fixture_environment():
+            assert os.environ.get("PYTHONNOUSERSITE") == "1"
+            assert all(key not in os.environ for key in names[:-1])
+            kwargs["env"] = {
+                **os.environ,
+                "CLOSER_NATIVE_QUALIFICATION_REQUEST": kwargs["env"][
+                    "CLOSER_NATIVE_QUALIFICATION_REQUEST"
+                ],
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+            assert caller.subprocess_allowed(["/bin/bash", str(wrapper), "closer"], kwargs)
+            raise RuntimeError("controlled exit")
+    assert before == {key: os.environ.get(key) for key in names}
+    kwargs["env"].pop("PYTHONNOUSERSITE")
+    assert not caller.subprocess_allowed(["/bin/bash", str(wrapper), "closer"], kwargs)
+
+
+def test_self_hashed_changed_launcher_cannot_be_registered_as_reviewed_source(registration):
+    caller, manifest, path, _wrapper = registration
+    module = path.parent / "modules/closer_launcher.py"
+    module.write_bytes(module.read_bytes() + b"\n# unreviewed source substitution\n")
+    changed = hashlib.sha256(module.read_bytes()).hexdigest()
+    manifest["modules"]["closer_launcher.py"] = changed
+    manifest["launcher"]["sha256"] = changed
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(AssertionError):
+        caller.register_native_fixture(manifest, path)
+    assert getattr(caller, "native_fixture", None) is None
+
+
+def test_unlisted_module_and_directory_refused_before_any_process(registration, monkeypatch):
+    caller, manifest, path, wrapper = registration
+    caller.register_native_fixture(manifest, path)
+    kwargs = options(caller)
+    monkeypatch.setattr(
+        support,
+        "REAL_POPEN",
+        lambda *_a, **_kw: pytest.fail("unlisted import source reached Popen"),
+    )
+    for extra, directory in (
+        (path.parent / "modules/json.py", False),
+        (path.parent / "modules/unlisted_package", True),
+    ):
+        if directory:
+            extra.mkdir()
+        else:
+            extra.write_text("raise RuntimeError('shadowing must never execute')\n")
+        try:
+            with pytest.raises(AssertionError, match="forbidden subprocess"):
+                caller.popen(["/bin/bash", str(wrapper), "closer"], **kwargs)
+        finally:
+            if directory:
+                extra.rmdir()
+            else:
+                extra.unlink()
+    assert caller.subprocess_allowed(["/bin/bash", str(wrapper), "closer"], kwargs)
+
+
+def test_unlisted_import_source_cannot_enter_registration(registration):
+    caller, manifest, path, _wrapper = registration
+    (path.parent / "modules/sitecustomize.py").write_text(
+        "raise RuntimeError('unlisted startup')\n"
+    )
+    with pytest.raises(AssertionError):
+        caller.register_native_fixture(manifest, path)
+    assert getattr(caller, "native_fixture", None) is None
