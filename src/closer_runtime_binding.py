@@ -949,6 +949,75 @@ class RuntimeBinding:
 
         outcome = submit_effect(adapter, NativePort(), spec, {}, holder=operation["owner"])
         if outcome == "not_accepted":
+            # Stamp only this actual completed rejection CAS, before the queue
+            # persists its result. Later recovery/unknown outcomes cannot mint
+            # an original Core identity, nor can native/caller data supply one.
+            proof = result.get("verification_rejection_proof")
+            if isinstance(proof, dict) and "core_identity" in proof:
+                result["verification_rejection_proof"] = {
+                    key: value for key, value in proof.items() if key != "core_identity"
+                }
+                proof = None  # A native/caller-provided pin is never retained or restamped.
+            try:
+                core = self.bundle.runtime
+                record = adapter.store.read(adapter.target_fence_key(spec))
+                history = (record or {}).get("prior_operations", [])
+                bounded = (
+                    isinstance(history, list)
+                    and len(history) <= 64
+                    and all(
+                        isinstance(entry, dict)
+                        and isinstance(entry.get("record"), dict)
+                        and "prior_operations" not in entry["record"]
+                        for entry in history
+                    )
+                )
+                size = 0
+                for chunk in json.JSONEncoder(allow_nan=False).iterencode(record):
+                    size += len(chunk.encode("utf-8"))
+                    if size > 1024 * 1024:
+                        bounded = False
+                        break
+                if (
+                    bounded
+                    and isinstance(record, dict)
+                    and not record.get("denial")
+                    and not core.validate_operation_record(record)
+                    and core.verification_request_not_accepted(record)
+                    and record["operation_key"] == core.canonical_operation_key(ospec)
+                    and record["target_fence_key"] == core.canonical_target_fence_key(ospec)
+                    and (record.get("mutation_intent") or {}).get("native_binding")
+                    == native_binding
+                    and isinstance(proof, dict)
+                    and "core_identity" not in proof
+                    and proof.get("schema") == "closer-verification-rejection/v1"
+                    and proof.get("producer")
+                    == "submit_verify/GitHubNoEffectRejected/live-queue-invocation"
+                    and proof.get("operation_id") == operation["id"]
+                    and proof.get("revision") == operation["revision"]
+                    and proof.get("action") == action
+                    and proof.get("core_namespace") == self.bundle.namespace
+                    and proof.get("post_attempted") is True
+                    and proof.get("request_accepted") is False
+                ):
+                    archived = {
+                        key: value for key, value in record.items() if key != "prior_operations"
+                    }
+                    result["verification_rejection_proof"] = {
+                        **proof,
+                        "core_identity": {
+                            "schema": "closer-verification-core-rejection/v1",
+                            "namespace": self.bundle.namespace,
+                            "operation_key": record["operation_key"],
+                            "target_fence_key": record["target_fence_key"],
+                            "criteria_fingerprint": record["criteria_fingerprint"],
+                            "native_binding_sha256": record["guard_versions"]["native_binding"],
+                            "record_sha256": core._hash_canonical(archived),
+                            "digest_scope": "canonical_core_record_excluding_prior_operations",
+                        },
+                    }
+            except Exception:
+                pass  # No pin is unknown provenance, never permission to retry.
             return {**result, "core_rejected_not_accepted": True}
         if outcome in {"ok", "unknown"}:
             try:
