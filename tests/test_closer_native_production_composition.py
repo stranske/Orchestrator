@@ -188,7 +188,26 @@ def _fixture_worker_cleanup(obj, manifest, handoff, receipt_path):
             manifest["module_path"],
         ]
         if not all(value in before.stdout for value in expected):
-            raise AssertionError("test worker identity changed; refusing cleanup")
+            # Keep the original refusal and expose its exact owned-process boundary.
+            # verify.py retains short assertion summaries but discards the full XML.
+            diagnostic = {
+                "schema": "closer-fixture-cleanup-refusal/v1",
+                "worker_id": row["worker_id"],
+                "pid": pid,
+                "expected": expected,
+                "observed_lstart_command": before.stdout[:8192],
+                "observed_truncated": len(before.stdout) > 8192,
+                "result_exists": campaign.result_path(obj.path, row["worker_id"]).exists(),
+                "prior_exception_type": (
+                    type(sys.exc_info()[1]).__name__ if sys.exc_info()[1] is not None else None
+                ),
+                "signal_attempted": False,
+            }
+            receipt_path.write_text(json.dumps(diagnostic, sort_keys=True))
+            raise AssertionError(
+                "test worker identity changed; refusing cleanup: "
+                + json.dumps(diagnostic, sort_keys=True)
+            )
         if os.getpgid(pid) != pid:
             raise AssertionError("test worker does not own its expected process group")
         again = subprocess.run(command, capture_output=True, text=True, timeout=5)
