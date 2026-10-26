@@ -627,9 +627,9 @@ def test_source_alias_preserves_actual_delivery_owner_blocker(tmp_path):
 
 def test_unparsed_normative_acceptance_prose_cannot_disappear(tmp_path):
     current = snapshot()
-    current["sources"][0]["body"] += (
-        "\n\nThe migration must preserve every existing consumer override."
-    )
+    current["sources"][0][
+        "body"
+    ] += "\n\nThe migration must preserve every existing consumer override."
     decision = integrated(tmp_path, current)
     prose = "The migration must preserve every existing consumer override."
     decision["criteria"] = [row for row in decision["criteria"] if row["criterion"] != prose]
@@ -1971,9 +1971,9 @@ def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(
     backend.dispositions[TARGET] = {**integrated(tmp_path, current), **ack}
     assert backend.select(current)[0] == "close_source"
     assert backend.gh.calls == [] and len(calls) == 1
-    backend.dispositions[TARGET]["followup_task"] = (
-        "Collect newly requested source-specific evidence"
-    )
+    backend.dispositions[TARGET][
+        "followup_task"
+    ] = "Collect newly requested source-specific evidence"
     assert backend.observe(TARGET)["operation_binding"] != original_binding
 
 
@@ -4118,9 +4118,8 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
             actual = values[first]["provider_outcome"]["actual"]
             assert actual["run_id"] == inert_caller.results[0]["run_id"]
             assert actual["retry_safe"] is False
-            assert (
-                actual["raw_exit"]
-                == ({"transport": 1, "quota": 3, "quota_normal_exit": 0}[failure_kind])
+            assert actual["raw_exit"] == (
+                {"transport": 1, "quota": 3, "quota_normal_exit": 0}[failure_kind]
             )
             assert inert_caller.results[0]["outcome_uncertain"] is True
             assert inert_caller.results[0]["output"] == ""
