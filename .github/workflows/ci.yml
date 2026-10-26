@@ -306,7 +306,9 @@ jobs:
   exec-mirror:
     name: verify.py in the flat exec-mirror shape (the tree a sync ships)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Hosted mirror runs hit 25 minutes after printing VERIFIED; allow bounded
+    # completion/cleanup margin without changing tests or request deadlines.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
         with:
