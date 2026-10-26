@@ -15,7 +15,12 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Callable
 
-TASKS = {"closer_interpret", "closer_exception", "closer_repair"}
+TASKS = {
+    "closer_interpret",
+    "closer_exception",
+    "closer_repair",
+    "closer_correction_classification",
+}
 VALIDATORS = {"closer_disposition.integrate_ordinary", "closer_dispatcher.response_binding"}
 EFFICIENCY_SCHEMA = "closer-efficiency-summary/v1"
 _DIRECT_BRANCHES = {

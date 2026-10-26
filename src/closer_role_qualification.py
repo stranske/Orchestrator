@@ -25,6 +25,7 @@ STRONG_CRITERION_ADJUDICATION = "strong_criterion_adjudication"
 CONSTRAINED_REPAIR = "constrained_repair"
 TASK_ROLES = {
     "closer_interpret": BOUNDED_CLASSIFICATION,
+    "closer_correction_classification": BOUNDED_CLASSIFICATION,
     "closer_exception": STRONG_CRITERION_ADJUDICATION,
     "closer_repair": CONSTRAINED_REPAIR,
 }

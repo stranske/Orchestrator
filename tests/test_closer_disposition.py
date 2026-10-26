@@ -443,7 +443,12 @@ def test_ordinary_nonpass_resolution_preserves_raw_verdict_without_pass_authorit
             "expected_failure": "report test failed",
         },
     )
-    assert check(fx)["reason"] == "mechanical_repair_plan_unbound"
+    refusal = check(fx)
+    assert refusal["reason"] == "registered_required_test_missing"
+    assert refusal["status"] == "pending"
+    assert refusal["pending_kind"] == "external_event"
+    assert refusal["pending_evidence"]["finding_id"] == resolution["finding_id"]
+    assert refusal["raw_findings"][0]["raw"]["verdict"] == "NON_PASS"
 
 
 def test_native_merge_input_is_resolution_only_and_exact_run_bound(tmp_path):

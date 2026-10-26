@@ -405,7 +405,7 @@ def test_campaign_metrics_use_only_exact_authenticated_native_round_receipt(capa
     ],
 )
 def test_actual_io_release_observes_original_shared_pool(
-    capacity_host, tmp_path, monkeypatch, capsys, stage, state
+    capacity_host, tmp_path, monkeypatch, capsys, request, stage, state
 ):
     import copy
     import hashlib
@@ -433,7 +433,7 @@ def test_actual_io_release_observes_original_shared_pool(
 
     work = tmp_path / "actual-native"
     work.mkdir()
-    native = native_world.__wrapped__(work, monkeypatch)
+    native = native_world.__wrapped__(work, monkeypatch, request)
     native.ad.unlink()
     target = "owner/repo#12"
     native.snapshot.update(

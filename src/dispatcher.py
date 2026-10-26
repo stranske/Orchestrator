@@ -18,10 +18,14 @@ heartbeat unless --no-heartbeat). `--selftest` is fully offline.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
+import inspect
 import json
+import math
 import os
 import re
+import selectors
 import shlex
 import shutil
 import signal
@@ -31,6 +35,7 @@ import sys
 import tempfile
 import time
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -2559,6 +2564,291 @@ class ObservedOffloadFailure(RuntimeError):
         self.stdout, self.stderr = stdout, stderr
 
 
+class _ObservedOutputLimit(RuntimeError):
+    pass
+
+
+@dataclass
+class _ControlledDataOnly:
+    limits: dict
+    profile: dict
+    root: Path
+    cwd: Path
+    operation_id: str
+    env: dict[str, str] = field(repr=False)
+    token: str = field(repr=False)
+    observation: dict | None = None
+    execution: dict | None = None
+    native_sources: dict = field(default_factory=dict)
+    pool_reservation: dict = field(default_factory=dict)
+    runtime_cleanup_attempted: bool = False
+
+
+_CONTROLLED_DATA_ONLY: ContextVar[_ControlledDataOnly | None] = ContextVar(
+    "controlled_data_only_execution", default=None
+)
+
+
+def _controlled_module_sha(module) -> str:
+    source = getattr(module, "__file__", None)
+    if not isinstance(source, str):
+        raise ValueError("controlled source module identity unavailable")
+    with Path(source).open("rb") as stream:
+        raw = stream.read(8_000_001)
+    if not raw or len(raw) > 8_000_000:
+        raise ValueError("controlled source module exceeds bound")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _controlled_cleanup_result(context: _ControlledDataOnly, result: dict) -> None:
+    """Finalize owned filesystem cleanup before immutable capture retention."""
+    if context.runtime_cleanup_attempted:
+        return
+    context.runtime_cleanup_attempted = True
+    try:
+        shutil.rmtree(context.root)
+    except OSError as error:
+        result["data_only_private_runtime"] = {
+            "path": str(context.root),
+            "cleanup": "held_owned_cleanup_unverified",
+            "error_type": type(error).__name__,
+        }
+        result["semantic_promotion_blocked"] = True
+        result["retry_safe"] = False
+    else:
+        result["data_only_private_runtime"] = {
+            "path": str(context.root),
+            "cleanup": "removed_owned_private_runtime",
+        }
+
+
+def _controlled_data_only_entry(function):
+    """Keep the existing accounting/supervisor body inside an explicit runtime.
+
+    The supplier is an integration dependency, not a credential reader. It must
+    return a context manager yielding an already-authorized existing OAuth token.
+    No environment fallback, shell sourcing, login or alternate auth is allowed.
+    """
+    signature = inspect.signature(function)
+
+    @functools.wraps(function)
+    def invoke(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        values = bound.arguments
+        if values.get("data_only") is not True:
+            if any(
+                values.get(key) is not None
+                for key in ("data_only_limits", "trusted_auth_supplier", "data_only_operation_id")
+            ):
+                return {
+                    "agent": values.get("agent"),
+                    "exit": 2,
+                    "output": "",
+                    "run_id": None,
+                    "error": "controlled data-only inputs require data_only=True",
+                    "process_started": False,
+                    "outcome_uncertain": False,
+                }
+            return function(*args, **kwargs)
+
+        def refused(reason):
+            return {
+                "agent": values.get("agent"),
+                "exit": 2,
+                "output": "",
+                "run_id": None,
+                "error": reason,
+                "process_started": False,
+                "outcome_uncertain": False,
+                "unsupported_assessment_tool_boundary": True,
+            }
+
+        deadline = values.get("request_deadline_mono")
+        if deadline is not None and (
+            type(deadline) not in (int, float)
+            or not math.isfinite(deadline)
+            or deadline <= time.monotonic()
+        ):
+            return refused("original controlled request deadline exhausted or invalid")
+
+        # The existing global kill switch must precede private runtime/auth.
+        if os.environ.get("ORCH_OFFLOAD_DISABLED", "").strip() == "1":
+            return {**refused("offload disabled by ORCH_OFFLOAD_DISABLED=1"), "disabled": True}
+
+        import closer_data_only_execution as execution
+        import closer_resources
+        import closer_role_qualification as roles
+
+        try:
+            limits = execution.validate_limits(values.get("data_only_limits"))
+            supplier = values.get("trusted_auth_supplier")
+            if not callable(supplier):
+                raise ValueError("explicit trusted_auth_supplier is required")
+            if values.get("agent") != "claude" or values.get("mode") != "assess":
+                raise ValueError("controlled data-only requires explicit Claude assess")
+            if values.get("write_boundary") is not None:
+                raise ValueError("controlled data-only cannot inherit a generic write boundary")
+            if values.get("max_network_retries") not in (None, 0):
+                raise ValueError("data-only transport forbids automatic retries")
+            declared_timeout = values.get("timeout")
+            if declared_timeout is not None and (
+                type(declared_timeout) not in (int, float) or not 0 < declared_timeout <= 86400
+            ):
+                raise ValueError("invalid explicit controlled timeout")
+            expected_role = {
+                "closer_interpret": "bounded_classification",
+                "closer_correction_classification": "bounded_classification",
+                "closer_exception": "strong_criterion_adjudication",
+            }.get(values.get("task_type"))
+            if expected_role != limits["role"]:
+                raise ValueError("explicit task and execution limits role differ")
+            if not values.get("profile_id"):
+                raise ValueError("controlled data-only requires an explicit registered profile")
+            profile = roles.profile_identity(execution_profiles.get_profile(values["profile_id"]))
+            execution.profile_identity(profile)
+            # Size admission is deliberately hash-free: the borrowed token must
+            # be rejected from input before any prompt digest can be retained.
+            prompt = values["prompt"]
+            if (
+                type(prompt) is not str
+                or not prompt
+                or len(prompt.encode("utf-8")) > limits["max_prompt_bytes"]
+            ):
+                raise ValueError("complete controlled prompt exceeds explicit admission")
+            operation_id = values.get("data_only_operation_id")
+            if (
+                type(operation_id) is not str
+                or not operation_id
+                or len(operation_id) > 256
+                or any(ord(c) < 32 for c in operation_id)
+            ):
+                raise ValueError("exact original data-only operation identity is required")
+            if not all(
+                callable(values.get(key))
+                for key in (
+                    "process_starting_callback",
+                    "process_started_callback",
+                    "process_finished_callback",
+                )
+            ):
+                raise ValueError("existing observed process lifecycle callbacks are required")
+            if not closer_resources.finite_pool_has_active_reservations():
+                raise ValueError("original durable finite shared-pool reservation is required")
+            pool_binding = closer_resources.finite_pool_current_binding()
+            if pool_binding != {
+                "frontier_id": values.get("finite_frontier_id"),
+                "target": values.get("finite_frontier_target"),
+            }:
+                raise ValueError("original finite pool binding differs")
+            # A frontier/target alone does not prove the actual account lane.
+            slots = [
+                item
+                for item in closer_resources._pool_slots()
+                if item["record"].get("lane") == hashlib.sha256(b"claude-subscription").hexdigest()
+            ]
+            if len(slots) != 1:
+                raise ValueError("original Claude subscription lane is not held")
+            slot = slots[0]
+            record = slot["record"]
+            if (
+                slot["handle"].closed
+                or record.get("agent") != "claude"
+                or record.get("profile_id") != profile["profile_id"]
+                or record.get("frontier_id") != values.get("finite_frontier_id")
+                or record.get("target") != values.get("finite_frontier_target")
+            ):
+                raise ValueError("original pool profile or owner binding differs")
+            pool_reservation = {
+                key: record[key]
+                for key in (
+                    "reservation_id",
+                    "lane",
+                    "frontier_id",
+                    "target",
+                    "agent",
+                    "profile_id",
+                )
+            }
+            # Verify dependency availability before any runtime/credential effect.
+            from transport_saved_result import normalize_claude_result
+
+            if not callable(normalize_claude_result):
+                raise ValueError("reviewed native-result collector unavailable")
+        except (ImportError, OSError, ValueError, TypeError, KeyError):
+            return refused("controlled data-only contract/auth/lifecycle admission unavailable")
+
+        from storage_lifecycle import owned_agent_tmpdir
+
+        root = None
+        context = None
+        token = ""
+        entered_body = False
+        result = None
+        try:
+            parent = owned_agent_tmpdir("claude")
+            root = Path(tempfile.mkdtemp(prefix="controlled-data-only.", dir=parent)).resolve()
+            for leaf in ("home", "cache", "config", "tmp", "claude-config", "cwd"):
+                (root / leaf).mkdir(mode=0o700)
+            cwd = root / "cwd"
+            with supplier() as token:
+                if type(token) is not str or not token:
+                    raise ValueError("trusted borrower supplied no literal existing token")
+                if any(type(value) is str and token in value for value in values.values()):
+                    raise ValueError("borrowed credential entered retained caller metadata")
+                env = execution.isolated_environment(
+                    str(root), cwd=str(cwd), existing_oauth_token=token, limits=limits
+                )
+                context = _ControlledDataOnly(limits, profile, root, cwd, operation_id, env, token)
+                context.pool_reservation = pool_reservation
+                import transport_qualification
+                import transport_saved_result
+
+                context.native_sources = {
+                    name: _controlled_module_sha(module)
+                    for name, module in (
+                        ("transport_saved_result.py", transport_saved_result),
+                        ("transport_qualification.py", transport_qualification),
+                    )
+                }
+                marker = _CONTROLLED_DATA_ONLY.set(context)
+                try:
+                    entered_body = True
+                    result = function(*args, **kwargs)
+                    return result
+                finally:
+                    _CONTROLLED_DATA_ONLY.reset(marker)
+                    context.env.clear()
+                    context.token = ""
+        except Exception as error:
+            if not entered_body:
+                return refused("controlled auth/runtime unavailable:" + type(error).__name__)
+            raise
+        finally:
+            token = ""
+            # Preserve an uncertain invocation's private runtime for the existing
+            # owner/reconciler. A new call never reuses it or repeats its process.
+            if root is not None and not (context and context.runtime_cleanup_attempted):
+                if not entered_body or (result is not None and not result.get("outcome_uncertain")):
+                    try:
+                        shutil.rmtree(root)
+                    except OSError as cleanup_error:
+                        if result is not None:
+                            result["data_only_private_runtime"] = {
+                                "path": str(root),
+                                "cleanup": "held_owned_cleanup_unverified",
+                                "error_type": type(cleanup_error).__name__,
+                            }
+                            result["semantic_promotion_blocked"] = True
+                            result["retry_safe"] = False
+                elif result is not None:
+                    result["data_only_private_runtime"] = {
+                        "path": str(root),
+                        "cleanup": "deferred_original_outcome_unknown",
+                    }
+
+    return invoke
+
+
 def _finite_pool_fence(observation):
     """Return only trusted process identity for an unverified finite cleanup."""
     if not isinstance(observation, dict) or observation.get("cleanup_terminal") is not False:
@@ -2602,6 +2892,8 @@ def run_observed_offload(
     stdin,
     finished_callback=None,
     starting_callback=None,
+    env=None,
+    output_limit=None,
 ):
     """Optional observed transport; default offloads retain subprocess.run.
 
@@ -2620,6 +2912,7 @@ def run_observed_offload(
             text=True,
             stdin=stdin,
             start_new_session=True,
+            **({"env": env} if env is not None else {}),
         )
     except BaseException:
         if starting_callback is not None:
@@ -2634,6 +2927,51 @@ def run_observed_offload(
         "process_group": child.pid,
         "transport_argv": list(command),
     }
+    controlled_context = _CONTROLLED_DATA_ONLY.get() if env is not None else None
+    if controlled_context is not None:
+        controlled_context.observation = observed
+    token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "") if env is not None else ""
+
+    def safe_output(value):
+        if isinstance(value, bytes):
+            try:
+                text = value.decode("utf-8")
+            except UnicodeError:
+                observed["invalid_utf8_output"] = True
+                text = value.decode("utf-8", errors="replace")
+        else:
+            text = value or ""
+        if token and token in text:
+            observed["borrowed_credential_output"] = True
+            return text.replace(token, "[REDACTED]")
+        return text
+
+    captured = {"stdout": bytearray(), "stderr": bytearray()}
+
+    def bounded_communicate(timeout):
+        deadline = time.monotonic() + timeout
+        count = 0
+        with selectors.DefaultSelector() as selector:
+            for pipe, kind in ((child.stdout, "stdout"), (child.stderr, "stderr")):
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ, kind)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                for key, _ in selector.select(min(0.05, remaining)):
+                    chunk = os.read(key.fileobj.fileno(), min(8192, output_limit - count + 1))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    room = output_limit - count
+                    captured[key.data].extend(chunk[:room])
+                    count += len(chunk)
+                    chunk = b""
+                    if count > output_limit:
+                        raise _ObservedOutputLimit("controlled native output exceeds bound")
+        child.wait(timeout=max(0.001, deadline - time.monotonic()))
+        return tuple(safe_output(bytes(captured[k])) for k in ("stdout", "stderr"))
 
     def stop_known_group():
         cleanup_error = None
@@ -2662,9 +3000,15 @@ def run_observed_offload(
         stop_deadline = time.monotonic() + (0.25 if cleanup_error else 2.0)
         while time.monotonic() < stop_deadline:
             try:
-                latest = child.communicate(
-                    timeout=min(0.2, max(0.01, stop_deadline - time.monotonic()))
-                )
+                if output_limit is not None:
+                    # Controlled output remains bounded even during failed cleanup.
+                    # Never switch back to communicate()'s unbounded buffers.
+                    child.wait(timeout=min(0.2, max(0.01, stop_deadline - time.monotonic())))
+                    latest = tuple(safe_output(bytes(captured[k])) for k in ("stdout", "stderr"))
+                else:
+                    latest = child.communicate(
+                        timeout=min(0.2, max(0.01, stop_deadline - time.monotonic()))
+                    )
             except subprocess.TimeoutExpired as pending:
 
                 def decoded(value):
@@ -2707,7 +3051,7 @@ def run_observed_offload(
                 pass
         observed["cleanup_terminal"] = group_absent_proven and child.poll() is not None
         observed["transport_returncode"] = child.returncode
-        return latest
+        return tuple(safe_output(value) for value in latest)
 
     try:
         try:
@@ -2745,7 +3089,22 @@ def run_observed_offload(
             ) from exc
         try:
             remaining = None if timeout is None else max(0, timeout - (time.monotonic() - started))
-            stdout, stderr = child.communicate(timeout=remaining)
+            stdout, stderr = (
+                bounded_communicate(remaining)
+                if output_limit is not None
+                else child.communicate(timeout=remaining)
+            )
+        except _ObservedOutputLimit as exc:
+            stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            raise ObservedOffloadFailure(
+                str(exc),
+                observed,
+                child.poll(),
+                safe_output(bytes(captured["stdout"])),
+                safe_output(bytes(captured["stderr"])),
+            ) from exc
         except subprocess.TimeoutExpired as exc:
             stdout, stderr = stop_known_group()
             if observed.get("cleanup_terminal") is True and finished_callback is not None:
@@ -2793,13 +3152,24 @@ def run_observed_offload(
                     stdout,
                     stderr,
                 )
-        return subprocess.CompletedProcess(command, child.returncode, stdout, stderr)
+        result = subprocess.CompletedProcess(
+            command, child.returncode, safe_output(stdout), safe_output(stderr)
+        )
+        if env is not None:
+            result.observation = observed
+        return result
     finally:
+        token = ""
+        if env is not None:
+            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        for buffer in captured.values():
+            buffer.clear()
         for pipe in (child.stdout, child.stderr):
             if pipe is not None:
                 pipe.close()
 
 
+@_controlled_data_only_entry
 def offload(
     agent: str,
     prompt: str,
@@ -2822,6 +3192,9 @@ def offload(
     finite_frontier_target: str | None = None,
     process_finished_callback=None,
     data_only: bool = False,
+    data_only_limits: dict | None = None,
+    trusted_auth_supplier=None,
+    data_only_operation_id: str | None = None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -2876,6 +3249,17 @@ def offload(
             "output": "",
             "run_id": None,
             "error": "data_only must be boolean",
+        }
+    controlled = _CONTROLLED_DATA_ONLY.get() if data_only else None
+    if data_only and controlled is None:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": "controlled data-only context unavailable",
+            "process_started": False,
+            "outcome_uncertain": False,
         }
     if data_only:
         problem = adapters.data_only_problem(agent, mode)
@@ -2946,7 +3330,15 @@ def offload(
     # tick (ORCH_CAPABILITY_HEARTBEATS), so tests and manual runs stay silent. Never allowed to
     # raise: recording that a capability ran must not be able to prevent the work. (2026-08-09)
     _capability_heartbeat("invocation", agent=agent, mode=mode)
-    timeout = _default_offload_timeout(agent, timeout)
+    timeout = (
+        min(timeout, controlled.limits["timeout_seconds"])
+        if controlled is not None and timeout is not None
+        else (
+            controlled.limits["timeout_seconds"]
+            if controlled is not None
+            else _default_offload_timeout(agent, timeout)
+        )
+    )
 
     def remaining_request_time() -> float | None:
         if request_deadline_mono is None:
@@ -2981,10 +3373,14 @@ def offload(
     # with cwd `/`, so a role's `cwd="."` handed codex, agy and cursor the whole disk 1,521 times,
     # and an isolated copy of `/` would copy the disk. The run still starts, logged loudly.
     try:
-        source_cwd, relocated = adapters.agent_workspace(cwd, agent=agent)
+        source_cwd, relocated = (
+            (controlled.cwd, None)
+            if controlled is not None
+            else adapters.agent_workspace(cwd, agent=agent)
+        )
         # A relocated run's scratch dir is already its own, empty and unshared, so it is not copied:
         # a copy would tell the agent one directory and grant it another.
-        copied = isolate and relocated is None
+        copied = isolate and relocated is None and controlled is None
         run_cwd = (
             _isolate_offload_cwd(
                 source_cwd,
@@ -3104,7 +3500,9 @@ def offload(
     command_prompt = "" if prompt_via_stdin else prepared_prompt
     # Refuse missing login before allocating a private prompt or recording a started invocation.
     try:
-        muse_prelude = _agent_runtime_prelude(agent) if agent == "muse" else None
+        muse_prelude = (
+            _agent_runtime_prelude(agent) if agent == "muse" and controlled is None else None
+        )
     except StorageBlocked as exc:
         return {
             "agent": agent,
@@ -3152,6 +3550,41 @@ def offload(
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
     )  # raises ValueError on unknown agent
+    if controlled is not None:
+        import closer_data_only_execution as execution
+        import closer_role_qualification as roles
+
+        if profile is None or roles.profile_identity(profile) != controlled.profile:
+            raise ValueError("registered execution profile drifted during controlled preparation")
+        expected_argv = execution.expected_argv(
+            argv[0], controlled.profile, limits=controlled.limits
+        )
+        if argv not in (expected_argv, expected_argv[:-4]):
+            raise ValueError("adapter argv differs from controlled execution contract")
+        argv = expected_argv
+        sources = {
+            "adapters.py": _controlled_module_sha(adapters),
+            "dispatcher.py": _controlled_module_sha(sys.modules[__name__]),
+            "closer_data_only_execution.py": _controlled_module_sha(execution),
+        }
+        controlled_timeout = remaining_request_time()
+        if controlled_timeout is None or controlled_timeout <= 0:
+            raise ValueError("controlled request window expired before log allocation")
+        controlled.execution = execution.validate_launch(
+            agent=agent,
+            profile=controlled.profile,
+            binary_path=argv[0],
+            binary_sha256=adapters.DATA_ONLY_CLAUDE_SHA256,
+            argv=argv,
+            env=controlled.env,
+            cwd=str(proc_cwd),
+            private_root=str(controlled.root),
+            response_protocol=execution.NATIVE_JSON,
+            source_sha256=sources,
+            limits=controlled.limits,
+            prompt=prepared_prompt,
+            timeout_seconds=controlled_timeout,
+        )
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
         _align_gemini_print_timeout(argv, timeout)
@@ -3179,9 +3612,13 @@ def offload(
             argv = adapters.apply_write_boundary(agent, argv, *boundary)
         except Exception as exc:
             return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
-    auth_prelude = _auth_prelude(agent)
+    auth_prelude = "" if controlled is not None else _auth_prelude(agent)
     try:
-        agent_prelude = muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
+        agent_prelude = (
+            ""
+            if controlled is not None
+            else muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
+        )
     except StorageBlocked as exc:
         if muse_prompt is not None:
             muse_prompt.unlink(missing_ok=True)
@@ -3197,7 +3634,11 @@ def offload(
             "next_trigger": "reconcile_owned_storage_context",
         }
     wrapped = (
-        f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
+        ""
+        if controlled is not None
+        else (
+            f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
+        )
     )
     stream_prompt = (
         prepared_prompt
@@ -3210,7 +3651,7 @@ def offload(
         transport_bytes = transport_payload.encode("utf-8")
         request_metadata = {
             "transport": (
-                "claude-data-only-text-stdin"
+                "claude-native-json-stdin/v1"
                 if data_only
                 else "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
             ),
@@ -3224,6 +3665,8 @@ def offload(
                 else {}
             ),
         }
+        if controlled is not None:
+            request_metadata["execution"] = controlled.execution
     else:
         request_metadata = None
     target = f"offload:{run_cwd}"
@@ -3419,8 +3862,12 @@ def offload(
             probe: dict[str, str | None] = (
                 {"model": observed_model, "reason": None}
                 if observed_model
-                else adapters.cli_reported_model(
-                    agent, run_cwd, started_ts=started_ts, log_file=str(logf)
+                else (
+                    {"model": None, "reason": "controlled native model identity unavailable"}
+                    if controlled is not None
+                    else adapters.cli_reported_model(
+                        agent, run_cwd, started_ts=started_ts, log_file=str(logf)
+                    )
                 )
             )
             resolved_model = probe.get("model")
@@ -3500,8 +3947,10 @@ def offload(
         return errors
 
     def _retain_attempt_result(result: dict) -> None:
+        if controlled is not None and not result.get("outcome_uncertain"):
+            _controlled_cleanup_result(controlled, result)
         try:
-            _retain_provider_result(
+            receipt_path = _retain_provider_result(
                 logf,
                 result,
                 profile_id=effective_profile_id,
@@ -3511,6 +3960,17 @@ def offload(
                 run_cwd=run_cwd,
                 process_cwd=proc_cwd,
             )
+            if controlled is not None:
+                with receipt_path.open("rb") as receipt_stream:
+                    receipt_bytes = receipt_stream.read(1_048_577)
+                    receipt_stat = os.fstat(receipt_stream.fileno())
+                if len(receipt_bytes) > 1_048_576 or receipt_stat.st_size != len(receipt_bytes):
+                    raise ValueError("persisted provider receipt exceeds bound or changed")
+                result["provider_result_ref"] = {
+                    "path": str(receipt_path),
+                    "sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+                    "bytes": len(receipt_bytes),
+                }
         except (OSError, ValueError, TypeError) as exc:
             actual_exit = result.get("raw_exit", result.get("exit"))
             held = {
@@ -3624,7 +4084,59 @@ def offload(
             attempt_timeout = remaining_request_time()
             if attempt_timeout is not None and attempt_timeout <= 0:
                 raise subprocess.TimeoutExpired("owned offload request", 0)
-            if process_started_callback is None:
+            if controlled is not None:
+                import closer_data_only_execution as execution
+
+                if stream_path is None:
+                    raise ValueError("controlled stdin payload is missing")
+                if (
+                    controlled.execution is None
+                    or request_metadata is None
+                    or attempt_timeout is None
+                ):
+                    raise ValueError("controlled execution binding unavailable")
+                controlled.execution = execution.validate_launch(
+                    agent=agent,
+                    profile=controlled.profile,
+                    binary_path=argv[0],
+                    binary_sha256=adapters.DATA_ONLY_CLAUDE_SHA256,
+                    argv=argv,
+                    env=controlled.env,
+                    cwd=str(proc_cwd),
+                    private_root=str(controlled.root),
+                    response_protocol=execution.NATIVE_JSON,
+                    source_sha256=controlled.execution["binding"]["source_sha256"],
+                    limits=controlled.limits,
+                    prompt=prepared_prompt,
+                    timeout_seconds=attempt_timeout,
+                )
+                request_metadata["execution"] = controlled.execution
+                with stream_path.open("rb") as private_stdin:
+                    proc = run_observed_offload(
+                        argv,
+                        callback=process_started_callback,
+                        observation={
+                            "run_id": run_id,
+                            "agent": agent,
+                            "profile_id": profile_id,
+                            "provider_argv": list(argv),
+                            "operation_id": controlled.operation_id,
+                            "task_type": task_type,
+                            "finite_frontier_id": finite_frontier_id,
+                            "finite_frontier_target": finite_frontier_target,
+                            "data_only_execution_binding_sha256": controlled.execution[
+                                "binding_sha256"
+                            ],
+                        },
+                        cwd=str(proc_cwd),
+                        timeout=attempt_timeout,
+                        stdin=private_stdin,
+                        env=controlled.env,
+                        output_limit=controlled.limits["max_native_result_bytes"],
+                        finished_callback=process_finished_callback,
+                        starting_callback=process_starting_callback,
+                    )
+            elif process_started_callback is None:
                 proc = subprocess.run(
                     [
                         "bash",
@@ -3680,7 +4192,14 @@ def offload(
                 "agent": agent,
                 "exit": 70,
                 "raw_exit": exc.returncode,
-                "output": credential_redaction.redact(exc.stdout or ""),
+                "output": (
+                    "" if controlled is not None else credential_redaction.redact(exc.stdout or "")
+                ),
+                **(
+                    {"partial_native_stdout": credential_redaction.redact(exc.stdout or "")}
+                    if controlled is not None
+                    else {}
+                ),
                 "stderr_tail": credential_redaction.redact(exc.stderr or "")[-800:],
                 "error": credential_redaction.redact(str(exc)),
                 "run_id": run_id,
@@ -3786,6 +4305,21 @@ def offload(
                 "isolated_cwd": str(run_cwd) if isolate else None,
                 "run_id": run_id,
                 "log": str(logf),
+                **(
+                    {
+                        "process_started": controlled.observation is not None,
+                        "outcome_uncertain": controlled.observation is not None,
+                        "retry_safe": False,
+                        "process_observation": _public_process_observation(controlled.observation),
+                        **(
+                            {"finite_pool_fence": fence}
+                            if (fence := _finite_pool_fence(controlled.observation))
+                            else {}
+                        ),
+                    }
+                    if controlled is not None
+                    else {}
+                ),
             }
         except KeyboardInterrupt as interruption:
             error = "interrupted by orchestrator"
@@ -3841,6 +4375,120 @@ def offload(
                 getattr(proc, "args", argv), proc.returncode, stdout, stderr
             )
         attempt_stderr = proc.stderr or ""
+        if controlled is not None:
+            import closer_data_only_execution as execution
+            import transport_qualification
+            import transport_saved_result
+
+            native_text = proc.stdout or ""
+            observation = controlled.observation or {}
+            origin = {
+                "schema": "closer-data-only-runtime-origin/v1",
+                "source": "existing-dispatcher-observed-supervisor",
+                "operation_id": controlled.operation_id,
+                "operation_binding_source": "explicit_trusted_caller_must_match_expected_operation",
+                "run_id": run_id,
+                "pool_id": "claude-subscription",
+                "pool_reservation": controlled.pool_reservation,
+                "profile_id": profile_id,
+                "task_type": task_type,
+                "finite_frontier_id": finite_frontier_id,
+                "finite_frontier_target": finite_frontier_target,
+                "process_observation": _public_process_observation(observation),
+                "execution": controlled.execution,
+                "collector_sources": dict(controlled.native_sources),
+                "native_stdout_sha256": hashlib.sha256(native_text.encode()).hexdigest(),
+                "native_stdout_bytes": len(native_text.encode()),
+                "stdout_scope": "captured_UTF8_text_redacted_before_parse_and_retention",
+                "native_json": native_text,
+                "authority": False,
+                "classification_validated": False,
+            }
+            native_error = None
+            normalized = None
+            final_text = ""
+            try:
+                if proc.returncode != 0 or observation.get("cleanup_terminal") is not True:
+                    raise ValueError("native transport did not complete with positive cleanup")
+                if observation.get("borrowed_credential_output") or observation.get(
+                    "invalid_utf8_output"
+                ):
+                    raise ValueError("native output required credential or encoding redaction")
+                current_sources = {
+                    name: _controlled_module_sha(module)
+                    for name, module in (
+                        ("transport_saved_result.py", transport_saved_result),
+                        ("transport_qualification.py", transport_qualification),
+                    )
+                }
+                if current_sources != controlled.native_sources:
+                    raise ValueError("collector source drifted during observed invocation")
+                launch_sources = {
+                    "adapters.py": _controlled_module_sha(adapters),
+                    "dispatcher.py": _controlled_module_sha(sys.modules[__name__]),
+                    "closer_data_only_execution.py": _controlled_module_sha(execution),
+                }
+                if (
+                    controlled.execution is None
+                    or launch_sources != controlled.execution["binding"]["source_sha256"]
+                ):
+                    raise ValueError("controlled launch source drifted during invocation")
+                execution.validate_payload(
+                    native_text, limits=controlled.limits, kind="native_result"
+                )
+                normalized = transport_saved_result.normalize_claude_result(
+                    native_text,
+                    run_id=run_id,
+                    pool_id="claude-subscription",
+                    requested_model=controlled.profile["requested_model"],
+                    requested_effort=controlled.profile["reasoning_effort"],
+                )
+                native = transport_qualification.strict_final(native_text)
+                if (
+                    normalized["response"]["num_turns"] != controlled.limits["max_turns"]
+                    or native.get("permission_denials", []) != []
+                    or native["modelUsage"][controlled.profile["requested_model"]].get(
+                        "webSearchRequests", 0
+                    )
+                    != 0
+                    or any(k in native for k in ("resume", "resumed", "resumed_session_id"))
+                ):
+                    raise ValueError("native turn/tool/resume evidence differs from contract")
+                final_text = normalized["response"]["final"]
+                origin["final"] = execution.validate_payload(
+                    final_text, limits=controlled.limits, kind="final"
+                )
+                origin["normalized_native_result"] = normalized
+                observed_model = normalized["observed"]["model"]
+                observed_model_source = normalized["observed"]["identity_source"]
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                native_error = "controlled native result rejected:" + type(exc).__name__
+            with logf.open("a") as fh:
+                fh.write("[controlled native JSON; redacted]\n" + native_text + "\n")
+            return {
+                "agent": agent,
+                "exit": 70 if native_error else 0,
+                "raw_exit": proc.returncode,
+                "output": "" if native_error else final_text,
+                "error": native_error,
+                "model": model,
+                "usage": {},
+                "request_metadata": request_metadata,
+                "data_only_origin": origin,
+                "stderr_tail": (proc.stderr or "")[-800:],
+                "cwd": str(run_cwd),
+                "process_cwd": str(proc_cwd),
+                "run_id": run_id,
+                "log": str(logf),
+                "process_started": True,
+                "process_observation": _public_process_observation(observation),
+                **_public_model_metadata(agent, model, observed_model, observed_model_source),
+                **(
+                    {"outcome_uncertain": True, "outcome_status": "uncertain", "retry_safe": False}
+                    if native_error
+                    else {}
+                ),
+            }
         # THE RUN REPORTED ITS OWN MODEL. When the transport asked for stream-json, the tool's
         # `system/init` event names the model that actually served -- `gen_ai.response.model` in
         # OpenTelemetry's terms, as opposed to the `--model` we requested. Read it here, from THIS
@@ -4046,10 +4694,18 @@ def offload(
                         error="data-only private input cleanup failed",
                         cleanup_errors=data_only_cleanup_errors,
                     )
-                if out.get("exit") != 0 and not (
-                    out.get("exit") == 2
-                    and out.get("process_started") is False
-                    and out.get("unsupported_assessment_tool_boundary") is True
+                if (
+                    out.get("exit") != 0
+                    and not (
+                        controlled is not None
+                        and out.get("process_started") is False
+                        and out.get("outcome_uncertain") is False
+                    )
+                    and not (
+                        out.get("exit") == 2
+                        and out.get("process_started") is False
+                        and out.get("unsupported_assessment_tool_boundary") is True
+                    )
                 ):
                     out.update(outcome_uncertain=True, outcome_status="uncertain", retry_safe=False)
             _retain_attempt_result(out)

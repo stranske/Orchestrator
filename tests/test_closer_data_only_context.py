@@ -4,6 +4,7 @@ import copy
 from contextlib import contextmanager
 
 import pytest
+from test_closer_reasoning_boundary import controlled_world as controlled_world
 from test_closer_reasoning_boundary import native_world as native_world
 
 import adapters
@@ -437,7 +438,7 @@ def test_native_interpret_capacity_exhaustion_retains_capacity_recheck(native_wo
 
 @pytest.mark.parametrize("uncertain", [False, True])
 def test_native_interpret_maps_only_proven_no_spawn_transport_refusal(
-    native_world, capsys, monkeypatch, uncertain
+    native_world, controlled_world, capsys, monkeypatch, uncertain
 ):
     import json
 
@@ -445,12 +446,14 @@ def test_native_interpret_maps_only_proven_no_spawn_transport_refusal(
     calls = []
 
     def refused(*_a, **_kw):
+        # Consumer-mapping fixture: this boundary creates no process/result and
+        # must not invent a run identity or claim a qualified provider response.
         calls.append("offload")
         return {
             "agent": "claude",
             "exit": 70 if uncertain else 2,
             "output": "",
-            "run_id": "synthetic-no-spawn-refusal",
+            "run_id": None,
             "error": "qualification changed",
             "process_started": False,
             "unsupported_assessment_tool_boundary": True,
@@ -465,17 +468,23 @@ def test_native_interpret_maps_only_proven_no_spawn_transport_refusal(
     row = json.loads(shard.read_text())["frontiers"][w.frontier["frontier_id"]]["items"][
         w.snapshot["target"]
     ]
-    result = row["results"]["interpret"]
-    assert calls == ["offload"] and w.events["effect"] == 0
+    assert calls == ["offload"] and w.events["provider"] == w.events["effect"] == 0
+    assert controlled_world.events["auth"] == 0
+    assert controlled_world.events["started"] == []
+    assert controlled_world.events["ledger"] == []
+    assert not controlled_world.capture.exists()
+    assert not list((controlled_world.root / "logs").rglob("*.json"))
     if uncertain:
-        assert result["classification"] == "provider_outcome_uncertain"
-        assert row["status"] == "unknown"
+        # An unreceipted ambiguous transport mapping is not proof of a known
+        # provider run, and cannot be promoted to a recoverable no-start hold.
+        assert "interpret" not in row["results"]
+        assert row["status"] == row["stage_status"] == "unknown"
+        assert row["deferred_next_trigger"] == "manual_reconciliation"
+        assert "uncertainty lacks a valid actual run receipt" in row["error"]
     else:
+        result = row["results"]["interpret"]
         assert result["classification"] == "assessment_transport_unavailable"
-        assert (
-            result["pending_evidence"]["transport_refusal"]["run_id"]
-            == "synthetic-no-spawn-refusal"
-        )
+        assert result["pending_evidence"]["transport_refusal"]["run_id"] is None
         assert (
             result["next_trigger"] == "qualified data-only assessment transport becomes available"
         )
