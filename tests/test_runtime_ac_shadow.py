@@ -1197,6 +1197,8 @@ def post_merge_case(private_brain, monkeypatch):
 
     checkout = private_brain / "merged-checkout"
     _shadow_git_repo(checkout)
+    # Recheck environment setup is tested separately; these sweep fixtures stay offline.
+    (checkout / ".venv").symlink_to(sys.prefix, target_is_directory=True)
     (checkout / "tests").mkdir()
     (checkout / "tests/test_merged.py").write_text(
         "def test_delivered():\n    assert False, 'delivery missing on merged tip'\n"
@@ -1262,6 +1264,8 @@ def post_merge_case(private_brain, monkeypatch):
 
     def gh(args):
         calls.append(args)
+        if args == ["gh", "api", "repos/owner/repo/issues/1"]:
+            return {"state": "closed"}, None
         if args[1:3] == ["pr", "view"]:
             return {
                 "state": "MERGED",
