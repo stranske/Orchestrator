@@ -354,14 +354,15 @@ def create_successor(
                     # observation witness is not the identity of the original
                     # accepted request/result. Preserve the first full proof
                     # and frozen successor when only that projection changes.
-                    def identity(key: str, value: Any) -> Any:
+                    def terminal_identity(key: str, value: Any) -> Any:
                         if key == "accepted_terminal" and isinstance(value, Mapping):
                             return {k: v for k, v in value.items() if k != "substantive_witness"}
                         return value
 
                     if (
                         any(
-                            identity(key, recorded[key]) != identity(key, causal[key])
+                            terminal_identity(key, recorded[key])
+                            != terminal_identity(key, causal[key])
                             for key in causal
                             if key != "fresh_binding"
                         )
