@@ -260,25 +260,28 @@ def test_actual_nonpass_accounting_keeps_every_finding_and_raw_verdict(tmp_path)
     assert snap["verifier"]["verdict"] == "NON_PASS"
 
 
-def test_actual_interpret_callback_delegates_complete_production_prompt(tmp_path, monkeypatch):
+def test_actual_interpret_renders_complete_prompt_before_unqualified_refusal(tmp_path, monkeypatch):
     delivery = OfflineDelivery(tmp_path, monkeypatch)
     callbacks, context = callbacks_for(delivery, monkeypatch)
     render = contracts.render_classification_prompt
     captured = []
 
     def observed(mandatory, **kwargs):
-        captured.append((copy.deepcopy(mandatory), copy.deepcopy(kwargs)))
-        return render(mandatory, **kwargs)
+        rendered = render(mandatory, **kwargs)
+        captured.append((copy.deepcopy(mandatory), copy.deepcopy(kwargs), rendered))
+        return rendered
 
     monkeypatch.setattr(contracts, "render_classification_prompt", observed)
     result = callbacks["interpret"](TARGET, context)
-    assert result["integration_status"] == "accepted", result
-    assert len(captured) == len(delivery.provider_calls) == 1
-    mandatory, kwargs = captured[0]
-    assert delivery.provider_calls[0] == render(mandatory, **kwargs)
+    assert result["classification"] == "assessment_transport_unavailable", result
+    assert result["pending_kind"] == "external_event"
+    assert len(captured) == 1 and delivery.provider_calls == []
+    mandatory, kwargs, rendered = captured[0]
+    assert rendered == render(mandatory, **kwargs)
     assert mandatory["target"] == TARGET
     assert mandatory["data_only_evidence"]["sections"]["source"]["content_supplied"] is True
-    assert result["proposal"]["decision"]["criteria"]
+    assert result["pending_evidence"]["target"] == TARGET
+    assert result["authority"] is False
 
 
 @pytest.mark.parametrize(

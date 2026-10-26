@@ -85,6 +85,464 @@ def _parse_low_proposal(output):
     return closer_model_contracts.parse_low_proposal(output)
 
 
+class ControlledOriginUnavailable(ValueError):
+    """The original data-only response remains owned, with no semantic credit."""
+
+
+def _contract_digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
+
+def _controlled_model_contract(task_type):
+    """Bind actual installed production sources, without qualifying any profile."""
+    import importlib
+
+    import closer_role_qualification as roles
+
+    role = roles.TASK_ROLES.get(task_type)
+    if role not in {roles.BOUNDED_CLASSIFICATION, roles.STRONG_CRITERION_ADJUDICATION}:
+        raise ControlledOriginUnavailable("unsupported controlled Closer role")
+    sources = {}
+    for name in (
+        "closer_dispatcher",
+        "dispatcher",
+        "adapters",
+        "closer_data_only_execution",
+        "transport_saved_result",
+        "transport_qualification",
+        "closer_model_contracts",
+        "closer_execution_contracts",
+        "closer_disposition",
+        "closer_evidence",
+    ):
+        module = importlib.import_module(name)
+        path = Path(module.__file__)
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 8_000_000:
+                raise ControlledOriginUnavailable("controlled source identity unavailable")
+            raw = stream.read(info.st_size + 1)
+        if len(raw) != info.st_size:
+            raise ControlledOriginUnavailable("controlled source changed during read")
+        sources[name + ".py"] = hashlib.sha256(raw).hexdigest()
+    import closer_execution_contracts as contracts
+
+    descriptor = {
+        "schema": "closer-production-model-contract/v1",
+        "role": role,
+        "sources": sources,
+        "model_contract": (
+            closer_model_contracts.classification_contract_descriptor(
+                source_sha256=sources["closer_model_contracts.py"]
+            )
+            if task_type == "closer_interpret"
+            else {
+                **closer_model_contracts.STRONG_CONTRACT_ENTRYPOINTS,
+                "evidence_policy": contracts.ADJUDICATION_EVIDENCE_VERSION,
+            }
+        ),
+        "authority": False,
+    }
+    return {**descriptor, "contract_sha256": _contract_digest(descriptor)}
+
+
+def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier, target, prompt):
+    """Use only reviewed role-record limits and the currently held original lease."""
+    import closer_claude_auth
+    import closer_data_only_execution as execution
+    import closer_resources
+    import closer_role_qualification as roles
+    import dispatcher
+    import execution_profiles
+
+    profile = execution_profiles.get_profile(profile_id)
+    role = roles.TASK_ROLES.get(task_type)
+    record = roles.qualified_record(profile, role)
+    if record is None or not roles.is_runtime_qualified(profile, role):
+        raise ControlledOriginUnavailable("reviewed runtime role qualification unavailable")
+    descriptor = _controlled_model_contract(task_type)
+    limits = execution.validate_limits(record.get("execution_limits"))
+    if (
+        record.get("production_model_contract") != descriptor
+        or limits["model_contract_sha256"] != descriptor["contract_sha256"]
+        or limits["role"] != role
+    ):
+        raise ControlledOriginUnavailable("reviewed production execution contract unavailable")
+    execution.validate_payload(prompt, limits=limits, kind="prompt")
+    if (
+        not isinstance(frontier, dict)
+        or not isinstance(frontier.get("frontier_id"), str)
+        or not frontier["frontier_id"]
+        or not TARGET.fullmatch(str(target))
+        or not isinstance(operation_id, str)
+        or not operation_id
+        or len(operation_id) > 256
+        or any(ord(char) < 32 for char in operation_id)
+    ):
+        raise ControlledOriginUnavailable("original controlled operation binding unavailable")
+    binding = {"frontier_id": frontier["frontier_id"], "target": target}
+    if closer_resources.finite_pool_current_binding() != binding:
+        raise ControlledOriginUnavailable("original controlled pool binding unavailable")
+    slots = [
+        slot
+        for slot in closer_resources._pool_slots()
+        if slot["record"].get("lane") == hashlib.sha256(b"claude-subscription").hexdigest()
+    ]
+    if len(slots) != 1 or slots[0]["handle"].closed:
+        raise ControlledOriginUnavailable("original Claude reservation unavailable")
+    reservation = {
+        key: slots[0]["record"][key]
+        for key in ("reservation_id", "lane", "frontier_id", "target", "agent", "profile_id")
+    }
+    if any(
+        reservation[key] != value
+        for key, value in {**binding, "agent": "claude", "profile_id": profile_id}.items()
+    ):
+        raise ControlledOriginUnavailable("original Claude reservation differs")
+    observed = {}
+
+    def started(observation):
+        _accept_owned_transport(observation)
+        observed["started"] = dispatcher._public_process_observation(observation)
+
+    def finished(observation):
+        _finish_owned_transport(observation)
+        observed["finished"] = dispatcher._public_process_observation(observation)
+
+    options = {
+        "data_only_limits": limits,
+        "trusted_auth_supplier": lambda: closer_claude_auth.borrow_claude_oauth_token(
+            real_home=dispatcher.REAL_HOME
+        ),
+        "data_only_operation_id": operation_id,
+        "finite_frontier_id": frontier["frontier_id"],
+        "finite_frontier_target": target,
+        "process_starting_callback": closer_resources.finite_pool_prepare_request,
+        "process_started_callback": started,
+        "process_finished_callback": finished,
+    }
+    expected = {
+        "schema": "closer-controlled-response-expectation/v1",
+        "operation_id": operation_id,
+        "task_type": task_type,
+        "profile_id": profile_id,
+        "profile_identity": roles.profile_identity(profile),
+        "finite_frontier_id": frontier["frontier_id"],
+        "finite_frontier_target": target,
+        "pool_reservation": reservation,
+        "production_model_contract": descriptor,
+        "limits": limits,
+        "prompt": execution.validate_payload(prompt, limits=limits, kind="prompt"),
+        "qualification_id": record["qualification_id"],
+        "qualification_record_sha256": _contract_digest(record),
+    }
+    return options, expected, observed
+
+
+def _read_controlled_receipt(ref, root):
+    """Read only one bounded physical immutable dispatcher receipt."""
+    if not isinstance(ref, dict) or type(ref.get("bytes")) is not int:
+        raise ControlledOriginUnavailable("original provider receipt unavailable")
+    path = Path(ref.get("path", ""))
+    if (
+        path.is_symlink()
+        or not path.resolve().is_relative_to(Path(root).resolve())
+        or not 0 < ref["bytes"] <= 512 * 1024
+    ):
+        raise ControlledOriginUnavailable("original provider receipt confinement differs")
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size != ref["bytes"]:
+            raise ControlledOriginUnavailable("original provider receipt size differs")
+        raw = stream.read(ref["bytes"] + 1)
+    if len(raw) != ref["bytes"] or hashlib.sha256(raw).hexdigest() != ref.get("sha256"):
+        raise ControlledOriginUnavailable("original provider receipt bytes differ")
+    return _strict_response_json(raw.decode())
+
+
+def _validate_controlled_result(result, expected, observed, *, receipt_root):
+    """Authenticate local observed execution before existing semantic validators.
+
+    A restarted caller must obtain expected/observed from its original sealed
+    stage row. Caller declarations or this local proof do not authenticate a
+    remote Workflows decision or grant acceptance authority.
+    """
+    import closer_data_only_execution as execution
+    import transport_qualification
+    import transport_saved_result
+
+    try:
+        origin = result["data_only_origin"]
+        receipt = _read_controlled_receipt(result.get("provider_result_ref"), receipt_root)
+        retained = receipt["result"]
+        descriptor = expected["production_model_contract"]
+        limits = execution.validate_limits(expected["limits"])
+        observation = observed.get("finished")
+        if not (
+            expected.get("schema") == "closer-controlled-response-expectation/v1"
+            and type(result.get("exit")) is int
+            and result["exit"] == 0
+            and result.get("raw_exit", 0) == 0
+            and result.get("process_started") is True
+            and result.get("outcome_uncertain") is not True
+            and result.get("retry_safe") is not False
+            and result.get("semantic_promotion_blocked") is not True
+            and result.get("data_only_private_runtime", {}).get("cleanup")
+            == "removed_owned_private_runtime"
+            and retained.get("data_only_private_runtime") == result.get("data_only_private_runtime")
+            and retained.get("semantic_promotion_blocked") is not True
+            and isinstance(result.get("run_id"), str)
+            and bool(result["run_id"])
+            and receipt.get("schema") == "offload-provider-result/v1"
+            and receipt.get("full_result_retained") is True
+            and receipt.get("outcome_uncertain") is False
+            and receipt.get("run_id") == result["run_id"]
+            and receipt.get("profile_id") == expected["profile_id"]
+            and receipt.get("retained_result_sha256")
+            == hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest()
+            and retained.get("run_id") == result["run_id"]
+            and retained.get("output") == result.get("output")
+            and retained.get("data_only_origin") == origin
+            and origin.get("schema") == "closer-data-only-runtime-origin/v1"
+            and origin.get("source") == "existing-dispatcher-observed-supervisor"
+            and origin.get("authority") is False
+            and origin.get("classification_validated") is False
+            and origin.get("pool_id") == "claude-subscription"
+            and all(
+                origin.get(key) == expected[key]
+                for key in (
+                    "operation_id",
+                    "task_type",
+                    "profile_id",
+                    "finite_frontier_id",
+                    "finite_frontier_target",
+                    "pool_reservation",
+                )
+            )
+            and origin.get("run_id") == result["run_id"]
+            and isinstance(observed.get("started"), dict)
+            and isinstance(observation, dict)
+            and observation.get("cleanup_terminal") is True
+            and observation.get("source") == "trusted-popen-transport/v1"
+            and type(observation.get("pid")) is int
+            and observation["pid"] > 1
+            and observation.get("process_group") == observation["pid"]
+            and isinstance(observation.get("os_started"), str)
+            and bool(observation["os_started"])
+            and observation.get("run_id") == result["run_id"]
+            and origin.get("process_observation")
+            == observation
+            == result.get("process_observation")
+            and all(
+                observed["started"].get(key) == observation.get(key)
+                for key in ("pid", "process_group", "os_started", "run_id")
+            )
+            and descriptor == _controlled_model_contract(expected["task_type"])
+            and limits["model_contract_sha256"] == descriptor["contract_sha256"]
+        ):
+            raise ControlledOriginUnavailable("original controlled response identity differs")
+        launch = origin["execution"]
+        config, binding = launch["config"], launch["binding"]
+        sources = descriptor["sources"]
+        expected_argv = execution.expected_argv(
+            binding["binary_path"], expected["profile_identity"], limits=limits
+        )
+        expected_environment = execution.isolated_environment(
+            config["private_root"],
+            cwd=config["cwd"],
+            existing_oauth_token="synthetic-placeholder-not-a-borrowed-credential",
+            limits=limits,
+        )
+        expected_environment["CLAUDE_CODE_OAUTH_TOKEN"] = "REDACTED"
+        if not (
+            launch["binding_sha256"] == _contract_digest(binding)
+            and binding.get("schema") == execution.SCHEMA
+            and binding.get("agent") == "claude"
+            and binding.get("binary_sha256") == execution.CLAUDE_BINARY_SHA256
+            and config.get("argv") == expected_argv
+            and binding.get("argv_sha256") == _contract_digest(expected_argv)
+            and config.get("environment") == expected_environment
+            and binding.get("environment_sha256") == _contract_digest(expected_environment)
+            and config.get("controls") == execution.environment_controls(limits)
+            and config.get("control_presence")
+            == {key: True for key in execution.environment_controls(limits)}
+            and config.get("response_protocol")
+            == binding.get("response_protocol")
+            == execution.NATIVE_JSON
+            and config.get("prompt_transport") == "stdin"
+            and config.get("automatic_retries") == 0
+            and config.get("fallbacks") == 0
+            and type(config.get("timeout_seconds")) in (int, float)
+            and 0 < config["timeout_seconds"] <= limits["timeout_seconds"]
+            and binding.get("config_sha256") == _contract_digest(config)
+            and binding.get("profile_identity") == expected["profile_identity"]
+            and binding.get("source_sha256")
+            == {
+                name: sources[name]
+                for name in ("adapters.py", "dispatcher.py", "closer_data_only_execution.py")
+            }
+            and origin.get("collector_sources")
+            == {
+                name: sources[name]
+                for name in ("transport_saved_result.py", "transport_qualification.py")
+            }
+            and binding.get("model_contract_sha256") == descriptor["contract_sha256"]
+            and config.get("limits") == limits
+            and config.get("limits_sha256")
+            == binding.get("limits_sha256")
+            == _contract_digest(limits)
+            and config.get("prompt") == expected["prompt"]
+            and binding.get("prompt_sha256") == expected["prompt"]["sha256"]
+            and origin.get("native_stdout_sha256")
+            == hashlib.sha256(origin["native_json"].encode()).hexdigest()
+            and origin.get("native_stdout_bytes") == len(origin["native_json"].encode())
+            and origin.get("final")
+            == execution.validate_payload(result["output"], limits=limits, kind="final")
+            and origin.get("normalized_native_result", {}).get("response", {}).get("final")
+            == result["output"]
+        ):
+            raise ControlledOriginUnavailable("original controlled execution proof differs")
+        execution.validate_payload(origin["native_json"], limits=limits, kind="native_result")
+        normalized = transport_saved_result.normalize_claude_result(
+            origin["native_json"],
+            run_id=result["run_id"],
+            pool_id="claude-subscription",
+            requested_model=expected["profile_identity"]["requested_model"],
+            requested_effort=expected["profile_identity"]["reasoning_effort"],
+        )
+        native = transport_qualification.strict_final(origin["native_json"])
+        if (
+            normalized != origin.get("normalized_native_result")
+            or native.get("num_turns") != limits["max_turns"]
+            or native.get("permission_denials", []) != []
+            or any(key in native for key in ("resume", "resumed", "resumed_session_id"))
+            or any(
+                value.get("webSearchRequests", 0) != 0 for value in native["modelUsage"].values()
+            )
+        ):
+            raise ControlledOriginUnavailable("original native response contract differs")
+        return {
+            "schema": "closer-controlled-response-proof/v1",
+            "expected": expected,
+            "observed": observed,
+            "provider_result_ref": result["provider_result_ref"],
+            "run_id": result["run_id"],
+            "authority": False,
+        }
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
+        raise ControlledOriginUnavailable(
+            "original controlled response proof unavailable"
+        ) from error
+
+
+def _controlled_prestart_refusal():
+    return {
+        "exit": 2,
+        "output": "",
+        "run_id": None,
+        "process_started": False,
+        "outcome_uncertain": False,
+        "unsupported_assessment_tool_boundary": True,
+        "error": "reviewed controlled execution contract or original lease unavailable",
+    }
+
+
+def _controlled_offload(
+    *,
+    agent,
+    prompt,
+    profile_id,
+    task_type,
+    operation_id,
+    frontier,
+    target,
+    basis,
+    deadline,
+    offload=None,
+    **options,
+):
+    """Run the existing broker once, then authenticate its original local proof."""
+    import closer_resources
+    import dispatcher
+
+    try:
+        controlled, expected, observed = _controlled_launch_options(
+            profile_id=profile_id,
+            task_type=task_type,
+            operation_id=operation_id,
+            frontier=frontier,
+            target=target,
+            prompt=prompt,
+        )
+        if (
+            basis.get("revision") != frontier["bindings"][target]["revision"]
+            or basis.get("target") != target
+            or not SHA.fullmatch(str(basis.get("head")))
+            or not SHA.fullmatch(str(basis.get("base")))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(basis.get("packet_sha256")))
+        ):
+            raise ControlledOriginUnavailable("original scoped basis differs")
+        expected["basis"] = dict(basis)
+        remaining = float(deadline) - time.time()
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise ControlledOriginUnavailable("original controlled deadline expired")
+    except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        closer_resources.finite_pool_no_start()
+        return _controlled_prestart_refusal()
+    result = (offload or dispatcher.offload)(
+        agent,
+        prompt,
+        profile_id=profile_id,
+        task_type=task_type,
+        data_only=True,
+        max_network_retries=0,
+        subject_id=target,
+        timeout=min(remaining, expected["limits"]["timeout_seconds"]),
+        request_deadline_mono=time.monotonic() + remaining,
+        **controlled,
+        **options,
+    )
+    if not isinstance(result, dict) or result.get("exit") != 0:
+        return result
+    try:
+        proof = _validate_controlled_result(
+            result, expected, observed, receipt_root=dispatcher.DISPATCH_LOG_DIR
+        )
+    except ControlledOriginUnavailable:
+        # A true invocation completed. Missing local proof is reconciliation debt,
+        # never a pre-start refusal or permission to try another profile.
+        return {
+            **result,
+            "exit": 70,
+            "raw_exit": result.get("raw_exit", result["exit"]),
+            "outcome_uncertain": True,
+            "outcome_status": "uncertain",
+            "retry_safe": False,
+            "provider_completed": True,
+            "error": "original controlled execution proof unavailable; reconcile retained result",
+        }
+    return {**result, "_closer_controlled_proof": proof}
+
+
+def _revalidate_controlled_proof(proof, *, run_id, basis, receipt_root):
+    """Re-read the original sealed stage proof without launching a new worker."""
+    if not isinstance(proof, dict) or proof.get("schema") != "closer-controlled-response-proof/v1":
+        raise ControlledOriginUnavailable("original controlled stage proof unavailable")
+    expected = proof.get("expected") or {}
+    if expected.get("basis") != basis or proof.get("run_id") != run_id:
+        raise ControlledOriginUnavailable("original controlled stage binding differs")
+    retained = _read_controlled_receipt(proof.get("provider_result_ref"), receipt_root)["result"]
+    result = {**retained, "provider_result_ref": proof["provider_result_ref"]}
+    checked = _validate_controlled_result(
+        result, expected, proof.get("observed") or {}, receipt_root=receipt_root
+    )
+    if checked != proof:
+        raise ControlledOriginUnavailable("original controlled stage proof changed")
+    return result
+
+
 def _worker_proposal(result, *, agent):
     """Read only a completed provider deliverable, never tool output in its stream."""
     output = result.get("output")
@@ -136,6 +594,7 @@ def _worker_actual(result):
             "served_model",
             "served_model_status",
             "log",
+            "_closer_controlled_proof",
         )
     }
 
@@ -3282,28 +3741,52 @@ class Closer:
                     "finite_frontier_id": operation["finite_frontier"]["frontier_id"],
                     "finite_frontier_target": target,
                 }
-            result = (self.offload_fn or dispatcher.offload)(
-                chosen["agent"],
-                prompt,
-                cwd=workspace,
-                mode=chosen.get("mode") or selected_mode,
-                profile_id=chosen["profile_id"],
-                timeout=remaining,
-                isolate=True,
-                data_only=not repair,
-                task_type=(
-                    "closer_repair"
-                    if repair
-                    else (
-                        "closer_exception"
-                        if pipeline_reserved or action == "disposition"
-                        else "closer_interpret"
-                    )
-                ),
-                subject_id=target,
-                max_network_retries=0,
-                **request_options,
-            )
+            if not repair:
+                result = _controlled_offload(
+                    agent=chosen["agent"],
+                    prompt=prompt,
+                    profile_id=chosen["profile_id"],
+                    task_type="closer_exception" if action == "disposition" else "closer_interpret",
+                    operation_id=operation.get("id"),
+                    frontier=operation.get("finite_frontier"),
+                    target=target,
+                    deadline=operation["deadline"],
+                    offload=self.offload_fn,
+                    basis={
+                        "target": target,
+                        "revision": snapshot.get("revision"),
+                        "head": snapshot.get("head"),
+                        "base": snapshot.get("base"),
+                        "packet_sha256": (scoped_context.get("packet_ref") or {}).get("sha256"),
+                        "request_id": (scoped_request or {}).get("request_id"),
+                    },
+                    mode="assess",
+                    cwd=workspace,
+                    isolate=True,
+                )
+            else:
+                result = (self.offload_fn or dispatcher.offload)(
+                    chosen["agent"],
+                    prompt,
+                    cwd=workspace,
+                    mode=chosen.get("mode") or selected_mode,
+                    profile_id=chosen["profile_id"],
+                    timeout=remaining,
+                    isolate=True,
+                    data_only=not repair,
+                    task_type=(
+                        "closer_repair"
+                        if repair
+                        else (
+                            "closer_exception"
+                            if pipeline_reserved or action == "disposition"
+                            else "closer_interpret"
+                        )
+                    ),
+                    subject_id=target,
+                    max_network_retries=0,
+                    **request_options,
+                )
             fence = result.get("finite_pool_fence") if isinstance(result, dict) else None
             if fence and operation.get("finite_frontier") is not None:
                 import closer_resources
@@ -3365,6 +3848,16 @@ class Closer:
             basis={"revision": snapshot.get("revision"), "operation": operation.get("id")},
             capacity_context=route.get("capacity"),
         )
+        if (
+            result.get("unsupported_assessment_tool_boundary") is True
+            and result.get("process_started") is False
+            and result.get("outcome_uncertain") is False
+        ):
+            return {
+                **assessment_transport_pending(target, snapshot.get("revision")),
+                "advisory_only": True,
+                "worker": result,
+            }
         failure_details = str(result.get("error") or "") + "\n" + str(result.get("output") or "")
         if result.get("exit") != 0 and re.search(
             r"(?:model.*(?:not supported|not found|unavailable)|unsupported.*model|quota|rate.limit|authentication)",
@@ -5223,21 +5716,55 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             retained_evidence={"kind": error.kind, "ref": error.ref},
         )
 
-    def full_interpretation(value):
-        if not isinstance(value, dict) or not value.get("proposal_ref"):
+    def full_interpretation(value, target, prep):
+        if not isinstance(value, dict):
             return value
-        proposal = json.loads(
-            completed_response_text(
-                value["proposal_ref"],
-                value.get("actual"),
-                "proposal_ref",
-                value.get("requested_agent"),
-                value.get("requested_profile"),
+        if value.get("proposal_ref"):
+            proposal = json.loads(
+                completed_response_text(
+                    value["proposal_ref"],
+                    value.get("actual"),
+                    "proposal_ref",
+                    value.get("requested_agent"),
+                    value.get("requested_profile"),
+                )
             )
-        )
-        if not isinstance(proposal, dict):
-            raise RuntimeError("retained worker proposal is not an object")
-        return {**value, "proposal": proposal}
+            if not isinstance(proposal, dict):
+                raise RuntimeError("retained worker proposal is not an object")
+            value = {**value, "proposal": proposal}
+        actual = value.get("actual") or {}
+        if value.get("requested_profile") or actual.get("run_id"):
+            import dispatcher
+
+            try:
+                proved = _revalidate_controlled_proof(
+                    actual.get("_closer_controlled_proof"),
+                    run_id=actual.get("run_id"),
+                    basis={
+                        "target": target,
+                        "revision": prep.get("revision"),
+                        "head": (prep.get("snapshot") or {}).get("head"),
+                        "base": (prep.get("snapshot") or {}).get("base"),
+                        "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                    },
+                    receipt_root=dispatcher.DISPATCH_LOG_DIR,
+                )
+                # Semantic integration reads the physically retained provider
+                # response, never a substituted inline proposal or summary.
+                value = {
+                    **value,
+                    "proposal": _worker_proposal(proved, agent=value.get("requested_agent")),
+                }
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                raise CompletedResponseReadError(
+                    error,
+                    actual,
+                    actual.get("_closer_controlled_proof"),
+                    "controlled_origin",
+                    value.get("requested_agent"),
+                    value.get("requested_profile"),
+                ) from error
+        return value
 
     def durable_verifier_label_event(target, prep, snapshot, action_state_path):
         if (
@@ -6232,7 +6759,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "substantive_needs": [],
                 "authority": False,
             }
-        import dispatcher
 
         producer_sha = prep.get("producer_sha256")
         drift_due = prep.get("drift_audit_candidate") is True and (
@@ -6342,28 +6868,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     deadline=context["deadline"], remaining_seconds=remaining
                 )
             provider_invocation_started = True
-            result = dispatcher.offload(
-                chosen["agent"],
-                prompt,
-                mode="assess",
+            result = _controlled_offload(
+                agent=chosen["agent"],
+                prompt=prompt,
                 profile_id=chosen["profile_id"],
-                timeout=max(5, min(120, int(remaining))),
                 task_type="closer_interpret",
-                subject_id=target,
-                max_network_retries=0,
-                data_only=True,
-                **(
-                    {
-                        "request_deadline_mono": time.monotonic() + max(0.0, remaining),
-                        "process_starting_callback": closer_resources.finite_pool_prepare_request,
-                        "process_started_callback": _accept_owned_transport,
-                        "process_finished_callback": _finish_owned_transport,
-                        "finite_frontier_id": finite_frontier["frontier_id"],
-                        "finite_frontier_target": target,
-                    }
-                    if finite_frontier is not None
-                    else {}
-                ),
+                operation_id=context.get("work_key"),
+                frontier=finite_frontier,
+                target=target,
+                deadline=context["deadline"],
+                basis={
+                    "target": target,
+                    "revision": prep.get("revision"),
+                    "head": snap.get("head"),
+                    "base": snap.get("base"),
+                    "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                },
+                mode="assess",
             )
             fence = result.get("finite_pool_fence") if isinstance(result, dict) else None
             if fence and finite_frontier is not None:
@@ -6892,7 +7413,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # shed-marker, workspace and no-retry guards. This is only for substantive need.
         prep = effective_preparation(context)
         try:
-            interpreted = full_interpretation(context.get("interpret", {}))
+            interpreted = full_interpretation(context.get("interpret", {}), target, prep)
         except CompletedResponseReadError as error:
             return readback_hold(error, target, prep, context)
         exception_snapshot, _packet = full_snapshot(prep)
@@ -7067,6 +7588,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             )
             if uncertain is not None:
                 return uncertain
+        if (
+            isinstance(result, dict)
+            and result.get("status") == "pending"
+            and isinstance(worker_row, dict)
+            and worker_row.get("unsupported_assessment_tool_boundary") is True
+            and worker_row.get("process_started") is False
+        ):
+            return result
         if isinstance(worker_row, dict) and worker_row.get("exit") == 0:
             strong_json = _worker_proposal(worker_row, agent=route_agent)
             if strong_json:
@@ -7204,7 +7733,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         current.verifier_archive_root = backend.verifier_archive_root
         if finite_frontier is not None:
             current.finite_frontier = finite_frontier
-        interpreted = full_interpretation(context.get("interpret", {}))
+        interpreted = full_interpretation(context.get("interpret", {}), target, prep)
         if (
             isinstance(interpreted, dict)
             and interpreted.get("classification") == "deterministic_close_source"
@@ -7329,10 +7858,36 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     strong.get("requested_agent"),
                     strong.get("requested_profile"),
                 )
-                scoped_response = _worker_proposal(
-                    {**worker, "output": output},
-                    agent=strong.get("requested_agent") or "codex",
-                )
+                import dispatcher
+
+                try:
+                    strong_proof = (strong.get("actual") or {}).get("_closer_controlled_proof")
+                    original_basis = (strong_proof or {}).get("expected", {}).get("basis", {})
+                    proved = _revalidate_controlled_proof(
+                        strong_proof,
+                        run_id=(strong.get("actual") or {}).get("run_id"),
+                        basis={
+                            "target": target,
+                            "revision": prep.get("revision"),
+                            "head": snap.get("head"),
+                            "base": snap.get("base"),
+                            "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                            "request_id": original_basis.get("request_id"),
+                        },
+                        receipt_root=dispatcher.DISPATCH_LOG_DIR,
+                    )
+                    if proved.get("output") != output:
+                        raise ControlledOriginUnavailable("retained scoped response differs")
+                except (OSError, ValueError, TypeError, KeyError) as error:
+                    raise CompletedResponseReadError(
+                        error,
+                        strong.get("actual"),
+                        strong_proof,
+                        "controlled_origin",
+                        strong.get("requested_agent"),
+                        strong.get("requested_profile"),
+                    ) from error
+                scoped_response = _worker_proposal(proved, agent=strong.get("requested_agent"))
                 import closer_execution_contracts as contracts
 
                 try:
@@ -7364,6 +7919,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                             "high_risk_or_authority_finding_requires_existing_owner",
                             owner_required=True,
                         )
+                    if original_basis.get("request_id") != named_request.get("request_id"):
+                        raise contracts.ContractError("original_controlled_request_changed")
                     scoped_answer = contracts.validate_adjudication_response(
                         named_request,
                         scoped_response,
