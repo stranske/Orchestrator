@@ -600,6 +600,7 @@ def test_actual_normal_wrapper_and_controller_share_state_and_native_lease(
     # later, and native admission binds only the immutable admitted snapshot.
     discover(stamp=time.time())
     campaign.write_manifest(pin, manifest)
+    monkeypatch.setenv("PYTHONPATH", str(seams) + ":" + manifest["module_dir"])
     monkeypatch.setattr(campaign, "qualify", _REAL_QUALIFY)
     qualified = native.supervise_native(manifest, pin, budget_seconds=45)
     assert qualified["passed"] and campaign.qualify(manifest, root) == []
@@ -647,15 +648,46 @@ def test_actual_normal_wrapper_and_controller_share_state_and_native_lease(
         assert execution["phases"]["C"]["cleanup"]["exact_token_matched"] is True
         assert not (Path(os.environ["HANDOFF_DIR"]) / ".lane-closer.lock").exists()
         if ci_followup:
-            # Exact actual route presently stops at the inherited drift audit
-            # capacity gate. Retain that bounded failure, never invent a model
-            # qualification or a CI hold/release receipt to claim completion.
-            assert result["outcome"] == "unknown", result
-            receipts = list((root / "dispatch.json.pipeline.json.scoped/rounds").glob("*.json"))
-            assert len(receipts) == 1
-            retained = json.loads(receipts[0].read_bytes())["targets"][TARGET]
-            assert retained["deferred_reason"] == "worker_capacity"
-            assert obj.read()["generation"] == 1 and not obj.read().get("demand_continuations")
+            assert result["outcome"] in {"ok", "scoped_continuation"}, result
+            first_holds = obj.read().get("hold_followups") or {}
+            service.write_text(json.dumps({"complete": True}))
+            resumed = subprocess.run(
+                ["/bin/bash", str(wrapper), "closer"], capture_output=True, text=True, timeout=30
+            )
+            assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
+            doc = obj.read()
+            assert doc["generation"] == 2 and len(doc["demand_continuations"]) == 1, doc
+            origin = doc["demand_assignment"]
+            identity = native._campaign_identity(state_path, doc)
+            assert (
+                native._demand_assignment_bytes(
+                    manifest,
+                    origin,
+                    identity,
+                    continuations=doc["demand_continuations"],
+                    finite_frontier=cfg["finite_frontier"],
+                )[1]
+                == Path(origin["path"]).read_bytes()
+            )
+            with pytest.raises(RuntimeError, match="continuation"):
+                native._demand_assignment_bytes(
+                    manifest,
+                    origin,
+                    identity,
+                    continuations=doc["demand_continuations"] * 2,
+                    finite_frontier=cfg["finite_frontier"],
+                )
+            for hold_id, held in first_holds.items():
+                assert doc["hold_followups"][hold_id]["deadline"] == held["deadline"]
+                assert doc["hold_followups"][hold_id]["attempt_budget"] == held["attempt_budget"]
+            again = subprocess.run(
+                ["/bin/bash", str(wrapper), "closer"], capture_output=True, text=True, timeout=30
+            )
+            assert again.returncode == 0
+            assert (
+                obj.read()["generation"] == 2
+                and obj.read()["demand_continuations"] == doc["demand_continuations"]
+            )
             assert not (tmp_path / "provider-calls").exists()
             return
         old = subprocess.run(
@@ -1150,3 +1182,89 @@ def test_submitted_marker_survives_wake_cache_loss_without_retry(publisher):
     )
     assert outcome["status"] == "held" and len(calls) == 1
     assert obj.read()["demand_admission"] == receipt
+
+
+@pytest.mark.parametrize(
+    "case", ["delivery", "qualification", "policy", "native_owner", "foreign_path"]
+)
+def test_controller_services_only_pinned_communication_without_native_entry(
+    publisher, tmp_path, monkeypatch, case
+):
+    from test_closer_hold_escalation import world
+
+    import closer_hold_escalation as escalation
+    import closer_hold_followup as holds
+    import closer_native_observer as native
+
+    manifest, pin, root, _controller, state_path, _wrapper, *_ = publisher
+    scratch = tmp_path / "communication-fixture"
+    scratch.mkdir()
+    source_campaign, _minimal, _source_pin, route, _stamp = world(scratch, monkeypatch)
+    doc = source_campaign.read()
+    cfg = doc["worker_config"]
+    cfg.update(mechanism="native-handoff/v1", policy=manifest["policy"], runtime_manifest=str(pin))
+    doc["release_pin"] = manifest["package_digest"]
+    for hold in doc["hold_followups"].values():
+        hold.update(release_pin=doc["release_pin"], config_sha256=holds._digest(cfg))
+    obj = campaign.Campaign(state_path)
+    obj.update(lambda _doc: None, create=doc)
+    manifest["mechanism_contract"]["hold_escalation_route"] = route
+    manifest["hold_escalation_campaign_path"] = str(state_path)
+    if case == "foreign_path":
+        manifest["hold_escalation_campaign_path"] = str(source_campaign.path)
+    campaign.write_manifest(pin, manifest)
+    if case == "policy":
+        Path(next(iter(manifest["policy"]["toml_sha256"]))).write_text('status = "PAUSED"\n')
+    checks, deliveries = [], []
+    monkeypatch.setattr(
+        campaign,
+        "qualify",
+        lambda *_: checks.append(True) or (["not qualified"] if case == "qualification" else []),
+    )
+    actual_service = escalation.service
+
+    def service(*args, **kwargs):
+        assert len(args) == 3 and not kwargs  # service obtains fresh write clocks.
+        deliveries.append(args[0].path)
+        return actual_service(*args, **kwargs)
+
+    monkeypatch.setattr(escalation, "service", service)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("communication path reached native ownership or ACT machinery")
+
+    monkeypatch.setattr(holds, "consume", forbidden)
+    monkeypatch.setattr(holds, "rearm", forbidden)
+    monkeypatch.setattr(native, "publish_admission", forbidden)
+    monkeypatch.setattr(campaign, "default_launcher", forbidden)
+    monkeypatch.setattr(campaign, "tick", forbidden)
+    if case == "native_owner":
+        # Ownership-routing seam only; no native capability is issued in this test.
+        (native.contract(manifest)[3] / "native-active.json").write_text("{}")
+        monkeypatch.setattr(native, "entry_active", lambda *_: True)
+        monkeypatch.setattr(campaign, "tick", lambda *_: [{"kind": "native-owner"}])
+    output = campaign.tick_safe(str(root))
+    if case == "delivery":
+        assert deliveries == [state_path] and len(checks) == 1
+        assert any(row["kind"] == "escalation_delivered" for row in output)
+        request = next(iter(obj.read()["hold_escalations"].values()))
+        assert request["status"] == "delivered"
+        assert json.loads(Path(route["destination"]).read_bytes())["closer_hold_escalations"]
+        campaign.tick_safe(str(root))
+        assert len(obj.read()["hold_escalations"]) == 1
+    else:
+        assert not deliveries
+        if case == "native_owner":
+            assert output == [{"kind": "native-owner"}] and not checks
+        elif case == "qualification":
+            assert len(checks) == 1 and any(
+                row.get("reason") == "version not qualified" for row in output
+            )
+        elif case == "policy":
+            assert not checks and any(
+                row.get("kind") in {"held", "error"}
+                and row.get("reason") != "native tick requires observed wrapper entry"
+                for row in output
+            )
+        else:
+            assert any("escapes pinned root" in row.get("reason", "") for row in output)

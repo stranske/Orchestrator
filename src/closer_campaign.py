@@ -3311,6 +3311,47 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
 _LAST_CONTROLLER_DEMAND_REPORT = None
 
 
+def _controller_escalations(root, manifest_path, manifest):
+    """Communication only: an exact pinned route, with no native capability."""
+    from closer_hold_escalation import service
+    from closer_runtime_binding import policy_for_mechanism
+
+    name = manifest.get("hold_escalation_campaign_path")
+    if name is None:
+        return []
+    problem = policy_for_mechanism(manifest.get("policy") or {}, mechanism="native-handoff/v1")
+    if problem:
+        return [{"kind": "held", "reason": problem}]
+    unqualified = qualify(manifest, root)
+    if unqualified:
+        return [{"kind": "held", "reason": "version not qualified", "problems": unqualified}]
+    if not isinstance(name, str):
+        raise CampaignError("explicit escalation campaign path is malformed")
+    path = Path(name)
+    if (
+        not path.is_absolute()
+        or path.resolve() != path
+        or path.parent != root
+        or not path.name.endswith(".campaign.json")
+    ):
+        raise CampaignError("explicit escalation campaign escapes pinned root")
+    campaign = Campaign(path)
+    doc = campaign.read()
+    if doc is None:
+        return [{"kind": "held", "reason": "explicit escalation campaign is absent"}]
+    cfg = doc.get("worker_config") or {}
+    if (
+        doc.get("release_pin") != manifest["package_digest"]
+        or cfg.get("mechanism") != "native-handoff/v1"
+        or cfg.get("policy") != manifest.get("policy")
+    ):
+        return [{"kind": "held", "reason": "explicit escalation campaign pin/policy differs"}]
+    # service obtains a fresh wallclock at each write boundary. This path never
+    # calls consume, rearm, tick, admission publication, or a worker launcher.
+    _doc, reports = service(campaign, manifest, str(manifest_path))
+    return [{"campaign": path.name, **row} for row in reports]
+
+
 def tick_safe(argv_root: str | None = None) -> list[dict[str, Any]]:
     """Controller-side entry. Never raises and never blocks the controller's own work."""
     if os.environ.get("ORCH_CLOSER_CAMPAIGN_TICK", "1") == "0":
@@ -3322,6 +3363,18 @@ def tick_safe(argv_root: str | None = None) -> list[dict[str, Any]]:
     if not manifest.is_file():
         return []  # nothing pinned: inert
     try:
+        pinned = load_manifest(manifest)
+        from closer_mechanisms import NATIVE, mechanism
+        from closer_native_observer import contract as native_contract
+        from closer_native_observer import entry_active
+
+        if mechanism(pinned) == NATIVE:
+            observer_root = native_contract(pinned)[3]
+            active = observer_root / "native-active.json"
+            if not (active.exists() or active.is_symlink()) or not entry_active(pinned):
+                return _controller_escalations(root, manifest, pinned) + [
+                    {"kind": "held", "reason": "native tick requires observed wrapper entry"}
+                ]
         return tick(root, manifest)
     except Exception as exc:  # noqa: BLE001 - scheduled tick must not break the controller
         return [{"kind": "error", "reason": f"{type(exc).__name__}: {exc}"}]
