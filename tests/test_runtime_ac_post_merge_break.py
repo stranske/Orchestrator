@@ -827,11 +827,6 @@ class PostMergeBreakTests(unittest.TestCase):
             "print(json.dumps([sys.executable, sys.prefix, runtime_delivery.__file__, "
             "runtime_delivery.DELIVERED]))"
         )
-        parent = (
-            "import subprocess, sys; "
-            f"subprocess.run([sys.executable, '-c', {child!r}], cwd={str(self.root)!r}, check=True)"
-        )
-        (self.checkout / "check_child.py").write_text(parent)
         spec = runtime_ac.author_issue_spec(
             "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
         )
@@ -839,18 +834,41 @@ class PostMergeBreakTests(unittest.TestCase):
             ["python3", "check_child.py"]
         )
         spec["acceptance_criteria"][0]["evidence_required"] = ["command_output"]
-        with patch.dict(os.environ, PYTHONPATH="/scheduler/src"):
-            result = gate.recheck_merged(spec, self.checkout)
-        self.assertEqual(result["result"], "PASS", result)
-        self.assertEqual(result["interpreter"], interpreter)
-        run = json.loads(result["transcript"])
-        row = run["check_results"][0]
-        self.assertEqual(row["interpreter"], interpreter)
-        executable, prefix, package_path, delivered = json.loads(row["stdout_tail"])
-        self.assertEqual(executable, interpreter)
-        self.assertEqual(prefix, str(environment))
-        self.assertTrue(Path(package_path).is_relative_to(environment))
-        self.assertTrue(delivered)
+        for launcher in ("sys.executable", "python", "python3"):
+            with self.subTest(launcher=launcher):
+                child_launcher = (
+                    "sys.executable" if launcher == "sys.executable" else repr(launcher)
+                )
+                parent = (
+                    "import subprocess, sys; "
+                    f"subprocess.run([{child_launcher}, '-c', {child!r}], "
+                    f"cwd={str(self.root)!r}, check=True)"
+                )
+                (self.checkout / "check_child.py").write_text(parent)
+                # By-name children must find the repository's interpreter even
+                # when the scheduler has supplied its own active environment.
+                with patch.dict(
+                    os.environ,
+                    PYTHONPATH="/scheduler/src",
+                    VIRTUAL_ENV=sys.prefix,
+                    PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+                ):
+                    result = gate.recheck_merged(spec, self.checkout)
+                self.assertEqual(result["result"], "PASS", result)
+                self.assertEqual(result["interpreter"], interpreter)
+                run = json.loads(result["transcript"])
+                row = run["check_results"][0]
+                self.assertEqual(row["interpreter"], interpreter)
+                executable, prefix, package_path, delivered = json.loads(row["stdout_tail"])
+                expected = (
+                    interpreter
+                    if launcher == "sys.executable"
+                    else str(environment / "bin" / launcher)
+                )
+                self.assertEqual(executable, expected)
+                self.assertEqual(prefix, str(environment))
+                self.assertTrue(Path(package_path).is_relative_to(environment))
+                self.assertTrue(delivered)
 
     def test_worktree_interpreter_preserves_repository_environment(self):
         environment = self.checkout / ".venv"
