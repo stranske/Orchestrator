@@ -578,12 +578,70 @@ def _currently_invoking(target, operation):
         return False
 
 
+def _record_verification_prewrite_no_start(target, operation, result):
+    """Retain producer provenance only in this exact callback's private context."""
+    if _currently_invoking(target, operation):
+        _callback_threads.invocation["verification_prewrite_no_start"] = _json_copy(result)
+
+
+def verification_callback_not_invoked_proof(operation, target):
+    """Validate a queue-owned cutoff receipt; a callback result cannot mint it."""
+    proof = (operation.get("result") or {}).get("verification_callback_not_invoked")
+    deadline = operation.get("deadline")
+    if (
+        not isinstance(proof, Mapping)
+        or "invoked_at" in operation
+        or operation.get("action") not in {"initiate_verify", "post_merge_verify"}
+        or not isinstance(operation.get("id"), str)
+        or not operation["id"]
+        or not isinstance(operation.get("revision"), str)
+        or not operation["revision"]
+        or not isinstance(operation.get("binding"), Mapping)
+        or type(deadline) not in {int, float}
+        or not math.isfinite(deadline)
+        or type(proof.get("observed_at")) not in {int, float}
+        or not math.isfinite(proof["observed_at"])
+        or proof["observed_at"] < deadline
+    ):
+        return None
+    expected = {
+        "schema": "closer-verification-callback-not-invoked/v1",
+        "target": target,
+        "operation_id": operation["id"],
+        "action": operation["action"],
+        "revision": operation["revision"],
+        "binding_sha256": _digest(operation["binding"]),
+        "deadline": deadline,
+        "observed_at": proof["observed_at"],
+        "callback_invoked": False,
+    }
+    return dict(proof) if dict(proof) == expected else None
+
+
 def _invoke_before_cutoff(
     execute, target, action, snapshot, operation, now, execution_context=None
 ):
     """A queued callback rechecks its original request and held resource context."""
     if getattr(_callback_threads, "invocation", None) is not None:
         raise QueueStateError("nested queue callback invocation refused")
+
+    def invoke():
+        result = execute(target, action, snapshot, operation)
+        if isinstance(result, Mapping):
+            proof = result.get("verification_no_start")
+            untrusted_precore = False
+            if isinstance(proof, Mapping) and proof.get("phase") == "before_core_verify":
+                current = getattr(_callback_threads, "invocation", {})
+                untrusted_precore = current.get("verification_prewrite_no_start") != dict(result)
+            if untrusted_precore or "verification_callback_not_invoked" in result:
+                result = dict(result)
+                if untrusted_precore:
+                    result.pop("verification_no_start", None)
+                # This receipt is emitted only below by the actual no-invoke
+                # queue branch, never by a callback (including JSON output).
+                result.pop("verification_callback_not_invoked", None)
+        return result
+
     invoked_at = float(now())
     if invoked_at >= float(operation["deadline"]):
         return None, None
@@ -601,9 +659,9 @@ def _invoke_before_cutoff(
             if remaining is None or remaining <= 0:
                 return None, None
             with _callback_invocation(target, operation, now):
-                return execute(target, action, snapshot, operation), invoked_at
+                return invoke(), invoked_at
     with _callback_invocation(target, operation, now):
-        return execute(target, action, snapshot, operation), invoked_at
+        return invoke(), invoked_at
 
 
 def _operation_id(owner: str, target: str, action: str, revision: Any) -> str:
@@ -2363,6 +2421,23 @@ def run_round(
                         result, invoked_at = future.result()
                         if invoked_at is None:
                             op["status"] = "confirmed_not_started"
+                            # Only the real queued cutoff path reaches here without
+                            # entering execute. Never infer this from adapter JSON.
+                            if action in {"initiate_verify", "post_merge_verify"}:
+                                candidate = {
+                                    "schema": "closer-verification-callback-not-invoked/v1",
+                                    "target": target,
+                                    "operation_id": op["id"],
+                                    "action": action,
+                                    "revision": op["revision"],
+                                    "binding_sha256": _digest(op["binding"]),
+                                    "deadline": op["deadline"],
+                                    "observed_at": float(now()),
+                                    "callback_invoked": False,
+                                }
+                                op["result"] = {"verification_callback_not_invoked": candidate}
+                                if verification_callback_not_invoked_proof(op, target) is None:
+                                    op.pop("result")
                             op["next_trigger"] = "continue_next_round"
                             _defer(item, "receipt_reserve", op["next_trigger"])
                             stop_launch_reason = "receipt_reserve"
