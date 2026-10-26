@@ -82,7 +82,9 @@ jobs:
   combined-coverage:
     name: combined coverage (pytest + selftests, the honest number)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Full-suite runs also hit the measured 25-minute ceiling; retain the
+    # same bounded completion margin as the mirror, without changing gates.
+    timeout-minutes: 35
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +206,7 @@ jobs:
   verify:
     name: verify.py (real pytest counts + selftests + capability gates)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
         with:
