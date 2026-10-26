@@ -550,8 +550,9 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     initial = json.loads(capsys.readouterr().out)
     requested = initial["merge_verification_successors"]["owner/repo#12"]
     accepted_frontier = requested["lineage"]["finite_frontier"]
-    # Retain the actual native POST, but normalize its subsequent observation
-    # to the accepted-wait shape returned by the seven production regressions.
+    # The registered merge -> verification successor already produced this
+    # accepted wait and its own shared context. Resume that real row directly;
+    # do not synthesize another frontier by copying its original lane context.
     target = "owner/repo#12"
     shard = (
         resources.shard_dir(resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target)
@@ -559,81 +560,31 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     )
     action_path = shard.parent / "state.actions" / f"{pipeline._digest(target)}.json"
     stored_queue = queue._read_state(action_path)
-    operation = stored_queue["frontiers"][accepted_frontier["frontier_id"]]["items"][target][
-        "operation"
-    ]
-    prior_frontier = accepted_frontier
-    accepted_frontier = policy.make_frontier(
-        [target],
-        owner=prior_frontier["owner"],
-        frontier_id="accepted-observation",
-        bindings={
-            target: {
-                "revision": "verify-requested",
-                "action_id": policy.action_identity(
-                    target, "verify-requested", "wait", operation["binding"]
-                ),
-            }
-        },
+    original_queue_bucket = copy.deepcopy(
+        stored_queue["frontiers"][accepted_frontier["frontier_id"]]
     )
-    receipt = queue.run_round(
-        action_path,
-        [target],
-        lambda _t: {
-            "target": target,
-            "revision": "verify-requested",
-            "action": "wait",
-            "eligible": False,
-            "reason": "same verification request already accepted",
-            "next_trigger": "authenticated result",
-            "operation_binding": operation["binding"],
-            "evidence": {"target": target, **copy.deepcopy(w.snapshot)},
-        },
-        lambda *_: pytest.fail("already accepted native POST cannot replay"),
-        finite_frontier=accepted_frontier,
-        frontier_target=target,
-        deadline=None,
-        request_timeout_seconds=25,
-        receipt_reserve_seconds=0,
-        max_operation_retries=0,
-    )
-    evidence = {
-        "target": target,
-        "observed_revision": "verify-requested",
-        "head": w.snapshot["head"],
-        "merge": w.snapshot["merge"],
-        "operation_id": operation["id"],
-        "event_id": operation["result"]["verification_request_basis"],
-    }
-    proof = queue.accepted_verifier_wait_proof(
-        action_path, target, frontier=accepted_frontier, receipt=receipt, evidence=evidence
-    )
-    assert proof is not None
+    operation = original_queue_bucket["items"][target]["operation"]
     state = pipeline._load(shard)
-    bucket = copy.deepcopy(state["frontiers"][prior_frontier["frontier_id"]])
-    bucket["finite_frontier"] = accepted_frontier
-    bucket["run_id"] = pipeline._digest(
-        ["finite-frontier/v2", accepted_frontier["frontier_id"], accepted_frontier["owner"]]
-    )[:32]
-    state["frontiers"][accepted_frontier["frontier_id"]] = bucket
-    row = bucket["items"][target]
-    row.update(
-        status="held",
-        stage_status="completed",
-        deferred_reason="accepted_verifier_request",
-        deferred_next_trigger="authenticated result",
-        queue_receipt=receipt,
-        resource_evidence={"accepted_verifier_request": proof},
+    row = state["frontiers"][accepted_frontier["frontier_id"]]["items"][target]
+    assert row["stage"] == "act" and row["status"] == "held", row
+    assert row["deferred_reason"] == "accepted_verifier_request", requested
+    action = row["results"]["act"]
+    assert action["status"] == "pending" and action["pending_kind"] == "external_event"
+    proof = queue.accepted_verifier_wait_proof(
+        action_path,
+        target,
+        frontier=accepted_frontier,
+        receipt=action["queue_receipt"],
+        evidence=action["pending_evidence"],
     )
-    row.pop("error", None)
-    row["results"]["act"] = {
-        "status": "pending",
-        "pending_kind": "external_event",
-        "pending_evidence": evidence,
-        "queue_receipt": receipt,
-        "next_trigger": "authenticated result",
-    }
-    pipeline._save(shard, state)
+    assert proof is not None and proof["operation_id"] == operation["id"]
+    context = copy.deepcopy(row["shared_lane_context"])
+    initial_context = copy.deepcopy(
+        state["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
+    )
+    assert context["frontier_sha256"] == pipeline._digest(accepted_frontier)
+    assert context["frontier_sha256"] != initial_context["frontier_sha256"]
+    assert len(w.merges) == len(w.verifies) == 1
     w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(accepted_frontier)
     w.snapshot["verifier"] = {
         "schema": "verifier-corpus-decision/v1",
@@ -702,6 +653,21 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     assert following["predecessor_kind"] == "accepted_verifier_request"
     assert following["lineage"]["finite_frontier"] != accepted_frontier
     assert len(w.merges) == len(w.verifies) == 1
+    retained = pipeline._load(shard)
+    assert (
+        retained["frontiers"][accepted_frontier["frontier_id"]]["items"][target][
+            "shared_lane_context"
+        ]
+        == context
+    )
+    assert (
+        retained["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
+        == initial_context
+    )
+    assert (
+        queue._read_state(action_path)["frontiers"][accepted_frontier["frontier_id"]]
+        == original_queue_bucket
+    )
     assert all(path.read_bytes() == original for path, original in w.originals.items())
     dispatcher.main(w.argv)
     restarted = json.loads(capsys.readouterr().out)
