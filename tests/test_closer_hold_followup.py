@@ -384,3 +384,268 @@ def test_campaign_metrics_use_only_exact_authenticated_native_round_receipt(capa
     changed["targets"]["unrelated/repo#2"] = {"status": "completed"}
     receipt.write_text(json.dumps(changed))
     assert holds.validated_receipts(obj, obj.read(), manifest) == []
+
+
+@pytest.mark.parametrize("stage", ["prepare", "act"])
+@pytest.mark.parametrize(
+    "state",
+    [
+        "free",
+        "occupied",
+        "uncertain",
+        "legacy",
+        "wrong_root",
+        "wrong_bound",
+        "bool_bound",
+        "zero_bound",
+        "negative_bound",
+        "oversized_bound",
+        "nonfinite_bound",
+        "expired",
+    ],
+)
+def test_actual_io_release_observes_original_shared_pool(
+    capacity_host, tmp_path, monkeypatch, capsys, stage, state
+):
+    import copy
+    import hashlib
+    import json
+    from contextlib import ExitStack
+    from pathlib import Path
+
+    import closer_hold_followup as holds
+    import closer_operational_capacity as scoped
+    import closer_pipeline as pipeline
+    import closer_resources as resources
+    from closer_frontier_policy import make_frontier
+
+    _manifest, manifest_path, _obj, _doc, assignment, clock, _invocation = capacity_host
+    import time
+
+    real_clock = resources.run_scoped.__kwdefaults__["now"]
+    monkeypatch.setattr(time, "time", real_clock)
+    capacity_home = Path.home()
+    monkeypatch.setattr(campaign, "qualify", lambda *_: [])
+    from test_closer_reasoning_boundary import native_world
+
+    import closer_dispatcher as dispatcher
+    from closer_frontier_policy import action_identity
+
+    work = tmp_path / "actual-native"
+    work.mkdir()
+    native = native_world.__wrapped__(work, monkeypatch)
+    native.ad.unlink()
+    target = "owner/repo#12"
+    native.snapshot.update(
+        state="OPEN",
+        merge=None,
+        verifier=None,
+        checks="PENDING",
+        pending_check_run_ids=[123],
+        pending_check_head=native.snapshot["head"],
+    )
+    native.snapshot["revision"] = "rev"
+    monkeypatch.setattr(
+        dispatcher,
+        "_pipeline_capacity",
+        lambda: {
+            "io": int(stage == "act" and native.events["prepare"] == 0),
+            "low": 1,
+            "exception": 1,
+        },
+    )
+    observer = dispatcher.Closer(
+        dispatcher.GitHub(deadline=clock[0] + 30), state_path=native.raw, apply=True, workers=True
+    )
+    observed = observer.observe(target)
+    frontier = make_frontier(
+        [target],
+        owner=native.frontier["owner"],
+        frontier_id=native.frontier["frontier_id"],
+        bindings={
+            target: {
+                "revision": "rev",
+                "action_id": action_identity(target, "rev", "wait", observed["operation_binding"]),
+            }
+        },
+    )
+    native.argv[native.argv.index("--finite-frontier-json") + 1] = json.dumps(frontier)
+    native.events["prepare"] = 0
+    dispatcher.main(native.argv)
+    result = json.loads(capsys.readouterr().out)
+    assert result["targets"][target]["status"] == "capacity_blocked", result["targets"][target]
+    assert result["targets"][target]["stage"] == stage
+    assert native.events["provider"] == native.events["effect"] == 0
+    clock[0] = real_clock()
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    monkeypatch.setenv("HOME", str(capacity_home))
+    assignment.parent.mkdir(parents=True, exist_ok=True)
+    assignment.write_text(json.dumps({"targets": [{"target": target}]}))
+    pipeline_path = native.ledger
+    root = resources.scoped_root(pipeline_path)
+    path = resources.shard_dir(root, target) / "state.json"
+    document = pipeline._load(path)
+    row = document["frontiers"][frontier["frontier_id"]]["items"][target]
+    assert row["shared_lane_context"]["bounds"]["io"] == 4
+    bound = row["shared_lane_context"]["bounds"]["io"]
+    original_context = copy.deepcopy(row["shared_lane_context"])
+    if state == "legacy":
+        row.pop("shared_lane_context")
+    elif state == "wrong_root":
+        row["shared_lane_context"]["root"] = str(tmp_path / "other.scoped")
+    elif state in {
+        "wrong_bound",
+        "bool_bound",
+        "zero_bound",
+        "negative_bound",
+        "oversized_bound",
+        "nonfinite_bound",
+    }:
+        row["shared_lane_context"]["bounds"]["io"] = {
+            "wrong_bound": 3,
+            "bool_bound": True,
+            "zero_bound": 0,
+            "negative_bound": -1,
+            "oversized_bound": 999,
+            "nonfinite_bound": float("inf"),
+        }[state]
+    if state in {"wrong_root", "bool_bound", "zero_bound", "negative_bound", "oversized_bound"}:
+        context = row["shared_lane_context"]
+        context["sha256"] = holds._digest(
+            {key: value for key, value in context.items() if key != "sha256"}
+        )
+    path.write_text(json.dumps(document))
+    receipts = {
+        "followup_manifest": {
+            "path": str(manifest_path),
+            "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        },
+        "capacity_observation_window": {"started_at": clock[0], "expires_at": clock[0] + 120},
+    }
+    if state == "expired":
+        clock[0] += 120
+    calls = []
+    evaluate = scoped.evaluate
+    monkeypatch.setattr(scoped, "evaluate", lambda cfg: calls.append(cfg) or evaluate(cfg))
+    before = path.read_bytes()
+    with ExitStack() as held:
+        if state == "occupied":
+            for _ in range(bound):
+                held.enter_context(resources.pool_slot(root, "io", bound, deadline=clock[0]))
+        elif state == "uncertain":
+            (root / "pools/io").mkdir(parents=True, exist_ok=True)
+            for index in range(bound):
+                (root / f"pools/io/slot-{index}.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "finite-pool-uncertainty/v1",
+                            "status": "uncertain",
+                            "lane": "io",
+                            "process_group": None,
+                        }
+                    )
+                )
+        if state == "free":
+            proof = holds.release_probe(path, frontier, target, row, assignment, receipts)
+            assert proof["kind"] == "available_capacity_followup"
+            assert proof["capacity_inputs"] == {}  # Fresh explicit control-plane scope.
+            assert proof["io_observation"]["bound"] == bound and proof["io_observation"][
+                "root"
+            ] == str(root)
+            assert proof["io_observation"]["original_context_sha256"] == original_context["sha256"]
+            assert proof["acceptance_authority"] is False
+            assert holds.release_probe(path, frontier, target, row, assignment, receipts) == proof
+        else:
+            with pytest.raises((ValueError, resources.ResourceBlocked)):
+                holds.release_probe(path, frontier, target, row, assignment, receipts)
+    assert calls and all(
+        cfg["control_plane_only"] is True and cfg["profile_ids"] == [] for cfg in calls
+    )
+    assert path.read_bytes() == before
+    if state == "free":
+        # Only original native terminal attestation is a synthetic oracle here;
+        # capacity observation, plan/apply/audit, generation rearm and fresh
+        # registered dispatcher callbacks all remain real.
+        obj = campaign.Campaign(tmp_path / "actual-io-followup.campaign.json")
+        obj.begin(
+            "actual-io-followup",
+            [target],
+            owner=frontier["owner"],
+            release_pin=_manifest["package_digest"],
+            worker_config={
+                "finite_frontier": frontier,
+                "dispatch_state": str(native.raw),
+                "assignment": str(assignment),
+                "hold_followup_policy": {
+                    "check_interval_seconds": 1,
+                    "deadline_seconds": 120,
+                    "attempt_budget": 1,
+                },
+            },
+        )
+        obj.update(
+            lambda doc: doc.update(
+                workers=[
+                    {
+                        "worker_id": "original-terminal",
+                        "target": campaign.ROUND_UNIT,
+                        "state": "terminal",
+                        "outcome": "ok",
+                        "pid": None,
+                    }
+                ]
+            )
+        )
+        original = next(iter(holds.capture(obj, now=clock[0])["hold_followups"].values()))
+        boundary = {"offline_original_terminal": True}
+
+        def validate(_campaign, doc, _manifest, record, proof):
+            holds._assert_bound(doc, record)
+            if proof != boundary or not holds._probe_allowed(doc):
+                raise ValueError("terminal oracle refused changed context")
+
+        def terminal(_campaign, doc, _manifest, record):
+            validate(_campaign, doc, _manifest, record, boundary)
+            holds._source_row(record)
+            return copy.deepcopy(boundary)
+
+        monkeypatch.setattr(holds, "_native_terminal_boundary", terminal)
+        monkeypatch.setattr(holds, "_validate_terminal_boundary", validate)
+        released, _ = holds.consume(obj, _manifest, str(manifest_path), now=clock[0])
+        assert released["hold_followups"][original["hold_id"]]["status"] == "released"
+        rearmed = holds.rearm(obj, released, _manifest, now=clock[0])
+        assert rearmed["generation"] == 2
+        monkeypatch.setattr(time, "time", real_clock)
+        native.events["prepare"] = 0
+        dispatcher.main(native.argv)
+        reblocked = json.loads(capsys.readouterr().out)["targets"][target]
+        assert reblocked["status"] == "capacity_blocked" and reblocked["stage"] == stage, reblocked
+        clock[0] = real_clock()
+        monkeypatch.setattr(time, "time", lambda: clock[0])
+        after = holds.capture(campaign.Campaign(obj.path), now=clock[0])
+        following = [
+            record for record in after["hold_followups"].values() if record["generation"] == 2
+        ]
+        assert len(following) == 1
+        assert following[0]["deadline"] == original["deadline"]
+        assert following[0]["attempts"] == following[0]["attempt_budget"] == 1
+        assert following[0]["lineage_id"] == original["hold_id"]
+        assert following[0]["status"] == "escalated"
+        assert native.events["provider"] == native.events["effect"] == 0
+
+
+def test_plain_ci_hold_kind_is_refused_before_backend_observation(monkeypatch):
+    import closer_hold_followup as holds
+
+    monkeypatch.setattr(
+        holds,
+        "_backend",
+        lambda *_: pytest.fail("unsupported release kind must not spend GitHub reads"),
+    )
+    result = holds._probe_ci(
+        {"target": "offline/repo#1", "release_proof": {"kind": "ci_terminal"}}, "unused", {}, {}
+    )
+    assert result == {
+        "status": "waiting",
+        "reason": "fresh CI requires a normally admitted new frontier",
+    }

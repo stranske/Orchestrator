@@ -714,3 +714,88 @@ def test_released_hold_expiry_escalates_without_replaying_applied_audit(tmp_path
     assert retained["attempts"] == 1
     assert paths[TARGET].read_bytes() == applied_bytes
     assert after["generation"] == original["generation"]
+
+
+@pytest.mark.parametrize("stage", ["prepare", "act"])
+@pytest.mark.parametrize("exhausted", ["attempts", "deadline"])
+def test_reblocked_capacity_successor_keeps_original_budget_after_real_rearm(
+    tmp_path, monkeypatch, stage, exhausted
+):
+    obj, paths, manifest, manifest_path = successful_no_start_world(tmp_path, monkeypatch)
+    path = paths[TARGET]
+    source = json.loads(path.read_text())
+    frontier = obj.read()["worker_config"]["finite_frontier"]
+    row = source["frontiers"][frontier["frontier_id"]]["items"][TARGET]
+    row.update(
+        status="capacity_blocked", stage=stage, stage_status="queued", metrics={"requests": 0}
+    )
+    row["results"].pop("interpret", None)
+    path.write_text(json.dumps(source))
+    obj.update(lambda doc: doc.update(hold_followups={}))
+    if exhausted == "deadline":
+        obj.update(
+            lambda doc: doc["worker_config"]["hold_followup_policy"].update(
+                attempt_budget=2, deadline_seconds=900
+            )
+        )
+    original = next(iter(holds.capture(obj, now=NOW)["hold_followups"].values()))
+    monkeypatch.setattr(
+        holds,
+        "release_probe",
+        lambda *a: {
+            "kind": "available_capacity_followup",
+            "acceptance_authority": False,
+            "synthetic_observed_admission": "only the capacity oracle is doubled",
+        },
+    )
+    released, _ = holds.consume(obj, manifest, str(manifest_path), now=NOW)
+    assert released["hold_followups"][original["hold_id"]]["status"] == "released"
+    rearmed = holds.rearm(obj, released, manifest, now=NOW + 1)
+    assert rearmed["generation"] == 2
+    assert rearmed["hold_followups"][original["hold_id"]]["status"] == "consumed"
+    prepared = []
+
+    def prepare(*_args):
+        prepared.append(True)
+        return {"revision": "revision-1", "snapshot": {"target": TARGET, "head": "a" * 40}}
+
+    lease = resources.acquire(
+        path.parent.parent.parent, TARGET, owner="new-native", finite_frontier=frontier
+    )
+    try:
+        with resources.fenced(lease):
+            result = pipeline._run_pipeline_finite(
+                path,
+                [TARGET],
+                frontier_target=TARGET,
+                finite_frontier=frontier,
+                prepare=prepare,
+                interpret=lambda *_: {"substantive_needs": []},
+                exception=lambda *_: {"route": "normal"},
+                act=lambda *_: pytest.fail("capacity-zero ACT must not execute"),
+                capacity_fn=lambda: {
+                    "io": int(stage == "act" and not prepared),
+                    "low": 1,
+                    "exception": 1,
+                },
+            )
+    finally:
+        lease.release()
+    assert result["targets"][TARGET]["status"] == "capacity_blocked"
+    assert result["targets"][TARGET]["stage"] == stage
+    restarted = campaigns.Campaign(obj.path)
+    capture_at = NOW + 5 if exhausted == "attempts" else original["deadline"] + 1
+    recaptured = holds.capture(restarted, now=capture_at)
+    successors = [hold for hold in recaptured["hold_followups"].values() if hold["generation"] == 2]
+    assert len(successors) == 1
+    successor = successors[0]
+    retained = recaptured["hold_followups"][original["hold_id"]]
+    assert successor["deadline"] == original["deadline"]
+    assert successor["created_at"] == original["created_at"]
+    assert successor["attempts"] == retained["attempts"] == 1
+    assert successor["attempt_budget"] == original["attempt_budget"]
+    assert successor["lineage_id"] == original["hold_id"]
+    assert successor["predecessor_hold_id"] == original["hold_id"]
+    assert successor["status"] == "escalated"
+    again = holds.capture(campaigns.Campaign(obj.path), now=capture_at + 20)
+    assert again["hold_followups"][successor["hold_id"]] == successor
