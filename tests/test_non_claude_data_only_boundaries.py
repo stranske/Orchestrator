@@ -75,7 +75,7 @@ def test_claude_cannot_be_routed_through_candidate_diagnostics():
 def test_inspected_sources_have_explicit_native_gaps():
     expected = {"cursor": "hook", "vibe": "imports", "gemini": "MCP", "muse": "preset"}
     for agent, word in expected.items():
-        assert word in adapters.data_only_problem(agent)
+        assert word in adapters.non_claude_data_only_boundary(agent)["detail"]
 
 
 def test_inspected_evidence_is_metadata_and_never_entitlement_or_activation():
@@ -89,3 +89,9 @@ def test_inspected_evidence_is_metadata_and_never_entitlement_or_activation():
         assert row["status"] == "unsupported"
         assert row["hashes"] and row["source_refs"]
         assert adapters.non_claude_data_only_boundary(agent)["command_available"] is False
+
+
+@pytest.mark.parametrize("agent", CANDIDATES)
+def test_existing_refusal_string_is_a_stable_compatibility_contract(agent):
+    assert adapters.data_only_problem(agent) == f"data-only tool boundary unsupported for {agent}"
+    assert adapters.non_claude_data_only_boundary(agent)["detail"]

@@ -1957,7 +1957,7 @@ def non_claude_data_only_boundary(agent: str, mode: str | None = "assess") -> di
     problem = (
         "data-only transport requires explicit assess mode"
         if mode != "assess"
-        else f"data-only tool boundary unsupported for {agent}: " + "; ".join(gaps)
+        else f"data-only tool boundary unsupported for {agent}"
     )
     return {
         "agent": agent,
@@ -1974,6 +1974,7 @@ def non_claude_data_only_boundary(agent: str, mode: str | None = "assess") -> di
             else "no_reviewed_transport_evidence"
         ),
         "unresolved_controls": gaps,
+        "detail": "; ".join(gaps),
         "problem": problem,
     }
 

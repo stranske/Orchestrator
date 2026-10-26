@@ -6,7 +6,8 @@ returns provider-specific fail-closed diagnostics through
 `non_claude_data_only_boundary(agent, mode="assess")`. Its result always has
 `status: unsupported`, `command_available: false`, unknown entitlement and
 unassessed model suitability. The existing `data_only_problem` string/None API
-uses that reason for non-Claude seats. It emits no candidate command and never
+preserves its exact legacy refusal text. The structured report adds `detail` and
+`unresolved_controls` for provider-specific explanations. It emits no candidate command and never
 probes credentials, CLI processes, settings, capacity or provider APIs.
 
 These are engineering blockers, not model capability failures. Installed-source
@@ -54,3 +55,8 @@ it does not establish native confinement or provider suitability. A future
 supported builder needs an independently reviewed immutable runtime closure,
 sterile context, universal tool/MCP/hook fences, strict served identity/fallback
 handling, and real shared-account accounting before activation can be considered.
+
+Hosted Python CI caught five existing candidate-profile assertions requiring the
+exact legacy refusal string. The corrective change preserves that public
+compatibility contract; diagnostics remain in the new structured API. Those
+existing core-owned tests are now part of the focused validation set.
