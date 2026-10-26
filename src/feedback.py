@@ -745,6 +745,8 @@ COMPLETION_NESTED_FIELDS = {
     },
     "skill": {"skill_id", "version_hash", "phase", "result", "accepted"},
     "runtime_ac_post_merge": {
+        "interpreter",
+        "already_open",
         "result",
         # Why an UNRUNNABLE recheck could not run: one of runtime_ac_gate.UNRUNNABLE_REASONS,
         # or null for PASS/FAIL. Counted on the weekly line beside the total (2026-10-16).
