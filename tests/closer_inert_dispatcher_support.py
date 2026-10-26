@@ -315,6 +315,7 @@ class InertCaller:
         deadline,
         *,
         deterministic=False,
+        coordinator=False,
         snapshot_fn=None,
         read_text_fn=None,
     ):
@@ -336,7 +337,7 @@ class InertCaller:
 
         self.temporary_campaign_guard()
         module = sys.modules["closer_pipeline"]
-        fake = module.run_pipeline
+        runner = module.run_pipeline
         for key, value in vars(pipeline).items():
             if not hasattr(module, key):
                 setattr(module, key, value)
@@ -350,6 +351,11 @@ class InertCaller:
                 )
             )["backend"]
             captured["backend"] = actual_backend
+            if coordinator:
+                # Preserve the CLI-registered callback identities. The actual
+                # coordinator opens and owns its shard scopes and leases.
+                captured["result"] = runner(path, selected, **callbacks)
+                return captured["result"]
             import contextlib
 
             root = resources.open_root(path, pipeline_schema=pipeline.SCHEMA)
@@ -390,7 +396,7 @@ class InertCaller:
                             return fn(target, scoped)
 
                     callbacks[stage] = invoke
-                captured["result"] = fake(path, selected, **callbacks)
+                captured["result"] = runner(path, selected, **callbacks)
                 return captured["result"]
 
         assignment = self.world.root / "pipeline-assignment.json"
