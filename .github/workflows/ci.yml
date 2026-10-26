@@ -109,7 +109,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest coverage -r requirements.lock
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
 
       - name: Measure combined coverage
         shell: bash
@@ -205,6 +205,8 @@ jobs:
     name: verify.py (real pytest counts + selftests + capability gates)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      VERIFY_PYTEST_WORKERS: "4"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -230,7 +232,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest coverage -r requirements.lock
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
 
       - name: Verify
         env:
@@ -306,7 +308,11 @@ jobs:
   exec-mirror:
     name: verify.py in the flat exec-mirror shape (the tree a sync ships)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Hosted mirror runs hit 25 minutes after printing VERIFIED; allow bounded
+    # completion/cleanup margin without changing tests or request deadlines.
+    timeout-minutes: 35
+    env:
+      VERIFY_PYTEST_WORKERS: "4"
     steps:
       - uses: actions/checkout@v7
         with:
@@ -332,7 +338,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest coverage -r requirements.lock
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
 
       - name: Build the flat copy with the sync's copy contract and verify it there
         env:
@@ -440,7 +446,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest coverage -r requirements.lock
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
 
       - name: Reconcile
         env:
