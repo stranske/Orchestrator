@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
 sys.path.insert(0, str(MODULES))
 
+from closer_inert_dispatcher_support import REAL_GITHUB, InertCaller  # noqa: E402
 from closer_role_support import fixture_role_verdict  # noqa: E402
 
-import adapters  # noqa: E402
 import closer_dispatcher as d  # noqa: E402
 import closer_evidence  # noqa: E402
 import closer_resources  # noqa: E402
@@ -104,39 +104,8 @@ def main():
         def api(self, *a, **kw):
             raise AssertionError("live API forbidden")
 
-    def offload(agent, prompt, **kw):
-        if spec.get("simulated_tool_free"):
-            assert kw.get("data_only") is True
-            assert '"data_only_evidence":' in prompt
-            assert '"fixture_only":true' in prompt
-            assert '"content_supplied":true' in prompt
-        event("offload_enter", profile=kw["profile_id"], data_only=kw.get("data_only"))
-        barrier("offload")
-        if spec.get("crash"):
-            os._exit(9)
-        event("offload_exit", profile=kw["profile_id"])
-        if spec.get("failure"):
-            auth = spec["failure"] == "auth"
-            return {
-                "exit": 1,
-                "run_id": "failed-" + target,
-                "error": "HTTP 401 unauthorized" if auth else "quota exhausted",
-                "rate_incident_evidence": {
-                    "category": "authentication" if auth else "quota",
-                    "subcategory": "expired_token" if auth else "quota_exhausted",
-                    "evidence_hash": "f" * 64,
-                    "is_authoritative": not auth,
-                },
-            }
-        # Actual uncertainty proof deliberately retained by the production pipeline.
-        return {
-            "exit": 1,
-            "run_id": "offline-" + target,
-            "outcome_uncertain": True,
-            "outcome_status": "uncertain",
-            "retry_safe": False,
-            "error": "offline fixture",
-        }
+    def offload(*_args, **_kwargs):
+        raise AssertionError("deterministic shadow/alias fixture must not invoke a model")
 
     if spec.get("instrument_reservation"):
 
@@ -211,23 +180,6 @@ def main():
         None,
     )
     dispatcher.offload = offload
-    if spec.get("simulated_tool_free"):
-        # This child has no provider CLI on PATH and offload is the in-process
-        # fake above. Declare that fixture transport/content boundary explicitly;
-        # this neither qualifies actual Gemini nor alters the parent process.
-        adapters.data_only_problem = lambda agent, mode="assess": (
-            None
-            if mode == "assess" and agent in d._EXCEPTION_ELIGIBLE_AGENTS
-            else "unsupported synthetic data-only transport"
-        )
-        d.data_only_evidence_context = lambda _packet, *, readiness, snapshot, **_kw: {
-            "schema": "closer-data-only-context/v1",
-            "fixture_only": True,
-            "target": snapshot["target"],
-            "head": snapshot["head"],
-            "readiness": readiness,
-            "sections": {"source": {"content_supplied": True, "content": snapshot["sources"]}},
-        }
 
     def simulated_evidence(snapshot, _api, retained_dir, **_kw):
         packet = {
@@ -256,19 +208,88 @@ def main():
             closer_evidence._atomic_write(path, json.dumps(packet, sort_keys=True).encode())
         return packet
 
-    closer_evidence.collect_evidence = simulated_evidence
-    closer_evidence.validate_packet = lambda packet: bool(
-        spec.get("postverify") and isinstance(packet, dict) and packet.get("fixture_packet") is True
-    )
-    # This process/pool fixture starts after semantic admission, which has its own real-packet tests.
-    closer_evidence.action_evidence_readiness = lambda *_a, **_k: {
-        "schema": "closer-action-evidence-readiness/v1",
-        "action": _a[2],
-        "ready": True,
-        "mode": "acceptance",
-        "gaps": [],
-    }
-    closer_evidence.drift_sample = lambda *a, **kw: []
+    if not spec.get("postverify"):
+        closer_evidence.collect_evidence = simulated_evidence
+        closer_evidence.validate_packet = lambda packet: bool(
+            spec.get("postverify")
+            and isinstance(packet, dict)
+            and packet.get("fixture_packet") is True
+        )
+        # This process/pool fixture starts after semantic admission, which has its own real-packet tests.
+        closer_evidence.action_evidence_readiness = lambda *_a, **_k: {
+            "schema": "closer-action-evidence-readiness/v1",
+            "action": _a[2],
+            "ready": True,
+            "mode": "acceptance",
+            "gaps": [],
+        }
+        closer_evidence.drift_sample = lambda *a, **kw: []
+    else:
+        # Actual public CLI/pool/role/broker and retained origin. Only GitHub
+        # evidence and the generated executable are inert external fixtures.
+        import pytest
+        from test_dispatcher_controlled_data_only import world
+
+        patch = pytest.MonkeyPatch()
+        controlled = directory / "controlled"
+        controlled.mkdir(mode=0o700)
+        native = world.__wrapped__(controlled, patch)
+        caller = InertCaller(native, patch)
+        # Retain the exact production constructor/CLI registration; only the
+        # external observation method/transport is supplied by this fixture.
+        d.GitHub = REAL_GITHUB
+        patch.setattr(REAL_GITHUB, "snapshot", GitHub.snapshot)
+
+        def no_external_api(*_args, **_kwargs):
+            raise AssertionError("unexpected external GitHub transport")
+
+        patch.setattr(d.gh_capacity, "gh_run", no_external_api)
+        original_allowed = caller.allowed
+        workspace_reads = (
+            ["git", "-C", str(directory), "remote", "get-url", "origin"],
+            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+        )
+        # Actual readonly validation of this private Git fixture; no substitute
+        # identity, arbitrary Git command, shell, hook or remote access allowed.
+        caller.allowed = (
+            lambda command: original_allowed(command) or list(command) in workspace_reads
+        )
+
+        def collect(snap, _api, retained_dir, **_kwargs):
+            return caller.packet(snap, retained_dir)[0]
+
+        closer_evidence.collect_evidence = collect
+
+        def observed_inert(agent, prompt, **options):
+            assert agent == "claude" and options["data_only"] is True
+            assert options["max_network_retries"] == 0
+            event("offload_enter", profile=options["profile_id"], data_only=True)
+            barrier("offload")
+            if spec.get("crash"):
+                os._exit(9)
+            if spec.get("failure"):
+                control = {
+                    "exit": 1,
+                    "output": "",
+                    "error": (
+                        "HTTP 401 unauthorized"
+                        if spec["failure"] == "auth"
+                        else "quota exceeded: usage limit reached"
+                    ),
+                }
+            else:
+                control = {"exit": 0, "output": "", "outcome_uncertain": True}
+            result = caller.response(control, agent, prompt, **options)
+            event(
+                "offload_exit",
+                profile=options["profile_id"],
+                run_id=result.get("run_id"),
+                outcome_uncertain=result.get("outcome_uncertain"),
+                provider_result_ref=result.get("provider_result_ref"),
+            )
+            return result
+
+        dispatcher.offload = observed_inert
     # A shadow completion has no native action. Any accidental queue dispatch fails.
     import closer_queue
 
@@ -296,6 +317,23 @@ def main():
     args += ["--coordinator-mode", spec.get("mode", "resource_scoped")]
     if spec.get("mode", "resource_scoped") == "resource_scoped":
         args += ["--coordinator-contract-pin", json.dumps(pin)]
+    if spec.get("postverify"):
+        from closer_frontier_policy import make_frontier_from_observations
+
+        observer = d.Closer(
+            d.GitHub(deadline=time.time() + 20),
+            state_path=Path(spec["state"]),
+            apply=True,
+            workers=True,
+        )
+        frontier = make_frontier_from_observations(
+            {target: observer.observe(target)},
+            owner="scoped-inert-" + directory.name,
+            frontier_id="scoped-model-" + directory.name,
+        )
+        at = args.index("--budget-seconds")
+        del args[at : at + 2]
+        args += ["--finite-frontier-json", json.dumps(frontier), "--request-timeout-seconds", "20"]
     raise SystemExit(d.main(args))
 
 

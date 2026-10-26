@@ -11,10 +11,13 @@ import time
 from pathlib import Path
 
 import pytest
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import closer_dispatcher as d
 import closer_resources as resources
 import execution_profiles as profiles
+
+controlled_world = _controlled_world
 
 WORKER = Path(__file__).with_name("closer_dispatcher_scoped_worker.py")
 ROOT = WORKER.parents[1]
@@ -28,7 +31,6 @@ def start(tmp_path, name, **kw):
         "common": str(tmp_path / "common"),
         "state": str(tmp_path / "state"),
         "target": "o/r#1",
-        "simulated_tool_free": bool(kw.get("postverify")),
         **kw,
     }
     child_path = ""
@@ -55,6 +57,9 @@ def start(tmp_path, name, **kw):
         private_bin = directory / "private-bin"
         private_bin.mkdir()
         (private_bin / "git").symlink_to(git)
+        ps = shutil.which("ps")
+        assert ps is not None
+        (private_bin / "ps").symlink_to(ps)
         child_path = str(private_bin)
     return subprocess.Popen(
         [sys.executable, str(WORKER), json.dumps(spec)],
@@ -171,7 +176,7 @@ def test_cli_mixed_modes_gate_before_first_state_read(tmp_path, first_mode, seco
 def test_cli_cross_process_same_profile_pool_never_overlaps(tmp_path):
     common = tmp_path / "common"
     common.mkdir()
-    (common / "capacity.json").write_text(json.dumps(report(["gemini-3.8-flash-low"])))
+    (common / "capacity.json").write_text(json.dumps(report(["claude-sonnet-5-5-low"])))
     first = start(tmp_path, "a", shadow=False, hold="offload", postverify=True)
     wait(tmp_path / "a" / "offload.entered")
     second = finish(start(tmp_path, "b", shadow=False, target="other/repo#2", postverify=True))
@@ -180,24 +185,52 @@ def test_cli_cross_process_same_profile_pool_never_overlaps(tmp_path):
     assert second["targets"]["other/repo#2"]["status"] != "completed"
     (tmp_path / "a" / "release").touch()
     receipt = finish(first)
-    assert receipt["targets"]["o/r#1"]["status"] == "uncertain"
+    assert receipt["targets"]["o/r#1"]["status"] == "unknown"
     assert not receipt["validation"]["valid"]
 
 
-def test_fake_gemini_offload_requires_explicit_simulated_tool_free_boundary(tmp_path):
-    import adapters
+def test_fake_gemini_offload_requires_explicit_simulated_tool_free_boundary(
+    tmp_path, monkeypatch, controlled_world
+):
+    """Pure unsupported-route control after real ready evidence, never qualification."""
+    from closer_inert_dispatcher_support import InertCaller
+    from test_closer_dispatcher import snapshot
 
-    # The parent process keeps the actual unsupported transport refusal. Only
-    # the separately spawned fake-provider harness may replace that boundary.
+    import adapters
+    import closer_evidence
+
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
+    caller = InertCaller(controlled_world, monkeypatch)
+    current = snapshot(base="c" * 40)
+    packet, ref, _proposal = caller.packet(current, tmp_path / "ready.evidence")
+    ready = closer_evidence.action_evidence_readiness(
+        current, packet, "collect_evidence", retained_dir=tmp_path / "ready.evidence"
+    )
+    assert ready["ready"] is True, ready
     assert adapters.data_only_problem("gemini", "assess") is not None
-    common = tmp_path / "common"
-    common.mkdir()
-    (common / "capacity.json").write_text(json.dumps(report(["gemini-3.8-flash-low"])))
-    receipt = finish(start(tmp_path, "a", shadow=False, postverify=True, simulated_tool_free=False))
-    assert "offload_enter" not in events(tmp_path / "a")
-    row = receipt["targets"]["o/r#1"]
-    assert row["status"] != "completed"
-    assert row["results"]["interpret"]["classification"] == "assessment_transport_unavailable"
+    result = d._controlled_offload(
+        agent="gemini",
+        prompt="Complete supplied offline request.",
+        profile_id="gemini-3.8-flash-low",
+        task_type="closer_interpret",
+        operation_id="unsupported-gemini-offline-control",
+        frontier=caller.frontier({current["target"]: current}),
+        target=current["target"],
+        basis={
+            "target": current["target"],
+            "revision": current["revision"],
+            "head": current["head"],
+            "base": current["base"],
+            "packet_sha256": ref["sha256"],
+        },
+        deadline=time.time() + 10,
+        offload=lambda *_a, **_k: pytest.fail("unqualified transport invoked"),
+        mode="assess",
+    )
+    assert result["unsupported_assessment_tool_boundary"] is True
+    assert result["process_started"] is False and result["outcome_uncertain"] is False
+    assert result["run_id"] is None
+    assert not caller.results and controlled_world.events["auth"] == 0
     assert adapters.data_only_problem("gemini", "assess") is not None
 
 
@@ -528,14 +561,14 @@ def test_historical_unknown_intents_remain_fenced_after_store_move(tmp_path):
     assert resources.unknown_reservations(root) == {key: "o/r#1"}
 
 
-@pytest.mark.parametrize("failure,expected_calls", [("auth", 1), ("quota", 2)])
+@pytest.mark.parametrize("failure,expected_calls", [("auth", 1), ("quota", 1)])
 def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
     tmp_path, failure, expected_calls
 ):
     common = tmp_path / "common"
     common.mkdir()
     (common / "capacity.json").write_text(
-        json.dumps(report(["codex-6-luna-low", "gemini-3.8-flash-low", "gemini-4-argon-low"]))
+        json.dumps(report(["claude-sonnet-5-5-low", "claude-sonnet-5-5-high-v2"]))
     )
     receipt = finish(start(tmp_path, "a", shadow=False, failure=failure, postverify=True))
     rows = [json.loads(x) for x in (tmp_path / "a" / "events.jsonl").read_text().splitlines()]
@@ -544,10 +577,29 @@ def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
     assert all(x["data_only"] is True for x in rows if x["event"] == "offload_enter")
     pools = [profiles.get_profile(p)["capacity_pool_ids"][0] for p in calls]
     assert len(set(pools)) == len(pools)
-    assert receipt["targets"]["o/r#1"]["status"] == "deferred"
-    assert receipt["targets"]["o/r#1"]["deferred_reason"] == "provider_failure"
-    # A measured provider stop is legitimate; it grants no target completion.
-    assert receipt["validation"]["valid"] is True
+    # Actual incomplete native failure is UNKNOWN, never a fabricated measured
+    # provider stop. It cannot buy a retry/fallback on the other same-pool alias.
+    row = receipt["targets"]["o/r#1"]
+    assert row["status"] == "unknown"
+    interpreted = row["results"]["interpret"]
+    assert interpreted["classification"] == "provider_outcome_uncertain"
+    actual = interpreted["provider_outcome"]["actual"]
+    assert actual["raw_exit"] == 1 and actual["retry_safe"] is False
+    completed = [x for x in rows if x["event"] == "offload_exit"]
+    assert len(completed) == 1 and completed[0]["run_id"] == actual["run_id"]
+    ref = completed[0]["provider_result_ref"]
+    retained = Path(ref["path"])
+    import hashlib
+
+    assert retained.is_relative_to(tmp_path / "a" / "controlled" / "logs")
+    assert hashlib.sha256(retained.read_bytes()).hexdigest() == ref["sha256"]
+    assert len(retained.read_bytes()) == ref["bytes"]
+    native = json.loads(retained.read_bytes())["result"]
+    assert native["process_started"] is True and native["outcome_uncertain"] is True
+    assert native["process_observation"]["cleanup_terminal"] is True
+    assert calls == ["claude-sonnet-5-5-low"]
+    assert "claude-sonnet-5-5-high-v2" not in calls
+    assert not receipt["validation"]["valid"]
 
 
 def test_incompatible_contract_fences_legacy_even_for_disjoint_target(tmp_path):
