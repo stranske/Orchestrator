@@ -560,9 +560,9 @@ def test_actual_normal_wrapper_and_controller_share_state_and_native_lease(
             state_path=tmp_path / "discovery-observation.json",
         )
         observed = backend.observe(TARGET)
-        assert observed["action"] == "wait" and observed.get("pending_check_run_ids") == [123], (
-            json.dumps(observed)
-        )
+        assert observed["action"] == "wait" and observed.get("pending_check_run_ids") == [
+            123
+        ], json.dumps(observed)
         cfg.update(
             finite_frontier=frontier_policy.make_frontier(
                 [TARGET],
@@ -1014,9 +1014,9 @@ def test_initial_admission_restart_preserves_one_request_and_eventually_wakes(
     # Re-enter the SAME completed discovery, not a new generation/authorization.
     campaign.controller_demand_after_discovery(context, launcher=launch, now=NOW + 1)
     after = campaign.Campaign(path).read()
-    assert len(calls) == 1, (
-        "known prepared/no-submit crash must not permanently lose the original wake"
-    )
+    assert (
+        len(calls) == 1
+    ), "known prepared/no-submit crash must not permanently lose the original wake"
     assert after["demand_wake"]["status"] == "started"
     assert after["demand_admission"]["admission_count"] == 1
     assert (
@@ -1104,9 +1104,9 @@ def test_fresh_controller_restart_does_not_replace_accepted_unsubmitted_request(
     )
     durable = campaign.Campaign(path).read()
     assert len(calls) == (1 if new_discovery == "same" else 0)
-    assert durable["demand_admission"] == original, (
-        "restart must recover original accepted receipt, not issue a replacement generation/deadline"
-    )
+    assert (
+        durable["demand_admission"] == original
+    ), "restart must recover original accepted receipt, not issue a replacement generation/deadline"
     assert durable["demand_admission"]["admission_count"] == 1
 
 
