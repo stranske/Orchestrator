@@ -323,8 +323,19 @@ def test_existing_terminal_unknown_owner_is_not_modified_or_revived(publisher):
     before = campaign.controller_demand_before_discovery()
     discover()
     result = campaign.controller_demand_after_discovery(before, launcher=launch, now=NOW)
-    assert result["status"] == "refused" and "unresolved" in result["reason"]
+    # An existing cohort remains held by its original owner; this is not a
+    # malformed new request. Retirement cannot replace an unknown outcome.
+    assert result == {
+        "status": "held",
+        "reason": "cohort retains ownership, unknown outcomes or held budgets",
+    }
     assert path.read_bytes() == before_bytes and not calls
+    after = obj.read()
+    assert after["generation"] == 2 and after["owner"] == "existing-closer-owner"
+    assert after["workers"] == [
+        {"worker_id": "old-owned", "state": "terminal", "outcome": "unknown"}
+    ]
+    assert not any(key in after for key in ("demand_admission", "demand_wake", "cohort_retirement"))
 
 
 def test_native_demand_origin_consumes_immutable_bytes_after_new_publication(publisher):

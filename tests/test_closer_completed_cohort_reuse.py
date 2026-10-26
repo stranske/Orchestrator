@@ -239,7 +239,13 @@ def _completed_worker(world):
             if path.exists():
                 result = json.loads(path.read_bytes())
                 assert result["outcome"] == "ok", result
-                return obj, result
+                pid = doc["workers"][-1]["pid"]
+                assert type(pid) is int and pid > 0
+                # Result publication precedes interpreter exit. Retirement
+                # correctly preserves a still-live worker's ownership, so a
+                # completed-cohort fixture must wait for the actual PID too.
+                if not campaign.claims._pid_alive(pid):
+                    return obj, result
         time.sleep(0.05)
     pytest.fail("native completed worker did not finish")
 
