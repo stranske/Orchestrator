@@ -169,6 +169,10 @@ def test_selected_task_actual_native_proof_projects_and_restarts_without_broker(
     assert decision["request_sha256"] == local.inputs["original_request"]["request_sha256"]
     assert decision["findings"] == local.answer["findings"]
     assert decision["profile"]["qualification_sha256"] == closer._contract_digest(local.qualified)
+    assert decision["profile"]["qualification_ref"] == (
+        "github:stranske/Orchestrator:src/closer_role_qualification.py#ROLE_QUALIFICATIONS/"
+        + local.qualified["qualification_id"]
+    )
     assert Path(decision["decision_evidence_ref"]).is_file()
     assert json.loads(Path(result["decision_ref"]["path"]).read_bytes()) == decision
     original = local.world.capture.read_bytes()
@@ -356,3 +360,27 @@ def test_actual_generic_preflight_rejects_correction_role_mismatch_without_auth(
     assert result["process_started"] is False, result
     assert result["error"] == "controlled data-only contract/auth/lifecycle admission unavailable"
     assert local.world.events["auth"] == 0
+
+
+@pytest.mark.parametrize("entrypoint", [producer.produce, decisions.materialize_selected])
+def test_canonical_qualification_reference_has_no_caller_override(entrypoint):
+    import inspect
+
+    signature = inspect.signature(entrypoint)
+    assert "qualification_ref" not in signature.parameters
+    assert all(
+        parameter.kind is not inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    with pytest.raises(TypeError, match="qualification_ref"):
+        entrypoint(qualification_ref="caller:untrusted-override")
+
+
+def test_model_cannot_override_actual_literal_record_reference(local):
+    local.answer["qualification_ref"] = "caller:untrusted-override"
+    with local.lease():
+        result = local.run()
+    assert result["status"] == "owned_unknown"
+    assert "decision" not in result
+    assert len(local.caller.results) == 1
+    assert local.world.events["auth"] == 1

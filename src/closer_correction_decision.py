@@ -138,7 +138,8 @@ def materialize_selected(
         profile = {
             "id": profile_id,
             "role": "closer_interpret",
-            "qualification_ref": "closer_role_qualification.py#" + record["qualification_id"],
+            "qualification_ref": "github:stranske/Orchestrator:src/closer_role_qualification.py#ROLE_QUALIFICATIONS/"
+            + record["qualification_id"],
             "qualification_sha256": closer._contract_digest(record),
         }
         decision = project_explicit_semantics(
