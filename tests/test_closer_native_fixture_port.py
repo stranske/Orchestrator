@@ -286,9 +286,20 @@ def test_bound_metadata_candidates_and_exact_reader_forward_without_claiming_own
 
     monkeypatch.setattr(support, "REAL_POPEN", popen)
     opts = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
-    for command in commands:
-        assert caller.popen(command, **opts).pid == 4200
-        assert forwarded[-1] == (command, opts) and forwarded[-1][0] is command
+    # Hosted Python legitimately exports this loader path. The real native
+    # fixture scopes it out; this mocked observer positive must use that same
+    # existing isolation, while the guard must still reject it outside scope.
+    inherited_loader = "/synthetic/hosted/lib"
+    monkeypatch.setenv("LD_LIBRARY_PATH", inherited_loader)
+    with pytest.raises(AssertionError, match="forbidden subprocess"):
+        caller.popen(commands[0], **opts)
+    assert forwarded == []
+    with caller.native_fixture_environment():
+        assert "LD_LIBRARY_PATH" not in os.environ
+        for command in commands:
+            assert caller.popen(command, **opts).pid == 4200
+            assert forwarded[-1] == (command, opts) and forwarded[-1][0] is command
+    assert os.environ["LD_LIBRARY_PATH"] == inherited_loader
     assert 4200 not in caller.children  # Never promotes a helper/entry to model ownership.
     assert not caller.allowed(metadata(4102))
 
