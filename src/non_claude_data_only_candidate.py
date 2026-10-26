@@ -480,6 +480,23 @@ class RawResponseObserver:
         self.model, self.responses = raw["model"], 1
 
 
+class _InertNativeUsage(dict[str, int]):
+    """Fixture mapping accepted by native LLMUsage validation and stats attribute reads.
+
+    This is synthetic usage, never a native type or provider attestation. A plain
+    namespace fails Pydantic's LLMChunk constructor; a plain dict fails native
+    _update_stats attribute access before that constructor. Keep both boundaries.
+    """
+
+    @property
+    def prompt_tokens(self) -> int:
+        return self["prompt_tokens"]
+
+    @property
+    def completion_tokens(self) -> int:
+        return self["completion_tokens"]
+
+
 class InertObservingBackend:
     """Fixture-only proxy demonstrates observation BEFORE Vibe-style mapping."""
 
@@ -503,7 +520,7 @@ class InertObservingBackend:
                 reasoning_content=None,
                 tool_calls=None,
             ),
-            usage=SimpleNamespace(
+            usage=_InertNativeUsage(
                 prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"]
             ),
             correlation_id=None,
@@ -672,6 +689,7 @@ def selftest() -> dict:
     """Emitted inert controls; no installed API/SDK/provider import."""
     sources = []
     received = []
+    native_usage_shapes = []
 
     class Event:
         def __init__(self, content):
@@ -695,6 +713,14 @@ def selftest() -> dict:
         async def act(self, prompt):
             received.append(prompt)
             chunk = await self.backend.complete()
+            native_usage_shapes.append(
+                isinstance(chunk.usage, dict)
+                and chunk.usage
+                == {
+                    "prompt_tokens": chunk.usage.prompt_tokens,
+                    "completion_tokens": chunk.usage.completion_tokens,
+                }
+            )
             yield Event(chunk.message.content)
 
         async def aclose(self):
@@ -750,6 +776,7 @@ def selftest() -> dict:
         "cannot_activate": result["activation"] is False
         and result["production_admission"] is False,
         "synthetic_not_provider_attestation": result["provider_attested"] is False,
+        "fixture_usage_mapping_and_native_stats_attributes_agree": native_usage_shapes == [True],
     }
     if not all(checks.values()):
         raise AssertionError(checks)
