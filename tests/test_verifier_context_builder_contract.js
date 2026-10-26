@@ -138,7 +138,7 @@ test('actual pending builder retains uncertain effects and reenters only with sk
   assert.equal(state.status,'pending');
 }));
 
-test('invalid or missing requests and missing lossless local diff fail without API fallback',()=>isolated(async()=>{
+test('invalid requests and unavailable diff evidence cannot start evaluation',()=>isolated(async()=>{
   for(const body of [{invalid:'body'},'', '<!-- metadata only -->']) {
     const result=await fixture({body}).invoke({mode:'evaluate'});
     assert.equal(result.shouldRun,false);
@@ -148,7 +148,12 @@ test('invalid or missing requests and missing lossless local diff fail without A
   const result=await missing.invoke({mode:'evaluate'});
   assert.equal(result.shouldRun,false);
   assert.match(result.reason,/Authoritative pull request diff unavailable/);
-  assert.equal(missing.calls.files,0);
+  // A newer shared collector may attempt bounded API capture. The stub refuses
+  // it, so neither the legacy local-only path nor the shared fallback may
+  // invent evidence, a manifest, or an evaluation after retrieval fails.
+  assert.ok(missing.calls.files <= 1);
+  assert.equal(result.verificationManifest,undefined);
+  assert.equal(missing.outputs.should_run,'false');
 }));
 
 test('actual builder preserves linked original requirements and refuses malformed linked source',()=>isolated(async()=>{

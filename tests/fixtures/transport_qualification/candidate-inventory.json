@@ -1,0 +1,516 @@
+{
+  "schema": "closer-candidate-inventory/v1",
+  "source_commit": "ffa747fce4914e8cd4f0b0fdf23525e120fad645",
+  "metadata_sources": [
+    "src/execution_profiles.py:CLOSER_CANDIDATE_MODELS",
+    "approved category2 delegation: local Muse profiles and CLI confinement metadata"
+  ],
+  "production_qualification_records": 0,
+  "provider_trials_run": 0,
+  "routine_sonnet_cap": null,
+  "candidates": [
+    {
+      "agent": "codex",
+      "model_label": "Codex Luna",
+      "requested_model": "gpt-6-luna",
+      "registered_profile_ids": [
+        "codex-6-luna-low",
+        "codex-6-luna-high"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "codex-6-luna-low",
+          "requested_model": "gpt-6-luna",
+          "reasoning_effort": "low",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        },
+        {
+          "profile_id": "codex-6-luna-high",
+          "requested_model": "gpt-6-luna",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "effort_policy": "low candidate; high intermediate only",
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "codex",
+      "model_label": "Codex Sol",
+      "requested_model": "gpt-6.1-sol",
+      "registered_profile_ids": [
+        "codex-6.1-sol-low",
+        "codex-6.1-sol-medium",
+        "codex-6.1-sol-high"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "codex-6.1-sol-low",
+          "requested_model": "gpt-6.1-sol",
+          "reasoning_effort": "low",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        },
+        {
+          "profile_id": "codex-6.1-sol-medium",
+          "requested_model": "gpt-6.1-sol",
+          "reasoning_effort": "medium",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        },
+        {
+          "profile_id": "codex-6.1-sol-high",
+          "requested_model": "gpt-6.1-sol",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low",
+        "strong"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "codex",
+      "model_label": "Codex Astra",
+      "requested_model": "gpt-6-astra",
+      "registered_profile_ids": [
+        "codex-6-astra-high",
+        "codex-6-astra-medium"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "codex-6-astra-high",
+          "requested_model": "gpt-6-astra",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        },
+        {
+          "profile_id": "codex-6-astra-medium",
+          "requested_model": "gpt-6-astra",
+          "reasoning_effort": "medium",
+          "capacity_pool_ids": [
+            "codex-subscription"
+          ],
+          "adapter_version": "codex-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low",
+        "strong"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "claude",
+      "model_label": "Claude Haiku",
+      "requested_model": "claude-haiku-4-5",
+      "registered_profile_ids": [],
+      "identifier_status": "known_unregistered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "pinned data-only adapter exists; exact model/effort/entitlement and role evidence still required"
+    },
+    {
+      "agent": "claude",
+      "model_label": "Claude Sonnet",
+      "requested_model": "claude-sonnet-5-5",
+      "registered_profile_ids": [
+        "claude-sonnet-5-5-high",
+        "claude-sonnet-5-5-low"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "claude-sonnet-5-5-high",
+          "requested_model": "claude-sonnet-5-5",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "claude-subscription"
+          ],
+          "adapter_version": "claude-cli-profile-v1"
+        },
+        {
+          "profile_id": "claude-sonnet-5-5-low",
+          "requested_model": "claude-sonnet-5-5",
+          "reasoning_effort": "low",
+          "capacity_pool_ids": [
+            "claude-subscription"
+          ],
+          "adapter_version": "claude-cli-profile-v2"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low",
+        "strong"
+      ],
+      "transport_gap": "pinned data-only adapter exists; exact model/effort/entitlement and role evidence still required"
+    },
+    {
+      "agent": "claude",
+      "model_label": "Claude Opus",
+      "requested_model": "claude-opus-5-5",
+      "registered_profile_ids": [
+        "claude-opus-5-5-high",
+        "claude-opus-5-5-low"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "claude-opus-5-5-high",
+          "requested_model": "claude-opus-5-5",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "claude-subscription"
+          ],
+          "adapter_version": "claude-cli-profile-v2"
+        },
+        {
+          "profile_id": "claude-opus-5-5-low",
+          "requested_model": "claude-opus-5-5",
+          "reasoning_effort": "low",
+          "capacity_pool_ids": [
+            "claude-subscription"
+          ],
+          "adapter_version": "claude-cli-profile-v2"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low",
+        "strong"
+      ],
+      "transport_gap": "pinned data-only adapter exists; exact model/effort/entitlement and role evidence still required"
+    },
+    {
+      "agent": "gemini",
+      "model_label": "Gemini Flash low",
+      "requested_model": "gemini-3.8-flash-low",
+      "registered_profile_ids": [
+        "gemini-3.8-flash-low"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "gemini-3.8-flash-low",
+          "requested_model": "gemini-3.8-flash-low",
+          "reasoning_effort": "low",
+          "capacity_pool_ids": [
+            "gemini-prepaid"
+          ],
+          "adapter_version": "agy-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "gemini",
+      "model_label": "Gemini Flash high",
+      "requested_model": "gemini-3.8-flash-high",
+      "registered_profile_ids": [
+        "gemini-3.8-flash-high"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "gemini-3.8-flash-high",
+          "requested_model": "gemini-3.8-flash-high",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "gemini-prepaid"
+          ],
+          "adapter_version": "agy-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "gemini",
+      "model_label": "Gemini Argon",
+      "requested_model": "gemini-4-argon-high",
+      "registered_profile_ids": [
+        "gemini-4-argon-high"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "gemini-4-argon-high",
+          "requested_model": "gemini-4-argon-high",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "gemini-prepaid"
+          ],
+          "adapter_version": "agy-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low",
+        "strong"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "cursor",
+      "model_label": "Cursor Composer",
+      "requested_model": "composer-2.5",
+      "registered_profile_ids": [
+        "cursor-composer-2.5"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "cursor-composer-2.5",
+          "requested_model": "composer-2.5",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "cursor-subscription"
+          ],
+          "adapter_version": "cursor-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "ask/plan is read-only, not tool-free; data-only fence required"
+    },
+    {
+      "agent": "vibe",
+      "model_label": "Vibe Medium 3.5",
+      "requested_model": "mistral-medium-3.5",
+      "registered_profile_ids": [
+        "vibe-medium-3.5"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "vibe-medium-3.5",
+          "requested_model": "mistral-medium-3.5",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "vibe-subscription"
+          ],
+          "adapter_version": "vibe-cli-profile-v1"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "wildcard tool denial supported only with conflicting allowlist cleared; adapter confinement evidence required"
+    },
+    {
+      "agent": "muse",
+      "model_label": "Muse Spark 1.2",
+      "requested_model": "muse-spark-1.2",
+      "registered_profile_ids": [],
+      "identifier_status": "local_profile_resolves_entitlement_unknown",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "muse",
+      "model_label": "Muse Spark 1.3",
+      "requested_model": "muse-spark-1.3",
+      "registered_profile_ids": [],
+      "identifier_status": "local_profile_resolves_entitlement_unknown",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    },
+    {
+      "agent": "muse",
+      "model_label": "Muse Wonder",
+      "requested_model": "muse-wonder-1.0",
+      "registered_profile_ids": [
+        "muse-wonder-1.0",
+        "muse-wonder-1.0-low"
+      ],
+      "identifier_status": "registered",
+      "roles_candidate": [
+        "bounded_classification",
+        "strong_criterion_adjudication",
+        "constrained_repair"
+      ],
+      "qualification_status": "candidate_only",
+      "profiles": [
+        {
+          "profile_id": "muse-wonder-1.0",
+          "requested_model": "muse-wonder-1.0",
+          "reasoning_effort": "high",
+          "capacity_pool_ids": [
+            "muse-subscription"
+          ],
+          "adapter_version": "muse-cli-profile-v1"
+        },
+        {
+          "profile_id": "muse-wonder-1.0-low",
+          "requested_model": "muse-wonder-1.0",
+          "reasoning_effort": "low",
+          "capacity_pool_ids": [
+            "muse-subscription"
+          ],
+          "adapter_version": "muse-cli-profile-v2"
+        }
+      ],
+      "offline_fixture_status": "harness_only_no_candidate_outputs",
+      "provider_suitability": "not_measured",
+      "activation": false,
+      "candidate_tiers": [
+        "low",
+        "strong"
+      ],
+      "transport_gap": "reviewed data-only adapter plus runtime confinement evidence required; capability not assessed"
+    }
+  ]
+}
