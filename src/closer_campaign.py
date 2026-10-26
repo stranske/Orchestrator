@@ -39,6 +39,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
@@ -182,6 +183,7 @@ class Campaign:
         qualified_package: Mapping[str, Any] | None = None,
         demand_now: float | None = None,
         _demand_outcome: dict[str, Any] | None = None,
+        _retirement: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create the record, or resume the same campaign under the same owner.
 
@@ -232,12 +234,20 @@ class Campaign:
         stream = self._locked()
         try:
             current = self._read_unlocked()
+            original_current = current
+            retirement_record = None
             if current is not None:
                 if current["campaign_id"] != campaign_id or current["owner"] != owner:
                     raise CampaignError("campaign is owned by another id or runner")
                 if current["release_pin"] != release_pin:
                     raise CampaignError(
                         "campaign is pinned to a different release; reconcile first"
+                    )
+                if _retirement is not None:
+                    if demand_request is None:
+                        raise CampaignError("retirement requires fresh completed discovery")
+                    current, retirement_record = _retirement_view(
+                        self.path, current, demand_request, worker_config, _retirement
                     )
                 current_frontier = (current.get("worker_config") or {}).get("finite_frontier")
                 if current_frontier != frontier:
@@ -277,17 +287,41 @@ class Campaign:
                     raise CampaignError("completed demand did not bind an admission receipt")
                 if outcome["status"] == "replay":
                     return selected  # An exact replay neither writes nor bumps revision.
-                if current is not None and (
-                    current.get("workers") or current.get("hold_followups")
-                ):
-                    raise CampaignError(
-                        "existing campaign work remains owned; demand cannot replace it"
-                    )
                 selected["demand_assignment"] = _store_demand_assignment(
                     self.path, demand_assignment_bytes, receipt
                 )
                 selected["worker_config"]["assignment"] = selected["demand_assignment"]["path"]
                 selected["demand_continuations"] = []
+                if retirement_record is not None:
+                    manifest = load_manifest(selected["worker_config"]["runtime_manifest"])
+                    selected["cohort_retirement"] = _store_retirement(
+                        self.path, manifest, retirement_record
+                    )
+                    if (
+                        self._read_unlocked() != original_current
+                        or _retirement_evidence(self.path, original_current, manifest)
+                        != _retirement
+                    ):
+                        raise CampaignError("cohort changed during archive publication")
+                    if demand_request["deadline"] <= max(demand_now or _now(), _now()):
+                        raise CampaignError(
+                            "fresh cohort admission expired during archive publication"
+                        )
+                if original_current is not None:
+                    cohort_manifest = (
+                        load_manifest(selected["worker_config"]["runtime_manifest"])
+                        if selected.get("cohort_retirement")
+                        else None
+                    )
+                    owned = (
+                        _owned_cohort_workers(self.path, selected, cohort_manifest)
+                        if cohort_manifest is not None
+                        else selected.get("workers")
+                    )
+                    if owned or selected.get("hold_followups"):
+                        raise CampaignError(
+                            "existing campaign work remains owned; demand cannot replace it"
+                        )
                 selected["demand_prepared"] = {
                     "schema": "closer-demand-prepared/v1",
                     "status": "prepared",
@@ -795,6 +829,721 @@ def status_line(doc: dict[str, Any]) -> str:
         f"phase={doc['phase']} workers={live}/{doc['max_workers']} "
         f"drainable={drainable_workers(doc)} hold={'yes' if doc.get('hold') else 'no'}"
     )
+
+
+COHORT_RECORD_LIMIT = 4 * 1024 * 1024
+COHORT_HISTORY_LIMIT = 64
+COHORT_HISTORY_BYTES = 32 * 1024 * 1024
+
+
+def _complete_rows_from_leaves(manifest, cfg, detail, leaves):
+    """Authenticate full completion; STOP alone also admits nonactionable waits."""
+    import closer_native_observer as native
+    import closer_resources as resources
+    from closer_dispatcher import targets_from_assignment
+
+    targets = targets_from_assignment(Path(cfg["assignment"]))
+    if len(targets) > 64:
+        raise CampaignError("cohort completion target count exceeds bound")
+    proof = detail.get("completed_round")
+    if not isinstance(proof, dict) or native.completed_round_proof(manifest, cfg, proof) != proof:
+        raise CampaignError("cohort lacks authenticated completed round")
+    state = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
+    verdict = resources.validate_stop(state, proof["round_id"], targets)
+    if verdict.get("global_stop_valid") is not True or verdict.get("valid") is not True:
+        raise CampaignError("cohort no longer has global STOP")
+    receipt = json.loads(native._bounded_bytes(Path(proof["receipt_path"]), 32 * 1024 * 1024))
+    covered = {}
+    budget = [128 * 1024 * 1024]
+    loaded = {}
+    for leaf in leaves:
+        if leaf["active"]:
+            target = leaf["target"]
+            if target in covered:
+                raise CampaignError("cohort completion has duplicate active leaf")
+            ref = leaf["receipt_ref"]
+            key = (ref["receipt_path"], ref["receipt_sha256"])
+            if key not in loaded:
+                loaded[key] = _cohort_read(Path(ref["receipt_path"]), 32 * 1024 * 1024, budget)
+            raw = loaded[key]
+            import hashlib
+
+            from closer_native_descendants import _digest
+
+            if hashlib.sha256(raw).hexdigest() != ref["receipt_sha256"]:
+                raise CampaignError("cohort active leaf receipt changed")
+            row = json.loads(raw)["targets"][target]
+            if _digest(row) != leaf["source_row_sha256"]:
+                raise CampaignError("cohort active leaf row changed")
+            covered[target] = row
+    for target in targets:
+        if target not in covered:
+            covered[target] = receipt["targets"][target]
+    if set(covered) != set(targets) or any(
+        row.get("status") != "completed"
+        or row.get("stage_status") != "completed"
+        or row.get("provider_outcome_uncertain") not in (None, False)
+        or row.get("recovery_barrier") is not None
+        for row in covered.values()
+    ):
+        raise CampaignError("cohort retains incomplete, held or unknown active leaves")
+    return {target: sha256_json(covered[target]) for target in targets}
+
+
+def _completed_cohort_rows(manifest, cfg, detail):
+    leaves = []
+    if detail.get("descendant_bundle") is not None:
+        from closer_native_descendants import _HistoryBudget, observed_leaves
+
+        budget = _HistoryBudget()
+        state = Path(cfg["native_worker"]["state"])
+        budget.reserve_path(state)
+        budget.campaign_path = state
+        budget.campaign_doc = Campaign(state).read()
+        leaves = observed_leaves(
+            cfg, detail["descendant_bundle"], require_finalized=True, _history_budget=budget
+        )
+        budget.verify_sources()
+    return _complete_rows_from_leaves(manifest, cfg, detail, leaves)
+
+
+def _producer_completed_cohort_rows(manifest, cfg, detail):
+    """Actual result is not published yet; use pinned hook's finalized C bundle."""
+    leaves = []
+    if detail.get("descendant_bundle") is not None:
+        from closer_native_descendants import FINAL_SCHEMA, _digest, _read_signed, bundle_record
+
+        ref = detail["descendant_bundle"]
+        finalized = _read_signed(cfg, ref)
+        sealed = bundle_record(cfg, ref)
+        if (
+            finalized.get("schema") != FINAL_SCHEMA
+            or finalized.get("sealed_sha256") != _digest(sealed)
+            or finalized.get("worker") != cfg["native_worker"]
+            or finalized.get("admission") != cfg["native_admission"]
+            or finalized.get("cleanup") != detail["native_execution"]["phases"]["C"]["cleanup"]
+            or sealed.get("aggregate") != "completed"
+        ):
+            raise CampaignError("actual completed cohort lacks finalized exact cleanup")
+        leaves = sealed["leaves"]
+    return _complete_rows_from_leaves(manifest, cfg, detail, leaves)
+
+
+def _completion_cleanup(cfg, detail, outcome="ok"):
+    """Called by the actual worker result producer, never on caller assertions."""
+    import math
+
+    execution = detail.get("native_execution") or {}
+    phases = execution.get("phases") or {}
+    a, b, c = (phases.get(key) or {} for key in ("A", "B", "C"))
+    cleanup = c.get("cleanup") or {}
+    times = [
+        a.get("started_at"),
+        a.get("finished_at"),
+        b.get("started_at"),
+        b.get("finished_at"),
+        c.get("started_at"),
+        cleanup.get("released_at"),
+        c.get("finished_at"),
+    ]
+    handoff = Path(cfg.get("handoff_dir") or claims._handoff_dir())
+    if (
+        execution.get("schema") != "native-round-execution/v1"
+        or execution.get("admission_nonce") != cfg["native_admission"]["nonce"]
+        or execution.get("worker") != cfg["native_worker"]
+        or a.get("admitted") is not True
+        or a.get("exit_code") != 0
+        or b.get("started") is not True
+        or type(b.get("exit_code")) is not int
+        or b["exit_code"] not in ({0} if outcome == "ok" else {0, 78})
+        or c.get("attempted") is not True
+        or type(c.get("exit_code")) is not int
+        or c["exit_code"] not in ({0} if outcome == "ok" else {0, 65})
+        or c.get("dependencies_valid") is not True
+        or cleanup.get("schema") != "closer-native-lease-cleanup/v1"
+        or cleanup.get("lane") != "closer"
+        or cleanup.get("lane_dir") != str(handoff / ".lane-closer.lock")
+        or cleanup.get("released") is not True
+        or cleanup.get("exact_token_matched") is not True
+        or not _DIGEST.fullmatch(str(a.get("token_sha256", "")))
+        or cleanup.get("expected_token_sha256") != a["token_sha256"]
+        or cleanup.get("meta_sha256") != a["token_sha256"]
+        or type(a.get("lease_inode")) is not int
+        or a["lease_inode"] <= 0
+        or type(cleanup.get("released_lease_inode")) is not int
+        or cleanup.get("released_lease_inode") != a["lease_inode"]
+        or any(type(stamp) not in (int, float) or not math.isfinite(stamp) for stamp in times)
+        or times != sorted(times)
+    ):
+        raise CampaignError("cohort lacks exact actual A/B0/C0 cleanup")
+    return execution
+
+
+def _cohort_signed_bytes(record, root):
+    import closer_mechanisms as mechanisms
+
+    raw = json.dumps(
+        {"record": record, "signature": mechanisms._signature(record, mechanisms._key(root))},
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    if len(raw) > COHORT_RECORD_LIMIT:
+        raise CampaignError("cohort record exceeds bound")
+    return raw
+
+
+def _cohort_read(path, limit, budget):
+    import closer_native_observer as native
+
+    size = Path(path).stat(follow_symlinks=False).st_size
+    if size > budget[0]:
+        raise CampaignError("cohort evidence byte budget exhausted")
+    raw = native._bounded_bytes(path, limit)
+    if len(raw) > budget[0]:
+        raise CampaignError("cohort evidence changed beyond budget")
+    budget[0] -= len(raw)
+    return raw
+
+
+def _signed_cohort_record(ref, expected_path, root, budget):
+    import hashlib
+    import hmac
+
+    import closer_mechanisms as mechanisms
+
+    if (
+        not isinstance(ref, dict)
+        or set(ref) != {"path", "sha256"}
+        or ref["path"] != str(expected_path)
+    ):
+        raise CampaignError("cohort reference path differs")
+    raw = _cohort_read(expected_path, COHORT_RECORD_LIMIT, budget)
+    signed = json.loads(raw)
+    record = signed["record"]
+    if hashlib.sha256(raw).hexdigest() != ref["sha256"] or not hmac.compare_digest(
+        str(signed.get("signature", "")), mechanisms._signature(record, mechanisms._key(root))
+    ):
+        raise CampaignError("cohort record hash/signature differs")
+    return record, raw
+
+
+def _cohort_worker_evidence(state_path, doc, worker, manifest, budget):
+    """Historical generation comes from authenticated original admission, not <=."""
+    import hashlib
+
+    import closer_native_observer as native
+
+    result_file = result_path(Path(state_path), worker["worker_id"])
+    raw = _cohort_read(result_file, COHORT_RECORD_LIMIT, budget)
+    result = json.loads(raw)
+    context = result["native_admission"]
+    native.validate_admission(manifest, context, for_effects=False)
+    if (
+        result.get("worker_id") != worker["worker_id"]
+        or result.get("target") != ROUND_UNIT
+        or result.get("mechanism") != "native-handoff/v1"
+        or result.get("outcome") != worker.get("outcome")
+        or worker.get("state") != "terminal"
+        or worker.get("outcome") not in {"ok", "scoped_continuation", "unavailable"}
+        or context.get("demand_assignment") != doc.get("demand_assignment")
+        or context["campaign"]["owner"] != doc["owner"]
+        or context["campaign"]["campaign_id"] != doc["campaign_id"]
+        or context["campaign"]["state"] != str(Path(state_path))
+    ):
+        raise CampaignError("cohort worker identity or original scope differs")
+    original = {**doc, "generation": context["campaign"]["generation"]}
+    cfg = native.result_admission_config(
+        doc["worker_config"], context, Path(state_path), original, worker
+    )
+    detail = json.loads(result["detail"])
+    evidence = {
+        "worker_id": worker["worker_id"],
+        "result": {"path": str(result_file), "sha256": hashlib.sha256(raw).hexdigest()},
+        "result_bytes": raw.decode("utf-8"),
+    }
+    if worker["outcome"] == "unavailable":
+        proof = detail.get("native_no_start")
+        if (
+            not isinstance(proof, dict)
+            or native.pre_dispatch_no_start_proof(manifest, cfg, proof) != proof
+        ):
+            raise CampaignError("historical worker lacks signed no-start proof")
+        return evidence, cfg, detail, None
+    root = native.contract(manifest)[3]
+    path = root / context["nonce"] / ("completed-cohort-" + worker["worker_id"] + ".json")
+    record, terminal_bytes = _signed_cohort_record(
+        detail.get("cohort_terminal"), path, root, budget
+    )
+    if (
+        record.get("schema") != "closer-terminal-cohort-worker/v1"
+        or record.get("binding") != native.binding(manifest)
+        or record.get("admission") != context
+        or record.get("campaign") != context["campaign"]
+        or record.get("worker") != cfg["native_worker"]
+        or record.get("worker_id") != worker["worker_id"]
+        or record.get("outcome") != worker["outcome"]
+        or type(record.get("completed")) is not bool
+        or record.get("native_execution") != detail.get("native_execution")
+        or record.get("completed_round") != detail.get("completed_round")
+        or record.get("proof") != detail.get("proof")
+        or record.get("descendant_bundle") != detail.get("descendant_bundle")
+    ):
+        raise CampaignError("cohort producer attestation differs from exact result")
+    _completion_cleanup(cfg, record, worker["outcome"])
+    evidence["terminal"] = detail["cohort_terminal"]
+    evidence["terminal_bytes"] = terminal_bytes.decode("utf-8")
+    return evidence, cfg, detail, record
+
+
+def _retired_prefix(state_path, doc, manifest):
+    """Authenticate the exact retained historical prefix; never infer from age."""
+    import closer_native_observer as native
+
+    ref = doc.get("cohort_retirement")
+    if ref is None:
+        return {"workers": 0, "depth": 0, "bytes": 0}
+    root = native.contract(manifest)[3]
+    expected_binding = native.binding(manifest)
+    current = doc
+    total = 0
+    budget = [COHORT_HISTORY_BYTES]
+    count = None
+    depth = None
+    for _index in range(COHORT_HISTORY_LIMIT):
+        digest = ref.get("sha256") if isinstance(ref, dict) else None
+        if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
+            raise CampaignError("retirement archive identity differs")
+        path = Path(state_path).with_name(Path(state_path).name + ".cohorts") / (digest + ".json")
+        record, raw = _signed_cohort_record(ref, path, root, budget)
+        total += len(raw)
+        if total > COHORT_HISTORY_BYTES:
+            raise CampaignError("retirement archive history exceeds byte bound")
+        old = record.get("previous")
+        prefix = old.get("workers") if isinstance(old, dict) else None
+        if (
+            record.get("schema") != "closer-cohort-retirement/v1"
+            or record.get("binding") != expected_binding
+            or record.get("state") != str(Path(state_path))
+            or not isinstance(prefix, list)
+            or not prefix
+            or prefix != doc["workers"][: len(prefix)]
+            or old.get("owner") != doc["owner"]
+            or old.get("campaign_id") != doc["campaign_id"]
+            or old.get("release_pin") != doc["release_pin"]
+            or record.get("next_generation") != old.get("generation", 0) + 1
+            or record.get("next_generation") != current["demand_assignment"]["campaign_generation"]
+            or record.get("next_request_id") != current["demand_admission"]["request_id"]
+            or record.get("authority") is not False
+        ):
+            raise CampaignError("retirement archive scope/prefix/generation differs")
+        if (
+            type(record.get("depth")) is not int
+            or not 1 <= record["depth"] <= COHORT_HISTORY_LIMIT
+            or (depth is not None and record["depth"] != depth - _index)
+        ):
+            raise CampaignError("retirement archive depth differs")
+        if count is None:
+            count = len(prefix)
+            depth = record["depth"]
+        ref = old.get("cohort_retirement")
+        if ref is None:
+            if record["depth"] != 1:
+                raise CampaignError("retirement archive chain is incomplete")
+            return {"workers": count, "depth": depth, "bytes": total}
+        current = old
+    raise CampaignError("retirement archive history exceeds count bound")
+
+
+def _owned_cohort_workers(state_path, doc, manifest):
+    workers = doc.get("workers")
+    if not isinstance(workers, list) or len(workers) > 1024:
+        raise CampaignError("cohort worker registry exceeds bound")
+    return workers[_retired_prefix(state_path, doc, manifest)["workers"] :]
+
+
+def current_cohort_workers(state_path, doc, manifest):
+    """Authenticated retired prefix only; retained JSON status is not an origin."""
+    import closer_native_observer as native
+
+    current = _owned_cohort_workers(state_path, doc, manifest)
+    if len(current) > COHORT_HISTORY_LIMIT:
+        raise CampaignError("current cohort worker validation exceeds bound")
+    budget = [128 * 1024 * 1024]
+    if doc.get("demand_admission") is not None:
+        for worker in current:
+            # Publication already refuses live/unknown rows. Known results must
+            # identify the exact CURRENT origin before defeating first-start expiry.
+            if worker.get("state") != "terminal":
+                raise CampaignError("current cohort still has live/unknown workers")
+            result = json.loads(
+                _cohort_read(
+                    result_path(Path(state_path), worker["worker_id"]), COHORT_RECORD_LIMIT, budget
+                )
+            )
+            context = result["native_admission"]
+            native.validate_admission(manifest, context, for_effects=False)
+            if context.get("demand_assignment") != doc.get("demand_assignment"):
+                raise CampaignError("worker history belongs to another unretired demand origin")
+            old = {**doc, "generation": context["campaign"]["generation"]}
+            native.result_admission_config(
+                doc["worker_config"], context, Path(state_path), old, worker
+            )
+    return current
+
+
+def _retirement_evidence(state_path, doc, manifest):
+    """Read-only completion proof before and again inside the existing CAS."""
+    import closer_native_observer as native
+
+    workers = current_cohort_workers(state_path, doc, manifest)
+    if (
+        doc.get("phase") != "work"
+        or doc.get("hold")
+        or doc.get("release_record") is not None
+        or doc.get("release_attempt") is not None
+        or doc.get("targets") != {ROUND_UNIT: "done"}
+        or not workers
+        or len(workers) > COHORT_HISTORY_LIMIT
+        or any(
+            w.get("state") != "terminal"
+            or w.get("outcome") not in {"ok", "scoped_continuation", "unavailable"}
+            for w in workers
+        )
+        or any(w.get("pid") and claims._pid_alive(w["pid"]) for w in workers)
+        or any(
+            row.get("status") not in {"consumed", "resolved"}
+            for row in (doc.get("hold_followups") or {}).values()
+        )
+        or any(
+            row.get("status") not in {"acknowledged", "ack_overdue"}
+            for row in (doc.get("hold_escalations") or {}).values()
+        )
+    ):
+        raise CampaignError("cohort retains ownership, unknown outcomes or held budgets")
+    if native_barrier(doc) is not None or claims.holder(f"{doc['campaign_id']}:{ROUND_UNIT}"):
+        raise CampaignError("cohort native/claim ownership is still live")
+    if qualify(manifest, Path(state_path).parent):
+        raise CampaignError("cohort package is no longer qualified")
+    evidence = []
+    budget = [128 * 1024 * 1024]
+    for worker in workers:
+        item, cfg, detail, terminal = _cohort_worker_evidence(
+            state_path, doc, worker, manifest, budget
+        )
+        evidence.append(item)
+    if (
+        workers[-1]["outcome"] != "ok"
+        or terminal is None
+        or terminal.get("completed") is not True
+        or terminal.get("campaign") != native._campaign_identity(state_path, doc)
+        or detail.get("cohort_completion") != detail.get("cohort_terminal")
+        or terminal["row_sha256"] != _completed_cohort_rows(manifest, cfg, detail)
+    ):
+        raise CampaignError("cohort has no final authenticated full completion")
+    if cfg["native_admission"].get("demand_continuations", []) != doc.get(
+        "demand_continuations", []
+    ):
+        raise CampaignError("cohort continuation journal differs from final signed origin")
+    released_holds = set()
+    continuation_bytes = []
+    for ref in cfg["native_admission"].get("demand_continuations", []):
+        raw = _cohort_read(Path(ref["path"]), COHORT_RECORD_LIMIT, budget)
+        # validate_admission above already authenticated this exact chain. Keep
+        # its immutable bytes and demand that every discharged budget appears
+        # in an actual signed release, rather than accepting a status label.
+        if sha256_file(ref["path"]) != ref["sha256"]:
+            raise CampaignError("cohort continuation changed before archive")
+        continuation_bytes.append(raw.decode("utf-8"))
+        released_holds.update(row["hold_id"] for row in json.loads(raw)["record"]["releases"])
+    if any(
+        row.get("status") != "consumed"
+        or row.get("hold_id") != hold_id
+        or hold_id not in released_holds
+        for hold_id, row in (doc.get("hold_followups") or {}).items()
+    ):
+        raise CampaignError("cohort held budget lacks authenticated consumed release")
+    original_assignment = _cohort_read(Path(cfg["assignment"]), 2 * 1024 * 1024, budget)
+    original_receipt = _cohort_read(
+        Path(detail["completed_round"]["receipt_path"]), 32 * 1024 * 1024, budget
+    )
+    if (
+        sha256_file(detail["completed_round"]["receipt_path"])
+        != detail["completed_round"]["receipt_sha256"]
+    ):
+        raise CampaignError("completed cohort receipt changed before archive")
+    # Preserve the exact existing per-target journals and immutable receipt
+    # proofs before another cohort can touch the same scoped infrastructure.
+    # Paths come only from the authenticated original cfg/bundle, never a scan.
+    import hashlib
+
+    import closer_pipeline as pipeline
+    import closer_resources as resources
+
+    pipeline_path = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
+    scoped_root = resources.scoped_root(pipeline_path)
+    paths = {pipeline_path, Path(detail["completed_round"]["receipt_path"])}
+    for target in terminal["row_sha256"]:
+        shard = resources.shard_dir(scoped_root, target) / "state.json"
+        paths.add(shard)
+        paths.add(shard.parent / "state.actions" / (pipeline._digest(target) + ".json"))
+    bundle_ref = detail.get("descendant_bundle")
+    if bundle_ref is not None:
+        import closer_native_descendants as descendants
+
+        paths.add(Path(bundle_ref["path"]))
+        sealed = descendants.bundle_record(cfg, bundle_ref)
+        for leaf in sealed["leaves"]:
+            paths.add(Path(leaf["receipt_ref"]["receipt_path"]))
+    if len(paths) > 256:
+        raise CampaignError("retirement journal path count exceeds bound")
+    journals = []
+    for path in sorted(paths):
+        # Missing optional legacy/actions files are absence, not a replacement
+        # for the authenticated receipt/current row proof already required.
+        if path.exists():
+            raw = _cohort_read(path, COHORT_RECORD_LIMIT, budget)
+            journals.append(
+                {
+                    "path": str(path),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "bytes": raw.decode("utf-8"),
+                }
+            )
+    return {
+        "journals": journals,
+        "continuation_bytes": continuation_bytes,
+        "workers": evidence,
+        "completed": detail["cohort_completion"],
+        "row_sha256": terminal["row_sha256"],
+        "assignment_bytes": original_assignment.decode("utf-8"),
+        "receipt_bytes": original_receipt.decode("utf-8"),
+    }
+
+
+def _next_cohort_config(doc, targets, request):
+    """Freeze fresh existing read-only observations, never reuse a retired frontier."""
+    import copy
+
+    import closer_dispatcher as dispatcher
+    import closer_frontier_policy as policy
+
+    cfg = copy.deepcopy(doc["worker_config"])
+    deadline = _now() + 30
+    backend = dispatcher.Closer(
+        dispatcher.GitHub(deadline=deadline),
+        state_path=cfg["dispatch_state"],
+        apply=False,
+        workers=False,
+    )
+    observations = {target: backend.observe(target) for target in targets}
+    bindings = {}
+    for target, row in observations.items():
+        if (
+            row.get("target") != target
+            or row.get("revision") in (None, "unknown")
+            or row.get("_local_cached") is True
+            or not isinstance(row.get("evidence"), dict)
+            or row.get("action") == "complete"
+            or not (
+                row.get("eligible") is True
+                or row.get("action") == "collect_evidence"
+                or (
+                    row.get("action") == "wait"
+                    and row.get("reason") == "current-head checks pending or unknown"
+                    and row.get("pending_check_run_ids")
+                    and row.get("pending_check_head") == row.get("head")
+                )
+            )
+        ):
+            raise CampaignError("fresh demand lacks exact new actionable/CI-wait evidence")
+        bindings[target] = {
+            "revision": row["revision"],
+            "action_id": policy.action_identity(
+                target, row["revision"], row["action"], row["operation_binding"]
+            ),
+        }
+    if cfg.get("finite_frontier") is not None:
+        cfg["finite_frontier"] = policy.make_frontier(
+            targets,
+            owner=doc["owner"],
+            frontier_id="demand-" + sha256_json([request, bindings])[:40],
+            bindings=bindings,
+        )
+        if cfg["finite_frontier"] == doc["worker_config"]["finite_frontier"]:
+            raise CampaignError("retired frontier cannot authorize another cohort")
+    return cfg
+
+
+@contextmanager
+def _retirement_locks(manifest):
+    import closer_native_observer as native
+
+    root = native.contract(manifest)[3]
+    with (
+        (root / "native-supervisor.lock").open("a+") as supervisor,
+        (root / "native-entry.lock").open("a+") as entry,
+    ):
+        try:
+            fcntl.flock(supervisor.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(entry.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise CampaignError("existing native owner blocks cohort retirement") from exc
+        yield
+
+
+def _retirement_view(state_path, doc, request, cfg, expected):
+    import copy
+
+    import closer_native_observer as native
+
+    manifest = load_manifest(doc["worker_config"]["runtime_manifest"])
+    actual = _retirement_evidence(state_path, doc, manifest)
+    if {key: value for key, value in cfg.items() if key != "finite_frontier"} != {
+        key: value for key, value in doc["worker_config"].items() if key != "finite_frontier"
+    }:
+        raise CampaignError("fresh cohort changed qualified worker configuration")
+    if doc["worker_config"].get("finite_frontier") is not None:
+        from closer_frontier_policy import validate_frontier
+
+        frontier = validate_frontier(cfg.get("finite_frontier"), targets=request["targets"])
+        if frontier["owner"] != doc["owner"] or frontier == doc["worker_config"]["finite_frontier"]:
+            raise CampaignError("fresh cohort must not reuse original finite authority")
+    elif cfg.get("finite_frontier") is not None:
+        raise CampaignError("fresh cohort changed native publication mechanism")
+    if (
+        actual != expected
+        or request["campaign_generation"] != doc["generation"] + 1
+        or request["expected_revision"] != doc["revision"]
+    ):
+        raise CampaignError("cohort changed before retirement CAS")
+    # Archive precedes canonical generation/admission. A crash leaves only an
+    # unreferenced, non-authorizing orphan; accepted requests retain their receipt.
+    history = _retired_prefix(state_path, doc, manifest)
+    if history["depth"] >= COHORT_HISTORY_LIMIT:
+        raise CampaignError("retirement archive history exceeds count bound")
+    from closer_demand_admission import _hash as demand_hash
+
+    record = {
+        "schema": "closer-cohort-retirement/v1",
+        "depth": history["depth"] + 1,
+        "state": str(Path(state_path)),
+        "binding": native.binding(manifest),
+        "previous": copy.deepcopy(doc),
+        "evidence": actual,
+        "next_generation": request["campaign_generation"],
+        "next_request_id": demand_hash(request),
+        "authority": False,
+    }
+    selected = copy.deepcopy(doc)
+    selected.update(
+        generation=request["campaign_generation"],
+        targets={ROUND_UNIT: "pending"},
+        assignment_targets=list(request["targets"]),
+        worker_config=copy.deepcopy(cfg),
+        hold_followups={},
+        hold_escalations={},
+    )
+    selected.pop("demand_wake", None)
+    selected.pop("demand_prepared", None)
+    return selected, record
+
+
+def _store_retirement(state_path, manifest, record):
+    import hashlib
+
+    import closer_native_observer as native
+
+    history = _retired_prefix(state_path, record["previous"], manifest)
+    root = native.contract(manifest)[3]
+    raw = _cohort_signed_bytes(record, root)
+    if history["bytes"] + len(raw) > COHORT_HISTORY_BYTES:
+        raise CampaignError("retirement archive history exceeds byte bound")
+    digest = hashlib.sha256(raw).hexdigest()
+    directory = Path(state_path).with_name(Path(state_path).name + ".cohorts")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / (digest + ".json")
+    if path.resolve() != path:
+        raise CampaignError("retirement archive path is aliased")
+    if not path.exists():
+        count = 0
+        used = 0
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    raise CampaignError("retirement archive contains unknown storage")
+                count += 1
+                used += entry.stat(follow_symlinks=False).st_size
+                if count >= COHORT_HISTORY_LIMIT or used + len(raw) > COHORT_HISTORY_BYTES:
+                    raise CampaignError("retirement archive storage capacity exhausted")
+    try:
+        native._immutable(path, raw)
+    except FileExistsError:
+        if native._bounded_bytes(path, COHORT_RECORD_LIMIT) != raw:
+            raise CampaignError("retirement archive bytes conflict")
+    return {"path": str(path), "sha256": digest}
+
+
+def _seal_completed_cohort(state_path, cfg, detail, worker_id, outcome):
+    """Only run_worker.finish may seal its actual successful runtime result."""
+    import hashlib
+
+    import closer_native_observer as native
+
+    manifest = load_manifest(cfg["runtime_manifest"])
+    doc = Campaign(state_path).read()
+    matches = [worker for worker in doc["workers"] if worker["worker_id"] == worker_id]
+    if len(matches) != 1:
+        raise CampaignError("cohort completion worker identity differs")
+    original_cfg = native.result_admission_config(
+        doc["worker_config"], cfg["native_admission"], Path(state_path), doc, matches[0]
+    )
+    original_cfg["native_worker"] = cfg["native_worker"]
+    complete = False
+    rows = None
+    if outcome == "ok":
+        proof = detail.get("completed_round")
+        if native.completed_round_proof(manifest, original_cfg, proof) != proof or not isinstance(
+            proof, dict
+        ):
+            raise CampaignError("known terminal worker lacks signed C0 boundary")
+        try:
+            rows = _producer_completed_cohort_rows(manifest, original_cfg, detail)
+            complete = True
+        except CampaignError:
+            pass  # Known terminality is weaker than completed-cohort retirement.
+    else:
+        from closer_runtime_binding import scoped_continuation_proof
+
+        proof = detail.get("proof")
+        if not isinstance(proof, dict) or scoped_continuation_proof(original_cfg, proof) != proof:
+            raise CampaignError("known terminal worker lacks scoped continuation proof")
+    execution = _completion_cleanup(original_cfg, detail, outcome)
+    record = {
+        "schema": "closer-terminal-cohort-worker/v1",
+        "completed": complete,
+        "outcome": outcome,
+        "binding": native.binding(manifest),
+        "campaign": cfg["native_admission"]["campaign"],
+        "admission": cfg["native_admission"],
+        "worker": cfg["native_worker"],
+        "worker_id": worker_id,
+        "completed_round": detail.get("completed_round"),
+        "proof": detail.get("proof"),
+        "descendant_bundle": detail.get("descendant_bundle"),
+        "row_sha256": rows,
+        "native_execution": execution,
+        "authority": False,
+    }
+    root = native.contract(manifest)[3]
+    path = root / cfg["native_admission"]["nonce"] / ("completed-cohort-" + worker_id + ".json")
+    raw = _cohort_signed_bytes(record, root)
+    try:
+        native._immutable(path, raw)
+    except FileExistsError:
+        if native._bounded_bytes(path, COHORT_RECORD_LIMIT) != raw:
+            raise CampaignError("cohort completion bytes already differ")
+    return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}, complete
 
 
 def _store_demand_assignment(state_path, raw, receipt):
@@ -1646,6 +2395,26 @@ def run_worker(
     module_dir = module_dir or Path(__file__).resolve().parent
 
     def finish(outcome, detail):
+        if (
+            outcome in {"ok", "scoped_continuation"}
+            and result_mechanism == "native-handoff/v1"
+            and worker_admission is not None
+        ):
+            payload = None
+            try:
+                payload = json.loads(detail)
+                reference, complete = _seal_completed_cohort(
+                    Path(state), cfg, payload, worker_id, outcome
+                )
+                payload["cohort_terminal"] = reference
+                if complete:
+                    payload["cohort_completion"] = reference
+                detail = json.dumps(payload, sort_keys=True)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as exc:
+                if isinstance(payload, dict):
+                    payload["cohort_completion_unavailable"] = f"{type(exc).__name__}: {exc}"
+                    detail = json.dumps(payload, sort_keys=True)
+                # Original outcome is preserved; absence never grants retirement.
         try:
             write_result(
                 result,
@@ -3038,6 +3807,9 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
                 "status": "refused",
                 "reason": "pinned demand worker config invalid: " + str(exc),
             }
+        owned_workers = (
+            _owned_cohort_workers(campaign.path, doc, manifest) if doc is not None else []
+        )
         previous = state.get("closer_campaign_demand") or {}
         source = {key: value for key, value in assignment.items() if key != "generation"}
         source_sha = sha256_json(source)
@@ -3061,7 +3833,7 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
                 }
                 or (previous.get("wake") or {}).get("status")
                 in {"submitted", "unknown", "started", "denied"}
-                or doc.get("workers")
+                or owned_workers
                 or doc.get("hold_followups")
                 or not original["not_before"] <= current < original["deadline"]
             ):
@@ -3194,6 +3966,24 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
                 "deadline": current + 120,
                 "targets": targets,
             }
+        retirement = None
+        from closer_demand_admission import _hash as demand_hash
+
+        if (
+            doc is not None
+            and (owned_workers or doc.get("hold_followups"))
+            and demand_hash(request) != (doc.get("demand_admission") or {}).get("request_id")
+        ):
+            try:
+                retirement = _retirement_evidence(campaign.path, doc, manifest)
+                if same_source:
+                    if request["campaign_generation"] != doc["generation"] + 1:
+                        raise CampaignError("prepared retirement request generation differs")
+                else:
+                    request["campaign_generation"] = doc["generation"] + 1
+                cfg = _next_cohort_config(doc, request["targets"], request)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                return {"status": "held", "reason": str(exc)}
         prospective = (
             copy.deepcopy(doc)
             if doc is not None
@@ -3208,6 +3998,15 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
                 "workers": [],
             }
         )
+        if retirement is not None:
+            prospective.update(
+                generation=request["campaign_generation"],
+                targets={ROUND_UNIT: "pending"},
+                assignment_targets=list(request["targets"]),
+                worker_config=copy.deepcopy(cfg),
+                hold_followups={},
+                hold_escalations={},
+            )
         checked = admit_in_transaction(
             prospective,
             assignment_bytes=raw,
@@ -3220,7 +4019,8 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
         if (
             checked["status"] == "admitted"
             and doc is not None
-            and (doc.get("workers") or doc.get("hold_followups"))
+            and retirement is None
+            and (owned_workers or doc.get("hold_followups"))
         ):
             return {"status": "held", "reason": "existing campaign work remains owned"}
         snapshot = _store_demand_assignment(campaign.path, raw, checked["record"])
@@ -3235,25 +4035,29 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
                 "wake": {"status": "prepared", "request_id": checked["record"]["request_id"]},
             }
             _atomic_write(state_path, state)  # prepared before CAS; no process submitted yet
-        doc = campaign.begin(
-            contract["campaign_id"],
-            request["targets"],
-            owner=contract["owner"],
-            release_pin=manifest["package_digest"],
-            worker_config=cfg,
-            demand_assignment_bytes=raw,
-            demand_request=request,
-            qualified_package=package,
-            demand_now=current,
-            _demand_outcome=outcome,
-        )
+        from contextlib import nullcontext
+
+        with _retirement_locks(manifest) if retirement is not None else nullcontext():
+            doc = campaign.begin(
+                contract["campaign_id"],
+                request["targets"],
+                owner=contract["owner"],
+                release_pin=manifest["package_digest"],
+                worker_config=cfg,
+                demand_assignment_bytes=raw,
+                demand_request=request,
+                qualified_package=package,
+                demand_now=current,
+                _demand_outcome=outcome,
+                _retirement=retirement,
+            )
         recovering = (
             outcome["status"] == "replay"
             and same_source
             and previous.get("wake")
             == {"status": "prepared", "request_id": outcome["record"]["request_id"]}
             and not doc.get("demand_wake")
-            and not doc.get("workers")
+            and not _owned_cohort_workers(campaign.path, doc, manifest)
             and not doc.get("hold_followups")
             and doc.get("demand_assignment") == snapshot
             and outcome["record"]["not_before"] <= current < outcome["record"]["deadline"]
@@ -3283,7 +4087,7 @@ def controller_demand_after_discovery(context, *, launcher=default_launcher, now
                 or current_doc.get("release_pin") != manifest["package_digest"]
                 or current_doc.get("assignment_targets") != request["targets"]
                 or current_doc.get("worker_config") != doc.get("worker_config")
-                or current_doc.get("workers")
+                or _owned_cohort_workers(campaign.path, current_doc, manifest)
                 or current_doc.get("hold_followups")
                 or not outcome["record"]["not_before"]
                 <= max(current, _now())

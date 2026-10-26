@@ -497,7 +497,12 @@ def publish_admission(manifest, manifest_path, state_path, doc):
             raise mechanisms.MechanismError(
                 "native demand admission differs from qualified package/snapshot"
             )
-        if not doc.get("workers") and not demand["not_before"] <= time.time() < demand["deadline"]:
+        from closer_campaign import current_cohort_workers
+
+        if (
+            not current_cohort_workers(state_path, doc, manifest)
+            and not demand["not_before"] <= time.time() < demand["deadline"]
+        ):
             raise mechanisms.MechanismError(
                 "native demand admission is not due or expired before start"
             )
