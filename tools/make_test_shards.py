@@ -2,7 +2,7 @@
 """Balance deterministic module shards from JUnit timings (never verification counts).
 
 Run after adding/removing test modules:
-  python tools/make_test_shards.py junit.xml --shards 3
+  python tools/make_test_shards.py junit.xml --shards 6
 Untimed modules use the median measured module duration, and are named in the manifest.
 """
 
@@ -67,7 +67,7 @@ def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("junit", type=pathlib.Path)
-    parser.add_argument("--shards", type=int, default=3)
+    parser.add_argument("--shards", type=int, default=6)
     parser.add_argument(
         "--output", type=pathlib.Path, default=pathlib.Path("config/test-shards.json")
     )

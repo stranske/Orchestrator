@@ -155,8 +155,6 @@ def test_only_final_printed_summary_supplies_counts():
 
 
 def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
-    from coverage import CoverageData
-
     (tmp_path / "src").mkdir()
     (tmp_path / "config").mkdir()
     (tmp_path / "src/widget.py").write_text("def answer():\n    return 42\n")
@@ -175,7 +173,22 @@ def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
     monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
     code, output = verify.run_pytest_shard("1/1", tmp_path / "evidence")
     assert code == 0, output
-    data = CoverageData(basename=str(tmp_path / ".coverage.shard-1.pytest"))
-    data.read()
-    widget = next(name for name in data.measured_files() if name.endswith("widget.py"))
-    assert 2 in data.lines(widget)
+    report = tmp_path / "worker-coverage.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "coverage",
+            "json",
+            "--data-file=.coverage.shard-1.pytest",
+            "-o",
+            str(report),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    files = json.loads(report.read_text())["files"]
+    widget = next(name for name in files if name.endswith("widget.py"))
+    assert 2 in files[widget]["executed_lines"]

@@ -1,6 +1,6 @@
 # Sharded verification
 
-Every PR runs three four-worker pytest shards in the checkout and three in the flat
+Every PR runs six four-worker pytest shards in the checkout and six in the flat
 exec mirror. Each shape has one aggregate that runs the existing selftests and gates.
 The checkout aggregate also combines pytest-worker, selftest and gate coverage and
 publishes `gate-coverage` and `gate-coverage-trend`.
@@ -15,8 +15,8 @@ every event. Neither permits a collection drop.
 Run a shard and then aggregate its evidence with its peers:
 
 ```sh
-VERIFY_PYTEST_WORKERS=4 python3 src/verify.py --pytest-shard 1/3 --coverage --shard-output shard-results
-# Collect shard-1.json, shard-2.json, shard-3.json and every .coverage.shard-*.*
+VERIFY_PYTEST_WORKERS=4 python3 src/verify.py --pytest-shard 1/6 --coverage --shard-output shard-results
+# Collect shard-1.json through shard-6.json and every .coverage.shard-*.*
 # from the separate shard checkouts into one evidence directory.
 python3 src/verify.py --aggregate evidence --coverage --floor-may-lag
 ```
@@ -31,14 +31,16 @@ When adding or removing a test module, regenerate the plan:
 
 ```sh
 python3 -m pytest -q -n 4 --junitxml=junit.xml
-python3 tools/make_test_shards.py junit.xml --shards 3
+python3 tools/make_test_shards.py junit.xml --shards 6
 python3 -m pytest -q tests/test_verify_sharding.py
 ```
 
 The generator balances modules by summed JUnit timing, with deterministic ties.
 It lists modules absent from the timing sample and assigns them the median measured
-duration. The initial sample was the 2026-10-25 local four-worker control; its
-roughly 527 test-seconds per shard are estimates, not hosted job minutes.
+duration. The initial plan used the 2026-10-25 local control; the current
+plan uses this PR's hosted run 40328210708. JUnit is used here only for balancing
+timings. Hosted job minutes and pipeline wall time are read separately from
+`gh run view --json jobs`.
 
 Acceptance remains the issue's dated measurement: on 2026-11-22, inspect the five
 latest successful PR CI runs using `gh run view <id> --json jobs`. Measure from the
