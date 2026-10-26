@@ -1883,7 +1883,8 @@ def supervise_native(manifest, manifest_path, *, budget_seconds):
             raise
 
 
-def qualification_problems(manifest):
+def qualification_receipt_problems(manifest):
+    """Authenticate immutable package/lifecycle evidence; grants no ACT eligibility."""
     try:
         _value, _wrapper, _python, root = contract(manifest)
         signed = _read(root / "native-qualification.json")
@@ -1924,6 +1925,18 @@ def qualification_problems(manifest):
             or _read(directory / "crash.json").get("exit") != -signal.SIGKILL
         ):
             raise mechanisms.MechanismError("native result belongs to another package or lifecycle")
+        return []
+    except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
+        return [f"native handoff qualification held: {exc}"]
+
+
+def qualification_problems(manifest):
+    """ACT qualification retains the original current-entry/unknown barrier."""
+    problems = qualification_receipt_problems(manifest)
+    if problems:
+        return problems
+    try:
+        _value, _wrapper, _python, root = contract(manifest)
         active = _read(root / "native-active.json")
         if active.get("status") != "terminal" and _CURRENT_ENTRY.get(str(root)) != active.get(
             "nonce"

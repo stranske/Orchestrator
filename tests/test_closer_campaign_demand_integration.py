@@ -1218,7 +1218,7 @@ def test_controller_services_only_pinned_communication_without_native_entry(
     checks, deliveries = [], []
     monkeypatch.setattr(
         campaign,
-        "qualify",
+        "qualify_communication",
         lambda *_: checks.append(True) or (["not qualified"] if case == "qualification" else []),
     )
     actual_service = escalation.service
@@ -1268,3 +1268,140 @@ def test_controller_services_only_pinned_communication_without_native_entry(
             )
         else:
             assert any("escapes pinned root" in row.get("reason", "") for row in output)
+
+
+@pytest.mark.parametrize(
+    "fault", ["unknown", "corrupt", "unsafe", "unreadable", "signature", "artifact", "module"]
+)
+def test_real_static_qualification_keeps_unknown_native_owned_while_communicating(
+    publisher, tmp_path, monkeypatch, fault
+):
+    """Genuine supervisor receipt; faulted current observations grant no ACT."""
+    import os
+    import sys
+    import time
+
+    from test_closer_hold_escalation import world
+    from test_closer_native_production_composition import _core
+
+    import closer_hold_followup as holds
+    import closer_native_observer as native
+
+    monkeypatch.setattr(campaign, "_now", time.time)
+    monkeypatch.setattr(campaign, "qualify", _REAL_QUALIFY)
+    manifest, pin, root, _controller, state_path, _wrapper, *_ = publisher
+    seams = tmp_path / "static-qualification-offline"
+    seams.mkdir()
+    (seams / "sitecustomize.py").write_text(
+        "import socket\ndef blocked(*a,**k): raise AssertionError('network forbidden')\nsocket.socket.connect=blocked\n"
+    )
+    for name in ("gh", "codex", "claude", "gemini", "cursor", "vibe", "muse"):
+        path = seams / name
+        path.write_text(
+            "#!"
+            + sys.executable
+            + "\nfrom pathlib import Path\nPath("
+            + repr(str(tmp_path / "forbidden-service-probe"))
+            + ").write_text('forbidden')\nraise SystemExit(99)\n"
+        )
+        path.chmod(0o700)
+    monkeypatch.setenv("PATH", str(seams) + ":" + os.environ["PATH"])
+    monkeypatch.setenv("PYTHONPATH", str(seams) + ":" + manifest["module_dir"])
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    manifest["portable"] = _core(tmp_path)
+    manifest["package_digest"] = campaign.sha256_json(
+        [
+            manifest["candidate_sha"],
+            sorted(manifest["modules"].items()),
+            manifest["runtime_digest"],
+            manifest["state_digest"],
+            manifest["portable"],
+        ]
+    )
+    manifest["distribution"]["core"]["pinned"] = manifest["portable"]
+    scratch = tmp_path / "static-qualification-communication"
+    scratch.mkdir()
+    source_campaign, _minimal, _source_pin, route, _stamp = world(scratch, monkeypatch)
+    doc = source_campaign.read()
+    cfg = doc["worker_config"]
+    cfg.update(mechanism="native-handoff/v1", policy=manifest["policy"], runtime_manifest=str(pin))
+    doc["release_pin"] = manifest["package_digest"]
+    for held in doc["hold_followups"].values():
+        held.update(release_pin=doc["release_pin"], config_sha256=holds._digest(cfg))
+    obj = campaign.Campaign(state_path)
+    obj.update(lambda _doc: None, create=doc)
+    manifest["mechanism_contract"]["hold_escalation_route"] = route
+    manifest["hold_escalation_campaign_path"] = str(state_path)
+    original_wrapper = _wrapper.read_text()
+    original_wrapper = (
+        original_wrapper.split(native.MARKER)[0] + original_wrapper.split(native.END_MARKER)[1]
+    )
+    _wrapper.write_text(
+        native.render_cursor_wrapper(
+            original_wrapper,
+            manifest_path=pin,
+            campaign_root=root,
+            interpreter=Path(sys.executable).resolve(),
+            launcher=Path(manifest["launcher"]["path"]),
+        )
+    )
+    manifest["mechanism_contract"]["wrapper"]["sha256"] = native._hash(_wrapper)
+    campaign.write_manifest(pin, manifest)
+    qualified = native.supervise_native(manifest, pin, budget_seconds=45)
+    assert qualified["passed"] and _REAL_QUALIFY(manifest, root) == []
+    assert campaign.qualify_communication(manifest, root) == []
+    observation_root = native.contract(manifest)[3]
+    active = observation_root / "native-active.json"
+    if fault == "unknown":
+        value = json.loads(active.read_bytes())
+        value["status"] = "submitted"
+        active.write_text(json.dumps(value))
+    elif fault == "corrupt":
+        active.write_text("{")
+    elif fault == "unsafe":
+        active.unlink()
+        foreign = tmp_path / "foreign-active.json"
+        foreign.write_text("{}")
+        active.symlink_to(foreign)
+    elif fault == "unreadable":
+        active.chmod(0)
+    elif fault == "signature":
+        receipt = observation_root / "native-qualification.json"
+        value = json.loads(receipt.read_bytes())
+        value["signature"] = "0" * 64
+        receipt.write_text(json.dumps(value))
+    elif fault == "artifact":
+        receipt = json.loads((observation_root / "native-qualification.json").read_bytes())
+        (observation_root / receipt["record"]["nonce"] / "child-result.json").write_text("{}")
+    else:
+        module = Path(manifest["module_dir"]) / "closer_hold_escalation.py"
+        module.write_bytes(module.read_bytes() + b"\n# changed pinned module\n")
+    assert _REAL_QUALIFY(manifest, root), "Full ACT qualifier must stay held"
+    static_fault = fault in {"signature", "artifact", "module"}
+    assert bool(campaign.qualify_communication(manifest, root)) == static_fault
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("communication qualification reached ACT/native execution")
+
+    monkeypatch.setattr(campaign, "tick", forbidden)
+    monkeypatch.setattr(native, "publish_admission", forbidden)
+    monkeypatch.setattr(holds, "consume", forbidden)
+    monkeypatch.setattr(holds, "rearm", forbidden)
+    output = campaign.tick_safe(str(root))
+    assert not (tmp_path / "forbidden-service-probe").exists()
+    if not static_fault:
+        assert any(
+            row.get("reason") == "native tick requires observed wrapper entry" for row in output
+        )
+    if static_fault:
+        assert not obj.read().get("hold_escalations")
+        assert any(
+            row.get("reason") == "version not qualified" or row.get("kind") == "error"
+            for row in output
+        )
+    else:
+        assert any(row.get("kind") == "escalation_delivered" for row in output), output
+        assert next(iter(obj.read()["hold_escalations"].values()))["status"] == "delivered"
+        if fault in {"corrupt", "unsafe", "unreadable"}:
+            assert any(row.get("kind") == "error" for row in output)

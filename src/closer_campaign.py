@@ -2500,6 +2500,36 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     return problems
 
 
+def qualify_communication(manifest: dict[str, Any], root: str | Path) -> list[str]:
+    """Static native package/receipt checks for escalation communication ONLY.
+
+    This does not qualify a native entry, worker, effect, or hold rearm. Those
+    callers retain qualify(), including its unknown/current-entry barrier.
+    """
+    problems = validate_manifest(manifest) + verify_modules(manifest)
+    from closer_mechanisms import NATIVE, MechanismError, mechanism
+    from closer_native_observer import qualification_receipt_problems
+
+    try:
+        if mechanism(manifest) != NATIVE:
+            return problems + ["communication qualification requires native mechanism"]
+    except MechanismError as exc:
+        return problems + [f"communication mechanism remains held: {exc}"]
+    problems += qualification_receipt_problems(manifest)
+    recorded = (manifest.get("state_versions") or {}).get("campaign")
+    if not isinstance(recorded, int) or recorded != STATE_SCHEMA:
+        problems.append(f"state version {recorded!r} is not the runner's schema {STATE_SCHEMA}")
+    pin = manifest.get("portable") or {}
+    try:
+        from closer_runtime_binding import CoreBundle, dependency_problems
+
+        problems.extend(dependency_problems())
+        CoreBundle(pin)
+    except (KeyError, TypeError, OSError, CampaignError, AttributeError) as exc:
+        problems.append(f"pinned core unusable: {exc}")
+    return problems
+
+
 def tick(
     root: str | Path,
     manifest_path: str | Path,
@@ -3322,7 +3352,7 @@ def _controller_escalations(root, manifest_path, manifest):
     problem = policy_for_mechanism(manifest.get("policy") or {}, mechanism="native-handoff/v1")
     if problem:
         return [{"kind": "held", "reason": problem}]
-    unqualified = qualify(manifest, root)
+    unqualified = qualify_communication(manifest, root)
     if unqualified:
         return [{"kind": "held", "reason": "version not qualified", "problems": unqualified}]
     if not isinstance(name, str):
@@ -3371,8 +3401,28 @@ def tick_safe(argv_root: str | None = None) -> list[dict[str, Any]]:
         if mechanism(pinned) == NATIVE:
             observer_root = native_contract(pinned)[3]
             active = observer_root / "native-active.json"
-            if not (active.exists() or active.is_symlink()) or not entry_active(pinned):
-                return _controller_escalations(root, manifest, pinned) + [
+            observation_reports = []
+            try:
+                observed_entry = (active.exists() or active.is_symlink()) and entry_active(pinned)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                observed_entry = False
+                observation_reports.append(
+                    {
+                        "kind": "error",
+                        "reason": f"native entry observation unavailable: {type(exc).__name__}: {exc}",
+                    }
+                )
+            if not observed_entry:
+                try:
+                    observation_reports.extend(_controller_escalations(root, manifest, pinned))
+                except Exception as exc:
+                    observation_reports.append(
+                        {
+                            "kind": "error",
+                            "reason": f"communication service held: {type(exc).__name__}: {exc}",
+                        }
+                    )
+                return observation_reports + [
                     {"kind": "held", "reason": "native tick requires observed wrapper entry"}
                 ]
         return tick(root, manifest)
