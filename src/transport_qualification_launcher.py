@@ -442,6 +442,7 @@ def actual_launch_binding(
     wave_seconds: float,
     output_cap: int,
     capture_deadline: float,
+    wave_model_remaining: float = 360,
 ) -> dict[str, Any]:
     """Bind actual child inputs without retaining or hashing the OAuth value.
 
@@ -472,6 +473,8 @@ def actual_launch_binding(
             "outer_retries": 0,
             "fallbacks": 0,
             "cell_seconds": cell_seconds,
+            "wave_model_seconds_max": 360,
+            "wave_model_seconds_remaining": wave_model_remaining,
             "wave_seconds": wave_seconds,
             "combined_stdout_stderr_bytes": output_cap,
             "native_output_tokens": 512,
@@ -723,6 +726,30 @@ class PreflightBudget:
         self.start = None
 
 
+class ModelBudgetExceeded(ValueError):
+    """Safe fixed reason code, never candidate/credential text."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def _model_budget_reason(
+    cell: float | None,
+    wave: float,
+    *,
+    cell_limit: float = 45,
+    before_admission: bool = False,
+) -> str | None:
+    if cell is not None and cell > cell_limit:
+        return "per_submission_model_time_exceeded"
+    if wave > 360:
+        return "wave_model_time_exceeded"
+    if before_admission and wave >= 360:
+        return "wave_model_time_exhausted"
+    return None
+
+
 def run_wave(
     prepared: PreparedWave,
     *,
@@ -803,6 +830,15 @@ def run_wave(
     )
     root = None
     deadline = started + wave_seconds
+    model_seconds = 0.0
+
+    def check_model(*, cell_elapsed: float | None = None, before_admission: bool = False) -> None:
+        reason = _model_budget_reason(
+            cell_elapsed, model_seconds, cell_limit=cell_seconds, before_admission=before_admission
+        )
+        if reason:
+            raise ModelBudgetExceeded(reason)
+
     try:
         # Exclusive durable wave identity prevents replay after crashes/uncertain starts.
         root = receipt_parent / run_id
@@ -833,6 +869,7 @@ def run_wave(
             }
             stage = "prelaunch_hash_lease_argv"
             try:
+                check_model(before_admission=True)
                 if time.monotonic() + 0.5 >= deadline:
                     raise ValueError("whole wave deadline exhausted")
                 preflight.check()
@@ -871,9 +908,16 @@ def run_wave(
                 if runtime.command(plan["candidate"]["launch"]) != argv:
                     raise ValueError("prelaunch binary/argv drift")
                 preflight.check()
+                check_model(before_admission=True)
+                wave_model_remaining = 360 - model_seconds
                 capture_deadline = min(
-                    deadline - 0.5, time.monotonic() + cell_seconds - min(0.5, cell_seconds / 2)
+                    deadline - 0.5,
+                    time.monotonic()
+                    + min(cell_seconds, wave_model_remaining)
+                    - min(0.5, cell_seconds / 2),
                 )
+                if capture_deadline <= time.monotonic():
+                    raise ModelBudgetExceeded("remaining_model_time_insufficient_for_supervision")
                 record.update(
                     actual_launch_binding(
                         argv=argv,
@@ -891,6 +935,7 @@ def run_wave(
                         wave_seconds=wave_seconds,
                         output_cap=output_cap,
                         capture_deadline=capture_deadline,
+                        wave_model_remaining=wave_model_remaining,
                     )
                 )
                 record["status"] = "starting_outcome_uncertain_until_started_receipt"
@@ -898,6 +943,7 @@ def run_wave(
                 if isinstance(held_lease, SubscriptionLease):
                     held_lease.prepare(cell_run)
                 preflight.check()
+                check_model(before_admission=True)
 
                 def on_started(pid: int) -> None:
                     summary["cli_launch_count"] += 1
@@ -912,6 +958,7 @@ def run_wave(
 
                 stage = "process_supervision"
                 preflight.pause()
+                model_started = time.monotonic()
                 try:
                     captured = _capture(
                         argv,
@@ -924,6 +971,12 @@ def run_wave(
                         on_finished=on_finished,
                     )
                 finally:
+                    cell_model_seconds = max(0.0, time.monotonic() - model_started)
+                    model_seconds += cell_model_seconds
+                    record.update(
+                        cell_model_supervision_seconds=cell_model_seconds,
+                        wave_model_supervision_seconds=model_seconds,
+                    )
                     preflight.resume()
                 stdout = captured.pop("stdout")
                 stderr = captured.pop("stderr")
@@ -934,6 +987,8 @@ def run_wave(
                     stdout_sha256=sha(stdout),
                     stderr_sha256=sha(stderr),
                 )
+                stage = "model_supervision_budget"
+                check_model(cell_elapsed=cell_model_seconds)
                 if (
                     captured["problem"]
                     or captured["exit_code"] != 0
@@ -987,6 +1042,17 @@ def run_wave(
                     preflight_budget_exhausted=preflight.elapsed() >= 120,
                 )
                 # Do not persist exception text: arbitrary callbacks can embed secrets.
+                reason = (
+                    exc.reason
+                    if isinstance(exc, ModelBudgetExceeded)
+                    else _model_budget_reason(
+                        record.get("cell_model_supervision_seconds"),
+                        model_seconds,
+                        cell_limit=cell_seconds,
+                    )
+                )
+                if reason:
+                    record["model_budget_reason"] = summary["model_budget_reason"] = reason
                 summary["status"] = "stopped"
             name = f"cell-{index + 1}.json"
             _persist(root, name, record, token)
@@ -1000,6 +1066,12 @@ def run_wave(
             summary["preflight_budget_exhausted"] = True
         summary["preflight_seconds"] = preflight.elapsed()
         summary["preflight_seconds_max"] = 120
+        reason = _model_budget_reason(None, model_seconds, cell_limit=cell_seconds)
+        if reason:
+            summary["status"] = "stopped"
+            summary["model_budget_reason"] = reason
+        summary["model_supervision_seconds"] = model_seconds
+        summary["model_supervision_seconds_max"] = 360
         summary["seconds"] = time.monotonic() - started
         _persist(root, "summary.json", summary, token)
         return redact(summary, token)
