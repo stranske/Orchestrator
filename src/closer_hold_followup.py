@@ -996,8 +996,39 @@ def _probe_action(
 
 def _probe_ci_no_effect(record, manifest_path, doc, row, *, campaign, manifest):
     import closer_ci_followup as ci
+    import closer_finite_reentry as reentry
+    import closer_frontier_policy as frontiers
+    import closer_resources as resources
 
-    source = Path(record["source"]["state_path"])
+    # This function also serves direct/restart callers. Validate the retained
+    # source join before constructing a backend or asking CI to read anything.
+    try:
+        origin = record.get("source")
+        target = record.get("target")
+        frontier = frontiers.validate_frontier(record.get("frontier"))
+        if not (
+            isinstance(origin, Mapping)
+            and origin.get("kind") == "pipeline"
+            and _text(origin.get("state_path"))
+            and Path(origin["state_path"]).is_absolute()
+            and target in frontier["targets"]
+            and record.get("revision") == frontier["bindings"][target]["revision"]
+            and record.get("execution_state") == "confirmed_not_started"
+            and record.get("run_id")
+            == _digest(["finite-frontier/v2", frontier["frontier_id"], frontier["owner"]])[:32]
+            and row.get("revision") == record["revision"]
+            and row.get("provider_outcome_uncertain") in (None, False)
+            and row.get("recovery_barrier") is None
+            and origin.get("row_sha256") == _digest(row)
+        ):
+            raise ValueError("missing original CI source identity")
+        source = reentry._physical(origin["state_path"])
+        root = source.parent.parent.parent
+        if source.name != "state.json" or source.parent != resources.shard_dir(root, target):
+            raise ValueError("original CI source shard differs")
+        ci.pending_evidence(row)  # Pure typed original no-effect ACT boundary.
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {"status": "waiting", "reason": "CI original source binding is missing or invalid"}
     action_path = source.parent / f"{source.stem}.actions" / f"{_digest(record['target'])}.json"
     read = ci.read_terminal(
         _backend(manifest_path, doc),
