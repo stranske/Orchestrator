@@ -504,3 +504,38 @@ def test_retained_sdk_none_disables_configured_retries_and_uses_single_do():
     exec(compile(source, "<retained-sdk-send-decision>", "exec"), namespace)
     assert asyncio.run(namespace["invoke"]()) == "inert-response"
     assert calls == ["do"]
+
+
+def test_boolean_temperature_in_prepared_body_is_rejected_before_inert_send(setup):
+    BEHAVIOR["body_update"] = {"temperature": True}
+    with pytest.raises(ValueError, match="request contract differs"):
+        run(setup)
+    assert not any(
+        isinstance(item, tuple) and item[0] in ("inert_send", "raw_observed") for item in CALLS
+    )
+    assert "native_mapping" not in CALLS
+
+
+def test_boolean_temperature_at_sdk_boundary_is_rejected_before_sdk_call_or_send(setup):
+    backend = make_backend(setup)
+
+    async def drive():
+        async with backend:
+            with pytest.raises(ValueError, match="request contract differs"):
+                await backend._get_client().chat.complete_async(
+                    model=v.MODEL,
+                    reasoning_effort=v.EFFORT,
+                    temperature=True,
+                    tools=None,
+                    tool_choice=None,
+                    stream=False,
+                    max_tokens=setup[1].max_output_tokens,
+                    messages=[{"role": "user", "content": "inert"}],
+                )
+
+    asyncio.run(drive())
+    assert not any(
+        isinstance(item, tuple) and item[0] in ("sdk_call", "inert_send", "raw_observed")
+        for item in CALLS
+    )
+    assert "native_mapping" not in CALLS

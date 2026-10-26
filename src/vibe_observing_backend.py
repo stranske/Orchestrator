@@ -239,6 +239,7 @@ def _request_fields(values: dict, limits: NativeRequestLimits) -> None:
         or values.get("tools") is not None
         or values.get("tool_choice") is not None
         or values.get("stream") is not False
+        or type(values.get("temperature")) not in (int, float)
         or values.get("temperature") != 1.0
     ):
         raise ValueError("exact model/high/nonstream/no-tools request contract differs")
