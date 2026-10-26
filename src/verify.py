@@ -132,7 +132,9 @@ def coverage_reset() -> None:
             pass
 
 
-def coverage_combine_and_report(root: pathlib.Path | None = None) -> str:
+def coverage_combine_and_report(
+    root: pathlib.Path | None = None, required_shards: int | None = None
+) -> str:
     """Combine the per-process data files and return the report, or say why there is none.
 
     An absent or empty data set is reported as such rather than as 0% or as silence: a coverage
@@ -147,7 +149,24 @@ def coverage_combine_and_report(root: pathlib.Path | None = None) -> str:
     the working tree every time the suite ran.
     """
     root = ROOT if root is None else root
+    # Never leave an old report available when this run cannot publish a measurement.
+    (root / "coverage.json").unlink(missing_ok=True)
     files = sorted(root.glob(".coverage.*"))
+    if required_shards is not None:
+        missing = [
+            index
+            for index in range(1, required_shards + 1)
+            if not any(
+                data.is_file() and data.stat().st_size > 0
+                for data in files
+                if data.name.startswith(f".coverage.shard-{index}.")
+            )
+        ]
+        if missing:
+            return "".join(
+                f"coverage: NOT PUBLISHED, shard {index}/{required_shards} has no data\n"
+                for index in missing
+            )
     if not files:
         return "coverage: NO DATA — no instrumented child wrote a data file (did any test run?)\n"
     subprocess.run(
@@ -2726,7 +2745,13 @@ def main() -> int:
         # Printed AFTER the verdict, and it never alters the exit code. Coverage is a measurement,
         # not a gate: making it one here would be a threshold nobody agreed to, against a number
         # that has been wrong until this run.
-        print("\n" + coverage_combine_and_report(), end="")
+        print(
+            "\n"
+            + coverage_combine_and_report(
+                required_shards=len(shard_plan()) if args.aggregate else None
+            ),
+            end="",
+        )
     return code
 
 

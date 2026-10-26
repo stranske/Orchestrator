@@ -192,3 +192,99 @@ def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
     files = json.loads(report.read_text())["files"]
     widget = next(name for name in files if name.endswith("widget.py"))
     assert 2 in files[widget]["executed_lines"]
+
+
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("verdict", [0, 1])
+def test_aggregate_coverage_requires_every_shard_without_changing_verdict(
+    tmp_path, monkeypatch, capsys, missing, verdict
+):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (tmp_path / "run.py").write_text("answer = 42\n")
+    monkeypatch.delenv("COVERAGE_FILE", raising=False)
+    for index in (1, 2):
+        if missing and index == 2:
+            continue
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "coverage",
+                "run",
+                f"--data-file={evidence / f'.coverage.shard-{index}.pytest'}",
+                "run.py",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+    # Stale JSON must not survive an incomplete measurement.
+    (tmp_path / "coverage.json").write_text('{"stale": true}')
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(verify, "COVERAGE", False)
+    monkeypatch.setattr(verify, "shard_plan", lambda: [["a.py"], ["b.py"]])
+    monkeypatch.setattr(verify, "verify", lambda **kw: (verdict, "verification verdict\n"))
+    monkeypatch.setattr(sys, "argv", ["verify.py", "--aggregate", str(evidence), "--coverage"])
+    assert verify.main() == verdict
+    output = capsys.readouterr().out
+    report = tmp_path / "coverage.json"
+    if missing:
+        assert "coverage: NOT PUBLISHED, shard 2/2 has no data" in output
+        assert "0%" not in output
+        assert not report.exists()
+    else:
+        assert "coverage: combined" in output
+        assert "run.py" in json.loads(report.read_text())["files"]
+
+
+@pytest.fixture
+def planner_junit(tmp_path, monkeypatch):
+    from tools import make_test_shards
+
+    (tmp_path / "tests").mkdir()
+    for name in ("a", "b", "c", "untimed"):
+        (tmp_path / f"tests/test_{name}.py").touch()
+    junit = tmp_path / "timings.xml"
+    junit.write_text(
+        "<testsuite>"
+        '<testcase classname="tests.test_a.TestClass" time="2"/>'
+        '<testcase classname="tests.test_a.TestClass" time="4"/>'
+        '<testcase classname="tests.test_b" time="2"/>'
+        '<testcase classname="tests.test_c" time="10"/>'
+        "</testsuite>"
+    )
+    collected = "\n".join(
+        f"tests/test_{name}.py::test_example" for name in ("a", "b", "c", "untimed")
+    )
+    monkeypatch.setattr(
+        make_test_shards.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, collected, ""),
+    )
+    return make_test_shards, junit, tmp_path
+
+
+def test_make_plan_aggregates_module_timings_and_defaults_to_median(planner_junit):
+    planner, junit, root = planner_junit
+    plan = planner.make_plan(junit, root, 2)
+    assert plan == planner.make_plan(junit, root, 2)
+    # Measured modules: a=6, b=2, c=10; untimed gets median 6. Greedy placement
+    # puts c then b in shard 1, and a then untimed in shard 2 (load tie by index).
+    assert plan["untimed_modules"] == ["tests/test_untimed.py"]
+    assert plan["estimated_test_seconds"] == [12.0, 12.0]
+    assert plan["shards"] == [
+        ["tests/test_b.py", "tests/test_c.py"],
+        ["tests/test_a.py", "tests/test_untimed.py"],
+    ]
+
+
+@pytest.mark.parametrize("duration", ["NaN", "inf", "-inf", "-1"])
+def test_make_plan_rejects_invalid_junit_durations(planner_junit, duration):
+    planner, junit, root = planner_junit
+    junit.write_text(
+        f'<testsuite><testcase classname="tests.test_a" time="{duration}"/></testsuite>'
+    )
+    with pytest.raises(ValueError, match="invalid JUnit duration"):
+        planner.make_plan(junit, root, 2)

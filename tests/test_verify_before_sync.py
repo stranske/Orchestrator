@@ -818,3 +818,16 @@ def test_the_real_first_load_registers_a_declared_row_the_live_ledger_lacks(worl
     assert "(value-chain-monitor)" in result.stdout, result.stdout
     assert record["saw_expected_row"] == "True", record
     assert ledger.read_bytes() == before, "the live ledger was written"
+
+
+@pytest.mark.parametrize("output", ["", "relative/shards"])
+def test_shard_output_must_be_absolute_before_scratch_copy(world, output):
+    result, record = _run(
+        world,
+        VERIFY_BEFORE_SYNC_PYTEST_SHARD="2/3",
+        VERIFY_BEFORE_SYNC_SHARD_OUTPUT=output,
+    )
+    assert result.returncode == 2
+    assert "VERIFY_BEFORE_SYNC_SHARD_OUTPUT must be an absolute path" in result.stderr
+    assert "scratch mirror of" not in result.stdout
+    assert not record

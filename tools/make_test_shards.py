@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import statistics
 import subprocess
@@ -23,13 +24,19 @@ def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
         raise ValueError("--shards must be positive")
     seconds: dict[str, float] = defaultdict(float)
     for case in ET.parse(junit).getroot().iter("testcase"):
+        duration = float(case.get("time", "0"))
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError(f"invalid JUnit duration {case.get('time')!r}")
         # pytest classnames may end in a test class. Match against collected module paths,
         # rather than assuming every classname ends at a module.
         parts = (case.get("classname") or "").split(".")
         for end in range(len(parts), 0, -1):
             module = "/".join(parts[:end]) + ".py"
             if (root / module).is_file():
-                seconds[module] += float(case.get("time", "0"))
+                total = seconds[module] + duration
+                if not math.isfinite(total):
+                    raise ValueError(f"JUnit duration total is non-finite for {module}")
+                seconds[module] = total
                 break
     if not seconds:
         raise ValueError("JUnit contains no timings matching this checkout")
@@ -73,7 +80,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[1]
-    args.output.write_text(json.dumps(make_plan(args.junit, root, args.shards), indent=2) + "\n")
+    args.output.write_text(
+        json.dumps(make_plan(args.junit, root, args.shards), indent=2, allow_nan=False) + "\n"
+    )
 
 
 if __name__ == "__main__":

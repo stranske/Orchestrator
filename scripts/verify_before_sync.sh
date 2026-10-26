@@ -116,6 +116,12 @@ if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" && -n "$snapshot_out" ]]; then
   exit 2
 fi
 
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" &&
+      "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:-}" != /* ]]; then
+  printf 'verify-before-sync: VERIFY_BEFORE_SYNC_SHARD_OUTPUT must be an absolute path\n' >&2
+  exit 2
+fi
+
 say() { printf '%s\n' "$*"; }
 fail() { printf 'verify-before-sync: %s\n' "$*" >&2; }
 
