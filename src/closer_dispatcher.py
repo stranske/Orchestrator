@@ -2095,6 +2095,7 @@ class Closer:
         result = operation.get("result") or {}
         rejected = result.get("verification_rejected")
         proof = result.get("verification_rejection_proof")
+        core_identity = proof.get("core_identity") if isinstance(proof, Mapping) else None
         if not (
             operation.get("status") in {"confirmed_not_started", "abandoned"}
             and operation.get("action") in {"post_merge_verify", "initiate_verify"}
@@ -2129,6 +2130,11 @@ class Closer:
                 ),
                 "post_attempted": True,
                 "request_accepted": False,
+                **(
+                    {"core_identity": core_identity}
+                    if self.runtime_binding is not None and isinstance(core_identity, Mapping)
+                    else {}
+                ),
             }
         ):
             return False
@@ -2137,11 +2143,42 @@ class Closer:
         # A supplied boolean is not Core evidence. Read the exact original
         # namespace/fence once, then use only pure Core receipt/key validators.
         try:
+            from closer_campaign import sha256_json
             from closer_runtime_binding import RuntimeBinding
 
             if type(self.runtime_binding) is not RuntimeBinding:
                 return False
             runtime = self.runtime_binding
+            if not (
+                isinstance(core_identity, Mapping)
+                and set(core_identity)
+                == {
+                    "schema",
+                    "namespace",
+                    "operation_key",
+                    "target_fence_key",
+                    "criteria_fingerprint",
+                    "native_binding_sha256",
+                    "record_sha256",
+                    "digest_scope",
+                }
+                and core_identity.get("schema") == "closer-verification-core-rejection/v1"
+                and core_identity.get("namespace") == runtime.bundle.namespace
+                and core_identity.get("digest_scope")
+                == "canonical_core_record_excluding_prior_operations"
+                and all(
+                    isinstance(core_identity.get(k), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", core_identity[k])
+                    for k in (
+                        "operation_key",
+                        "target_fence_key",
+                        "criteria_fingerprint",
+                        "native_binding_sha256",
+                        "record_sha256",
+                    )
+                )
+            ):
+                return False
             core = runtime.bundle.runtime
             original = operation["binding"]
             repository, number = original["pr_target"].lower().split("#")
@@ -2157,54 +2194,100 @@ class Closer:
                 {"authority": 2},
             )
             key = core.canonical_target_fence_key(lookup)
-            record = adapter.store.read(key)
-            if (
-                not isinstance(record, Mapping)
-                or record.get("denial")
-                or not core.verification_request_not_accepted(record)
-            ):
+            record = adapter.store.read(key)  # One authenticated original-fence read.
+            if not isinstance(record, Mapping) or record.get("denial"):
                 return False
-            native = (record.get("mutation_intent") or {}).get("native_binding") or {}
-            mutation = native.get("verification_mutation") or {}
-            context = record.get("verification_context") or {}
-            spec = core.OperationSpec(
-                repository,
-                int(number),
-                "verify_request",
-                record["head_sha"],
-                record.get("base_sha"),
-                record["criteria_fingerprint"],
-                record["review_revision"],
-                record["guard_versions"],
-                required_capabilities=record.get("required_capabilities", []),
-                blocking_labels=record.get("blocking_labels", []),
-                verification_event=context.get("event"),
-                verification_event_action=context.get("action"),
-            )
-            return bool(
-                record.get("contract") == core.CONTRACT
-                and record.get("repository") == repository
-                and record.get("target") == {"kind": "pull_request", "number": int(number)}
-                and native.get("head") == record.get("head_sha")
-                and native.get("criteria_fingerprint") == record.get("criteria_fingerprint")
-                and native.get("review_revision") == record.get("review_revision")
-                and record.get("target_fence_key") == key == core.canonical_target_fence_key(spec)
-                and record.get("operation_key") == core.canonical_operation_key(spec)
-                and native.get("queue_operation_id") == operation["id"]
-                and native.get("revision") == operation["revision"]
-                and native.get("action") == operation["action"]
-                and native.get("pr_target") == original["pr_target"]
-                and all(
-                    native.get(k) == original.get(k) for k in ("head", "merge", "review_revision")
+            history = record.get("prior_operations", [])
+            if not isinstance(history, list) or len(history) > 64:
+                return False  # Shipped Core schema's flat history bound.
+            candidates = [record]
+            archive_hashes = set()
+            for entry in history:
+                if not isinstance(entry, Mapping) or set(entry) != {"sha256", "record"}:
+                    return False
+                prior = entry["record"]
+                if (
+                    not isinstance(prior, Mapping)
+                    or "prior_operations" in prior
+                    or not isinstance(entry["sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+                    or entry["sha256"] in archive_hashes
+                    or core._hash_canonical(prior) != entry["sha256"]
+                ):
+                    return False
+                archive_hashes.add(entry["sha256"])
+                candidates.append(prior)
+            # Bound validation work before Core schema/identity validation. No
+            # caller-supplied queue history or new archive/store is consulted.
+            size = 0
+            for chunk in json.JSONEncoder(allow_nan=False).iterencode(record):
+                size += len(chunk.encode("utf-8"))
+                if size > 1024 * 1024:
+                    return False
+            if core.validate_operation_record(record):
+                return False
+
+            def matches(record):
+                if record.get("denial") or not core.verification_request_not_accepted(record):
+                    return False
+                native = (record.get("mutation_intent") or {}).get("native_binding") or {}
+                mutation = native.get("verification_mutation") or {}
+                context = record.get("verification_context") or {}
+                spec = core.OperationSpec(
+                    repository,
+                    int(number),
+                    "verify_request",
+                    record["head_sha"],
+                    record.get("base_sha"),
+                    record["criteria_fingerprint"],
+                    record["review_revision"],
+                    record["guard_versions"],
+                    required_capabilities=record.get("required_capabilities", []),
+                    blocking_labels=record.get("blocking_labels", []),
+                    verification_event=context.get("event"),
+                    verification_event_action=context.get("action"),
                 )
-                and native.get("source_targets", []) == original.get("source_targets", [])
-                and mutation.get("mutation_kind") == rejected["mutation_kind"]
-                and mutation.get("request_basis") == rejected["request_basis"]
-                and (
-                    "correlation_input" not in mutation
-                    or mutation["correlation_input"] == rejected["request_basis"]
+                return bool(
+                    core._hash_canonical(
+                        {k: v for k, v in record.items() if k != "prior_operations"}
+                    )
+                    == core_identity["record_sha256"]
+                    and record.get("operation_key") == core_identity["operation_key"]
+                    and record.get("target_fence_key") == core_identity["target_fence_key"]
+                    and record.get("criteria_fingerprint") == core_identity["criteria_fingerprint"]
+                    and record.get("guard_versions", {}).get("native_binding")
+                    == core_identity["native_binding_sha256"]
+                    and record.get("contract") == core.CONTRACT
+                    and record.get("repository") == repository
+                    and record.get("target") == {"kind": "pull_request", "number": int(number)}
+                    and native.get("head") == record.get("head_sha")
+                    and native.get("criteria_fingerprint") == record.get("criteria_fingerprint")
+                    and "criteria" in native
+                    and native.get("criteria_fingerprint") == sha256_json(native["criteria"])
+                    and native.get("review_revision") == record.get("review_revision")
+                    and record.get("target_fence_key")
+                    == key
+                    == core.canonical_target_fence_key(spec)
+                    and record.get("operation_key") == core.canonical_operation_key(spec)
+                    and native.get("queue_operation_id") == operation["id"]
+                    and native.get("revision") == operation["revision"]
+                    and native.get("action") == operation["action"]
+                    and native.get("pr_target") == original["pr_target"]
+                    and all(
+                        native.get(k) == original.get(k)
+                        for k in ("head", "merge", "review_revision")
+                    )
+                    and native.get("source_targets", []) == original.get("source_targets", [])
+                    and mutation.get("mutation_kind") == rejected["mutation_kind"]
+                    and mutation.get("request_basis") == rejected["request_basis"]
+                    and (
+                        "correlation_input" not in mutation
+                        or mutation["correlation_input"] == rejected["request_basis"]
+                    )
                 )
-            )
+
+            # Duplicate/rebound original identities are ambiguity, not release.
+            return sum(bool(matches(candidate)) for candidate in candidates) == 1
         except Exception:
             return False  # Missing/changed/unreadable original proof stays fenced.
 
