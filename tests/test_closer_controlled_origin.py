@@ -105,6 +105,13 @@ def proof(tmp_path):
         "os_started": "offline-process-start",
         "run_id": "original-run",
         "cleanup_terminal": True,
+        "agent": "claude",
+        "operation_id": "original-op",
+        "profile_id": profile["profile_id"],
+        "task_type": "closer_interpret",
+        "finite_frontier_id": "original-frontier",
+        "finite_frontier_target": "offline/repo#1",
+        "data_only_execution_binding_sha256": launch["binding_sha256"],
     }
     reservation = {
         "reservation_id": "original-reservation",
@@ -170,7 +177,7 @@ def proof(tmp_path):
         "output": output,
         "run_id": "original-run",
         "process_started": True,
-        "data_only_private_runtime": {"cleanup": "removed_owned_private_runtime"},
+        "data_only_private_runtime": {"path": root, "cleanup": "removed_owned_private_runtime"},
         "data_only_origin": origin,
         "process_observation": observed,
     }
@@ -700,3 +707,51 @@ def test_actual_registered_pipeline_missing_contract_stops_before_broker(
     assert interpreted["pending_evidence"]["target"] == world.snapshot["target"]
     assert interpreted["pending_evidence"]["revision"] == world.snapshot["revision"]
     assert world.events["provider"] == world.events["effect"] == 0
+
+
+def test_recomputed_launch_must_match_original_callback_binding(proof):
+    validate(proof)
+    launch = proof.result["data_only_origin"]["execution"]
+    launch["config"]["timeout_seconds"] = 19
+    launch["binding"]["config_sha256"] = closer._contract_digest(launch["config"])
+    launch["binding_sha256"] = closer._contract_digest(launch["binding"])
+    proof.retain()
+    with pytest.raises(closer.ControlledOriginUnavailable):
+        validate(proof)
+
+
+def test_rebound_expected_and_origin_operation_cannot_replace_actual_callback(proof):
+    proof.expected["operation_id"] = "foreign-operation"
+    proof.result["data_only_origin"]["operation_id"] = "foreign-operation"
+    proof.retain()
+    with pytest.raises(closer.ControlledOriginUnavailable):
+        validate(proof)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "operation_id",
+        "profile_id",
+        "task_type",
+        "finite_frontier_id",
+        "finite_frontier_target",
+        "data_only_execution_binding_sha256",
+        "agent",
+    ],
+)
+def test_started_finished_callback_contract_must_remain_identical(proof, field):
+    proof.observed["started"][field] = "foreign-original-callback"
+    with pytest.raises(closer.ControlledOriginUnavailable):
+        validate(proof)
+
+
+@pytest.mark.parametrize("path", [None, "/foreign/unrelated-runtime", "/tmp/../foreign-runtime"])
+def test_private_cleanup_proof_must_name_original_launch_root(proof, path):
+    if path is None:
+        proof.result["data_only_private_runtime"].pop("path")
+    else:
+        proof.result["data_only_private_runtime"]["path"] = path
+    proof.retain()
+    with pytest.raises(closer.ControlledOriginUnavailable):
+        validate(proof)

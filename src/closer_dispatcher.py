@@ -339,6 +339,23 @@ def _validate_controlled_result(result, expected, observed, *, receipt_root):
                 observed["started"].get(key) == observation.get(key)
                 for key in ("pid", "process_group", "os_started", "run_id")
             )
+            and all(
+                callback.get(key) == expected[key]
+                for callback in (observed["started"], observation)
+                for key in (
+                    "operation_id",
+                    "profile_id",
+                    "task_type",
+                    "finite_frontier_id",
+                    "finite_frontier_target",
+                )
+            )
+            and all(
+                callback.get("agent") == "claude"
+                and callback.get("data_only_execution_binding_sha256")
+                == origin["execution"]["binding_sha256"]
+                for callback in (observed["started"], observation)
+            )
             and descriptor == _controlled_model_contract(expected["task_type"])
             and limits["model_contract_sha256"] == descriptor["contract_sha256"]
         ):
@@ -346,6 +363,14 @@ def _validate_controlled_result(result, expected, observed, *, receipt_root):
         launch = origin["execution"]
         config, binding = launch["config"], launch["binding"]
         sources = descriptor["sources"]
+        private_root = config["private_root"]
+        if (
+            not isinstance(private_root, str)
+            or str(Path(private_root).absolute()) != private_root
+            or str(Path(private_root).resolve()) != private_root
+            or result["data_only_private_runtime"].get("path") != private_root
+        ):
+            raise ControlledOriginUnavailable("original private runtime cleanup binding differs")
         expected_argv = execution.expected_argv(
             binding["binary_path"], expected["profile_identity"], limits=limits
         )
