@@ -3,11 +3,9 @@
 import copy
 
 import pytest
-from test_closer_controlled_origin import proof as proof
-from test_closer_controlled_origin import validate
 
+import closer_correction_classification as contract
 import closer_correction_decision as material
-import execution_profiles
 
 REQUEST = {
     "schema": "closer-correction-request/v1",
@@ -165,37 +163,52 @@ DECISION = {
 }
 
 
-def semantic():
-    return {
-        "schema": material.SEMANTIC_SCHEMA,
-        "request_sha256": REQUEST["request_sha256"],
-        "bundle_sha256": material.digest(SEED_BUNDLE),
-        "findings": [
+def inputs():
+    return dict(
+        original_request=copy.deepcopy(REQUEST),
+        seed_bundle=copy.deepcopy(SEED_BUNDLE),
+        source_body="issue 1",
+        raw_findings=[
             {
-                "id": REQUEST["finding"]["id"],
-                "evidence": REQUEST["finding"]["evidence"],
-                "classification": "ordinary_substantive",
-                "required_tests": REQUEST["required_tests"],
+                **copy.deepcopy(REQUEST["finding"]),
+                "text": "Reject the exact invalid-input case — preserve the source issue.",
             }
         ],
+        retained_packet_ref={
+            "path": "/synthetic/manifests/packet.json",
+            "sha256": "a" * 64,
+            "bytes": 42,
+        },
+    )
+
+
+def semantic():
+    args = inputs()
+    request = contract.build_request(**args)
+    return {
+        "schema": contract.RESPONSE_SCHEMA,
+        "classification_request_sha256": request["classification_request_sha256"],
+        "request_sha256": REQUEST["request_sha256"],
+        "bundle_sha256": contract.digest(SEED_BUNDLE),
+        "packet_sha256": "a" * 64,
+        "findings": copy.deepcopy(DECISION["findings"]),
     }
 
 
 def project(value):
+    args = inputs()
     return material.project_explicit_semantics(
-        semantic=value, request=REQUEST, bundle=SEED_BUNDLE, profile=DECISION["profile"]
+        semantic=value, request=contract.build_request(**args), profile=DECISION["profile"], **args
     )
 
 
-def test_synthetic_future_contract_projection_matches_frozen_consumer():
+def test_synthetic_selected_contract_projection_matches_frozen_consumer():
     got = project(semantic())
-    expected = {
+    assert got == {
         k: v
         for k, v in DECISION.items()
         if k not in ("retained_packet_ref", "decision_evidence_ref")
     }
-    assert got == expected
-    # A projection deliberately has no evidence references or emission authority.
     assert "decision_evidence_ref" not in got
 
 
@@ -214,7 +227,7 @@ def test_synthetic_future_contract_projection_matches_frozen_consumer():
     ],
 )
 def test_explicit_semantics_refuse_incomplete_or_mismatched_source(damage):
-    value = copy.deepcopy(semantic())
+    value = semantic()
     row = value["findings"][0]
     if damage == "missing":
         row.pop("classification")
@@ -223,9 +236,9 @@ def test_explicit_semantics_refuse_incomplete_or_mismatched_source(damage):
     elif damage == "foreign_evidence":
         row["evidence"]["sha256"] = "0" * 64
     elif damage == "foreign_tests":
-        row["required_tests"][0]["specification"] = "other"
+        row["required_tests_sha256"] = "0" * 64
     elif damage == "missing_tests":
-        row["required_tests"] = []
+        row.pop("required_tests_sha256")
     elif damage == "request":
         value["request_sha256"] = "0" * 64
     elif damage == "bundle":
@@ -240,7 +253,7 @@ def test_explicit_semantics_refuse_incomplete_or_mismatched_source(damage):
 
 @pytest.mark.parametrize("classification", ["unknown", "security", "authority_conflict"])
 def test_risk_never_becomes_ordinary(classification):
-    value = copy.deepcopy(semantic())
+    value = semantic()
     value["findings"][0]["classification"] = classification
     assert project(value)["findings"][0]["classification"] == classification
 
@@ -252,32 +265,9 @@ def test_whole_material_bound():
         project(value)
 
 
-@pytest.mark.parametrize("damage", ["missing", "run", "basis", "receipt", "none"])
-def test_real_origin_validator_refuses_or_empty_production_registry_holds(proof, damage):
-    basis = {"target": "offline/repo#1", "revision": "original-revision"}
-    proof.expected["basis"] = basis
-    original = validate(proof)
-    run_id = "original-run"
-    if damage == "missing":
-        original = {}
-    elif damage == "run":
-        run_id = "foreign-run"
-    elif damage == "basis":
-        basis = {**basis, "revision": "foreign"}
-    elif damage == "receipt":
-        proof.result["outcome_uncertain"] = True
-        proof.retain()
-    result = material.materialize(
-        proof=original,
-        run_id=run_id,
-        basis=basis,
-        receipt_root=proof.root,
-        profile=execution_profiles.get_profile("claude-sonnet-5-5-low"),
-        request=REQUEST,
-        bundle=SEED_BUNDLE,
-    )
+@pytest.mark.parametrize("proof", [None, {}, {"classification": "relevant"}])
+def test_ordinary_low_never_opts_into_correction(proof):
+    result = material.materialize(proof=proof)
     assert result["status"] == "owned_unknown"
-    assert result["evidence_scope"] == "local_controlled_execution_only"
+    assert "ordinary LOW" in result["reason"]
     assert not result["act_authorized"] and not result["source_closure_authorized"]
-    if damage == "none":
-        assert "qualification" in result["reason"]

@@ -105,7 +105,7 @@ def _controlled_model_contract(task_type):
     if role not in {roles.BOUNDED_CLASSIFICATION, roles.STRONG_CRITERION_ADJUDICATION}:
         raise ControlledOriginUnavailable("unsupported controlled Closer role")
     sources = {}
-    for name in (
+    selected_sources = (
         "closer_dispatcher",
         "dispatcher",
         "adapters",
@@ -116,7 +116,14 @@ def _controlled_model_contract(task_type):
         "closer_execution_contracts",
         "closer_disposition",
         "closer_evidence",
-    ):
+    )
+    if task_type == "closer_correction_classification":
+        selected_sources += (
+            "closer_correction_classification",
+            "closer_correction_producer",
+            "closer_correction_decision",
+        )
+    for name in selected_sources:
         module = importlib.import_module(name)
         path = Path(module.__file__)
         with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
@@ -138,10 +145,16 @@ def _controlled_model_contract(task_type):
                 source_sha256=sources["closer_model_contracts.py"]
             )
             if task_type == "closer_interpret"
-            else {
-                **closer_model_contracts.STRONG_CONTRACT_ENTRYPOINTS,
-                "evidence_policy": contracts.ADJUDICATION_EVIDENCE_VERSION,
-            }
+            else (
+                importlib.import_module("closer_correction_classification").contract_descriptor(
+                    source_sha256=sources["closer_correction_classification.py"]
+                )
+                if task_type == "closer_correction_classification"
+                else {
+                    **closer_model_contracts.STRONG_CONTRACT_ENTRYPOINTS,
+                    "evidence_policy": contracts.ADJUDICATION_EVIDENCE_VERSION,
+                }
+            )
         ),
         "authority": False,
     }

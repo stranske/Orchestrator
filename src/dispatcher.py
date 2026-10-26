@@ -2697,6 +2697,7 @@ def _controlled_data_only_entry(function):
                 raise ValueError("invalid explicit controlled timeout")
             expected_role = {
                 "closer_interpret": "bounded_classification",
+                "closer_correction_classification": "bounded_classification",
                 "closer_exception": "strong_criterion_adjudication",
             }.get(values.get("task_type"))
             if expected_role != limits["role"]:
