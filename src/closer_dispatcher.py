@@ -2090,6 +2090,124 @@ class Closer:
         except FileNotFoundError:
             return None
 
+    def _verification_rejection_not_accepted(self, snapshot, operation):
+        """Read exact producer/Core no-acceptance proof; never acquire an effect."""
+        result = operation.get("result") or {}
+        rejected = result.get("verification_rejected")
+        proof = result.get("verification_rejection_proof")
+        if not (
+            operation.get("status") in {"confirmed_not_started", "abandoned"}
+            and operation.get("action") in {"post_merge_verify", "initiate_verify"}
+            and isinstance(operation.get("id"), str)
+            and operation["id"]
+            and isinstance(operation.get("revision"), str)
+            and operation["revision"]
+            and isinstance(operation.get("binding"), Mapping)
+            and isinstance(rejected, Mapping)
+            and set(rejected) == {"mutation_kind", "request_basis", "http_status"}
+            and type(rejected.get("http_status")) is int
+            and rejected.get("http_status") == 422
+            and rejected.get("mutation_kind") == "workflow_dispatch"
+            and isinstance(rejected.get("request_basis"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", rejected["request_basis"])
+            and isinstance(proof, Mapping)
+            and proof.get("post_attempted") is True
+            and proof.get("request_accepted") is False
+            and proof
+            == {
+                "schema": "closer-verification-rejection/v1",
+                "producer": "submit_verify/GitHubNoEffectRejected/live-queue-invocation",
+                "target": snapshot["target"],
+                "operation_id": operation["id"],
+                "action": operation["action"],
+                "revision": operation["revision"],
+                "binding_sha256": digest(operation["binding"]),
+                "rejection_sha256": digest(rejected),
+                "request_basis": rejected["request_basis"],
+                "core_namespace": getattr(
+                    getattr(self.runtime_binding, "bundle", None), "namespace", None
+                ),
+                "post_attempted": True,
+                "request_accepted": False,
+            }
+        ):
+            return False
+        if self.runtime_binding is None:
+            return not self.require_runtime_binding and "core_rejected_not_accepted" not in result
+        # A supplied boolean is not Core evidence. Read the exact original
+        # namespace/fence once, then use only pure Core receipt/key validators.
+        try:
+            from closer_runtime_binding import RuntimeBinding
+
+            if type(self.runtime_binding) is not RuntimeBinding:
+                return False
+            runtime = self.runtime_binding
+            core = runtime.bundle.runtime
+            original = operation["binding"]
+            repository, number = original["pr_target"].lower().split("#")
+            adapter = runtime._adapter(repository)
+            lookup = core.OperationSpec(
+                repository,
+                int(number),
+                "verify_request",
+                "0" * 40,
+                None,
+                "0" * 64,
+                "lookup",
+                {"authority": 2},
+            )
+            key = core.canonical_target_fence_key(lookup)
+            record = adapter.store.read(key)
+            if (
+                not isinstance(record, Mapping)
+                or record.get("denial")
+                or not core.verification_request_not_accepted(record)
+            ):
+                return False
+            native = (record.get("mutation_intent") or {}).get("native_binding") or {}
+            mutation = native.get("verification_mutation") or {}
+            context = record.get("verification_context") or {}
+            spec = core.OperationSpec(
+                repository,
+                int(number),
+                "verify_request",
+                record["head_sha"],
+                record.get("base_sha"),
+                record["criteria_fingerprint"],
+                record["review_revision"],
+                record["guard_versions"],
+                required_capabilities=record.get("required_capabilities", []),
+                blocking_labels=record.get("blocking_labels", []),
+                verification_event=context.get("event"),
+                verification_event_action=context.get("action"),
+            )
+            return bool(
+                record.get("contract") == core.CONTRACT
+                and record.get("repository") == repository
+                and record.get("target") == {"kind": "pull_request", "number": int(number)}
+                and native.get("head") == record.get("head_sha")
+                and native.get("criteria_fingerprint") == record.get("criteria_fingerprint")
+                and native.get("review_revision") == record.get("review_revision")
+                and record.get("target_fence_key") == key == core.canonical_target_fence_key(spec)
+                and record.get("operation_key") == core.canonical_operation_key(spec)
+                and native.get("queue_operation_id") == operation["id"]
+                and native.get("revision") == operation["revision"]
+                and native.get("action") == operation["action"]
+                and native.get("pr_target") == original["pr_target"]
+                and all(
+                    native.get(k) == original.get(k) for k in ("head", "merge", "review_revision")
+                )
+                and native.get("source_targets", []) == original.get("source_targets", [])
+                and mutation.get("mutation_kind") == rejected["mutation_kind"]
+                and mutation.get("request_basis") == rejected["request_basis"]
+                and (
+                    "correlation_input" not in mutation
+                    or mutation["correlation_input"] == rejected["request_basis"]
+                )
+            )
+        except Exception:
+            return False  # Missing/changed/unreadable original proof stays fenced.
+
     def _unacknowledged_verification_request(self, snapshot):
         """An old submitted effect without a proven acknowledgment is no new POST.
 
@@ -2117,8 +2235,15 @@ class Closer:
                 # Status labels cannot erase possible submitted effects. In
                 # particular Core blocked/denied/read failures are not proof
                 # that the original verification request never started.
+                rejected_not_accepted = self._verification_rejection_not_accepted(
+                    snapshot, operation
+                )
                 conflict = any(
                     key in record
+                    and not (
+                        rejected_not_accepted
+                        and key in {"verification_rejected", "core_rejected_not_accepted"}
+                    )
                     for record in (operation, result)
                     for key in (
                         "verification_post_accepted",
@@ -2167,7 +2292,10 @@ class Closer:
                 )
                 if not conflict and (
                     operation.get("status") == "confirmed_not_started"
-                    or (operation.get("status") == "abandoned" and no_start)
+                    or (
+                        operation.get("status") == "abandoned"
+                        and (no_start or rejected_not_accepted)
+                    )
                     or (
                         operation.get("status") == "failed"
                         and operation.get("outcome") in {"stale", "blocked", "deferred"}
@@ -3021,16 +3149,44 @@ class Closer:
         try:
             self.gh.api(prepared["endpoint"], method="POST", fields=prepared["fields"])
         except GitHubNoEffectRejected:
-            return {
+            rejected = {
+                "mutation_kind": prepared["mutation_kind"],
+                "request_basis": prepared["request_basis"],
+                "http_status": 422,
+            }
+            result = {
                 "status": "not_started",
                 "reason": "verification event inputs unsupported or rejected (HTTP 422)",
                 "next_trigger": "compatible reviewed consumer workflow and valid event inputs",
-                "verification_rejected": {
-                    "mutation_kind": prepared["mutation_kind"],
-                    "request_basis": prepared["request_basis"],
-                    "http_status": 422,
-                },
+                "verification_rejected": rejected,
             }
+            import closer_queue
+
+            invocation = getattr(closer_queue._callback_threads, "invocation", None)
+            operation = (invocation or {}).get("operation") or {}
+            if (
+                closer_queue._currently_invoking(snapshot["target"], operation)
+                and operation.get("action") in {"post_merge_verify", "initiate_verify"}
+                and operation.get("revision") == snapshot.get("revision")
+                and isinstance(operation.get("binding"), Mapping)
+            ):
+                result["verification_rejection_proof"] = {
+                    "schema": "closer-verification-rejection/v1",
+                    "producer": "submit_verify/GitHubNoEffectRejected/live-queue-invocation",
+                    "target": snapshot["target"],
+                    "operation_id": operation["id"],
+                    "action": operation["action"],
+                    "revision": operation["revision"],
+                    "binding_sha256": digest(operation["binding"]),
+                    "rejection_sha256": digest(rejected),
+                    "request_basis": prepared["request_basis"],
+                    "core_namespace": getattr(
+                        getattr(self.runtime_binding, "bundle", None), "namespace", None
+                    ),
+                    "post_attempted": True,
+                    "request_accepted": False,
+                }
+            return result
         return {
             "status": "completed",
             "verification_key": f"{target}:{snapshot['merge']}:compare",
