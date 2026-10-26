@@ -1102,6 +1102,8 @@ class PinnedNativeHooks:
                 ):
                     raise BindingError("native admission cfg differs from signed invocation")
                 admitted_assignment = Path(context["assignment"]["path"])
+                if "demand_assignment" in context:
+                    self.assignment_source = Path(context["demand_assignment"]["path"])
             canonical = {
                 "interpreter": self.interpreter_anchor.resolve(),
                 "dispatcher": self.dispatcher_anchor.resolve(),

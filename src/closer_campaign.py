@@ -38,6 +38,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
@@ -176,11 +177,21 @@ class Campaign:
         max_workers: int = 2,
         release_record: str | None = None,
         worker_config: dict[str, Any] | None = None,
+        demand_assignment_bytes: bytes | None = None,
+        demand_request: Mapping[str, Any] | None = None,
+        qualified_package: Mapping[str, Any] | None = None,
+        demand_now: float | None = None,
+        _demand_outcome: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create the record, or resume the same campaign under the same owner.
 
         `worker_config` and `release_record` live IN the record so a later scheduled tick
         needs no memory of the process that began it."""
+        demand_inputs = (demand_assignment_bytes, demand_request, qualified_package)
+        if any(value is not None for value in demand_inputs) and not all(
+            value is not None for value in demand_inputs
+        ):
+            raise ValueError("completed demand needs assignment, request and verified package")
         if not 1 <= max_workers <= MAX_WORKERS_CAP:
             raise ValueError(f"max_workers must be 1..{MAX_WORKERS_CAP}")
         worker_config = dict(worker_config or {})
@@ -200,7 +211,7 @@ class Campaign:
         if mode == "round":  # one whole-round owner; the dispatcher gives its own parallelism
             targets = [ROUND_UNIT]
             max_workers = 1
-        fresh = {
+        fresh: dict[str, Any] = {
             "schema_version": STATE_SCHEMA,
             "campaign_id": campaign_id,
             "revision": 0,
@@ -237,11 +248,57 @@ class Campaign:
                     raise CampaignError(
                         "campaign finite frontier targets changed; use a new campaign"
                     )
-                return current
-            fresh["revision"] = 1
-            fresh["updated_at"] = _now()
-            self._write_unlocked(fresh)
-            return fresh
+                if demand_request is None:
+                    return current
+            selected: dict[str, Any] = current if current is not None else fresh
+            if demand_request is not None:
+                if current is None:
+                    selected["revision"] = 1  # logical initial record, still not written
+                original_revision = selected["revision"]
+                assert demand_assignment_bytes is not None and qualified_package is not None
+                from closer_demand_admission import admit_in_transaction
+
+                outcome = admit_in_transaction(
+                    selected,
+                    assignment_bytes=demand_assignment_bytes,
+                    request=demand_request,
+                    qualified_package=qualified_package,
+                    now=_now() if demand_now is None else demand_now,
+                )
+                if _demand_outcome is not None:
+                    _demand_outcome.update(outcome)
+                if outcome["status"] == "refused":
+                    raise CampaignError("completed demand refused: " + outcome["reason"])
+                receipt = selected.get("demand_admission")
+                if (
+                    not isinstance(receipt, Mapping)
+                    or receipt.get("schema") != "closer-demand-admission/v1"
+                ):
+                    raise CampaignError("completed demand did not bind an admission receipt")
+                if outcome["status"] == "replay":
+                    return selected  # An exact replay neither writes nor bumps revision.
+                if current is not None and (
+                    current.get("workers") or current.get("hold_followups")
+                ):
+                    raise CampaignError(
+                        "existing campaign work remains owned; demand cannot replace it"
+                    )
+                selected["demand_assignment"] = _store_demand_assignment(
+                    self.path, demand_assignment_bytes, receipt
+                )
+                selected["worker_config"]["assignment"] = selected["demand_assignment"]["path"]
+                selected["demand_continuations"] = []
+                selected["demand_prepared"] = {
+                    "schema": "closer-demand-prepared/v1",
+                    "status": "prepared",
+                    "request_id": receipt["request_id"],
+                    "snapshot": dict(selected["demand_assignment"]),
+                }
+                selected["revision"] = original_revision
+            selected["revision"] = selected["revision"] + 1
+            selected["updated_at"] = _now()
+            self._write_unlocked(selected)
+            return selected
         finally:
             stream.close()
 
@@ -738,6 +795,52 @@ def status_line(doc: dict[str, Any]) -> str:
         f"phase={doc['phase']} workers={live}/{doc['max_workers']} "
         f"drainable={drainable_workers(doc)} hold={'yes' if doc.get('hold') else 'no'}"
     )
+
+
+def _store_demand_assignment(state_path, raw, receipt):
+    """Prepare exact immutable bytes; an orphan after failed CAS grants no launch."""
+    import hashlib
+
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != receipt["assignment_sha256"]:
+        raise CampaignError("demand snapshot differs from admitted bytes")
+    directory = Path(state_path).with_name(Path(state_path).name + ".demand")
+    directory.mkdir(parents=True, exist_ok=True)
+    if directory.resolve() != directory or directory.is_symlink():
+        raise CampaignError("demand snapshot directory is aliased")
+    path = directory / (digest + ".json")
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        from closer_native_observer import _bounded_bytes
+
+        if _bounded_bytes(path, 2 * 1024 * 1024) != raw:
+            raise CampaignError("demand snapshot bytes changed")
+    else:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    return {
+        "schema": "closer-demand-assignment/v1",
+        "path": str(path),
+        "sha256": digest,
+        **{
+            key: receipt[key]
+            for key in (
+                "campaign_id",
+                "owner",
+                "campaign_generation",
+                "assignment_generation",
+                "request_id",
+            )
+        },
+    }
 
 
 # ------------------------------------------------------------- release status
@@ -2538,7 +2641,8 @@ def tick(
                 # never receive a fresh report, assignment or execution window.
                 doc = reconcile(campaign, pid_alive=pid_alive)
                 try:
-                    doc = rearm_on_assignment_change(campaign, doc, manifest)
+                    if doc.get("demand_admission") is None:
+                        doc = rearm_on_assignment_change(campaign, doc, manifest)
                 except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
                     report.append(
                         {
@@ -2715,6 +2819,498 @@ def _tick_release(campaign, doc, release, py, module, launcher, pid_alive) -> di
     }
 
 
+def _demand_read(path):
+    from closer_demand_admission import MAX_ASSIGNMENT_BYTES
+    from closer_native_observer import _bounded_bytes
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise CampaignError("duplicate demand JSON key")
+            result[key] = value
+        return result
+
+    raw = _bounded_bytes(path, MAX_ASSIGNMENT_BYTES)
+    value = json.loads(raw, object_pairs_hook=unique)
+    if not isinstance(value, dict):
+        raise CampaignError("completed discovery document must be an object")
+    return value, raw
+
+
+def _controller_demand_context(argv_root=None):
+    if os.environ.get("ORCH_CLOSER_CAMPAIGN_TICK", "1") == "0":
+        return None
+    state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+    root = Path(
+        argv_root or os.environ.get("ORCH_CLOSER_CAMPAIGN_DIR") or state / "closer-campaigns"
+    )
+    path = root / "pin.manifest.json"
+    if not path.is_file():
+        return None
+    manifest = load_manifest(path)
+    contract = (manifest.get("mechanism_contract") or {}).get("controller_demand")
+    if contract is None:
+        return None
+    required = {
+        "schema",
+        "controller_root",
+        "campaign_state",
+        "campaign_id",
+        "owner",
+        "publisher_sha256",
+    }
+    if (
+        not isinstance(contract, dict)
+        or not required <= contract.keys()
+        or set(contract) - required - {"worker_config"}
+        or contract.get("schema") != "closer-controller-demand/v1"
+    ):
+        raise CampaignError("unsupported pinned controller demand contract")
+    from closer_mechanisms import NATIVE, mechanism
+    from closer_native_observer import contract as native_contract
+
+    if mechanism(manifest) != NATIVE:
+        raise CampaignError("controller demand requires the existing native wrapper")
+    native_root = native_contract(manifest)[0]["campaign_root"]
+    campaign_path = Path(contract["campaign_state"])
+    controller_root = Path(contract["controller_root"])
+    if (
+        root.resolve() != root
+        or str(root) != native_root
+        or path.resolve() != path
+        or campaign_path.resolve() != campaign_path
+        or campaign_path.parent != root
+        or not campaign_path.name.endswith(".campaign.json")
+        or controller_root.resolve() != controller_root
+        or not controller_root.is_dir()
+        or not all(
+            isinstance(contract.get(key), str) and contract[key] for key in ("campaign_id", "owner")
+        )
+    ):
+        raise CampaignError("pinned demand publisher/campaign path differs from canonical state")
+    publisher = controller_root / "demand_router.py"
+    if (
+        not isinstance(contract.get("publisher_sha256"), str)
+        or not _DIGEST.fullmatch(contract["publisher_sha256"])
+        or publisher.resolve() != publisher
+        or sha256_file(publisher) != contract["publisher_sha256"]
+    ):
+        raise CampaignError("pinned demand publisher source differs")
+    return {
+        "root": root,
+        "publisher": publisher,
+        "manifest_path": path,
+        "manifest": manifest,
+        "manifest_sha256": sha256_file(path),
+        "contract": contract,
+    }
+
+
+def controller_demand_before_discovery(argv_root=None):
+    """Capture publisher identity before main; never claim its exit code proves discovery."""
+    context = _controller_demand_context(argv_root)
+    if context is None:
+        return None
+    path = Path(context["contract"]["controller_root"]) / "demand-plan.json"
+    lock = path.parent / ".demand.lock"
+    with lock.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        context["previous_plan_sha256"] = (
+            sha256_json(_demand_read(path)[0]) if path.is_file() else None
+        )
+    return context
+
+
+def controller_demand_after_discovery(context, *, launcher=default_launcher, now=None):
+    """Bridge completed discovery to the canonical campaign, then the normal wrapper.
+
+    The publisher lock covers generation and immutable snapshot preparation plus
+    Campaign's existing CAS. It is released before invoking any process. Replay
+    never submits a second wrapper; uncertain submission is retained for its owner.
+    """
+    import copy
+
+    import closer_native_observer as native
+    from closer_demand_admission import admit_in_transaction
+
+    current = _now() if now is None else now
+    pinned = _controller_demand_context(str(context["root"]))
+    if pinned is None or pinned["manifest_sha256"] != context["manifest_sha256"]:
+        raise CampaignError("demand manifest changed after discovery began")
+    manifest, contract = pinned["manifest"], pinned["contract"]
+    controller_root = Path(contract["controller_root"])
+    manifest_path = pinned["manifest_path"]
+    native_value, wrapper, _python, observer_root = native.contract(manifest)
+    qualification_path = observer_root / "native-qualification.json"
+    qualification_sha = sha256_file(qualification_path)
+    problems = qualify(manifest, pinned["root"])
+    if problems:
+        return {"status": "held", "reason": "version not qualified", "problems": problems}
+    if (
+        sha256_file(qualification_path) != qualification_sha
+        or sha256_file(manifest_path) != pinned["manifest_sha256"]
+    ):
+        raise CampaignError("demand qualification changed during verification")
+    package = {
+        "package_digest": manifest["package_digest"],
+        "manifest_sha256": pinned["manifest_sha256"],
+        "qualification_digest": qualification_sha,
+    }
+    state_path = controller_root / "demand-state.json"
+    campaign = Campaign(contract["campaign_state"])
+    outcome = {}
+    with (controller_root / ".demand.lock").open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        plan, plan_raw = _demand_read(controller_root / "demand-plan.json")
+        state, _state_raw = _demand_read(state_path)
+        assignment, _assignment_raw = _demand_read(controller_root / "closer-assignment.json")
+        import hashlib
+
+        plan_sha = sha256_json(plan)
+        if plan_sha == context["previous_plan_sha256"]:
+            return {"status": "inert", "reason": "no completed discovery in this invocation"}
+        generated = plan.get("generated_at")
+        if (
+            plan.get("errors") != []
+            or assignment.get("errors") != []
+            or generated is None
+            or generated != state.get("last_complete_at")
+            or generated != assignment.get("generated_at")
+            or plan.get("ownership_complete") is not True
+            or (plan.get("routes") or {}).get("closer") != assignment.get("targets")
+        ):
+            return {"status": "refused", "reason": "discovery/assignment/state completion differs"}
+        doc = campaign.read()
+        if doc is not None and (
+            doc["campaign_id"] != contract["campaign_id"] or doc["owner"] != contract["owner"]
+        ):
+            return {"status": "refused", "reason": "canonical campaign belongs to another owner"}
+        cfg = copy.deepcopy((doc or {}).get("worker_config") or contract.get("worker_config") or {})
+        if (
+            cfg.get("mechanism") != "native-handoff/v1"
+            or cfg.get("policy") != manifest["policy"]
+            or cfg.get("granularity", "round") != "round"
+            or cfg.get("apply") is not True
+            or cfg.get("coordinator_mode") != "resource_scoped"
+        ):
+            return {"status": "refused", "reason": "canonical native worker configuration required"}
+        if cfg.get("runtime_manifest") not in (None, str(manifest_path)):
+            return {
+                "status": "refused",
+                "reason": "worker manifest differs from pinned demand package",
+            }
+        cfg["runtime_manifest"] = str(manifest_path)
+        try:
+            dispatch_command(cfg, manifest["runtime"]["python"], Path(manifest["module_dir"]))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return {
+                "status": "refused",
+                "reason": "pinned demand worker config invalid: " + str(exc),
+            }
+        previous = state.get("closer_campaign_demand") or {}
+        source = {key: value for key, value in assignment.items() if key != "generation"}
+        source_sha = sha256_json(source)
+        same_source = (
+            previous.get("generated_at") == generated
+            and previous.get("source_sha256") == source_sha
+        )
+        if doc is not None and doc.get("demand_admission") and not doc.get("demand_wake"):
+            # The same-commit marker proves the original bridge has not crossed
+            # its durable submit boundary, even if discovery replaced its cache.
+            prepared = doc.get("demand_prepared")
+            original = doc["demand_admission"]
+            if (
+                not isinstance(prepared, dict)
+                or prepared
+                != {
+                    "schema": "closer-demand-prepared/v1",
+                    "status": "prepared",
+                    "request_id": original.get("request_id"),
+                    "snapshot": doc.get("demand_assignment"),
+                }
+                or (previous.get("wake") or {}).get("status")
+                in {"submitted", "unknown", "started", "denied"}
+                or doc.get("workers")
+                or doc.get("hold_followups")
+                or not original["not_before"] <= current < original["deadline"]
+            ):
+                return {"status": "held", "reason": "original unsubmitted demand remains owned"}
+            retained = native._bounded_bytes(Path(prepared["snapshot"]["path"]), 2 * 1024 * 1024)
+            frozen = json.loads(retained)
+            if hashlib.sha256(retained).hexdigest() != original["assignment_sha256"]:
+                raise CampaignError("prepared demand snapshot changed")
+            current_assignment = {**assignment, "generation": original["assignment_generation"]}
+            current_raw = json.dumps(
+                current_assignment, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+            trial_request = {
+                **original,
+                "schema": "closer-demand-request/v1",
+                "expected_revision": doc["revision"],
+                "assignment_sha256": hashlib.sha256(current_raw).hexdigest(),
+            }
+            for field in ("request_id", "accepted_at", "admission_count", "record_digest"):
+                trial_request.pop(field, None)
+            trial = copy.deepcopy(doc)
+            trial.pop("demand_admission")
+            tested = admit_in_transaction(
+                trial,
+                assignment_bytes=current_raw,
+                request=trial_request,
+                qualified_package=package,
+                now=current,
+            )
+            if tested["status"] != "admitted":
+                return {
+                    "status": "held",
+                    "reason": "fresh discovery cannot recover prepared demand: " + tested["reason"],
+                }
+
+            def material(value):
+                projected = {
+                    key: copy.deepcopy(item)
+                    for key, item in value.items()
+                    if key not in {"generation", "generated_at"}
+                }
+                for row in projected.get("targets", []):
+                    if isinstance(row, dict):
+                        row.pop("due", None)
+                        row.pop("not_before", None)
+                return projected
+
+            if material(assignment) != material(frozen):
+                return {
+                    "status": "held",
+                    "reason": "fresh demand differs from original prepared scope",
+                }
+            request = {
+                key: value
+                for key, value in original.items()
+                if key not in {"request_id", "accepted_at", "admission_count", "record_digest"}
+            }
+            request["schema"] = "closer-demand-request/v1"
+            previous = {
+                "generation": original["assignment_generation"],
+                "generated_at": frozen["generated_at"],
+                "source_sha256": sha256_json(
+                    {key: value for key, value in frozen.items() if key != "generation"}
+                ),
+                "request": request,
+                "snapshot": dict(prepared["snapshot"]),
+                "wake": {"status": "prepared", "request_id": original["request_id"]},
+            }
+            same_source = True  # Exact original request, independently validated fresh scope.
+        owned_wake = (doc or {}).get("demand_wake") or previous.get("wake") or {}
+        if not same_source and owned_wake.get("status") in {
+            "submitted",
+            "unknown",
+            "started",
+            "denied",
+        }:
+            # Campaign worker results are the existing effect owner. In their
+            # absence an uncertain wrapper wake cannot be replaced by discovery.
+            if owned_wake.get("status") == "denied":
+                return {"status": "held", "reason": "existing wrapper submission was denied"}
+            previous_workers = set(owned_wake.get("prior_worker_ids") or [])
+            known_workers = [
+                worker
+                for worker in (doc or {}).get("workers") or []
+                if worker.get("worker_id") not in previous_workers
+            ]
+            if not known_workers or any(
+                w.get("state") != "terminal"
+                or w.get("outcome") not in {"ok", "unavailable", "scoped_continuation"}
+                for w in known_workers
+            ):
+                return {
+                    "status": "held",
+                    "reason": "existing wrapper/campaign outcome remains owned",
+                }
+        if same_source:
+            request = previous["request"]
+            raw = native._bounded_bytes(Path(previous["snapshot"]["path"]), 2 * 1024 * 1024)
+        else:
+            generations = [
+                previous.get("generation", 0),
+                (doc or {}).get("demand_admission", {}).get("assignment_generation", 0),
+            ]
+            if any(type(value) is not int or value < 0 for value in generations):
+                raise CampaignError("demand generation accounting malformed")
+            generation = max(generations) + 1
+            assignment["generation"] = generation
+            raw = (
+                json.dumps(assignment, sort_keys=True, separators=(",", ":"), allow_nan=False)
+                + "\n"
+            ).encode()
+            targets = [
+                row.get("target") if isinstance(row, dict) else row
+                for row in assignment.get("targets", [])
+            ]
+            if not targets or any(
+                not isinstance(target, str) or not TARGET.fullmatch(target) for target in targets
+            ):
+                return {"status": "refused", "reason": "no exact current demand targets"}
+            request = {
+                "schema": "closer-demand-request/v1",
+                "campaign_id": contract["campaign_id"],
+                "owner": contract["owner"],
+                "campaign_generation": (doc or {}).get("generation", 1),
+                "expected_revision": (doc or {}).get("revision", 1),
+                "assignment_generation": generation,
+                "assignment_sha256": hashlib.sha256(raw).hexdigest(),
+                **package,
+                "not_before": current,
+                "deadline": current + 120,
+                "targets": targets,
+            }
+        prospective = (
+            copy.deepcopy(doc)
+            if doc is not None
+            else {
+                "campaign_id": contract["campaign_id"],
+                "owner": contract["owner"],
+                "generation": 1,
+                "revision": 1,
+                "release_pin": manifest["package_digest"],
+                "phase": "work",
+                "hold": None,
+                "workers": [],
+            }
+        )
+        checked = admit_in_transaction(
+            prospective,
+            assignment_bytes=raw,
+            request=request,
+            qualified_package=package,
+            now=current,
+        )
+        if checked["status"] == "refused":
+            return checked
+        if (
+            checked["status"] == "admitted"
+            and doc is not None
+            and (doc.get("workers") or doc.get("hold_followups"))
+        ):
+            return {"status": "held", "reason": "existing campaign work remains owned"}
+        snapshot = _store_demand_assignment(campaign.path, raw, checked["record"])
+        if checked["status"] == "admitted":
+            _atomic_write(controller_root / "closer-assignment.json", json.loads(raw))
+            state["closer_campaign_demand"] = {
+                "generation": request["assignment_generation"],
+                "generated_at": generated,
+                "source_sha256": source_sha,
+                "request": request,
+                "snapshot": snapshot,
+                "wake": {"status": "prepared", "request_id": checked["record"]["request_id"]},
+            }
+            _atomic_write(state_path, state)  # prepared before CAS; no process submitted yet
+        doc = campaign.begin(
+            contract["campaign_id"],
+            request["targets"],
+            owner=contract["owner"],
+            release_pin=manifest["package_digest"],
+            worker_config=cfg,
+            demand_assignment_bytes=raw,
+            demand_request=request,
+            qualified_package=package,
+            demand_now=current,
+            _demand_outcome=outcome,
+        )
+        recovering = (
+            outcome["status"] == "replay"
+            and same_source
+            and previous.get("wake")
+            == {"status": "prepared", "request_id": outcome["record"]["request_id"]}
+            and not doc.get("demand_wake")
+            and not doc.get("workers")
+            and not doc.get("hold_followups")
+            and doc.get("demand_assignment") == snapshot
+            and outcome["record"]["not_before"] <= current < outcome["record"]["deadline"]
+        )
+        if outcome["status"] != "admitted" and not recovering:
+            return outcome
+        wake = {
+            "schema": "closer-demand-wake/v1",
+            "status": "submitted",
+            "request_id": outcome["record"]["request_id"],
+            "prior_worker_ids": [worker["worker_id"] for worker in doc.get("workers", [])],
+        }
+
+        def record_wake(current_doc):
+            if (
+                current_doc.get("demand_admission") != doc.get("demand_admission")
+                or current_doc.get("generation") != doc.get("generation")
+                or current_doc.get("demand_assignment") != snapshot
+                or current_doc.get("demand_wake")
+                or current_doc.get("demand_prepared") != doc.get("demand_prepared")
+                or (current_doc.get("demand_prepared") or {}).get("status") != "prepared"
+                or current_doc.get("phase") != "work"
+                or current_doc.get("hold")
+                or current_doc.get("release_attempt") is not None
+                or current_doc.get("campaign_id") != contract["campaign_id"]
+                or current_doc.get("owner") != contract["owner"]
+                or current_doc.get("release_pin") != manifest["package_digest"]
+                or current_doc.get("assignment_targets") != request["targets"]
+                or current_doc.get("worker_config") != doc.get("worker_config")
+                or current_doc.get("workers")
+                or current_doc.get("hold_followups")
+                or not outcome["record"]["not_before"]
+                <= max(current, _now())
+                < outcome["record"]["deadline"]
+            ):
+                raise CampaignError("prepared demand wake changed before submission intent")
+            current_doc["demand_prepared"]["status"] = "submitted"
+            current_doc["demand_wake"] = wake
+
+        campaign.update(record_wake)
+        state["closer_campaign_demand"] = (
+            {**previous, "wake": dict(wake)}
+            if recovering
+            else {**state["closer_campaign_demand"], "wake": dict(wake)}
+        )
+        _atomic_write(state_path, state)  # durable intent before the process boundary
+    # The normal pinned wrapper establishes its own observed entry, supervisor
+    # lock and canonical ACTION A/C lease. No in-process capability is invented.
+    try:
+        pid = launcher(
+            ["/bin/bash", str(wrapper), "closer"],
+            campaign.path.with_name(campaign.path.name + ".demand-wrapper.log"),
+        )
+    except BaseException as exc:
+        with (controller_root / ".demand.lock").open("a+b") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            state, _raw = _demand_read(state_path)
+            wake = state["closer_campaign_demand"]["wake"]
+            wake.update(
+                status="denied" if isinstance(exc, PermissionError) else "unknown",
+                reason=type(exc).__name__,
+            )
+            campaign.update(lambda current_doc: current_doc.__setitem__("demand_wake", dict(wake)))
+            _atomic_write(state_path, state)
+        raise
+    with (controller_root / ".demand.lock").open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        state, _raw = _demand_read(state_path)
+        state["closer_campaign_demand"]["wake"].update(status="started", pid=pid)
+        campaign.update(
+            lambda current_doc: current_doc.__setitem__(
+                "demand_wake", dict(state["closer_campaign_demand"]["wake"])
+            )
+        )
+        _atomic_write(state_path, state)
+    return {
+        "status": "admitted",
+        "request_id": outcome["record"]["request_id"],
+        "pid": pid,
+        "campaign": str(campaign.path),
+        "assignment": snapshot,
+    }
+
+
+_LAST_CONTROLLER_DEMAND_REPORT = None
+
+
 def tick_safe(argv_root: str | None = None) -> list[dict[str, Any]]:
     """Controller-side entry. Never raises and never blocks the controller's own work."""
     if os.environ.get("ORCH_CLOSER_CAMPAIGN_TICK", "1") == "0":
@@ -2870,14 +3466,57 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _pinned_demand_main(fallback, context):
+    """Match loaded executable code to the exact verified publisher source."""
+    import hashlib
+    import types
+
+    from closer_native_observer import _bounded_bytes
+
+    code = getattr(fallback, "__code__", None)
+    source = _bounded_bytes(context["publisher"], 2 * 1024 * 1024)
+    if hashlib.sha256(source).hexdigest() != context["contract"]["publisher_sha256"]:
+        return False
+    compiled = compile(source, str(context["publisher"]), "exec", dont_inherit=True)
+    mains = [
+        value
+        for value in compiled.co_consts
+        if isinstance(value, types.CodeType) and value.co_name == "main"
+    ]
+    return (
+        code is not None
+        and Path(code.co_filename).resolve() == context["publisher"]
+        and getattr(fallback, "__name__", None) == "main"
+        and len(mains) == 1
+        and code == mains[0]
+    )
+
+
 def controller_entry(argv: list[str] | None, fallback: Callable[[list[str] | None], int]) -> int:
     """Hook for the desktop controller's `main`. `closer-campaign ...` is ours; any other
     scheduled invocation first runs one bounded, never-raising tick, then the fallback."""
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["closer-campaign"]:
         return main(args[1:])
-    tick_safe()
-    return fallback(argv)
+    global _LAST_CONTROLLER_DEMAND_REPORT
+    try:
+        demand_context = controller_demand_before_discovery()
+        if demand_context is not None:
+            if not _pinned_demand_main(fallback, demand_context):
+                raise CampaignError("controller fallback is not the pinned demand publisher main")
+    except Exception as exc:  # the controller's own discovery must still run
+        demand_context = None
+        _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
+    tick_safe()  # Existing-owned reconciliation remains separate from new demand.
+    result = fallback(argv)
+    if result == 0 and demand_context is not None:
+        try:
+            if not _pinned_demand_main(fallback, demand_context):
+                raise CampaignError("controller publisher executable code changed during discovery")
+            _LAST_CONTROLLER_DEMAND_REPORT = controller_demand_after_discovery(demand_context)
+        except Exception as exc:
+            _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
+    return result
 
 
 if __name__ == "__main__":

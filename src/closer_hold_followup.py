@@ -1443,6 +1443,13 @@ def rearm(
                 )
             return  # Expiry closes this scheduling release; it grants no cohort.
         next_generation = generation + 1
+        if value.get("demand_admission") is not None:
+            from closer_native_observer import seal_demand_hold_continuation
+
+            continuation = seal_demand_hold_continuation(
+                campaign.path, value, next_generation, ready
+            )
+            value.setdefault("demand_continuations", []).append(continuation)
         value.setdefault("hold_followup_transitions", []).append(
             {
                 "schema": "native-hold-followup-transition/v1",
@@ -1455,6 +1462,12 @@ def rearm(
                 "accepted": False,
             }
         )
+        if value.get("demand_admission") is not None and any(
+            time.time() >= value["hold_followups"][row["hold_id"]]["deadline"] for row in ready
+        ):
+            # Signing may block. The orphan sidecar grants no authority until
+            # this Campaign commit; preserve the original released hold on expiry.
+            raise ValueError("demand hold release expired during native seal")
         value["generation"] = next_generation
         value["targets"][campaigns.ROUND_UNIT] = "pending"
         consumed = {row["hold_id"] for row in ready}

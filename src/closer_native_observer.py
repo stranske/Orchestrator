@@ -202,6 +202,213 @@ def _immutable(path, raw):
         os.close(descriptor)
 
 
+def _demand_cohort(raw, finite_frontier):
+    assignment = json.loads(raw)
+    return {
+        "assignment_sha256": hashlib.sha256(raw).hexdigest(),
+        "targets_sha256": mechanisms.digest(assignment["targets"]),
+        "finite_frontier_sha256": mechanisms.digest(finite_frontier),
+    }
+
+
+def _validate_demand_continuations(manifest, origin, campaign, raw, refs, finite_frontier):
+    """Only an explicit contiguous signed execution-generation chain may advance."""
+    if not isinstance(refs, list) or len(refs) > 64:
+        raise mechanisms.MechanismError("demand continuation chain exceeds bound")
+    generation = origin["campaign_generation"]
+    if type(generation) is not int or generation < 1 or type(campaign.get("generation")) is not int:
+        raise mechanisms.MechanismError("demand execution generation malformed")
+    if not refs:
+        if generation != campaign["generation"]:
+            raise mechanisms.MechanismError("demand execution lacks signed continuation")
+        return
+    root = contract(manifest)[3]
+    expected_binding = binding(manifest)
+    key = mechanisms._key(root)
+    expected_campaign = {name: campaign[name] for name in ("state", "campaign_id", "owner")}
+    cohort = _demand_cohort(raw, finite_frontier)
+    for ref in refs:
+        if not isinstance(ref, dict) or set(ref) != {"path", "sha256"}:
+            raise mechanisms.MechanismError("demand continuation reference malformed")
+        path = Path(ref["path"])
+        if (
+            path.parent.parent != root
+            or not re.fullmatch(r"[0-9a-f]{32}", path.parent.name)
+            or not re.fullmatch(r"demand-continuation-[0-9a-f]{64}\.json", path.name)
+        ):
+            raise mechanisms.MechanismError("demand continuation escapes native observation root")
+        encoded = _bounded_bytes(path, 128 * 1024)
+        signed = json.loads(encoded)
+        record = signed["record"]
+        if (
+            hashlib.sha256(encoded).hexdigest() != ref["sha256"]
+            or record.get("schema") != "native-demand-continuation/v1"
+            or record.get("origin") != origin
+            or record.get("cohort") != cohort
+            or record.get("campaign") != expected_campaign
+            or record.get("release_pin") != manifest["package_digest"]
+            or record.get("binding") != expected_binding
+            or record.get("entry_nonce") != path.parent.name
+            or type(record.get("previous_generation")) is not int
+            or type(record.get("next_generation")) is not int
+            or record["previous_generation"] != generation
+            or record["next_generation"] != generation + 1
+            or not isinstance(record.get("releases"), list)
+            or not record["releases"]
+            or not hmac.compare_digest(
+                str(signed.get("signature", "")), mechanisms._signature(record, key)
+            )
+        ):
+            raise mechanisms.MechanismError(
+                "demand continuation signature/scope/generation differs"
+            )
+        generation = record["next_generation"]
+    if generation != campaign["generation"]:
+        raise mechanisms.MechanismError("demand continuation chain is incomplete")
+
+
+def seal_demand_hold_continuation(state_path, doc, next_generation, releases):
+    """Called only inside the existing validated hold-rearm Campaign transaction."""
+    import copy
+
+    from closer_campaign import load_manifest
+
+    manifest = load_manifest(doc["worker_config"]["runtime_manifest"])
+    if not entry_active(manifest):
+        raise mechanisms.MechanismError("demand continuation requires actual observed native entry")
+    previous = doc["generation"]
+    if (
+        type(previous) is not int
+        or type(next_generation) is not int
+        or next_generation != previous + 1
+        or not releases
+        or doc.get("release_pin") != manifest["package_digest"]
+    ):
+        raise mechanisms.MechanismError("demand hold transition identity differs")
+    for released in releases:
+        held = doc["hold_followups"][released["hold_id"]]
+        if held.get("status") != "released" or time.time() >= held["deadline"]:
+            raise mechanisms.MechanismError("demand hold release expired or changed before seal")
+    identity = _campaign_identity(state_path, doc)
+    origin = doc["demand_assignment"]
+    admission = doc["demand_admission"]
+    from closer_demand_admission import RECORD_SCHEMA
+    from closer_demand_admission import _hash as admission_hash
+
+    if (
+        admission.get("schema") != RECORD_SCHEMA
+        or admission.get("record_digest")
+        != admission_hash({k: v for k, v in admission.items() if k != "record_digest"})
+        or admission.get("package_digest") != manifest["package_digest"]
+        or doc["worker_config"].get("assignment") != origin.get("path")
+        or origin.get("sha256") != admission.get("assignment_sha256")
+        or any(
+            origin.get(name) != admission.get(name)
+            for name in (
+                "campaign_id",
+                "owner",
+                "campaign_generation",
+                "assignment_generation",
+                "request_id",
+            )
+        )
+    ):
+        raise mechanisms.MechanismError("demand continuation original admission/snapshot changed")
+    _source, raw = _demand_assignment_bytes(
+        manifest,
+        origin,
+        identity,
+        continuations=doc.get("demand_continuations", []),
+        finite_frontier=doc["worker_config"].get("finite_frontier"),
+    )
+    root = contract(manifest)[3]
+    nonce = _CURRENT_ENTRY[str(root)]
+    record = {
+        "schema": "native-demand-continuation/v1",
+        "origin": copy.deepcopy(origin),
+        "cohort": _demand_cohort(raw, doc["worker_config"].get("finite_frontier")),
+        "campaign": {name: identity[name] for name in ("state", "campaign_id", "owner")},
+        "release_pin": manifest["package_digest"],
+        "binding": binding(manifest),
+        "previous_generation": previous,
+        "next_generation": next_generation,
+        "releases": copy.deepcopy(releases),
+        "entry_nonce": nonce,
+    }
+    path = root / nonce / ("demand-continuation-" + mechanisms.digest(record) + ".json")
+    encoded = json.dumps(
+        {"record": record, "signature": mechanisms._signature(record, mechanisms._key(root))},
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    if len(encoded) > 128 * 1024:
+        raise mechanisms.MechanismError("demand continuation receipt exceeds bound")
+    try:
+        _immutable(path, encoded)
+    except FileExistsError:
+        if _bounded_bytes(path, 128 * 1024) != encoded:
+            raise mechanisms.MechanismError("demand continuation immutable bytes changed")
+    return {"path": str(path), "sha256": hashlib.sha256(encoded).hexdigest()}
+
+
+def _demand_assignment_bytes(
+    manifest, reference, campaign, *, continuations=None, finite_frontier=None
+):
+    """Exact admitted snapshot origin, independently bound to the pinned state."""
+    contract = manifest["mechanism_contract"].get("controller_demand") or {}
+    keys = {
+        "schema",
+        "path",
+        "sha256",
+        "campaign_id",
+        "owner",
+        "campaign_generation",
+        "assignment_generation",
+        "request_id",
+    }
+    if (
+        contract.get("schema") != "closer-controller-demand/v1"
+        or not isinstance(reference, dict)
+        or set(reference) != keys
+        or reference.get("schema") != "closer-demand-assignment/v1"
+        or campaign.get("state") != contract.get("campaign_state")
+        or campaign.get("campaign_id") != contract.get("campaign_id")
+        or campaign.get("owner") != contract.get("owner")
+        or any(reference.get(key) != campaign.get(key) for key in ("campaign_id", "owner"))
+        or type(reference.get("assignment_generation")) is not int
+        or reference["assignment_generation"] <= 0
+        or not re.fullmatch(r"[0-9a-f]{64}", str(reference.get("sha256", "")))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(reference.get("request_id", "")))
+    ):
+        raise mechanisms.MechanismError("typed demand snapshot identity differs")
+    state = Path(contract["campaign_state"])
+    path = state.with_name(state.name + ".demand") / (reference["sha256"] + ".json")
+    if (
+        state.parent != Path(manifest["mechanism_contract"]["campaign_root"])
+        or state.resolve() != state
+        or str(path) != reference["path"]
+    ):
+        raise mechanisms.MechanismError("typed demand snapshot escapes canonical campaign")
+    raw = _bounded_bytes(path, 2 * 1024 * 1024)
+    assignment = json.loads(raw)
+    if (
+        hashlib.sha256(raw).hexdigest() != reference["sha256"]
+        or type(assignment.get("generation")) is not int
+        or assignment["generation"] != reference["assignment_generation"]
+    ):
+        raise mechanisms.MechanismError("typed demand snapshot bytes/generation differ")
+    _validate_demand_continuations(
+        manifest,
+        reference,
+        campaign,
+        raw,
+        [] if continuations is None else continuations,
+        finite_frontier,
+    )
+    return path, raw
+
+
 def publish_admission(manifest, manifest_path, state_path, doc):
     """Publish only for a genuinely pending new round; never renew an old worker."""
     import closer_operational_capacity as scoped
@@ -259,9 +466,52 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         Path.home()
         / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
     )
-    if assignment_source.resolve() != assignment_source or assignment_source.is_symlink():
-        raise mechanisms.MechanismError("native canonical assignment is aliased")
-    raw = _bounded_bytes(assignment_source, 2 * 1024 * 1024)
+    demand = doc.get("demand_admission")
+    demand_reference = None
+    if demand is not None:
+        from closer_demand_admission import RECORD_SCHEMA
+        from closer_demand_admission import _hash as demand_hash
+
+        demand_reference = doc.get("demand_assignment")
+        if (
+            not isinstance(demand, dict)
+            or demand.get("schema") != RECORD_SCHEMA
+            or demand.get("record_digest")
+            != demand_hash({k: v for k, v in demand.items() if k != "record_digest"})
+            or demand.get("package_digest") != manifest["package_digest"]
+            or demand.get("manifest_sha256") != _hash(Path(manifest_path))
+            or demand.get("qualification_digest") != _hash(root / "native-qualification.json")
+            or not isinstance(demand_reference, dict)
+            or any(
+                demand_reference.get(key) != demand.get(key)
+                for key in (
+                    "campaign_id",
+                    "owner",
+                    "campaign_generation",
+                    "assignment_generation",
+                    "request_id",
+                )
+            )
+            or demand_reference.get("sha256") != demand.get("assignment_sha256")
+        ):
+            raise mechanisms.MechanismError(
+                "native demand admission differs from qualified package/snapshot"
+            )
+        if not doc.get("workers") and not demand["not_before"] <= time.time() < demand["deadline"]:
+            raise mechanisms.MechanismError(
+                "native demand admission is not due or expired before start"
+            )
+        assignment_source, raw = _demand_assignment_bytes(
+            manifest,
+            demand_reference,
+            _campaign_identity(state_path, doc),
+            continuations=doc.get("demand_continuations", []),
+            finite_frontier=cfg.get("finite_frontier"),
+        )
+    else:
+        if assignment_source.resolve() != assignment_source or assignment_source.is_symlink():
+            raise mechanisms.MechanismError("native canonical assignment is aliased")
+        raw = _bounded_bytes(assignment_source, 2 * 1024 * 1024)
     if not raw:
         raise mechanisms.MechanismError("native assignment missing or exceeds bound")
     assignment = directory / "assignment.json"
@@ -371,6 +621,9 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         "runtime_manifest": producer_cfg["runtime_manifest"],
         "runtime_manifest_sha256": producer_cfg["runtime_manifest_sha256"],
     }
+    if demand_reference is not None:
+        context["demand_assignment"] = dict(demand_reference)
+        context["demand_continuations"] = list(doc.get("demand_continuations", []))
     if control_plane_reasons:
         context["control_plane_reasons"] = control_plane_reasons
     if workspace_config is not None:
@@ -473,7 +726,20 @@ def validate_admission(manifest, context, *, for_effects):
             or not Path(pin["source_path"]).is_absolute()
         ):
             raise mechanisms.MechanismError("native immutable workspace configuration differs")
-    if context["assignment"].get("source_path") != str(source):
+    if "demand_assignment" in context:
+        demand_source, demand_raw = _demand_assignment_bytes(
+            manifest,
+            context["demand_assignment"],
+            context["campaign"],
+            continuations=context.get("demand_continuations", []),
+            finite_frontier=context.get("finite_frontier"),
+        )
+        if (
+            context["assignment"].get("source_path") != str(demand_source)
+            or hashlib.sha256(demand_raw).hexdigest() != context["assignment"]["sha256"]
+        ):
+            raise mechanisms.MechanismError("native typed demand assignment origin differs")
+    elif context["assignment"].get("source_path") != str(source):
         raise mechanisms.MechanismError("native assignment source differs")
     manifest_path = Path(context["runtime_manifest"])
     if (
