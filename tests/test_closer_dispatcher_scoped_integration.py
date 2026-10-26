@@ -561,9 +561,9 @@ def test_historical_unknown_intents_remain_fenced_after_store_move(tmp_path):
     assert resources.unknown_reservations(root) == {key: "o/r#1"}
 
 
-@pytest.mark.parametrize("failure,expected_calls", [("auth", 1), ("quota", 1)])
-def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
-    tmp_path, failure, expected_calls
+@pytest.mark.parametrize("failure", ["auth", "quota"])
+def test_actual_entry_incomplete_native_auth_or_quota_signal_stays_unknown_without_retry(
+    tmp_path, failure
 ):
     common = tmp_path / "common"
     common.mkdir()
@@ -573,12 +573,11 @@ def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
     receipt = finish(start(tmp_path, "a", shadow=False, failure=failure, postverify=True))
     rows = [json.loads(x) for x in (tmp_path / "a" / "events.jsonl").read_text().splitlines()]
     calls = [x["profile"] for x in rows if x["event"] == "offload_enter"]
-    assert len(calls) == expected_calls
+    assert len(calls) == 1
     assert all(x["data_only"] is True for x in rows if x["event"] == "offload_enter")
-    pools = [profiles.get_profile(p)["capacity_pool_ids"][0] for p in calls]
-    assert len(set(pools)) == len(pools)
-    # Actual incomplete native failure is UNKNOWN, never a fabricated measured
-    # provider stop. It cannot buy a retry/fallback on the other same-pool alias.
+    # These stderr signals accompany an incomplete native result, not an
+    # authenticated quota classification. UNKNOWN alone forbids retry/fallback;
+    # the separate quota-capacity unit below exercises shared-pool suppression.
     row = receipt["targets"]["o/r#1"]
     assert row["status"] == "unknown"
     interpreted = row["results"]["interpret"]
@@ -600,6 +599,44 @@ def test_actual_entry_auth_no_retry_and_quota_suppresses_every_pool_alias(
     assert calls == ["claude-sonnet-5-5-low"]
     assert "claude-sonnet-5-5-high-v2" not in calls
     assert not receipt["validation"]["valid"]
+
+
+@pytest.mark.parametrize("profile_id", ["claude-sonnet-5-5-low", "claude-sonnet-5-5-high-v2"])
+def test_quota_capacity_snapshot_blocks_both_shared_pool_aliases(tmp_path, monkeypatch, profile_id):
+    # Pure resource unit: a supplied current quota-capacity observation is
+    # authoritative for this allocator test only, not native/provider proof or
+    # production qualification. Hold all other capacity fields healthy.
+    aliases = ["claude-sonnet-5-5-low", "claude-sonnet-5-5-high-v2"]
+    selected = route(profile_id)
+    lane = "low" if profile_id.endswith("-low") else "exception"
+    pools = [profiles.get_profile(p)["capacity_pool_ids"] for p in aliases]
+    assert pools[0] == pools[1] and len(pools[0]) == 1
+    cap = report(aliases)
+    cap["pools"][pools[0][0]].update(state="exhausted", reason="quota exhausted")
+    monkeypatch.setenv("HANDOFF_DIR", str(tmp_path))
+    monkeypatch.setattr(d, "_fresh_capacity_report", lambda: cap)
+    monkeypatch.setattr(d, "_exception_route", lambda **_kw: (None, "exhausted"))
+    monkeypatch.setattr(d, "_pipeline_low_route", lambda **_kw: (None, "exhausted"))
+    with pytest.raises(resources.ResourceBlocked):
+        d._execute_profile_route(
+            selected,
+            lambda _p: pytest.fail("quota-exhausted shared pool executed"),
+            lane=lane,
+            load={},
+            deadline=time.time() + 3,
+        )
+    # Same selected alias and all other inputs: fresh healthy pool evidence
+    # removes this capacity refusal, proving the negative wasn't an unrelated
+    # qualification/UNKNOWN fence.
+    cap["pools"][pools[0][0]] = {"state": "ok"}
+    value, actual = d._execute_profile_route(
+        selected,
+        lambda chosen: chosen["profile_id"],
+        lane=lane,
+        load={},
+        deadline=time.time() + 3,
+    )
+    assert value == profile_id and actual == selected
 
 
 def test_incompatible_contract_fences_legacy_even_for_disjoint_target(tmp_path):
