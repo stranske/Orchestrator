@@ -24,6 +24,7 @@ from closer_role_qualification import MECHANICAL_OPERATIONS
 
 REQUEST_SCHEMA = "closer-criterion-request/v1"
 RESPONSE_SCHEMA = "closer-criterion-response/v1"
+ADJUDICATION_EVIDENCE_VERSION = "closer-adjudication-evidence/v2"
 PLAN_SCHEMA = "closer-mechanical-plan/v1"
 TEST_SCHEMA = "closer-required-test/v1"
 REGISTERED_REQUIRED_TESTS: dict[str, dict[str, Any]] = {}
@@ -284,6 +285,25 @@ def _refs(values, index, root):
     return result
 
 
+def _adjudication_receipt_index(snapshot, packet, root, basis):
+    """Native receipts explain one current finding, never a source PASS or fix.
+
+    Reuse the ordinary NON_PASS validator's explicit producer/manifest/run/raw
+    joins; do not traverse arbitrary packet content for apparent references.
+    """
+    index = disposition._receipt_index(packet, root)
+    verifier = snapshot.get("verifier")
+    if (
+        set(basis) == {"finding_id"}
+        and isinstance(verifier, Mapping)
+        and verifier.get("verdict") == "NON_PASS"
+        and verifier.get("head_sha") == snapshot.get("head")
+        and verifier.get("evaluated_sha") == snapshot.get("merge")
+    ):
+        index = {**index, **disposition._native_resolution_index(packet, root, verifier)}
+    return index
+
+
 def build_adjudication_request(
     snapshot, packet, packet_ref, *, basis, question, evidence_refs, retained_dir
 ):
@@ -304,7 +324,7 @@ def build_adjudication_request(
         owner_error = error
     if not _text(question) or "\n" in question or "\r" in question or question.count("?") > 1:
         raise ContractError("one_bounded_disputed_question_required")
-    refs = _refs(evidence_refs, disposition._receipt_index(packet, root), root)
+    refs = _refs(evidence_refs, _adjudication_receipt_index(snapshot, packet, root, selected), root)
     result = {
         "schema": REQUEST_SCHEMA,
         **identity,
@@ -381,12 +401,11 @@ def validate_adjudication_response(
         "unresolved_mechanical",
     }
     if needs_proof:
-        normalized = _refs(refs, disposition._receipt_index(packet, root), root)
+        index = _adjudication_receipt_index(snapshot, packet, root, request["basis"])
+        normalized = _refs(refs, index, root)
         if any(
             ref not in request["evidence"] for ref in normalized
-        ) or not disposition._proofs_valid(
-            refs, response.get("proofs"), disposition._receipt_index(packet, root), root
-        ):
+        ) or not disposition._proofs_valid(refs, response.get("proofs"), index, root):
             raise ContractError("scoped_adjudication_proof_unbound")
     elif refs != [] or response.get("proofs") != []:
         raise ContractError("missing_evidence_answer_must_not_invent_proof")
