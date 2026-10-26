@@ -333,15 +333,69 @@ def _inherit_no_start_lineage(candidate, journal, doc, current):
         )
 
 
+class _CaptureBlocked(ValueError):
+    def __init__(self, message: str, candidates: list[dict[str, Any]]):
+        super().__init__(message)
+        self.candidate_count = len(candidates)
+        self.candidate_ids_sha256 = _digest(sorted(row["hold_id"] for row in candidates))
+
+
 def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
+    """Capture or retain one bounded, owned refusal; never starve existing expiry.
+
+    At capacity, original source shards/workers and the exact campaign scope stay
+    owned. No history is deleted and no overflow journal/archive is allocated.
+    The owner must remediate saturation; a blocked capture cannot release/rearm.
+    """
+    current = time.time() if now is None else now
+    if not _number(current):
+        raise ValueError("invalid follow-up clock")
+    doc = campaign.read()
+    if doc is None:
+        raise ValueError("campaign disappeared")
+    try:
+        return _capture(campaign, doc, current)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+        # Only capture/source failures are contained. Campaign context is checked
+        # again under its existing lock before recording ownership of the refusal.
+        failure = exc
+
+    def blocked(value):
+        if any(
+            value.get(key) != doc.get(key)
+            for key in ("campaign_id", "owner", "generation", "release_pin", "worker_config")
+        ):
+            raise ValueError("campaign owner context changed during failed hold capture")
+        previous = value.get("hold_capture") or {}
+        value["hold_capture"] = {
+            "schema": "closer-hold-capture/v1",
+            "status": "blocked",
+            "campaign_id": value["campaign_id"],
+            "owner": value["owner"],
+            "escalation_owner": policy(value)["escalation_owner"],
+            "generation": value.get("generation", 1),
+            "release_pin": value["release_pin"],
+            "config_sha256": _digest(value.get("worker_config") or {}),
+            "scope": {
+                "frontier": (value.get("worker_config") or {}).get("finite_frontier"),
+                "dispatch_state": (value.get("worker_config") or {}).get("dispatch_state"),
+            },
+            "first_seen_at": previous.get("first_seen_at", current),
+            "last_seen_at": current,
+            "reason": type(failure).__name__ + ": " + str(failure)[:500],
+            "candidate_count": getattr(failure, "candidate_count", None),
+            "candidate_ids_sha256": getattr(failure, "candidate_ids_sha256", None),
+            "authority": False,
+        }
+
+    return campaign.update(blocked)
+
+
+def _capture(campaign: Any, doc: dict[str, Any], current: float) -> dict[str, Any]:
     """Bind actual retained pipeline rows to this campaign's durable owner."""
     import closer_finite_reentry as reentry
     import closer_resources as resources
 
-    current = time.time() if now is None else now
-    doc = campaign.read()
-    if doc is None:
-        raise ValueError("campaign disappeared")
     settings = policy(doc)
     located = _paths(doc)
     if located is None:
@@ -513,7 +567,7 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
             raise ValueError("campaign owner context changed during hold capture")
         journal = value.setdefault("hold_followups", {})
         if not isinstance(journal, dict) or len(journal) > MAX_HOLDS:
-            raise ValueError("hold journal is invalid or exceeds bound")
+            raise _CaptureBlocked("hold journal is invalid or exceeds bound", candidates)
         for candidate in candidates:
             if not validate_hold(candidate):
                 raise ValueError("retained hold has invalid identity")
@@ -538,11 +592,16 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
                     raise ValueError("durable hold is malformed")
                 continue  # Never reset original deadline, identity or attempt budget.
             if len(journal) >= MAX_HOLDS:
-                raise ValueError("hold journal exceeds bound")
-            _inherit_no_start_lineage(candidate, journal, value, current)
+                raise _CaptureBlocked("hold journal exceeds bound", candidates)
+            try:
+                _inherit_no_start_lineage(candidate, journal, value, current)
+            except (ValueError, TypeError, KeyError) as exc:
+                raise _CaptureBlocked(str(exc), candidates) from exc
             if not validate_hold(candidate):
                 raise ValueError("inherited hold bounds are malformed")
             journal[candidate["hold_id"]] = candidate
+        if value.get("hold_capture"):
+            value["hold_capture"].update(status="resolved", resolved_at=current)
 
     return campaign.update(persist)
 
@@ -1219,11 +1278,12 @@ def _assert_bound(doc: Mapping[str, Any], record: Mapping[str, Any]) -> None:
         raise ValueError("hold campaign owner, generation, pin or configuration changed")
 
 
-def _probe_allowed(doc: Mapping[str, Any]) -> bool:
+def _probe_allowed(doc: Mapping[str, Any], *, require_capture: bool = True) -> bool:
     return bool(
         doc.get("phase") == "work"
         and not doc.get("hold")
         and not doc.get("release_record")
+        and (not require_capture or (doc.get("hold_capture") or {}).get("status") != "blocked")
         and all(
             worker.get("state") not in {"active", "launched"} for worker in doc.get("workers", [])
         )
@@ -1693,7 +1753,13 @@ def consume(
     doc = capture(campaign, now=current)
     settings = policy(doc)
     reports: list[dict[str, Any]] = []
-    journal = doc.get("hold_followups") or {}
+    if (doc.get("hold_capture") or {}).get("status") == "blocked":
+        reports.append({"kind": "hold_capture_blocked", **doc["hold_capture"]})
+    journal = doc.get("hold_followups", {})
+    # A contained capture refusal does not admit oversized/corrupt storage to
+    # the bounded consumer. Check shape/count before inspecting or sorting rows.
+    if not isinstance(journal, Mapping) or len(journal) > MAX_HOLDS:
+        raise ValueError("hold journal is invalid or exceeds bound")
     if any(not validate_hold(row) for row in journal.values()):
         raise ValueError("malformed durable hold")
     # Expiry is processed for the entire bounded journal, independently of the
@@ -1732,7 +1798,14 @@ def consume(
         )
         if not due and not expired:
             continue
-        if not expired and (probes >= MAX_CHECKS or not _probe_allowed(doc)):
+        if not expired and (
+            probes >= MAX_CHECKS
+            or not _probe_allowed(doc, require_capture=False)
+            or (
+                (doc.get("hold_capture") or {}).get("status") == "blocked"
+                and prior["execution_state"] == "confirmed_not_started"
+            )
+        ):
             continue
         recovering = prior["status"] == "checking"
         check_id = (
