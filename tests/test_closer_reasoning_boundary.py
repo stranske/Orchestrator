@@ -202,6 +202,7 @@ def native_world(tmp_path, monkeypatch, controlled_world):
         frontier=frontier,
         report=report,
         response=response,
+        inert_caller=inert_caller,
     )
 
 

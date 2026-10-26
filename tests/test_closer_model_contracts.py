@@ -335,7 +335,7 @@ def test_descriptor_binds_actual_source_pin_and_separates_syntax_from_semantics(
     source_sha = hashlib.sha256(Path(contracts.__file__).read_bytes()).hexdigest()
     descriptor = contracts.classification_contract_descriptor(source_sha256=source_sha)
     assert descriptor["source_sha256"] == source_sha
-    assert descriptor["prompt_version"] == "closer-classification-prompt/v2"
+    assert descriptor["prompt_version"] == "closer-classification-prompt/v3"
     assert descriptor["max_prompt_bytes"] == 65536
     assert descriptor["response_syntax"]["identity_or_evidence_validation"] is False
     assert descriptor["semantic_validator"]["retained_io_required"] is True

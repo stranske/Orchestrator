@@ -24,7 +24,9 @@ _REAL_DATA_ONLY_PROBLEM = adapters.data_only_problem
 
 def install_inert_native_transport(w, world, monkeypatch):
     """Keep the public CLI/pool proof; replace only the old unproved emitter."""
-    caller = InertCaller(world, monkeypatch)
+    # native_world already owns the physical emitter; a second construction
+    # would rewrite its executable after the original hash was admitted.
+    caller = getattr(w, "inert_caller", None) or InertCaller(world, monkeypatch)
     monkeypatch.setattr(adapters, "data_only_problem", _REAL_DATA_ONLY_PROBLEM)
 
     def provider(agent, prompt, **kwargs):
