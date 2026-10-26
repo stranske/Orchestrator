@@ -393,6 +393,12 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
     cmd = child_argv(
         [sys.executable, "-m", "pytest", "-q", "-rfEs", "-p", "no:cacheprovider", "--no-header"]
     )
+    try:
+        workers = int(os.environ.get("VERIFY_PYTEST_WORKERS", "0"))
+    except ValueError:
+        workers = 0
+    if workers > 0:
+        cmd += ["-n", str(workers)]
     if junit is not None:
         cmd.append(f"--junitxml={junit}")
     cmd += extra or []
