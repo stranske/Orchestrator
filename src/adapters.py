@@ -1923,10 +1923,10 @@ _NON_CLAUDE_DATA_ONLY_GAPS = {
         "wrapper identity omits bundled node, JavaScript and native dependency closure",
     ),
     "vibe": (
-        "tool deny-all requires a cleared allowlist and does not prevent custom module imports",
-        "user/project agent and config discovery require an unqualified sterile runtime",
-        "launcher identity omits interpreter, imported packages and environment precedence",
-        "mistral-medium-3.5 resolves to a mutable upstream alias, not served-model evidence",
+        "native wildcard denial and zero-source discovery exist; production admission is not wired",
+        "experimental public-API candidate needs an observing backend and imports/closure review",
+        "exact model and high thinking are configurable; served identity/effort remain unmeasured",
+        "exact server model acceptance and subscription/no-paid-route assurance are unprobed",
     ),
     "gemini": (
         "print/plan/sandbox and slash-command disabling do not disable all tools",
@@ -1976,6 +1976,55 @@ def non_claude_data_only_boundary(agent: str, mode: str | None = "assess") -> di
         "unresolved_controls": gaps,
         "detail": "; ".join(gaps),
         "problem": problem,
+    }
+
+
+def prepare_non_claude_data_only_candidate(
+    agent: str,
+    *,
+    manifest: Any,
+    private_root: str | Path,
+    profile: str = "vibe-medium-3.5",
+    mode: str | None = "assess",
+    transport: str = "offload",
+) -> dict[str, Any]:
+    """Prepare an unverified experimental plan; never admit or invoke a transport.
+
+    The installed Vibe public API has sterile discovery/config primitives that
+    the ordinary CLI path does not wire. This helper binds those candidate
+    controls to the existing exact profile and reviewed runtime manifest. The
+    separate real backend, account and confinement evidence gates remain closed.
+    """
+    if mode != "assess" or transport != "offload":
+        raise ValueError("candidate preparation requires an explicit assess offload")
+    if agent != "vibe" or profile != "vibe-medium-3.5":
+        raise ValueError("only the exact Vibe Medium 3.5 candidate builder is implemented")
+    selected = execution_profiles.get_profile(profile)
+    if (
+        not selected
+        or selected["agent"] != agent
+        or selected["requested_model"] != "mistral-medium-3.5"
+        or selected["reasoning_effort"] != "high"
+    ):
+        raise ValueError("candidate profile identity changed")
+    import closer_role_qualification
+    import non_claude_data_only_candidate as candidate
+
+    if not isinstance(manifest, candidate.RuntimeManifest):
+        raise ValueError("an explicit pinned candidate runtime manifest is required")
+    plan = candidate.prepare_vibe_candidate(
+        requested_model=selected["requested_model"],
+        requested_effort=selected["reasoning_effort"],
+        manifest=manifest,
+        private_root=Path(private_root),
+    ).to_dict()
+    return {
+        **plan,
+        "candidate_builder": "vibe-zero-source-programmatic/v1",
+        "profile_identity": closer_role_qualification.profile_identity(selected),
+        "adapter_build_sha256": candidate.pin_file(Path(__file__)).sha256,
+        "production_admission": False,
+        "activation": False,
     }
 
 
