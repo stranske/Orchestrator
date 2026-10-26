@@ -40,12 +40,16 @@ avoids ordinary site `.pth` startup. Manifest drift, extra files and callback/AP
 source drift fail closed. Preparation performs no SDK import, credential read,
 configuration write or provider request.
 
-The inert driver initializes zero sources before configuration, requires the
-public API and backend factory to be pinned, checks an empty available-tool set,
-and denies network access throughout. The raw-response observer rejects aliases,
-model mismatch, missing/multiple responses, tool activity and incomplete results
-before response mapping. Requested high thinking is a real native configuration
-field; observed effort remains UNKNOWN.
+The trusted same-process fixture driver initializes zero sources before
+configuration, requires pinned API/factory code, and checks an empty available-tool
+set. Its Python guards cover TCP connect and DNS helpers. They are not a kernel
+network sandbox: UDP sends, existing-connection writes and subprocess execution
+are outside those guards. This driver does not execute the emitted isolated
+bootstrap or replace its own import path; those remain separate native-runtime
+qualification work. Its raw-response observer rejects aliases, model mismatch,
+missing/multiple responses, tool activity and incomplete results before mapping.
+Requested high thinking is a real native configuration field; observed effort
+remains UNKNOWN.
 
 The native backend currently drops the response's model identity. A real passive
 observer must retain that upstream field. `load_installed_provider_backend()` is
