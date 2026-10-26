@@ -4120,6 +4120,7 @@ def offload(
                             "profile_id": profile_id,
                             "provider_argv": list(argv),
                             "operation_id": controlled.operation_id,
+                            "task_type": task_type,
                             "finite_frontier_id": finite_frontier_id,
                             "finite_frontier_target": finite_frontier_target,
                             "data_only_execution_binding_sha256": controlled.execution[

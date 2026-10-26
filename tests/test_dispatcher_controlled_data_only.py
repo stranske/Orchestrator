@@ -423,3 +423,27 @@ def test_misplaced_borrowed_token_rejected_before_any_prompt_hash(world, monkeyp
     assert result["process_started"] is False and result["outcome_uncertain"] is False
     assert world.events["auth"] == world.events["auth_closed"] == 1
     assert not world.events["ledger"] and not world.capture.exists()
+
+
+def test_trusted_observation_keeps_actual_task_across_all_lifecycle_callbacks(world):
+    starting = []
+
+    def prepare(observation):
+        starting.append(dict(observation))
+        resources.finite_pool_prepare_request(observation)
+
+    result = run(world, process_starting_callback=prepare)
+    assert result["exit"] == 0
+    observations = [starting[0], world.events["started"][0], world.events["finished"][0]]
+    assert all(row["task_type"] == "closer_interpret" for row in observations)
+    for key in (
+        "run_id",
+        "operation_id",
+        "profile_id",
+        "task_type",
+        "finite_frontier_id",
+        "finite_frontier_target",
+        "data_only_execution_binding_sha256",
+    ):
+        assert all(row[key] == observations[0][key] for row in observations)
+    assert observations[0]["task_type"] == result["data_only_origin"]["task_type"]
