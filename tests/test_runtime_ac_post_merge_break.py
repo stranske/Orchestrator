@@ -595,10 +595,11 @@ class PostMergeBreakTests(unittest.TestCase):
                 continue
             copied.add(name)
             for requirement in distribution.requires or []:
-                # Metadata requirements begin with their distribution name. Copying
-                # every installed requirement is safe here: platform-specific ones
-                # simply are not installed and are skipped below. Keep this test
-                # stdlib-only so the CI dependency declaration remains accurate.
+                # This fixture requests no extras. Do not copy optional test/doc
+                # dependencies just because they happen to be installed on the host.
+                # pip still selects applicable platform requirements from the wheels.
+                if re.search(r"\bextra\b", requirement.partition(";")[2]):
+                    continue
                 match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
                 if match:
                     pending.append(match.group())
