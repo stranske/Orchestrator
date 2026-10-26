@@ -22,7 +22,8 @@ import closer_disposition as disposition
 import closer_evidence as evidence
 from closer_role_qualification import MECHANICAL_OPERATIONS
 
-REQUEST_SCHEMA = "closer-criterion-request/v1"
+REQUEST_SCHEMA = "closer-criterion-request/v2"
+ADJUDICATION_PROMPT_VERSION = "closer-adjudication-prompt/v2"
 RESPONSE_SCHEMA = "closer-criterion-response/v1"
 ADJUDICATION_EVIDENCE_VERSION = "closer-adjudication-evidence/v2"
 PLAN_SCHEMA = "closer-mechanical-plan/v1"
@@ -304,6 +305,54 @@ def _adjudication_receipt_index(snapshot, packet, root, basis):
     return index
 
 
+_PROOF_IDENTITY_KEYS = frozenset(
+    {
+        "artifact_id",
+        "run_id",
+        "run_attempt",
+        "head_sha",
+        "kind",
+        "receipt_path",
+        "filename",
+        "base",
+        "head",
+        "blob_sha",
+        "evaluated_sha",
+    }
+)
+MAX_PROOF_IDENTITY_BYTES = 16 * 1024
+
+
+def _proof_identities(refs, index):
+    """Project only exact validator-admitted typed identities, never conclusions."""
+    result = []
+    for ref in refs:
+        entry = index[(ref["path"], ref["sha256"])]
+        members = entry if isinstance(entry, list) else [entry]
+        if not 1 <= len(members) <= 8 or any(
+            not isinstance(row, dict) or not row or set(row) - _PROOF_IDENTITY_KEYS
+            for row in members
+        ):
+            raise ContractError("adjudication_proof_identity_invalid")
+        result.append(
+            {
+                "ref": copy.deepcopy(ref),
+                "alternatives": [
+                    {"evidence_sha256": ref["sha256"], **copy.deepcopy(row)} for row in members
+                ],
+            }
+        )
+    try:
+        raw = json.dumps(result, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise ContractError("adjudication_proof_identity_invalid") from exc
+    if len(raw) > MAX_PROOF_IDENTITY_BYTES:
+        raise ContractError("adjudication_proof_identity_exceeds_bound")
+    return result
+
+
 def build_adjudication_request(
     snapshot, packet, packet_ref, *, basis, question, evidence_refs, retained_dir
 ):
@@ -324,13 +373,15 @@ def build_adjudication_request(
         owner_error = error
     if not _text(question) or "\n" in question or "\r" in question or question.count("?") > 1:
         raise ContractError("one_bounded_disputed_question_required")
-    refs = _refs(evidence_refs, _adjudication_receipt_index(snapshot, packet, root, selected), root)
+    index = _adjudication_receipt_index(snapshot, packet, root, selected)
+    refs = _refs(evidence_refs, index, root)
     result = {
         "schema": REQUEST_SCHEMA,
         **identity,
         "basis": selected,
         "question": question,
         "evidence": refs,
+        "proof_identities": _proof_identities(refs, index),
     }
     if criterion is not None:
         result["criterion"] = criterion
@@ -483,6 +534,14 @@ def validate_selected_inventory(original, request):
 
 def build_adjudication_prompt(original, request, *, retained_dir):
     """Project one row and bound the entire serialized prompt before allocation."""
+    if (
+        not isinstance(request, Mapping)
+        or request.get("schema") != REQUEST_SCHEMA
+        or "proof_identities" not in request
+        or request.get("request_id")
+        != _digest({key: value for key, value in request.items() if key != "request_id"})
+    ):
+        raise ContractError("adjudication_request_changed")
     selected = validate_selected_inventory(original, request)
     supplied, remaining = [], 64 * 1024
     for ref in request["evidence"]:
@@ -506,12 +565,16 @@ def build_adjudication_prompt(original, request, *, retained_dir):
         "schema must be closer-criterion-response/v1; all request identity fields must exactly match. "
         "For a source criterion outcome is satisfied|unsatisfied|insufficient_evidence. "
         "For a finding outcome is resolved_duplicate|resolved_nonissue|unresolved_missing_evidence|unresolved_mechanical and include the sole additional key next_guarded_action (wait|collect_evidence). "
-        "Cite only supplied evidence and existing typed raw-proof grammar; missing evidence requires evidence:[] and proofs:[]. "
+        "Cite only supplied evidence. For satisfied|unsatisfied|resolved_duplicate|resolved_nonissue, evidence must be a nonempty subset of adjudication_request.evidence, with one proof per cited ref in the same order. "
+        "For each proof copy EVERY field of exactly one alternatives object for that ref in adjudication_request.proof_identities (including evidence_sha256 and every typed identity), then add excerpt and relevance strings. "
+        "excerpt must be an exact substring of that ref's raw content with length at least 4 after stripping outer whitespace; relevance must explain this named criterion/finding with length at least 12 after stripping outer whitespace. You author excerpt and relevance; supplied identities are not a verdict or evidence of relevance. "
+        "For insufficient_evidence|unresolved_missing_evidence|unresolved_mechanical, return evidence:[] and proofs:[]. "
         "This is scoped advice with no acceptance, repair, merge, closure or verification authority.\n"
     )
     try:
         prompt = instructions + json.dumps(
             {
+                "prompt_contract": ADJUDICATION_PROMPT_VERSION,
                 "adjudication_request": request,
                 "selected_row": selected,
                 "supplied_evidence": supplied,

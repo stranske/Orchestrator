@@ -233,7 +233,7 @@ def classification_contract_descriptor(*, source_sha256):
 
 
 STRONG_CONTRACT_ENTRYPOINTS = {
-    "request_schema": "closer-criterion-request/v1",
+    "request_schema": "closer-criterion-request/v2",
     "response_schema": "closer-criterion-response/v1",
     "prompt_builder": "closer_execution_contracts.build_adjudication_prompt",
     "response_validator": "closer_execution_contracts.validate_adjudication_response",
