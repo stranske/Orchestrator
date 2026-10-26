@@ -126,7 +126,7 @@ def test_actual_closed_complete_authenticated_receipt_counts_one_zero_model_bran
             json.dumps(
                 {
                     "schema": "category46-closed-complete-metrics-composition/v1",
-                    "source_head": "3d949f9a1bfd6f3ae1d67c32cc06b8cbffff415e",
+                    "fixture_source_base": "3d949f9a1bfd6f3ae1d67c32cc06b8cbffff415e",
                     "evidence_class": "SYNTHETIC_ACTUAL_LOCAL_NATIVE_COMPOSITION",
                     "worker_id": worker["worker_id"],
                     "actual_pid_exit_observed": True,
