@@ -634,3 +634,108 @@ def test_receipt_readback_after_deadline_never_records_timely_delivery(tmp_path,
     assert row["status"] == "ack_overdue"
     assert row["delivery_receipt"]["readback_at"] == now + 601
     assert "acknowledgment" not in row
+
+
+@pytest.mark.parametrize("hold_status", [None, "waiting", "checking", "released", "consumed"])
+def test_no_escalation_work_is_quiet_without_route(tmp_path, monkeypatch, hold_status):
+    c, m, p, _policy, now = world(tmp_path, monkeypatch)
+
+    def select(doc):
+        if hold_status is None:
+            doc.pop("hold_followups")
+        else:
+            doc["hold_followups"]["hold"]["status"] = hold_status
+
+    c.update(select)
+    before = c.path.read_bytes()
+    monkeypatch.setattr(
+        escalation, "route", lambda *_: pytest.fail("quiet service must not require a route")
+    )
+    doc, report = escalation.service(c, {}, "unconfigured-manifest", now=now)
+    assert report == [] and doc == c.read() and c.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("status", ["confirmed_not_started", "outcome_unknown", "delivered"])
+def test_pending_request_is_not_quiet_without_route(tmp_path, monkeypatch, status):
+    c, m, p, _policy, now = world(tmp_path, monkeypatch)
+    escalation.service(c, m, p, now=now)
+
+    def pending(doc):
+        doc["hold_followups"]["hold"]["status"] = "waiting"
+        next(iter(doc["hold_escalations"].values()))["status"] = status
+
+    c.update(pending)
+    before = c.path.read_bytes()
+    doc, report = escalation.service(c, {}, "unconfigured-manifest", now=now)
+    assert report[0]["kind"] == "escalation_unrouted"
+    assert c.path.read_bytes() == before and doc == c.read()
+
+
+@pytest.mark.parametrize("terminal", ["acknowledged", "ack_overdue"])
+def test_finished_request_without_escalated_hold_is_quiet(tmp_path, monkeypatch, capsys, terminal):
+    c, m, p, _policy, now = world(tmp_path, monkeypatch)
+    escalation.service(c, m, p, now=now)
+    if terminal == "acknowledged":
+        monkeypatch.setattr(escalation.time, "time", lambda: now + 1)
+        run_preflight(_policy, capsys)
+    else:
+        monkeypatch.setattr(escalation.time, "time", lambda: now + 601)
+        escalation.service(c, m, p, now=now + 601)
+    assert next(iter(c.read()["hold_escalations"].values()))["status"] == terminal
+    c.update(lambda doc: doc["hold_followups"]["hold"].update(status="resolved"))
+    before = c.path.read_bytes()
+    monkeypatch.setattr(escalation, "route", lambda *_: pytest.fail("finished work is quiet"))
+    _doc, report = escalation.service(c, {}, "unconfigured-manifest", now=now + 602)
+    assert report == [] and c.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "holds_none",
+        "holds_list",
+        "hold_row",
+        "journal_none",
+        "journal_list",
+        "request_row",
+        "request_status",
+    ],
+)
+def test_malformed_journal_never_proves_empty(tmp_path, monkeypatch, corruption):
+    c, m, p, _policy, now = world(tmp_path, monkeypatch)
+    if corruption == "request_status":
+        escalation.service(c, m, p, now=now)
+
+    def damage(doc):
+        doc["hold_followups"]["hold"]["status"] = "waiting"
+        if corruption == "holds_none":
+            doc["hold_followups"] = None
+        elif corruption == "holds_list":
+            doc["hold_followups"] = []
+        elif corruption == "hold_row":
+            doc["hold_followups"]["hold"] = {}
+        elif corruption == "journal_none":
+            doc["hold_escalations"] = None
+        elif corruption == "journal_list":
+            doc["hold_escalations"] = []
+        elif corruption == "request_row":
+            doc["hold_escalations"] = {"bad": {}}
+        else:
+            next(iter(doc["hold_escalations"].values()))["status"] = "unrecognized"
+
+    c.update(damage)
+    before = c.path.read_bytes()
+    monkeypatch.setattr(escalation, "route", lambda *_: pytest.fail("corruption cannot be empty"))
+    with pytest.raises(ValueError):
+        escalation.service(c, {}, "unconfigured-manifest", now=now)
+    assert c.path.read_bytes() == before
+
+
+def test_pending_request_with_changed_hold_does_not_silently_become_quiet(tmp_path, monkeypatch):
+    c, m, p, _policy, now = world(tmp_path, monkeypatch)
+    escalation.service(c, m, p, now=now)
+    c.update(lambda doc: doc["hold_followups"]["hold"].update(status="waiting"))
+    before = c.path.read_bytes()
+    with pytest.raises(ValueError, match="original escalated hold changed"):
+        escalation.service(c, m, p, now=now + 1)
+    assert c.path.read_bytes() == before
