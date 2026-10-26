@@ -701,6 +701,92 @@ def _pending_campaign(tmp_path, monkeypatch, bundle, policy):
     return obj, path, action_path, canonical, frontier, observation, manifest, manifest_path, calls
 
 
+def _terminal_successor_case(tmp_path, monkeypatch, bundle, policy):
+    import time
+
+    import closer_stage_continuation as stages
+
+    _obj, path, action_path, canonical, frontier, observation, _manifest, _pin, posts = (
+        _pending_campaign(tmp_path, monkeypatch, bundle, policy)
+    )
+
+    def create():
+        observation["observed_at"] = time.time()
+        return stages.create_successor(
+            path,
+            action_path,
+            predecessor=frontier,
+            target=observation["target"],
+            observation=observation,
+            canonical_path=canonical,
+            canonical_row={"target": observation["target"]},
+            admission=lambda: {"paused": False, "dependency": None, "live_owner": False},
+        )
+
+    first = create()
+    return path, action_path, observation, posts, first, create
+
+
+@pytest.mark.parametrize("changed", ["checks", "pending", "mergeable", "threads", "action"])
+def test_terminal_successor_reuses_original_link_after_witness_changes(
+    tmp_path, monkeypatch, bundle, policy, changed
+):
+    path, action_path, observation, posts, first, create = _terminal_successor_case(
+        tmp_path, monkeypatch, bundle, policy
+    )
+    before_journal, before_queue = path.read_bytes(), action_path.read_bytes()
+    observation["revision"] = "new-observation-projection"
+    if changed == "pending":
+        observation.update(pending_check_run_ids=[918], pending_check_head=observation["head"])
+    elif changed == "threads":
+        observation.update(active_threads=1, threads=[{"id": "new-thread", "isResolved": False}])
+    else:
+        observation[changed] = {
+            "checks": "PENDING",
+            "mergeable": "UNKNOWN",
+            "action": "disposition",
+        }[changed]
+    second = create()
+    assert second["reused"] and second["finite_frontier"] == first["finite_frontier"]
+    assert second["predecessor"] == first["predecessor"]
+    assert path.read_bytes() == before_journal and action_path.read_bytes() == before_queue
+    assert posts == ["POST"]
+
+
+@pytest.mark.parametrize(
+    "changed", ["request_basis", "operation_id", "event", "run_id", "run_attempt"]
+)
+def test_terminal_successor_never_reuses_another_stable_result(
+    tmp_path, monkeypatch, bundle, policy, changed
+):
+    path, action_path, observation, posts, _first, create = _terminal_successor_case(
+        tmp_path, monkeypatch, bundle, policy
+    )
+    before_journal, before_queue = path.read_bytes(), action_path.read_bytes()
+    marker = observation["verifier"]
+    if changed == "request_basis":
+        marker["verification_request_basis"] = "f" * 64
+    elif changed == "operation_id":
+        # A stored link for another operation must not borrow the current
+        # operation's independently revalidated terminal proof.
+        state = json.loads(path.read_text())
+        child = next(iter(state["stage_successors"].values()))
+        child["stage_predecessor"]["accepted_terminal"]["operation_id"] = "another-operation"
+        path.write_text(json.dumps(state))
+        before_journal = path.read_bytes()
+    elif changed == "event":
+        event = marker["verification_event"]
+        event["material_sha256"] = "f" * 64
+        event["event_id"] = verification_events.event_id(event)
+    else:
+        marker[changed] = "50002" if changed == "run_id" else "2"
+    observation["verifier_lifecycle"] = copy.deepcopy(marker)
+    with pytest.raises(ValueError, match="correlated terminal proof|successor identity conflicts"):
+        create()
+    assert path.read_bytes() == before_journal and action_path.read_bytes() == before_queue
+    assert posts == ["POST"]
+
+
 @pytest.mark.parametrize("crash", [False, True])
 def test_actual_core_campaign_terminal_wake_restart_and_fresh_successor_never_reposts(
     tmp_path, monkeypatch, bundle, policy, crash
