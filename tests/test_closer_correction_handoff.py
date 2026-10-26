@@ -11,6 +11,16 @@ import closer_correction_handoff as contract
 
 FIXTURE = Path(__file__).parent / "fixtures/closer_correction/request.json"
 REQUEST_SHA = "68998ab61d0d0540fca0ac37205e2d68a0be4812c7098d40346181238f236490"
+# Exact unchanged bytes from Workflows commit
+# 4cccc4bd6c8d3c76816668c4b1dcd8e7402d15a3 (parent ff224abc49ffb41f2c7eb0ebe30f70172e0372a1).
+NO_INCUMBENT_FIXTURES = {
+    "no-incumbent-request.json": "de0ec0b8d678bd6887a030e21a288aad0e7781e5500b7f7e9671c270f7a0c327",
+    "seed.json": "1a467934f617617eb85388a048a97018f4606b3fcf2e83db61df959214c3980d",
+    "no-incumbent-ownership.json": "b8c85db31e3c671c2019487618469c48734e96236e80e95d065b8495fb7c261e",
+    "accepted-no-incumbent-receipt.json": "c3f6312c3266f36358730c72fc39beee0eb5e7a887650b728ae802edf98125a8",
+}
+NO_INCUMBENT_REQUEST_SHA = "b31d7758a473fbc502048075b98a0661f41f06e97233f652a753ef2ba0a4326b"
+NO_INCUMBENT_RECEIPT_SHA = "50dc1de9aa1f373cc7f80f876c6b77f5ddfe58bf2876aba2e8cee3a39abd5745"
 
 
 @pytest.fixture
@@ -111,6 +121,78 @@ def test_committed_workflows_fixture_bytes_and_canonical_digest(req):
     assert contract.validate_request(req) is req
     with pytest.raises(ValueError, match="identity mismatch"):
         contract.parse_request(json.dumps(req), expected_sha256="f" * 64)
+
+
+@pytest.fixture
+def committed_no_incumbent():
+    blobs = {}
+    for name, expected in NO_INCUMBENT_FIXTURES.items():
+        blobs[name] = (FIXTURE.parent / name).read_bytes()
+        assert hashlib.sha256(blobs[name]).hexdigest() == expected
+    return blobs
+
+
+def test_actual_committed_no_incumbent_request_receipt_and_seed_parity(committed_no_incumbent):
+    blobs = committed_no_incumbent
+    req = contract.parse_request(
+        blobs["no-incumbent-request.json"], expected_sha256=NO_INCUMBENT_REQUEST_SHA
+    )
+    result = contract.parse_receipt(blobs["accepted-no-incumbent-receipt.json"], request=req)
+    assert result["receipt_sha256"] == NO_INCUMBENT_RECEIPT_SHA
+    assert req["incumbent"] == {"kind": "no_incumbent"}
+    assert result["issue"] == {
+        "number": "9",
+        "node_id": "I_9",
+        "body_sha256": "15effd21ce3b611b5283262bbc3f1a0a133c5b9ef842e5826524593529c9d338",
+    }
+    assert result["continuation"] == {
+        "workflow": "agents-auto-pilot.yml",
+        "run_id": "902",
+        "run_attempt": "3",
+        "request_sha256": NO_INCUMBENT_REQUEST_SHA,
+        "issue_node_id": "I_9",
+    }
+    assert result["ownership"] == json.loads(blobs["no-incumbent-ownership.json"])
+    # No seed parser or authority is introduced: these fixture projections
+    # cross-check the same field names used by the existing effect/source keys.
+    seed = json.loads(blobs["seed.json"])
+    assert seed == {
+        "schema": "closer-correction-seed/v1",
+        **{
+            key: req[key]
+            for key in ("target", "source_issue", "original_verifier", "finding", "scope")
+        },
+    }
+    assert req["required_tests"][0]["source_evidence"] == seed["finding"]["evidence"]
+    assert result["effect_state"] == contract.ACCEPTED
+    assert all(
+        result[key] is False
+        for key in ("retry_authorized", "act_authorized", "source_closure_authorized")
+    )
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("ownership", "seed_effect_key"), "f" * 64),
+        (("ownership", "source_scope_digest"), "f" * 64),
+        (("ownership", "kind"), "existing"),
+        (("ownership", "incumbent"), {"kind": "no_incumbent"}),
+        (("continuation", "issue_node_id"), "I_another"),
+        (("continuation", "request_sha256"), "f" * 64),
+        (("continuation", "run_attempt"), 3),
+        (("effect_state",), "outcome_unknown"),
+        (("retry_authorized",), True),
+    ],
+)
+def test_actual_committed_no_incumbent_receipt_rehashed_negative_joins(
+    committed_no_incumbent, path, value
+):
+    req = contract.parse_request(committed_no_incumbent["no-incumbent-request.json"])
+    row = json.loads(committed_no_incumbent["accepted-no-incumbent-receipt.json"])
+    set_path(row, path, value)
+    with pytest.raises(ValueError):
+        contract.parse_receipt(seal(row, "receipt_sha256"), request=req)
 
 
 @pytest.mark.parametrize(
