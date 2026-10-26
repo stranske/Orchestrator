@@ -286,6 +286,43 @@ def service(
     doc = campaign.read()
     if not doc:
         raise ValueError("no campaign")
+    # Empty work is inert even on hosts without escalation configuration. Validate
+    # both journals before proving emptiness; malformed/unknown rows are not empty.
+    from closer_hold_followup import validate_hold
+
+    holds = doc.get("hold_followups", {})
+    journal = doc.get("hold_escalations", {})
+    if not isinstance(holds, dict) or not isinstance(journal, dict):
+        raise ValueError("malformed escalation journals")
+    if len(holds) > MAX_REQUESTS or len(journal) > MAX_REQUESTS:
+        raise ValueError("escalation journal exceeds bound")
+    for hold_id, hold in holds.items():
+        if (
+            not isinstance(hold_id, str)
+            or not validate_hold(hold)
+            or hold.get("hold_id") != hold_id
+        ):
+            raise ValueError("malformed escalation hold journal")
+    pending = False
+    for request_id, row in journal.items():
+        if (
+            not isinstance(request_id, str)
+            or not isinstance(row, dict)
+            or not isinstance(row.get("request"), dict)
+        ):
+            raise ValueError("malformed escalation request journal")
+        _row(request_id, row)
+        if row.get("status") not in {
+            "confirmed_not_started",
+            "outcome_unknown",
+            "delivered",
+            "acknowledged",
+            "ack_overdue",
+        }:
+            raise ValueError("unknown escalation request status")
+        pending |= row["status"] not in {"acknowledged", "ack_overdue"}
+    if not pending and not any(hold["status"] == "escalated" for hold in holds.values()):
+        return doc, []
     reports = []
     deliveries = 0
     try:
@@ -294,10 +331,11 @@ def service(
             raise ValueError("foreign escalation campaign path")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return doc, [{"kind": "escalation_unrouted", "reason": str(exc), "authority": False}]
-    journal = doc.get("hold_escalations", {})
-    if len(journal) > MAX_REQUESTS or len(doc.get("hold_followups", {})) > MAX_REQUESTS:
-        raise ValueError("escalation journal exceeds bound")
-    for hold_id, hold in sorted(doc.get("hold_followups", {}).items()):
+    for request_id, row in journal.items():
+        if row["status"] not in {"acknowledged", "ack_overdue"}:
+            _row(request_id, row, policy)
+            _bound(doc, row["request"])
+    for hold_id, hold in sorted(holds.items()):
         if hold.get("status") != "escalated":
             continue
         claimed: dict[str, str] = {}
