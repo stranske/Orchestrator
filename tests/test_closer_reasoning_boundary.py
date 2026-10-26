@@ -27,7 +27,7 @@ controlled_world = _controlled_world
 
 
 @pytest.fixture
-def native_world(tmp_path, monkeypatch, controlled_world):
+def native_world(tmp_path, monkeypatch, request):
     """Real CLI/backend/registry/coordinator; synthetic role and transport admission."""
     from closer_role_support import install_synthetic_role_verdict
 
@@ -125,7 +125,16 @@ def native_world(tmp_path, monkeypatch, controlled_world):
     # Re-enable the real qualification, launch and receipt validators after the
     # historical quarantine fixture is constructed. Only the executable/auth
     # inputs are synthetic; the broker runs the physical inert native emitter.
-    inert_caller = InertCaller(controlled_world, monkeypatch)
+    # Keep this exported fixture usable when imported alone. If the caller
+    # also exposes controlled_world, reuse that pytest instance so auth/process
+    # observations stay shared; otherwise construct the same private fixture.
+    try:
+        controlled = request.getfixturevalue("controlled_world")
+    except pytest.FixtureLookupError as error:
+        if error.argname != "controlled_world":
+            raise
+        controlled = _controlled_world.__wrapped__(tmp_path, monkeypatch)
+    inert_caller = InertCaller(controlled, monkeypatch)
     inert_caller.temporary_campaign_guard()
     profile = execution_profiles.get_profile(PROFILE)
     report = {

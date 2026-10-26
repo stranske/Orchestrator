@@ -882,3 +882,10 @@ def test_restart_checks_sealed_source_context_before_reading_provider_text(proof
         closer._revalidate_controlled_proof(
             checked, run_id="original-run", basis=basis, receipt_root=proof.root
         )
+
+
+def test_exported_native_fixture_reuses_explicit_controlled_world(native_world, controlled_world):
+    assert native_world.inert_caller.world is controlled_world
+    assert controlled_world.events["auth"] == 0
+    assert controlled_world.events["started"] == []
+    assert native_world.events["provider"] == native_world.events["effect"] == 0
