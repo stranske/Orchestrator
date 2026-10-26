@@ -29,11 +29,9 @@ def test_retained_assessment_is_not_invalidated_by_incomplete_producer_audit(tmp
     monkeypatch.setattr(
         transport,
         "offload",
-        lambda *a, **kw: {
-            "exit": 0,
-            "run_id": "retained-public-response",
-            "output": json.dumps(proposal),
-        },
+        lambda *a, **kw: callbacks["_inert_caller"].response(
+            {"exit": 0, "output": json.dumps(proposal)}, *a, **kw
+        ),
     )
     result = callbacks["interpret"](snap["target"], context)
     assert feedback[-1]["structurally_invalid"] is False
@@ -76,7 +74,9 @@ def test_incomplete_audit_preserves_existing_typed_recovery_route(tmp_path, monk
         )
         if len(prompts) == 1:
             response["evidence_requests"] = [log_request(snap)]
-        return {"exit": 0, "run_id": f"offline-{len(prompts)}", "output": json.dumps(response)}
+        return callbacks["_inert_caller"].response(
+            {"exit": 0, "output": json.dumps(response)}, _agent, prompt, **_kw
+        )
 
     monkeypatch.setattr(transport, "offload", offload)
     result = callbacks["interpret"](snap["target"], context)
@@ -148,7 +148,9 @@ def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkey
     monkeypatch.setattr(
         transport,
         "offload",
-        lambda *a, **kw: {"exit": 0, "run_id": "offline-guard", "output": json.dumps(response)},
+        lambda *a, **kw: callbacks["_inert_caller"].response(
+            {"exit": 0, "output": json.dumps(response)}, *a, **kw
+        ),
     )
     result = callbacks["interpret"](snap["target"], context)
     assert result["authority"] is False
