@@ -314,6 +314,7 @@ jobs:
       actions: read
     with:
       primary-python-version: '3.14'
+      coverage-python-version: '3.14'
       python-versions: '["3.13", "3.14"]'
       marker: "not quarantine and not slow"
       pytest_markers: ${{ needs.detect.outputs.pytest_markers }}
@@ -579,6 +580,7 @@ jobs:
   summary:
     name: summary
     needs:
+      - resolve-pr
       - detect
       - environment-gate
       - python-ci
@@ -596,6 +598,7 @@ jobs:
       pull-requests: write
       statuses: write
     env:
+      GATE_PR_JSON: ${{ needs.resolve-pr.outputs.pull_request }}
       REQUIRED_JOB_GROUPS_JSON: ${{ vars.REQUIRED_JOB_GROUPS_JSON || '' }}
     outputs:
       state: ${{ steps.summarize.outputs.state || steps.docs_only.outputs.state || 'success' }}
@@ -750,7 +753,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           COVERAGE_ROOT: gate_artifacts/downloads
-          COVERAGE_REFERENCE_RUNTIME: '3.13'
+          COVERAGE_REFERENCE_RUNTIME: '3.14'
         with:
           script: |
             const fs = require('fs');
@@ -799,7 +802,30 @@ jobs:
           DELIVERY_SEAL_RESULT: ${{ needs.generated-delivery-seal.result || 'success' }}
           DOCKER_CHANGED: ${{ needs.detect.outputs.docker_changed || 'false' }}
           COVERAGE_ENABLED: ${{ needs.detect.outputs.coverage || 'true' }}
-        run: python .github/scripts/gate_summary.py
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          raw = os.environ.get("GATE_PR_JSON", "")
+          if raw and raw != "null":
+              path = Path(os.environ["GITHUB_EVENT_PATH"])
+              event = json.loads(path.read_text(encoding="utf-8"))
+              resolved = json.loads(raw)
+              original = event.get("pull_request")
+              if original and (
+                  original.get("number") != resolved.get("number")
+                  or original.get("head", {}).get("sha") != resolved.get("head", {}).get("sha")
+                  or original.get("head", {}).get("repo", {}).get("full_name")
+                  != resolved.get("head", {}).get("repo", {}).get("full_name")
+              ):
+                  raise RuntimeError("Resolved Gate PR identity differs from the original event")
+              event["pull_request"] = resolved
+              event["number"] = resolved["number"]
+              path.write_text(json.dumps(event), encoding="utf-8")
+          PY
+          python .github/scripts/gate_summary.py
 
       - name: Auto-apply autofix label for cosmetic failures
         id: autofix_label
