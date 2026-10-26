@@ -903,6 +903,46 @@ class PostMergeBreakTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "selected repository interpreter is unavailable"):
             gate._worktree_interpreter(self.checkout)
 
+    def test_dangling_repository_environment_never_uses_another_interpreter(self):
+        spec = runtime_ac.author_issue_spec(
+            "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
+        )
+        for name in (".venv", "venv"):
+            with self.subTest(environment=name):
+                checkout = self.root / f"checkout-{name}"
+                checkout.mkdir()
+                missing = checkout.parent / "unavailable-environment"
+                environment = checkout / name
+                environment.symlink_to(missing, target_is_directory=True)
+                if name == ".venv":
+                    # A secondary environment must not mask the broken preferred one.
+                    secondary = checkout / "venv/bin/python"
+                    secondary.parent.mkdir(parents=True)
+                    secondary.touch()
+                with (
+                    patch.object(
+                        subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+                    ) as setup,
+                    patch.object(
+                        runtime_ac,
+                        "run_verification",
+                        return_value={
+                            "gate": {"verdict": "PASS"},
+                            "check_results": [{"type": "command", "status": "PASS"}],
+                        },
+                    ) as verify,
+                ):
+                    result = gate.recheck_merged(spec, checkout)
+                self.assertEqual((result["result"], result["reason"]), ("UNRUNNABLE", "tool_error"))
+                self.assertIsNone(result["interpreter"])
+                self.assertIn(
+                    "selected repository interpreter is unavailable", result["transcript"]
+                )
+                setup.assert_not_called()
+                verify.assert_not_called()
+                self.assertTrue(environment.is_symlink())
+                self.assertFalse(missing.exists())
+
     def test_genuine_assertion_wins_over_spawned_interpreter_error(self):
         spec = runtime_ac.author_issue_spec(
             "owner/repo#1", "## Acceptance Criteria\n- Inspect the delivered behavior.\n"

@@ -91,3 +91,33 @@ Dependency verification and `git diff --check` pass.
 Staging the two Python files was attempted again and failed with
 `Unable to create '.git/index.lock': Read-only file system`. No commit or push was
 possible in this run.
+
+## Follow-up: unavailable environment symlinks
+
+Reviewed the recent keepalive commits and PR #935 before making this change.
+Acceptance items 1, 2, 3, and 5 are verified locally; item 4 remains unchecked
+because its required main-branch run has not occurred. The PR-body reconciliation
+was rejected again: the connector requires approval and the run's approval policy
+is `never`. The PR remains open and ready for review.
+
+Environment selection now treats a dangling `.venv` or `venv` symlink as an
+unavailable repository environment. It returns `UNRUNNABLE/tool_error` instead of
+selecting a secondary interpreter or attempting provisioning. The new regression
+failed in both subtests before the fix and passes after it, checking that neither
+setup nor verification runs and the symlink and its missing target are preserved.
+
+The eight-suite command above now reports **208 passed, 72 subtests passed**.
+Repeated the classification deliberate-break demonstration: removing
+`or environment_mismatch(row)` made the named regression fail with
+`AssertionError: 'FAIL' != 'UNRUNNABLE'`. Restoring the source byte for byte made
+the same regression pass. Dependency verification and `git diff --check` pass.
+
+Black formatted the two changed Python files. Worker-based checks stalled in this
+sandbox; sequential Black checks of all 714 tracked Python files outside the
+excluded directories completed successfully. With the resulting writable cache,
+the required repository-wide command above exited 0 and reported
+**714 files unchanged**.
+
+After the formatting gate passed, staging the source, regression test, and these
+notes failed with `Unable to create '.git/index.lock': Read-only file system`.
+The commit was not created; all three changes remain in the working tree.

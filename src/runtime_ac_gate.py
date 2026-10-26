@@ -407,7 +407,7 @@ def _worktree_interpreter(worktree: str | Path) -> str:
         interpreter = environment / "bin" / "python"
         if interpreter.is_file():
             return str(interpreter)
-        if environment.exists():
+        if environment.exists() or environment.is_symlink():
             raise RuntimeError(f"selected repository interpreter is unavailable: {interpreter}")
     environment = root / ".venv"
     interpreter = environment / "bin" / "python"
