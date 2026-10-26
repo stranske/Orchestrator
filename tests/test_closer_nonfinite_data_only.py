@@ -1,62 +1,51 @@
-"""Non-finite interpretation uses the same confined route and refusal contract."""
+"""Legacy assessment refusal regressions through the owned controlled CLI boundary."""
 
-import time
-
-from closer_role_support import install_synthetic_role_verdict
-from test_closer_batch_interpretation import OfflineDelivery, callbacks_for
-from test_closer_disposition import TARGET
+from closer_inert_dispatcher_support import REAL_BROKER
 from test_closer_evidence_recovery import recovery_callbacks
 
-import adapters
 import closer_dispatcher as closer
 import closer_evidence_recovery as recovery
 import dispatcher
-import execution_profiles
+
+
+def actual_prelaunch_refusal(monkeypatch, agent, prompt, **kwargs):
+    """Actual broker refuses unavailable provenance before any process/ledger start."""
+
+    def unavailable(_module):
+        raise OSError("synthetic prelaunch provenance read unavailable")
+
+    with monkeypatch.context() as local:
+        local.setattr(dispatcher, "_controlled_module_sha", unavailable)
+        return REAL_BROKER(agent, prompt, **kwargs)
 
 
 def test_nonfinite_tool_boundary_refusal_is_owned_pending_not_invalid_run(tmp_path, monkeypatch):
-    install_synthetic_role_verdict(monkeypatch)
-    delivery = OfflineDelivery(tmp_path, monkeypatch)
-    profile = execution_profiles.get_profile("claude-sonnet-5-5-low")
-    monkeypatch.setattr(adapters, "data_only_problem", lambda *_: None)
-    report = {
-        "generated_at": time.time(),
-        "agents": {"claude": {"state": "ok"}},
-        "profiles": {profile["profile_id"]: {"state": "ok"}},
-        "pools": {pool: {"state": "ok"} for pool in profile["capacity_pool_ids"]},
-    }
-    monkeypatch.setattr(closer, "_fresh_capacity_report", lambda: report)
+    callbacks, context, calls, refreshes = recovery_callbacks(
+        tmp_path, monkeypatch, recover=True, initial_missing=False
+    )
+    target = context["prepare"]["snapshot"]["target"]
     routed, invoked = [], []
+    original_route = closer._pipeline_low_route
 
     def route(**kwargs):
         routed.append(kwargs)
-        return {
-            "agent": "claude",
-            "profile_id": profile["profile_id"],
-            "mode": "assess",
-            "pools": profile["capacity_pool_ids"],
-        }, "available"
+        return original_route(**kwargs)
 
-    def refused(_agent, prompt, **kwargs):
+    def refused(agent, prompt, **kwargs):
         invoked.append((prompt, kwargs))
-        return {
-            "exit": 2,
-            "run_id": None,
-            "unsupported_assessment_tool_boundary": True,
-            "process_started": False,
-            "outcome_uncertain": False,
-        }
+        return actual_prelaunch_refusal(monkeypatch, agent, prompt, **kwargs)
 
     monkeypatch.setattr(closer, "_pipeline_low_route", route)
     monkeypatch.setattr(dispatcher, "offload", refused)
-    callbacks, context = callbacks_for(delivery, monkeypatch)
-    result = callbacks["interpret"](TARGET, context)
+    result = callbacks["interpret"](target, context)
     assert routed and all(call["data_only"] is True for call in routed)
     assert len(invoked) == 1 and invoked[0][1]["data_only"] is True
     assert "mandatory" in invoked[0][0] and "data_only_evidence" in invoked[0][0]
     assert result["classification"] == "assessment_transport_unavailable"
     assert result["pending_evidence"]["transport_refusal"]["run_id"] is None
     assert result["authority"] is False
+    assert not calls and not refreshes
+    assert not callbacks["_inert_caller"].world.events["ledger"]
 
 
 def test_known_not_started_transport_refusal_releases_only_its_collection_attempt(
@@ -67,15 +56,9 @@ def test_known_not_started_transport_refusal_releases_only_its_collection_attemp
     original_offload = dispatcher.offload
     refusals = []
 
-    def refused(*args, **kwargs):
+    def refused(agent, prompt, **kwargs):
         refusals.append(kwargs)
-        return {
-            "exit": 2,
-            "run_id": None,
-            "unsupported_assessment_tool_boundary": True,
-            "process_started": False,
-            "outcome_uncertain": False,
-        }
+        return actual_prelaunch_refusal(monkeypatch, agent, prompt, **kwargs)
 
     monkeypatch.setattr(dispatcher, "offload", refused)
     first = callbacks["interpret"](target, context)

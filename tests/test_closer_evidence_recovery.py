@@ -162,7 +162,8 @@ class LogGitHub:
         self.snap, self.reads = snap, []
         self.wrong_head, self.wrong_pr = wrong_head, wrong_pr
 
-    def api(self, endpoint):
+    def api(self, endpoint, *, method="GET", fields=None):
+        assert method == "GET" and fields is None
         self.reads.append(endpoint)
         if "/jobs/" in endpoint:
             return {"id": 88, "run_id": 7}
