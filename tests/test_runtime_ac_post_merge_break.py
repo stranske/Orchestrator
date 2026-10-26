@@ -542,6 +542,8 @@ class PostMergeBreakTests(unittest.TestCase):
             self.assertEqual(call.kwargs["cwd"], str(self.checkout))
             self.assertNotIn("PYTHONPATH", call.kwargs["env"])
             self.assertNotIn("PYTHONHOME", call.kwargs["env"])
+        install_env = run.call_args_list[1].kwargs["env"]
+        self.assertEqual(install_env["PATH"].split(os.pathsep)[0], str(Path(interpreter).parent))
 
     def test_failed_environment_setup_never_runs_checks_or_leaves_partial_venv(self):
         spec = runtime_ac.author_issue_spec(
@@ -665,9 +667,12 @@ class PostMergeBreakTests(unittest.TestCase):
         )
         # A stdlib-only backend installs the actual checkout's source, avoiding a
         # dependency on setuptools being present in the host or the new venv.
+        build_child = f"import sys; assert sys.prefix == {str(self.checkout / '.venv')!r}"
         (self.checkout / "delivery_backend.py").write_text(
-            "from pathlib import Path\nimport zipfile\n\n"
+            "from pathlib import Path\nimport subprocess, sys, zipfile\n\n"
             "def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\n"
+            "    for launcher in (sys.executable, 'python', 'python3'):\n"
+            f"        subprocess.run([launcher, '-c', {build_child!r}], check=True)\n"
             "    filename = 'runtime_delivery-1.0-py3-none-any.whl'\n"
             "    with zipfile.ZipFile(Path(wheel_directory) / filename, 'w') as archive:\n"
             "        archive.write('src/runtime_delivery/__init__.py', "

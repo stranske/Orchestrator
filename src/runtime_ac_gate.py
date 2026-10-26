@@ -430,6 +430,9 @@ def _worktree_interpreter(worktree: str | Path) -> str:
     setup_env = os.environ.copy()
     for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
         setup_env.pop(key, None)
+    # Build backends and dependency installers can launch Python by name too.
+    # Keep their children in this venv, just like the subsequent command checks.
+    setup_env["PATH"] = str(interpreter.parent) + os.pathsep + setup_env.get("PATH", "")
     try:
         for command in (
             [sys.executable, "-m", "venv", str(environment)],
