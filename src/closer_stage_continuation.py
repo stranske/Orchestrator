@@ -349,9 +349,21 @@ def create_successor(
                         raise ValueError("recorded stage successor metadata is malformed")
                     link = existing["stage_predecessor"]
                     recorded = {key: link.get(key) for key in causal}
+
+                    # Revalidate the current terminal proof above, but its
+                    # observation witness is not the identity of the original
+                    # accepted request/result. Preserve the first full proof
+                    # and frozen successor when only that projection changes.
+                    def identity(key: str, value: Any) -> Any:
+                        if key == "accepted_terminal" and isinstance(value, Mapping):
+                            return {k: v for k, v in value.items() if k != "substantive_witness"}
+                        return value
+
                     if (
                         any(
-                            recorded[key] != causal[key] for key in causal if key != "fresh_binding"
+                            identity(key, recorded[key]) != identity(key, causal[key])
+                            for key in causal
+                            if key != "fresh_binding"
                         )
                         or link.get("predecessor_row_sha256") != lineage["predecessor_row_sha256"]
                         or link.get("predecessor_frontier_sha256")
