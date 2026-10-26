@@ -2189,10 +2189,72 @@ class Closer:
             item = (bucket.get("items") or {}).get(snapshot["target"], {})
             if not isinstance(item, Mapping):
                 continue
-            for operation in [item.get("operation"), *(item.get("operation_history") or [])]:
+            for history_index, operation in enumerate(
+                [item.get("operation"), *(item.get("operation_history") or [])]
+            ):
                 if not isinstance(operation, Mapping):
                     continue
-                if operation.get("status") == "confirmed_not_started":
+                result = operation.get("result") or {}
+                # Status labels cannot erase possible submitted effects. In
+                # particular Core blocked/denied/read failures are not proof
+                # that the original verification request never started.
+                conflict = any(
+                    key in record
+                    for record in (operation, result)
+                    for key in (
+                        "verification_post_accepted",
+                        "verification_request_basis",
+                        "verification_rejected",
+                        "core_request_correlation",
+                        "core_rejected_not_accepted",
+                        "native_result",
+                        "mutation_intent",
+                        "core_operation_key",
+                        "core_target_fence_key",
+                        "effect_started",
+                        "post_started",
+                        "native_binding",
+                        "mutation_kind",
+                        "endpoint",
+                    )
+                ) or any(
+                    record.get("outcome_uncertain") not in (None, False)
+                    for record in (operation, result)
+                )
+                proof = result.get("verification_no_start")
+                no_start = (
+                    isinstance(proof, Mapping)
+                    and proof.get("post_started") is False
+                    and isinstance(operation.get("id"), str)
+                    and bool(operation["id"])
+                    and isinstance(operation.get("revision"), str)
+                    and bool(operation["revision"])
+                    and proof
+                    == {
+                        "schema": "closer-verification-no-start/v1",
+                        "phase": "before_prepare_verify",
+                        "target": snapshot["target"],
+                        "operation_id": operation.get("id"),
+                        "action": operation.get("action"),
+                        "revision": operation.get("revision"),
+                        "binding_sha256": digest(operation.get("binding")),
+                        "result_status": (
+                            "not_started"
+                            if operation.get("status") == "abandoned"
+                            else operation.get("outcome")
+                        ),
+                        "post_started": False,
+                    }
+                )
+                if not conflict and (
+                    operation.get("status") == "confirmed_not_started"
+                    or (operation.get("status") == "abandoned" and no_start)
+                    or (
+                        operation.get("status") == "failed"
+                        and operation.get("outcome") in {"stale", "blocked", "deferred"}
+                        and no_start
+                    )
+                ):
                     continue
                 if closer_queue._currently_invoking(snapshot["target"], operation):
                     continue
@@ -2220,12 +2282,26 @@ class Closer:
                     and accepted.get("request_basis") == basis
                     and isinstance(accepted.get("mutation_kind"), str)
                     and accepted["mutation_kind"] in {"label", "workflow_dispatch"}
+                    and (
+                        "correlation_input" not in accepted
+                        or accepted.get("correlation_input") == basis
+                    )
                     and all(
                         record.get(key) is None or record.get(key) is False
                         for record in (operation, result)
                         for key in ("outcome_uncertain", "no_effect", "advisory_only")
                     )
                 ):
+                    if history_index and basis == self.verification_request_basis(snapshot):
+                        # Acceptance remains owned when a later queue operation
+                        # archives the actual POST. A revision-only change cannot
+                        # resend its identical event/material request. This is a
+                        # fence only, never adoption as source completion proof.
+                        return {
+                            "operation_id": operation.get("id"),
+                            "request_basis": basis,
+                            "accepted_history": True,
+                        }
                     continue
                 return {"operation_id": operation.get("id"), "request_basis": basis}
         return None
@@ -2252,12 +2328,45 @@ class Closer:
         return action, reason, True, None
 
     def execute(self, target, action, snapshot, operation):
+        def prewrite(result):
+            # Only this producer's returns BEFORE prepare_verify/Core/effects
+            # can record no-start provenance. Queue persistence retains it when
+            # confirmed_not_started later becomes abandoned history.
+            if (
+                action in {"initiate_verify", "post_merge_verify"}
+                and operation.get("action") == action
+                and isinstance(operation.get("id"), str)
+                and bool(operation["id"])
+                and isinstance(operation.get("revision"), str)
+                and bool(operation["revision"])
+                and operation.get("revision") == snapshot.get("revision")
+                and isinstance(operation.get("binding"), Mapping)
+                and result.get("status") in {"stale", "blocked", "deferred", "not_started"}
+            ):
+                return {
+                    **result,
+                    "verification_no_start": {
+                        "schema": "closer-verification-no-start/v1",
+                        "phase": "before_prepare_verify",
+                        "target": target,
+                        "operation_id": operation["id"],
+                        "action": action,
+                        "revision": operation["revision"],
+                        "binding_sha256": digest(operation["binding"]),
+                        "result_status": result["status"],
+                        "post_started": False,
+                    },
+                }
+            return result
+
         if not self.apply:
-            return {
-                "status": "deferred",
-                "reason": "inventory only",
-                "next_trigger": "authorized apply",
-            }
+            return prewrite(
+                {
+                    "status": "deferred",
+                    "reason": "inventory only",
+                    "next_trigger": "authorized apply",
+                }
+            )
         self.gh.deadline = min(
             getattr(self.gh, "deadline", operation["deadline"]), operation["deadline"]
         )
@@ -2265,12 +2374,14 @@ class Closer:
             dependency = self.assignment_guard_fn(target)
             if dependency:
                 if dependency.get("status") == "pending":
-                    return dependency
-                return {
-                    "status": "blocked",
-                    "reason": dependency.get("reason") or "assignment changed before action",
-                    "next_trigger": "refresh closer assignment",
-                }
+                    return prewrite(dependency)
+                return prewrite(
+                    {
+                        "status": "blocked",
+                        "reason": dependency.get("reason") or "assignment changed before action",
+                        "next_trigger": "refresh closer assignment",
+                    }
+                )
         # Packet-only work can progress offline. Every remote mutation still has
         # an exact live observation before its first side effect.
         local_actions = {"collect_evidence", "review", "disposition", "repair"}
@@ -2282,34 +2393,40 @@ class Closer:
             except Exception as exc:
                 # This read precedes every remote mutation, so the operation is
                 # known not to have started. Preserve its durable intent for retry.
-                return {
-                    "status": "not_started",
-                    "reason": f"remote freshness unavailable: {type(exc).__name__}",
-                    "next_trigger": "targeted_remote_freshness_recheck",
-                }
+                return prewrite(
+                    {
+                        "status": "not_started",
+                        "reason": f"remote freshness unavailable: {type(exc).__name__}",
+                        "next_trigger": "targeted_remote_freshness_recheck",
+                    }
+                )
         if fresh["revision"] != snapshot["revision"]:
-            return {
-                "status": "stale",
-                "reason": "source/review/head changed; reassess",
-                "next_trigger": "fresh observation",
-            }
+            return prewrite(
+                {
+                    "status": "stale",
+                    "reason": "source/review/head changed; reassess",
+                    "next_trigger": "fresh observation",
+                }
+            )
         if snapshot.get("native_diagnostic_reference") is not None and digest(
             snapshot.get("native_diagnostic_reference")
         ) != digest(fresh.get("native_diagnostic_reference")):
-            return {
-                "status": "not_started",
-                "reason": "native diagnostic run reference changed before action",
-                "next_trigger": "fresh native verifier observation",
-            }
+            return prewrite(
+                {
+                    "status": "not_started",
+                    "reason": "native diagnostic run reference changed before action",
+                    "next_trigger": "fresh native verifier observation",
+                }
+            )
         current_action, reason, eligible, trigger = self.select(fresh)
         if not eligible or current_action != action:
-            return {"status": "blocked", "reason": reason, "next_trigger": trigger}
+            return prewrite({"status": "blocked", "reason": reason, "next_trigger": trigger})
         pr_target = fresh.get("pr_target", target)
         if action in {"collect_evidence", "review", "disposition", "repair"}:
             return self.worker(target, action, fresh, operation)
 
         if self.require_runtime_binding and self.runtime_binding is None:
-            return {"status": "blocked", "reason": "pinned shared Core binding required"}
+            return prewrite({"status": "blocked", "reason": "pinned shared Core binding required"})
         prepared_verify = None
         if action in {"initiate_verify", "post_merge_verify"}:
             prepared_verify = self.prepare_verify(pr_target, fresh)

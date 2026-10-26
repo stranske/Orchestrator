@@ -578,6 +578,10 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
         evidence=action["pending_evidence"],
     )
     assert proof is not None and proof["operation_id"] == operation["id"]
+    assert proof["event_id"] == operation["result"]["verification_request_basis"]
+    assert proof["head"] == operation["binding"]["head"] == w.snapshot["head"]
+    assert proof["merge"] == operation["binding"]["merge"] == w.snapshot["merge"]
+    assert proof["operation_frontier"] == operation["finite_frontier"]["frontier_id"]
     context = copy.deepcopy(row["shared_lane_context"])
     initial_context = copy.deepcopy(
         state["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
@@ -621,7 +625,9 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
         "model2": "",
     }
     w.snapshot["verifier_lifecycle"] = copy.deepcopy(marker)
-    assert operation["result"]["core_request_correlation"]
+    correlation = operation["result"]["core_request_correlation"]
+    assert correlation["operation_id"] == operation["id"]
+    assert correlation["native_binding"]["queue_operation_id"] == operation["id"]
     assert (
         operation["result"]["verification_post_accepted"]["correlation_input"]
         == marker["verification_request_basis"]

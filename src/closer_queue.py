@@ -2069,460 +2069,499 @@ def run_round(
         active_ops, active_mutating_repos = _active_operations(items)
         stop_launch_reason: str | None = None
         executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="closer-action")
-        slice_start_pass = int(round_state.get("passes", 0))
-        # A finite frontier's only queue-pass bound is its immutable cardinality:
-        # each selected target can start at most one source-bound operation.
-        # Legacy rounds retain their configured pass limit unchanged.
-        slice_pass_limit = len(targets) if frontier is not None else slice_start_pass + max_passes
-        for pass_number in range(slice_start_pass, slice_pass_limit):
-            if not budget_available_at_start or not budget_available():
-                stop_launch_reason = "receipt_reserve"
-                break
-            round_state["passes"] = pass_number + 1
-            round_state["last_event_at"] = float(now())
-            made_progress = False
-            launched: list[
-                tuple[str, dict[str, Any], dict[str, Any], Future[Any], list[str], float]
-            ] = []
-            # Rotate start order each pass so repeated rounds don't privilege the
-            # same first assignment.
-            ordered = (
-                targets[pass_number % len(targets) :] + targets[: pass_number % len(targets)]
-                if targets
-                else []
-            )
-            for target in ordered:
-                if target in stalled:
-                    continue
-                item = items[target]
-                snapshot = snapshots[target]
-                operation = item.get("operation")
-                if (
-                    isinstance(operation, dict)
-                    and operation.get("status") in PENDING_OPERATION_STATES
-                ):
-                    _defer(
-                        item,
-                        (
-                            "operation_running"
-                            if operation.get("status") == "running"
-                            else "operation_uncertain"
-                        ),
-                        operation.get("next_trigger", "reconcile_operation"),
-                    )
-                    stalled.add(target)
-                    continue
-                if snapshot["action"] == "complete":
-                    item["status"] = "complete"
-                    item.pop("deferred_reason", None)
-                    item.pop("deferred_next_trigger", None)
-                    stalled.add(target)
-                    continue
-                if not frontier_identity_matches(target, snapshot):
-                    _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
-                    item["frontier_identity_mismatch"] = {
-                        "expected": (
-                            dict(frontier["bindings"][target]) if frontier is not None else {}
-                        ),
-                        "observed_revision": snapshot.get("revision"),
-                        "observed_action": snapshot.get("action"),
-                    }
-                    stalled.add(target)
-                    continue
-                if snapshot["action"] == "wait" or not snapshot["eligible"]:
-                    why = snapshot["reason"] or "not_eligible"
-                    trigger = snapshot["next_trigger"] or "wait_for_trigger"
-                    _defer(item, why, trigger)
-                    stalled.add(target)
-                    continue
-                action = snapshot["action"]
-                if action not in ACTION_NAMES:
-                    _defer(item, "invalid_action", "repair_observation")
-                    stalled.add(target)
-                    continue
-                if frontier is not None:
-                    assert finite_timeout is not None
-                    available = finite_timeout
-                else:
-                    assert legacy_deadline is not None
-                    available = _remaining(legacy_deadline, receipt_reserve_seconds, now)
-                if available <= 0 or available < min_action_seconds:
-                    _defer(item, "receipt_reserve", "continue_next_round")
-                    stop_launch_reason = "receipt_reserve"
-                    continue
-                active_ops, active_mutating_repos = _active_operations(items)
-                if len(active_ops) >= max_workers:
-                    _defer(item, "worker_capacity", "reconcile_running_operations")
-                    continue
-                is_mutating = action not in READ_ONLY_ACTIONS and action not in TERMINAL_ACTIONS
-                repos = set(snapshot["repo_keys"])
-                if is_mutating and repos.intersection(active_mutating_repos):
-                    _defer(item, "repo_operation_running", "reconcile_repo_operation")
-                    continue
+        pending_claims: dict[int, list[str]] = {}
 
-                # Read immediately before the action. A moving revision invalidates
-                # prior evidence and this pass defers rather than acting on stale data.
-                try:
-                    fresh = _observe_or_error(observe, target)
-                except Exception as exc:
-                    fresh = _failure_observation(target, exc)
-                    round_state.setdefault("invalid_observations", {})[target] = type(exc).__name__
-                if fresh["revision"] != snapshot["revision"]:
+        def release_acquired(acquired: list[str]) -> list[str]:
+            # An ordinary release attempt already reports its own failures. Do
+            # not silently retry that cleanup when unwinding a later exception.
+            pending_claims.pop(id(acquired), None)
+            return _release_all(acquired, round_owner, release_call)
+
+        try:
+            slice_start_pass = int(round_state.get("passes", 0))
+            # A finite frontier's only queue-pass bound is its immutable cardinality:
+            # each selected target can start at most one source-bound operation.
+            # Legacy rounds retain their configured pass limit unchanged.
+            slice_pass_limit = (
+                len(targets) if frontier is not None else slice_start_pass + max_passes
+            )
+            for pass_number in range(slice_start_pass, slice_pass_limit):
+                if not budget_available_at_start or not budget_available():
+                    stop_launch_reason = "receipt_reserve"
+                    break
+                round_state["passes"] = pass_number + 1
+                round_state["last_event_at"] = float(now())
+                made_progress = False
+                launched: list[
+                    tuple[str, dict[str, Any], dict[str, Any], Future[Any], list[str], float]
+                ] = []
+                # Rotate start order each pass so repeated rounds don't privilege the
+                # same first assignment.
+                ordered = (
+                    targets[pass_number % len(targets) :] + targets[: pass_number % len(targets)]
+                    if targets
+                    else []
+                )
+                for target in ordered:
+                    if target in stalled:
+                        continue
+                    item = items[target]
+                    snapshot = snapshots[target]
+                    operation = item.get("operation")
+                    if (
+                        isinstance(operation, dict)
+                        and operation.get("status") in PENDING_OPERATION_STATES
+                    ):
+                        _defer(
+                            item,
+                            (
+                                "operation_running"
+                                if operation.get("status") == "running"
+                                else "operation_uncertain"
+                            ),
+                            operation.get("next_trigger", "reconcile_operation"),
+                        )
+                        stalled.add(target)
+                        continue
+                    if snapshot["action"] == "complete":
+                        item["status"] = "complete"
+                        item.pop("deferred_reason", None)
+                        item.pop("deferred_next_trigger", None)
+                        stalled.add(target)
+                        continue
+                    if not frontier_identity_matches(target, snapshot):
+                        _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
+                        item["frontier_identity_mismatch"] = {
+                            "expected": (
+                                dict(frontier["bindings"][target]) if frontier is not None else {}
+                            ),
+                            "observed_revision": snapshot.get("revision"),
+                            "observed_action": snapshot.get("action"),
+                        }
+                        stalled.add(target)
+                        continue
+                    if snapshot["action"] == "wait" or not snapshot["eligible"]:
+                        why = snapshot["reason"] or "not_eligible"
+                        trigger = snapshot["next_trigger"] or "wait_for_trigger"
+                        _defer(item, why, trigger)
+                        stalled.add(target)
+                        continue
+                    action = snapshot["action"]
+                    if action not in ACTION_NAMES:
+                        _defer(item, "invalid_action", "repair_observation")
+                        stalled.add(target)
+                        continue
+                    if frontier is not None:
+                        assert finite_timeout is not None
+                        available = finite_timeout
+                    else:
+                        assert legacy_deadline is not None
+                        available = _remaining(legacy_deadline, receipt_reserve_seconds, now)
+                    if available <= 0 or available < min_action_seconds:
+                        _defer(item, "receipt_reserve", "continue_next_round")
+                        stop_launch_reason = "receipt_reserve"
+                        continue
+                    active_ops, active_mutating_repos = _active_operations(items)
+                    if len(active_ops) >= max_workers:
+                        _defer(item, "worker_capacity", "reconcile_running_operations")
+                        continue
+                    is_mutating = action not in READ_ONLY_ACTIONS and action not in TERMINAL_ACTIONS
+                    repos = set(snapshot["repo_keys"])
+                    if is_mutating and repos.intersection(active_mutating_repos):
+                        _defer(item, "repo_operation_running", "reconcile_repo_operation")
+                        continue
+
+                    # Read immediately before the action. A moving revision invalidates
+                    # prior evidence and this pass defers rather than acting on stale data.
+                    try:
+                        fresh = _observe_or_error(observe, target)
+                    except Exception as exc:
+                        fresh = _failure_observation(target, exc)
+                        round_state.setdefault("invalid_observations", {})[target] = type(
+                            exc
+                        ).__name__
+                    if fresh["revision"] != snapshot["revision"]:
+                        _set_observation(
+                            item, fresh, owner=round_owner, source_revisions=source_revisions
+                        )
+                        snapshots[target] = fresh
+                        _defer(item, "revision_changed", "reobserve_next_pass")
+                        _event(round_state, target, "stale_snapshot_rejected", action=action)
+                        stalled.add(target)
+                        continue
+                    snapshot = fresh
+                    snapshots[target] = fresh
                     _set_observation(
                         item, fresh, owner=round_owner, source_revisions=source_revisions
                     )
-                    snapshots[target] = fresh
-                    _defer(item, "revision_changed", "reobserve_next_pass")
-                    _event(round_state, target, "stale_snapshot_rejected", action=action)
-                    stalled.add(target)
-                    continue
-                snapshot = fresh
-                snapshots[target] = fresh
-                _set_observation(item, fresh, owner=round_owner, source_revisions=source_revisions)
-                if not frontier_identity_matches(target, fresh):
-                    _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
-                    item["frontier_identity_mismatch"] = {
-                        "expected": (
-                            dict(frontier["bindings"][target]) if frontier is not None else {}
-                        ),
-                        "observed_revision": fresh.get("revision"),
-                        "observed_action": fresh.get("action"),
-                    }
-                    stalled.add(target)
-                    continue
-                # Eligibility and lifecycle action can change without a new head
-                # (e.g. a human hold or a check conclusion). Never execute the old
-                # action with refreshed but contradictory selection evidence.
-                if fresh["action"] != action or not fresh["eligible"]:
-                    _defer(item, "selection_changed", "reselect_current_lifecycle_action")
-                    made_progress = True
-                    continue
-                if fresh.get("revision") is None:
-                    _defer(item, "revision_unavailable", "restore_source_observation")
-                    stalled.add(target)
-                    continue
-
-                acquired: list[str] = []
-                if is_mutating:
-                    active_ops, active_mutating_repos = _active_operations(items)
-                    repos = set(fresh["repo_keys"])
-                    if repos.intersection(active_mutating_repos):
-                        _defer(item, "repo_operation_running", "reconcile_repo_operation")
+                    if not frontier_identity_matches(target, fresh):
+                        _defer(item, "finite_frontier_identity_mismatch", "new_frontier_required")
+                        item["frontier_identity_mismatch"] = {
+                            "expected": (
+                                dict(frontier["bindings"][target]) if frontier is not None else {}
+                            ),
+                            "observed_revision": fresh.get("revision"),
+                            "observed_action": fresh.get("action"),
+                        }
+                        stalled.add(target)
                         continue
-                    # Statefile locks are private to a round. Shared repository
-                    # claims serialize distinct targets across separate ledgers.
-                    claim_targets = sorted(
-                        {*(f"closer-repo:{repo}" for repo in repos), *fresh["claim_targets"]}
-                    )
-                    item["claim_targets"] = claim_targets
-                    acquired, claim_error, claim_holder = _claim_all(
-                        claim_targets, round_owner, claim_call, release_call, holder_call
-                    )
-                    if claim_error:
-                        item["holder"] = (
-                            _json_copy(claim_holder)
-                            if isinstance(
-                                claim_holder, (dict, list, str, int, float, bool, type(None))
+                    # Eligibility and lifecycle action can change without a new head
+                    # (e.g. a human hold or a check conclusion). Never execute the old
+                    # action with refreshed but contradictory selection evidence.
+                    if fresh["action"] != action or not fresh["eligible"]:
+                        _defer(item, "selection_changed", "reselect_current_lifecycle_action")
+                        made_progress = True
+                        continue
+                    if fresh.get("revision") is None:
+                        _defer(item, "revision_unavailable", "restore_source_observation")
+                        stalled.add(target)
+                        continue
+
+                    acquired: list[str] = []
+                    if is_mutating:
+                        active_ops, active_mutating_repos = _active_operations(items)
+                        repos = set(fresh["repo_keys"])
+                        if repos.intersection(active_mutating_repos):
+                            _defer(item, "repo_operation_running", "reconcile_repo_operation")
+                            continue
+                        # Statefile locks are private to a round. Shared repository
+                        # claims serialize distinct targets across separate ledgers.
+                        claim_targets = sorted(
+                            {*(f"closer-repo:{repo}" for repo in repos), *fresh["claim_targets"]}
+                        )
+                        item["claim_targets"] = claim_targets
+                        acquired, claim_error, claim_holder = _claim_all(
+                            claim_targets, round_owner, claim_call, release_call, holder_call
+                        )
+                        if acquired:
+                            pending_claims[id(acquired)] = acquired
+                        if claim_error:
+                            item["holder"] = (
+                                _json_copy(claim_holder)
+                                if isinstance(
+                                    claim_holder, (dict, list, str, int, float, bool, type(None))
+                                )
+                                else {"status": "unreadable"}
                             )
-                            else {"status": "unreadable"}
-                        )
-                        _defer(item, "claim_held", "retry_after_claim_release")
-                        _event(round_state, target, "claim_refused", holder=item["holder"])
-                        stalled.add(target)
-                        continue
-
-                if not budget_available():
-                    _release_all(acquired, round_owner, release_call)
-                    _defer(item, "receipt_reserve", "continue_next_round")
-                    stop_launch_reason = "receipt_reserve"
-                    continue
-                previous = item.get("operation")
-                # Keep a durable completed result available to the coordinator;
-                # restarting a round must not repeat the same action at the same
-                # source revision merely because process-local worker memory reset.
-                if (
-                    isinstance(previous, dict)
-                    and previous.get("status") == "completed"
-                    and previous.get("action") == action
-                    and previous.get("revision") == fresh["revision"]
-                    and previous.get("binding") == fresh["operation_binding"]
-                ):
-                    _defer(
-                        item,
-                        "completed_result_pending_integration",
-                        "integrate_saved_operation_result",
-                    )
-                    item["saved_operation_result"] = _json_copy(previous.get("result", {}))
-                    stalled.add(target)
-                    _release_all(acquired, round_owner, release_call)
-                    continue
-                if isinstance(previous, dict) and previous.get("status") == "confirmed_not_started":
-                    op = previous
-                    if op.get("attempts", 0) > max_operation_retries:
-                        _release_all(acquired, round_owner, release_call)
-                        _defer(item, "operation_uncertain", "manual_operation_reconciliation")
-                        stalled.add(target)
-                        continue
-                    op["status"] = "submitted"
-                    op["attempts"] = int(op.get("attempts", 0)) + 1
-                    op["submitted_at"] = float(now())
-                else:
-                    history = item.get("operation_history", [])
-                    if isinstance(previous, dict):
-                        history = (history + [previous])[-MAX_OPERATION_HISTORY:]
-                    item["operation_history"] = history
-                    op = {
-                        "id": _operation_id(round_owner, target, action, fresh["revision"]),
-                        "action": action,
-                        "status": "submitted",
-                        "attempts": 1,
-                        "revision": fresh["revision"],
-                        "owner": round_owner,
-                        "repo_keys": fresh["repo_keys"],
-                        "claim_targets": claim_targets if is_mutating else fresh["claim_targets"],
-                        "binding": _json_copy(fresh["operation_binding"], limit=8192),
-                        "submitted_at": float(now()),
-                    }
-                execution_context = None
-                if frontier is not None:
-                    import closer_resources
-
-                    try:
-                        execution_context = closer_resources.capture_finite_execution_context(
-                            target, frontier
-                        )
-                    except closer_resources.ResourceBlocked:
-                        _release_all(acquired, round_owner, release_call)
-                        _defer(item, "finite_execution_context_refused", "inspect_original_owner")
-                        stalled.add(target)
-                        continue
-                op_deadline = request_deadline()
-                op["request_started_at"] = float(now())
-                op["deadline"] = op_deadline
-                op["timeout_seconds"] = max(0.0, op_deadline - float(now()))
-                if frontier is not None:
-                    op["finite_frontier"] = frontier
-                item["operation"] = op
-                item["status"] = "submitted"
-                item.pop("deferred_reason", None)
-                item.pop("deferred_next_trigger", None)
-                persist_state()  # intent is durable before the callback
-                _event(
-                    round_state, target, "operation_submitted", operation_id=op["id"], action=action
-                )
-                persist_state()
-                started = monotonic()
-                callback_snapshot = _execution_snapshot(fresh)
-                future = executor.submit(
-                    _invoke_before_cutoff,
-                    execute,
-                    target,
-                    action,
-                    callback_snapshot,
-                    dict(op),
-                    now,
-                    execution_context,
-                )
-                launched.append((target, item, op, future, acquired, started))
-
-            # Wait for every action launched this pass before deciding whether to
-            # launch another pass. The pool bounds concurrency and no background
-            # callback survives round finalization.
-            for target, item, op, future, acquired, started in launched:
-                action = op["action"]
-                result_persist_failed = False
-                try:
-                    result, invoked_at = future.result()
-                    if invoked_at is None:
-                        op["status"] = "confirmed_not_started"
-                        op["next_trigger"] = "continue_next_round"
-                        _defer(item, "receipt_reserve", op["next_trigger"])
-                        stop_launch_reason = "receipt_reserve"
-                        stalled.add(target)
-                        continue
-                    op["invoked_at"] = invoked_at
-                    if not isinstance(result, Mapping):
-                        raise ValueError("execute must return an object")
-                    result = dict(result)
-                    result_status = result.get("status")
-                    if result_status not in {
-                        "completed",
-                        "running",
-                        "failed",
-                        "uncertain",
-                        "blocked",
-                        "deferred",
-                        "stale",
-                        "not_started",
-                        "resource_wait",
-                    }:
-                        raise ValueError("execute returned an unsupported operation status")
-                    stored_result = {
-                        key: value
-                        for key, value in result.items()
-                        if key not in {"status", "advanced", "next_trigger"}
-                    }
-                    op["result"] = _json_copy(stored_result)
-                    op["elapsed_seconds"] = max(0.0, monotonic() - started)
-                    op["status"] = result_status
-                    op["next_trigger"] = result.get("next_trigger")
-                    item["operation"] = op
-                    if result_status == "resource_wait":
-                        op["completed_at"] = float(now())
-                        proof = verifier_resource_wait_proof(op, target)
-                        if not _native_verify_wait_executor(execute) or proof is None:
-                            raise ValueError("untrusted_native_verifier_prewrite_wait")
-                        op["next_trigger"] = verifier_resource_wait_event(proof)
-                        _defer(item, "verifier_resource_wait", op["next_trigger"])
-                        stalled.add(target)
-                    elif result_status == "completed":
-                        op["completed_at"] = float(now())
-                        # Post-effect observation may consult this same durable
-                        # operation (for example an acknowledged verifier POST).
-                        # Publish its confirmed result before that read; external
-                        # snapshots need not change when a request is accepted.
-                        try:
-                            persist_state()
-                        except Exception:
-                            result_persist_failed = True
-                            raise
-                        if not budget_available_at_start or not budget_available():
-                            item["observation_freshness"] = "cached_budget_exhausted"
-                            if result.get("advisory_only") or result.get("requires_coordinator"):
-                                item["requires_coordinator"] = True
-                                item["saved_operation_result"] = _json_copy(stored_result)
-                            _defer(item, "receipt_reserve", "retry_observation_next_round")
+                            _defer(item, "claim_held", "retry_after_claim_release")
+                            _event(round_state, target, "claim_refused", holder=item["holder"])
                             stalled.add(target)
                             continue
-                        after = _observe_or_error(observe, target)
-                        changed = _set_observation(
-                            item, after, owner=round_owner, source_revisions=source_revisions
+
+                    if not budget_available():
+                        release_acquired(acquired)
+                        _defer(item, "receipt_reserve", "continue_next_round")
+                        stop_launch_reason = "receipt_reserve"
+                        continue
+                    previous = item.get("operation")
+                    # Keep a durable completed result available to the coordinator;
+                    # restarting a round must not repeat the same action at the same
+                    # source revision merely because process-local worker memory reset.
+                    if (
+                        isinstance(previous, dict)
+                        and previous.get("status") == "completed"
+                        and previous.get("action") == action
+                        and previous.get("revision") == fresh["revision"]
+                        and previous.get("binding") == fresh["operation_binding"]
+                    ):
+                        _defer(
+                            item,
+                            "completed_result_pending_integration",
+                            "integrate_saved_operation_result",
                         )
-                        snapshots[target] = after
-                        advanced = (
-                            bool(result.get("advanced")) or changed or after["action"] != action
-                        )
-                        if advanced:
-                            made_progress = True
-                            progress_targets.append(target)
-                            round_state.setdefault("progress", []).append(
-                                {"target": target, "action": action, "at": float(now())}
+                        item["saved_operation_result"] = _json_copy(previous.get("result", {}))
+                        stalled.add(target)
+                        release_acquired(acquired)
+                        continue
+                    if (
+                        isinstance(previous, dict)
+                        and previous.get("status") == "confirmed_not_started"
+                    ):
+                        op = previous
+                        if op.get("attempts", 0) > max_operation_retries:
+                            release_acquired(acquired)
+                            _defer(item, "operation_uncertain", "manual_operation_reconciliation")
+                            stalled.add(target)
+                            continue
+                        op["status"] = "submitted"
+                        op["attempts"] = int(op.get("attempts", 0)) + 1
+                        op["submitted_at"] = float(now())
+                    else:
+                        history = item.get("operation_history", [])
+                        if isinstance(previous, dict):
+                            history = (history + [previous])[-MAX_OPERATION_HISTORY:]
+                        item["operation_history"] = history
+                        op = {
+                            "id": _operation_id(round_owner, target, action, fresh["revision"]),
+                            "action": action,
+                            "status": "submitted",
+                            "attempts": 1,
+                            "revision": fresh["revision"],
+                            "owner": round_owner,
+                            "repo_keys": fresh["repo_keys"],
+                            "claim_targets": (
+                                claim_targets if is_mutating else fresh["claim_targets"]
+                            ),
+                            "binding": _json_copy(fresh["operation_binding"], limit=8192),
+                            "submitted_at": float(now()),
+                        }
+                    execution_context = None
+                    if frontier is not None:
+                        import closer_resources
+
+                        try:
+                            execution_context = closer_resources.capture_finite_execution_context(
+                                target, frontier
                             )
-                            item["status"] = "observed"
-                            item.pop("deferred_reason", None)
-                            item.pop("deferred_next_trigger", None)
-                            _event(
-                                round_state,
-                                target,
-                                "action_advanced",
-                                action=action,
-                                revision=after["revision"],
-                            )
-                        else:
+                        except closer_resources.ResourceBlocked:
+                            release_acquired(acquired)
                             _defer(
-                                item,
-                                "no_progress",
-                                result.get("next_trigger") or "inspect_action_result",
+                                item, "finite_execution_context_refused", "inspect_original_owner"
                             )
                             stalled.add(target)
-                    elif result_status == "running":
-                        _defer(
-                            item,
-                            "operation_running",
-                            result.get("next_trigger") or "reconcile_operation",
-                        )
-                        stalled.add(target)
-                    elif result_status == "uncertain":
-                        _defer(
-                            item,
-                            "operation_uncertain",
-                            result.get("next_trigger") or "reconcile_operation",
-                        )
-                        stalled.add(target)
-                    elif result_status == "not_started":
-                        # The adapter must return this only before entering a remote
-                        # mutation. Keep the durable intent for a later same-binding
-                        # retry without misclassifying a failed read as an unknown write.
-                        op["status"] = "confirmed_not_started"
-                        op["next_trigger"] = (
-                            result.get("next_trigger") or "refresh_remote_before_action"
-                        )
-                        _defer(item, "remote_action_not_started", op["next_trigger"])
-                        stalled.add(target)
-                    elif result_status == "blocked" and "merge_guard_refusal" in stored_result:
-                        op.update(status="failed", outcome="blocked", completed_at=float(now()))
-                        if (
-                            not _native_verify_wait_executor(execute)
-                            or merge_guard_refusal_proof(op, target) is None
-                        ):
-                            raise ValueError("untrusted_native_merge_guard_refusal")
-                        op["next_trigger"] = "refresh_merge_guard_before_action"
-                        _defer(item, "merge_guard_refused", op["next_trigger"])
-                        stalled.add(target)
-                    else:
-                        if result_status == "stale":
-                            try:
-                                latest = _observe_or_error(observe, target)
-                                _set_observation(
-                                    item,
-                                    latest,
-                                    owner=round_owner,
-                                    source_revisions=source_revisions,
-                                )
-                                snapshots[target] = latest
-                            except Exception as refresh_exc:
-                                round_state.setdefault("invalid_observations", {})[target] = type(
-                                    refresh_exc
-                                ).__name__
-                        op["status"] = "failed"
-                        op["outcome"] = result_status
-                        _defer(
-                            item,
-                            "operation_failed",
-                            result.get("next_trigger") or "inspect_operation_failure",
-                        )
-                        stalled.add(target)
-                except Exception as exc:
-                    op["status"] = "uncertain"
-                    op["next_trigger"] = "reconcile_operation_before_retry"
-                    op["error_type"] = type(exc).__name__
-                    _defer(item, "operation_uncertain", op["next_trigger"])
-                    stalled.add(target)
-                    _event(round_state, target, "execute_uncertain", error_type=type(exc).__name__)
-                    if result_persist_failed:
-                        # Durable control-plane failures are fatal, not provider
-                        # failures. The finally write retains the unknown intent
-                        # for reconciliation without allowing a second effect.
-                        raise
-                finally:
-                    released = _release_all(acquired, round_owner, release_call)
-                    if released:
-                        item["claim_release_failures"] = released
-                        item["status"] = "deferred"
-                        item["deferred_reason"] = "claim_release_failed"
-                        item["deferred_next_trigger"] = "inspect_claim_state"
-                        stalled.add(target)
+                            continue
+                    op_deadline = request_deadline()
+                    op["request_started_at"] = float(now())
+                    op["deadline"] = op_deadline
+                    op["timeout_seconds"] = max(0.0, op_deadline - float(now()))
+                    if frontier is not None:
+                        op["finite_frontier"] = frontier
+                    item["operation"] = op
+                    item["status"] = "submitted"
+                    item.pop("deferred_reason", None)
+                    item.pop("deferred_next_trigger", None)
+                    persist_state()  # intent is durable before the callback
+                    _event(
+                        round_state,
+                        target,
+                        "operation_submitted",
+                        operation_id=op["id"],
+                        action=action,
+                    )
                     persist_state()
+                    started = monotonic()
+                    callback_snapshot = _execution_snapshot(fresh)
+                    future = executor.submit(
+                        _invoke_before_cutoff,
+                        execute,
+                        target,
+                        action,
+                        callback_snapshot,
+                        dict(op),
+                        now,
+                        execution_context,
+                    )
+                    launched.append((target, item, op, future, acquired, started))
 
-            # Check an active write/observe callback did not overrun the action
-            # cutoff. No further task is launched when only receipt reserve remains.
-            if not budget_available_at_start or not budget_available():
-                stop_launch_reason = "receipt_reserve"
-                break
-            # A full worker batch may have made no progress while untouched
-            # assignments were only deferred for temporary capacity. Fill those
-            # free slots rather than ending the whole round on the first stall.
-            runnable_deferred = any(
-                target not in stalled
-                and items[target].get("eligible")
-                and items[target].get("deferred_reason")
-                in {"worker_capacity", "repo_operation_running"}
-                for target in targets
-            )
-            if not made_progress and not runnable_deferred:
-                break
+                # Wait for every action launched this pass before deciding whether to
+                # launch another pass. The pool bounds concurrency and no background
+                # callback survives round finalization.
+                for target, item, op, future, acquired, started in launched:
+                    action = op["action"]
+                    result_persist_failed = False
+                    try:
+                        result, invoked_at = future.result()
+                        if invoked_at is None:
+                            op["status"] = "confirmed_not_started"
+                            op["next_trigger"] = "continue_next_round"
+                            _defer(item, "receipt_reserve", op["next_trigger"])
+                            stop_launch_reason = "receipt_reserve"
+                            stalled.add(target)
+                            continue
+                        op["invoked_at"] = invoked_at
+                        if not isinstance(result, Mapping):
+                            raise ValueError("execute must return an object")
+                        result = dict(result)
+                        result_status = result.get("status")
+                        if result_status not in {
+                            "completed",
+                            "running",
+                            "failed",
+                            "uncertain",
+                            "blocked",
+                            "deferred",
+                            "stale",
+                            "not_started",
+                            "resource_wait",
+                        }:
+                            raise ValueError("execute returned an unsupported operation status")
+                        stored_result = {
+                            key: value
+                            for key, value in result.items()
+                            if key not in {"status", "advanced", "next_trigger"}
+                        }
+                        op["result"] = _json_copy(stored_result)
+                        op["elapsed_seconds"] = max(0.0, monotonic() - started)
+                        op["status"] = result_status
+                        op["next_trigger"] = result.get("next_trigger")
+                        item["operation"] = op
+                        if result_status == "resource_wait":
+                            op["completed_at"] = float(now())
+                            proof = verifier_resource_wait_proof(op, target)
+                            if not _native_verify_wait_executor(execute) or proof is None:
+                                raise ValueError("untrusted_native_verifier_prewrite_wait")
+                            op["next_trigger"] = verifier_resource_wait_event(proof)
+                            _defer(item, "verifier_resource_wait", op["next_trigger"])
+                            stalled.add(target)
+                        elif result_status == "completed":
+                            op["completed_at"] = float(now())
+                            # Post-effect observation may consult this same durable
+                            # operation (for example an acknowledged verifier POST).
+                            # Publish its confirmed result before that read; external
+                            # snapshots need not change when a request is accepted.
+                            try:
+                                persist_state()
+                            except Exception:
+                                result_persist_failed = True
+                                raise
+                            if not budget_available_at_start or not budget_available():
+                                item["observation_freshness"] = "cached_budget_exhausted"
+                                if result.get("advisory_only") or result.get(
+                                    "requires_coordinator"
+                                ):
+                                    item["requires_coordinator"] = True
+                                    item["saved_operation_result"] = _json_copy(stored_result)
+                                _defer(item, "receipt_reserve", "retry_observation_next_round")
+                                stalled.add(target)
+                                continue
+                            after = _observe_or_error(observe, target)
+                            changed = _set_observation(
+                                item, after, owner=round_owner, source_revisions=source_revisions
+                            )
+                            snapshots[target] = after
+                            advanced = (
+                                bool(result.get("advanced")) or changed or after["action"] != action
+                            )
+                            if advanced:
+                                made_progress = True
+                                progress_targets.append(target)
+                                round_state.setdefault("progress", []).append(
+                                    {"target": target, "action": action, "at": float(now())}
+                                )
+                                item["status"] = "observed"
+                                item.pop("deferred_reason", None)
+                                item.pop("deferred_next_trigger", None)
+                                _event(
+                                    round_state,
+                                    target,
+                                    "action_advanced",
+                                    action=action,
+                                    revision=after["revision"],
+                                )
+                            else:
+                                _defer(
+                                    item,
+                                    "no_progress",
+                                    result.get("next_trigger") or "inspect_action_result",
+                                )
+                                stalled.add(target)
+                        elif result_status == "running":
+                            _defer(
+                                item,
+                                "operation_running",
+                                result.get("next_trigger") or "reconcile_operation",
+                            )
+                            stalled.add(target)
+                        elif result_status == "uncertain":
+                            _defer(
+                                item,
+                                "operation_uncertain",
+                                result.get("next_trigger") or "reconcile_operation",
+                            )
+                            stalled.add(target)
+                        elif result_status == "not_started":
+                            # The adapter must return this only before entering a remote
+                            # mutation. Keep the durable intent for a later same-binding
+                            # retry without misclassifying a failed read as an unknown write.
+                            op["status"] = "confirmed_not_started"
+                            op["next_trigger"] = (
+                                result.get("next_trigger") or "refresh_remote_before_action"
+                            )
+                            _defer(item, "remote_action_not_started", op["next_trigger"])
+                            stalled.add(target)
+                        elif result_status == "blocked" and "merge_guard_refusal" in stored_result:
+                            op.update(status="failed", outcome="blocked", completed_at=float(now()))
+                            if (
+                                not _native_verify_wait_executor(execute)
+                                or merge_guard_refusal_proof(op, target) is None
+                            ):
+                                raise ValueError("untrusted_native_merge_guard_refusal")
+                            op["next_trigger"] = "refresh_merge_guard_before_action"
+                            _defer(item, "merge_guard_refused", op["next_trigger"])
+                            stalled.add(target)
+                        else:
+                            if result_status == "stale":
+                                try:
+                                    latest = _observe_or_error(observe, target)
+                                    _set_observation(
+                                        item,
+                                        latest,
+                                        owner=round_owner,
+                                        source_revisions=source_revisions,
+                                    )
+                                    snapshots[target] = latest
+                                except Exception as refresh_exc:
+                                    round_state.setdefault("invalid_observations", {})[target] = (
+                                        type(refresh_exc).__name__
+                                    )
+                            op["status"] = "failed"
+                            op["outcome"] = result_status
+                            _defer(
+                                item,
+                                "operation_failed",
+                                result.get("next_trigger") or "inspect_operation_failure",
+                            )
+                            stalled.add(target)
+                    except Exception as exc:
+                        op["status"] = "uncertain"
+                        op["next_trigger"] = "reconcile_operation_before_retry"
+                        op["error_type"] = type(exc).__name__
+                        _defer(item, "operation_uncertain", op["next_trigger"])
+                        stalled.add(target)
+                        _event(
+                            round_state, target, "execute_uncertain", error_type=type(exc).__name__
+                        )
+                        if result_persist_failed:
+                            # Durable control-plane failures are fatal, not provider
+                            # failures. The finally write retains the unknown intent
+                            # for reconciliation without allowing a second effect.
+                            raise
+                    finally:
+                        released = release_acquired(acquired)
+                        if released:
+                            item["claim_release_failures"] = released
+                            item["status"] = "deferred"
+                            item["deferred_reason"] = "claim_release_failed"
+                            item["deferred_next_trigger"] = "inspect_claim_state"
+                            stalled.add(target)
+                        persist_state()
 
-        executor.shutdown(wait=True)
+                # Check an active write/observe callback did not overrun the action
+                # cutoff. No further task is launched when only receipt reserve remains.
+                if not budget_available_at_start or not budget_available():
+                    stop_launch_reason = "receipt_reserve"
+                    break
+                # A full worker batch may have made no progress while untouched
+                # assignments were only deferred for temporary capacity. Fill those
+                # free slots rather than ending the whole round on the first stall.
+                runnable_deferred = any(
+                    target not in stalled
+                    and items[target].get("eligible")
+                    and items[target].get("deferred_reason")
+                    in {"worker_capacity", "repo_operation_running"}
+                    for target in targets
+                )
+                if not made_progress and not runnable_deferred:
+                    break
+
+        finally:
+            # Fatal writes and BaseException exits may skip unprocessed futures.
+            # Cancel only callbacks not yet started; wait for every actual worker
+            # before dropping any remaining repository/source claims. Their
+            # durable submitted/uncertain intents remain reconciliation fences.
+            executor.shutdown(wait=True, cancel_futures=True)
+            for acquired in list(pending_claims.values()):
+                release_acquired(acquired)
         # Final fresh observations are the basis of assignment accounting. Pending
         # operation state still prevents any second action even if the source read
         # already reflects its external change.
