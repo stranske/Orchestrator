@@ -45,6 +45,12 @@ def world(monkeypatch, tmp_path):
         dispatcher.AGENT_GH_CONFIG_DISABLED_ENV,
         "GH_CONFIG_DIR",
         "XDG_CONFIG_HOME",
+        # This shell/gh unit owns a private runtime, not the enclosing CI storage job.
+        # Production owned-storage admission/lock refusal is exercised separately.
+        "ORCH_STORAGE_RUN_ROOT",
+        "ORCH_STORAGE_RUN_ID",
+        "ORCH_STORAGE_OWNER_TOKEN",
+        "ORCH_STORAGE_STATE_DIR",
     ):
         monkeypatch.delenv(var, raising=False)
     real = tmp_path / "realgh"

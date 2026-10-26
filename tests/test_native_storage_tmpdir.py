@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 import test_storage_lifecycle as lifecycle_fixtures
+from test_closer_reasoning_boundary import controlled_world as controlled_world
 from test_closer_reasoning_boundary import native_world as native_world
 
 import adapters
@@ -156,7 +157,7 @@ def test_invalid_context_plan_is_named_no_start_error(job, monkeypatch):
 
 
 def test_actual_closer_cli_keeps_proven_storage_refusal_recoverable(
-    native_world, monkeypatch, capsys
+    native_world, controlled_world, monkeypatch, capsys
 ):
     import closer_dispatcher as closer
     import closer_resources
@@ -172,6 +173,8 @@ def test_actual_closer_cli_keeps_proven_storage_refusal_recoverable(
         "outcome_uncertain": False,
         "error": "owned storage marker differs",
     }
+    # Explicit consumer mapping: no child or retained provider result exists.
+    # Actual owned-storage validation is covered independently above.
     monkeypatch.setattr(dispatcher, "offload", lambda *_a, **_kw: dict(refused))
     assert closer.main(w.argv) == 78
     capsys.readouterr()
@@ -190,6 +193,11 @@ def test_actual_closer_cli_keeps_proven_storage_refusal_recoverable(
         result["pending_evidence"]["refusal"].get(key) == value for key, value in refused.items()
     )
     assert w.events["provider"] == w.events["effect"] == 0
+    assert controlled_world.events["auth"] == 0
+    assert controlled_world.events["started"] == []
+    assert controlled_world.events["ledger"] == []
+    assert not controlled_world.capture.exists()
+    assert not list((controlled_world.root / "logs").rglob("*.json"))
     assert all(path.read_bytes() == raw for path, raw in w.originals.items())
 
 

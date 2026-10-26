@@ -23,6 +23,17 @@ import feedback
 import verifier_evidence
 
 
+def _bound_worker_adjudication(tmp_path):
+    from test_closer_execution_contracts import context, request
+
+    bound = context.__wrapped__(tmp_path / "named-adjudication")
+    return bound["snapshot"], {
+        "adjudication_request": request(bound),
+        "packet_ref": bound["packet_ref"],
+        "interpretation": bound["original"],
+    }
+
+
 def test_not_requested_placeholder_is_recollected_when_action_needs_the_section(tmp_path):
     snap = snapshot(revision="same-revision")
     first = collect(tmp_path / "first", snap, action="post_merge_verify")
@@ -50,7 +61,9 @@ def test_not_requested_placeholder_is_recollected_when_action_needs_the_section(
 
 
 @pytest.mark.parametrize("damage", ["wrong-origin", "missing", "nested"])
-def test_legacy_worker_validates_actual_checkout_identity_before_capacity(tmp_path, damage):
+def test_legacy_worker_validates_actual_checkout_identity_before_capacity(
+    tmp_path, monkeypatch, damage
+):
     checkout = tmp_path / "checkout"
     subprocess.run(["git", "init", "-q", str(checkout)], check=True)
     subprocess.run(
@@ -62,9 +75,9 @@ def test_legacy_worker_validates_actual_checkout_identity_before_capacity(tmp_pa
             "add",
             "origin",
             (
-                "https://github.com/o/other.git"
+                "https://github.com/owner/other.git"
                 if damage == "wrong-origin"
-                else "https://github.com/o/r.git"
+                else "https://github.com/owner/repo.git"
             ),
         ],
         check=True,
@@ -77,7 +90,7 @@ def test_legacy_worker_validates_actual_checkout_identity_before_capacity(tmp_pa
     else:
         selected = checkout
     config = tmp_path / "workspaces.json"
-    config.write_text(json.dumps({"o/r": str(selected)}))
+    config.write_text(json.dumps({"owner/repo": str(selected)}))
     workspace, bindings = dispatcher.load_workspace_config(config, validate_execution=False)
     backend = dispatcher.Closer(
         SimpleNamespace(),
@@ -89,7 +102,18 @@ def test_legacy_worker_validates_actual_checkout_identity_before_capacity(tmp_pa
             config, targets=[target]
         ),
     )
-    result = backend.worker("o/r#7", "repair", {}, {})
+    monkeypatch.setattr(
+        dispatcher,
+        "_exception_route",
+        lambda **_kw: pytest.fail("workspace validation must precede capacity selection"),
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_fresh_capacity_report",
+        lambda: pytest.fail("workspace validation must precede capacity reads"),
+    )
+    snap, advisory = _bound_worker_adjudication(tmp_path)
+    result = backend.worker(snap["target"], "disposition", snap, {}, advisory_context=advisory)
     assert result["status"] == "blocked"
     assert "workspace validation failed" in result["reason"]
 
@@ -123,8 +147,13 @@ def test_control_only_profile_fallback_retains_reason(capacity_host, monkeypatch
 
     monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
     context = publish(capacity_host)
-    assert any("active low" in reason for reason in context["control_plane_reasons"])
-    assert native._read(Path(context["report"]["path"]))["profiles"] == {}
+    assert (
+        "model qualification unavailable: native capacity profile is not approved active qualified offload"
+        in context["control_plane_reasons"]
+    )
+    report = native._read(Path(context["report"]["path"]))
+    assert report["control_plane_only"] is True
+    assert report["profiles"] == {} and report["profile_ids"] == []
 
 
 def test_lifecycle_refresh_is_bounded_and_fair_including_previously_passed_rows(
@@ -250,17 +279,25 @@ def test_global_control_exception_preserves_backoff_without_fetching_other_repos
     assert result["verifier_recorded"] == 0
 
 
-def test_legacy_mapping_change_cannot_validate_a_different_checkout(tmp_path):
+def test_legacy_mapping_change_cannot_validate_a_different_checkout(tmp_path, monkeypatch):
     old = tmp_path / "old"
     new = tmp_path / "new"
     for directory in (old, new):
         subprocess.run(["git", "init", "-q", str(directory)], check=True)
         subprocess.run(
-            ["git", "-C", str(directory), "remote", "add", "origin", "https://github.com/o/r.git"],
+            [
+                "git",
+                "-C",
+                str(directory),
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/owner/repo.git",
+            ],
             check=True,
         )
     config = tmp_path / "workspaces.json"
-    config.write_text(json.dumps({"o/r": str(old)}))
+    config.write_text(json.dumps({"owner/repo": str(old)}))
     original, bindings = dispatcher.load_workspace_config(config, validate_execution=False)
     backend = dispatcher.Closer(
         SimpleNamespace(),
@@ -272,7 +309,7 @@ def test_legacy_mapping_change_cannot_validate_a_different_checkout(tmp_path):
             config, original, target
         ),
     )
-    config.write_text(json.dumps({"o/r": str(new)}))
+    config.write_text(json.dumps({"owner/repo": str(new)}))
     subprocess.run(
         [
             "git",
@@ -281,10 +318,21 @@ def test_legacy_mapping_change_cannot_validate_a_different_checkout(tmp_path):
             "remote",
             "set-url",
             "origin",
-            "https://github.com/o/unrelated.git",
+            "https://github.com/owner/unrelated.git",
         ],
         check=True,
     )
-    result = backend.worker("o/r#7", "repair", {}, {})
+    monkeypatch.setattr(
+        dispatcher,
+        "_exception_route",
+        lambda **_kw: pytest.fail("workspace identity must precede capacity selection"),
+    )
+    monkeypatch.setattr(
+        dispatcher,
+        "_fresh_capacity_report",
+        lambda: pytest.fail("workspace validation must precede capacity reads"),
+    )
+    snap, advisory = _bound_worker_adjudication(tmp_path)
+    result = backend.worker(snap["target"], "disposition", snap, {}, advisory_context=advisory)
     assert result["status"] == "blocked"
     assert "mapping changed" in result["reason"]

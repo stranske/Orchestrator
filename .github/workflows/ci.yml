@@ -70,7 +70,7 @@ jobs:
             sudo apt-get install --yes --no-install-recommends zsh
           fi
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
       - name: Run the instrumented shard
         env:
@@ -78,7 +78,18 @@ jobs:
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
         run: |
           python3 src/verify.py --pytest-shard ${{ matrix.shard }}/6 --coverage --shard-output shard-results
-          cp .coverage.shard-${{ matrix.shard }}.* shard-results/
+      - name: Stage worker coverage measurement
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
+        shell: bash
+        run: |
+          # Missing coverage is a named measurement gap, never a failed test verdict.
+          shopt -s nullglob
+          data=(.coverage.shard-${{ matrix.shard }}.*)
+          if (( ${#data[@]} )); then
+            cp "${data[@]}" shard-results/
+          else
+            echo "::warning::No worker coverage data; shard verdict is unchanged."
+          fi
       - name: Upload printed summary, gate verdicts and worker coverage
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -89,6 +100,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Unlike main's coverage-only job, this job owns the verification verdict.
+  # verify.py keeps coverage reporting out of its exit code; only publishing is soft.
   verify:
     name: verify.py aggregate + combined coverage
     needs: pytest-shards
@@ -117,7 +130,7 @@ jobs:
             sudo apt-get install --yes --no-install-recommends zsh
           fi
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
       - name: Download shard evidence
         continue-on-error: true # Missing evidence must be named by the aggregate.
@@ -139,6 +152,7 @@ jobs:
             python3 src/verify.py --aggregate shard-evidence --coverage 2>&1 | tee /tmp/combined.txt
           fi
       - name: Build the trend record the coverage guard reads
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
         if: always()
         run: |
           # tools/coverage_trend.py is synced from Workflows and is the SAME producer every other
@@ -166,6 +180,7 @@ jobs:
       # preferred first, so using it keeps this job's payload unambiguous on a run that may also
       # carry the Gate's.
       - name: Publish the payload the coverage guard reads
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
         if: always() && hashFiles('coverage.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -174,6 +189,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish the coverage trend
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
         if: always() && hashFiles('coverage-trend.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -213,7 +229,7 @@ jobs:
             sudo apt-get install --yes --no-install-recommends zsh
           fi
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
       - name: Build the sync's flat copy and run the shard with payload integrity checks
         env:
@@ -266,7 +282,7 @@ jobs:
             sudo apt-get install --yes --no-install-recommends zsh
           fi
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
       - name: Download flat-copy evidence
         continue-on-error: true # Missing evidence must be named by the aggregate.
@@ -380,7 +396,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
 
       - name: Reconcile
         env:

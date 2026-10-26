@@ -25,6 +25,9 @@ _REAL_TIME = time.time
 
 @pytest.fixture
 def capacity_host(host, monkeypatch):
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
     manifest, path, wrapper = host
     manifest["mechanism_contract"]["capacity_publication"] = {
         "schema": "native-scoped-capacity/v1",
@@ -800,7 +803,7 @@ def test_native_invocation_without_low_profile_publishes_only_local_control_scop
     global_report.write_text('{"owner":"unrelated-model-user"}')
     original = global_report.read_bytes()
     monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
-    with pytest.raises(mechanisms.MechanismError, match="active low"):
+    with pytest.raises(mechanisms.MechanismError, match="active qualified"):
         native.capacity_contract(manifest)
     context = publish(capacity_host)
     report_path = Path(context["report"]["path"])
