@@ -66,6 +66,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as _dt
+import hashlib
 import json
 import os
 import pathlib
@@ -404,8 +405,23 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
     cmd += extra or []
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     tail = (proc.stdout or "") + (proc.stderr or "")
+    return parse_pytest_output(tail, returncode=proc.returncode, junit=junit)
+
+
+def parse_pytest_output(
+    tail: str, *, returncode: int = 0, junit: pathlib.Path | None = None
+) -> dict:
+    """Read only pytest's final printed summary, never JUnit's count attributes."""
+    summaries = [
+        line.strip("= ")
+        for line in tail.splitlines()
+        if re.fullmatch(
+            r"[= ]*\d+ (?:passed|failed|errors?|skipped|xfailed|xpassed).* in .+",
+            line,
+        )
+    ]
     counts: dict[str, int] = {}
-    for n, kind in COUNT_RE.findall(tail):
+    for n, kind in COUNT_RE.findall(summaries[-1] if summaries else ""):
         kind = "error" if kind.startswith("error") else kind
         counts[kind] = counts.get(kind, 0) + int(n)
     collected = sum(
@@ -432,7 +448,9 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
         "passed": counts.get("passed", 0),
         "skipped": counts.get("skipped", 0),
         "failed": counts.get("failed", 0) + counts.get("error", 0),
-        "returncode": proc.returncode,
+        "returncode": returncode,
+        "output": tail,
+        "summary": summaries[-1] if summaries else None,
         "usage_error": usage_error,
         "failures": failures,
         "skips": skips,
@@ -440,6 +458,127 @@ def run_pytest(*, extra: list[str] | None = None, junit: pathlib.Path | None = N
         "verdicts": verdicts,
         "skip_records": skip_records,
     }
+
+
+def shard_plan() -> list[list[str]]:
+    """One module partition for checkouts and flat mirrors (tests/ travels unchanged)."""
+    plan = json.loads((ROOT / "config/test-shards.json").read_text(encoding="utf-8"))["shards"]
+    if not plan or any(not isinstance(shard, list) or not shard for shard in plan):
+        raise ValueError("test-shards.json must contain nonempty shards")
+    modules = [module for shard in plan for module in shard]
+    if any(
+        not isinstance(module, str)
+        or not module.endswith(".py")
+        or pathlib.PurePosixPath(module).is_absolute()
+        or ".." in pathlib.PurePosixPath(module).parts
+        for module in modules
+    ) or len(modules) != len(set(modules)):
+        raise ValueError("test-shards.json contains invalid or duplicate modules")
+    return plan
+
+
+def shard_identity() -> str:
+    return hashlib.sha256((ROOT / "config/test-shards.json").read_bytes()).hexdigest()
+
+
+def run_pytest_shard(spec: str, output: pathlib.Path) -> tuple[int, str]:
+    plan = shard_plan()
+    match = re.fullmatch(r"([1-9]\d*)/([1-9]\d*)", spec)
+    if not match or int(match[2]) != len(plan) or int(match[1]) > len(plan):
+        raise ValueError(
+            f"invalid pytest shard {spec!r}; expected 1/{len(plan)}..{len(plan)}/{len(plan)}"
+        )
+    index = int(match[1])
+    output.mkdir(parents=True, exist_ok=True)
+    extra = list(plan[index - 1])
+    if COVERAGE:
+        # pytest-cov starts coverage inside every xdist worker; wrapping only the controller
+        # process misses the tests. The controller is still wrapped by child_argv as usual.
+        extra += ["--cov", "--cov-append", "--cov-report="]
+    with private_state() as state:
+        if state.get("refused"):
+            return 1, _not_run_summary(state)
+        py = run_pytest(extra=extra, junit=output / f"shard-{index}.xml")
+    shape, reason = tree_shape()
+    record = {
+        "shard": spec,
+        "plan": shard_identity(),
+        "shape": shape,
+        "output": py["output"],
+        "returncode": py["returncode"],
+        "verdicts": py["verdicts"],
+        "skip_records": py["skip_records"],
+    }
+    (output / f"shard-{index}.json").write_text(json.dumps(record), encoding="utf-8")
+    # pytest-cov combines its workers into COVERAGE_FILE (without a parallel suffix).
+    if COVERAGE:
+        data = ROOT / os.environ["COVERAGE_FILE"]
+        if data.is_file():
+            data.rename(data.with_name(data.name + ".pytest"))
+    code = int(bool(py["returncode"] or not py["summary"] or py["failed"] or py["usage_error"]))
+    return (
+        code,
+        f"  tree:       {TREE_LABELS[shape]} {reason or ''}\npytest shard {spec}\n{py['output']}",
+    )
+
+
+def aggregate_pytest(directory: pathlib.Path) -> dict:
+    """Require every shard, reparse printed counts, retain gate verdicts and skip reasons."""
+    plan = shard_plan()
+    shape, _ = tree_shape()
+    parts = []
+    for index in range(1, len(plan) + 1):
+        spec = f"{index}/{len(plan)}"
+        path = directory / f"shard-{index}.json"
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"missing or unreadable summary for shard {spec}: {path} ({exc})"
+            ) from exc
+        if not isinstance(record, dict) or not isinstance(record.get("output"), str):
+            raise ValueError(f"missing printed pytest summary for shard {spec}")
+        if (
+            type(record.get("returncode")) is not int
+            or not isinstance(record.get("verdicts"), dict)
+            or not isinstance(record.get("skip_records"), list)
+        ):
+            raise ValueError(f"shard {spec}: missing exit status, gate verdicts or skip reasons")
+        if (
+            record.get("shard") != spec
+            or record.get("plan") != shard_identity()
+            or record.get("shape") != shape
+        ):
+            raise ValueError(f"shard {spec}: wrong shard, plan or tree shape")
+        py = parse_pytest_output(record.get("output", ""), returncode=record["returncode"])
+        if not py["summary"] or not py["collected"]:
+            raise ValueError(f"missing printed pytest summary for shard {spec}")
+        if (
+            py["usage_error"]
+            or py["returncode"] not in (0, 1)
+            or (py["returncode"] and not py["failed"])
+        ):
+            raise ValueError(f"shard {spec} failed (exit {py['returncode']}): {py['output']}")
+        py["verdicts"] = record["verdicts"]
+        py["skip_records"] = record["skip_records"]
+        parts.append(py)
+    summed = parse_pytest_output("")
+    for part in parts:
+        for key in ("collected", "passed", "skipped", "failed"):
+            summed[key] += part[key]
+        for key, count in part["counts"].items():
+            summed["counts"][key] = summed["counts"].get(key, 0) + count
+        for key in ("failures", "skips", "tail", "skip_records"):
+            summed[key].extend(part[key])
+        for module, verdicts in part["verdicts"].items():
+            target = summed["verdicts"].setdefault(module, {})
+            for name, verdict in verdicts.items():
+                if (
+                    name not in target
+                    or _VERDICT_RANK[verdict["outcome"]] > _VERDICT_RANK[target[name]["outcome"]]
+                ):
+                    target[name] = verdict
+    return summed
 
 
 # Per test, the most severe verdict wins: pytest writes a second <testcase> for a teardown error.
@@ -1458,6 +1597,7 @@ def verify(
     update_floor: bool = False,
     forgive_healed_drift: bool = False,
     floor_may_lag: bool = False,
+    aggregate: pathlib.Path | None = None,
 ) -> tuple[int, str]:
     jobs, jobs_said = selftest_jobs()
     took: dict[str, float] = {}
@@ -1469,7 +1609,13 @@ def verify(
         # BEFORE any child: the run's last gate is a writing load that seeds these rows.
         declared_rows = declared_rows_at_start(run_state["ledger"])
         started = time.monotonic()
-        py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
+        if aggregate is None:
+            py = run_pytest(junit=pathlib.Path(run_dir) / "pytest.xml")
+        else:
+            try:
+                py = aggregate_pytest(aggregate)
+            except (ValueError, KeyError, TypeError) as exc:
+                return 1, f"aggregate FAILED: {exc}\n"
         took["pytest"] = time.monotonic() - started
         floor = load_floor()
         mods = selftest_modules()
@@ -2541,6 +2687,10 @@ def main() -> int:
             "codebase and reports the blind spot as a score."
         ),
     )
+    modes = ap.add_mutually_exclusive_group()
+    modes.add_argument("--pytest-shard", metavar="i/N", help="run only this module shard")
+    modes.add_argument("--aggregate", type=pathlib.Path, help="verify summed shard summaries")
+    ap.add_argument("--shard-output", type=pathlib.Path, default=ROOT / "shard-results")
     args = ap.parse_args()
     if args.selftest:
         _selftest()
@@ -2548,10 +2698,28 @@ def main() -> int:
     if args.coverage:
         globals()["COVERAGE"] = True
         coverage_reset()
+    if args.pytest_shard:
+        if args.coverage:
+            index = args.pytest_shard.split("/", 1)[0]
+            # Relative to each child's cwd: tests that intentionally measure a tiny scratch
+            # script must not have its data redirected into the suite's checkout.
+            os.environ["COVERAGE_FILE"] = f".coverage.shard-{index}"
+        try:
+            shard_code, text = run_pytest_shard(args.pytest_shard, args.shard_output.resolve())
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"pytest shard FAILED: {exc}")
+            return 1
+        print(text, end="")
+        return shard_code
+    if args.aggregate and args.coverage:
+        # Reset only this runner's stale data above, then import every shard process file.
+        for data in args.aggregate.rglob(".coverage.*"):
+            shutil.copy2(data, ROOT / data.name)
     code, text = verify(
         update_floor=args.update_floor or args.reconcile_floor,
         forgive_healed_drift=args.reconcile_floor,
         floor_may_lag=args.floor_may_lag,
+        aggregate=args.aggregate,
     )
     print(text, end="")
     if args.coverage:

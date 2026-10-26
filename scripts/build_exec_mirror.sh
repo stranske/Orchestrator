@@ -91,6 +91,7 @@ for snapshot in \
   experiments/repo_knowledge.json \
   data/feedback-snapshot.json \
   config/coverage-baseline.json \
+  config/test-shards.json \
   config/model_epochs.json; do
   if [[ -f "$SRC/$snapshot" ]]; then
     cp "$SRC/$snapshot" "$MIRROR/$snapshot"

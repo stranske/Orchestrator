@@ -234,6 +234,41 @@ def _run(world: dict, *args: str, **env: str) -> tuple[subprocess.CompletedProce
     return result, record
 
 
+def test_ci_shard_passes_arguments_without_claiming_a_full_verdict(world):
+    output = str(world["tmp"] / "shards")
+    result, record = _run(
+        world,
+        VERIFY_BEFORE_SYNC_PYTEST_SHARD="2/3",
+        VERIFY_BEFORE_SYNC_SHARD_OUTPUT=output,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_args"] == f"--pytest-shard 2/3 --shard-output {output}"
+    assert "SHARD COMPLETED (2/3; full verdict awaits aggregate)" in result.stdout
+    assert "== verify-before-sync: VERIFIED" not in result.stdout
+
+
+def test_ci_aggregate_passes_evidence_and_keeps_the_full_verdict(world):
+    evidence = str(world["tmp"] / "evidence")
+    result, record = _run(world, VERIFY_BEFORE_SYNC_AGGREGATE=evidence)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_args"] == f"--aggregate {evidence}"
+    assert "== verify-before-sync: VERIFIED" in result.stdout
+
+
+def test_a_shard_cannot_publish_a_verified_snapshot(world):
+    target = world["tmp"] / "published"
+    result, _ = _run(
+        world,
+        "--snapshot-out",
+        str(target),
+        str(world["src"]),
+        VERIFY_BEFORE_SYNC_PYTEST_SHARD="1/3",
+    )
+    assert result.returncode == 2
+    assert "a pytest shard cannot publish a verified snapshot" in result.stderr
+    assert not target.exists()
+
+
 @pytest.mark.parametrize("code", [0, 7])
 def test_real_storage_supervisor_wraps_bash_copy_stage_and_terminal_result(world, code):
     # Exercise the real supervisor/admission/staged CLI with the existing tiny

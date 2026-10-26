@@ -1,0 +1,181 @@
+"""Shards must preserve the whole suite and the existing aggregate verification rules."""
+
+import contextlib
+import json
+import subprocess
+import sys
+from collections import Counter
+
+import pytest
+
+import verify
+
+
+def test_shard_lists_partition_every_collected_test_exactly_once():
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        cwd=verify.ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ids = [
+        line
+        for line in proc.stdout.splitlines()
+        if "::" in line and line.split("::", 1)[0].endswith(".py")
+    ]
+    assert ids, proc.stdout
+    plan = verify.shard_plan()
+    modules = [module for shard in plan for module in shard]
+    collected_modules = {node.split("::", 1)[0] for node in ids}
+    assert set(modules) == collected_modules, (
+        f"unassigned modules: {sorted(collected_modules - set(modules))}; "
+        f"stale modules: {sorted(set(modules) - collected_modules)}"
+    )
+    assigned = [
+        node
+        for shard in plan
+        for module in shard
+        for node in ids
+        if node.split("::", 1)[0] == module
+    ]
+    assert Counter(assigned) == Counter(ids)
+    assert len(modules) == len(set(modules))
+
+
+@pytest.fixture
+def summaries(tmp_path, monkeypatch):
+    monkeypatch.setattr(verify, "shard_plan", lambda: [["a.py"], ["b.py"], ["c.py"]])
+    monkeypatch.setattr(verify, "shard_identity", lambda: "plan")
+    shape, _ = verify.tree_shape()
+    for index, summary in enumerate(
+        ["4 passed, 1 skipped in 1s", "3 passed, 1 xfailed in 2s", "2 passed in 3s"], 1
+    ):
+        (tmp_path / f"shard-{index}.json").write_text(
+            json.dumps(
+                {
+                    "shard": f"{index}/3",
+                    "plan": "plan",
+                    "shape": shape,
+                    "output": f"fixture says 999 passed\n{summary}\n",
+                    "returncode": 0,
+                    "verdicts": {f"gate{index}": {"check": {"outcome": "passed", "message": ""}}},
+                    "skip_records": (
+                        [{"outcome": "skipped", "message": "widget absent"}] if index == 1 else []
+                    ),
+                }
+            )
+        )
+    return tmp_path
+
+
+def test_aggregate_fails_when_a_shard_summary_is_missing(summaries):
+    (summaries / "shard-2.json").unlink()
+    with pytest.raises(ValueError, match="summary for shard 2/3"):
+        verify.aggregate_pytest(summaries)
+
+
+def test_aggregate_sums_counts_and_keeps_the_collected_equality(summaries):
+    # JUnit's totals deliberately disagree; only the printed summaries may supply counts.
+    (summaries / "shard-1.xml").write_text('<testsuite tests="999999" failures="999999"/>')
+    result = verify.aggregate_pytest(summaries)
+    assert (result["passed"], result["failed"], result["skipped"], result["collected"]) == (
+        9,
+        0,
+        1,
+        11,
+    )
+    assert result["counts"]["xfailed"] == 1
+    assert len(result["verdicts"]) == 3
+    assert len(result["skip_records"]) == 1
+    assert not verify._floor_problems({"collected": 11, "passed": 10}, result)
+    assert verify._floor_problems({"collected": 10, "passed": 10}, result)
+    assert verify._floor_problems({"collected": 12, "passed": 10}, result)
+
+
+def test_failed_shard_counts_reach_the_existing_verifier(summaries):
+    path = summaries / "shard-2.json"
+    record = json.loads(path.read_text())
+    record.update(output="2 passed, 1 failed, 1 xfailed in 2s", returncode=1)
+    path.write_text(json.dumps(record))
+    result = verify.aggregate_pytest(summaries)
+    assert (result["passed"], result["failed"], result["collected"]) == (8, 1, 11)
+
+
+@pytest.mark.parametrize(
+    "mutation,match",
+    [
+        ({"output": "nothing ran"}, "missing printed pytest summary for shard 2/3"),
+        ({"returncode": 3}, "shard 2/3 failed"),
+        ({"plan": "old"}, "shard 2/3: wrong"),
+        ({"shape": "wrong"}, "shard 2/3: wrong"),
+    ],
+)
+def test_bad_shard_cannot_read_as_green(summaries, mutation, match):
+    path = summaries / "shard-2.json"
+    data = json.loads(path.read_text())
+    data.update(mutation)
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match=match):
+        verify.aggregate_pytest(summaries)
+
+
+def test_aggregate_uses_the_normal_verifier_and_ceilings(summaries, monkeypatch):
+    @contextlib.contextmanager
+    def state():
+        yield {"line": "test", "ledger": None}
+
+    monkeypatch.setattr(verify, "private_state", state)
+    monkeypatch.setattr(
+        verify,
+        "declared_rows_at_start",
+        lambda _: {"state": "absent", "declared": 0, "missing": None},
+    )
+    monkeypatch.setattr(
+        verify, "load_floor", lambda: {"collected": 11, "passed": 10, "skipped_max": 0}
+    )
+    monkeypatch.setattr(verify, "selftest_modules", lambda: [])
+    monkeypatch.setattr(
+        verify, "run_selftests", lambda *a, **kw: {"ok": [], "failed": {}, "skipped": {}}
+    )
+    monkeypatch.setattr(verify, "run_pytest", lambda **kw: pytest.fail("aggregate reran pytest"))
+    monkeypatch.setattr(verify, "run_gates", lambda **kw: {})
+    monkeypatch.setattr(verify, "absent_entrypoint_line", lambda _: None)
+    code, text = verify.verify(aggregate=summaries)
+    assert code == 1
+    assert "CEILING exceeded" in text
+    assert "11 collected; floor 11" in text
+
+
+def test_only_final_printed_summary_supplies_counts():
+    result = verify.parse_pytest_output(
+        "1 passed in 1s\nfixture: 999 failed\n2 passed, 1 skipped in 2s\n"
+    )
+    assert (result["passed"], result["skipped"], result["failed"]) == (2, 1, 0)
+
+
+def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
+    from coverage import CoverageData
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "src/widget.py").write_text("def answer():\n    return 42\n")
+    (tmp_path / "test_widget.py").write_text(
+        "from widget import answer\ndef test_answer():\n    assert answer() == 42\n"
+    )
+    (tmp_path / "config/test-shards.json").write_text(json.dumps({"shards": [["test_widget.py"]]}))
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["src"]\n'
+        '[tool.coverage.run]\nparallel = true\nsource = ["src"]\n'
+    )
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(verify, "COVERAGE", True)
+    monkeypatch.setenv("COVERAGE_FILE", str(tmp_path / ".coverage.shard-1"))
+    monkeypatch.setenv("VERIFY_PYTEST_WORKERS", "2")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    code, output = verify.run_pytest_shard("1/1", tmp_path / "evidence")
+    assert code == 0, output
+    data = CoverageData(basename=str(tmp_path / ".coverage.shard-1.pytest"))
+    data.read()
+    widget = next(name for name in data.measured_files() if name.endswith("widget.py"))
+    assert 2 in data.lines(widget)

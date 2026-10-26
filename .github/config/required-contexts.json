@@ -1,8 +1,13 @@
 {
   "required_contexts": [
-    "combined coverage (pytest + selftests, the honest number)",
-    "verify.py (real pytest counts + selftests + capability gates)",
-    "verify.py in the flat exec-mirror shape (the tree a sync ships)"
+    "pytest + coverage shard 1/3",
+    "pytest + coverage shard 2/3",
+    "pytest + coverage shard 3/3",
+    "verify.py aggregate + combined coverage",
+    "flat exec-mirror shard 1/3",
+    "flat exec-mirror shard 2/3",
+    "flat exec-mirror shard 3/3",
+    "verify.py aggregate in the flat exec-mirror shape"
   ],
   "_note": "Every job in .github/workflows/ci.yml that runs on a pull request, by its check-run name. Workflows' Maint 71 reads this file from main and will not merge a generated delivery (template sync or dev-tool pin bump) while one of these checks has failed on its exact head; a declared check that never started is reported, not awaited. This repo has no branch protection, so Gate / gate alone was the delivery gate until stranske/Orchestrator#530 merged with verify.py red and turned main red for every open PR. tests/test_delivery_required_contexts.py keeps this list equal to ci.yml's pull-request jobs. The Gate summary also prints this list."
 }

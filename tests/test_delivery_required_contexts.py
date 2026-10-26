@@ -57,7 +57,19 @@ def _ci_jobs() -> dict[str, dict[str, str]]:
         field = JOB_FIELD.match(line)
         if current is not None and field:
             current[field.group(1)] = field.group(2)
+        shard_values = re.match(r"^        shard: (\[.*\])$", line)
+        if current is not None and shard_values:
+            current["shards"] = shard_values.group(1)
     return jobs
+
+
+def _job_check_names(job_id: str, fields: dict[str, str]) -> set[str]:
+    name = fields.get("name", job_id)
+    if "shards" in fields:
+        assert "${{ matrix.shard }}" in name, fields
+        return {name.replace("${{ matrix.shard }}", str(i)) for i in json.loads(fields["shards"])}
+    assert "${{" not in name, f"unexpanded check name: {name}"
+    return {name}
 
 
 def _pull_request_check_names() -> set[str]:
@@ -70,7 +82,7 @@ def _pull_request_check_names() -> set[str]:
     for job_id, fields in _ci_jobs().items():
         if _is_push_only(fields.get("if", "")):
             continue
-        names.add(fields.get("name", job_id))
+        names.update(_job_check_names(job_id, fields))
     return names
 
 
@@ -96,7 +108,21 @@ def test_the_job_reader_sees_every_job():
     executors = re.findall(r"(?m)^    (?:runs-on|uses):", CI.read_text(encoding="utf-8"))
     assert len(jobs) == len(executors), sorted(jobs)
     push_only = {job_id for job_id, f in jobs.items() if _is_push_only(f.get("if", ""))}
-    assert len(_pull_request_check_names()) == len(jobs) - len(push_only)
+    assert len(_pull_request_check_names()) == sum(
+        len(_job_check_names(job_id, fields))
+        for job_id, fields in jobs.items()
+        if job_id not in push_only
+    )
+
+
+def test_shard_contexts_name_every_matrix_child():
+    assert _job_check_names(
+        "shards", {"name": "shard ${{ matrix.shard }}/3", "shards": "[1, 2, 3]"}
+    ) == {
+        "shard 1/3",
+        "shard 2/3",
+        "shard 3/3",
+    }
 
 
 def test_only_a_push_only_condition_removes_a_job():
