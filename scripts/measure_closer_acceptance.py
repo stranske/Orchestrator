@@ -9,14 +9,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import resource
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from closer_stage_feedback import summarize_efficiency
+_root = Path(__file__).resolve().parents[1]
+_modules = _root / "src"
+if not (_modules / "closer_stage_feedback.py").is_file():
+    _modules = _root
+if not (_modules / "closer_stage_feedback.py").is_file():
+    raise SystemExit("expected source or flat Closer measurement modules are missing")
+sys.path.insert(0, str(_modules))
+summarize_efficiency = importlib.import_module("closer_stage_feedback").summarize_efficiency
 
 
 def measure(document):
@@ -55,7 +62,7 @@ def measure(document):
         "remaining_measurements": {
             "repeat_classification": "needs evidence-identity/semantic dispatch ledger join",
             "missed_wake": "needs scheduled-due versus actual consumer invocation receipts; due is not missed",
-            "escalation_acknowledgment": "unmet: no durable recipient delivery/ack-window consumer",
+            "escalation_acknowledgment": "requires installed delivery/ack-window receipts joined to the exact hold",
             "provider_quota_pressure": "requires measured provider/account records",
         },
         "authority": False,
