@@ -273,3 +273,10 @@ def test_runner_wrappers_cannot_contradict_native_completed_claims(native, field
     native[field] = value
     with pytest.raises(ValueError, match="runner field"):
         normalize(native)
+
+
+@pytest.mark.parametrize("value", ["uncertain", "completed", None, False, 0])
+def test_dispatcher_outcome_status_is_not_part_of_native_result_contract(native, value):
+    native["outcome_status"] = value
+    with pytest.raises(ValueError, match="runner field"):
+        normalize(native)

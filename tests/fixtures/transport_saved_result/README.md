@@ -36,3 +36,6 @@ Root corrective review also tested contradictory captures: a local-command marke
 or runner uncertainty/exit wrapper must not override native completed-model
 claims. Only an absent or explicitly false `local_command` marker can proceed;
 wrapper fields must be bound and reviewed outside this native-only importer.
+The actual dispatcher wrapper field `outcome_status` is also excluded by
+presence, including nominal or false values; it belongs outside the native-only
+completion contract and must not override imported native claims.

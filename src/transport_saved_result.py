@@ -131,6 +131,7 @@ def normalize_claude_result(
         "fallback_model",
         "fallbackModel",
         "outcome_uncertain",
+        "outcome_status",
         "retry_safe",
         "exit",
         "exit_code",
