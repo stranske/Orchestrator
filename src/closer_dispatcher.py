@@ -7457,11 +7457,34 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "verification_recovery_progress": prep.get("verification_recovery_progress"),
         }
         if data_only:
+            # Imported/restarted preparations retain their original physical
+            # packet custody; the current pipeline's output root is unrelated.
+            import closer_execution_contracts
+
+            try:
+                retained_packet, ci_retained_root = closer_execution_contracts.load_retained_packet(
+                    prep.get("packet_ref")
+                )
+                if retained_packet != raw_packet or not closer_evidence.validate_packet(
+                    retained_packet
+                ):
+                    raise ValueError("original retained packet changed")
+            except (OSError, ValueError, TypeError):
+                _release_route_load(route, route_load)
+                return evidence_pending(
+                    target,
+                    prep,
+                    {
+                        **(readiness or {}),
+                        "ready": False,
+                        "gaps": ["packet:invalid_or_unavailable"],
+                    },
+                )
             prompt_mandatory["data_only_evidence"] = data_only_evidence_context(
                 raw_packet,
                 readiness=readiness,
                 snapshot=admitted_snapshot,
-                retained_dir=retained_dir,
+                retained_dir=ci_retained_root,
             )
             raw_ci = prompt_mandatory["data_only_evidence"]["sections"]["ci_receipt_inputs"][
                 "content"
