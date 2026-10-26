@@ -548,20 +548,61 @@ class PostMergeBreakTests(unittest.TestCase):
             "owner/repo#1", "## Acceptance Criteria\n- Named test: `tests/test_delivery.py`.\n"
         )
 
-        def fail_install(command, **kwargs):
-            (self.checkout / ".venv/bin").mkdir(parents=True, exist_ok=True)
-            (self.checkout / ".venv/bin/python").touch()
-            return subprocess.CompletedProcess(command, 1 if "pip" in command else 0)
+        for stage in ("venv", "pip"):
+            for failure in ("exit", "timeout", "os_error"):
+                with self.subTest(stage=stage, failure=failure):
+                    checkout = self.checkout / f"{stage}-{failure}"
+                    checkout.mkdir()
+                    environment = checkout / ".venv"
+                    interpreter = environment / "bin/python"
 
-        with (
-            patch.object(subprocess, "run", side_effect=fail_install),
-            patch.object(runtime_ac, "run_verification") as verify,
-        ):
-            result = gate.recheck_merged(spec, self.checkout)
-        self.assertEqual((result["result"], result["reason"]), ("UNRUNNABLE", "tool_error"))
-        self.assertIsNone(result["interpreter"])
-        verify.assert_not_called()
-        self.assertFalse((self.checkout / ".venv").exists())
+                    def setup(command, **kwargs):
+                        interpreter.parent.mkdir(parents=True, exist_ok=True)
+                        interpreter.touch()
+                        if stage in command:
+                            if failure == "timeout":
+                                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                            if failure == "os_error":
+                                raise OSError("environment setup interrupted")
+                            return subprocess.CompletedProcess(command, 1)
+                        return subprocess.CompletedProcess(command, 0)
+
+                    with (
+                        patch.object(subprocess, "run", side_effect=setup),
+                        patch.object(runtime_ac, "run_verification") as verify,
+                    ):
+                        result = gate.recheck_merged(spec, checkout)
+                    self.assertEqual(
+                        (result["result"], result["reason"]), ("UNRUNNABLE", "tool_error")
+                    )
+                    self.assertIsNone(result["interpreter"])
+                    verify.assert_not_called()
+                    self.assertFalse(environment.exists())
+
+                    # Retry must provision from scratch rather than selecting a
+                    # partially installed interpreter or falling back to the scheduler.
+                    verification = {
+                        "gate": {"verdict": "PASS"},
+                        "check_results": [{"type": "command", "status": "PASS"}],
+                    }
+                    with (
+                        patch.object(
+                            subprocess, "run", return_value=subprocess.CompletedProcess([], 0)
+                        ) as retry,
+                        patch.object(
+                            runtime_ac, "run_verification", return_value=verification
+                        ) as verify,
+                    ):
+                        result = gate.recheck_merged(spec, checkout)
+                    self.assertEqual(result["result"], "PASS", result)
+                    self.assertEqual(result["interpreter"], str(interpreter))
+                    self.assertEqual(
+                        [call.args[0][:3] for call in retry.call_args_list],
+                        [[sys.executable, "-m", "venv"], [str(interpreter), "-m", "pip"]],
+                    )
+                    context = verify.call_args.args[0]["runtime_context"]
+                    self.assertEqual(context["python_interpreter"], str(interpreter))
+                    self.assertEqual(context["worktree"], str(checkout))
 
     def test_runner_error_preserves_selected_worktree_interpreter(self):
         spec = runtime_ac.author_issue_spec(
