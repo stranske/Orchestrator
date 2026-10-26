@@ -12,7 +12,6 @@ import json
 import sqlite3
 import time
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -115,6 +114,20 @@ class OfflineDelivery:
 
     def api(self, endpoint, *, method="GET", fields=None, **kw):
         self.api_calls.append((endpoint, method, fields))
+        if endpoint == "repos/owner/repo" and method == "GET":
+            return {"default_branch": "main"}
+        if endpoint == "repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches":
+            assert method == "POST"
+            assert self.current["state"] == "MERGED"
+            assert fields == {
+                "ref": "main",
+                "inputs[pr_number]": "12",
+                "inputs[mode]": "compare",
+                "inputs[verification_request_basis]": self.backend.verification_request_basis(
+                    self.current
+                ),
+            }
+            return {"accepted": True}
         if endpoint == "graphql":
             return {
                 "data": {
@@ -156,20 +169,16 @@ class OfflineDelivery:
             return {"workflow_runs": [], "total_count": 0}
         if "/actions/runs?" in endpoint:
             return {"workflow_runs": [{"id": 7, "head_sha": HEAD}]}
-        if endpoint.endswith("/issues/12/labels") and method == "POST":
-            assert fields == {"labels[]": "verify:compare"}
-            self.current["labels"] = ["verify:compare"]
-            self.current["label_events_complete"] = True
-            self.current["label_events"] = [
-                {
-                    "id": "offline-label-event-1",
-                    "label": "verify:compare",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ]
-            self.refresh()
-            return []
         raise AssertionError((endpoint, method, fields))
+
+    def verification_dispatches(self):
+        return [
+            call
+            for call in self.api_calls
+            if len(call) == 3
+            and call[0] == "repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches"
+            and call[1] == "POST"
+        ]
 
     def offload(self, agent, prompt, **kw):
         assert agent == "gemini"
@@ -344,7 +353,12 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     assert len(delivery.guard_calls) == 1, result
     assert not delivery.provider_calls  # Objective premerge path never calls a model.
     assert delivery.current["state"] == "MERGED"
-    assert "verify:compare" in delivery.current["labels"]
+    dispatches = delivery.verification_dispatches()
+    assert len(dispatches) == 1, result
+    basis = dispatches[0][2]["inputs[verification_request_basis]"]
+    assert basis == delivery.backend.verification_request_basis(delivery.current)
+    changed_head = dict(delivery.current, head="e" * 40)
+    assert delivery.backend.verification_request_basis(changed_head) != basis
     assert closer_pipeline.validate_stop(
         tmp_path / "queue.json.pipeline.json", assignment_targets=[TARGET]
     )["valid"], result
@@ -378,13 +392,9 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     # drift review; it cannot create a second terminal effect or learning outcome.
     assert len(delivery.provider_calls) <= provider_calls + 1
     assert len(delivery.guard_calls) == len(delivery.closure_calls) == 1
-    label_posts = [
-        call
-        for call in delivery.api_calls
-        if len(call) == 3 and call[0].endswith("/issues/12/labels") and call[1] == "POST"
-    ]
     source_patches = [call for call in delivery.api_calls if "PATCH" in call]
-    assert len(label_posts) == len(source_patches) == 1
+    assert delivery.verification_dispatches() == dispatches
+    assert len(source_patches) == 1
     assert delivery.current["verifier"]["verdict"] == "PASS"
     assert delivery.current["sources"][0]["state"] == "closed"
     assert json.loads(operations[0].read_text())["phase"] == "settled"
@@ -507,7 +517,11 @@ def test_generic_needs_human_label_preserves_objective_merge_and_verifier_succes
     assert len(delivery.guard_calls) == 1, result
     assert not delivery.provider_calls
     assert delivery.current["state"] == "MERGED"
-    assert "verify:compare" in delivery.current["labels"]
+    dispatches = delivery.verification_dispatches()
+    assert len(dispatches) == 1, result
+    assert dispatches[0][2]["inputs[verification_request_basis]"] == (
+        delivery.backend.verification_request_basis(delivery.current)
+    )
     assert delivery.current["sources"][0]["state"] == "open"
 
 

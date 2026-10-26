@@ -64,6 +64,7 @@ DEFAULT_MIN_ACTION_SECONDS = 1.0
 MAX_OPERATION_HISTORY = 12
 MAX_CALLBACK_JSON_BYTES = 128 * 1024
 _ledger_threads = threading.local()
+_callback_threads = threading.local()
 
 
 class QueueStateError(ValueError):
@@ -541,10 +542,48 @@ def _budget_available(
     return available > 0 and available >= minimum
 
 
+@contextlib.contextmanager
+def _callback_invocation(target, operation, now):
+    """Private live callback identity; never serialized or restored on restart."""
+    if getattr(_callback_threads, "invocation", None) is not None:
+        raise QueueStateError("nested queue callback invocation refused")
+    _callback_threads.invocation = {
+        "pid": os.getpid(),
+        "thread": threading.get_ident(),
+        "target": target,
+        "operation": _json_copy(operation),
+        "now": now,
+    }
+    try:
+        yield
+    finally:
+        del _callback_threads.invocation
+
+
+def _currently_invoking(target, operation):
+    """Recognize only this thread's exact live original submitted operation."""
+    current = getattr(_callback_threads, "invocation", None)
+    if current is None:
+        return False
+    try:
+        return (
+            current["pid"] == os.getpid()
+            and current["thread"] == threading.get_ident()
+            and current["target"] == target
+            and operation.get("status") == "submitted"
+            and _canonical_bytes(operation) == _canonical_bytes(current["operation"])
+            and float(current["now"]()) < float(current["operation"]["deadline"])
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def _invoke_before_cutoff(
     execute, target, action, snapshot, operation, now, execution_context=None
 ):
     """A queued callback rechecks its original request and held resource context."""
+    if getattr(_callback_threads, "invocation", None) is not None:
+        raise QueueStateError("nested queue callback invocation refused")
     invoked_at = float(now())
     if invoked_at >= float(operation["deadline"]):
         return None, None
@@ -561,8 +600,10 @@ def _invoke_before_cutoff(
             remaining = closer_resources.finite_request_remaining()
             if remaining is None or remaining <= 0:
                 return None, None
-            return execute(target, action, snapshot, operation), invoked_at
-    return execute(target, action, snapshot, operation), invoked_at
+            with _callback_invocation(target, operation, now):
+                return execute(target, action, snapshot, operation), invoked_at
+    with _callback_invocation(target, operation, now):
+        return execute(target, action, snapshot, operation), invoked_at
 
 
 def _operation_id(owner: str, target: str, action: str, revision: Any) -> str:
@@ -2263,6 +2304,11 @@ def run_round(
                         stalled.add(target)
                     elif result_status == "completed":
                         op["completed_at"] = float(now())
+                        # Post-effect observation may consult this same durable
+                        # operation (for example an acknowledged verifier POST).
+                        # Publish its confirmed result before that read; external
+                        # snapshots need not change when a request is accepted.
+                        persist_state()
                         if not budget_available_at_start or not budget_available():
                             item["observation_freshness"] = "cached_budget_exhausted"
                             if result.get("advisory_only") or result.get("requires_coordinator"):
