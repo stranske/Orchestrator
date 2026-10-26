@@ -1009,10 +1009,9 @@ def run_wave(
 
 def selftest() -> dict:
     """Only inert fixture processes. Fixtures are package test inputs, not Claude."""
-    fixture = (
-        Path(__file__).resolve().parent.parent
-        / "tests/fixtures/transport_qualification_launcher/inert_child.py"
-    )
+    module_dir = Path(__file__).resolve().parent
+    fixture_root = module_dir.parent if module_dir.name == "src" else module_dir
+    fixture = fixture_root / "tests/fixtures/transport_qualification_launcher/inert_child.py"
     with tempfile.TemporaryDirectory(prefix="launcher-inert-selftest-") as temp:
         root = Path(temp)
         binary = root / "success"

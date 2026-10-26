@@ -383,6 +383,35 @@ def test_emitted_selftest_uses_only_inert_processes_and_verify_runner(monkeypatc
     assert result["failed"] == {} and result["skipped"] == {}
 
 
+def test_flat_exec_mirror_selftest_uses_retained_fixture(tmp_path):
+    flat = tmp_path / "exec-mirror"
+    flat.mkdir()
+    source = Path(launcher.__file__).resolve().parent
+    for name in launcher.SOURCE_NAMES:
+        (flat / name).write_bytes((source / name).read_bytes())
+    fixture = flat / "tests/fixtures/transport_qualification_launcher/inert_child.py"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_bytes(FIXTURE.read_bytes())
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, transport_qualification_launcher as m; print(json.dumps(m.selftest()))",
+        ],
+        cwd=flat,
+        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(flat), "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    report = json.loads(child.stdout)
+    assert report["synthetic_pipeline_controls_only"] is True
+    assert report["activation"] is False
+    assert all(report["checked_assertions"].values())
+
+
 def test_descendant_holding_pipes_triggers_group_kill_and_whole_wave_stop(
     wave, tmp_path, monkeypatch
 ):
