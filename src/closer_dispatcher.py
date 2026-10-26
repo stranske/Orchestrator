@@ -1155,6 +1155,10 @@ def _request_source(target, obj, *, kind="issue", via):
     }
 
 
+class _VerificationPrepostReadFailure(dict):
+    """Producer-local metadata failure, before Core or any verification write."""
+
+
 class GitHubNoEffectRejected(RuntimeError):
     """An explicit GitHub validation rejection; no mutation was accepted."""
 
@@ -1777,6 +1781,13 @@ class Closer:
                     "collect_evidence",
                     "recover the malformed or conflicting current verifier event",
                 )
+            if self._unacknowledged_verification_request(s) is not None:
+                return (
+                    "collect_evidence",
+                    "verification request acknowledgement unresolved; reconcile original operation",
+                    False,
+                    "exact original request acknowledgment or terminal reconciliation",
+                )
             if lifecycle.get(
                 "schema"
             ) == verifier_evidence.STATE_MARKER and self._accepted_verification_request(s):
@@ -1904,10 +1915,11 @@ class Closer:
                     s, "collect_evidence", "collect original source acceptance evidence"
                 )
             if self._accepted_verification_request(s):
-                return self.proposal(
-                    s,
+                return (
                     "collect_evidence",
                     "collect terminal or unattributed verifier evidence; do not rerun",
+                    False,
+                    "new authenticated verifier attempt or request reconciliation",
                 )
             if s.get("native_diagnostic_reference"):
                 return (
@@ -2053,6 +2065,7 @@ class Closer:
             for candidate in operations:
                 binding = candidate.get("binding") or {}
                 result = candidate.get("result") or {}
+                accepted = result.get("verification_post_accepted") or {}
                 if (
                     candidate.get("status") == "completed"
                     and candidate.get("action") == "post_merge_verify"
@@ -2061,6 +2074,15 @@ class Closer:
                     and binding.get("merge") == snapshot.get("merge")
                     and result.get("verification_request_basis")
                     == self.verification_request_basis(snapshot)
+                    and isinstance(accepted, Mapping)
+                    and accepted.get("request_basis") == result["verification_request_basis"]
+                    and isinstance(accepted.get("mutation_kind"), str)
+                    and accepted.get("mutation_kind") in {"label", "workflow_dispatch"}
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (candidate, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
                 ):
                     return {
                         "operation_id": candidate.get("id"),
@@ -2071,6 +2093,364 @@ class Closer:
             )
         except FileNotFoundError:
             return None
+
+    def _verification_rejection_not_accepted(self, snapshot, operation):
+        """Read exact producer/Core no-acceptance proof; never acquire an effect."""
+        result = operation.get("result") or {}
+        rejected = result.get("verification_rejected")
+        proof = result.get("verification_rejection_proof")
+        core_identity = proof.get("core_identity") if isinstance(proof, Mapping) else None
+        if not (
+            operation.get("status") in {"confirmed_not_started", "abandoned"}
+            and operation.get("action") in {"post_merge_verify", "initiate_verify"}
+            and isinstance(operation.get("id"), str)
+            and operation["id"]
+            and isinstance(operation.get("revision"), str)
+            and operation["revision"]
+            and isinstance(operation.get("binding"), Mapping)
+            and isinstance(rejected, Mapping)
+            and set(rejected) == {"mutation_kind", "request_basis", "http_status"}
+            and type(rejected.get("http_status")) is int
+            and rejected.get("http_status") == 422
+            and rejected.get("mutation_kind") == "workflow_dispatch"
+            and isinstance(rejected.get("request_basis"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", rejected["request_basis"])
+            and isinstance(proof, Mapping)
+            and proof.get("post_attempted") is True
+            and proof.get("request_accepted") is False
+            and proof
+            == {
+                "schema": "closer-verification-rejection/v1",
+                "producer": "submit_verify/GitHubNoEffectRejected/live-queue-invocation",
+                "target": snapshot["target"],
+                "operation_id": operation["id"],
+                "action": operation["action"],
+                "revision": operation["revision"],
+                "binding_sha256": digest(operation["binding"]),
+                "rejection_sha256": digest(rejected),
+                "request_basis": rejected["request_basis"],
+                "core_namespace": getattr(
+                    getattr(self.runtime_binding, "bundle", None), "namespace", None
+                ),
+                "post_attempted": True,
+                "request_accepted": False,
+                **(
+                    {"core_identity": core_identity}
+                    if self.runtime_binding is not None and isinstance(core_identity, Mapping)
+                    else {}
+                ),
+            }
+        ):
+            return False
+        if self.runtime_binding is None:
+            return not self.require_runtime_binding and "core_rejected_not_accepted" not in result
+        # A supplied boolean is not Core evidence. Read the exact original
+        # namespace/fence once, then use only pure Core receipt/key validators.
+        try:
+            from closer_campaign import sha256_json
+            from closer_runtime_binding import RuntimeBinding
+
+            if type(self.runtime_binding) is not RuntimeBinding:
+                return False
+            runtime = self.runtime_binding
+            if not (
+                isinstance(core_identity, Mapping)
+                and set(core_identity)
+                == {
+                    "schema",
+                    "namespace",
+                    "operation_key",
+                    "target_fence_key",
+                    "criteria_fingerprint",
+                    "native_binding_sha256",
+                    "record_sha256",
+                    "digest_scope",
+                }
+                and core_identity.get("schema") == "closer-verification-core-rejection/v1"
+                and core_identity.get("namespace") == runtime.bundle.namespace
+                and core_identity.get("digest_scope")
+                == "canonical_core_record_excluding_prior_operations"
+                and all(
+                    isinstance(core_identity.get(k), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", core_identity[k])
+                    for k in (
+                        "operation_key",
+                        "target_fence_key",
+                        "criteria_fingerprint",
+                        "native_binding_sha256",
+                        "record_sha256",
+                    )
+                )
+            ):
+                return False
+            core = runtime.bundle.runtime
+            original = operation["binding"]
+            repository, number = original["pr_target"].lower().split("#")
+            adapter = runtime._adapter(repository)
+            lookup = core.OperationSpec(
+                repository,
+                int(number),
+                "verify_request",
+                "0" * 40,
+                None,
+                "0" * 64,
+                "lookup",
+                {"authority": 2},
+            )
+            key = core.canonical_target_fence_key(lookup)
+            record = adapter.store.read(key)  # One authenticated original-fence read.
+            if not isinstance(record, Mapping) or record.get("denial"):
+                return False
+            history = record.get("prior_operations", [])
+            if not isinstance(history, list) or len(history) > 64:
+                return False  # Shipped Core schema's flat history bound.
+            candidates = [record]
+            archive_hashes = set()
+            for entry in history:
+                if not isinstance(entry, Mapping) or set(entry) != {"sha256", "record"}:
+                    return False
+                prior = entry["record"]
+                if (
+                    not isinstance(prior, Mapping)
+                    or "prior_operations" in prior
+                    or not isinstance(entry["sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+                    or entry["sha256"] in archive_hashes
+                    or core._hash_canonical(prior) != entry["sha256"]
+                ):
+                    return False
+                archive_hashes.add(entry["sha256"])
+                candidates.append(prior)
+            # Bound validation work before Core schema/identity validation. No
+            # caller-supplied queue history or new archive/store is consulted.
+            size = 0
+            for chunk in json.JSONEncoder(allow_nan=False).iterencode(record):
+                size += len(chunk.encode("utf-8"))
+                if size > 1024 * 1024:
+                    return False
+            if core.validate_operation_record(record):
+                return False
+
+            def matches(record):
+                if record.get("denial") or not core.verification_request_not_accepted(record):
+                    return False
+                native = (record.get("mutation_intent") or {}).get("native_binding") or {}
+                mutation = native.get("verification_mutation") or {}
+                context = record.get("verification_context") or {}
+                spec = core.OperationSpec(
+                    repository,
+                    int(number),
+                    "verify_request",
+                    record["head_sha"],
+                    record.get("base_sha"),
+                    record["criteria_fingerprint"],
+                    record["review_revision"],
+                    record["guard_versions"],
+                    required_capabilities=record.get("required_capabilities", []),
+                    blocking_labels=record.get("blocking_labels", []),
+                    verification_event=context.get("event"),
+                    verification_event_action=context.get("action"),
+                )
+                return bool(
+                    core._hash_canonical(
+                        {k: v for k, v in record.items() if k != "prior_operations"}
+                    )
+                    == core_identity["record_sha256"]
+                    and record.get("operation_key") == core_identity["operation_key"]
+                    and record.get("target_fence_key") == core_identity["target_fence_key"]
+                    and record.get("criteria_fingerprint") == core_identity["criteria_fingerprint"]
+                    and record.get("guard_versions", {}).get("native_binding")
+                    == core_identity["native_binding_sha256"]
+                    and record.get("contract") == core.CONTRACT
+                    and record.get("repository") == repository
+                    and record.get("target") == {"kind": "pull_request", "number": int(number)}
+                    and native.get("head") == record.get("head_sha")
+                    and native.get("criteria_fingerprint") == record.get("criteria_fingerprint")
+                    and "criteria" in native
+                    and native.get("criteria_fingerprint") == sha256_json(native["criteria"])
+                    and native.get("review_revision") == record.get("review_revision")
+                    and record.get("target_fence_key")
+                    == key
+                    == core.canonical_target_fence_key(spec)
+                    and record.get("operation_key") == core.canonical_operation_key(spec)
+                    and native.get("queue_operation_id") == operation["id"]
+                    and native.get("revision") == operation["revision"]
+                    and native.get("action") == operation["action"]
+                    and native.get("pr_target") == original["pr_target"]
+                    and all(
+                        native.get(k) == original.get(k)
+                        for k in ("head", "merge", "review_revision")
+                    )
+                    and native.get("source_targets", []) == original.get("source_targets", [])
+                    and mutation.get("mutation_kind") == rejected["mutation_kind"]
+                    and mutation.get("request_basis") == rejected["request_basis"]
+                    and (
+                        "correlation_input" not in mutation
+                        or mutation["correlation_input"] == rejected["request_basis"]
+                    )
+                )
+
+            # Duplicate/rebound original identities are ambiguity, not release.
+            return sum(bool(matches(candidate)) for candidate in candidates) == 1
+        except Exception:
+            return False  # Missing/changed/unreadable original proof stays fenced.
+
+    def _unacknowledged_verification_request(self, snapshot):
+        """An old submitted effect without a proven acknowledgment is no new POST.
+
+        This is only a reconciliation barrier. It cannot provide accepted-wait
+        proof or adopt an old result as completion of the current source.
+        """
+        import closer_queue
+
+        try:
+            state = closer_queue._read_state(self.state_path)
+        except FileNotFoundError:
+            return None
+        for bucket in [state, *(state.get("frontiers") or {}).values()]:
+            if not isinstance(bucket, Mapping):
+                continue
+            item = (bucket.get("items") or {}).get(snapshot["target"], {})
+            if not isinstance(item, Mapping):
+                continue
+            for history_index, operation in enumerate(
+                [item.get("operation"), *(item.get("operation_history") or [])]
+            ):
+                if not isinstance(operation, Mapping):
+                    continue
+                result = operation.get("result") or {}
+                # Status labels cannot erase possible submitted effects. In
+                # particular Core blocked/denied/read failures are not proof
+                # that the original verification request never started.
+                rejected_not_accepted = self._verification_rejection_not_accepted(
+                    snapshot, operation
+                )
+                conflict = any(
+                    key in record
+                    and not (
+                        rejected_not_accepted
+                        and key in {"verification_rejected", "core_rejected_not_accepted"}
+                    )
+                    for record in (operation, result)
+                    for key in (
+                        "verification_post_accepted",
+                        "verification_request_basis",
+                        "verification_rejected",
+                        "core_request_correlation",
+                        "core_rejected_not_accepted",
+                        "native_result",
+                        "mutation_intent",
+                        "core_operation_key",
+                        "core_target_fence_key",
+                        "effect_started",
+                        "post_started",
+                        "native_binding",
+                        "mutation_kind",
+                        "endpoint",
+                    )
+                ) or any(
+                    record.get("outcome_uncertain") not in (None, False)
+                    for record in (operation, result)
+                )
+                proof = result.get("verification_no_start")
+                no_start = (
+                    isinstance(proof, Mapping)
+                    and proof.get("post_started") is False
+                    and isinstance(operation.get("id"), str)
+                    and bool(operation["id"])
+                    and isinstance(operation.get("revision"), str)
+                    and bool(operation["revision"])
+                    and proof.get("phase") in {"before_prepare_verify", "before_core_verify"}
+                    and (
+                        proof.get("phase") == "before_prepare_verify"
+                        or type(operation.get("invoked_at")) in {int, float}
+                    )
+                    and proof
+                    == {
+                        "schema": "closer-verification-no-start/v1",
+                        "phase": proof.get("phase"),
+                        "target": snapshot["target"],
+                        "operation_id": operation.get("id"),
+                        "action": operation.get("action"),
+                        "revision": operation.get("revision"),
+                        "binding_sha256": digest(operation.get("binding")),
+                        "result_status": (
+                            "not_started"
+                            if operation.get("status") == "abandoned"
+                            else operation.get("outcome")
+                        ),
+                        "post_started": False,
+                    }
+                )
+                no_start = (
+                    no_start
+                    or closer_queue.verification_callback_not_invoked_proof(
+                        operation, snapshot["target"]
+                    )
+                    is not None
+                )
+                if not conflict and (
+                    operation.get("status") == "confirmed_not_started"
+                    or (
+                        operation.get("status") == "abandoned"
+                        and (no_start or rejected_not_accepted)
+                    )
+                    or (
+                        operation.get("status") == "failed"
+                        and operation.get("outcome") in {"stale", "blocked", "deferred"}
+                        and no_start
+                    )
+                ):
+                    continue
+                if closer_queue._currently_invoking(snapshot["target"], operation):
+                    continue
+                binding, result = operation.get("binding") or {}, operation.get("result") or {}
+                basis = result.get("verification_request_basis")
+                if not (
+                    operation.get("action") in {"post_merge_verify", "initiate_verify"}
+                    and binding.get("pr_target") == snapshot.get("pr_target", snapshot["target"])
+                    and all(binding.get(key) == snapshot.get(key) for key in ("head", "merge"))
+                ):
+                    continue
+                if (
+                    operation.get("status") == "resource_wait"
+                    and closer_queue.verifier_resource_wait_proof(operation, snapshot["target"])
+                    is not None
+                ):
+                    continue
+                accepted = result.get("verification_post_accepted")
+                if (
+                    operation.get("status") == "completed"
+                    and operation.get("action") == "post_merge_verify"
+                    and isinstance(basis, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", basis)
+                    and isinstance(accepted, Mapping)
+                    and accepted.get("request_basis") == basis
+                    and isinstance(accepted.get("mutation_kind"), str)
+                    and accepted["mutation_kind"] in {"label", "workflow_dispatch"}
+                    and (
+                        "correlation_input" not in accepted
+                        or accepted.get("correlation_input") == basis
+                    )
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (operation, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
+                ):
+                    if history_index and basis == self.verification_request_basis(snapshot):
+                        # Acceptance remains owned when a later queue operation
+                        # archives the actual POST. A revision-only change cannot
+                        # resend its identical event/material request. This is a
+                        # fence only, never adoption as source completion proof.
+                        return {
+                            "operation_id": operation.get("id"),
+                            "request_basis": basis,
+                            "accepted_history": True,
+                        }
+                    continue
+                return {"operation_id": operation.get("id"), "request_basis": basis}
+        return None
 
     def proposal(self, snapshot, action, reason):
         if self.advisory.get(snapshot["target"]) == snapshot["revision"]:
@@ -2094,12 +2474,54 @@ class Closer:
         return action, reason, True, None
 
     def execute(self, target, action, snapshot, operation):
+        import closer_queue
+
+        def prewrite(result, *, phase="before_prepare_verify"):
+            # Only this producer's returns BEFORE Core/effects
+            # can record no-start provenance. Queue persistence retains it when
+            # confirmed_not_started later becomes abandoned history.
+            if (
+                action in {"initiate_verify", "post_merge_verify"}
+                and operation.get("action") == action
+                and isinstance(operation.get("id"), str)
+                and bool(operation["id"])
+                and isinstance(operation.get("revision"), str)
+                and bool(operation["revision"])
+                and operation.get("revision") == snapshot.get("revision")
+                and isinstance(operation.get("binding"), Mapping)
+                and result.get("status") in {"stale", "blocked", "deferred", "not_started"}
+                and (
+                    phase == "before_prepare_verify"
+                    or closer_queue._currently_invoking(target, operation)
+                )
+            ):
+                stamped = {
+                    **result,
+                    "verification_no_start": {
+                        "schema": "closer-verification-no-start/v1",
+                        "phase": phase,
+                        "target": target,
+                        "operation_id": operation["id"],
+                        "action": action,
+                        "revision": operation["revision"],
+                        "binding_sha256": digest(operation["binding"]),
+                        "result_status": result["status"],
+                        "post_started": False,
+                    },
+                }
+                if phase == "before_core_verify":
+                    closer_queue._record_verification_prewrite_no_start(target, operation, stamped)
+                return stamped
+            return result
+
         if not self.apply:
-            return {
-                "status": "deferred",
-                "reason": "inventory only",
-                "next_trigger": "authorized apply",
-            }
+            return prewrite(
+                {
+                    "status": "deferred",
+                    "reason": "inventory only",
+                    "next_trigger": "authorized apply",
+                }
+            )
         self.gh.deadline = min(
             getattr(self.gh, "deadline", operation["deadline"]), operation["deadline"]
         )
@@ -2107,12 +2529,14 @@ class Closer:
             dependency = self.assignment_guard_fn(target)
             if dependency:
                 if dependency.get("status") == "pending":
-                    return dependency
-                return {
-                    "status": "blocked",
-                    "reason": dependency.get("reason") or "assignment changed before action",
-                    "next_trigger": "refresh closer assignment",
-                }
+                    return prewrite(dependency)
+                return prewrite(
+                    {
+                        "status": "blocked",
+                        "reason": dependency.get("reason") or "assignment changed before action",
+                        "next_trigger": "refresh closer assignment",
+                    }
+                )
         # Packet-only work can progress offline. Every remote mutation still has
         # an exact live observation before its first side effect.
         local_actions = {"collect_evidence", "review", "disposition", "repair"}
@@ -2124,38 +2548,46 @@ class Closer:
             except Exception as exc:
                 # This read precedes every remote mutation, so the operation is
                 # known not to have started. Preserve its durable intent for retry.
-                return {
-                    "status": "not_started",
-                    "reason": f"remote freshness unavailable: {type(exc).__name__}",
-                    "next_trigger": "targeted_remote_freshness_recheck",
-                }
+                return prewrite(
+                    {
+                        "status": "not_started",
+                        "reason": f"remote freshness unavailable: {type(exc).__name__}",
+                        "next_trigger": "targeted_remote_freshness_recheck",
+                    }
+                )
         if fresh["revision"] != snapshot["revision"]:
-            return {
-                "status": "stale",
-                "reason": "source/review/head changed; reassess",
-                "next_trigger": "fresh observation",
-            }
+            return prewrite(
+                {
+                    "status": "stale",
+                    "reason": "source/review/head changed; reassess",
+                    "next_trigger": "fresh observation",
+                }
+            )
         if snapshot.get("native_diagnostic_reference") is not None and digest(
             snapshot.get("native_diagnostic_reference")
         ) != digest(fresh.get("native_diagnostic_reference")):
-            return {
-                "status": "not_started",
-                "reason": "native diagnostic run reference changed before action",
-                "next_trigger": "fresh native verifier observation",
-            }
+            return prewrite(
+                {
+                    "status": "not_started",
+                    "reason": "native diagnostic run reference changed before action",
+                    "next_trigger": "fresh native verifier observation",
+                }
+            )
         current_action, reason, eligible, trigger = self.select(fresh)
         if not eligible or current_action != action:
-            return {"status": "blocked", "reason": reason, "next_trigger": trigger}
+            return prewrite({"status": "blocked", "reason": reason, "next_trigger": trigger})
         pr_target = fresh.get("pr_target", target)
         if action in {"collect_evidence", "review", "disposition", "repair"}:
             return self.worker(target, action, fresh, operation)
 
         if self.require_runtime_binding and self.runtime_binding is None:
-            return {"status": "blocked", "reason": "pinned shared Core binding required"}
+            return prewrite({"status": "blocked", "reason": "pinned shared Core binding required"})
         prepared_verify = None
         if action in {"initiate_verify", "post_merge_verify"}:
             prepared_verify = self.prepare_verify(pr_target, fresh)
             if "mutation_kind" not in prepared_verify:
+                if isinstance(prepared_verify, _VerificationPrepostReadFailure):
+                    return prewrite(prepared_verify, phase="before_core_verify")
                 return prepared_verify
             # Metadata/inventory admission may take time. Refresh the exact
             # subject and current holds before Core records any mutation intent.
@@ -2168,19 +2600,25 @@ class Closer:
                         "request_basis"
                     ) != self.verification_request_basis(latest)
             except Exception as exc:
-                return {
-                    "status": "not_started",
-                    "reason": f"verification admission freshness unavailable: {type(exc).__name__}",
-                    "next_trigger": "fresh authoritative verification admission",
-                }
+                return prewrite(
+                    {
+                        "status": "not_started",
+                        "reason": f"verification admission freshness unavailable: {type(exc).__name__}",
+                        "next_trigger": "fresh authoritative verification admission",
+                    },
+                    phase="before_core_verify",
+                )
             if changed or not latest_eligible or latest_action != action:
-                return {
-                    "status": "not_started",
-                    "reason": (
-                        latest_reason if not latest_eligible else "verification binding changed"
-                    ),
-                    "next_trigger": latest_trigger or "fresh verification frontier",
-                }
+                return prewrite(
+                    {
+                        "status": "not_started",
+                        "reason": (
+                            latest_reason if not latest_eligible else "verification binding changed"
+                        ),
+                        "next_trigger": latest_trigger or "fresh verification frontier",
+                    },
+                    phase="before_core_verify",
+                )
             fresh = latest
 
         def native_effect():
@@ -2721,91 +3159,102 @@ class Closer:
 
     def prepare_verify(self, target, snapshot):
         """Complete read admission before recording a consequential Core intent."""
+        if self._unacknowledged_verification_request(snapshot) is not None:
+            return {
+                "status": "not_started",
+                "reason": "verification request acknowledgement unresolved; reconcile original operation",
+                "next_trigger": "exact original request acknowledgment or terminal reconciliation",
+            }
+        if self._accepted_verification_request(snapshot):
+            return {
+                "status": "not_started",
+                "reason": "same verification request already accepted",
+                "next_trigger": "new authenticated verifier attempt or request reconciliation",
+            }
         disposition = self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
         repeat_request = verification_events.request_matches(snapshot, disposition)
         result = self._verification_preflight(target, snapshot)
         if result is not None:
             return result
         repo, number = target.split("#")
-        initial_redispatch = repeat_request is None and (
-            "verify:compare" in snapshot.get("labels", [])
-            or snapshot.get("native_diagnostic_reference")
-        )
-        if repeat_request is not None or initial_redispatch:
-            # The reusable collector validates actual merged subject/material and
-            # dedups exact event+assessment. A POST timeout remains UNKNOWN.
-            try:
-                repository = self.gh.api(f"repos/{repo}")
-            except RoundCapacityDeferred as exc:
-                import closer_verifier_boundary as boundary
+        # Only NEW normally admitted requests reach this producer. Existing
+        # accepted/unknown requests remain in their original queue/Core fence.
+        # Deployment requires the qualified matching consumer input interface;
+        # an HTTP 422 is known-not-started, never fallback to a second route.
+        # The reusable collector validates actual merged subject/material and
+        # dedups exact event+assessment. A POST timeout remains UNKNOWN.
+        try:
+            repository = self.gh.api(f"repos/{repo}")
+        except RoundCapacityDeferred as exc:
+            import closer_verifier_boundary as boundary
 
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "capacity_deferred",
-                    [],
-                    ["authoritative GitHub capacity recovery before metadata read"],
-                    control={
-                        "kind": "capacity",
-                        "resource": exc.resource,
-                        "throttle": exc.throttle,
-                        "observed_at": exc.observed_at,
-                        "reset_at_epoch": exc.reset_at_epoch,
-                    },
-                )
-            except RoundDeadlineExhausted as exc:
-                import closer_verifier_boundary as boundary
+            return boundary.pending(
+                snapshot,
+                target,
+                "capacity_deferred",
+                [],
+                ["authoritative GitHub capacity recovery before metadata read"],
+                control={
+                    "kind": "capacity",
+                    "resource": exc.resource,
+                    "throttle": exc.throttle,
+                    "observed_at": exc.observed_at,
+                    "reset_at_epoch": exc.reset_at_epoch,
+                },
+            )
+        except RoundDeadlineExhausted as exc:
+            import closer_verifier_boundary as boundary
 
-                return boundary.pending(
-                    snapshot,
-                    target,
-                    "request_deadline",
-                    [],
-                    ["fresh owned metadata read after request deadline"],
-                    control={
-                        "kind": "request_deadline",
-                        "deadline": exc.deadline,
-                        "remaining_seconds": exc.remaining_seconds,
-                    },
-                )
-            except Exception as exc:
-                return {
-                    "status": "not_started",
-                    "reason": f"verifier repository metadata unavailable: {type(exc).__name__}",
-                    "next_trigger": "authoritative repository metadata recovery",
+            return boundary.pending(
+                snapshot,
+                target,
+                "request_deadline",
+                [],
+                ["fresh owned metadata read after request deadline"],
+                control={
+                    "kind": "request_deadline",
+                    "deadline": exc.deadline,
+                    "remaining_seconds": exc.remaining_seconds,
+                },
+            )
+        except Exception as exc:
+            return _VerificationPrepostReadFailure(
+                status="not_started",
+                reason=f"verifier repository metadata unavailable: {type(exc).__name__}",
+                next_trigger="authoritative repository metadata recovery",
+            )
+        branch = repository.get("default_branch") if isinstance(repository, dict) else None
+        if not isinstance(branch, str) or not branch:
+            return _VerificationPrepostReadFailure(
+                status="not_started",
+                reason="verifier workflow default branch unavailable",
+                next_trigger="authoritative repository metadata",
+            )
+        inputs = {
+            "ref": branch,
+            "inputs[pr_number]": number,
+            "inputs[mode]": "compare",
+            # Inert correlation, not semantic event identity or retry authority.
+            "inputs[verification_request_basis]": self.verification_request_basis(snapshot),
+        }
+        if repeat_request is not None:
+            inputs.update(
+                {
+                    "inputs[verification_material]": json.dumps(
+                        repeat_request["material"], separators=(",", ":")
+                    ),
+                    "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
                 }
-            branch = repository.get("default_branch") if isinstance(repository, dict) else None
-            if not isinstance(branch, str) or not branch:
-                return {
-                    "status": "not_started",
-                    "reason": "verifier workflow default branch unavailable",
-                    "next_trigger": "authoritative repository metadata",
-                }
-            inputs = {"ref": branch, "inputs[pr_number]": number, "inputs[mode]": "compare"}
-            if repeat_request is not None:
-                inputs.update(
-                    {
-                        "inputs[verification_material]": json.dumps(
-                            repeat_request["material"], separators=(",", ":")
-                        ),
-                        "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
-                    }
-                )
-            return {
-                "mutation_kind": "workflow_dispatch",
-                "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
-                "fields": inputs,
-                "request_basis": self.verification_request_basis(snapshot),
-                "verification_predecessor": (
-                    repeat_request["predecessor_event_id"] if repeat_request else None
-                ),
-                "material_selectors": repeat_request["material"] if repeat_request else [],
-            }
+            )
         return {
-            "mutation_kind": "label",
-            "endpoint": f"repos/{repo}/issues/{number}/labels",
-            "fields": {"labels[]": "verify:compare"},
+            "mutation_kind": "workflow_dispatch",
+            "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
+            "fields": inputs,
             "request_basis": self.verification_request_basis(snapshot),
+            "verification_predecessor": (
+                repeat_request["predecessor_event_id"] if repeat_request else None
+            ),
+            "material_selectors": repeat_request["material"] if repeat_request else [],
         }
 
     def submit_verify(self, target, snapshot, prepared):
@@ -2816,16 +3265,44 @@ class Closer:
         try:
             self.gh.api(prepared["endpoint"], method="POST", fields=prepared["fields"])
         except GitHubNoEffectRejected:
-            return {
+            rejected = {
+                "mutation_kind": prepared["mutation_kind"],
+                "request_basis": prepared["request_basis"],
+                "http_status": 422,
+            }
+            result = {
                 "status": "not_started",
                 "reason": "verification event inputs unsupported or rejected (HTTP 422)",
                 "next_trigger": "compatible reviewed consumer workflow and valid event inputs",
-                "verification_rejected": {
-                    "mutation_kind": prepared["mutation_kind"],
-                    "request_basis": prepared["request_basis"],
-                    "http_status": 422,
-                },
+                "verification_rejected": rejected,
             }
+            import closer_queue
+
+            invocation = getattr(closer_queue._callback_threads, "invocation", None)
+            operation = (invocation or {}).get("operation") or {}
+            if (
+                closer_queue._currently_invoking(snapshot["target"], operation)
+                and operation.get("action") in {"post_merge_verify", "initiate_verify"}
+                and operation.get("revision") == snapshot.get("revision")
+                and isinstance(operation.get("binding"), Mapping)
+            ):
+                result["verification_rejection_proof"] = {
+                    "schema": "closer-verification-rejection/v1",
+                    "producer": "submit_verify/GitHubNoEffectRejected/live-queue-invocation",
+                    "target": snapshot["target"],
+                    "operation_id": operation["id"],
+                    "action": operation["action"],
+                    "revision": operation["revision"],
+                    "binding_sha256": digest(operation["binding"]),
+                    "rejection_sha256": digest(rejected),
+                    "request_basis": prepared["request_basis"],
+                    "core_namespace": getattr(
+                        getattr(self.runtime_binding, "bundle", None), "namespace", None
+                    ),
+                    "post_attempted": True,
+                    "request_accepted": False,
+                }
+            return result
         return {
             "status": "completed",
             "verification_key": f"{target}:{snapshot['merge']}:compare",
@@ -2833,6 +3310,13 @@ class Closer:
             "verification_post_accepted": {
                 "mutation_kind": prepared["mutation_kind"],
                 "request_basis": prepared["request_basis"],
+                **(
+                    {"correlation_input": prepared["request_basis"]}
+                    if prepared.get("mutation_kind") == "workflow_dispatch"
+                    and prepared.get("fields", {}).get("inputs[verification_request_basis]")
+                    == prepared["request_basis"]
+                    else {}
+                ),
             },
             "verification_predecessor": prepared.get("verification_predecessor"),
             "material_selectors": prepared.get("material_selectors", []),
@@ -4754,29 +5238,10 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             events = receipt.get("events")
             if not isinstance(events, list):
                 return None
-            submitted = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "operation_submitted"
-                and event.get("target") == target
-                and event.get("operation_id") == operation.get("id")
-                and event.get("action") == operation.get("action")
-                for event in events
-            )
-            advanced = any(
-                isinstance(event, Mapping)
-                and event.get("kind") == "action_advanced"
-                and event.get("target") == target
-                and event.get("action") == operation.get("action")
-                and isinstance(event.get("revision"), str)
-                and event["revision"]
-                and event["revision"] != operation.get("revision")
-                for event in events
-            )
-            # The queue may refresh metadata again after the first action
-            # transition. Its validated final row need not repeat that first
-            # revision; the exact completed operation and both causal events do.
+            # Shared exact event validation also authenticates a completed
+            # verification POST's same-pass result-wait boundary.
             if (operation.get("action") == "merge" and row.get("action") == "merge") or not (
-                submitted and advanced
+                closer_queue.completed_progress_events(receipt, target, operation)
             ):
                 return None
             progress_key = digest(
@@ -7379,20 +7844,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     },
                     "queue_receipt": receipt,
                 }
-        if finite_frontier is not None:
-            progress = verified_finite_partial_progress(target, action_state, row, receipt)
-            if progress is not None:
-                return progress
         if (
             receipt.get("stop_valid") is True
-            and row.get("eligible") is False
             and row.get("status") in {"deferred", "ineligible"}
             and row.get("action") in {"wait", "collect_evidence"}
-            and reason
-            in {
-                "same verification request already accepted",
-                "collect terminal or unattributed verifier evidence; do not rerun",
-            }
+            and (
+                (
+                    row.get("eligible") is False
+                    and reason
+                    in {
+                        "same verification request already accepted",
+                        "collect terminal or unattributed verifier evidence; do not rerun",
+                    }
+                )
+                or verified_finite_partial_progress(target, action_state, row, receipt) is not None
+            )
         ):
             inner = queue_item_readback(action_state, target)
             fresh = inner.get("evidence") if isinstance(inner, dict) else None
@@ -7402,26 +7868,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 and inner.get("observation_freshness") == "fresh"
                 and inner.get("revision") == row.get("revision")
                 and fresh.get("target") == target
-                and current.select(fresh)[1] == reason
+                and current.select(fresh)[1] == inner.get("reason")
+                and inner.get("reason")
+                in {
+                    "same verification request already accepted",
+                    "collect terminal or unattributed verifier evidence; do not rerun",
+                }
                 and fresh.get("head") == prep_snapshot.get("head")
                 and fresh.get("merge") == prep_snapshot.get("merge")
                 else None
             )
             if isinstance(accepted, dict):
+                pending_evidence = {
+                    "event_id": accepted["request_basis"],
+                    "operation_id": accepted["operation_id"],
+                    "target": target,
+                    "head": fresh["head"],
+                    "merge": fresh["merge"],
+                    "observed_revision": row["revision"],
+                }
+                proof = (
+                    closer_queue.accepted_verifier_wait_proof(
+                        action_state,
+                        target,
+                        frontier=finite_frontier,
+                        receipt=receipt,
+                        evidence=pending_evidence,
+                    )
+                    if finite_frontier is not None
+                    else None
+                )
+                if finite_frontier is not None and proof is None:
+                    accepted = None
+            if isinstance(accepted, dict):
                 return {
                     "status": "pending",
                     "pending_kind": "external_event",
                     "next_trigger": "authenticated verifier result or supported request reconciliation",
-                    "pending_evidence": {
-                        "event_id": accepted["request_basis"],
-                        "operation_id": accepted["operation_id"],
-                        "target": target,
-                        "head": fresh["head"],
-                        "merge": fresh["merge"],
-                        "observed_revision": row["revision"],
-                    },
+                    "pending_evidence": pending_evidence,
                     "queue_receipt": receipt,
                 }
+        # An authenticated accepted request is an owned result wait even when
+        # this same queue pass also advanced the original POST. Preserve its
+        # typed wait before the general finite partial-progress fallback.
+        if finite_frontier is not None:
+            progress = verified_finite_partial_progress(target, action_state, row, receipt)
+            if progress is not None:
+                return progress
         if (
             receipt.get("stop_valid")
             and row.get("eligible")
@@ -8377,6 +8870,20 @@ def _run_merge_verification_successors(args, backend, result, targets):
                     "reason": "fresh merged identity unavailable or changed",
                 }
                 continue
+            if accepted_wait:
+                import closer_verifier_followup
+
+                if (
+                    closer_verifier_followup.terminal_proof(
+                        action_path, target, accepted_proof, observation
+                    )
+                    is None
+                ):
+                    continuations[target] = {
+                        "status": "held",
+                        "reason": "accepted request lacks current correlated terminal proof",
+                    }
+                    continue
             if observation.get("eligible") is not True or (
                 observation.get("action") == op.get("action")
                 if accepted_wait

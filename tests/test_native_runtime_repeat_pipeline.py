@@ -47,6 +47,12 @@ def test_acknowledged_repeat_dispatch_staged_restart_is_stop_valid(repeat):
     operation = queue._read_state(inner)["items"][TARGET]["operation"]
     assert operation["status"] == "completed"
     assert operation["result"]["verification_post_accepted"]["mutation_kind"] == "workflow_dispatch"
+    acknowledgment = operation["result"]["verification_post_accepted"]
+    assert acknowledgment["correlation_input"] == operation["result"]["verification_request_basis"]
+    assert (
+        repeat.dispatch_fields[0]["inputs[verification_request_basis]"]
+        == acknowledgment["correlation_input"]
+    )
     accepted_core = copy.deepcopy(repeat.contents.rows)
     repeat.backend.state_path = raw
     args = SimpleNamespace(state=str(raw), shadow=False, max_workers=1)

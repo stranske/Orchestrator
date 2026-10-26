@@ -270,13 +270,15 @@ def test_fresh_complete_inventory_wakes_new_frontier_without_resetting_old_wait(
     assert all(after[key]["items"] == entry["items"] for key, entry in old.items())
 
 
-def test_timeout_after_label_post_remains_uncertain(public_merge_world, monkeypatch, capsys):
+def test_timeout_after_correlated_dispatch_remains_uncertain(
+    public_merge_world, monkeypatch, capsys
+):
     w = public_merge_world
     transport = native.gh_capacity.gh_run
     writes = []
 
     def api(args, **kwargs):
-        if args[3].endswith("/issues/12/labels"):
+        if args[3].endswith("/actions/workflows/agents-verifier.yml/dispatches"):
             writes.append(args)
             raise TimeoutError("effect readback unavailable")
         return transport(args, **kwargs)
@@ -288,6 +290,23 @@ def test_timeout_after_label_post_remains_uncertain(public_merge_world, monkeypa
         "owner/repo#12"
     ]
     assert len(writes) == 1 and row["status"] == "unknown"
+    fields = dict(
+        writes[0][index + 1].split("=", 1)
+        for index, argument in enumerate(writes[0][:-1])
+        if argument == "-f"
+    )
+    assert fields["ref"] == "main"
+    assert fields["inputs[pr_number]"] == "12" and fields["inputs[mode]"] == "compare"
+    correlation = fields["inputs[verification_request_basis]"]
+    assert len(correlation) == 64 and all(
+        character in "0123456789abcdef" for character in correlation
+    )
+    assert set(fields) == {
+        "ref",
+        "inputs[pr_number]",
+        "inputs[mode]",
+        "inputs[verification_request_basis]",
+    }
     assert "pending_evidence" not in row.get("results", {}).get("act", {})
     assert native.main(w.argv) == 78
     capsys.readouterr()

@@ -140,8 +140,8 @@ def test_ledger_write_failure_preserves_safe_restart_boundary(
 
     reconciled = []
 
-    def reconcile(*_args):
-        reconciled.append(True)
+    def reconcile(_target, operation):
+        reconciled.append(operation["id"])
         return {
             "status": "completed" if remote["applied"] else "confirmed_not_started",
             "target_complete": remote["applied"],
@@ -154,12 +154,16 @@ def test_ledger_write_failure_preserves_safe_restart_boundary(
     assert remote["calls"] == (0 if write_boundary == "intent" else 1)
     saved = queue._read_state(path)["items"][target].get("operation")
     if write_boundary == "after_external_mutation":
-        assert saved["status"] in {"submitted", "running", "uncertain"}
+        assert saved["status"] == "uncertain"
+        assert saved["error_type"] == "OSError"
+        assert saved["next_trigger"] == "reconcile_operation_before_retry"
     monkeypatch.setattr(queue, "_atomic_write", original_write)
     _run(path, [target], observe, execute, reconcile=reconcile)
     assert remote["calls"] == 1
     assert queue._read_state(path)["items"][target]["operation"]["status"] == "completed"
     if write_boundary == "after_external_mutation":
-        assert reconciled, "completed remote effect must be reconciled before considering replay"
+        assert reconciled == [
+            saved["id"]
+        ], "reconcile the original effect before considering replay"
     _run(path, [target], observe, execute, reconcile=reconcile)
     assert remote["calls"] == 1

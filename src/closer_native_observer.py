@@ -113,6 +113,7 @@ def contract(manifest):
 
 def capacity_contract(manifest, *, control_plane_only=False):
     """Explicit host opt-in; never infer quota or profile scope from the wrapper actor."""
+    import closer_role_qualification as roles
     import execution_profiles
     from closer_agent_launchers import APPROVED_AGENTS
 
@@ -179,10 +180,10 @@ def capacity_contract(manifest, *, control_plane_only=False):
             or profile.get("agent") not in APPROVED_AGENTS
             or profile.get("lifecycle_status") != "active"
             or "offload" not in profile.get("transport_support", [])
-            or profile.get("reasoning_effort") not in {"none", "minimal", "low"}
+            or not any(roles.is_runtime_qualified(profile, role) for role in roles.ROLES)
         ):
             raise mechanisms.MechanismError(
-                "native capacity profile is not approved active low offload"
+                "native capacity profile is not approved active qualified offload"
             )
     return value
 
@@ -883,9 +884,16 @@ def completed_round_proof(manifest, cfg, candidate, *, record_boundary=False):
         return None
 
 
+def rearm_on_hold_followup(campaign, doc, manifest):
+    """A same-assignment continuation needs an exact audited no-start release."""
+    import closer_hold_followup
+
+    return closer_hold_followup.rearm(campaign, doc, manifest)
+
+
 def rearm_on_assignment_change(campaign, doc, manifest):
     """Standing mode only: a different assignment may follow a proven completed round."""
-    policy = capacity_contract(manifest)
+    policy = capacity_contract(manifest, control_plane_only=True)
     if (
         not policy
         or policy.get("schema") == "native-scoped-capacity/v2"
@@ -1291,7 +1299,7 @@ def authorize_worker(manifest, argv):
             "argv_sha256": mechanisms.digest(argv),
             **(
                 {"admission": _CURRENT_ADMISSION[str(root)]["context"]}
-                if capacity_contract(manifest) is not None
+                if capacity_contract(manifest, control_plane_only=True) is not None
                 else {}
             ),
         },
@@ -1337,7 +1345,7 @@ def accept_worker(
     # Its signed pre-launch handoff permits qualification during the entry's
     # short submitted-to-terminal transition; arbitrary JSON never does.
     context = record.get("admission")
-    if capacity_contract(manifest) is not None:
+    if capacity_contract(manifest, control_plane_only=True) is not None:
         validate_admission(manifest, context, for_effects=True)
         if context["campaign"] != {
             "state": str(Path(state).resolve()),
@@ -1450,7 +1458,7 @@ def _native_entry(manifest, manifest_path, campaign_root):
                 # qualification while its own submission is in progress. JSON
                 # alone never issues that capability to another worker process.
                 _CURRENT_ENTRY[str(root)] = nonce
-                capacity_policy = capacity_contract(manifest)
+                capacity_policy = capacity_contract(manifest, control_plane_only=True)
                 if capacity_policy is not None:
                     started = time.time()
                     _CURRENT_ADMISSION[str(root)] = {
