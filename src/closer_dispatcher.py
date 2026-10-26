@@ -5548,7 +5548,130 @@ def collect_native_evidence(
     )
 
 
-def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snapshot=None):
+def _data_only_ci_receipt_inputs(section, *, retained_dir, max_bytes):
+    """Expose bounded inventory-bound CI bytes as untrusted data, never proof."""
+    import closer_disposition
+    import credential_redaction
+
+    limits = {
+        "max_receipts": 8,
+        "max_physical_bytes_per_receipt": 64 * 1024,
+        "max_visible_bytes_per_receipt": 16 * 1024,
+        "max_visible_bytes": 32 * 1024,
+    }
+    result = {
+        "schema": "closer-low-ci-receipt-inputs/v1",
+        "limits": limits,
+        "text_is_untrusted": True,
+        "acceptance_authority": False,
+        "action_authority": False,
+        "receipts": [],
+        "inventory_receipt_count": 0,
+        "omitted_receipt_count": 0,
+        "visible_bytes": 0,
+        "integrity_failure_count": 0,
+    }
+    content = section.get("content") if isinstance(section, dict) else None
+    artifacts = content.get("artifacts") if isinstance(content, dict) else None
+    if not isinstance(artifacts, list):
+        result["omission_reason"] = "CI artifact inventory unavailable"
+        return result
+    runs = content.get("runs")
+    runs = runs if isinstance(runs, list) else []
+    remaining = min(max_bytes, limits["max_visible_bytes"])
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("receipts"), list):
+            continue
+        for receipt in artifact["receipts"]:
+            result["inventory_receipt_count"] += 1
+            if len(result["receipts"]) >= limits["max_receipts"]:
+                result["omitted_receipt_count"] += 1
+                continue
+            row = {
+                "run_id": artifact.get("run_id"),
+                "run_attempt": artifact.get("run_attempt"),
+                "head_sha": artifact.get("head_sha"),
+                "artifact_id": artifact.get("id"),
+                "artifact_name": artifact.get("name"),
+                "artifact_status": artifact.get("status"),
+                "run_inventory_matches": [
+                    run
+                    for run in runs
+                    if isinstance(run, dict) and run.get("id") == artifact.get("run_id")
+                ],
+                "receipt_kind": receipt.get("kind") if isinstance(receipt, dict) else None,
+                "receipt_path": receipt.get("path") if isinstance(receipt, dict) else None,
+                "ref": receipt.get("raw") if isinstance(receipt, dict) else None,
+                "content_supplied": False,
+                "supplied_bytes": 0,
+                "truncated": False,
+            }
+            result["receipts"].append(row)
+            ref = row["ref"]
+            if not isinstance(ref, dict) or (
+                type(ref.get("bytes")) is not int
+                or ref["bytes"] < 1
+                or not isinstance(ref.get("path"), str)
+                or not isinstance(ref.get("sha256"), str)
+                or not closer_evidence.SHA256.fullmatch(ref["sha256"])
+            ):
+                row["omission_reason"] = "raw reference malformed"
+                result["integrity_failure_count"] += 1
+                continue
+            row["total_bytes"] = ref["bytes"]
+            if ref["bytes"] > limits["max_physical_bytes_per_receipt"]:
+                row["omission_reason"] = "raw receipt exceeds physical verification bound"
+                continue
+            if retained_dir is None:
+                row["omission_reason"] = "explicit retained root unavailable; no file read"
+                continue
+            if remaining <= 0:
+                row["omission_reason"] = "visible byte budget exhausted; not inspected"
+                row["truncated"] = True
+                continue
+            raw = closer_disposition._safe_raw(
+                ref, Path(retained_dir), max_bytes=limits["max_physical_bytes_per_receipt"]
+            )
+            if raw is None:
+                row["omission_reason"] = "retained raw reference unavailable or integrity differs"
+                result["integrity_failure_count"] += 1
+                continue
+            try:
+                raw.decode("utf-8", errors="strict")
+            except UnicodeError:
+                row["omission_reason"] = "raw receipt is not complete UTF-8"
+                continue
+            count = min(remaining, limits["max_visible_bytes_per_receipt"])
+            prefix = raw[:count].decode("utf-8", errors="ignore")
+            text, redactions = credential_redaction.redact_with_counts(prefix)
+            redacted_bytes = text.encode("utf-8")
+            encoded = redacted_bytes[:count]
+            text = encoded.decode("utf-8", errors="ignore")
+            supplied = len(text.encode("utf-8"))
+            row.update(
+                content=text,
+                content_supplied=True,
+                supplied_bytes=supplied,
+                raw_prefix_bytes=len(prefix.encode("utf-8")),
+                redaction_applied=bool(redactions),
+                truncated=(
+                    len(prefix.encode("utf-8")) < len(raw) or supplied < len(redacted_bytes)
+                ),
+            )
+            if row["truncated"]:
+                row["omission_reason"] = "bounded UTF-8 prefix only; omitted tail not inspected"
+            remaining -= supplied
+            result["visible_bytes"] += supplied
+    if result["omitted_receipt_count"]:
+        result["omission_reason"] = (
+            "receipt count bound; remaining compact inventory is provenance only"
+        )
+    return result
+
+
+def data_only_evidence_context(
+    packet, *, readiness, max_bytes=256 * 1024, snapshot=None, retained_dir=None
+):
     """Carry validated available content, with explicit omissions, to a no-tools model.
 
     A retained reference is provenance, never permission to read a file or evidence
@@ -5584,7 +5707,7 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snaps
         )
     )
     result = {
-        "schema": "closer-data-only-context/v1",
+        "schema": "closer-data-only-context/v2",
         "readiness": readiness,
         "content_limit_bytes": max_bytes,
         "sections": {},
@@ -5681,12 +5804,23 @@ def data_only_evidence_context(packet, *, readiness, max_bytes=256 * 1024, snaps
         }
         if len(encoded) <= remaining:
             current_request.update(content=request_content, content_supplied=True)
+            remaining -= len(encoded)
         else:
             current_request.update(
                 content_supplied=False,
                 context_gap="current request exceeds remaining assessment context; not inspected",
             )
         result["current_request"] = current_request
+    result["sections"]["ci_receipt_inputs"] = {
+        "schema": "closer-low-ci-receipt-section/v1",
+        "content_supplied": True,
+        "text_is_untrusted": True,
+        "acceptance_authority": False,
+        "action_authority": False,
+        "content": _data_only_ci_receipt_inputs(
+            sections.get("ci_artifacts"), retained_dir=retained_dir, max_bytes=remaining
+        ),
+    }
     return result
 
 
@@ -7291,8 +7425,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         }
         if data_only:
             prompt_mandatory["data_only_evidence"] = data_only_evidence_context(
-                raw_packet, readiness=readiness, snapshot=admitted_snapshot
+                raw_packet,
+                readiness=readiness,
+                snapshot=admitted_snapshot,
+                retained_dir=retained_dir,
             )
+            raw_ci = prompt_mandatory["data_only_evidence"]["sections"]["ci_receipt_inputs"][
+                "content"
+            ]
+            if raw_ci["integrity_failure_count"]:
+                _release_route_load(route, route_load)
+                pending = evidence_pending(
+                    target,
+                    prep,
+                    {
+                        **(readiness or {}),
+                        "ready": False,
+                        "evaluation_ready": False,
+                        "gaps": list(
+                            dict.fromkeys(
+                                [
+                                    *(readiness or {}).get("gaps", []),
+                                    "ci_raw_receipt_integrity_unavailable",
+                                ]
+                            )
+                        ),
+                    },
+                )
+                pending["reason"] = "ci_raw_receipt_integrity_unavailable"
+                return pending
         if snap.get("verifier") and snap["verifier"].get("verdict") not in {None, "PASS"}:
             import closer_disposition
 
