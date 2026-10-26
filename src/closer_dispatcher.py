@@ -1641,6 +1641,10 @@ def _request_source(target, obj, *, kind="issue", via):
     }
 
 
+class _VerificationPrepostReadFailure(dict):
+    """Producer-local metadata failure, before Core or any verification write."""
+
+
 class GitHubNoEffectRejected(RuntimeError):
     """An explicit GitHub validation rejection; no mutation was accepted."""
 
@@ -2842,10 +2846,15 @@ class Closer:
                     and bool(operation["id"])
                     and isinstance(operation.get("revision"), str)
                     and bool(operation["revision"])
+                    and proof.get("phase") in {"before_prepare_verify", "before_core_verify"}
+                    and (
+                        proof.get("phase") == "before_prepare_verify"
+                        or type(operation.get("invoked_at")) in {int, float}
+                    )
                     and proof
                     == {
                         "schema": "closer-verification-no-start/v1",
-                        "phase": "before_prepare_verify",
+                        "phase": proof.get("phase"),
                         "target": snapshot["target"],
                         "operation_id": operation.get("id"),
                         "action": operation.get("action"),
@@ -2858,6 +2867,13 @@ class Closer:
                         ),
                         "post_started": False,
                     }
+                )
+                no_start = (
+                    no_start
+                    or closer_queue.verification_callback_not_invoked_proof(
+                        operation, snapshot["target"]
+                    )
+                    is not None
                 )
                 if not conflict and (
                     operation.get("status") == "confirmed_not_started"
@@ -2944,8 +2960,10 @@ class Closer:
         return action, reason, True, None
 
     def execute(self, target, action, snapshot, operation):
-        def prewrite(result):
-            # Only this producer's returns BEFORE prepare_verify/Core/effects
+        import closer_queue
+
+        def prewrite(result, *, phase="before_prepare_verify"):
+            # Only this producer's returns BEFORE Core/effects
             # can record no-start provenance. Queue persistence retains it when
             # confirmed_not_started later becomes abandoned history.
             if (
@@ -2958,12 +2976,16 @@ class Closer:
                 and operation.get("revision") == snapshot.get("revision")
                 and isinstance(operation.get("binding"), Mapping)
                 and result.get("status") in {"stale", "blocked", "deferred", "not_started"}
+                and (
+                    phase == "before_prepare_verify"
+                    or closer_queue._currently_invoking(target, operation)
+                )
             ):
-                return {
+                stamped = {
                     **result,
                     "verification_no_start": {
                         "schema": "closer-verification-no-start/v1",
-                        "phase": "before_prepare_verify",
+                        "phase": phase,
                         "target": target,
                         "operation_id": operation["id"],
                         "action": action,
@@ -2973,6 +2995,9 @@ class Closer:
                         "post_started": False,
                     },
                 }
+                if phase == "before_core_verify":
+                    closer_queue._record_verification_prewrite_no_start(target, operation, stamped)
+                return stamped
             return result
 
         if not self.apply:
@@ -3047,6 +3072,8 @@ class Closer:
         if action in {"initiate_verify", "post_merge_verify"}:
             prepared_verify = self.prepare_verify(pr_target, fresh)
             if "mutation_kind" not in prepared_verify:
+                if isinstance(prepared_verify, _VerificationPrepostReadFailure):
+                    return prewrite(prepared_verify, phase="before_core_verify")
                 return prepared_verify
             # Metadata/inventory admission may take time. Refresh the exact
             # subject and current holds before Core records any mutation intent.
@@ -3059,19 +3086,25 @@ class Closer:
                         "request_basis"
                     ) != self.verification_request_basis(latest)
             except Exception as exc:
-                return {
-                    "status": "not_started",
-                    "reason": f"verification admission freshness unavailable: {type(exc).__name__}",
-                    "next_trigger": "fresh authoritative verification admission",
-                }
+                return prewrite(
+                    {
+                        "status": "not_started",
+                        "reason": f"verification admission freshness unavailable: {type(exc).__name__}",
+                        "next_trigger": "fresh authoritative verification admission",
+                    },
+                    phase="before_core_verify",
+                )
             if changed or not latest_eligible or latest_action != action:
-                return {
-                    "status": "not_started",
-                    "reason": (
-                        latest_reason if not latest_eligible else "verification binding changed"
-                    ),
-                    "next_trigger": latest_trigger or "fresh verification frontier",
-                }
+                return prewrite(
+                    {
+                        "status": "not_started",
+                        "reason": (
+                            latest_reason if not latest_eligible else "verification binding changed"
+                        ),
+                        "next_trigger": latest_trigger or "fresh verification frontier",
+                    },
+                    phase="before_core_verify",
+                )
             fresh = latest
 
         def native_effect():
@@ -3671,18 +3704,18 @@ class Closer:
                 },
             )
         except Exception as exc:
-            return {
-                "status": "not_started",
-                "reason": f"verifier repository metadata unavailable: {type(exc).__name__}",
-                "next_trigger": "authoritative repository metadata recovery",
-            }
+            return _VerificationPrepostReadFailure(
+                status="not_started",
+                reason=f"verifier repository metadata unavailable: {type(exc).__name__}",
+                next_trigger="authoritative repository metadata recovery",
+            )
         branch = repository.get("default_branch") if isinstance(repository, dict) else None
         if not isinstance(branch, str) or not branch:
-            return {
-                "status": "not_started",
-                "reason": "verifier workflow default branch unavailable",
-                "next_trigger": "authoritative repository metadata",
-            }
+            return _VerificationPrepostReadFailure(
+                status="not_started",
+                reason="verifier workflow default branch unavailable",
+                next_trigger="authoritative repository metadata",
+            )
         inputs = {
             "ref": branch,
             "inputs[pr_number]": number,
