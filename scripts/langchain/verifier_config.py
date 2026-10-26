@@ -14,8 +14,9 @@ EVAL_PAIR_BUDGET_TOKENS = DEFAULT_TOKEN_BUDGET
 EVAL_SCHEMA_REPAIR_BUDGET_TOKENS = DEFAULT_TOKEN_BUDGET
 EVAL_FOLLOW_UP_BUDGET_TOKENS = DEFAULT_TOKEN_BUDGET
 
-# Prompt-coverage budgets (#3701). The context block carries CI, plan sources and
-# the diff summary; changed code is reviewed as whole files across bounded chunks.
+# Prompt-coverage budgets (#3701). The context budget bounds CI/navigation and
+# the diff summary. Original requirements remain complete and are admitted by
+# native request counting; changed code uses whole files across bounded chunks.
 # A prefix cap of EVAL_PAIR_BUDGET_TOKENS // 2 per block silently dropped all or
 # most code on complex PRs, so code gets its own bounded budget. Override with the
 # VERIFIER_CONTEXT_BUDGET_TOKENS / VERIFIER_DIFF_BUDGET_TOKENS environment variables.
@@ -129,7 +130,7 @@ def is_terminal_artifact(verifier_run: Any) -> bool:
 def artifact_from_verification_text(text: str) -> dict[str, Any]:
     """Build a verifier artifact candidate from a posted verifier report."""
 
-    raw = (text or "").strip()
+    raw = latest_verifier_report(text)
     artifact: dict[str, Any] = {"raw_present": bool(raw)}
     if not raw:
         return artifact
@@ -145,35 +146,61 @@ def artifact_from_verification_text(text: str) -> dict[str, Any]:
         severity = {"PASS": 0, "CONCERNS": 1, "FAIL": 2, "ERROR": 3, "UNVERIFIABLE_INPUT": 0.5}
         artifact["verdict"] = max(verdicts, key=lambda verdict: severity.get(verdict, -1))
 
-    latest_raw = _latest_verifier_report(raw)
-    lowered = latest_raw.lower()
-    repair_pending = (
-        any(
-            phrase in lowered
-            for phrase in (
-                "repair pending",
-                "schema repair pending",
-                "validation retry",
-                "pending repair",
-                "partial verifier output",
-            )
+    lowered = raw.lower()
+    repair_pending = any(
+        phrase in lowered
+        for phrase in (
+            "repair pending",
+            "schema repair pending",
+            "validation retry",
+            "pending repair",
+            "partial verifier output",
         )
-        and "older run" not in lowered
     )
-    if "## pr verification" in lowered or "verdict:" in lowered:
+    if (
+        "## pr verification" in lowered
+        or "## llm evaluation report" in lowered
+        or "## provider comparison report" in lowered
+        or "verdict:" in lowered
+    ):
         artifact["artifact_family"] = "verifier-report"
     if repair_pending:
         artifact["repair_pending"] = True
     return artifact
 
 
-def _latest_verifier_report(raw: str) -> str:
-    lowered = raw.lower()
-    marker = "## pr verification"
-    index = lowered.rfind(marker)
-    if index == -1:
+def latest_verifier_report(text: str) -> str:
+    """Select the last posted verifier report before interpreting any verdict.
+
+    A single structured JSON artifact or marker-less report is returned intact.
+    Historical reports remain available in comments, never as current evidence.
+    """
+
+    raw = (text or "").strip()
+    parsed = _coerce_artifact(raw)
+    if isinstance(parsed, dict) and parsed.get("schema") == "verifier-comment-history/v1":
+        comments = parsed.get("comments")
+        if not isinstance(comments, list) or not all(isinstance(body, str) for body in comments):
+            return ""
+        return comments[-1].strip() if comments else ""
+    if isinstance(parsed, (dict, list)):
         return raw
-    return raw[index:]
+    # Legacy concatenated histories use this explicit comment separator. A
+    # heading inside one current report is content, never another report.
+    if "\n\n---\n\n" in raw:
+        candidate = raw.rsplit("\n\n---\n\n", 1)[-1].strip()
+        if re.match(
+            r"##[ \t]+(?:PR Verification|LLM Evaluation Report|Provider Comparison Report)\b",
+            candidate,
+            re.I,
+        ):
+            raw = candidate
+    heading = re.search(
+        r"^##[ \t]+(?:PR Verification(?: Report| Comparison)?|LLM Evaluation Report|Provider Comparison Report)\b",
+        raw,
+        re.I | re.M,
+    )
+    return raw[heading.start() :] if heading else raw
 
 
 def _coerce_artifact(value: Any) -> Any:

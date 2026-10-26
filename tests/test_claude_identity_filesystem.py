@@ -681,7 +681,8 @@ def test_real_retention_barrier_reaches_closer_interpret_uncertainty(
     )
     chosen = []
 
-    def route(*, load, unavailable_profiles, with_status=False):
+    def route(*, load, unavailable_profiles, data_only, with_status=False):
+        assert data_only is True
         profile = PROFILE if PROFILE not in unavailable_profiles else "no-fallback"
         chosen.append(profile)
         value = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}

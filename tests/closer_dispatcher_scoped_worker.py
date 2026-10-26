@@ -13,14 +13,21 @@ ROOT = Path(__file__).resolve().parents[1]
 MODULES = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
 sys.path.insert(0, str(MODULES))
 
+from closer_role_support import fixture_role_verdict  # noqa: E402
+
+import adapters  # noqa: E402
 import closer_dispatcher as d  # noqa: E402
 import closer_evidence  # noqa: E402
 import closer_resources  # noqa: E402
+import closer_role_qualification as role_qualification  # noqa: E402
 import dispatcher  # noqa: E402
 import router  # noqa: E402
 
 
 def main():
+    # The child simulates role admission as well as provider admission; actual
+    # role evidence/build checks are exercised in the separate role contracts.
+    role_qualification.is_runtime_qualified = fixture_role_verdict
     spec = json.loads(sys.argv[1])
     target = spec["target"]
     directory = Path(spec["directory"])
@@ -98,7 +105,12 @@ def main():
             raise AssertionError("live API forbidden")
 
     def offload(agent, prompt, **kw):
-        event("offload_enter", profile=kw["profile_id"])
+        if spec.get("simulated_tool_free"):
+            assert kw.get("data_only") is True
+            assert '"data_only_evidence":' in prompt
+            assert '"fixture_only":true' in prompt
+            assert '"content_supplied":true' in prompt
+        event("offload_enter", profile=kw["profile_id"], data_only=kw.get("data_only"))
         barrier("offload")
         if spec.get("crash"):
             os._exit(9)
@@ -199,15 +211,55 @@ def main():
         None,
     )
     dispatcher.offload = offload
-    closer_evidence.collect_evidence = lambda *a, **kw: {
-        "schema": "closer-evidence/v1",
-        "producer_sha256": "f" * 64,
-        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
-        "sections": {},
-        "section_digests": {},
-        "manifest": {"packet_sha256": "d" * 64},
-    }
-    closer_evidence.validate_packet = lambda *_: False
+    if spec.get("simulated_tool_free"):
+        # This child has no provider CLI on PATH and offload is the in-process
+        # fake above. Declare that fixture transport/content boundary explicitly;
+        # this neither qualifies actual Gemini nor alters the parent process.
+        adapters.data_only_problem = lambda agent, mode="assess": (
+            None
+            if mode == "assess" and agent in d._EXCEPTION_ELIGIBLE_AGENTS
+            else "unsupported synthetic data-only transport"
+        )
+        d.data_only_evidence_context = lambda _packet, *, readiness, snapshot, **_kw: {
+            "schema": "closer-data-only-context/v1",
+            "fixture_only": True,
+            "target": snapshot["target"],
+            "head": snapshot["head"],
+            "readiness": readiness,
+            "sections": {"source": {"content_supplied": True, "content": snapshot["sources"]}},
+        }
+
+    def simulated_evidence(snapshot, _api, retained_dir, **_kw):
+        packet = {
+            "schema": "closer-evidence/v1",
+            "producer_sha256": "f" * 64,
+            "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
+            "sections": {},
+            "section_digests": {},
+            "manifest": {"packet_sha256": "d" * 64},
+        }
+        if spec.get("postverify"):
+            # Semantic evidence is explicitly simulated for these process/pool
+            # tests, but retention still has real bytes bound to this request.
+            packet.update(
+                fixture_packet=True,
+                target=snapshot["target"],
+                head=snapshot["head"],
+                capture_revision=snapshot["revision"],
+            )
+            packet["manifest"]["packet_sha256"] = d.digest(
+                [snapshot["target"], snapshot["revision"], "fixture-packet"]
+            )
+            path = (
+                Path(retained_dir) / "manifests" / (packet["manifest"]["packet_sha256"] + ".json")
+            )
+            closer_evidence._atomic_write(path, json.dumps(packet, sort_keys=True).encode())
+        return packet
+
+    closer_evidence.collect_evidence = simulated_evidence
+    closer_evidence.validate_packet = lambda packet: bool(
+        spec.get("postverify") and isinstance(packet, dict) and packet.get("fixture_packet") is True
+    )
     # This process/pool fixture starts after semantic admission, which has its own real-packet tests.
     closer_evidence.action_evidence_readiness = lambda *_a, **_k: {
         "schema": "closer-action-evidence-readiness/v1",

@@ -168,7 +168,8 @@ def test_recovery_selector_is_one_string_input_and_forwarded_without_shell_inter
     dispatch = re.search(r"(?ms)^  workflow_dispatch:\n    inputs:\n(.*?)(?=^[^ ]|\Z)", source)
     assert dispatch is not None
     inputs = re.findall(r"(?m)^      ([a-z_]+):$", dispatch[1])
-    assert len(inputs) == len(set(inputs)) and len(inputs) <= 10
+    # GitHub.com supports 25 workflow_dispatch inputs (since December 2025).
+    assert len(inputs) == len(set(inputs)) and len(inputs) <= 25
     assert "verification_recovery" in inputs
     recovery = re.search(r"(?m)^      verification_recovery:\n((?:        [^\n]*\n)+)", dispatch[1])
     assert recovery is not None

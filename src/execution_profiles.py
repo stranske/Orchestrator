@@ -171,6 +171,27 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="claude-subscription",
             adapter_version="claude-cli-profile-v2",
         ),
+        # Exact ID is present in installed Claude Code 2.1.296 and the existing
+        # adapter full tier. New profiles carry explicit effort; no historical
+        # Sonnet definition or semantic role qualification is changed.
+        _profile(
+            "claude-opus-5-5-high",
+            "claude-opus-5-5",
+            "high",
+            agent="claude",
+            provider="anthropic",
+            pool="claude-subscription",
+            adapter_version="claude-cli-profile-v2",
+        ),
+        _profile(
+            "claude-opus-5-5-low",
+            "claude-opus-5-5",
+            "low",
+            agent="claude",
+            provider="anthropic",
+            pool="claude-subscription",
+            adapter_version="claude-cli-profile-v2",
+        ),
         _profile(
             "aider-codestral-high",
             "mistral/codestral-latest",
@@ -401,6 +422,54 @@ PROFILE_RETIREMENTS: dict[str, str] = {
     "codex-5.6-luna-high": "codex-6-luna-high",
     "codex-5.6-luna-low": "codex-6-luna-low",
 }
+
+
+def _closer_candidate(agent: str, label: str, model: str | None) -> dict[str, Any]:
+    """Inventory interest only; neither registration nor candidacy qualifies a role."""
+    registered = tuple(
+        p["profile_id"]
+        for p in PROFILE_REGISTRY.values()
+        if p["agent"] == agent
+        and p["requested_model"] == model
+        and p["lifecycle_status"] == "active"
+        and p["profile_id"] not in PROFILE_RETIREMENTS
+    )
+    return {
+        "agent": agent,
+        "model_label": label,
+        "requested_model": model,
+        "registered_profile_ids": registered,
+        "identifier_status": (
+            "registered" if registered else "known_unregistered" if model else "unverified"
+        ),
+        "roles_candidate": (
+            "bounded_classification",
+            "strong_criterion_adjudication",
+            "constrained_repair",
+        ),
+        "qualification_status": "candidate_only",
+    }
+
+
+# Broad owner-requested candidacy, separate from role qualification and transport
+# confinement. Unknown identifiers remain None rather than invented CLI flags.
+# The rows are never consumed by profiles_for_agent or automatic dispatch.
+CLOSER_CANDIDATE_MODELS = (
+    _closer_candidate("codex", "Codex Luna", "gpt-6-luna"),
+    _closer_candidate("codex", "Codex Sol", "gpt-6.1-sol"),
+    _closer_candidate("codex", "Codex Astra", "gpt-6-astra"),
+    _closer_candidate("claude", "Claude Haiku", "claude-haiku-4-5"),
+    _closer_candidate("claude", "Claude Sonnet", "claude-sonnet-5-5"),
+    _closer_candidate("claude", "Claude Opus", "claude-opus-5-5"),
+    _closer_candidate("gemini", "Gemini Flash low", "gemini-3.8-flash-low"),
+    _closer_candidate("gemini", "Gemini Flash high", "gemini-3.8-flash-high"),
+    _closer_candidate("gemini", "Gemini Argon", "gemini-4-argon-high"),
+    _closer_candidate("cursor", "Cursor Composer", "composer-2.5"),
+    _closer_candidate("vibe", "Vibe Medium 3.5", "mistral-medium-3.5"),
+    _closer_candidate("muse", "Muse Spark 1.2", None),
+    _closer_candidate("muse", "Muse Spark 1.3", None),
+    _closer_candidate("muse", "Muse Wonder", "muse-wonder-1.0"),
+)
 
 # Production defaults are task-specific. Astra High remains an explicit escalation;
 # immutable trial profiles stay addressable without being chosen for routine work.

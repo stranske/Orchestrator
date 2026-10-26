@@ -464,3 +464,11 @@ class TestPipelineCapacity:
 
         capacity = adapter._pipeline_capacity()
         assert capacity["exception"] == 0
+
+
+@pytest.fixture(autouse=True)
+def synthetic_role_boundary(monkeypatch):
+    # Allocator/capacity tests use an explicit synthetic qualification oracle.
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
