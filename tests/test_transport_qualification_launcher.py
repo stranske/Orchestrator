@@ -187,6 +187,8 @@ def test_failure_stops_whole_wave_without_retry(wave, tmp_path, mode):
     if mode == "timeout":
         assert record["problem"] == "timeout"
         assert record["seconds"] < 2
+        with pytest.raises(ProcessLookupError):
+            os.killpg(record["process_group"], 0)
     if mode == "oversize":
         assert record["problem"] == "combined_output_cap"
         assert (
@@ -425,7 +427,11 @@ def test_descendant_holding_pipes_triggers_group_kill_and_whole_wave_stop(
     monkeypatch.setattr(launcher, "_kill_group", observed)
     report = run(wave, tmp_path, mode="descendant", cell_seconds=0.35)
     assert report["cli_launch_count"] == 1 and report["status"] == "stopped"
-    assert killed == [read_receipt(report)["process_group"]]
+    row = read_receipt(report)
+    assert killed == [row["process_group"]]
+    assert row["failure_type"] == "ValueError"  # not unproven cleanup (RuntimeError)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(row["process_group"], 0)
 
 
 def test_hard_cap_combines_stdout_and_stderr(wave, tmp_path):

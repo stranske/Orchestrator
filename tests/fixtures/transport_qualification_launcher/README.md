@@ -22,8 +22,10 @@ Native integration:
    thread. Its production default uses the same HANDOFF_DIR (or real HOME's
    .codex/handoff), closer-profile-execution root, SHA256(claude-subscription)
    lane and bound=1 as closer_dispatcher. offline_root is an explicit test-only
-   seam; its minted lease cannot admit NativeRuntime. This is a non-finite
-   external calibration lease, not a finite production reservation or quota read.
+   seam; its minted lease cannot admit NativeRuntime. The lease uses the existing
+   finite-frontier slot lifecycle (starting, child and uncertain fences) under an
+   external calibration identity. It grants no production frontier, quota read
+   or role authority.
 4. Within that context call run_wave(..., held_lease=lease, execute=True) with
    an existing OAuth token parameter or existing CLAUDE_CODE_OAUTH_TOKEN. No
    credential file is opened/copied and no login occurs. NativeRuntime rehashes
