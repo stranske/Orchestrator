@@ -3,6 +3,7 @@
 import dataclasses
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,26 +17,28 @@ def box(tmp_path):
     root = tmp_path.resolve()
     workspace = root / "workspace"
     scratch = root / "scratch"
-    runtime = root / "runtime"
-    workspace.mkdir(mode=0o700)
-    scratch.mkdir(mode=0o700)
-    runtime.mkdir(mode=0o700)
-    source = workspace / "input.py"
-    source.write_text("x=1\n")
-    tool = runtime / "inert"
-    tool.write_text("#!/bin/sh\nprintf 'inert\\n'\n")
-    tool.chmod(0o700)
-    args = dict(
-        workspace=workspace,
-        write_paths=[source],
-        scratch=scratch,
-        runtime_read_roots=[runtime],
-        argv=[str(tool)],
-        timeout_seconds=2,
-        max_output_bytes=1024,
-        operation_id="original-operation",
-    )
-    return args, source, tool
+    # Hosted pytest tmp may be beneath the real account home. The fake runtime
+    # must satisfy the same production read-root guard, not weaken/mock it.
+    with tempfile.TemporaryDirectory(prefix="closer-inert-runtime-", dir="/tmp") as private:
+        runtime = Path(private).resolve()
+        workspace.mkdir(mode=0o700)
+        scratch.mkdir(mode=0o700)
+        source = workspace / "input.py"
+        source.write_text("x=1\n")
+        tool = runtime / "inert"
+        tool.write_text("#!/bin/sh\nprintf 'inert\\n'\n")
+        tool.chmod(0o700)
+        args = dict(
+            workspace=workspace,
+            write_paths=[source],
+            scratch=scratch,
+            runtime_read_roots=[runtime],
+            argv=[str(tool)],
+            timeout_seconds=2,
+            max_output_bytes=1024,
+            operation_id="original-operation",
+        )
+        yield args, source, tool
 
 
 def callbacks():
