@@ -172,6 +172,13 @@ def create_successor(
                     or resource.get("accepted_verifier_request") != accepted_proof
                 ):
                     raise ValueError("accepted predecessor request proof differs")
+                import closer_verifier_followup
+
+                terminal = closer_verifier_followup.terminal_proof(
+                    action_path, target, accepted_proof, observation, now=now()
+                )
+                if terminal is None:
+                    raise ValueError("accepted predecessor lacks current correlated terminal proof")
             # Match the native finite-progress validator's pipeline->queue order.
             # Public validation releases its queue lock; CAS those exact bytes,
             # then retain the queue lock through successor store publication.
@@ -291,6 +298,7 @@ def create_successor(
                 }
                 if accepted_proof is not None:
                     causal["accepted_request"] = dict(accepted_proof)
+                    causal["accepted_terminal"] = terminal
                 frontier_id = "stage-successor-" + _digest(causal)
                 bindings = {target: fresh["bindings"][target]}
                 successor = policy.make_frontier(
@@ -341,9 +349,22 @@ def create_successor(
                         raise ValueError("recorded stage successor metadata is malformed")
                     link = existing["stage_predecessor"]
                     recorded = {key: link.get(key) for key in causal}
+
+                    # Revalidate the current terminal proof above, but its
+                    # observation witness is not the identity of the original
+                    # accepted request/result. Preserve the first full proof
+                    # and frozen successor when only that projection changes.
+                    def terminal_identity(key: str, value: Any) -> Any:
+                        if key == "accepted_terminal" and isinstance(value, Mapping):
+                            return {k: v for k, v in value.items() if k != "substantive_witness"}
+                        return value
+
                     if (
                         any(
-                            recorded[key] != causal[key] for key in causal if key != "fresh_binding"
+                            terminal_identity(key, recorded[key])
+                            != terminal_identity(key, causal[key])
+                            for key in causal
+                            if key != "fresh_binding"
                         )
                         or link.get("predecessor_row_sha256") != lineage["predecessor_row_sha256"]
                         or link.get("predecessor_frontier_sha256")

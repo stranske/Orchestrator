@@ -2438,7 +2438,7 @@ def tick(
         from closer_native_observer import contract as native_contract
 
         py = str(native_contract(manifest)[2])
-    report = []
+    report: list[dict[str, Any]] = []
     for path in sorted(Path(root).glob("*.campaign.json")):
         campaign = Campaign(path)
         try:
@@ -2476,13 +2476,64 @@ def tick(
             continue
         admission = None
         if execution_mechanism == "native-handoff/v1":
+            import closer_hold_followup
+            from closer_native_observer import rearm_on_hold_followup
+
+            try:
+                doc = reconcile(campaign, pid_alive=pid_alive)
+                receipts = closer_hold_followup.validated_receipts(campaign, doc, manifest)
+                doc, followups = closer_hold_followup.consume(
+                    campaign, manifest, str(manifest_path)
+                )
+                report.extend({"campaign": path.name, **entry} for entry in followups)
+                doc = rearm_on_hold_followup(campaign, doc, manifest)
+                if receipts or doc.get("hold_followups"):
+                    try:
+                        from closer_stage_feedback import read_stage_events, summarize_efficiency
+
+                        stamp = _now()
+                        held = list((doc.get("hold_followups") or {}).values())
+                        preliminary = summarize_efficiency(receipts, holds=held, now=stamp)
+                        observed = read_stage_events(preliminary["model_runs"]["bindings"])
+                        summary = summarize_efficiency(
+                            receipts, stage_events=observed["events"], holds=held, now=stamp
+                        )
+                        summary["stage_event_collection"] = {
+                            key: value for key, value in observed.items() if key != "events"
+                        }
+                        report.append(
+                            {
+                                "campaign": path.name,
+                                "kind": "hold_followup_summary",
+                                "efficiency": summary,
+                            }
+                        )
+                    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                        report.append(
+                            {
+                                "campaign": path.name,
+                                "kind": "efficiency_unavailable",
+                                "reason": type(exc).__name__,
+                                "authority": False,
+                            }
+                        )
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                report.append(
+                    {
+                        "campaign": path.name,
+                        "kind": "held",
+                        "reason": f"native hold follow-up: {exc}",
+                    }
+                )
+                continue
+        if execution_mechanism == "native-handoff/v1":
             from closer_native_observer import (
                 capacity_contract,
                 publish_admission,
                 rearm_on_assignment_change,
             )
 
-            if capacity_contract(manifest) is not None:
+            if capacity_contract(manifest, control_plane_only=True) is not None:
                 # Fold only actual terminal results first. Unknown or live workers
                 # never receive a fresh report, assignment or execution window.
                 doc = reconcile(campaign, pid_alive=pid_alive)
