@@ -330,6 +330,80 @@ def private_environment(root: Path, oauth_token: str) -> dict[str, str]:
     return env
 
 
+def actual_launch_binding(
+    *,
+    argv: list[str],
+    env: dict[str, str],
+    cwd: Path,
+    private: Path,
+    oauth_source: str,
+    run_id: str,
+    cell: dict,
+    launch: dict,
+    pins: ReviewPins,
+    cell_seconds: float,
+    wave_seconds: float,
+    output_cap: int,
+    capture_deadline: float,
+) -> dict[str, Any]:
+    """Bind actual child inputs without retaining or hashing the OAuth value.
+
+    Planned hashes are lineage only. The actual config records the augmented
+    argv, exact nonsecret environment, resolved cwd and supplied cwd argument,
+    private paths, controls and bounds used for this submission. OAuth presence
+    and source describe transport setup, not authentication or subscription proof.
+    """
+    nonsecret_env = {k: v for k, v in env.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+    nonsecret_env["CLAUDE_CODE_OAUTH_TOKEN"] = "REDACTED"
+    config = {
+        "argv": list(argv),
+        "environment": nonsecret_env,
+        "cwd": str(cwd.resolve()),
+        "cwd_argument": str(cwd),
+        "private_root": str(private.resolve()),
+        "oauth_context": {
+            "variable": "CLAUDE_CODE_OAUTH_TOKEN",
+            "present": bool(env.get("CLAUDE_CODE_OAUTH_TOKEN")),
+            "source": oauth_source,
+            "value": "REDACTED",
+        },
+        "controls": dict(CONTROLS),
+        "budgets": {
+            "max_cli_submissions": 8,
+            "concurrency": 1,
+            "outer_retries": 0,
+            "fallbacks": 0,
+            "cell_seconds": cell_seconds,
+            "wave_seconds": wave_seconds,
+            "combined_stdout_stderr_bytes": output_cap,
+            "native_output_tokens": 512,
+            "final_response_bytes": 512,
+            "capture_deadline_monotonic": capture_deadline,
+            "http_attempt_count": "UNKNOWN",
+        },
+    }
+    config_sha = digest(config)
+    binding = {
+        "run_id": run_id,
+        "pool_id": POOL,
+        "profile_id": PROFILE,
+        "requested_model": MODEL,
+        "requested_effort": "low",
+        "role": cell["role"],
+        "case_id": cell["case_id"],
+        "prompt_sha256": cell["prompt_sha256"],
+        "binary_sha256": launch["binary_sha256"],
+        "source_pins": dict(pins.files),
+        "actual_config_sha256": config_sha,
+    }
+    return {
+        "actual_config": config,
+        "actual_config_sha256": config_sha,
+        "actual_execution_binding": binding,
+        "actual_execution_binding_sha256": digest(binding),
+    }
+
+
 def redact(value: Any, token: str) -> Any:
     if isinstance(value, str):
         return SECRET.sub(
@@ -592,7 +666,12 @@ def run_wave(
                 "role": cell["role"],
                 "case_id": cell["case_id"],
                 "prompt_sha256": cell["prompt_sha256"],
-                "execution_binding_sha256": cell.get("execution_binding_sha256"),
+                "planned_lineage": {
+                    "execution_binding_sha256": cell.get("execution_binding_sha256"),
+                    "config_sha256": plan["candidate"]["launch"]["config_sha256"],
+                    "plan_sha256": prepared.pins.plan_sha256,
+                    "prompts_sha256": prepared.pins.prompts_sha256,
+                },
                 "activation": False,
                 "http_attempt_count": "UNKNOWN",
                 "external_lease_check": "caller_supplied_held_lease_interface",
@@ -620,7 +699,6 @@ def run_wave(
                 env = private_environment(private, token)
                 record.update(
                     argv=argv,
-                    config_sha256=plan["candidate"]["launch"]["config_sha256"],
                     source_pins=prepared.pins.files,
                     binary_sha256=plan["candidate"]["launch"]["binary_sha256"],
                     isolated_home=True,
@@ -634,6 +712,26 @@ def run_wave(
                 held_lease.check(POOL, cell_run)
                 if runtime.command(plan["candidate"]["launch"]) != argv:
                     raise ValueError("prelaunch binary/argv drift")
+                capture_deadline = min(deadline - 0.5, time.monotonic() + cell_seconds - 0.05)
+                record.update(
+                    actual_launch_binding(
+                        argv=argv,
+                        env=env,
+                        cwd=cwd,
+                        private=private,
+                        oauth_source=(
+                            "parameter" if oauth_token is not None else "existing_environment"
+                        ),
+                        run_id=cell_run,
+                        cell=cell,
+                        launch=plan["candidate"]["launch"],
+                        pins=prepared.pins,
+                        cell_seconds=cell_seconds,
+                        wave_seconds=wave_seconds,
+                        output_cap=output_cap,
+                        capture_deadline=capture_deadline,
+                    )
+                )
                 record["status"] = "starting_outcome_uncertain_until_started_receipt"
                 _persist(root, f"attempt-{index + 1}-starting.json", record, token)
 
@@ -648,7 +746,7 @@ def run_wave(
                     prompt["prompt"].encode(),
                     cwd,
                     env,
-                    deadline=min(deadline - 0.5, time.monotonic() + cell_seconds - 0.05),
+                    deadline=capture_deadline,
                     cap=output_cap,
                     on_started=on_started,
                 )

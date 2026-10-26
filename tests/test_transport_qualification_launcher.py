@@ -4,6 +4,7 @@ import json
 import stat
 import sys
 import time
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -460,3 +461,94 @@ def test_binary_drift_between_cells_is_rehashed_and_stops_wave(wave, tmp_path, m
     assert read_receipt(report, 1)["status"] == "captured_unverified_calibration"
     assert read_receipt(report, 2)["status"] == "stopped"
     assert not (Path(report["receipt_directory"]) / "attempt-2-starting.json").exists()
+
+
+def test_actual_runtime_binding_matches_child_and_prelaunch_receipt(wave, tmp_path):
+    report = run(wave, tmp_path)
+    record = read_receipt(report)
+    observed = json.loads(record["stderr_redacted"])
+    config = record["actual_config"]
+    binding = record["actual_execution_binding"]
+    assert config["argv"] == observed["fixture_argv"] == record["argv"]
+    assert config["cwd"] == observed["fixture_cwd"]
+    env = {k: v for k, v in observed["fixture_env"].items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+    assert {k: v for k, v in config["environment"].items() if k != "CLAUDE_CODE_OAUTH_TOKEN"} == env
+    assert config["environment"]["CLAUDE_CODE_OAUTH_TOKEN"] == "REDACTED"
+    assert config["oauth_context"] == {
+        "variable": "CLAUDE_CODE_OAUTH_TOKEN",
+        "present": True,
+        "source": "parameter",
+        "value": "REDACTED",
+    }
+    assert config["budgets"]["max_cli_submissions"] == 8
+    assert config["budgets"]["combined_stdout_stderr_bytes"] == 65536
+    assert config["controls"] == launcher.CONTROLS
+    assert record["actual_config_sha256"] == launcher.digest(config)
+    assert binding["actual_config_sha256"] == launcher.digest(config)
+    assert record["actual_execution_binding_sha256"] == launcher.digest(binding)
+    assert binding["run_id"] == record["run_id"]
+    assert binding["pool_id"] == launcher.POOL and binding["profile_id"] == launcher.PROFILE
+    assert binding["requested_model"] == launcher.MODEL and binding["requested_effort"] == "low"
+    assert binding["role"] == record["role"] and binding["prompt_sha256"] == record["prompt_sha256"]
+    assert binding["binary_sha256"] == record["binary_sha256"]
+    assert binding["source_pins"] == record["source_pins"]
+    assert "config_sha256" not in record and "execution_binding_sha256" not in record
+    assert record["planned_lineage"]["config_sha256"] != record["actual_config_sha256"]
+    starting = json.loads(
+        (Path(report["receipt_directory"]) / "attempt-1-starting.json").read_text()
+    )
+    assert starting["actual_config"] == config
+    assert starting["actual_execution_binding_sha256"] == record["actual_execution_binding_sha256"]
+    serialized = json.dumps(record)
+    assert TOKEN not in serialized and launcher.sha(TOKEN.encode()) not in serialized
+
+
+def test_actual_config_and_execution_hashes_change_with_child_capture_controls_and_paths(
+    wave, tmp_path
+):
+    binary, prepared = wave
+    plan = json.loads(prepared.plan_text)
+    cell = plan["calls"]["cells"][0]
+    env = {"PATH": "/usr/bin:/bin", "CLAUDE_CODE_OAUTH_TOKEN": TOKEN, **launcher.CONTROLS}
+    kwargs = dict(
+        argv=launcher.fenced_argv(str(binary)) + ["--output-format", "json", "--max-turns", "1"],
+        env=env,
+        cwd=tmp_path / "cwd",
+        private=tmp_path,
+        oauth_source="parameter",
+        run_id="binding-1",
+        cell=cell,
+        launch=plan["candidate"]["launch"],
+        pins=prepared.pins,
+        cell_seconds=45,
+        wave_seconds=480,
+        output_cap=65536,
+        capture_deadline=123.0,
+    )
+    original = launcher.actual_launch_binding(**kwargs)
+    for field in ("capture_flag", "guard", "private_home", "cwd", "cap"):
+        changed = deepcopy(kwargs)
+        if field == "capture_flag":
+            changed["argv"][-1] = "2"
+        elif field == "guard":
+            changed["env"]["CLAUDE_CODE_NO_MODEL_FALLBACK"] = "0"
+        elif field == "private_home":
+            changed["env"]["HOME"] = str(tmp_path / "other-home")
+        elif field == "cwd":
+            changed["cwd"] = tmp_path / "other-cwd"
+        else:
+            changed["output_cap"] = 1024
+        result = launcher.actual_launch_binding(**changed)
+        assert result["actual_config_sha256"] != original["actual_config_sha256"]
+        assert (
+            result["actual_execution_binding_sha256"] != original["actual_execution_binding_sha256"]
+        )
+    # OAuth value itself is neither retained nor hashed. Only presence/source bind.
+    changed = deepcopy(kwargs)
+    changed["env"]["CLAUDE_CODE_OAUTH_TOKEN"] = "another-synthetic-secret-token"
+    assert launcher.actual_launch_binding(**changed) == original
+    changed["oauth_source"] = "existing_environment"
+    assert (
+        launcher.actual_launch_binding(**changed)["actual_config_sha256"]
+        != original["actual_config_sha256"]
+    )
