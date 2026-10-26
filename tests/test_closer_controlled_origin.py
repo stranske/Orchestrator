@@ -208,7 +208,11 @@ def proof(tmp_path):
     return SimpleNamespace(
         result=result,
         expected=expected,
-        observed={"started": dict(observed), "finished": dict(observed)},
+        observed={
+            "starting": dict(observed),
+            "started": dict(observed),
+            "finished": dict(observed),
+        },
         root=tmp_path,
         retain=retain,
     )
@@ -389,6 +393,13 @@ def test_restart_uses_original_physical_proof_without_invocation(proof, monkeypa
 
     monkeypatch.setattr(
         dispatcher, "offload", lambda *a, **kw: pytest.fail("restart invoked broker")
+    )
+    import closer_claude_auth
+
+    monkeypatch.setattr(
+        closer_claude_auth,
+        "borrow_claude_oauth_token",
+        lambda **kw: pytest.fail("restart borrowed auth"),
     )
     basis = {"target": "offline/repo#1", "revision": "original-revision"}
     proof.expected["basis"] = basis
@@ -654,6 +665,14 @@ def test_actual_inert_supervisor_caller_receipt_semantics_and_restart(
         )
     assert result["exit"] == 0, result
     checked = result["_closer_controlled_proof"]
+    assert (
+        checked["observed"]["starting"]["data_only_execution_binding_sha256"]
+        == result["data_only_origin"]["execution"]["binding_sha256"]
+    )
+    assert (
+        checked["expected"]["prompt"]["sha256"]
+        == result["data_only_origin"]["execution"]["config"]["prompt"]["sha256"]
+    )
     assert checked["expected"]["operation_id"] == "original-component-operation"
     assert world.events["auth"] == world.events["auth_closed"] == 1
     original_capture = world.capture.read_bytes()
@@ -755,3 +774,101 @@ def test_private_cleanup_proof_must_name_original_launch_root(proof, path):
     proof.retain()
     with pytest.raises(closer.ControlledOriginUnavailable):
         validate(proof)
+
+
+def test_token_equal_prompt_refuses_without_hash_or_start(controlled_world, monkeypatch):
+    """Synthetic reviewed-role/pool component; no actual credential reader or child."""
+    import time
+
+    from test_closer_role_qualification import record
+
+    import closer_claude_auth
+    import dispatcher
+
+    world = controlled_world
+    profile = execution_profiles.get_profile(world.args["profile_id"])
+    descriptor = closer._controlled_model_contract("closer_interpret")
+    limits = {
+        **world.args["data_only_limits"],
+        "model_contract_sha256": descriptor["contract_sha256"],
+    }
+    qualified = record(profile, roles.BOUNDED_CLASSIFICATION)
+    qualified.update(
+        qualification_id="synthetic-token-exclusion",
+        qualified_at=time.time() - 10,
+        expires_at=time.time() + 60,
+        execution_limits=limits,
+        production_model_contract=descriptor,
+    )
+    qualified["confinement"]["adapter_build_sha256"] = hashlib.sha256(
+        world.cli.read_bytes()
+    ).hexdigest()
+    monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {"synthetic-token-exclusion": qualified})
+    monkeypatch.setattr(
+        closer_claude_auth,
+        "borrow_claude_oauth_token",
+        lambda **kw: world.args["trusted_auth_supplier"](),
+    )
+    real_sha = hashlib.sha256
+    secret_hashes = []
+
+    def guarded_sha(data=b"", *args, **kwargs):
+        if world.token.encode() in data:
+            secret_hashes.append(True)
+            pytest.fail("known-not-started caller hashed borrowed synthetic token")
+        return real_sha(data, *args, **kwargs)
+
+    monkeypatch.setattr(hashlib, "sha256", guarded_sha)
+    with world.lease():
+        result = closer._controlled_offload(
+            agent="claude",
+            prompt=world.token,
+            profile_id=profile["profile_id"],
+            task_type="closer_interpret",
+            operation_id="original-op",
+            frontier={
+                "frontier_id": "original-frontier",
+                "bindings": {"offline/repo#1": {"revision": "original"}},
+            },
+            target="offline/repo#1",
+            basis={
+                "target": "offline/repo#1",
+                "revision": "original",
+                "head": "a" * 40,
+                "base": "b" * 40,
+                "packet_sha256": "c" * 64,
+            },
+            deadline=time.time() + 20,
+            mode="assess",
+        )
+    assert result["process_started"] is False and result["outcome_uncertain"] is False
+    assert world.events["auth"] == world.events["auth_closed"] == 1
+    assert not secret_hashes and not world.capture.exists() and world.events["ledger"] == []
+    assert result["run_id"] is None and not list(
+        dispatcher.DISPATCH_LOG_DIR.glob("*.provider-result-*.json")
+    )
+
+
+@pytest.mark.parametrize("prompt", [None, "", False, "\ud800", "界" * 20])
+def test_prompt_preflight_is_hash_free_and_strict(prompt, monkeypatch):
+    monkeypatch.setattr(hashlib, "sha256", lambda *a, **kw: pytest.fail("preflight hashed prompt"))
+    with pytest.raises(closer.ControlledOriginUnavailable):
+        closer._controlled_prompt_size(prompt, {"max_prompt_bytes": 10})
+
+
+def test_restart_checks_sealed_source_context_before_reading_provider_text(proof, monkeypatch):
+    basis = {"target": "offline/repo#1", "revision": "original"}
+    proof.expected["basis"] = basis
+    checked = validate(proof)
+    checked["expected"]["production_model_contract"]["sources"]["closer_model_contracts.py"] = (
+        "0" * 64
+    )
+    monkeypatch.setattr(
+        closer,
+        "_read_controlled_receipt",
+        lambda *a, **kw: pytest.fail("foreign source read retained provider text"),
+    )
+    with pytest.raises(closer.ControlledOriginUnavailable):
+        closer._revalidate_controlled_proof(
+            checked, run_id="original-run", basis=basis, receipt_root=proof.root
+        )

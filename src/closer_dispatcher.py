@@ -148,6 +148,19 @@ def _controlled_model_contract(task_type):
     return {**descriptor, "contract_sha256": _contract_digest(descriptor)}
 
 
+def _controlled_prompt_size(prompt, limits):
+    """Hash-free admission; token exclusion belongs to the actual broker."""
+    if type(prompt) is not str or not prompt:
+        raise ControlledOriginUnavailable("complete controlled prompt must be nonempty text")
+    try:
+        size = len(prompt.encode("utf-8"))
+    except UnicodeError as error:
+        raise ControlledOriginUnavailable("complete controlled prompt is not UTF8") from error
+    if not 0 < size <= limits["max_prompt_bytes"]:
+        raise ControlledOriginUnavailable("complete controlled prompt exceeds byte bound")
+    return size
+
+
 def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier, target, prompt):
     """Use only reviewed role-record limits and the currently held original lease."""
     import closer_claude_auth
@@ -170,7 +183,7 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
         or limits["role"] != role
     ):
         raise ControlledOriginUnavailable("reviewed production execution contract unavailable")
-    execution.validate_payload(prompt, limits=limits, kind="prompt")
+    prompt_bytes = _controlled_prompt_size(prompt, limits)
     if (
         not isinstance(frontier, dict)
         or not isinstance(frontier.get("frontier_id"), str)
@@ -203,6 +216,31 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
         raise ControlledOriginUnavailable("original Claude reservation differs")
     observed = {}
 
+    def starting(observation):
+        # Only the actual broker calls this after borrowing and excluding its
+        # credential from launch inputs. Preflight/refusal never hashes prompt.
+        if (
+            observed.get("starting") is not None
+            or any(
+                observation.get(key) != expected[key]
+                for key in (
+                    "operation_id",
+                    "profile_id",
+                    "task_type",
+                    "finite_frontier_id",
+                    "finite_frontier_target",
+                )
+            )
+            or observation.get("agent") != "claude"
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(observation.get("data_only_execution_binding_sha256"))
+            )
+        ):
+            raise ControlledOriginUnavailable("trusted original starting callback differs")
+        closer_resources.finite_pool_prepare_request(observation)
+        observed["starting"] = dispatcher._public_process_observation(observation)
+        expected["prompt"] = execution.validate_payload(prompt, limits=limits, kind="prompt")
+
     def started(observation):
         _accept_owned_transport(observation)
         observed["started"] = dispatcher._public_process_observation(observation)
@@ -219,7 +257,7 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
         "data_only_operation_id": operation_id,
         "finite_frontier_id": frontier["frontier_id"],
         "finite_frontier_target": target,
-        "process_starting_callback": closer_resources.finite_pool_prepare_request,
+        "process_starting_callback": starting,
         "process_started_callback": started,
         "process_finished_callback": finished,
     }
@@ -234,7 +272,7 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
         "pool_reservation": reservation,
         "production_model_contract": descriptor,
         "limits": limits,
-        "prompt": execution.validate_payload(prompt, limits=limits, kind="prompt"),
+        "prompt": {"kind": "prompt", "utf8_bytes": prompt_bytes},
         "qualification_id": record["qualification_id"],
         "qualification_record_sha256": _contract_digest(record),
     }
@@ -300,8 +338,6 @@ def _validate_controlled_result(result, expected, observed, *, receipt_root):
             and receipt.get("outcome_uncertain") is False
             and receipt.get("run_id") == result["run_id"]
             and receipt.get("profile_id") == expected["profile_id"]
-            and receipt.get("retained_result_sha256")
-            == hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest()
             and retained.get("run_id") == result["run_id"]
             and retained.get("output") == result.get("output")
             and retained.get("data_only_origin") == origin
@@ -322,6 +358,7 @@ def _validate_controlled_result(result, expected, observed, *, receipt_root):
                 )
             )
             and origin.get("run_id") == result["run_id"]
+            and isinstance(observed.get("starting"), dict)
             and isinstance(observed.get("started"), dict)
             and isinstance(observation, dict)
             and observation.get("cleanup_terminal") is True
@@ -341,7 +378,7 @@ def _validate_controlled_result(result, expected, observed, *, receipt_root):
             )
             and all(
                 callback.get(key) == expected[key]
-                for callback in (observed["started"], observation)
+                for callback in (observed["starting"], observed["started"], observation)
                 for key in (
                     "operation_id",
                     "profile_id",
@@ -354,12 +391,17 @@ def _validate_controlled_result(result, expected, observed, *, receipt_root):
                 callback.get("agent") == "claude"
                 and callback.get("data_only_execution_binding_sha256")
                 == origin["execution"]["binding_sha256"]
-                for callback in (observed["started"], observation)
+                for callback in (observed["starting"], observed["started"], observation)
             )
             and descriptor == _controlled_model_contract(expected["task_type"])
             and limits["model_contract_sha256"] == descriptor["contract_sha256"]
         ):
             raise ControlledOriginUnavailable("original controlled response identity differs")
+        if (
+            receipt.get("retained_result_sha256")
+            != hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest()
+        ):
+            raise ControlledOriginUnavailable("original retained result digest differs")
         launch = origin["execution"]
         config, binding = launch["config"], launch["binding"]
         sources = descriptor["sources"]
@@ -558,6 +600,10 @@ def _revalidate_controlled_proof(proof, *, run_id, basis, receipt_root):
     expected = proof.get("expected") or {}
     if expected.get("basis") != basis or proof.get("run_id") != run_id:
         raise ControlledOriginUnavailable("original controlled stage binding differs")
+    if expected.get("production_model_contract") != _controlled_model_contract(
+        expected.get("task_type")
+    ):
+        raise ControlledOriginUnavailable("original sealed controlled source context differs")
     retained = _read_controlled_receipt(proof.get("provider_result_ref"), receipt_root)["result"]
     result = {**retained, "provider_result_ref": proof["provider_result_ref"]}
     checked = _validate_controlled_result(
@@ -5744,6 +5790,26 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     def full_interpretation(value, target, prep):
         if not isinstance(value, dict):
             return value
+        actual = value.get("actual") or {}
+        if value.get("requested_profile") or actual.get("run_id"):
+            packet = load_packet(prep)
+            compact = prep.get("snapshot") or {}
+            if not (
+                isinstance(packet, dict)
+                and packet.get("target") == target
+                and packet.get("head") == compact.get("head")
+                and packet.get("base") == compact.get("base")
+                and packet.get("capture_revision") == prep.get("revision")
+            ):
+                error = ControlledOriginUnavailable("original sealed packet context differs")
+                raise CompletedResponseReadError(
+                    error,
+                    actual,
+                    actual.get("_closer_controlled_proof"),
+                    "controlled_origin",
+                    value.get("requested_agent"),
+                    value.get("requested_profile"),
+                )
         if value.get("proposal_ref"):
             proposal = json.loads(
                 completed_response_text(
