@@ -33,7 +33,7 @@ ORCH="$ORCH_REPO/src"
 # Tools the tick shells out to live outside the default cron/sandbox PATH: ccusage/npx/node
 # in homebrew, vibe/cursor-agent in ~/.local|.cursor/bin. Without this, capacity.py can't see
 # ccusage → codex/claude read 'unknown' and never get routed.
-export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
+export PATH="$HOME/.codex/python-bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
 
 # ORCH-ANCHOR: mirror-reader-reentry -------------------------------------------------------------
 # Reopen the tick only after acquiring the publisher's shared lock. The helper

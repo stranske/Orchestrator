@@ -1777,6 +1777,13 @@ class Closer:
                     "collect_evidence",
                     "recover the malformed or conflicting current verifier event",
                 )
+            if self._unacknowledged_verification_request(s) is not None:
+                return (
+                    "collect_evidence",
+                    "verification request acknowledgement unresolved; reconcile original operation",
+                    False,
+                    "exact original request acknowledgment or terminal reconciliation",
+                )
             if lifecycle.get(
                 "schema"
             ) == verifier_evidence.STATE_MARKER and self._accepted_verification_request(s):
@@ -1904,10 +1911,11 @@ class Closer:
                     s, "collect_evidence", "collect original source acceptance evidence"
                 )
             if self._accepted_verification_request(s):
-                return self.proposal(
-                    s,
+                return (
                     "collect_evidence",
                     "collect terminal or unattributed verifier evidence; do not rerun",
+                    False,
+                    "new authenticated verifier attempt or request reconciliation",
                 )
             if s.get("native_diagnostic_reference"):
                 return (
@@ -2053,6 +2061,7 @@ class Closer:
             for candidate in operations:
                 binding = candidate.get("binding") or {}
                 result = candidate.get("result") or {}
+                accepted = result.get("verification_post_accepted") or {}
                 if (
                     candidate.get("status") == "completed"
                     and candidate.get("action") == "post_merge_verify"
@@ -2061,6 +2070,15 @@ class Closer:
                     and binding.get("merge") == snapshot.get("merge")
                     and result.get("verification_request_basis")
                     == self.verification_request_basis(snapshot)
+                    and isinstance(accepted, Mapping)
+                    and accepted.get("request_basis") == result["verification_request_basis"]
+                    and isinstance(accepted.get("mutation_kind"), str)
+                    and accepted.get("mutation_kind") in {"label", "workflow_dispatch"}
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (candidate, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
                 ):
                     return {
                         "operation_id": candidate.get("id"),
@@ -2071,6 +2089,65 @@ class Closer:
             )
         except FileNotFoundError:
             return None
+
+    def _unacknowledged_verification_request(self, snapshot):
+        """An old submitted effect without a proven acknowledgment is no new POST.
+
+        This is only a reconciliation barrier. It cannot provide accepted-wait
+        proof or adopt an old result as completion of the current source.
+        """
+        import closer_queue
+
+        try:
+            state = closer_queue._read_state(self.state_path)
+        except FileNotFoundError:
+            return None
+        for bucket in [state, *(state.get("frontiers") or {}).values()]:
+            if not isinstance(bucket, Mapping):
+                continue
+            item = (bucket.get("items") or {}).get(snapshot["target"], {})
+            if not isinstance(item, Mapping):
+                continue
+            for operation in [item.get("operation"), *(item.get("operation_history") or [])]:
+                if not isinstance(operation, Mapping):
+                    continue
+                if operation.get("status") == "confirmed_not_started":
+                    continue
+                if closer_queue._currently_invoking(snapshot["target"], operation):
+                    continue
+                binding, result = operation.get("binding") or {}, operation.get("result") or {}
+                basis = result.get("verification_request_basis")
+                if not (
+                    operation.get("action") in {"post_merge_verify", "initiate_verify"}
+                    and binding.get("pr_target") == snapshot.get("pr_target", snapshot["target"])
+                    and all(binding.get(key) == snapshot.get(key) for key in ("head", "merge"))
+                ):
+                    continue
+                if (
+                    operation.get("status") == "resource_wait"
+                    and closer_queue.verifier_resource_wait_proof(operation, snapshot["target"])
+                    is not None
+                ):
+                    continue
+                accepted = result.get("verification_post_accepted")
+                if (
+                    operation.get("status") == "completed"
+                    and operation.get("action") == "post_merge_verify"
+                    and isinstance(basis, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", basis)
+                    and isinstance(accepted, Mapping)
+                    and accepted.get("request_basis") == basis
+                    and isinstance(accepted.get("mutation_kind"), str)
+                    and accepted["mutation_kind"] in {"label", "workflow_dispatch"}
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (operation, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
+                ):
+                    continue
+                return {"operation_id": operation.get("id"), "request_basis": basis}
+        return None
 
     def proposal(self, snapshot, action, reason):
         if self.advisory.get(snapshot["target"]) == snapshot["revision"]:
@@ -2721,6 +2798,18 @@ class Closer:
 
     def prepare_verify(self, target, snapshot):
         """Complete read admission before recording a consequential Core intent."""
+        if self._unacknowledged_verification_request(snapshot) is not None:
+            return {
+                "status": "not_started",
+                "reason": "verification request acknowledgement unresolved; reconcile original operation",
+                "next_trigger": "exact original request acknowledgment or terminal reconciliation",
+            }
+        if self._accepted_verification_request(snapshot):
+            return {
+                "status": "not_started",
+                "reason": "same verification request already accepted",
+                "next_trigger": "new authenticated verifier attempt or request reconciliation",
+            }
         disposition = self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
         repeat_request = verification_events.request_matches(snapshot, disposition)
         result = self._verification_preflight(target, snapshot)

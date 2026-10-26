@@ -8,6 +8,7 @@ responses are inert. No accepted authority, queue, or runtime callback stub.
 import base64
 import copy
 import json
+import re
 import time
 from types import SimpleNamespace
 
@@ -40,10 +41,21 @@ def repeat(runtime_request, monkeypatch, capsys):
     assert len(world.verifies) == 1 and not world.merges
     initial = records(contents)[0]
     assert initial["status"] == "succeeded"
-    assert (
-        initial["mutation_intent"]["native_binding"]["verification_mutation"]["mutation_kind"]
-        == "label"
+    mutation = initial["mutation_intent"]["native_binding"]["verification_mutation"]
+    assert mutation["mutation_kind"] == "workflow_dispatch"
+    assert mutation["correlation_input"] == mutation["request_basis"]
+    posted = world.verifies[0]
+    fields = dict(
+        posted[index + 1].split("=", 1) for index, value in enumerate(posted) if value == "-f"
     )
+    assert fields == {
+        "ref": "main",
+        "inputs[mode]": "compare",
+        "inputs[pr_number]": "12",
+        "inputs[verification_request_basis]": mutation["request_basis"],
+    }
+    # Retain the fixture's old label as ambient prior evidence. It cannot
+    # acknowledge a later dispatch or settle an unknown Core request.
     # A completed exact-subject verifier returned concerns; real retained source
     # selectors now request one bounded question about recovered material.
     prior = marker()
@@ -80,7 +92,13 @@ def repeat(runtime_request, monkeypatch, capsys):
         world.snapshot["verifier"],
         backend.dispositions[TARGET],
     )
-    state = SimpleNamespace(mode="accepted", dispatches=0, initial=copy.deepcopy(contents.rows))
+    state = SimpleNamespace(
+        mode="accepted",
+        dispatches=0,
+        dispatch_fields=[],
+        initial=copy.deepcopy(contents.rows),
+        initial_mutation=copy.deepcopy(mutation),
+    )
     transport = dispatcher.gh_capacity.gh_run
 
     def github(argv, **kwargs):
@@ -95,6 +113,24 @@ def repeat(runtime_request, monkeypatch, capsys):
                 world.snapshot["labels"].append("agents:paused")
         if endpoint.endswith("/agents-verifier.yml/dispatches") and method == "POST":
             state.dispatches += 1
+            fields = dict(
+                argv[index + 1].split("=", 1) for index, value in enumerate(argv) if value == "-f"
+            )
+            assert set(fields) == {
+                "ref",
+                "inputs[mode]",
+                "inputs[pr_number]",
+                "inputs[verification_request_basis]",
+                "inputs[verification_material]",
+                "inputs[verification_predecessor]",
+            }
+            selected = backend.dispositions[TARGET]["ordinary_nonpass"]["verification_request"]
+            assert json.loads(fields["inputs[verification_material]"]) == selected["material"]
+            assert fields["inputs[verification_predecessor]"] == selected["predecessor_event_id"]
+            assert fields["ref"] == "main" and fields["inputs[mode]"] == "compare"
+            assert fields["inputs[pr_number]"] == "12"
+            assert re.fullmatch(r"[0-9a-f]{64}", fields["inputs[verification_request_basis]"])
+            state.dispatch_fields.append(fields)
             if state.mode == "uncertain":
                 raise TimeoutError("dispatch POST result unavailable")
             if state.mode == "rejected":
@@ -126,13 +162,18 @@ def run(state):
     )
 
 
-def test_initial_label_then_new_dispatch_is_acknowledged_and_restart_idempotent(repeat):
+def test_initial_dispatch_then_new_dispatch_is_acknowledged_and_restart_idempotent(repeat):
     result = run(repeat)
     assert repeat.dispatches == 1, result
     current = records(repeat.contents)[0]
     assert current["status"] == "succeeded", current
     mutation = current["mutation_intent"]["native_binding"]["verification_mutation"]
     assert mutation["mutation_kind"] == "workflow_dispatch"
+    assert mutation["correlation_input"] == mutation["request_basis"]
+    assert mutation["request_basis"] != repeat.initial_mutation["request_basis"]
+    assert (
+        repeat.dispatch_fields[0]["inputs[verification_request_basis]"] == mutation["request_basis"]
+    )
     retained = queue._read_state(repeat.backend.state_path)["items"][TARGET]["operation"]
     restarted = binding.binding_from_manifest(repeat.path)
     outcome = restarted.reconcile(TARGET, retained)
@@ -222,5 +263,6 @@ def test_exact_422_is_known_not_accepted_then_same_queue_can_retry_compatible_co
     repeat.backend.runtime_binding = resumed
     second = run(repeat)
     assert repeat.dispatches == 2, second
+    assert repeat.dispatch_fields[0] == repeat.dispatch_fields[1]
     assert records(repeat.contents)[0]["status"] == "succeeded"
     assert repeat.world.events["provider"] == 0

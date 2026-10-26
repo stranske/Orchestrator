@@ -147,8 +147,13 @@ def test_control_only_profile_fallback_retains_reason(capacity_host, monkeypatch
 
     monkeypatch.setattr(execution_profiles, "get_profile", lambda *_: None)
     context = publish(capacity_host)
-    assert any("active low" in reason for reason in context["control_plane_reasons"])
-    assert native._read(Path(context["report"]["path"]))["profiles"] == {}
+    assert (
+        "model qualification unavailable: native capacity profile is not approved active qualified offload"
+        in context["control_plane_reasons"]
+    )
+    report = native._read(Path(context["report"]["path"]))
+    assert report["control_plane_only"] is True
+    assert report["profiles"] == {} and report["profile_ids"] == []
 
 
 def test_lifecycle_refresh_is_bounded_and_fair_including_previously_passed_rows(
