@@ -291,6 +291,13 @@ def test_start_receipt_exists_before_popen_and_started_receipt_before_result(
 
 def test_post_spawn_receipt_failure_still_counts_and_kills_process(wave, tmp_path, monkeypatch):
     original = launcher._persist
+    original_popen = launcher.subprocess.Popen
+    pids = []
+
+    def recording_popen(*args, **kwargs):
+        proc = original_popen(*args, **kwargs)
+        pids.append(proc.pid)
+        return proc
 
     def failed(root, name, value, token):
         if name.endswith("-started.json"):
@@ -298,8 +305,19 @@ def test_post_spawn_receipt_failure_still_counts_and_kills_process(wave, tmp_pat
         return original(root, name, value, token)
 
     monkeypatch.setattr(launcher, "_persist", failed)
-    report = run(wave, tmp_path, mode="timeout")
-    assert report["status"] == "stopped" and report["cli_launch_count"] == 1
+    monkeypatch.setattr(launcher.subprocess, "Popen", recording_popen)
+    try:
+        report = run(wave, tmp_path, mode="timeout")
+        assert report["status"] == "stopped" and report["cli_launch_count"] == 1
+        assert len(pids) == 1
+        with pytest.raises(ProcessLookupError):
+            os.killpg(pids[0], 0)
+    finally:
+        for pid in pids:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_whole_wave_deadline_stops_without_launch(wave, tmp_path):
