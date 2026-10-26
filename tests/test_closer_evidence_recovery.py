@@ -162,7 +162,8 @@ class LogGitHub:
         self.snap, self.reads = snap, []
         self.wrong_head, self.wrong_pr = wrong_head, wrong_pr
 
-    def api(self, endpoint):
+    def api(self, endpoint, *, method="GET", fields=None):
+        assert method == "GET" and fields is None
         self.reads.append(endpoint)
         if "/jobs/" in endpoint:
             return {"id": 88, "run_id": 7}
@@ -342,6 +343,14 @@ def test_reporting_failure_does_not_repost_or_change_recovered_case(tmp_path, fa
         assert len(record["cases"]) == 2
 
 
+def inert_caller(tmp_path, monkeypatch):
+    """Use the shared real broker/receipt fixture, never invent an origin."""
+    import test_closer_dispatcher as runtime
+
+    controlled = runtime.controlled_world.__wrapped__(tmp_path, monkeypatch)
+    return runtime.InertCaller(controlled, monkeypatch)
+
+
 def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, causes=None):
     import time
 
@@ -404,15 +413,7 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
     prep = readiness_tests.prepared(tmp_path, snap, packet)
     callbacks, calls, refreshes = {}, [], []
     backend = runtime.closer(tmp_path, snap, apply=True, workers=True)
-    backend.campaign_admission = lambda *_a: {"allowed": True, "timeout": 60}
-    monkeypatch.setattr(
-        closer_pipeline, "run_pipeline", lambda *_a, **kw: callbacks.update(kw) or {"targets": {}}
-    )
-    monkeypatch.setattr(
-        dispatcher,
-        "_pipeline_low_route",
-        lambda **kw: ({"agent": "gemini", "profile_id": "offline-low", "pools": []}, "available"),
-    )
+    caller = inert_caller(tmp_path, monkeypatch)
     monkeypatch.setattr(dispatcher, "GitHub", lambda **_kw: backend.gh)
 
     def offload(_agent, prompt, **_kw):
@@ -452,7 +453,7 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
                 "findings": [],
                 "decision": {"criteria": []},
             }
-        return {"exit": 0, "run_id": "offline-" + str(len(calls)), "output": json.dumps(response)}
+        return caller.response({"exit": 0, "output": json.dumps(response)}, _agent, prompt, **_kw)
 
     monkeypatch.setattr(transport, "offload", offload)
 
@@ -476,7 +477,29 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
     args = SimpleNamespace(
         state=str(tmp_path / "state.json"), shadow=False, max_workers=1, evidence_recovery=True
     )
-    dispatcher._run_staged_pipeline(args, [snap["target"]], backend, time.time() + 120)
+
+    def invoke(stage, target, context):
+        observed = {}
+
+        def execute(_path, _targets, **owned):
+            observed["result"] = owned[stage](target, context)
+            return {"targets": {target: observed["result"]}}
+
+        # The callback executes while the genuine CLI-owned context and scoped
+        # lease are alive. Reentry reopens the same private state/recovery store.
+        with monkeypatch.context() as local:
+            local.setattr(closer_pipeline, "run_pipeline", execute)
+            local.setattr(dispatcher, "GitHub", lambda **_kw: backend.gh)
+            caller.staged(args, [target], backend, time.time() + 120)
+        return observed["result"]
+
+    callbacks.update(
+        {
+            stage: (lambda target, context, stage=stage: invoke(stage, target, context))
+            for stage in ("interpret", "exception", "act")
+        }
+    )
+    callbacks["_inert_caller"] = caller
     return (
         callbacks,
         {"prepare": prep, "deadline": time.time() + 100, "revision": snap["revision"]},
@@ -494,6 +517,19 @@ def test_real_dispatcher_collects_then_rescreens_and_reenters_same_closer(tmp_pa
     assert result["evidence_recovery"]["outcome"] == "recovered"
     assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
     assert not result.get("accepted") and result["authority"] is False
+    actual_runs = callbacks["_inert_caller"].results
+    assert len(actual_runs) == 2
+    for actual in actual_runs:
+        reference = actual["provider_result_ref"]
+        path = Path(reference["path"])
+        assert path.resolve().is_relative_to(tmp_path.resolve())
+        raw = path.read_bytes()
+        assert reference["sha256"] == hashlib.sha256(raw).hexdigest()
+        retained = json.loads(raw)["result"]
+        assert retained["run_id"] == actual["run_id"]
+        assert retained["data_only_origin"] == actual["data_only_origin"]
+        assert actual["data_only_origin"]["process_observation"]["cleanup_terminal"] is True
+        assert json.loads(actual["data_only_origin"]["native_json"])["type"] == "result"
 
 
 def test_real_dispatcher_retains_no_progress_and_does_not_buy_another_collection(
@@ -607,11 +643,15 @@ def test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads(
         }
         if len(model_calls) == 1:
             response["evidence_requests"] = [request]
-        return {
-            "exit": 0,
-            "run_id": "extra-" + str(len(model_calls)),
-            "output": json.dumps(response),
-        }
+        return callbacks["_inert_caller"].response(
+            {
+                "exit": 0,
+                "output": json.dumps(response),
+            },
+            _agent,
+            prompt,
+            **_kwargs,
+        )
 
     monkeypatch.setattr(transport, "offload", offload)
     result = callbacks["interpret"](snap["target"], context)
@@ -704,11 +744,15 @@ def test_partial_log_progress_is_kept_and_only_unresolved_job_is_retried(tmp_pat
         }
         if len(model_calls) == 1:
             proposal["evidence_requests"] = requests
-        return {
-            "exit": 0,
-            "run_id": "partial-" + str(len(model_calls)),
-            "output": json.dumps(proposal),
-        }
+        return callbacks["_inert_caller"].response(
+            {
+                "exit": 0,
+                "output": json.dumps(proposal),
+            },
+            _agent,
+            prompt,
+            **_kwargs,
+        )
 
     monkeypatch.setattr(transport, "offload", offload)
     first = callbacks["interpret"](snap["target"], context)
@@ -1054,27 +1098,29 @@ def test_related_collector_wording_cannot_confirm_an_unrelated_root(tmp_path, bo
 
 @pytest.mark.parametrize("failure", ["routing", "deadline"])
 def test_assessment_failure_cannot_overwrite_successful_recovery(tmp_path, monkeypatch, failure):
-    import dispatcher as transport
-
     callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
     target = context["prepare"]["snapshot"]["target"]
-    original = transport.offload
+    original = dispatcher._pipeline_low_route
+    routes = []
 
-    def fail_assessment(agent, prompt, **kwargs):
-        if "gap-directed second-pass" not in prompt:
+    def fail_assessment(**kwargs):
+        routes.append(kwargs)
+        if len(routes) > 1:
             if failure == "deadline":
                 raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
             raise RuntimeError("low provider capacity snapshot is stale or unavailable")
-        return original(agent, prompt, **kwargs)
+        return original(**kwargs)
 
-    monkeypatch.setattr(transport, "offload", fail_assessment)
+    # A selector/read failure is confirmed before allocation or invocation.
+    # Throwing from an invoked offload cannot prove the provider never started.
+    monkeypatch.setattr(dispatcher, "_pipeline_low_route", fail_assessment)
     with pytest.raises((RuntimeError, dispatcher.RoundDeadlineExhausted)):
         callbacks["interpret"](target, context)
     records = list((tmp_path / "state.json.evidence" / "recovery").glob("*.json"))
     latest = json.loads(records[0].read_text())["latest"]
     assert latest["outcome"] == "recovered"
     assert latest["prepare"]["packet_ref"] != context["prepare"]["packet_ref"]
-    monkeypatch.setattr(transport, "offload", original)
+    monkeypatch.setattr(dispatcher, "_pipeline_low_route", original)
     result = callbacks["interpret"](target, {**context, "prepare": latest["prepare"]})
     assert result["classification"] == "uncertain"
     assert len(calls) == 2 and refreshes == [{"diff_files"}]
@@ -1182,8 +1228,9 @@ def test_deadline_raised_after_provider_invocation_remains_held(tmp_path, monkey
     target = context["prepare"]["snapshot"]["target"]
     started = []
 
-    def uncertain(*_args, **_kwargs):
+    def uncertain(agent, prompt, **kwargs):
         started.append(True)
+        callbacks["_inert_caller"].response({"_native_mode": "uncertain"}, agent, prompt, **kwargs)
         raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
 
     monkeypatch.setattr(transport, "offload", uncertain)

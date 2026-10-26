@@ -9,6 +9,8 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from closer_inert_dispatcher_support import InertCaller
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import closer_dispatcher as d
 import closer_frontier_policy as frontier_policy
@@ -21,10 +23,11 @@ SOURCE = "owner/repo#2"
 HEAD = "a" * 40
 BASE = "b" * 40
 PROFILE = "claude-sonnet-5-5-low"
+controlled_world = _controlled_world
 
 
 @pytest.fixture
-def native_world(tmp_path, monkeypatch):
+def native_world(tmp_path, monkeypatch, request):
     """Real CLI/backend/registry/coordinator; synthetic role and transport admission."""
     from closer_role_support import install_synthetic_role_verdict
 
@@ -122,16 +125,20 @@ def native_world(tmp_path, monkeypatch):
 
     monkeypatch.setattr(d.gh_capacity, "gh_run", github_transport)
     monkeypatch.setattr(d.gh_capacity, "throttle", lambda *_a, **_kw: {"action": "allow"})
-    monkeypatch.setattr(d.Closer, "campaign_admission", lambda *_a, **_kw: {"allowed": True})
-    import adapters
-
-    monkeypatch.setattr(
-        adapters,
-        "data_only_problem",
-        lambda agent, mode="assess": (
-            None if agent == "claude" and mode == "assess" else "unsupported"
-        ),
-    )
+    # Re-enable the real qualification, launch and receipt validators after the
+    # historical quarantine fixture is constructed. Only the executable/auth
+    # inputs are synthetic; the broker runs the physical inert native emitter.
+    # Keep this exported fixture usable when imported alone. If the caller
+    # also exposes controlled_world, reuse that pytest instance so auth/process
+    # observations stay shared; otherwise construct the same private fixture.
+    try:
+        controlled = request.getfixturevalue("controlled_world")
+    except pytest.FixtureLookupError as error:
+        if error.argname != "controlled_world":
+            raise
+        controlled = _controlled_world.__wrapped__(tmp_path, monkeypatch)
+    inert_caller = InertCaller(controlled, monkeypatch)
+    inert_caller.temporary_campaign_guard()
     profile = execution_profiles.get_profile(PROFILE)
     report = {
         "generated_at": time.time(),
@@ -171,8 +178,9 @@ def native_world(tmp_path, monkeypatch):
                     deadline=time.time(),
                 ):
                     pytest.fail("native reasoning did not hold the real shared pool")
-        resources.finite_pool_no_start()  # Synthetic transport spawns no provider process.
-        return {"exit": 0, "run_id": "synthetic-reasoning-only", "output": json.dumps(response)}
+        return inert_caller.response(
+            {"exit": 0, "output": json.dumps(response)}, agent, prompt, **kwargs
+        )
 
     monkeypatch.setattr(dispatcher, "offload", provider)
     import closer_queue
@@ -206,6 +214,7 @@ def native_world(tmp_path, monkeypatch):
         frontier=frontier,
         report=report,
         response=response,
+        inert_caller=inert_caller,
     )
 
 
@@ -237,23 +246,26 @@ def protected_unchanged(w):
     assert w.events["effect"] == 0
 
 
-def test_reasoning_with_valid_incomplete_evidence_reports_gaps_without_pass(native_world, capsys):
+def test_missing_base_retains_evidence_gap_without_starting_controlled_model(native_world, capsys):
     w = native_world
     w.snapshot["base"] = None
     w.response.update(
         classification="uncertain", substantive_needs=["base commit and raw diff are unavailable"]
     )
-    _code, _result = invoke(w, capsys)
-    assert w.events["provider"] == 1
-    prompt = w.events["prompts"][0]
-    mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
-        "mandatory"
-    ]
-    context = mandatory["data_only_evidence"]
-    assert context["readiness"]["ready"] is False
-    assert context["readiness"]["gaps"]
-    assert context["sections"]["source"]["content_supplied"] is True
-    assert "No file, shell, network, MCP or delegated tools" in prompt
+    _code, result = invoke(w, capsys)
+    # A missing base cannot bind the reviewed controlled execution identity.
+    # Preserve the genuine unknown evidence instead of inventing a base merely
+    # to keep the former fake-provider invocation count positive.
+    assert w.events["provider"] == 0
+    shard = resources.shard_dir(resources.scoped_root(w.ledger), TARGET) / "state.json"
+    state = json.loads(shard.read_text())
+    row = state["frontiers"][w.frontier["frontier_id"]]["items"][TARGET]
+    assert row["status"] != "completed", result
+    assert "delivery:base_missing" in shard.read_text()
+    assert (
+        "reviewed controlled execution contract or original lease unavailable" in shard.read_text()
+    )
+    assert "unsupported_assessment_tool_boundary" in shard.read_text()
     protected_unchanged(w)
 
 
