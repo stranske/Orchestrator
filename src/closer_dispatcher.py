@@ -909,6 +909,108 @@ def _native_pending_ci_snapshot(prep, target):
         return None
 
 
+def _native_complete_snapshot(prep, target):
+    """Authenticate observation of an already closed issue, never acceptance."""
+    import closer_finite_reentry as reentry
+
+    try:
+        proposal = prep.get("proposal") or {}
+        compact = prep.get("snapshot") or {}
+        if (
+            prep.get("remote_fresh") is not True
+            or prep.get("finite_binding_changed")
+            or proposal.get("action") != "complete"
+            or proposal.get("eligible") is not False
+            or proposal.get("reason") != "already closed; acceptance is separately recorded"
+        ):
+            return None
+        snapshot, snapshot_sha = reentry._read(prep["snapshot_ref"]["path"])
+        packet, packet_sha = reentry._read(prep["packet_ref"]["path"])
+        sections = packet.get("sections") or {}
+        sources = snapshot.get("sources")
+        delivery = snapshot.get("delivery_links") or {}
+        readiness = (prep.get("collection_result") or {}).get("readiness") or {}
+        stamp = snapshot.get("observed_at")
+        if not (
+            snapshot_sha == prep["snapshot_ref"].get("sha256")
+            and packet_sha == prep["packet_ref"].get("sha256")
+            and closer_evidence.validate_packet(packet)
+            and snapshot.get("target") == target == compact.get("target")
+            and TARGET.fullmatch(str(target))
+            and snapshot.get("revision") == prep.get("revision") == compact.get("revision")
+            and isinstance(prep.get("revision"), str)
+            and bool(prep["revision"])
+            and all(
+                snapshot.get(key) == compact.get(key) for key in ("head", "base", "kind", "state")
+            )
+            and snapshot.get("kind") == "issue"
+            and snapshot.get("state") == "CLOSED"
+            and all(
+                snapshot.get(key) is None
+                for key in (
+                    "head",
+                    "base",
+                    "merge",
+                    "pr_target",
+                    "verifier",
+                    "checks",
+                    "pending_check_run_ids",
+                    "pending_check_head",
+                )
+            )
+            and not snapshot.get("labels")
+            and snapshot.get("_local_cached") is not True
+            and type(stamp) in (int, float)
+            and 0 <= time.time() - stamp <= 120
+            and delivery.get("complete") is True
+            and delivery.get("status") == "missing"
+            and delivery.get("candidates") == []
+            and delivery.get("acceptance_authority") is False
+            and not delivery.get("ancestry_proofs")
+            and not delivery.get("candidate_metadata")
+            and isinstance(sources, list)
+            and len(sources) == 1
+            and sources[0].get("target") == target
+            and sources[0].get("kind") == "issue"
+            and sources[0].get("state") == "closed"
+            and not sources[0].get("labels")
+            and sections.get("source", {}).get("status") == "complete"
+            and not sections.get("prior_dispositions", {}).get("content")
+            and packet.get("target") == target
+            and packet.get("head") is None
+            and packet.get("base") is None
+            and packet.get("capture_revision") == prep["revision"]
+            and packet.get("collection_action") == "complete"
+            and packet.get("producer_sha256") == prep.get("producer_sha256")
+            and packet.get("bindings", {}).get("source") == closer_evidence._hash(sources)
+            and readiness.get("action") == "complete"
+            and readiness.get("mode") == "deterministic"
+            and readiness.get("ready") is True
+            and readiness.get("gaps") == []
+            and closer_evidence.collection_summary(packet, prep["packet_ref"])
+            == prep.get("collection_result")
+            and all(
+                not record.get(key)
+                for record in (prep, snapshot)
+                for key in (
+                    "provider_outcome_uncertain",
+                    "outcome_uncertain",
+                    "no_effect",
+                    "advisory_only",
+                    "recovery_barrier",
+                    "findings",
+                    "substantive_needs",
+                    "security_concern",
+                    "conflicting_authority",
+                )
+            )
+        ):
+            return None
+        return snapshot
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return None
+
+
 def _native_remote_footprint(snapshot, action):
     """Positive capability for native effects that never use a product checkout."""
     if action in {"post_merge_verify", "initiate_verify", "respond_review"}:
@@ -5187,8 +5289,38 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             False,
         )
 
+    def complete_wait(target, context):
+        prep = context.get("prepare") or {}
+        snapshot = _native_complete_snapshot(prep, target)
+        if snapshot is None:
+            return False
+        if backend.select(snapshot)[:3] != (
+            "complete",
+            "already closed; acceptance is separately recorded",
+            False,
+        ):
+            return False
+        if finite_frontier is not None:
+            from closer_frontier_policy import action_identity
+
+            frozen = finite_frontier["bindings"][target]
+            return frozen == {
+                "revision": snapshot["revision"],
+                "action_id": action_identity(
+                    target,
+                    snapshot["revision"],
+                    "complete",
+                    backend.operation_binding(target, snapshot),
+                ),
+            }
+        return True
+
     def native_wait(target, context):
-        return accepted_request_wait(target, context) or pending_ci_wait(target, context)
+        return (
+            accepted_request_wait(target, context)
+            or pending_ci_wait(target, context)
+            or complete_wait(target, context)
+        )
 
     def resource_keys(target, context):
         import closer_resources
