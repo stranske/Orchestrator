@@ -20,9 +20,11 @@ import closer_pipeline
 
 strong_context = _strong_context
 
-# Recorded from unmodified ccc6b951 before extraction. Keys are the flags
+# Prospective source-renderer fixtures for closer-classification-prompt/v3 at
+# 98f25636 (required codepatch kind). Keys are the flags
 # run_drift/data_only/recovery_enabled/collection_mode in that order. The large
 # Unicode optional payload exercises the unchanged 9,000-character projection.
+# Captured research prompts/results and response fixtures are separate history.
 _INPUTS = {
     "prompt_mandatory": {
         "target": "offline/repo#12",
@@ -94,68 +96,68 @@ _INPUTS = {
 
 _GOLDEN = {
     "0000": {
-        "sha256": "995cdf67b53299785c6e4ff6ce0b057085699be95903dcef1ce9f2e6920746bb",
-        "bytes": 17380,
+        "sha256": "a2dcaa65a17aa7e6a0e14b6f43f6d78503999d61429dde5d5cd40a9e946ccf45",
+        "bytes": 17398,
     },
     "0001": {
-        "sha256": "995cdf67b53299785c6e4ff6ce0b057085699be95903dcef1ce9f2e6920746bb",
-        "bytes": 17380,
+        "sha256": "a2dcaa65a17aa7e6a0e14b6f43f6d78503999d61429dde5d5cd40a9e946ccf45",
+        "bytes": 17398,
     },
     "0010": {
-        "sha256": "ff33bf7bed40818232c850c4a25ae9330364c54d1a3f16d482fb227204eea859",
-        "bytes": 18140,
+        "sha256": "afaab2450f9ffaa9691759e72412d636a46e4819b808140926a7674e32ee76f3",
+        "bytes": 18158,
     },
     "0011": {
-        "sha256": "93d3e8febec1090b38a59f0e6c6febdf9e71ea34fb957753feb4a11136856a8d",
-        "bytes": 19183,
+        "sha256": "82bec381bc4d38a4dd9071df76be5cb0713767fd6964fe62ac827360b022aa69",
+        "bytes": 19201,
     },
     "0100": {
-        "sha256": "85eedf556512b0760a7437142c839661f515faac2bbe671f4413ef57870e6ab2",
-        "bytes": 17659,
+        "sha256": "46c11367fffe7c26799205c12c5002d9c786079f8de4f272609745ac5f87af00",
+        "bytes": 17677,
     },
     "0101": {
-        "sha256": "85eedf556512b0760a7437142c839661f515faac2bbe671f4413ef57870e6ab2",
-        "bytes": 17659,
+        "sha256": "46c11367fffe7c26799205c12c5002d9c786079f8de4f272609745ac5f87af00",
+        "bytes": 17677,
     },
     "0110": {
-        "sha256": "0aeca7b96111549dca8da910357b8b4f888baa0fdc63183519bb5c556aaae18d",
-        "bytes": 18419,
+        "sha256": "cc959d093b13ed1aa018a76b1496b71ec403347ca22aac28417f50a9155562f9",
+        "bytes": 18437,
     },
     "0111": {
-        "sha256": "0f9e8a21bf137d9fbe686d7e2eb0f42e7950db8960e42346bd24b4f3cf8ea9f0",
-        "bytes": 19462,
+        "sha256": "3e9bc7010568415e9d8997764c20157059354b211631b42df215f6a384e7a058",
+        "bytes": 19480,
     },
     "1000": {
-        "sha256": "95659bcbada273e2d765bc7c9429136a7680498fdc147fb82d70eb4ffbd27148",
-        "bytes": 17783,
+        "sha256": "a15344dd6c7fdd5324d72b6797da5e57244d4ec052aeaf94d42518c62d1ff2b5",
+        "bytes": 17801,
     },
     "1001": {
-        "sha256": "95659bcbada273e2d765bc7c9429136a7680498fdc147fb82d70eb4ffbd27148",
-        "bytes": 17783,
+        "sha256": "a15344dd6c7fdd5324d72b6797da5e57244d4ec052aeaf94d42518c62d1ff2b5",
+        "bytes": 17801,
     },
     "1010": {
-        "sha256": "702daf220654dce893c7b1393396976c4ee838e9350a999d07cb7531c5552b03",
-        "bytes": 18543,
+        "sha256": "678a95cce12f46eefc839d433d6fab947b736d1c4b4c43995b9130f621e52c51",
+        "bytes": 18561,
     },
     "1011": {
-        "sha256": "7baf33b81d2bed31c28b3ed480d992426993a2b1d7322498bdc046ce83a17754",
-        "bytes": 19586,
+        "sha256": "53e8abf11c42ef1a143a3f3ca7ad04fa4ef74dc5b5de1dba2ee54be91483775b",
+        "bytes": 19604,
     },
     "1100": {
-        "sha256": "0018d58ff8301d10031fe1e5249e369486f3eb431e8b2b0b415b708affc28ef2",
-        "bytes": 18062,
+        "sha256": "2594b92347df4223c6b99d93f1b8f3ca0de424664b1a2a3303472a959c564d22",
+        "bytes": 18080,
     },
     "1101": {
-        "sha256": "0018d58ff8301d10031fe1e5249e369486f3eb431e8b2b0b415b708affc28ef2",
-        "bytes": 18062,
+        "sha256": "2594b92347df4223c6b99d93f1b8f3ca0de424664b1a2a3303472a959c564d22",
+        "bytes": 18080,
     },
     "1110": {
-        "sha256": "f3e6b683eea2e67699349f0206f88d7dc41be672b87b1c901bf40313fb9436d4",
-        "bytes": 18822,
+        "sha256": "da77398a17f8340fc19d7995cc9cfe4ff410c2f49593114708c0ccff398d2b74",
+        "bytes": 18840,
     },
     "1111": {
-        "sha256": "fd1986897c0785ea93f8f67ce1e11f96ad06dfc5fd1ba8b9fb7e8992e29b8524",
-        "bytes": 19865,
+        "sha256": "70dfdbf34768262b301ae62a813f3d305ec85f681ee22e2381b1a7d3fd1ef481",
+        "bytes": 19883,
     },
 }
 
@@ -165,7 +167,8 @@ def render_inputs():
 
 
 @pytest.mark.parametrize("flags", list(_GOLDEN))
-def test_all_original_prompt_branches_are_byte_identical(flags):
+def test_all_prospective_v3_prompt_branches_match_golden(flags):
+    assert contracts.CLASSIFICATION_PROMPT_VERSION == "closer-classification-prompt/v3"
     run_drift, data_only, recovery_enabled, collection_mode = map(lambda value: value == "1", flags)
     prompt = contracts.render_classification_prompt(
         **render_inputs(),
