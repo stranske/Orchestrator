@@ -248,6 +248,37 @@ def test_strict_final_requires_one_semantic_object(text):
         c.strict_final(text)
 
 
+def test_large_runtime_manifest_is_internal_not_a_model_response(fixture, tmp_path):
+    plan, _, _ = fixture
+    imports = Path(plan.manifest.import_roots[0])
+    for index in range(600):
+        (imports / f"module_{index:04d}.py").write_text("# inert pinned import\n")
+    manifest = c.snapshot_runtime_manifest(
+        interpreter=Path(sys.executable),
+        import_roots=(imports,),
+        support_files=(Path(c.__file__), Path(__file__)),
+        origin="offline_fixture",
+    )
+    large = c.prepare_vibe_candidate(
+        requested_model=c.MODEL,
+        requested_effort=c.EFFORT,
+        manifest=manifest,
+        private_root=tmp_path / "large-private",
+    )
+    assert len(manifest.trees[0].files) == 601
+    assert len(large.contract_json.encode()) > 65536
+    assert large.to_dict()["manifest_sha256"] == c.digest(large.to_dict()["manifest"])
+    with pytest.raises(ValueError, match="oversized"):
+        c.strict_final(large.contract_json)
+
+
+@pytest.mark.parametrize("text", ['{"a":1,"a":2}', '{"a":NaN}', '{"a":1e999}', "[]"])
+def test_internal_contract_still_rejects_invalid_json(fixture, text):
+    plan, _, _ = fixture
+    with pytest.raises(ValueError):
+        replace(plan, contract_json=text).to_dict()
+
+
 def test_fixed_model_effort_and_installed_import_roots_cannot_be_overridden(fixture, tmp_path):
     plan, _, _ = fixture
     with pytest.raises(ValueError):

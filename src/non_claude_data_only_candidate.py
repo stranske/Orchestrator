@@ -94,6 +94,11 @@ def digest(value: Any) -> str:
 def strict_final(text: str) -> dict:
     if not isinstance(text, str) or len(text.encode()) > 65536:
         raise ValueError("final text absent or oversized")
+    return _strict_object(text)
+
+
+def _strict_object(text: str) -> dict:
+    """Parse an internal object without imposing a model-response byte budget."""
 
     def unique(pairs):
         result = {}
@@ -341,7 +346,7 @@ class CandidatePlan:
     contract_json: str
 
     def to_dict(self) -> dict:
-        return strict_final(self.contract_json)
+        return _strict_object(self.contract_json)
 
 
 def prepare_vibe_candidate(
