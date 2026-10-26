@@ -2,6 +2,7 @@
 
 No result/origin/qualification validator is replaced. The sole executable is a
 fixture-generated native-result emitter; ps is limited to this test/its children.
+The fixture's resolved Core source may answer one exact read-only HEAD query.
 """
 
 import copy
@@ -73,9 +74,32 @@ def fixture_api_transport(api, argv, *, read_text_fn=None, **kwargs):
     return 0, body  # The unchanged source GitHub.api validates body/status/type.
 
 
+def fixture_core_head_binding():
+    """Bind the existing _core fixture's physical resolver, never arbitrary Git."""
+    from closer_core_support import core_source
+
+    supplied = os.environ.get("CLOSER_CORE_PACKAGE")
+    source = Path(supplied).expanduser() if supplied else core_source()
+    try:
+        source = source.resolve(strict=True)
+    except OSError:
+        return None, None
+    if (
+        not (source / "scripts/closer_runtime.py").is_file()
+        or (source / "closer-core-package.json").is_file()
+        or not (source / ".git").exists()
+    ):
+        return None, None
+    expected = os.environ.get("CLOSER_CORE_SOURCE_REVISION")
+    if expected is not None:
+        assert len(expected) == 40 and all(ch in "0123456789abcdef" for ch in expected)
+    return ("git", "-C", str(source), "rev-parse", "HEAD"), expected
+
+
 class InertCaller:
     def __init__(self, world, monkeypatch):
         self.world, self.patch = world, monkeypatch
+        self.core_head_query, self.core_head_revision = fixture_core_head_binding()
         self.results, self.prompts = [], []
         self.timeout_seconds = 45
         self.children = {os.getpid()}
@@ -162,9 +186,14 @@ class InertCaller:
         )
 
     def allowed(self, command):
+        if not isinstance(command, (list, tuple)) or not all(
+            isinstance(arg, str) for arg in command
+        ):
+            return False
         command = list(command)
         return command and (
-            command[0] == str(self.world.cli)
+            (self.core_head_query is not None and tuple(command) == self.core_head_query)
+            or command[0] == str(self.world.cli)
             or (
                 Path(command[0]).name == "ps"
                 and command[1:2] == ["-p"]
@@ -175,16 +204,37 @@ class InertCaller:
             )
         )
 
+    def subprocess_allowed(self, command, options):
+        if options.get("shell", False) is not False or not self.allowed(command):
+            return False
+        if self.core_head_query is not None and tuple(command) == self.core_head_query:
+            # No alternate executable, cwd or injected Git environment may turn
+            # the exact metadata query into a different repository/operation.
+            return all(options.get(name) is None for name in ("cwd", "env", "executable"))
+        return True
+
     def popen(self, command, **kwargs):
-        assert not kwargs.get("shell") and self.allowed(command), ("forbidden subprocess", command)
+        assert self.subprocess_allowed(command, kwargs), ("forbidden subprocess", command)
         child = REAL_POPEN(command, **kwargs)
         if command[0] == str(self.world.cli):
             self.children.add(child.pid)
         return child
 
     def run(self, command, **kwargs):
-        assert self.allowed(command), ("forbidden subprocess", command)
-        return REAL_RUN(command, **kwargs)
+        assert self.subprocess_allowed(command, kwargs), ("forbidden subprocess", command)
+        result = REAL_RUN(command, **kwargs)
+        if (
+            self.core_head_query is not None
+            and tuple(command) == self.core_head_query
+            and self.core_head_revision is not None
+            and result.returncode == 0
+            and result.stdout is not None
+        ):
+            observed = result.stdout
+            if isinstance(observed, bytes):
+                observed = observed.decode("ascii")
+            assert observed.strip() == self.core_head_revision, "fixture Core HEAD differs from pin"
+        return result
 
     def response(self, result, agent, prompt, **kwargs):
         assert agent == "claude" and kwargs["profile_id"] in (LOW, SECOND)
@@ -281,11 +331,18 @@ class InertCaller:
         root = self.world.root
         assert root.is_absolute() and root.resolve(strict=True) == root
         home = root / "private-home"
-        assert Path(os.environ["HOME"]).resolve() == home
+        assert Path(os.environ["HOME"]) == home and home.resolve() == home
         account_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
-        assert root != account_home and not root.is_relative_to(account_home)
+        # CI's legitimate private pytest roots can be below account-home/work.
+        # Forbid the account root/ancestors and canonical live settings instead.
+        assert root != account_home and not account_home.is_relative_to(root)
+        assert home != account_home
         guard = home / ".codex/automations/model-allocation/assess.py"
-        assert guard.is_relative_to(root) and not guard.is_relative_to(account_home)
+        assert guard.is_relative_to(root)
+        for name in (".codex", ".config", ".aws", ".agents", ".ssh", ".gnupg"):
+            canonical = account_home / name
+            for protected in (canonical, canonical.resolve()):
+                assert not any(path.is_relative_to(protected) for path in (root, home, guard))
         current = Path(guard.anchor)
         for component in guard.parts[1:]:
             current = current / component
