@@ -37,6 +37,9 @@ def native_world(tmp_path, monkeypatch):
     monkeypatch.setenv("HANDOFF_DIR", str(root / "private-handoff"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(root / "private-orch"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(root / "private-runtime"))
+    # Native attribution uses this explicit override ahead of the runtime path.
+    # Never contend with the enclosing mirror verifier's admission ledger.
+    monkeypatch.setenv("ORCH_STORAGE_STATE_DIR", str(root / "private-storage-ledger"))
     monkeypatch.setenv("ORCH_FLEET_ROOT", str(root / "empty-fleet"))
     raw, ledger, held = original_state(root)
     ad = advertisement(ledger, "pr:" + TARGET, target=held[0])
