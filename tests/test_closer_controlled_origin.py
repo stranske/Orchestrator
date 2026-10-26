@@ -713,6 +713,16 @@ def test_actual_registered_pipeline_missing_contract_stops_before_broker(
     import dispatcher
 
     world = native_world
+    # native_world now installs complete, hash-bound inert launch records.
+    # Deliberately remove only execution-contract authority for this negative;
+    # the real role qualification must still pass independently.
+    records = copy.deepcopy(roles.ROLE_QUALIFICATIONS)
+    for record in records.values():
+        record.pop("execution_limits", None)
+        record.pop("production_model_contract", None)
+    monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", records)
+    profile = execution_profiles.get_profile("claude-sonnet-5-5-low")
+    assert roles.is_runtime_qualified(profile, roles.BOUNDED_CLASSIFICATION)
     monkeypatch.setattr(
         dispatcher,
         "offload",
