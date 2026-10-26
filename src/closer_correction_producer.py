@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import time
 from pathlib import Path
 
 import closer_correction_classification as contract
@@ -124,6 +125,74 @@ def retain(root, value, suffix):
     return ref
 
 
+def compact_actual(result, *, profile_id):
+    """Accounting-only identity from an independently re-read original result.
+
+    No nested proof or semantic/acceptance verdict is copied into this envelope.
+    """
+    return {
+        **{
+            key: result[key]
+            for key in (
+                "run_id",
+                "exit",
+                "raw_exit",
+                "process_started",
+                "outcome_uncertain",
+                "retry_safe",
+            )
+            if key in result
+        },
+        "profile_id": profile_id,
+        **(
+            {"provider_result_ref": result["provider_result_ref"]}
+            if result.get("provider_result_ref")
+            else {}
+        ),
+    }
+
+
+def original_accounting_actual(result, *, profile_id, basis, frontier, receipt_root):
+    """Read uncertain transport custody for counting only, never native authority.
+
+    The successful semantic validator deliberately rejects uncertain outcomes.
+    Accounting may still identify an original physical invocation; missing or
+    mismatched custody exposes no discoverable run envelope.
+    """
+    import closer_dispatcher as closer
+
+    try:
+        ref = result.get("provider_result_ref")
+        receipt = closer._read_controlled_receipt(ref, receipt_root)
+        retained = receipt["result"]
+        origin = retained["data_only_origin"]
+        if not (
+            receipt.get("schema") == "offload-provider-result/v1"
+            and receipt.get("full_result_retained") is True
+            and receipt.get("run_id") == retained.get("run_id") == result.get("run_id")
+            and isinstance(result.get("run_id"), str)
+            and result["run_id"]
+            and receipt.get("profile_id") == origin.get("profile_id") == profile_id
+            and receipt.get("agent") == "claude"
+            and origin.get("schema") == "closer-data-only-runtime-origin/v1"
+            and origin.get("source") == "existing-dispatcher-observed-supervisor"
+            and origin.get("task_type") == TASK
+            and origin.get("finite_frontier_target") == basis["target"]
+            and origin.get("finite_frontier_id") == frontier["frontier_id"]
+            and retained.get("process_started") is True
+            and retained.get("output") == result.get("output")
+            and origin == result.get("data_only_origin")
+            and receipt.get("retained_result_sha256")
+            == hashlib.sha256(json.dumps(retained, sort_keys=True).encode()).hexdigest()
+        ):
+            return None
+        # Original transport uncertainty remains uncertainty; this read grants
+        # neither the strict success proof nor semantic promotion.
+        return compact_actual({**retained, "provider_result_ref": ref}, profile_id=profile_id)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def produce(
     *,
     original_request,
@@ -154,6 +223,7 @@ def produce(
         )
         # Request retention happens before submission. Failure creates no effect.
         request_ref = retain(root, request, "correction-request.json")
+        started = time.monotonic()
         actual = closer._controlled_offload(
             agent="claude",
             prompt=prompt,
@@ -166,12 +236,60 @@ def produce(
             deadline=deadline,
             mode="assess",
         )
+        elapsed = time.monotonic() - started
+        if isinstance(actual, dict) and actual.get("process_started") is not False:
+            # Execution accounting only. A risk label is not independently
+            # validated quality and does not imply ordinary integration ran.
+            try:
+                import closer_stage_feedback
+
+                closer_stage_feedback.record_stage(
+                    actual,
+                    task_type=TASK,
+                    target=bound_basis["target"],
+                    head=bound_basis["head"],
+                    agent="claude",
+                    profile_id=profile_id,
+                    basis=bound_basis,
+                    elapsed_seconds=elapsed,
+                    validation=None,
+                )
+            except Exception:
+                # Even a broken telemetry implementation cannot replace the
+                # original result, authorize anything or resubmit a provider.
+                pass
         if not isinstance(actual, dict) or actual.get("exit") != 0:
-            return _held(
+            accounting = None
+            if isinstance(actual, dict):
+                if actual.get("process_started") is False:
+                    # Known prestart results may have a generic bookkeeping ID;
+                    # they must never expose a model-run accounting identity.
+                    accounting = {
+                        "exit": actual.get("exit"),
+                        "process_started": False,
+                        "profile_id": profile_id,
+                    }
+                else:
+                    accounting = original_accounting_actual(
+                        actual,
+                        profile_id=profile_id,
+                        basis=bound_basis,
+                        frontier=frontier,
+                        receipt_root=dispatcher.DISPATCH_LOG_DIR,
+                    )
+            held = _held(
                 "controlled correction invocation unavailable or uncertain",
-                actual=actual,
+                actual=accounting,
                 request_ref=request_ref,
             )
+            if isinstance(actual, dict):
+                # Reconciliation diagnostics are not recursively discoverable
+                # model runs and never stand in for a verified actual envelope.
+                held.update(
+                    original_result_ref=actual.get("provider_result_ref"),
+                    original_run_id=actual.get("run_id"),
+                )
+            return held
         return decisions.materialize_selected(
             proof=actual.get("_closer_controlled_proof"),
             run_id=actual.get("run_id"),

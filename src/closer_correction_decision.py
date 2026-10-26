@@ -106,6 +106,7 @@ def materialize_selected(
     import closer_data_only_execution as execution
     import closer_dispatcher as closer
 
+    accounting = None
     try:
         inputs, request, prompt, bound_basis, root = producer.prepare(
             original_request=original_request,
@@ -129,6 +130,7 @@ def materialize_selected(
             == execution.validate_payload(prompt, limits=expected["limits"], kind="prompt")
         ):
             raise DecisionUnavailable("original selected correction task/prompt differs")
+        accounting = producer.compact_actual(result, profile_id=profile_id)
         record = _qualification(proof, profile_id, now=now)
         if closer._read_controlled_receipt(request_ref, root) != request:
             raise DecisionUnavailable("original retained correction request differs")
@@ -159,14 +161,15 @@ def materialize_selected(
             "proof": proof,
             "basis": bound_basis,
             "run_id": run_id,
+            "actual": accounting,
             "retry_safe": False,
         }
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, RecursionError) as error:
-        return producer._held(
-            error,
-            actual={"run_id": run_id, "_closer_controlled_proof": proof},
-            request_ref=request_ref,
-        )
+        held = producer._held(error, actual=accounting, request_ref=request_ref)
+        # Preserve the original proof once for reconciliation/revalidation. An
+        # invalid proof never becomes a discoverable accounting run by itself.
+        held.update(proof=proof, run_id=run_id)
+        return held
 
 
 def materialize(**kwargs):
