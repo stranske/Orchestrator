@@ -31,3 +31,8 @@ The status fixture models the supplied real zero-model `/usage` observation's
 relevant counters: zero turns, zero cost, empty modelUsage. It must fail import as
 a model evaluation. All successful imports still require independent review and
 carry explicit missing confinement, served effort, quota and attribution evidence.
+
+Root corrective review also tested contradictory captures: a local-command marker
+or runner uncertainty/exit wrapper must not override native completed-model
+claims. Only an absent or explicitly false `local_command` marker can proceed;
+wrapper fields must be bound and reviewed outside this native-only importer.

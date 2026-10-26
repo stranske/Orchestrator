@@ -251,3 +251,25 @@ def test_selftest_reports_checked_controls_without_provider_claims(capsys, monke
     assert len(report["checked_assertions"]) >= 8
     assert all(report["checked_assertions"].values())
     assert report["activation"] is False
+
+
+@pytest.mark.parametrize("value", [True, None, "usage", 0, 1])
+def test_local_command_marker_cannot_override_completed_model_claims(native, value):
+    native["local_command"] = value
+    with pytest.raises(ValueError, match="local command marker"):
+        normalize(native)
+
+
+def test_explicit_false_local_command_marker_remains_a_model_candidate(native):
+    native["local_command"] = False
+    assert normalize(native)["status"] == "unverified_imported_capture"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("outcome_uncertain", True), ("retry_safe", False), ("exit", 1), ("exit_code", 1)],
+)
+def test_runner_wrappers_cannot_contradict_native_completed_claims(native, field, value):
+    native[field] = value
+    with pytest.raises(ValueError, match="runner field"):
+        normalize(native)

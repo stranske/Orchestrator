@@ -103,6 +103,8 @@ def normalize_claude_result(
     requested_effort = _label(requested_effort, "requested_effort")
     requested_model = _label(requested_model, "requested_model")
     row = strict_final(text)
+    if "local_command" in row and row["local_command"] is not False:
+        raise ValueError("local command marker cannot establish a model evaluation")
     if (
         row.get("type") != "result"
         or row.get("subtype") != "success"
@@ -128,6 +130,10 @@ def normalize_claude_result(
         "runner_exit",
         "fallback_model",
         "fallbackModel",
+        "outcome_uncertain",
+        "retry_safe",
+        "exit",
+        "exit_code",
     ):
         if key in row:
             raise ValueError(f"unsupported event/fallback/runner field: {key}")
