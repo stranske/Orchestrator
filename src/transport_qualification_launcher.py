@@ -11,9 +11,10 @@ credential renewal remain outside the observable attempt budget.
 Pool integration seam: HeldPoolLease.check(pool_id, run_id) must raise unless the
 caller's original shared pool lease remains held. held_subscription_lease wraps
 the existing canonical root, SHA256(pool) lane and bound=1 pool_slot ownership.
-A finite caller must instead preserve its original reservation and lifecycle
-callbacks; this wrapper is for non-finite external calibration only. finite_pool_current_binding() alone does not prove a
-lane. No fake capacity, quota, subscription debit or lease acquisition is added.
+The existing durable starting/child/uncertain lifecycle fences this external
+calibration identity across supervisor death. These labels grant no production
+frontier or role authority. finite_pool_current_binding() alone does not prove a
+lane. No quota, subscription debit or separate pool is invented.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -92,6 +94,10 @@ class SubscriptionLease:
     active: bool = False
     owner_pid: int = 0
     owner_thread: int = 0
+    frontier_id: str = ""
+    target: str = ""
+    observation: dict[str, Any] | None = None
+    request_started: float = 0.0
 
     def check(self, pool_id: str, run_id: str) -> None:
         if (
@@ -103,6 +109,45 @@ class SubscriptionLease:
         ):
             raise ValueError("original shared subscription lease is not held")
 
+    def prepare(self, run_id: str) -> None:
+        import closer_resources
+
+        self.check(POOL, run_id)
+        self.observation = {
+            "source": "trusted-popen-transport/v1",
+            "run_id": run_id,
+            "agent": "claude",
+            "profile_id": PROFILE,
+            "finite_frontier_id": self.frontier_id,
+            "finite_frontier_target": self.target,
+        }
+        closer_resources.finite_pool_prepare_request(self.observation)
+
+    def started(self, run_id: str, pid: int) -> None:
+        import closer_resources
+
+        psutil = importlib.import_module("psutil")
+
+        self.check(POOL, run_id)
+        if self.observation is None or self.observation["run_id"] != run_id:
+            raise ValueError("durable prelaunch reservation missing")
+        process = psutil.Process(pid)
+        if process.ppid() != os.getpid() or os.getpgid(pid) != pid:
+            raise ValueError("owned child OS identity differs")
+        self.observation.update(
+            pid=pid, process_group=pid, os_started=f"os-create-time:{process.create_time():.9f}"
+        )
+        closer_resources.finite_pool_process_started(self.observation)
+
+    def finished(self, run_id: str, pid: int) -> None:
+        import closer_resources
+
+        self.check(POOL, run_id)
+        if self.observation is None or self.observation["run_id"] != run_id:
+            raise ValueError("durable completion reservation missing")
+        observation = {**self.observation, "pid": pid, "process_group": pid}
+        closer_resources.finite_pool_process_finished(observation)
+
 
 @contextlib.contextmanager
 def held_subscription_lease(
@@ -112,8 +157,10 @@ def held_subscription_lease(
 
     deadline is wall-clock time, matching closer_resources.pool_slot. offline_root
     is only a fixture seam; its minted lease cannot admit NativeRuntime. No quota
-    or charge is inferred. This non-finite wrapper is not a finite reservation.
+    or charge is inferred. Durable lifecycle fields identify this external
+    calibration run; they grant no production frontier or role authority.
     """
+    request_started = time.monotonic()
     import closer_resources
 
     root = (
@@ -123,13 +170,40 @@ def held_subscription_lease(
         / "closer-profile-execution"
     )
     lane = hashlib.sha256(POOL.encode()).hexdigest()
-    lease = SubscriptionLease(run_id, offline_root is not None)
-    with closer_resources.pool_slot(root, lane, 1, deadline=deadline):
+    frontier = "external-supervised-calibration:" + sha(run_id.encode())
+    target = "external-supervised-calibration:" + run_id
+    lease = SubscriptionLease(
+        run_id,
+        offline_root is not None,
+        frontier_id=frontier,
+        target=target,
+        request_started=request_started,
+    )
+    reservation = {
+        "reservation_id": sha(f"{root.resolve()}\0{lane}\0{run_id}".encode()),
+        "frontier_id": frontier,
+        "target": target,
+        "agent": "claude",
+        "profile_id": PROFILE,
+    }
+    with closer_resources.pool_slot(
+        root,
+        lane,
+        1,
+        deadline=min(deadline, time.time()),
+        finite_frontier=True,
+        reservation=reservation,
+    ):
         lease.active, lease.owner_pid, lease.owner_thread = True, os.getpid(), threading.get_ident()
         try:
             yield lease
         finally:
-            lease.active = False
+            # Only an unassigned intent is known not to have spawned. Assigned
+            # starting/uncertain journals survive release/death until absence proof.
+            try:
+                closer_resources.finite_pool_no_start()
+            finally:
+                lease.active = False
 
 
 def sha(data: bytes) -> str:
@@ -220,6 +294,29 @@ def prepare_wave(plan_text: str, prompts_text: str, pins: ReviewPins) -> Prepare
         raise ValueError("planned argv differs from reviewed data-only fence")
     if launch["config_sha256"] != digest(launch["config"]):
         raise ValueError("planned config hash differs")
+    bounds = plan.get("bounds")
+    required_bounds = {
+        "preflight_seconds_max": 120,
+        "max_cli_submissions": 8,
+        "wall_seconds_per_call_max": 45,
+        "per_submission_deadline_seconds": 45,
+        "total_wall_seconds_max": 480,
+        "whole_wave_deadline_seconds": 480,
+        "model_wall_seconds_total_max": 360,
+        "native_max_output_tokens_per_request": 512,
+        "retained_response_bytes_max": 65536,
+        "requested_response_bytes_per_call": 512,
+        "input_bytes_per_call_max": 4096,
+        "total_input_bytes_max": 32768,
+        "outer_retries": 0,
+        "new_paid_usd_max": 0,
+        "payg_allowed": False,
+    }
+    if not isinstance(bounds, dict) or any(
+        type(bounds.get(key)) is not type(expected) or bounds.get(key) != expected
+        for key, expected in required_bounds.items()
+    ):
+        raise ValueError("exact executable plan budgets differ")
     calls = plan["calls"]
     cells = calls["cells"]
     if (
@@ -369,6 +466,7 @@ def actual_launch_binding(
         },
         "controls": dict(CONTROLS),
         "budgets": {
+            "preflight_seconds_max": 120,
             "max_cli_submissions": 8,
             "concurrency": 1,
             "outer_retries": 0,
@@ -431,12 +529,28 @@ def _persist(root: Path, name: str, value: dict, token: str) -> None:
         os.close(directory)
 
 
+def _group_absent(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def _kill_group(proc: subprocess.Popen) -> None:
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    proc.wait(timeout=0.5)
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline:
+        proc.poll()  # reap leader, but never equate that with group absence
+        if proc.returncode is not None and _group_absent(proc.pid):
+            return
+        time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+    raise RuntimeError("owned process-group cleanup absence is unproven")
 
 
 def _capture(
@@ -448,6 +562,7 @@ def _capture(
     deadline: float,
     cap: int,
     on_started: Callable[[int], None],
+    on_finished: Callable[[int], None] = lambda _pid: None,
 ) -> dict:
     """Drain both pipes under one hard retained byte cap; stdin uses nonblocking IO."""
     start = time.monotonic()
@@ -467,10 +582,16 @@ def _capture(
     try:
         on_started(proc.pid)
     except BaseException:
-        _kill_group(proc)
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
-            if pipe is not None:
-                pipe.close()
+        try:
+            _kill_group(proc)
+        finally:
+            try:
+                if proc.poll() is not None and _group_absent(proc.pid):
+                    on_finished(proc.pid)
+            finally:
+                for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                    if pipe is not None:
+                        pipe.close()
         raise
     assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
     captured = {"stdout": bytearray(), "stderr": bytearray()}
@@ -535,8 +656,12 @@ def _capture(
         _kill_group(proc)
         raise
     finally:
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
-            pipe.close()
+        try:
+            if proc.poll() is not None and _group_absent(proc.pid):
+                on_finished(proc.pid)
+        finally:
+            for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                pipe.close()
     return {
         "stdout": bytes(captured["stdout"]),
         "stderr": bytes(captured["stderr"]),
@@ -576,6 +701,28 @@ def _final_check(normalized: dict, cell: dict) -> dict:
     return final
 
 
+@dataclass
+class PreflightBudget:
+    clock: Callable[[], float]
+    used: float = 0.0
+    start: float | None = None
+
+    def resume(self) -> None:
+        self.start = self.clock()
+
+    def elapsed(self) -> float:
+        return self.used + (self.clock() - self.start if self.start is not None else 0.0)
+
+    def check(self) -> None:
+        if self.elapsed() >= 120:
+            raise ValueError("aggregate 120-second preflight budget exhausted")
+
+    def pause(self) -> None:
+        self.check()
+        self.used = self.elapsed()
+        self.start = None
+
+
 def run_wave(
     prepared: PreparedWave,
     *,
@@ -588,12 +735,19 @@ def run_wave(
     cell_seconds: float = 45,
     wave_seconds: float = 480,
     output_cap: int = 65536,
+    _preflight_clock: Callable[[], float] | None = None,
 ) -> dict:
     """Explicit execution only; external manual caller owns authorization and lease.
 
     No plan/account field can authorize this call. No automated CLI execution flag
     exists. FixtureRuntime is an injected test-only path and is labelled offline.
     """
+    started = time.monotonic()
+    preflight = PreflightBudget(_preflight_clock or time.monotonic)
+    if isinstance(held_lease, SubscriptionLease) and held_lease.request_started > 0:
+        preflight.used = max(0.0, started - held_lease.request_started)
+        started = min(started, held_lease.request_started)
+    preflight.resume()
     prepare_wave(prepared.plan_text, prepared.prompts_text, prepared.pins)
     plan = strict_final(prepared.plan_text)
     cells = plan["calls"]["cells"]
@@ -627,6 +781,7 @@ def run_wave(
         or cell_seconds != 45
         or wave_seconds != 480
         or output_cap != 65536
+        or _preflight_clock is not None
     ):
         raise ValueError(
             "native execution requires original subscription lease and fixed reviewed limits"
@@ -647,7 +802,6 @@ def run_wave(
         oauth_token if oauth_token is not None else os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     )
     root = None
-    started = time.monotonic()
     deadline = started + wave_seconds
     try:
         # Exclusive durable wave identity prevents replay after crashes/uncertain starts.
@@ -681,10 +835,14 @@ def run_wave(
             try:
                 if time.monotonic() + 0.5 >= deadline:
                     raise ValueError("whole wave deadline exhausted")
+                preflight.check()
                 prepare_wave(prepared.plan_text, prepared.prompts_text, prepared.pins)
+                preflight.check()
                 _source_check(prepared.pins)
+                preflight.check()
                 held_lease.check(POOL, cell_run)
                 argv = runtime.command(plan["candidate"]["launch"])
+                preflight.check()
                 if argv != plan["candidate"]["launch"]["argv"] + [
                     "--output-format",
                     "json",
@@ -712,7 +870,10 @@ def run_wave(
                 held_lease.check(POOL, cell_run)
                 if runtime.command(plan["candidate"]["launch"]) != argv:
                     raise ValueError("prelaunch binary/argv drift")
-                capture_deadline = min(deadline - 0.5, time.monotonic() + cell_seconds - 0.05)
+                preflight.check()
+                capture_deadline = min(
+                    deadline - 0.5, time.monotonic() + cell_seconds - min(0.5, cell_seconds / 2)
+                )
                 record.update(
                     actual_launch_binding(
                         argv=argv,
@@ -734,22 +895,36 @@ def run_wave(
                 )
                 record["status"] = "starting_outcome_uncertain_until_started_receipt"
                 _persist(root, f"attempt-{index + 1}-starting.json", record, token)
+                if isinstance(held_lease, SubscriptionLease):
+                    held_lease.prepare(cell_run)
+                preflight.check()
 
                 def on_started(pid: int) -> None:
                     summary["cli_launch_count"] += 1
                     record.update(status="started_outcome_pending", process_group=pid)
+                    if isinstance(held_lease, SubscriptionLease):
+                        held_lease.started(cell_run, pid)
                     _persist(root, f"attempt-{index + 1}-started.json", record, token)
 
+                def on_finished(pid: int) -> None:
+                    if isinstance(held_lease, SubscriptionLease):
+                        held_lease.finished(cell_run, pid)
+
                 stage = "process_supervision"
-                captured = _capture(
-                    argv,
-                    prompt["prompt"].encode(),
-                    cwd,
-                    env,
-                    deadline=capture_deadline,
-                    cap=output_cap,
-                    on_started=on_started,
-                )
+                preflight.pause()
+                try:
+                    captured = _capture(
+                        argv,
+                        prompt["prompt"].encode(),
+                        cwd,
+                        env,
+                        deadline=capture_deadline,
+                        cap=output_cap,
+                        on_started=on_started,
+                        on_finished=on_finished,
+                    )
+                finally:
+                    preflight.resume()
                 stdout = captured.pop("stdout")
                 stderr = captured.pop("stderr")
                 record.update(
@@ -802,9 +977,14 @@ def run_wave(
                     status="captured_unverified_calibration",
                 )
                 held_lease.check(POOL, cell_run)
+                preflight.check()
             except Exception as exc:
                 record.update(
-                    status="stopped", failure_type=type(exc).__name__, failure_stage=stage
+                    status="stopped",
+                    failure_type=type(exc).__name__,
+                    failure_stage=stage,
+                    preflight_seconds=preflight.elapsed(),
+                    preflight_budget_exhausted=preflight.elapsed() >= 120,
                 )
                 # Do not persist exception text: arbitrary callbacks can embed secrets.
                 summary["status"] = "stopped"
@@ -815,6 +995,11 @@ def run_wave(
                 break
         else:
             summary["status"] = "completed_unverified_calibration"
+        if preflight.elapsed() >= 120:
+            summary["status"] = "stopped"
+            summary["preflight_budget_exhausted"] = True
+        summary["preflight_seconds"] = preflight.elapsed()
+        summary["preflight_seconds_max"] = 120
         summary["seconds"] = time.monotonic() - started
         _persist(root, "summary.json", summary, token)
         return redact(summary, token)
@@ -887,6 +1072,23 @@ def synthetic_wave(binary: Path) -> PreparedWave:
     pins = {name: file_sha(source / name) for name in SOURCE_NAMES}
     config = {"tools": [], "mcpServers": {}, "settings": {"disableAllHooks": True}}
     plan = {
+        "bounds": {
+            "preflight_seconds_max": 120,
+            "max_cli_submissions": 8,
+            "wall_seconds_per_call_max": 45,
+            "per_submission_deadline_seconds": 45,
+            "total_wall_seconds_max": 480,
+            "whole_wave_deadline_seconds": 480,
+            "model_wall_seconds_total_max": 360,
+            "native_max_output_tokens_per_request": 512,
+            "retained_response_bytes_max": 65536,
+            "requested_response_bytes_per_call": 512,
+            "input_bytes_per_call_max": 4096,
+            "total_input_bytes_max": 32768,
+            "outer_retries": 0,
+            "new_paid_usd_max": 0,
+            "payg_allowed": False,
+        },
         "candidate": {
             "profile": {
                 "profile_id": PROFILE,

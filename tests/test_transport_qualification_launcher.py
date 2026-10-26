@@ -1,7 +1,10 @@
 """Inert supervised-launch controls. No native CLI is resolved or invoked."""
 
 import json
+import os
+import signal
 import stat
+import subprocess
 import sys
 import time
 from copy import deepcopy
@@ -552,3 +555,325 @@ def test_actual_config_and_execution_hashes_change_with_child_capture_controls_a
         launcher.actual_launch_binding(**changed)["actual_config_sha256"]
         != original["actual_config_sha256"]
     )
+
+
+def _pool_record(root):
+    return root / "pools" / launcher.sha(launcher.POOL.encode()) / "slot-0.json"
+
+
+def _refuses_reacquisition(root):
+    import closer_resources
+
+    with pytest.raises(closer_resources.ResourceBlocked):
+        with launcher.held_subscription_lease(
+            "must-refuse", deadline=time.time(), offline_root=root
+        ):
+            raise AssertionError("uncertain pool reservation was reused")
+
+
+def test_supervisor_death_leaves_live_child_durable_fence(wave, tmp_path):
+    binary = wave[0].with_name("timeout")
+    binary.write_bytes(wave[0].read_bytes())
+    binary.chmod(0o700)
+    pool = tmp_path / "durable-pool"
+    script = """
+import sys,time
+from pathlib import Path
+import transport_qualification_launcher as l
+binary, root = Path(sys.argv[1]), Path(sys.argv[2])
+p = l.synthetic_wave(binary)
+with l.held_subscription_lease('supervisor-death', deadline=time.time(), offline_root=root) as lease:
+    l.run_wave(p,run_id='supervisor-death',receipt_parent=root.parent,held_lease=lease,
+               execute=True,oauth_token='synthetic',runtime=l.FixtureRuntime(binary,l.file_sha(binary)),
+               cell_seconds=4)
+"""
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(launcher.__file__).parent)}
+    supervisor = subprocess.Popen(
+        [sys.executable, "-c", script, str(binary), str(pool)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    child = None
+    try:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            try:
+                row = json.loads(_pool_record(pool).read_text())
+            except (FileNotFoundError, json.JSONDecodeError):
+                row = {}
+            if row.get("status") == "uncertain":
+                child = row["process_group"]
+                break
+            assert supervisor.poll() is None
+            time.sleep(0.01)
+        assert child is not None
+        assert row["process_birth"].startswith("os-create-time:")
+        supervisor.kill()
+        supervisor.wait(timeout=2)
+        os.killpg(child, 0)  # detached child is still alive after supervisor death
+        _refuses_reacquisition(pool)
+        assert json.loads(_pool_record(pool).read_text())["status"] == "uncertain"
+    finally:
+        if supervisor.poll() is None:
+            supervisor.kill()
+            supervisor.wait(timeout=2)
+        if child is not None:
+            try:
+                os.killpg(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_failed_group_cleanup_keeps_durable_fence_after_flock_release(wave, tmp_path, monkeypatch):
+    binary = wave[0].with_name("timeout")
+    binary.write_bytes(wave[0].read_bytes())
+    binary.chmod(0o700)
+    prepared = launcher.synthetic_wave(binary)
+    pool = tmp_path / "cleanup-pool"
+
+    def failed_cleanup(proc):
+        raise RuntimeError("inert cleanup failure")
+
+    monkeypatch.setattr(launcher, "_kill_group", failed_cleanup)
+    child = None
+    try:
+        with launcher.held_subscription_lease(
+            "cleanup", deadline=time.time(), offline_root=pool
+        ) as lease:
+            report = launcher.run_wave(
+                prepared,
+                run_id="cleanup",
+                receipt_parent=tmp_path,
+                held_lease=lease,
+                execute=True,
+                oauth_token=TOKEN,
+                runtime=launcher.FixtureRuntime(binary, launcher.file_sha(binary)),
+                cell_seconds=0.25,
+            )
+        child = read_receipt(report)["process_group"]
+        assert report["status"] == "stopped" and report["cli_launch_count"] == 1
+        os.killpg(child, 0)
+        assert json.loads(_pool_record(pool).read_text())["status"] == "uncertain"
+        _refuses_reacquisition(pool)
+    finally:
+        if child is not None:
+            try:
+                os.killpg(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_spawn_journal_gap_preserves_assigned_starting_intent(wave, tmp_path, monkeypatch):
+    pool = tmp_path / "starting-pool"
+
+    def uncertain_spawn(*args, **kwargs):
+        raise OSError("inert uncertain spawn result")
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", uncertain_spawn)
+    with launcher.held_subscription_lease("gap", deadline=time.time(), offline_root=pool) as lease:
+        report = launcher.run_wave(
+            wave[1],
+            run_id="gap",
+            receipt_parent=tmp_path,
+            held_lease=lease,
+            execute=True,
+            oauth_token=TOKEN,
+            runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        )
+    row = json.loads(_pool_record(pool).read_text())
+    assert row["status"] == "starting" and row["run_id"] == "gap-1"
+    assert report["status"] == "stopped" and report["cli_launch_count"] == 0
+    _refuses_reacquisition(pool)
+
+
+def test_started_journal_failure_and_failed_cleanup_keep_starting_fence(
+    wave, tmp_path, monkeypatch
+):
+    import closer_resources
+
+    binary = wave[0].with_name("timeout")
+    binary.write_bytes(wave[0].read_bytes())
+    binary.chmod(0o700)
+    prepared = launcher.synthetic_wave(binary)
+    pool = tmp_path / "journal-failure-pool"
+
+    def failed_journal(*args):
+        raise OSError("inert start journal failure")
+
+    def failed_cleanup(proc):
+        raise RuntimeError("inert cleanup failure")
+
+    monkeypatch.setattr(closer_resources, "finite_pool_process_started", failed_journal)
+    monkeypatch.setattr(launcher, "_kill_group", failed_cleanup)
+    child = None
+    try:
+        with launcher.held_subscription_lease(
+            "journal-gap", deadline=time.time(), offline_root=pool
+        ) as lease:
+            report = launcher.run_wave(
+                prepared,
+                run_id="journal-gap",
+                receipt_parent=tmp_path,
+                held_lease=lease,
+                execute=True,
+                oauth_token=TOKEN,
+                runtime=launcher.FixtureRuntime(binary, launcher.file_sha(binary)),
+            )
+        child = read_receipt(report)["process_group"]
+        row = json.loads(_pool_record(pool).read_text())
+        assert row["status"] == "starting" and row["run_id"] == "journal-gap-1"
+        assert report["cli_launch_count"] == 1
+        _refuses_reacquisition(pool)
+    finally:
+        if child is not None:
+            try:
+                os.killpg(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("preflight_seconds_max", 121),
+        ("wall_seconds_per_call_max", 46),
+        ("total_wall_seconds_max", 481),
+        ("max_cli_submissions", 9),
+        ("native_max_output_tokens_per_request", 513),
+        ("outer_retries", 1),
+        ("payg_allowed", True),
+    ],
+)
+def test_executable_plan_budgets_must_match_exact_reviewed_contract(wave, key, value):
+    p = wave[1]
+    plan = json.loads(p.plan_text)
+    plan["bounds"][key] = value
+    text = json.dumps(plan)
+    pins = replace(p.pins, plan_sha256=launcher.sha(text.encode()))
+    with pytest.raises(ValueError, match="budgets"):
+        launcher.prepare_wave(text, p.prompts_text, pins)
+
+
+def test_aggregate_preflight_budget_stops_before_first_spawn(wave, tmp_path, monkeypatch):
+    clock = [0.0]
+    original = launcher._source_check
+
+    def expensive(pins):
+        original(pins)
+        clock[0] += 121
+
+    monkeypatch.setattr(launcher, "_source_check", expensive)
+    report = launcher.run_wave(
+        wave[1],
+        run_id="preflight",
+        receipt_parent=tmp_path,
+        held_lease=Lease(),
+        execute=True,
+        oauth_token=TOKEN,
+        runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        _preflight_clock=lambda: clock[0],
+    )
+    assert report["status"] == "stopped" and report["cli_launch_count"] == 0
+    assert report["preflight_seconds"] >= 120
+
+
+def test_preflight_budget_accumulates_across_cells_and_excludes_child_time(
+    wave, tmp_path, monkeypatch
+):
+    clock = [0.0]
+    original_check = launcher._source_check
+    original_capture = launcher._capture
+
+    def expensive(pins):
+        original_check(pins)
+        clock[0] += 35
+
+    def child_time(*args, **kwargs):
+        clock[0] += 10000  # paused process interval must not spend preflight
+        return original_capture(*args, **kwargs)
+
+    monkeypatch.setattr(launcher, "_source_check", expensive)
+    monkeypatch.setattr(launcher, "_capture", child_time)
+    report = launcher.run_wave(
+        wave[1],
+        run_id="aggregate",
+        receipt_parent=tmp_path,
+        held_lease=Lease(),
+        execute=True,
+        oauth_token=TOKEN,
+        runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        _preflight_clock=lambda: clock[0],
+    )
+    assert report["status"] == "stopped" and report["cli_launch_count"] == 1
+    assert report["preflight_seconds"] == 140
+    assert read_receipt(report, 1)["status"] == "captured_unverified_calibration"
+
+
+def test_lease_setup_time_counts_against_preflight_and_whole_wave(wave, tmp_path):
+    with launcher.held_subscription_lease(
+        "lease-time", deadline=time.time(), offline_root=tmp_path / "lease-time-pool"
+    ) as lease:
+        lease.request_started -= 121  # causal elapsed acquisition/setup, no real wait
+        report = launcher.run_wave(
+            wave[1],
+            run_id="lease-time",
+            receipt_parent=tmp_path,
+            held_lease=lease,
+            execute=True,
+            oauth_token=TOKEN,
+            runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        )
+    assert report["status"] == "stopped" and report["cli_launch_count"] == 0
+    assert report["preflight_seconds"] >= 120 and report["seconds"] >= 121
+
+
+def test_kill_group_does_not_equate_reaped_leader_with_group_absence(monkeypatch):
+    class LeaderGone:
+        pid = 123456789
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(launcher.os, "killpg", lambda *args: None)
+    monkeypatch.setattr(launcher, "_group_absent", lambda _pid: False)
+    with pytest.raises(RuntimeError, match="absence is unproven"):
+        launcher._kill_group(LeaderGone())
+
+
+def test_pool_acquisition_is_fail_fast_even_with_later_caller_deadline(tmp_path, monkeypatch):
+    import closer_resources
+
+    observed = []
+    original = closer_resources.pool_slot
+
+    def capture(root, lane, bound, *, deadline, **kwargs):
+        observed.append(deadline)
+        return original(root, lane, bound, deadline=deadline, **kwargs)
+
+    monkeypatch.setattr(closer_resources, "pool_slot", capture)
+    before = time.time()
+    with launcher.held_subscription_lease(
+        "immediate", deadline=before + 1000, offline_root=tmp_path
+    ):
+        pass
+    assert before <= observed[0] <= time.time()
+    assert observed[0] < before + 1
+
+
+def test_lease_active_flag_clears_even_when_final_journal_update_fails(tmp_path, monkeypatch):
+    import closer_resources
+
+    def failed(*args):
+        raise OSError("inert lease journal failure")
+
+    monkeypatch.setattr(closer_resources, "finite_pool_no_start", failed)
+    lease = None
+    with pytest.raises(OSError):
+        with launcher.held_subscription_lease(
+            "journal-close", deadline=time.time(), offline_root=tmp_path
+        ) as lease:
+            assert lease.active
+    assert lease is not None and lease.active is False
