@@ -2963,6 +2963,13 @@ class Closer:
                 repair=repair, substantive=action == "disposition", with_status=True
             )
         if not route:
+            if route_status == "qualification_unavailable":
+                return role_qualification_pending(
+                    target,
+                    snapshot.get("revision"),
+                    repair=repair,
+                    substantive=action == "disposition",
+                )
             if route_status == "unknown":
                 return {
                     "status": "deferred",
@@ -3046,8 +3053,13 @@ class Closer:
             "Do not contact GitHub, publish, merge, close issues, claim targets, change control-plane state, "
             "or invoke other agents. Return concrete source references, original Tasks/AC coverage, "
             "findings and uncertainties. No completion authority transfers. "
-            "Report workspace git HEAD before assessing implementation. If it differs from observed head, "
-            "mark local workspace/code findings UNVERIFIED. You may still analyze only the exact retained "
+            + (
+                "Report workspace git HEAD before assessing implementation. If it differs from observed head, "
+                "mark local workspace/code findings UNVERIFIED. "
+                if repair
+                else "This read-only data-only worker cannot inspect the workspace; do not make local workspace/code findings. "
+            )
+            + "You may still analyze only the exact retained "
             "current-head patch and CI receipt excerpts explicitly supplied in the exception evidence envelope; "
             "do not infer implementation status from canonical-main code, checkout/fetch, or claim acceptance. "
             + (
@@ -3179,6 +3191,7 @@ class Closer:
                 profile_id=chosen["profile_id"],
                 timeout=remaining,
                 isolate=True,
+                data_only=not repair,
                 task_type=(
                     "closer_repair"
                     if repair
@@ -3226,6 +3239,7 @@ class Closer:
                 load={},
                 deadline=operation["deadline"],
                 repair=repair,
+                data_only=not repair,
                 finite_frontier=operation.get("finite_frontier"),
                 frontier_target=target,
             )
@@ -3508,13 +3522,17 @@ def _fresh_capacity_report():
 _EXCEPTION_ELIGIBLE_AGENTS = ("codex", "claude", "gemini", "cursor", "vibe", "muse")
 
 
-def _exception_effort_tier(repair: bool, substantive: bool = True) -> set[str]:
-    return {"medium", "high"} if repair or substantive else {"none", "minimal", "low"}
+def _exception_role(repair: bool, substantive: bool = True) -> str:
+    import closer_role_qualification as roles
+
+    return (
+        roles.CONSTRAINED_REPAIR
+        if repair
+        else roles.STRONG_CRITERION_ADJUDICATION if substantive else roles.BOUNDED_CLASSIFICATION
+    )
 
 
-def _profile_exception_qualified(
-    report, profile, *, repair: bool, substantive: bool = True
-) -> bool:
+def _profile_has_capacity(report, profile) -> bool:
     if not report or not profile:
         return False
     agent = str(profile.get("agent", "")).casefold()
@@ -3522,16 +3540,24 @@ def _profile_exception_qualified(
         return False
     if report.get("agents", {}).get(agent, {}).get("state") not in {"ok", "warn"}:
         return False
-    profile_id = profile["profile_id"]
-    if report.get("profiles", {}).get(profile_id, {}).get("state") not in {"ok", "warn"}:
-        return False
-    if profile.get("reasoning_effort") not in _exception_effort_tier(repair, substantive):
+    if report.get("profiles", {}).get(profile["profile_id"], {}).get("state") not in {"ok", "warn"}:
         return False
     pools = profile.get("capacity_pool_ids") or []
-    if not pools:
-        return False
-    return all(
+    return bool(pools) and all(
         report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"} for pool in pools
+    )
+
+
+def _profile_exception_qualified(
+    report, profile, *, repair: bool, substantive: bool = True
+) -> bool:
+    if not _profile_has_capacity(report, profile):
+        return False
+    import adapters
+    import closer_role_qualification as roles
+
+    return adapters.automatic_profile_within_cap(profile) and roles.is_runtime_qualified(
+        profile, _exception_role(repair, substantive)
     )
 
 
@@ -3585,7 +3611,7 @@ def _qualified_capacity(report, available_profiles):
 def _pipeline_low_route(
     *, load=None, unavailable_profiles=None, with_status=False, data_only=False
 ):
-    """Choose a currently usable low-effort profile through the existing router."""
+    """Choose a role-qualified classification profile through the existing router."""
     load = load if load is not None else {}
     import execution_profiles
     import router
@@ -3600,6 +3626,7 @@ def _pipeline_low_route(
         eligible = set()
         available_profiles = {}
         busy_unfailed_profile = False
+        capacity_candidate = False
         unsupported_assessment = False
         qualified_assessment = False
         for agent, row in report["agents"].items():
@@ -3620,12 +3647,16 @@ def _pipeline_low_route(
             if row.get("state") not in {"ok", "warn"}:
                 continue
             profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            capacity_candidate |= assessment_problem is None and any(
+                p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
+                for p in profiles
+            )
             profiles = [
                 p
                 for p in profiles
                 if str(p.get("agent", "")).casefold() != "aider"
                 and p["profile_id"] not in unavailable_profiles
-                and p["reasoning_effort"] in {"none", "minimal", "low"}
+                and _profile_exception_qualified(report, p, repair=False, substantive=False)
                 and report.get("profiles", {}).get(p["profile_id"], {}).get("state")
                 in {"ok", "warn"}
                 and bool(p.get("capacity_pool_ids"))
@@ -3658,7 +3689,7 @@ def _pipeline_low_route(
                 else (
                     "unsupported_assessment_tool_boundary"
                     if unsupported_assessment and not qualified_assessment
-                    else "exhausted"
+                    else "qualification_unavailable" if capacity_candidate else "exhausted"
                 )
             )
             return (None, status) if with_status else None
@@ -3704,7 +3735,6 @@ def _exception_route(
     import router
 
     mode = "mid" if repair else "assess"
-    efforts = _exception_effort_tier(repair, substantive)
     task_type = (
         "closer_repair" if repair else "closer_exception" if substantive else "closer_interpret"
     )
@@ -3717,17 +3747,22 @@ def _exception_route(
         eligible = set()
         available_profiles = {}
         busy_unfailed_profile = False
+        capacity_candidate = False
 
         for agent in _EXCEPTION_ELIGIBLE_AGENTS:
             row = report["agents"].get(agent, {})
             if row.get("state") not in {"ok", "warn"}:
                 continue
             profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            capacity_candidate |= any(
+                p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
+                for p in profiles
+            )
             profiles = [
                 p
                 for p in profiles
                 if str(p.get("agent", "")).casefold() != "aider"
-                and p.get("reasoning_effort") in efforts
+                and _profile_exception_qualified(report, p, repair=repair, substantive=substantive)
                 and p["profile_id"] not in unavailable_profiles
                 and report.get("profiles", {}).get(p["profile_id"], {}).get("state")
                 in {"ok", "warn"}
@@ -3752,7 +3787,11 @@ def _exception_route(
                 available_profiles[agent] = profiles
 
         if not eligible:
-            status = "busy" if busy_unfailed_profile else "exhausted"
+            status = (
+                "busy"
+                if busy_unfailed_profile
+                else "qualification_unavailable" if capacity_candidate else "exhausted"
+            )
             return (None, status) if with_status else None
 
         pick = router.select_agent(
@@ -3819,6 +3858,25 @@ def assessment_transport_pending(target, revision):
             "reason": "unsupported_assessment_tool_boundary",
         },
         "classification": "assessment_transport_unavailable",
+        "substantive_needs": [],
+        "authority": False,
+    }
+
+
+def role_qualification_pending(target, revision, *, repair=False, substantive=True):
+    role = _exception_role(repair, substantive)
+    return {
+        "status": "pending",
+        "pending_kind": "external_event",
+        "next_trigger": "reviewed role qualification or explicit operator policy changes; recheck fresh evidence",
+        "pending_evidence": {
+            "event_id": f"closer-role-qualification:{target}:{revision}:{role}",
+            "target": target,
+            "revision": revision,
+            "role": role,
+            "reason": "qualification_unavailable",
+        },
+        "classification": "role_qualification_unavailable",
         "substantive_needs": [],
         "authority": False,
     }
@@ -4060,7 +4118,7 @@ def _pipeline_capacity():
     io_capacity = 4
     if report is None or report.get("control_plane_only") is True:
         return {"io": io_capacity, "low": 0, "exception": 0}
-    # Count distinct currently usable low-effort pools. The shared reservation
+    # Count distinct currently usable classification-qualified pools. The shared reservation
     # lock arbitrates any overlap with the strong exception lane at dispatch time.
     low_pools = set()
     import execution_profiles
@@ -4074,9 +4132,7 @@ def _pipeline_capacity():
                 or str(profile.get("agent", "")).casefold() == "aider"
             ):
                 continue
-            if profile["reasoning_effort"] in {"none", "minimal", "low"} and report.get(
-                "profiles", {}
-            ).get(profile["profile_id"], {}).get("state") in {"ok", "warn"}:
+            if _profile_exception_qualified(report, profile, repair=False, substantive=False):
                 pools = profile.get("capacity_pool_ids") or []
                 for pool in pools:
                     if report.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"}:
@@ -5846,13 +5902,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "content"
         ) or {}
         admitted_snapshot, _packet = full_snapshot(prep)
-        data_only = finite_frontier is not None
-        if data_only and (
-            raw_packet is None
-            or raw_packet.get("target") != target
-            or raw_packet.get("head") != admitted_snapshot.get("head")
-        ):
-            raise RuntimeError("data-only interpretation requires a valid exact-target packet")
+        data_only = True
         dependency = (
             assignment_dependency(
                 args.assignment, target, expected_fingerprint=prep.get("assignment_fingerprint")
@@ -5969,8 +6019,27 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         "new observation or explicit targeted retry; unchanged collection made no progress"
                     )
                     return pending
-            elif not readiness["ready"] and not data_only:
+            elif not readiness["ready"]:
                 return evidence_pending(target, prep, readiness)
+        if prior_wait is None and (
+            raw_packet is None
+            or raw_packet.get("target") != target
+            or raw_packet.get("head") != admitted_snapshot.get("head")
+        ):
+            return evidence_pending(
+                target,
+                prep,
+                {
+                    **(readiness or {}),
+                    "ready": False,
+                    "evaluation_ready": False,
+                    "gaps": list(
+                        dict.fromkeys(
+                            [*(readiness or {}).get("gaps", []), "packet:invalid_or_unavailable"]
+                        )
+                    ),
+                },
+            )
         admission = backend.campaign_admission(
             target, admitted_snapshot, max(0, min(120, int(context["deadline"] - time.time())))
         )
@@ -6049,6 +6118,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 **({"data_only": True} if data_only else {}),
             )
         if not route:
+            if route_status == "qualification_unavailable":
+                return role_qualification_pending(target, prep.get("revision"), substantive=False)
             if route_status == "unsupported_assessment_tool_boundary":
                 return assessment_transport_pending(target, prep.get("revision"))
             if route_status == "unknown":
@@ -6225,7 +6296,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 task_type="closer_interpret",
                 subject_id=target,
                 max_network_retries=0,
-                **({"data_only": True} if data_only else {}),
+                data_only=True,
                 **(
                     {
                         "request_deadline_mono": time.monotonic() + max(0.0, remaining),
@@ -6307,6 +6378,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             and result.get("exit") == 2
             and result.get("outcome_uncertain") is False
         ):
+            if collection_attempt:
+                recovery_store.retryable(admitted_snapshot, collection_attempt, "not_started")
             pending = assessment_transport_pending(target, prep.get("revision"))
             pending["pending_evidence"]["transport_refusal"] = result
             return pending
@@ -6780,6 +6853,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             with_status=True,
         )
         if not route:
+            if route_status == "qualification_unavailable":
+                return role_qualification_pending(target, prep.get("revision"))
             if route_status == "busy":
                 occupied = max(
                     (route_load.get(key, 0) for key in route_load if str(key).startswith("pool:")),

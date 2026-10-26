@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -16,6 +15,8 @@ from contextlib import contextmanager
 from importlib import metadata
 from pathlib import Path
 from unittest.mock import patch
+
+from packaging.requirements import Requirement
 
 import backlog
 import durability_sweep
@@ -595,13 +596,12 @@ class PostMergeBreakTests(unittest.TestCase):
                 continue
             copied.add(name)
             for requirement in distribution.requires or []:
-                # Metadata requirements begin with their distribution name.  Copying
-                # every installed requirement is safe here: platform-specific ones
-                # simply are not installed and are skipped below.  Keep this test
-                # stdlib-only so the CI dependency declaration remains accurate.
-                match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", requirement)
-                if match:
-                    pending.append(match.group())
+                # pytest requires packaging, so its PEP 508 parser is available.
+                # Only the active runtime dependency closure belongs in the offline
+                # wheelhouse; installed testing extras can pull in the whole host.
+                parsed = Requirement(requirement)
+                if parsed.marker is None or parsed.marker.evaluate({"extra": ""}):
+                    pending.append(parsed.name)
             tag = next(
                 line.removeprefix("Tag: ")
                 for line in distribution.read_text("WHEEL").splitlines()

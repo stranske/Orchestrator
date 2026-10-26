@@ -28,6 +28,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -105,18 +106,10 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
 
-# A seat can be high quality AND capacity-scarce — claude's weekly is frequently the binding
-# constraint on this fleet. Rather than lying about what the family offers (which would delete the
-# frontier option entirely), the tier map stays HONEST and a CEILING caps what routine routing may
-# actually spend: a request for `full` on a capped seat quietly executes at the ceiling instead.
-# The frontier model therefore remains permanently available — reachable by raising the ceiling
-# (ORCH_CLAUDE_MAX_TIER=full) or naming it directly (ORCH_CLAUDE_MODEL_FULL / requested_model /
-# an explicit profile) — without routine work spending it. To stop dispatching a seat ALTOGETHER
-# and keep it purely for orchestration, use the existing 429-shed switch instead of a ceiling:
-#   touch ~/.codex/handoff/capacity-shed/claude     (remove the file to re-enable)
-AGENT_TIER_CEILING: dict[str, str] = {
-    "claude": "mid",  # owner policy 2026-08-09: routine claude work runs Sonnet 5.5, not Opus 5.5
-}
+# Routine Claude work has no default Sonnet ceiling (owner direction 2026-10-25).
+# Explicit ORCH_<AGENT>_MAX_TIER caps remain available, as do the ordinary capacity
+# and shared-pool checks. Tier choice never establishes a Closer role qualification.
+AGENT_TIER_CEILING: dict[str, str] = {}
 CURSOR_FRONTIER_DEFAULT = None  # require explicit 'frontier:<model>'; bare 'frontier' is unsafe
 # Owner policy: cursor runs Composer and only Composer. Pinned by id because omitting --model
 # selects `auto`, which is NOT Composer — it routes across every frontier model cursor advertises.
@@ -960,17 +953,45 @@ def effective_tier(agent: str, tier: str) -> str:
     return cap if MODEL_TIER_NAMES.index(tier) > MODEL_TIER_NAMES.index(cap) else tier
 
 
+def automatic_profile_within_cap(profile: dict[str, Any]) -> bool:
+    """Apply an explicit tier cap to automatic selection, never explicit profiles.
+
+    A registered model outside the known tier ladder cannot silently become a
+    cheaper fallback. Role suitability and transport confinement are separate.
+    """
+    agent = profile.get("agent")
+    if not isinstance(agent, str) or not agent:
+        return False
+    cap = tier_ceiling(agent)
+    if cap is None:
+        return True
+    profile_id = profile.get("profile_id")
+    if not isinstance(profile_id, str):
+        return False
+    registered = execution_profiles.PROFILE_REGISTRY.get(profile_id)
+    if not registered or any(
+        profile.get(key) != registered.get(key) for key in ("agent", "requested_model")
+    ):
+        return False
+    tiers = MODEL_TIERS.get(agent, {})
+    permitted = {
+        tiers[tier] for tier in MODEL_TIER_NAMES[: MODEL_TIER_NAMES.index(cap) + 1] if tier in tiers
+    }
+    return profile.get("requested_model") in permitted
+
+
 def _tier_model(agent: str, mode: str | None) -> str | None:
     """Model for a router `mode` token, or None to leave --model off.
 
-    Only the three tier tokens select a model. Anything else (None, 'assess', 'offload',
-    'composer', 'frontier') deliberately falls through to the CLI default, preserving the
-    long-standing "never pin what we haven't verified" behaviour for non-tier modes.
+    Tier tokens select a model. Non-tier modes keep the CLI default unless an
+    explicit cap requires a known bounded model; an absent automatic profile
+    must not bypass that cap through the CLI's default model.
     An explicit `requested_model`/profile bypasses this entirely, so the ceiling constrains
     ROUTINE routing without ever making the frontier model unreachable.
     """
     if mode not in MODEL_TIER_NAMES:
-        return None
+        cap = tier_ceiling(agent)
+        return resolve_model(agent, cap) if cap is not None else None
     return resolve_model(agent, effective_tier(agent, mode))
 
 
@@ -1802,6 +1823,9 @@ def apply_write_boundary(
 # The complete data-only controls below were inspected in this installed CLI's
 # embedded help. An upgrade must be requalified; unknown flags are not a tool fence.
 DATA_ONLY_CLAUDE_SHA256 = "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+_DATA_ONLY_CLAUDE_PROBE_TTL_SECONDS = 5.0
+_DATA_ONLY_CLAUDE_PROBE_LOCK = threading.Lock()
+_DATA_ONLY_CLAUDE_PROBE_CACHE: dict[tuple[str, tuple[int, ...], str], float] = {}
 
 
 def _data_only_claude_binary() -> str:
@@ -1847,6 +1871,46 @@ def _data_only_claude_binary() -> str:
     return str(path)
 
 
+def _data_only_claude_probe_key() -> tuple[str, tuple[int, ...], str]:
+    name = shutil.which("claude")
+    if not name:
+        raise ValueError("data-only Claude CLI is absent")
+    path = Path(name).resolve(strict=True)
+    info = path.stat()
+    return (
+        str(path),
+        (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+        ),
+        DATA_ONLY_CLAUDE_SHA256,
+    )
+
+
+def _data_only_claude_eligibility_binary() -> str:
+    """Cache successful eligibility briefly; actual launches always rehash fully."""
+    with _DATA_ONLY_CLAUDE_PROBE_LOCK:
+        before = _data_only_claude_probe_key()
+        observed = time.monotonic()
+        cached = _DATA_ONLY_CLAUDE_PROBE_CACHE.get(before)
+        if cached is not None and 0 <= observed - cached < _DATA_ONLY_CLAUDE_PROBE_TTL_SECONDS:
+            if _data_only_claude_probe_key() != before:
+                raise ValueError("data-only Claude CLI changed during eligibility probe")
+            return before[0]
+        verified = _data_only_claude_binary()
+        if verified != before[0] or _data_only_claude_probe_key() != before:
+            raise ValueError("data-only Claude CLI changed during eligibility probe")
+        _DATA_ONLY_CLAUDE_PROBE_CACHE.clear()
+        _DATA_ONLY_CLAUDE_PROBE_CACHE[before] = time.monotonic()
+        return verified
+
+
 def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
 
@@ -1858,7 +1922,7 @@ def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     if agent != "claude":
         return f"data-only tool boundary unsupported for {agent}"
     try:
-        _data_only_claude_binary()
+        _data_only_claude_eligibility_binary()
     except (OSError, ValueError) as exc:
         return str(exc)
     return None
@@ -2004,10 +2068,11 @@ def build_command(
         if model:
             cmd += ["--model", model]
         if reasoning_effort is not None:
-            # Sonnet 5.5 effort support verified in Claude's model-config docs.
+            # Installed Claude 2.1.296 names Opus/Sonnet 5.5 and advertises these
+            # effort values. This is command support, not role qualification.
             # v1 high-profile history is not retroactively evidence of this flag.
             if (
-                model != "claude-sonnet-5-5"
+                model not in {"claude-sonnet-5-5", "claude-opus-5-5"}
                 or not isinstance(reasoning_effort, str)
                 or reasoning_effort
                 not in {
@@ -2780,6 +2845,7 @@ def _selftest_workspace_never_broad() -> None:
 def _selftest():
     old_codex_sandbox = os.environ.pop("CODEX_SANDBOX", None)
     old_codex_bypass = os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
+    old_claude_cap = os.environ.pop("ORCH_CLAUDE_MAX_TIER", None)
     try:
         _selftest_inner(gaps=[])
     finally:
@@ -2787,6 +2853,8 @@ def _selftest():
             os.environ["CODEX_SANDBOX"] = old_codex_sandbox
         if old_codex_bypass is not None:
             os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = old_codex_bypass
+        if old_claude_cap is not None:
+            os.environ["ORCH_CLAUDE_MAX_TIER"] = old_claude_cap
 
 
 def _selftest_inner(*, gaps: list[str] | None = None):
@@ -2948,24 +3016,22 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert "--add-dir" not in kept, kept
         assert codex_worktree_git_roots(common.parent) == [], "a .git DIRECTORY is never granted"
     _selftest_workspace_never_broad()
-    # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5.5 (mid) / Opus 5.5 (full) — but the seat is CAPPED
-    # at mid (scarce weekly), so the `full` lane really dispatches Sonnet 5.5. Expectations are
-    # written post-ceiling because that is what reaches the CLI.
+    # Claude tiers retain their named models without a routine Sonnet ceiling.
     assert MODEL_TIERS["claude"]["full"] == "claude-opus-5-5", "frontier option must stay defined"
-    assert tier_ceiling("claude") == "mid" and effective_tier("claude", "full") == "mid"
+    assert tier_ceiling("claude") is None and effective_tier("claude", "full") == "full"
     for tier, expected in (
         ("cheap", "claude-haiku-4-5"),
         ("mid", "claude-sonnet-5-5"),
-        ("full", "claude-sonnet-5-5"),
+        ("full", "claude-opus-5-5"),
     ):
         cl = build_command("claude", "x", mode=tier)
         assert cl[cl.index("--model") + 1] == expected, (tier, cl)
         assert model_identity("claude", tier) == expected, tier
-    # Raising the ceiling reaches the frontier model — the option is capped, never deleted.
-    os.environ["ORCH_CLAUDE_MAX_TIER"] = "full"
+    # An explicit cap still limits routine selection without changing the tiers.
+    os.environ["ORCH_CLAUDE_MAX_TIER"] = "mid"
     try:
-        uncapped = build_command("claude", "x", mode="full")
-        assert uncapped[uncapped.index("--model") + 1] == "claude-opus-5-5", uncapped
+        capped = build_command("claude", "x", mode="full")
+        assert capped[capped.index("--model") + 1] == "claude-sonnet-5-5", capped
     finally:
         os.environ.pop("ORCH_CLAUDE_MAX_TIER", None)
     assert model_identity("cursor", "frontier:gpt-5.5") == "cursor:gpt-5.5"

@@ -28,6 +28,9 @@ MERGE = "b" * 40
 
 @pytest.fixture(autouse=True)
 def no_live_state_or_provider(monkeypatch, tmp_path):
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
     monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "private-state"))
@@ -741,7 +744,7 @@ def assert_nonpass_accounting_prompt_contract(prompt):
     assert "Otherwise return classification uncertain" not in prompt
 
 
-def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
+def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
     current = snapshot(
         state="MERGED",
         merge=MERGE,
@@ -766,7 +769,14 @@ def test_luna_result_is_advisory_and_cannot_supply_completion_disposition(tmp_pa
     )
     result = backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))
     assert result["advisory_only"] and result["status"] == "completed"
-    assert calls[0][1]["profile_id"] == "codex-6-luna-low"
+    import execution_profiles
+
+    assert calls[0][1]["profile_id"] in execution_profiles.PROFILE_REGISTRY
+    assert calls[0][1]["data_only"] is True
+    assert (
+        "cannot inspect the workspace; do not make local workspace/code findings" in calls[0][0][1]
+    )
+    assert "Report workspace git HEAD" not in calls[0][0][1]
     assert backend.dispositions == {}
     assert backend.select(current)[0] == "wait"
     assert backend.gh.calls == []
@@ -2956,6 +2966,7 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
         lambda agent, **kw: [
             {
                 "profile_id": f"{agent}-flash-low",
+                "agent": agent,
                 "reasoning_effort": "low",
                 "capacity_pool_ids": ["aider-paygo" if agent == "aider" else "gemini-api"],
             }
@@ -3090,6 +3101,12 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
 
     def pipeline_stub(_path, _targets, **callbacks):
         prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 60})
+        retained = tmp_path / "pool-evidence-packet.json"
+        retained.write_text(json.dumps(packet))
+        prep["packet_ref"] = {
+            "path": str(retained),
+            "sha256": adapter.hashlib.sha256(retained.read_bytes()).hexdigest(),
+        }
         context = {"prepare": prep, "deadline": time.time() + 60}
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(callbacks["interpret"], TARGET, context)
@@ -3820,7 +3837,7 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     )
     route_profiles = []
 
-    def select_route(*, load, unavailable_profiles, with_status=False):
+    def select_route(*, load, unavailable_profiles, with_status=False, data_only=False):
         if "gemini-low" not in unavailable_profiles:
             profile = "gemini-low"
         elif "claude-low" not in unavailable_profiles:
@@ -3847,7 +3864,9 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
             "If acceptance proof is incomplete and the known NON_PASS accounting contract below does not apply"
             in _prompt
         )
-        assert "read-only commands such as python3 -c" in _prompt
+        assert kwargs["data_only"] is True
+        assert "Inspect only supplied inline content; do not open retained paths" in _prompt
+        assert "read-only commands such as python3 -c" not in _prompt
         if profile == "gemini-low" and kwargs["subject_id"] == first:
             result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
             if failure_kind in {"refusal", "inspection", "quota_normal_exit"}:
@@ -4064,7 +4083,7 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
     )
     chosen = []
 
-    def route(*, load, unavailable_profiles, with_status=False):
+    def route(*, load, unavailable_profiles, with_status=False, data_only=False):
         profile = "gemini-low" if "gemini-low" not in unavailable_profiles else "claude-low"
         chosen.append(profile)
         value = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}

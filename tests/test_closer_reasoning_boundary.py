@@ -25,7 +25,10 @@ PROFILE = "claude-sonnet-5-5-low"
 
 @pytest.fixture
 def native_world(tmp_path, monkeypatch):
-    """Real CLI/backend/registry/coordinator; fake only external observations/transport."""
+    """Real CLI/backend/registry/coordinator; synthetic role and transport admission."""
+    from closer_role_support import install_synthetic_role_verdict
+
+    install_synthetic_role_verdict(monkeypatch)
     from test_closer_dispatcher_finite_frontier import command
     from test_closer_quarantine_integration import advertisement, original_state
 
