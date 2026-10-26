@@ -226,3 +226,129 @@ def test_actual_post_acceptance_or_lost_ack_never_allows_second_request(
     again = backend.prepare_verify(TARGET, snapshot)
     assert again["status"] == "not_started" and "mutation_kind" not in again
     assert len(calls) == 1
+
+
+def accepted_archive(tmp_path, monkeypatch):
+    backend, snapshot = world(tmp_path, monkeypatch, "post")
+    posts = []
+
+    def api(endpoint, **kwargs):
+        if kwargs.get("method") == "POST":
+            posts.append(endpoint)
+            return {"accepted": True}
+        return {"default_branch": "main"}
+
+    backend.gh.api = api
+    monkeypatch.setattr(
+        backend, "prepare_verify", dispatcher.Closer.prepare_verify.__get__(backend)
+    )
+    monkeypatch.setattr(backend, "_verification_preflight", lambda *a: None)
+    _run(
+        backend.state_path,
+        [TARGET],
+        lambda _: copy.deepcopy(snapshot),
+        backend.execute,
+        max_passes=1,
+    )
+    original = copy.deepcopy(queue._read_state(backend.state_path)["items"][TARGET]["operation"])
+    middle = {**snapshot, "revision": "r2", "action": "collect_evidence"}
+    _run(
+        backend.state_path,
+        [TARGET],
+        lambda _: copy.deepcopy(middle),
+        lambda *_: {"status": "completed"},
+        max_passes=1,
+    )
+    item = queue._read_state(backend.state_path)["items"][TARGET]
+    assert item["operation"]["action"] == "collect_evidence"
+    assert item["operation_history"][-1] == original
+    return backend, snapshot, original, posts, api
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_actual_accepted_post_archived_then_changed_revision_never_reposts(
+    tmp_path, monkeypatch, restart
+):
+    backend, snapshot, original, posts, api = accepted_archive(tmp_path, monkeypatch)
+    if restart:
+        backend, _ = world(tmp_path, monkeypatch, "post")
+        backend.gh.api = api
+        monkeypatch.setattr(
+            backend, "prepare_verify", dispatcher.Closer.prepare_verify.__get__(backend)
+        )
+        monkeypatch.setattr(backend, "_verification_preflight", lambda *a: None)
+    fresh = {**snapshot, "revision": "r3"}
+    backend.gh.snapshot = lambda _: copy.deepcopy(fresh)
+    assert (
+        backend.verification_request_basis(fresh)
+        == original["result"]["verification_request_basis"]
+    )
+    _run(
+        backend.state_path, [TARGET], lambda _: copy.deepcopy(fresh), backend.execute, max_passes=1
+    )
+    assert len(posts) == 1
+    retained = queue._read_state(backend.state_path)["items"][TARGET]["operation_history"]
+    assert any(row == original for row in retained)
+
+
+@pytest.mark.parametrize(
+    "kind", ["foreign_target", "foreign_head", "foreign_merge", "new_event", "new_basis"]
+)
+def test_unrelated_or_different_accepted_history_does_not_supply_same_request_fence(
+    tmp_path, monkeypatch, kind
+):
+    backend, snapshot, original, posts, _ = accepted_archive(tmp_path, monkeypatch)
+    state = queue._read_state(backend.state_path)
+    history = state["items"][TARGET]["operation_history"][-1]
+    if kind == "foreign_target":
+        history["binding"]["pr_target"] = "foreign/repo#1"
+    elif kind == "foreign_head":
+        history["binding"]["head"] = "c" * 40
+    elif kind == "foreign_merge":
+        history["binding"]["merge"] = "d" * 40
+    elif kind == "new_event":
+        snapshot["verifier_lifecycle"] = {"verification_event": {"event_id": "e" * 64}}
+    else:
+        history["result"]["verification_request_basis"] = "f" * 64
+        history["result"]["verification_post_accepted"]["request_basis"] = "f" * 64
+        history["result"]["verification_post_accepted"]["correlation_input"] = "f" * 64
+    backend.state_path.write_text(json.dumps(state))
+    assert backend._unacknowledged_verification_request(snapshot) is None
+    assert len(posts) == 1
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "lost_result",
+        "uncertain",
+        "partial_acceptance",
+        "wrong_ack_basis",
+        "wrong_correlation",
+        "uncertain_flag",
+    ],
+)
+def test_ambiguous_or_uncertain_archived_post_still_fences_new_request(
+    tmp_path, monkeypatch, damage
+):
+    backend, snapshot, original, posts, _ = accepted_archive(tmp_path, monkeypatch)
+    state = queue._read_state(backend.state_path)
+    history = state["items"][TARGET]["operation_history"][-1]
+    if damage == "lost_result":
+        history["result"] = {}
+    elif damage == "uncertain":
+        history["status"] = "uncertain"
+    elif damage == "partial_acceptance":
+        history["result"]["verification_post_accepted"] = {}
+    elif damage == "wrong_ack_basis":
+        history["result"]["verification_post_accepted"]["request_basis"] = "f" * 64
+    elif damage == "wrong_correlation":
+        history["result"]["verification_post_accepted"]["correlation_input"] = "f" * 64
+    else:
+        history["result"]["outcome_uncertain"] = True
+    backend.state_path.write_text(json.dumps(state))
+    barrier = backend._unacknowledged_verification_request(snapshot)
+    assert barrier["operation_id"] == original["id"]
+    prepared = backend.prepare_verify(TARGET, snapshot)
+    assert prepared["status"] == "not_started" and "mutation_kind" not in prepared
+    assert len(posts) == 1

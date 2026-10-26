@@ -2108,7 +2108,9 @@ class Closer:
             item = (bucket.get("items") or {}).get(snapshot["target"], {})
             if not isinstance(item, Mapping):
                 continue
-            for operation in [item.get("operation"), *(item.get("operation_history") or [])]:
+            for history_index, operation in enumerate(
+                [item.get("operation"), *(item.get("operation_history") or [])]
+            ):
                 if not isinstance(operation, Mapping):
                     continue
                 result = operation.get("result") or {}
@@ -2199,12 +2201,26 @@ class Closer:
                     and accepted.get("request_basis") == basis
                     and isinstance(accepted.get("mutation_kind"), str)
                     and accepted["mutation_kind"] in {"label", "workflow_dispatch"}
+                    and (
+                        "correlation_input" not in accepted
+                        or accepted.get("correlation_input") == basis
+                    )
                     and all(
                         record.get(key) is None or record.get(key) is False
                         for record in (operation, result)
                         for key in ("outcome_uncertain", "no_effect", "advisory_only")
                     )
                 ):
+                    if history_index and basis == self.verification_request_basis(snapshot):
+                        # Acceptance remains owned when a later queue operation
+                        # archives the actual POST. A revision-only change cannot
+                        # resend its identical event/material request. This is a
+                        # fence only, never adoption as source completion proof.
+                        return {
+                            "operation_id": operation.get("id"),
+                            "request_basis": basis,
+                            "accepted_history": True,
+                        }
                     continue
                 return {"operation_id": operation.get("id"), "request_basis": basis}
         return None
