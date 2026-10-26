@@ -5585,8 +5585,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 raise ValueError("snapshot identity mismatch")
         except (OSError, ValueError, KeyError, TypeError):
             snap = compact
-        if packet:
-            snap["base"] = packet.get("base")
+        # Retained evidence cannot replace the current observed identity.
+        # Readiness must see and collect an explicit snapshot/packet mismatch.
         return snap, packet
 
     def effective_preparation(context):
@@ -6719,11 +6719,35 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     return pending
             elif not readiness["ready"]:
                 return evidence_pending(target, prep, readiness)
-        if prior_wait is None and (
-            raw_packet is None
-            or raw_packet.get("target") != target
-            or raw_packet.get("head") != admitted_snapshot.get("head")
-        ):
+        identity_gaps = []
+        if prior_wait is None:
+            if (
+                raw_packet is None
+                or raw_packet.get("target") != target
+                or admitted_snapshot.get("target") != target
+                or raw_packet.get("head") != admitted_snapshot.get("head")
+            ):
+                identity_gaps.append("packet:invalid_or_unavailable")
+            else:
+                # These are the same known identity contradictions checked by
+                # integrate_ordinary, not semantic sufficiency or risk judgments.
+                if raw_packet.get("base") != admitted_snapshot.get("base"):
+                    identity_gaps.append("packet:base_mismatch")
+                if prep.get("revision") != admitted_snapshot.get("revision"):
+                    identity_gaps.append("packet:revision_mismatch")
+                current_producer = hashlib.sha256(
+                    Path(closer_evidence.__file__).read_bytes()
+                ).hexdigest()
+                if (
+                    raw_packet.get("producer_sha256") != current_producer
+                    or prep.get("producer_sha256") != current_producer
+                ):
+                    identity_gaps.append("packet:producer_mismatch")
+                if raw_packet.get("bindings", {}).get("reviews") != closer_evidence._hash(
+                    admitted_snapshot.get("review_revision")
+                ):
+                    identity_gaps.append("review_conversations:revision_binding_mismatch")
+        if identity_gaps:
             return evidence_pending(
                 target,
                 prep,
@@ -6732,9 +6756,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "ready": False,
                     "evaluation_ready": False,
                     "gaps": list(
-                        dict.fromkeys(
-                            [*(readiness or {}).get("gaps", []), "packet:invalid_or_unavailable"]
-                        )
+                        dict.fromkeys([*(readiness or {}).get("gaps", []), *identity_gaps])
                     ),
                 },
             )
