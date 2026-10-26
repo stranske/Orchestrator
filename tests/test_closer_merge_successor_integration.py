@@ -897,7 +897,10 @@ def test_public_post_produces_authenticated_accepted_wait_without_normalization(
         "provider_unknown",
     ],
 )
-def test_actual_completed_request_wait_rejects_unbound_progress(public_merge_world, capsys, damage):
+@pytest.mark.parametrize("wait_shape", ["ineligible", "historical_progress"])
+def test_actual_completed_request_wait_rejects_unbound_progress(
+    public_merge_world, capsys, damage, wait_shape
+):
     w = public_merge_world
     dispatcher.main(w.argv)
     produced = json.loads(capsys.readouterr().out)
@@ -914,6 +917,21 @@ def test_actual_completed_request_wait_rejects_unbound_progress(public_merge_wor
     operation = item["operation"]
     receipt = bucket["round"]["receipt"]
     evidence = action["pending_evidence"]
+    if wait_shape == "historical_progress":
+        # Historical eligible collection remains supported, but cannot bypass
+        # either the original POST provenance or the uncertainty barriers.
+        item.update(eligible=True, deferred_reason="pass_limit")
+        receipt["accounting"] = [queue._account_row("owner/repo#12", item)]
+        receipt["deferred"] = copy.deepcopy(receipt["accounting"])
+        receipt["eligible_remaining"] = ["owner/repo#12"]
+        receipt["continuation_required"] = True
+        path.write_text(json.dumps(document))
+        assert (
+            queue.accepted_verifier_wait_proof(
+                path, "owner/repo#12", frontier=frontier, receipt=receipt, evidence=evidence
+            )
+            is not None
+        )
     if damage in {"missing_submit", "missing_advance"}:
         kind = "operation_submitted" if damage == "missing_submit" else "action_advanced"
         receipt["events"] = [event for event in receipt["events"] if event.get("kind") != kind]
@@ -947,6 +965,146 @@ def test_actual_completed_request_wait_rejects_unbound_progress(public_merge_wor
     )
     assert path.read_bytes() == before and len(w.merges) == len(w.verifies) == 1
     assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "missing_submit",
+        "missing_advance",
+        "wrong_submit_id",
+        "wrong_advance_id",
+        "provider_unknown",
+        "outcome_unknown",
+        "recovery_barrier",
+    ],
+)
+def test_cross_frontier_wait_checks_original_post_receipt(public_merge_world, capsys, damage):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    target = "owner/repo#12"
+    child = produced["merge_verification_successors"][target]
+    origin = child["lineage"]["finite_frontier"]
+    shard = resources.shard_dir(
+        resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target
+    )
+    path = shard / "state.actions" / f"{pipeline._digest(target)}.json"
+    # Actual per-target state.actions is beside state.json in the shard.
+    document = queue._read_state(path)
+    bucket = document["frontiers"][origin["frontier_id"]]
+    original_item = bucket["items"][target]
+    operation = original_item["operation"]
+    following = policy.make_frontier(
+        [target],
+        owner=origin["owner"],
+        frontier_id="later-accepted-observation",
+        bindings={
+            target: {
+                "revision": w.snapshot["revision"],
+                "action_id": policy.action_identity(
+                    target, w.snapshot["revision"], "wait", operation["binding"]
+                ),
+            }
+        },
+    )
+    receipt = queue.run_round(
+        path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": w.snapshot["revision"],
+            "action": "wait",
+            "eligible": False,
+            "reason": "same verification request already accepted",
+            "next_trigger": "authenticated result",
+            "operation_binding": operation["binding"],
+            "evidence": {"target": target, **copy.deepcopy(w.snapshot)},
+        },
+        lambda *_: pytest.fail("a later wait must never issue another POST"),
+        finite_frontier=following,
+        frontier_target=target,
+        deadline=None,
+        request_timeout_seconds=25,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+    )
+    evidence = {
+        "target": target,
+        "observed_revision": w.snapshot["revision"],
+        "head": w.snapshot["head"],
+        "merge": w.snapshot["merge"],
+        "operation_id": operation["id"],
+        "event_id": operation["result"]["verification_request_basis"],
+    }
+    assert (
+        queue.accepted_verifier_wait_proof(
+            path, target, frontier=following, receipt=receipt, evidence=evidence
+        )
+        is not None
+    )
+    document = queue._read_state(path)
+    bucket = document["frontiers"][origin["frontier_id"]]
+    original_item = bucket["items"][target]
+    if damage in {"missing_submit", "missing_advance", "wrong_submit_id", "wrong_advance_id"}:
+        kind = "operation_submitted" if "submit" in damage else "action_advanced"
+        # Keep both copies consistent: refusal must check actual causal binding,
+        # not merely detect different round/receipt serializations.
+        for record in (bucket["round"], bucket["round"]["receipt"]):
+            if damage.startswith("missing"):
+                record["events"] = [event for event in record["events"] if event["kind"] != kind]
+            else:
+                next(event for event in record["events"] if event["kind"] == kind)[
+                    "operation_id"
+                ] = "foreign"
+    elif damage == "provider_unknown":
+        original_item["provider_outcome_uncertain"] = {"run_id": "unknown-original"}
+    elif damage == "outcome_unknown":
+        original_item["operation"]["result"]["outcome_uncertain"] = True
+    elif damage == "recovery_barrier":
+        original_item["recovery_barrier"] = {"run_id": "unknown-original"}
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    checked = queue.accepted_verifier_wait_proof(
+        path, target, frontier=following, receipt=receipt, evidence=evidence
+    )
+    assert (checked is not None) is (damage is None)
+    assert path.read_bytes() == before and len(w.merges) == len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize("remove_progress", [False, True])
+def test_static_ack_action_change_requires_original_progress_event(
+    tmp_path, monkeypatch, remove_progress
+):
+    import test_closer_accepted_request_wait as static_wait
+
+    backend, remote, path, frontier = static_wait.world.__wrapped__(tmp_path, monkeypatch)
+    receipt = static_wait.run(
+        backend, path, frontier, lambda *_: static_wait.submit(backend, remote)
+    )
+    assert static_wait.proof(path, frontier, receipt, backend, remote) is not None
+    document = queue._read_state(path)
+    bucket = document["frontiers"][frontier["frontier_id"]]
+    item = bucket["items"][static_wait.TARGET]
+    operation = item["operation"]
+    assert item["revision"] == operation["revision"] == remote.current["revision"]
+    assert operation["action"] == "post_merge_verify" and item["action"] == "collect_evidence"
+    if remove_progress:
+        # Remove both redundant copies consistently. The accounting action
+        # change still claims progress even when the remote revision is static.
+        for record in (bucket["round"], bucket["round"]["receipt"]):
+            record["events"] = [
+                event for event in record["events"] if event["kind"] != "action_advanced"
+            ]
+            record["progress"] = []
+    receipt = bucket["round"]["receipt"]
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    checked = static_wait.proof(path, frontier, receipt, backend, remote)
+    assert (checked is not None) is (not remove_progress)
+    assert path.read_bytes() == before and len(remote.posts) == 1
 
 
 @pytest.mark.parametrize(
