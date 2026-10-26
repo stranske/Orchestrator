@@ -1,0 +1,65 @@
+{
+  "schema": "non-claude-data-only-inspection/v1",
+  "origin": "local-help-and-source-read-only",
+  "observed_date": "2026-10-25",
+  "model_calls": 0,
+  "activation": false,
+  "candidates": {
+    "cursor": {
+      "version": "2026.10.22-27dcf5f",
+      "models_found": ["composer-2.5", "composer-2.5-fast"],
+      "entitlement": "unknown",
+      "status": "unsupported",
+      "reason": "Allowed-tools empty is an unverified remote header; independent hook loading and no complete MCP/no-fallback fence.",
+      "hashes": {
+        "wrapper": "2ccc9a8e167797641448b5e5c936f006ba137a2555f117f38c5eb76a5238a233",
+        "index.js": "943765eeedb4fe5d4ab6d95fc839c3eaf0c070e734577409badb9dea5b0ed293",
+        "node": "06eb3f5762c2b6890e99d03f931bf01d9b20fd341dec1a8c1ef5c1809e66102b",
+        "8008.index.js": "448a22d3908279dbfd7ac47c014979643add4d73b63f2bd880dce6501abec678",
+        "1841.index.js": "c867eccddf46be1f4c77053387ba55121c33cc5d0f2231441575965f2ed4c8c2"
+      },
+      "source_refs": ["index.js byte2037212:hidden flags", "8008.index.js byte923760:allowed tool header", "8008.index.js byte726730:independent hook executor", "1841.index.js byte78072:hook locations"]
+    },
+    "vibe": {
+      "version": "2.15.0",
+      "models_found": ["mistral-medium-3.5"],
+      "upstream_alias": "mistral-vibe-cli-latest",
+      "entitlement": "unknown",
+      "status": "unsupported",
+      "reason": "Deny-all requires cleared allows; custom modules import before filtering; unpinned Python/import/config/agent closure and mutable upstream alias.",
+      "hashes": {
+        "launcher": "8d6ffc5710377d17b4b434d4a29831d6bdedfac8326b985839b0dbe397de2305",
+        "interpreter": "d01b09973b5bd3ff617e7849ce9c0bdb8991256f495ce190720ccc976cdaaee7",
+        "core/config/_settings.py": "89f2e55d283c8334ea0ec563fd87865ca3f74e5cf41cc1e22768525181a599f8",
+        "core/tools/manager.py": "3d0bb39cb4c9460ed1ff736d64fd2ca396bb0b62feb528d88ad56de41b4fc431",
+        "core/hooks/config.py": "38eb5e2f8f0430512816731dba59ba03311c80381e89a48fa75dd83b1b32725f",
+        "core/agents/manager.py": "2111855b9a8e44b0674040bd6bcaadaca5999e798fe19641e1cd1721e4f5f0f6"
+      },
+      "source_refs": ["core/tools/manager.py:140-157 import before deny", "core/tools/manager.py:208-218 allowlist precedence", "core/hooks/config.py:89-91 hook gate", "core/agents/manager.py:106-123 agent overrides", "core/config/_settings.py:902-923 environment precedence"]
+    },
+    "gemini": {
+      "version": "agy installed native binary",
+      "models_found": [],
+      "repository_candidate_models": ["gemini-3.8-flash-low", "gemini-4-argon-high"],
+      "entitlement": "unknown",
+      "status": "unsupported",
+      "reason": "Plan/sandbox and disable-slash-commands do not establish all-tools/MCP/hooks/project-context/no-fallback fences. Binary model strings are not accepted-ID evidence.",
+      "hashes": {"native": "b7a13e53c9f49921692676ef8edc2e60ceb67064c00bc732d9a364ec3ad75b32"},
+      "source_refs": ["native --help: mode/print/sandbox/disable-slash-commands", "native help: persistent per-server MCP configuration"]
+    },
+    "muse": {
+      "version": "1.4.13-R6996.1",
+      "models_found": ["muse-spark-1.2", "muse-spark-1.3"],
+      "repository_prior_observed_model": "muse-wonder-1.0",
+      "entitlement": "unknown",
+      "status": "unsupported",
+      "reason": "Selective tool disables/empty preset do not establish universal tools/MCP/hooks/context/no-fallback fences; wrapper auto-updates and chooses a native payload.",
+      "hashes": {
+        "wrapper": "c6db294799a190ca380da274beb3b9c0e160e0da9681a3d364ce8b0e5fa3a4bc",
+        "native": "9fd40ae9c6dfb847e3ef58b61405c004d0ebbf19ceb0297be966f750b3b84aa0",
+        "exec-help": "866a7d36b2027098d4aeb1d73c0b8bd5a999e2a6de45a32d975c54aa3f52679e"
+      },
+      "source_refs": ["wrapper:1089-1112 auto-update", "wrapper active_binary:.muse-version", "native exec --help:selective disables/preset"]
+    }
+  }
+}
