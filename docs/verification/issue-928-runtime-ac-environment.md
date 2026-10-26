@@ -43,10 +43,10 @@ The first adjacent-suite run lacked the tooling venv on `PATH` and failed the
 shadow-ingest subprocess test because bare `python3` had no pytest. The command
 above fixes that validation environment and passes without production changes.
 
-Black formatted the changed Python file, and its targeted `--check --line-length 100`
-passes. The required repository-wide check has not returned a result; bounded
-multi-file diagnostic runs also timed out. The full formatting gate remains
-unverified. These checks use `BLACK_NUM_WORKERS=1`. Dependency verification
+Black formatted the changed Python files, and their targeted checks pass. The
+required repository-wide check subsequently passed with **714 files unchanged**
+using `BLACK_NUM_WORKERS=1` and a writable `BLACK_CACHE_DIR` after the bounded
+diagnostics populated the cache. Dependency verification
 (`python3 scripts/sync_test_dependencies.py --verify`) and `git diff --check` pass.
 
 Commit handoff is blocked by the runner's read-only `.git` mount: staging these
@@ -58,3 +58,36 @@ item 4 remains pending its required main-branch run. The GitHub connector reject
 the PR-body update because it requires approval and this run's approval policy is
 `never`, so remote checkboxes remain unchanged. The PR was open and ready for review
 when inspected.
+
+## Follow-up: scheduler pip install destinations
+
+The recent commits were reviewed before this follow-up. Acceptance items 1, 2, 3,
+and 5 remain verified; item 4 still requires delivery and verification on main.
+The PR-body reconciliation was attempted again and rejected by the connector's
+approval requirement, so the remote acceptance checkboxes remain unchecked.
+
+Extended the existing offline provisioning regression with inherited `PIP_TARGET`,
+`PIP_PREFIX`, and `PIP_USER`. Before the fix it failed with `UNRUNNABLE/tool_error`.
+Provisioning now removes those install-location overrides while retaining index
+and wheelhouse settings. The regression passes and confirms neither scheduler
+destination was created. The mocked provisioning test verifies all three settings
+are absent and the offline dependency-source settings are preserved.
+
+The eight-suite command above still reports **207 passed, 70 subtests passed**.
+Repeated the deliberate-break/revert demonstration: the named regression failed
+with `FAIL != UNRUNNABLE`, then passed after restoring the source byte for byte.
+Both changed Python files pass Black individually. A four-minute diagnostic using
+a fork process pool exited 124 after reporting 714 files unchanged. The subsequent
+required repository-wide command, using the populated writable cache, exited 0
+and reported **714 files unchanged**:
+
+```bash
+BLACK_CACHE_DIR=/tmp/runtime-ac-black-cache BLACK_NUM_WORKERS=1 \
+  black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .
+```
+
+Dependency verification and `git diff --check` pass.
+
+Staging the two Python files was attempted again and failed with
+`Unable to create '.git/index.lock': Read-only file system`. No commit or push was
+possible in this run.

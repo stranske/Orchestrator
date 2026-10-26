@@ -428,7 +428,9 @@ def _worktree_interpreter(worktree: str | Path) -> str:
         selected = sorted(set(extras) & {"dev", "test", "tests"})
         requirements.append(".[" + ",".join(selected) + "]" if selected else ".")
     setup_env = os.environ.copy()
-    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+    # Scheduler install destinations can redirect pip outside this venv or force
+    # an unsupported user install. Retain index settings for repository dependencies.
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "PIP_TARGET", "PIP_PREFIX", "PIP_USER"):
         setup_env.pop(key, None)
     # Build backends and dependency installers can launch Python by name too.
     # Keep their children in this venv, just like the subsequent command checks.

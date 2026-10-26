@@ -519,7 +519,16 @@ class PostMergeBreakTests(unittest.TestCase):
         interpreter = str(self.checkout / ".venv/bin/python")
         with (
             patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run,
-            patch.dict(os.environ, PYTHONPATH="/scheduler/src", PYTHONHOME="/scheduler/python"),
+            patch.dict(
+                os.environ,
+                PYTHONPATH="/scheduler/src",
+                PYTHONHOME="/scheduler/python",
+                PIP_TARGET="/scheduler/pip-target",
+                PIP_PREFIX="/scheduler/pip-prefix",
+                PIP_USER="1",
+                PIP_NO_INDEX="1",
+                PIP_FIND_LINKS="/scheduler/wheels",
+            ),
         ):
             self.assertEqual(gate._worktree_interpreter(self.checkout), interpreter)
         commands = [call.args[0] for call in run.call_args_list]
@@ -542,6 +551,10 @@ class PostMergeBreakTests(unittest.TestCase):
             self.assertEqual(call.kwargs["cwd"], str(self.checkout))
             self.assertNotIn("PYTHONPATH", call.kwargs["env"])
             self.assertNotIn("PYTHONHOME", call.kwargs["env"])
+            for key in ("PIP_TARGET", "PIP_PREFIX", "PIP_USER"):
+                self.assertNotIn(key, call.kwargs["env"])
+            self.assertEqual(call.kwargs["env"]["PIP_NO_INDEX"], "1")
+            self.assertEqual(call.kwargs["env"]["PIP_FIND_LINKS"], "/scheduler/wheels")
         install_env = run.call_args_list[1].kwargs["env"]
         self.assertEqual(install_env["PATH"].split(os.pathsep)[0], str(Path(interpreter).parent))
 
@@ -723,6 +736,9 @@ class PostMergeBreakTests(unittest.TestCase):
             PYTHONPATH=str(scheduler_source),
             PYTHONHOME=str(scheduler / "unavailable-python"),
             VIRTUAL_ENV=str(scheduler),
+            PIP_TARGET=str(scheduler / "pip-target"),
+            PIP_PREFIX=str(scheduler / "pip-prefix"),
+            PIP_USER="1",
         ):
             result = gate.recheck_merged(spec, self.checkout)
         self.assertEqual(result["result"], "PASS", result)
@@ -731,6 +747,8 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(row["interpreter"], interpreter)
         self.assertEqual(shlex.split(row["command"])[0], interpreter)
         self.assertIn("2 passed", row["stdout_tail"])
+        self.assertFalse((scheduler / "pip-target").exists())
+        self.assertFalse((scheduler / "pip-prefix").exists())
 
     def test_tool_only_pyproject_does_not_require_a_distribution(self):
         (self.checkout / "pyproject.toml").write_text("[tool.black]\nline-length = 100\n")
