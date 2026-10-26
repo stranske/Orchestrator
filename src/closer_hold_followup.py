@@ -119,6 +119,13 @@ def summarize_holds(doc: Mapping[str, Any], now: float | None = None) -> dict[st
     }
 
 
+def _assignment_path():
+    return (
+        Path.home()
+        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
+    )
+
+
 def _paths(doc: Mapping[str, Any]) -> tuple[Path, dict[str, Any]] | None:
     import closer_dispatcher as dispatcher
     import closer_frontier_policy as frontiers
@@ -208,6 +215,76 @@ def _boundary(row: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
     return None
 
 
+def _inherit_no_start_lineage(candidate, journal, doc, current):
+    """Reblocked same-cohort work cannot purchase another deadline or attempts."""
+    if candidate["execution_state"] != "confirmed_not_started" or candidate["release_proof"][
+        "kind"
+    ] not in {"capacity_available", "role_qualified"}:
+        return
+    previous = []
+    for held in journal.values():
+        if not (
+            held.get("status") == "consumed"
+            and held.get("execution_state") == "confirmed_not_started"
+            and held.get("release_proof", {}).get("kind")
+            in {"capacity_available", "role_qualified"}
+            and held.get("observer_generation") == candidate["generation"]
+            and all(
+                held.get(key) == candidate.get(key)
+                for key in (
+                    "campaign_id",
+                    "owner",
+                    "release_pin",
+                    "config_sha256",
+                    "target",
+                    "run_id",
+                    "frontier",
+                )
+            )
+        ):
+            continue
+        transitions = [
+            entry
+            for entry in doc.get("hold_followup_transitions", [])
+            if entry.get("next_generation") == candidate["generation"]
+            and entry.get("previous_generation") == held.get("generation")
+            and entry.get("owner") == candidate["owner"]
+            and entry.get("release_pin") == candidate["release_pin"]
+            and any(
+                release.get("hold_id") == held["hold_id"] for release in entry.get("releases", [])
+            )
+        ]
+        if len(transitions) != 1:
+            raise ValueError("reblocked hold lacks its exact original rearm transition")
+        previous.append(held)
+    if not previous:
+        return
+    if len(previous) != 1:
+        raise ValueError("reblocked hold has conflicting original lineages")
+    held = previous[0]
+    candidate.update(
+        lineage_id=held.get("lineage_id", held["hold_id"]),
+        predecessor_hold_id=held["hold_id"],
+        **{
+            key: held[key]
+            for key in (
+                "created_at",
+                "next_check_at",
+                "deadline",
+                "attempt_budget",
+                "attempts",
+                "escalation_owner",
+            )
+        },
+    )
+    if current >= candidate["deadline"] or candidate["attempts"] >= candidate["attempt_budget"]:
+        candidate.update(
+            status="escalated",
+            escalated_at=current,
+            escalation_reason="inherited_deadline_or_attempt_budget",
+        )
+
+
 def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
     """Bind actual retained pipeline rows to this campaign's durable owner."""
     import closer_finite_reentry as reentry
@@ -261,7 +338,10 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
             import closer_queue as queue
 
             queued = queue.state_for_frontier(
-                queue._read_state(queue_path), frontier["frontier_id"], expected_policy=frontier
+                queue._read_state(queue_path),
+                frontier["frontier_id"],
+                expected_policy=frontier,
+                allow_missing=True,
             )
             operation = ((queued or {}).get("items") or {}).get(target, {}).get("operation")
             if not isinstance(operation, Mapping):
@@ -397,6 +477,9 @@ def capture(campaign: Any, *, now: float | None = None) -> dict[str, Any]:
                 continue  # Never reset original deadline, identity or attempt budget.
             if len(journal) >= MAX_HOLDS:
                 raise ValueError("hold journal exceeds bound")
+            _inherit_no_start_lineage(candidate, journal, value, current)
+            if not validate_hold(candidate):
+                raise ValueError("inherited hold bounds are malformed")
             journal[candidate["hold_id"]] = candidate
 
     return campaign.update(persist)
@@ -652,16 +735,17 @@ def _apply_no_start(
             "followup_manifest": {
                 "path": str(Path(manifest_path).resolve()),
                 "sha256": hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest(),
-            }
+            },
+            "capacity_observation_window": {
+                "started_at": record["last_check_at"],
+                "expires_at": min(record["deadline"], record["last_check_at"] + 120),
+            },
         }
         common = {
             "frontier": record["frontier"],
             "target": record["target"],
             "event": event,
-            "assignment_path": str(
-                Path.home()
-                / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-            ),
+            "assignment_path": str(_assignment_path()),
             "source_receipts": receipts,
         }
         proposal = reentry.plan(record["source"]["state_path"], **common)
@@ -726,10 +810,7 @@ def _apply_no_start(
                 frontier=record["frontier"],
                 target=record["target"],
                 event=intent["event"],
-                assignment_path=str(
-                    Path.home()
-                    / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-                ),
+                assignment_path=str(_assignment_path()),
                 source_receipts=intent["source_receipts"],
                 expected_plan_sha256=intent["plan_sha256"],
             )
@@ -819,10 +900,10 @@ def _probe_ci(
     import closer_queue as queue
     import closer_verifier_followup as followup
 
-    snapshot = _backend(manifest_path, doc).observe(record["target"])
-    snapshot["observed_at"] = time.time()
     if record["release_proof"]["kind"] != "accepted_verifier_terminal":
         return {"status": "waiting", "reason": "fresh CI requires a normally admitted new frontier"}
+    snapshot = _backend(manifest_path, doc).observe(record["target"])
+    snapshot["observed_at"] = time.time()
     source = Path(record["source"]["state_path"])
     action_path = (
         source.parent / f"{source.stem}.actions" / f"{pipeline._digest(record['target'])}.json"
@@ -941,6 +1022,89 @@ def _validate_terminal_intent(campaign, doc, manifest, record, intent):
     _validate_terminal_boundary(campaign, doc, manifest, record, intent.get("terminal_boundary"))
 
 
+def _observe_io_capacity(state_path, frontier, target, row, source_receipts):
+    import closer_finite_reentry as reentry
+    import closer_pipeline as pipeline
+    import closer_resources as resources
+
+    path = reentry._physical(state_path)
+    root = path.parent.parent.parent
+    context = row.get("shared_lane_context")
+    if not isinstance(context, Mapping):
+        raise ValueError("original shared IO bound is unavailable")
+    body = {key: value for key, value in context.items() if key != "sha256"}
+    bounds = body.get("bounds")
+    if not (
+        path.name == "state.json"
+        and path.parent == resources.shard_dir(root, target)
+        and body.get("schema") == "closer-shared-lane-context/v1"
+        and body.get("root") == str(root)
+        and body.get("state_path") == str(path)
+        and body.get("target") == target
+        and body.get("frontier_sha256") == _digest(frontier)
+        and context.get("sha256") == _digest(body)
+        and isinstance(bounds, Mapping)
+        and set(bounds) == set(pipeline.CEILINGS)
+        and all(
+            type(bounds[key]) is int and 1 <= bounds[key] <= pipeline.CEILINGS[key]
+            for key in bounds
+        )
+    ):
+        raise ValueError("original shared IO context is malformed or changed")
+    document, _ = reentry._read(path)
+    entry = (document.get("frontiers") or {}).get(frontier["frontier_id"], {})
+    current_row = (entry.get("items") or {}).get(target)
+    if (
+        document.get("schema") != pipeline.SCHEMA
+        or entry.get("schema") != "closer-pipeline-frontier/v2"
+        or entry.get("finite_frontier") != frontier
+        or entry.get("run_id")
+        != _digest(["finite-frontier/v2", frontier["frontier_id"], frontier["owner"]])[:32]
+        or not isinstance(current_row, Mapping)
+    ):
+        raise ValueError("IO observation differs from exact retained capacity row")
+    if current_row != row:
+        # Plan/apply/ready/rearm recheck the same original no-start release.
+        # Only its exact applied fresh-PREPARE audit may replace that old row.
+        ready = current_row.get("reentry_ready") or {}
+        if not _text(ready.get("event")):
+            raise ValueError("IO original row has no exact applied reentry audit")
+        audit_path = (
+            root / "reentry-audit" / (_digest([frontier, target, ready["event"]]) + ".json")
+        )
+        audit, _ = reentry._read(audit_path)
+        if not (
+            audit.get("status") == "applied"
+            and audit.get("before") == row
+            and audit.get("after_sha256") == _digest(current_row)
+            and audit.get("plan", {}).get("plan_sha256") == ready.get("plan_sha256")
+            and current_row.get("shared_lane_context") == context
+        ):
+            raise ValueError("IO original row no longer matches its applied reentry audit")
+    window = source_receipts.get("capacity_observation_window") or {}
+    start, end, current = window.get("started_at"), window.get("expires_at"), time.time()
+    if not (_number(start) and _number(end) and start <= current < end <= start + 120):
+        raise ValueError("original IO observation window is unavailable or expired")
+    # Reuse the actual scheduler's flock/fence logic. One nonblocking pass,
+    # without a finite reservation or provider/child launch, observes a slot.
+    reentry._physical(root / "pools" / "io")
+    for index in range(bounds["io"]):
+        reentry._physical(root / "pools" / "io" / f"slot-{index}")
+        reentry._physical(root / "pools" / "io" / f"slot-{index}.json")
+    with resources.pool_slot(root, "io", bounds["io"], deadline=current):
+        if not start <= time.time() < end:
+            raise ValueError("original IO observation window expired during check")
+    return {
+        "schema": "closer-io-availability-observation/v1",
+        "root": str(root),
+        "lane": "io",
+        "bound": bounds["io"],
+        "original_context_sha256": context["sha256"],
+        "observation_window": dict(window),
+        "available": True,
+    }
+
+
 def release_probe(
     state_path: str | Path,
     frontier: Mapping[str, Any],
@@ -958,10 +1122,7 @@ def release_probe(
     import closer_role_qualification as roles
     import execution_profiles
 
-    canonical = (
-        Path.home()
-        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-    )
+    canonical = _assignment_path()
     assignment = reentry._physical(assignment_path)
     if assignment != canonical or dispatcher.assignment_dependency(assignment, target) is not None:
         raise ValueError("hold release requires current active canonical assignment")
@@ -1011,21 +1172,25 @@ def release_probe(
     if stage not in {"prepare", "interpret", "exception", "act"}:
         raise ValueError("unsupported no-start stage")
     eligible = []
-    capacity_inputs = None
-    if expected_role is not None:
-        strict = native.capacity_contract(manifest)
-        producer = {
-            "schema": scoped.SCHEMA,
-            "owner": strict["owner"],
-            "profile_ids": strict["profile_ids"],
-            "bounded_trial_agents": strict["bounded_trial_agents"],
-            "original_deadline": time.time() + 120,
-            "runtime_manifest": str(manifest_path),
-            "runtime_manifest_sha256": manifest_ref["sha256"],
-        }
-        report = scoped.evaluate(producer)
-        if not scoped.validate_report(report, now=time.time()):
-            raise ValueError("hold capacity observation is not current")
+    strict = native.capacity_contract(manifest) if expected_role is not None else policy_value
+    producer = {
+        "schema": scoped.SCHEMA,
+        "owner": strict["owner"],
+        "profile_ids": strict["profile_ids"] if expected_role is not None else [],
+        "bounded_trial_agents": strict["bounded_trial_agents"] if expected_role is not None else [],
+        "original_deadline": time.time() + 120,
+        "runtime_manifest": str(manifest_path),
+        "runtime_manifest_sha256": manifest_ref["sha256"],
+        **({"control_plane_only": True} if expected_role is None else {}),
+    }
+    report = scoped.evaluate(producer)
+    if not scoped.validate_report(report, now=time.time()):
+        raise ValueError("hold capacity observation is not current")
+    capacity_inputs = report["input_sha256"]
+    io_observation = None
+    if expected_role is None:
+        io_observation = _observe_io_capacity(state_path, frontier, target, row, source_receipts)
+    else:
         for profile_id in strict["profile_ids"]:
             profile = execution_profiles.get_profile(profile_id)
             if dispatcher._profile_exception_qualified(
@@ -1039,7 +1204,6 @@ def release_probe(
                 )
         if not eligible:
             raise ValueError("role or model pool remains unavailable")
-        capacity_inputs = report["input_sha256"]
     return {
         "schema": "closer-hold-release-proof/v1",
         "target": target,
@@ -1050,6 +1214,7 @@ def release_probe(
         "assignment_sha256": hashlib.sha256(assignment.read_bytes()).hexdigest(),
         "eligible_profiles": sorted(eligible, key=lambda item: item["profile_id"]),
         "capacity_inputs": capacity_inputs,
+        **({"io_observation": io_observation} if io_observation is not None else {}),
         "acceptance_authority": False,
     }
 

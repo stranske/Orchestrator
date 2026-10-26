@@ -2703,6 +2703,62 @@ def run_scoped(
                         return scope_guard(prepare, "prepare")(name, context)
 
                     with fenced(lease, now):
+                        if finite_frontier is not None:
+                            assert admission_deadline is not None
+                            # Retain the OUTER shared bounds, not the per-shard
+                            # runner's single-worker ceiling. Historical rows
+                            # without this observation are never backfilled.
+                            context_body = {
+                                "schema": "closer-shared-lane-context/v1",
+                                "root": str(root.resolve()),
+                                "state_path": str(lease.state_path.resolve()),
+                                "target": target,
+                                "frontier_sha256": cp._digest(finite_frontier),
+                                "bounds": dict(bounds),
+                            }
+                            context = {**context_body, "sha256": cp._digest(context_body)}
+                            with inventory_request(admission_deadline, now=now):
+                                with cp._locked(
+                                    lease.state_path,
+                                    timeout_seconds=max(0.001, admission_deadline - now()),
+                                ):
+                                    retained = cp._load(lease.state_path)
+                                    entries = retained.setdefault("frontiers", {})
+                                    entry = entries.setdefault(
+                                        finite_frontier["frontier_id"],
+                                        {
+                                            "schema": "closer-pipeline-frontier/v2",
+                                            "run_id": cp._digest(
+                                                [
+                                                    "finite-frontier/v2",
+                                                    finite_frontier["frontier_id"],
+                                                    finite_frontier["owner"],
+                                                ]
+                                            )[:32],
+                                            "finite_frontier": finite_frontier,
+                                            "created_at": now(),
+                                            "items": {},
+                                        },
+                                    )
+                                    if entry.get("finite_frontier") != finite_frontier:
+                                        raise ResourceBlocked(
+                                            "shared lane frontier context differs"
+                                        )
+                                    existing = entry.setdefault("items", {}).get(target)
+                                    if existing is None:
+                                        entry["items"][target] = {
+                                            "status": "pending",
+                                            "stage": "prepare",
+                                            "results": {},
+                                            "metrics": {"requests": 0},
+                                            "shared_lane_context": context,
+                                        }
+                                        cp._save(lease.state_path, retained)
+                                    elif (
+                                        existing.get("shared_lane_context") is not None
+                                        and existing["shared_lane_context"] != context
+                                    ):
+                                        raise ResourceBlocked("shared lane original bounds changed")
                         runner = (
                             cp._run_pipeline_legacy
                             if finite_frontier is None
