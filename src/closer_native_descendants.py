@@ -694,11 +694,15 @@ def seal_bundle(cfg, candidate, watermark):
             "sha256": hashlib.sha256(watermark[1]).hexdigest(),
         },
         "leaves": leaves,
-        "aggregate": "unknown"
-        if any(row["domain"] == "unknown" for row in leaves)
-        else "known_held"
-        if any(row["active"] and row["domain"] == "known_held" for row in leaves)
-        else "completed",
+        "aggregate": (
+            "unknown"
+            if any(row["domain"] == "unknown" for row in leaves)
+            else (
+                "known_held"
+                if any(row["active"] and row["domain"] == "known_held" for row in leaves)
+                else "completed"
+            )
+        ),
         "authority": False,
     }
     return _write_signed(root / context["nonce"] / "descendant-receipts.json", record, root)
