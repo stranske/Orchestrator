@@ -247,19 +247,12 @@ class TestExceptionCallbackIdentity:
     """Pipeline exception callback must preserve router-selected provider identity."""
 
     def test_non_codex_exception_callback_identity(self, tmp_path, monkeypatch):
-        from test_closer_dispatcher import (
-            TARGET,
-            FakeGitHub,
-            snapshot,
-            stub_action_readiness_for_transport_test,
-        )
+        from test_closer_disposition import TARGET
+        from test_closer_execution_contract_routes import named, prepared, scoped_answer
 
-        stub_action_readiness_for_transport_test(monkeypatch)
-
-        import closer_pipeline
-
-        current = snapshot()
-        fake_gh = FakeGitHub(current)
+        delivery, callbacks, context = prepared(tmp_path, monkeypatch)
+        row = named(context["interpret"])
+        backend = delivery.backend
         route = {
             "agent": "claude",
             "profile_id": "claude-offload-assess",
@@ -278,14 +271,6 @@ class TestExceptionCallbackIdentity:
             return (route, "available")
 
         monkeypatch.setattr(adapter, "_exception_route", exception_route)
-        monkeypatch.setattr(adapter, "GitHub", lambda **kw: fake_gh)
-        backend = adapter.Closer(
-            fake_gh,
-            state_path=tmp_path / "state.json",
-            apply=True,
-            workers=True,
-            workspaces={"o/r": str(tmp_path)},
-        )
 
         def worker_stub(target, action, snap, op, **kwargs):
             worker_calls.append(kwargs)
@@ -294,38 +279,22 @@ class TestExceptionCallbackIdentity:
                 "worker": {
                     "exit": 0,
                     "output": json.dumps(
-                        {
-                            "classification": "uncertain",
-                            "substantive_needs": ["needs senior review"],
-                        }
+                        scoped_answer(kwargs["advisory_context"]["adjudication_request"], row)
                     ),
                 },
             }
 
         monkeypatch.setattr(backend, "worker", worker_stub)
-        callbacks = {}
-
-        def capture(_path, _targets, **kwargs):
-            callbacks.update(kwargs)
-            return {"targets": {}}
-
-        monkeypatch.setattr(closer_pipeline, "run_pipeline", capture)
-        args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-        adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 600)
-        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 180})
-        context = {
-            "prepare": prep,
-            "deadline": time.time() + 180,
-            "revision": prep["revision"],
-            "work_key": "non-codex-exception",
-        }
-        result = callbacks["exception"](
-            TARGET,
-            {**context, "interpret": {"proposal": {}, "substantive_needs": []}},
-        )
+        result = callbacks["exception"](TARGET, context)
+        assert result["validated"]["scoped_adjudication"]["outcome"] == "satisfied"
         assert result["requested_agent"] == "claude"
         assert result["requested_profile"] == "claude-offload-assess"
+        assert len(worker_calls) == 1
         assert worker_calls[0]["profile_id"] == "claude-offload-assess"
+        assert (
+            worker_calls[0]["advisory_context"]["adjudication_request"]["basis"]["source"]
+            == row["source"]
+        )
 
 
 class TestInterpretationCapacityDeferral:
