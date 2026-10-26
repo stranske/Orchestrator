@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from src import vibe_isolated_types_proof as proof
+import vibe_isolated_types_proof as proof
 
 
 def test_import_is_stdlib_only():
