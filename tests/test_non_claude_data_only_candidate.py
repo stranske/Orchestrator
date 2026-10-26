@@ -272,7 +272,9 @@ def test_large_runtime_manifest_is_internal_not_a_model_response(fixture, tmp_pa
         c.strict_final(large.contract_json)
 
 
-@pytest.mark.parametrize("text", ['{"a":1,"a":2}', '{"a":NaN}', '{"a":1e999}', "[]"])
+@pytest.mark.parametrize(
+    "text", ['{"a":1,"a":2}', '{"a":NaN}', '{"a":1e999}', "[]", b"{}", None, 0]
+)
 def test_internal_contract_still_rejects_invalid_json(fixture, text):
     plan, _, _ = fixture
     with pytest.raises(ValueError):

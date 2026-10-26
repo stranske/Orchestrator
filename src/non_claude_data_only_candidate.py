@@ -99,6 +99,8 @@ def strict_final(text: str) -> dict:
 
 def _strict_object(text: str) -> dict:
     """Parse an internal object without imposing a model-response byte budget."""
+    if not isinstance(text, str):
+        raise ValueError("JSON text required")
 
     def unique(pairs):
         result = {}
