@@ -178,7 +178,7 @@ def _fixture_worker_cleanup(obj, manifest, handoff, receipt_path):
                 time.sleep(0.05)
             if status.returncode or status.stdout.strip().startswith("Z"):
                 continue
-        command = ["ps", "-p", str(pid), "-o", "lstart=", "-o", "command="]
+        command = ["ps", "-ww", "-p", str(pid), "-o", "lstart=", "-o", "command="]
         before = subprocess.run(command, capture_output=True, text=True, timeout=5)
         if before.returncode or not before.stdout.strip():
             continue
