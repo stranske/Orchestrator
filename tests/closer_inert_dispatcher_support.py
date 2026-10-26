@@ -37,6 +37,42 @@ LOW = "claude-sonnet-5-5-low"
 SECOND = "claude-sonnet-5-5-high-v2"
 
 
+def fixture_api_transport(api, argv, *, read_text_fn=None, **kwargs):
+    """Translate only the source GitHub.api protocol into explicit fixture I/O."""
+    if (
+        not isinstance(argv, (list, tuple))
+        or len(argv) < 4
+        or list(argv[:2]) != ["api", "--method"]
+        or not isinstance(argv[2], str)
+        or argv[2] not in {"GET", "POST", "PATCH", "PUT", "DELETE"}
+        or not isinstance(argv[3], str)
+        or not argv[3]
+        or argv[3].startswith(("-", "/"))
+        or "://" in argv[3]
+        or any(ch.isspace() for ch in argv[3])
+        or set(kwargs) - {"resource", "timeout_s", "raw_body"}
+        or type(kwargs.get("raw_body", False)) is not bool
+        or len(argv[4:]) % 2
+    ):
+        raise AssertionError("unsupported fixture GitHub argv or transport option")
+    fields = {}
+    for flag, value in zip(argv[4::2], argv[5::2], strict=True):
+        if flag != "-f" or not isinstance(value, str) or "=" not in value:
+            raise AssertionError("unsupported fixture GitHub field option")
+        name, field = value.split("=", 1)
+        if not name or name in fields:
+            raise AssertionError("ambiguous fixture GitHub field")
+        fields[name] = field
+    method, endpoint = argv[2:4]
+    if kwargs.get("raw_body"):
+        if method != "GET" or fields or read_text_fn is None:
+            raise AssertionError("explicit fixture GET text reader required")
+        body = read_text_fn(endpoint)
+    else:
+        body = api(endpoint, method=method, fields=fields or None)
+    return 0, body  # The unchanged source GitHub.api validates body/status/type.
+
+
 class InertCaller:
     def __init__(self, world, monkeypatch):
         self.world, self.patch = world, monkeypatch
@@ -271,10 +307,25 @@ class InertCaller:
         self.created_guard = guard
         return guard
 
-    def staged(self, args, targets, backend, deadline, *, deterministic=False):
+    def staged(
+        self,
+        args,
+        targets,
+        backend,
+        deadline,
+        *,
+        deterministic=False,
+        snapshot_fn=None,
+        read_text_fn=None,
+    ):
         """Use the unchanged CLI backend constructor for finite model positives."""
         snapshots = {
-            target: closer.GitHub(deadline=deadline).snapshot(target) for target in targets
+            target: (
+                copy.deepcopy(snapshot_fn(target))
+                if snapshot_fn is not None
+                else closer.GitHub(deadline=deadline).snapshot(target)
+            )
+            for target in targets
         }
         if deterministic:
             return REAL_STAGED(args, targets, backend, deadline)
@@ -366,12 +417,21 @@ class InertCaller:
         with self.patch.context() as local:
             local.setattr(closer, "GitHub", REAL_GITHUB)
             local.setattr(
-                REAL_GITHUB, "snapshot", lambda self, target: copy.deepcopy(snapshots[target])
+                REAL_GITHUB,
+                "snapshot",
+                lambda self, target: copy.deepcopy(
+                    snapshot_fn(target) if snapshot_fn is not None else snapshots[target]
+                ),
             )
             local.setattr(
                 closer.gh_capacity,
                 "gh_run",
-                lambda endpoint, **kwargs: backend.gh.api(endpoint, **kwargs),
+                lambda argv, **kwargs: fixture_api_transport(
+                    backend.gh.api,
+                    argv,
+                    read_text_fn=read_text_fn or getattr(backend.gh, "read_text", None),
+                    **kwargs,
+                ),
             )
             local.setattr(closer, "known_workspaces", lambda targets: backend.workspaces)
             local.setattr(module, "run_pipeline", scoped)
