@@ -8130,15 +8130,41 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 output_ref = closer_evidence._retain_bytes(
                     retained_dir, worker_row["output"].encode(), "worker-output.txt"
                 )
-            except OSError as error:
+                # Full original transport metadata is immutable evidence, not
+                # scheduling state. The independently revalidated original proof
+                # remains in actual below, once, for the existing ACT readback.
+                metadata_ref = closer_evidence._retain_bytes(
+                    retained_dir,
+                    json.dumps(
+                        {key: value for key, value in worker_row.items() if key != "output"},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode(),
+                    "worker-metadata.json",
+                )
+            except (OSError, ValueError, TypeError) as error:
                 if worker_row.get("exit") == 0:
                     return completed_retention_hold(
                         worker_row, target, prep, context, error, route_agent, route_profile
                     )
                 raise
             retained_result["worker"] = {
-                **{k: v for k, v in worker_row.items() if k != "output"},
+                **{
+                    key: worker_row[key]
+                    for key in (
+                        "exit",
+                        "raw_exit",
+                        "run_id",
+                        "profile_id",
+                        "process_started",
+                        "outcome_uncertain",
+                        "retry_safe",
+                    )
+                    if key in worker_row
+                },
                 "output_ref": output_ref,
+                "metadata_ref": metadata_ref,
             }
         validated_ref = None
         validation_bytes = json.dumps(validated, ensure_ascii=False, separators=(",", ":")).encode()
