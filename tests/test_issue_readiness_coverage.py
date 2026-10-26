@@ -42,6 +42,12 @@ def test_github_read_helpers_are_hermetic_and_surface_failures(monkeypatch):
     assert readiness._gh_json(["issue", "list"]) == []
     rows = readiness.fetch_open_issues(limit=3)
     assert rows == [{"number": 7, "repository": {"name": "One"}}]
+    listings = [argv for argv, _ in calls if "--repo" in argv]
+    assert sorted(argv[argv.index("--repo") + 1] for argv in listings) == [
+        "stranske/One",
+        "stranske/Two",
+    ]
+    assert all(argv[argv.index("--limit") + 1] == "3" for argv in listings)
     assert readiness.fetch_failures(limit=3) == ["stranske/One: offline", "stranske/Two: offline"]
     assert all(call[1]["capture_output"] and call[1]["text"] for call in calls)
 
@@ -91,7 +97,10 @@ def test_readiness_writers_report_each_result_without_network(monkeypatch, tmp_p
         "errors": [],
         "dry_run": False,
     }
-    assert feedback_calls
+    assert len(feedback_calls) == 1
+    question_kwargs = feedback_calls[0][1]
+    assert question_kwargs["target"] == "Two#8"
+    assert question_kwargs["repo"] == "Two"
 
     reconciled = readiness.reconcile_durable([{"target": "One#9"}], dry_run=False)
     assert reconciled == {"applied": [], "errors": ["One#9: denied"], "dry_run": False}
@@ -104,6 +113,31 @@ def test_readiness_writers_report_each_result_without_network(monkeypatch, tmp_p
         "errors": [],
         "dry_run": False,
     }
+    edits = [argv for argv, _ in calls if argv[:3] == ["gh", "issue", "edit"]]
+    assert [
+        "gh",
+        "issue",
+        "edit",
+        "7",
+        "--repo",
+        "stranske/One",
+        "--add-label",
+        "status: ready",
+    ] in edits
+    assert [
+        "gh",
+        "issue",
+        "edit",
+        "10",
+        "--repo",
+        "stranske/One",
+        "--add-label",
+        "refactor",
+    ] in edits
+    task_edits = [argv for argv in edits if argv[3] == "10"]
+    assert [argv[-1] for argv in task_edits] == ["refactor", "refactor"]
+    creates = [argv for argv, _ in calls if argv[:3] == ["gh", "label", "create"]]
+    assert [argv[3:6] for argv in creates] == [["refactor", "--repo", "stranske/One"]]
     assert all(call[1]["capture_output"] and call[1]["text"] for call in calls)
 
 
