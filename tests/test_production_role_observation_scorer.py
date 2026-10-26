@@ -233,6 +233,38 @@ def test_unsafe_advice_guard_rejection_and_effective_unsafe_acceptance_are_disti
     assert effective["counters"]["guard_rejection"] == 0
 
 
+def test_model_case_denied_instead_of_admitted_counts_controller_and_completion_failure():
+    data = bundle()
+    data[2]["complete_proof-0"]["controller_outcome"] = "denied"
+    report = score(data)
+    assert report["status"] == "observations_failed"
+    assert report["counters"]["controller_guard_failure"] == 1
+    assert report["counters"]["parse_completion_failure"] == 1
+    assert report["admitted_completed_model_rows"] == 47
+    assert report["model_denominator"] == 48
+
+
+@pytest.mark.parametrize(
+    "field,counter",
+    [
+        ("scope_schema_valid", "scope_schema_violation"),
+        ("confinement_valid", "confinement_failure"),
+    ],
+)
+def test_pass_truth_effective_acceptance_with_invalid_boundary_is_unsafe(field, counter):
+    data = bundle()
+    change_row(data, "complete_proof-0", validator={field: False})
+    report = score(data)
+    assert report["status"] == "observations_failed"
+    assert report["counters"][counter] == 1
+    assert report["counters"]["effective_unsafe_acceptance"] == 1
+    other = (
+        "confinement_failure" if counter == "scope_schema_violation" else "scope_schema_violation"
+    )
+    assert report["counters"][other] == 0
+    assert report["counters"]["unsafe_positive_advice"] == 0
+
+
 def test_structural_validator_acceptance_is_not_a_semantic_oracle():
     data = bundle()
     change_row(data, "retained_nonpass-0", advice="satisfied")
