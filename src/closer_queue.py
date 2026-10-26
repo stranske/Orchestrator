@@ -64,6 +64,7 @@ DEFAULT_MIN_ACTION_SECONDS = 1.0
 MAX_OPERATION_HISTORY = 12
 MAX_CALLBACK_JSON_BYTES = 128 * 1024
 _ledger_threads = threading.local()
+_callback_threads = threading.local()
 
 
 class QueueStateError(ValueError):
@@ -541,10 +542,48 @@ def _budget_available(
     return available > 0 and available >= minimum
 
 
+@contextlib.contextmanager
+def _callback_invocation(target, operation, now):
+    """Private live callback identity; never serialized or restored on restart."""
+    if getattr(_callback_threads, "invocation", None) is not None:
+        raise QueueStateError("nested queue callback invocation refused")
+    _callback_threads.invocation = {
+        "pid": os.getpid(),
+        "thread": threading.get_ident(),
+        "target": target,
+        "operation": _json_copy(operation),
+        "now": now,
+    }
+    try:
+        yield
+    finally:
+        del _callback_threads.invocation
+
+
+def _currently_invoking(target, operation):
+    """Recognize only this thread's exact live original submitted operation."""
+    current = getattr(_callback_threads, "invocation", None)
+    if current is None:
+        return False
+    try:
+        return (
+            current["pid"] == os.getpid()
+            and current["thread"] == threading.get_ident()
+            and current["target"] == target
+            and operation.get("status") == "submitted"
+            and _canonical_bytes(operation) == _canonical_bytes(current["operation"])
+            and float(current["now"]()) < float(current["operation"]["deadline"])
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def _invoke_before_cutoff(
     execute, target, action, snapshot, operation, now, execution_context=None
 ):
     """A queued callback rechecks its original request and held resource context."""
+    if getattr(_callback_threads, "invocation", None) is not None:
+        raise QueueStateError("nested queue callback invocation refused")
     invoked_at = float(now())
     if invoked_at >= float(operation["deadline"]):
         return None, None
@@ -561,8 +600,10 @@ def _invoke_before_cutoff(
             remaining = closer_resources.finite_request_remaining()
             if remaining is None or remaining <= 0:
                 return None, None
-            return execute(target, action, snapshot, operation), invoked_at
-    return execute(target, action, snapshot, operation), invoked_at
+            with _callback_invocation(target, operation, now):
+                return execute(target, action, snapshot, operation), invoked_at
+    with _callback_invocation(target, operation, now):
+        return execute(target, action, snapshot, operation), invoked_at
 
 
 def _operation_id(owner: str, target: str, action: str, revision: Any) -> str:
@@ -1074,6 +1115,66 @@ def completed_progress_events(receipt, target, operation):
     )
 
 
+def _accepted_request_events(bucket, target, operation):
+    """Use the POST's own receipt, including when today's wait is another frontier.
+
+    A static acknowledgment needs no changed remote revision. Any progress the
+    original round actually claims must nevertheless have its causal event.
+    """
+    origin_round = bucket.get("round") or {}
+    receipt = origin_round.get("receipt") or {}
+    events = receipt.get("events")
+    progress = receipt.get("progress")
+    if (
+        not isinstance(events, list)
+        or not isinstance(progress, list)
+        or events != origin_round.get("events")
+        or progress != origin_round.get("progress")
+    ):
+        return False
+    rows = [row for row in receipt.get("accounting", []) if row.get("target") == target]
+    original_item = (bucket.get("items") or {}).get(target) or {}
+    if (
+        origin_round.get("finite_frontier") != bucket.get("policy")
+        or receipt.get("schema") != RECEIPT_SCHEMA
+        or len(rows) != 1
+        or rows[0] != _account_row(target, original_item)
+        or rows[0].get("operation_id") != operation.get("id")
+    ):
+        return False
+    row = rows[0]
+    if not any(
+        event.get("kind") == "operation_submitted"
+        and event.get("target") == target
+        and event.get("operation_id") == operation.get("id")
+        and event.get("action") == operation.get("action")
+        for event in events
+    ):
+        return False
+    advances = [
+        event
+        for event in events
+        if event.get("kind") == "action_advanced" and event.get("target") == target
+    ]
+    claimed = (
+        row.get("action") != operation.get("action")
+        or row.get("revision") != operation.get("revision")
+        or any(entry.get("target") == target for entry in progress)
+        or bool(advances)
+    )
+    return (
+        not claimed
+        or bool(advances)
+        and all(
+            event.get("action") == operation.get("action")
+            and event.get("operation_id", operation.get("id")) == operation.get("id")
+            and isinstance(event.get("revision"), str)
+            and bool(event["revision"])
+            for event in advances
+        )
+    )
+
+
 def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evidence):
     """Authenticate a completed request awaiting its result, never a no-effect retry.
 
@@ -1146,15 +1247,15 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
                 and item.get("revision") == row.get("revision")
                 and snapshot.get("revision") == row.get("revision")
                 and item.get("reason") in accepted_reasons
-                and item.get("provider_outcome_uncertain") in (None, False)
-                and item.get("recovery_barrier") is None
-                and all(
-                    item.get(key) in (None, False)
-                    for key in ("outcome_uncertain", "no_effect", "advisory_only")
-                )
             )
             if (
                 not (legacy_wait or progress_wait)
+                or item.get("provider_outcome_uncertain") not in (None, False)
+                or item.get("recovery_barrier") is not None
+                or any(
+                    item.get(key) not in (None, False)
+                    for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                )
                 or item.get("observation_freshness") != "fresh"
                 or evidence.get("observed_revision") != row.get("revision")
                 or snapshot.get("target") != target
@@ -1171,10 +1272,10 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
                 if not isinstance(operation, Mapping):
                     continue
                 if operation.get("id") == evidence["operation_id"]:
-                    candidates.append((bucket, operation))
+                    candidates.append((bucket, item, operation))
             if len(candidates) != 1:
                 return None
-            for bucket, operation in candidates:
+            for bucket, original_item, operation in candidates:
                 policy = validate_frontier(bucket.get("policy"))
                 binding = operation.get("binding") or {}
                 result = operation.get("result") or {}
@@ -1182,6 +1283,13 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
                 expected = policy["bindings"].get(target) or {}
                 if (
                     operation.get("finite_frontier") == policy
+                    and _accepted_request_events(bucket, target, operation)
+                    and original_item.get("provider_outcome_uncertain") in (None, False)
+                    and original_item.get("recovery_barrier") is None
+                    and all(
+                        original_item.get(key) in (None, False)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
                     and (
                         not progress_wait
                         or (
@@ -1206,7 +1314,12 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
                     and all(
                         record.get(key) is None or record.get(key) is False
                         for record in (operation, result)
-                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                        for key in (
+                            "provider_outcome_uncertain",
+                            "outcome_uncertain",
+                            "no_effect",
+                            "advisory_only",
+                        )
                     )
                 ):
                     return {
@@ -2217,6 +2330,7 @@ def run_round(
             # callback survives round finalization.
             for target, item, op, future, acquired, started in launched:
                 action = op["action"]
+                result_persist_failed = False
                 try:
                     result, invoked_at = future.result()
                     if invoked_at is None:
@@ -2263,6 +2377,15 @@ def run_round(
                         stalled.add(target)
                     elif result_status == "completed":
                         op["completed_at"] = float(now())
+                        # Post-effect observation may consult this same durable
+                        # operation (for example an acknowledged verifier POST).
+                        # Publish its confirmed result before that read; external
+                        # snapshots need not change when a request is accepted.
+                        try:
+                            persist_state()
+                        except Exception:
+                            result_persist_failed = True
+                            raise
                         if not budget_available_at_start or not budget_available():
                             item["observation_freshness"] = "cached_budget_exhausted"
                             if result.get("advisory_only") or result.get("requires_coordinator"):
@@ -2366,6 +2489,11 @@ def run_round(
                     _defer(item, "operation_uncertain", op["next_trigger"])
                     stalled.add(target)
                     _event(round_state, target, "execute_uncertain", error_type=type(exc).__name__)
+                    if result_persist_failed:
+                        # Durable control-plane failures are fatal, not provider
+                        # failures. The finally write retains the unknown intent
+                        # for reconciliation without allowing a second effect.
+                        raise
                 finally:
                     released = _release_all(acquired, round_owner, release_call)
                     if released:

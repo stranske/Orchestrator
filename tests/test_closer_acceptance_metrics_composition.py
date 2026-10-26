@@ -78,6 +78,40 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
             for row in receipt["targets"].values()
         )
     )
+    post_row = next(iter(receipts[post_index]["targets"].values()))
+    completed_post = post_row["results"]["act"]["queue_receipt"]["accounting"][0]
+    # The real producer now persists the completed POST before observing its
+    # result-wait. This is not a fixture invented to look completed.
+    assert completed_post["operation_status"] == "completed"
+    assert completed_post["eligible"] is False
+    assert completed_post["reason"] == (
+        "collect terminal or unattributed verifier evidence; do not rerun"
+    )
+
+    def rebind_queue(row):
+        queue = row["results"]["act"]["queue_receipt"]
+        row["queue_receipt"] = copy.deepcopy(queue)
+        row["resource_evidence"]["accepted_verifier_request"]["queue_receipt_sha256"] = (
+            hashlib.sha256(
+                json.dumps(queue, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+        )
+
+    # Read-side join compatibility only: retain the older exact progress shape
+    # and the other established accepted-result reason, without changing proof.
+    for eligible, reason in (
+        (True, "pass_limit"),
+        (False, "same verification request already accepted"),
+    ):
+        compatible = copy.deepcopy(receipts)
+        row = next(iter(compatible[post_index]["targets"].values()))
+        entry = row["results"]["act"]["queue_receipt"]["accounting"][0]
+        entry.update(eligible=eligible, reason=reason)
+        rebind_queue(row)
+        observed = summarize_efficiency(compatible, now=time.time())
+        assert observed["observed_branches"]["denominator"] == 2
+        assert observed["model_runs"]["count"] == 0
+
     # One real producer fixture, then independent adversarial read-side joins.
     for damage in (
         "proof",
@@ -101,6 +135,12 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
         "frontier_binding_digest",
         "frontier_binding_rehashed",
         "frontier_revision_rehashed",
+        "generic_deferred",
+        "generic_pending",
+        "pending_status",
+        "wrong_eligibility",
+        "wrong_action",
+        "wrong_submitted_operation",
     ):
         bad = copy.deepcopy(receipts)
         row = next(iter(bad[post_index]["targets"].values()))
@@ -158,12 +198,21 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
                 queue["accounting"][0]["reason"] = "unknown_result"
             elif damage == "duplicate":
                 queue["accounting"].append(copy.deepcopy(queue["accounting"][0]))
+            elif damage in {"generic_deferred", "generic_pending"}:
+                queue["accounting"][0]["reason"] = damage.removeprefix("generic_")
+            elif damage == "pending_status":
+                queue["accounting"][0]["status"] = "pending"
+            elif damage == "wrong_eligibility":
+                queue["accounting"][0]["eligible"] = True
+            elif damage == "wrong_action":
+                queue["accounting"][0]["action"] = "wait"
+            elif damage == "wrong_submitted_operation":
+                for event in queue["events"]:
+                    if event.get("kind") == "operation_submitted":
+                        event["operation_id"] = "unrelated-original-operation"
             else:
                 queue["accounting"][0]["operation_status"] = "submitted"
-            row["queue_receipt"] = copy.deepcopy(queue)
-            proof["queue_receipt_sha256"] = hashlib.sha256(
-                json.dumps(queue, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
+            rebind_queue(row)
         rejected = summarize_efficiency(bad, now=time.time())
         assert rejected["observed_branches"]["denominator"] == 1, damage
         assert rejected["model_runs"]["count"] == 0, damage
@@ -179,7 +228,13 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
                     "provider_calls": 0,
                     "deployment": False,
                     "summary": result,
-                    "negative_join_cases": 21,
+                    "negative_join_cases": 27,
+                    "producer_accounting": completed_post,
+                    "supported_join_shapes": [
+                        "original eligible pass_limit progress",
+                        "ineligible exact accepted-request reason",
+                        "ineligible exact collect-terminal do-not-rerun reason",
+                    ],
                     "source_hashes": {
                         str(p): hashlib.sha256(p.read_bytes()).hexdigest()
                         for p in (Path("src/closer_stage_feedback.py"), Path(__file__))

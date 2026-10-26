@@ -828,6 +828,87 @@ def native_interpretation_ready(prep, *, target=None):
     )
 
 
+def _native_pending_ci_snapshot(prep, target):
+    """Authenticate a read-only pending-check wait, never an effect capability."""
+    import closer_finite_reentry as reentry
+
+    try:
+        proposal = prep.get("proposal") or {}
+        compact = prep.get("snapshot") or {}
+        if (
+            prep.get("remote_fresh") is not True
+            or proposal.get("action") != "wait"
+            or proposal.get("eligible") is not False
+            or proposal.get("reason") != "current-head checks pending or unknown"
+        ):
+            return None
+        snap_ref, packet_ref = prep["snapshot_ref"], prep["packet_ref"]
+        snapshot, snapshot_sha = reentry._read(snap_ref["path"])
+        packet, packet_sha = reentry._read(packet_ref["path"])
+        checks = (packet.get("sections") or {}).get("checks") or {}
+        check_content = checks.get("content") or {}
+        ids = snapshot.get("pending_check_run_ids")
+        readiness = (prep.get("collection_result") or {}).get("readiness") or {}
+        if not (
+            snapshot_sha == snap_ref.get("sha256")
+            and packet_sha == packet_ref.get("sha256")
+            and closer_evidence.validate_packet(packet)
+            and snapshot.get("target") == target == compact.get("target")
+            and TARGET.fullmatch(str(target))
+            and snapshot.get("revision") == prep.get("revision") == compact.get("revision")
+            and isinstance(prep.get("revision"), str)
+            and bool(prep["revision"])
+            and all(
+                snapshot.get(key) == compact.get(key)
+                for key in ("head", "base", "state", "kind", "checks")
+            )
+            and snapshot.get("state") == "OPEN"
+            and snapshot.get("kind") == "pr"
+            and snapshot.get("draft") is False
+            and snapshot.get("active_threads") == 0
+            and snapshot.get("_local_cached") is not True
+            and SHA.fullmatch(str(snapshot.get("head")))
+            and snapshot.get("checks") == "PENDING"
+            and snapshot.get("pending_check_head") == snapshot["head"]
+            and isinstance(ids, list)
+            and bool(ids)
+            and all(type(check_id) is int and check_id > 0 for check_id in ids)
+            and len(set(ids)) == len(ids)
+            and packet.get("target") == target
+            and packet.get("head") == snapshot["head"]
+            and packet.get("base") == snapshot.get("base")
+            and packet.get("capture_revision") == prep["revision"]
+            and packet.get("collection_action") == "wait"
+            and packet.get("producer_sha256") == prep.get("producer_sha256")
+            and packet.get("bindings", {}).get("source")
+            == closer_evidence._hash(snapshot.get("sources") or [])
+            and checks.get("status") == "complete"
+            and check_content.get("head") == snapshot["head"]
+            and check_content.get("aggregate_state") == "PENDING"
+            and checks.get("provenance", {}).get("head_bound") is True
+            and readiness.get("mode") == "deterministic"
+            and readiness.get("ready") is True
+            and readiness.get("gaps") == []
+            and closer_evidence.collection_summary(packet, packet_ref)
+            == prep.get("collection_result")
+            and all(
+                record.get(key) in (None, False)
+                for record in (prep, snapshot)
+                for key in (
+                    "provider_outcome_uncertain",
+                    "outcome_uncertain",
+                    "no_effect",
+                    "advisory_only",
+                )
+            )
+            and all(record.get("recovery_barrier") is None for record in (prep, snapshot))
+        ):
+            return None
+        return snapshot
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return None
+
+
 def _native_remote_footprint(snapshot, action):
     """Positive capability for native effects that never use a product checkout."""
     if action in {"post_merge_verify", "initiate_verify", "respond_review"}:
@@ -1777,6 +1858,13 @@ class Closer:
                     "collect_evidence",
                     "recover the malformed or conflicting current verifier event",
                 )
+            if self._unacknowledged_verification_request(s) is not None:
+                return (
+                    "collect_evidence",
+                    "verification request acknowledgement unresolved; reconcile original operation",
+                    False,
+                    "exact original request acknowledgment or terminal reconciliation",
+                )
             if lifecycle.get(
                 "schema"
             ) == verifier_evidence.STATE_MARKER and self._accepted_verification_request(s):
@@ -1904,10 +1992,11 @@ class Closer:
                     s, "collect_evidence", "collect original source acceptance evidence"
                 )
             if self._accepted_verification_request(s):
-                return self.proposal(
-                    s,
+                return (
                     "collect_evidence",
                     "collect terminal or unattributed verifier evidence; do not rerun",
+                    False,
+                    "new authenticated verifier attempt or request reconciliation",
                 )
             if s.get("native_diagnostic_reference"):
                 return (
@@ -2053,6 +2142,7 @@ class Closer:
             for candidate in operations:
                 binding = candidate.get("binding") or {}
                 result = candidate.get("result") or {}
+                accepted = result.get("verification_post_accepted") or {}
                 if (
                     candidate.get("status") == "completed"
                     and candidate.get("action") == "post_merge_verify"
@@ -2061,6 +2151,15 @@ class Closer:
                     and binding.get("merge") == snapshot.get("merge")
                     and result.get("verification_request_basis")
                     == self.verification_request_basis(snapshot)
+                    and isinstance(accepted, Mapping)
+                    and accepted.get("request_basis") == result["verification_request_basis"]
+                    and isinstance(accepted.get("mutation_kind"), str)
+                    and accepted.get("mutation_kind") in {"label", "workflow_dispatch"}
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (candidate, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
                 ):
                     return {
                         "operation_id": candidate.get("id"),
@@ -2071,6 +2170,65 @@ class Closer:
             )
         except FileNotFoundError:
             return None
+
+    def _unacknowledged_verification_request(self, snapshot):
+        """An old submitted effect without a proven acknowledgment is no new POST.
+
+        This is only a reconciliation barrier. It cannot provide accepted-wait
+        proof or adopt an old result as completion of the current source.
+        """
+        import closer_queue
+
+        try:
+            state = closer_queue._read_state(self.state_path)
+        except FileNotFoundError:
+            return None
+        for bucket in [state, *(state.get("frontiers") or {}).values()]:
+            if not isinstance(bucket, Mapping):
+                continue
+            item = (bucket.get("items") or {}).get(snapshot["target"], {})
+            if not isinstance(item, Mapping):
+                continue
+            for operation in [item.get("operation"), *(item.get("operation_history") or [])]:
+                if not isinstance(operation, Mapping):
+                    continue
+                if operation.get("status") == "confirmed_not_started":
+                    continue
+                if closer_queue._currently_invoking(snapshot["target"], operation):
+                    continue
+                binding, result = operation.get("binding") or {}, operation.get("result") or {}
+                basis = result.get("verification_request_basis")
+                if not (
+                    operation.get("action") in {"post_merge_verify", "initiate_verify"}
+                    and binding.get("pr_target") == snapshot.get("pr_target", snapshot["target"])
+                    and all(binding.get(key) == snapshot.get(key) for key in ("head", "merge"))
+                ):
+                    continue
+                if (
+                    operation.get("status") == "resource_wait"
+                    and closer_queue.verifier_resource_wait_proof(operation, snapshot["target"])
+                    is not None
+                ):
+                    continue
+                accepted = result.get("verification_post_accepted")
+                if (
+                    operation.get("status") == "completed"
+                    and operation.get("action") == "post_merge_verify"
+                    and isinstance(basis, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", basis)
+                    and isinstance(accepted, Mapping)
+                    and accepted.get("request_basis") == basis
+                    and isinstance(accepted.get("mutation_kind"), str)
+                    and accepted["mutation_kind"] in {"label", "workflow_dispatch"}
+                    and all(
+                        record.get(key) is None or record.get(key) is False
+                        for record in (operation, result)
+                        for key in ("outcome_uncertain", "no_effect", "advisory_only")
+                    )
+                ):
+                    continue
+                return {"operation_id": operation.get("id"), "request_basis": basis}
+        return None
 
     def proposal(self, snapshot, action, reason):
         if self.advisory.get(snapshot["target"]) == snapshot["revision"]:
@@ -2721,6 +2879,18 @@ class Closer:
 
     def prepare_verify(self, target, snapshot):
         """Complete read admission before recording a consequential Core intent."""
+        if self._unacknowledged_verification_request(snapshot) is not None:
+            return {
+                "status": "not_started",
+                "reason": "verification request acknowledgement unresolved; reconcile original operation",
+                "next_trigger": "exact original request acknowledgment or terminal reconciliation",
+            }
+        if self._accepted_verification_request(snapshot):
+            return {
+                "status": "not_started",
+                "reason": "same verification request already accepted",
+                "next_trigger": "new authenticated verifier attempt or request reconciliation",
+            }
         disposition = self.dispositions.get(snapshot["target"], {}).get("ordinary_nonpass") or {}
         repeat_request = verification_events.request_matches(snapshot, disposition)
         result = self._verification_preflight(target, snapshot)
@@ -5009,6 +5179,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             dict,
         )
 
+    def pending_ci_wait(target, context):
+        snapshot = _native_pending_ci_snapshot(context.get("prepare") or {}, target)
+        return snapshot is not None and backend.select(snapshot)[:3] == (
+            "wait",
+            "current-head checks pending or unknown",
+            False,
+        )
+
+    def native_wait(target, context):
+        return accepted_request_wait(target, context) or pending_ci_wait(target, context)
+
     def resource_keys(target, context):
         import closer_resources
 
@@ -5030,7 +5211,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             backend.workspaces,
             workspace_bindings=getattr(backend, "workspace_bindings", None),
             infer_workspace=not (
-                _remote_only_effect(target, context) or accepted_request_wait(target, context)
+                _remote_only_effect(target, context) or native_wait(target, context)
             ),
         )
 
@@ -7941,7 +8122,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
     if not shadow:
         _NATIVE_STAGE_CALLBACKS["prepare"].add(prepare)
         _NATIVE_STAGE_CALLBACKS["interpret"].add(interpret)
-        _NATIVE_WAIT_CALLBACKS[interpret] = accepted_request_wait
+        _NATIVE_WAIT_CALLBACKS[interpret] = native_wait
     pipeline = closer_pipeline.run_pipeline(
         pipeline_path,
         targets,

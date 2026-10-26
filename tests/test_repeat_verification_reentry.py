@@ -186,6 +186,9 @@ def test_skipped_unattributed_repository_run_never_blocks_initial_verification(w
 
     world.backend.gh.api = api
     assert world.backend.select(world.snapshot)[0] == "post_merge_verify"
+    basis = world.backend.verification_request_basis(world.snapshot)
+    changed_head = dict(world.snapshot, head="e" * 40)
+    assert world.backend.verification_request_basis(changed_head) != basis
     result = world.backend.initiate_verify(subject, world.snapshot)
     assert result["status"] == "completed"
     writes = [(endpoint, kwargs) for endpoint, kwargs in requests if kwargs.get("method") == "POST"]
@@ -194,6 +197,13 @@ def test_skipped_unattributed_repository_run_never_blocks_initial_verification(w
         "ref": "main",
         "inputs[pr_number]": number,
         "inputs[mode]": "compare",
+        "inputs[verification_request_basis]": basis,
+    }
+    assert result["verification_request_basis"] == basis
+    assert result["verification_post_accepted"] == {
+        "mutation_kind": "workflow_dispatch",
+        "request_basis": basis,
+        "correlation_input": basis,
     }
     assert not world.downloads
 

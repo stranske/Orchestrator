@@ -301,9 +301,20 @@ def _completed_verifier_request(
     return bool(
         entry.get("operation_id") == operation
         and entry.get("operation_status") == "completed"
-        and entry.get("eligible") is True
         and entry.get("status") == "deferred"
-        and entry.get("reason") == "pass_limit"
+        # Persisting a completed POST before observation can immediately expose
+        # its result-wait. Eligibility to rerun is not whether that POST ran.
+        and (
+            (entry.get("eligible") is True and entry.get("reason") == "pass_limit")
+            or (
+                entry.get("eligible") is False
+                and entry.get("reason")
+                in {
+                    "same verification request already accepted",
+                    "collect terminal or unattributed verifier evidence; do not rerun",
+                }
+            )
+        )
         and entry.get("action") == "collect_evidence"
         and entry.get("revision") == proof.get("observed_revision")
         and any(

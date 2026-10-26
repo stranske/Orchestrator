@@ -66,11 +66,17 @@ def _response(method,path,body=None):
         return {'number':number,'state':'closed','body':'Synthetic verification request fixture','pull_request':{},'labels':[{'name':'verify:compare'}] if state['labels'].get(str(number)) else []}
     if method=='GET' and re.fullmatch(r'/repos/offline/repo[12]/pulls/\d+',path):
         return {'number':number,'head':{'sha':'a'*40},'base':{'sha':'b'*40},'merged':True,'merge_commit_sha':'c'*40,'labels':[{'name':'verify:compare'}] if state['labels'].get(str(number)) else []}
-    if method=='POST' and re.fullmatch(r'/repos/offline/repo[12]/issues/\d+/labels',path):
-        if body!={'labels[]':'verify:compare'}: raise AssertionError('unexpected label mutation')
-        if state['labels'].get(str(number)): raise AssertionError('duplicate synthetic label request')
-        state['labels'][str(number)]=datetime.datetime.fromtimestamp(time.time(),datetime.timezone.utc).isoformat().replace('+00:00','Z'); save(state)
-        return [{'name':'verify:compare'}]
+    dispatch=re.fullmatch(r'/repos/offline/repo([12])/actions/workflows/agents-verifier.yml/dispatches',path)
+    if method=='POST' and dispatch:
+        number=dispatch[1]
+        expected={'ref','inputs[mode]','inputs[pr_number]','inputs[verification_request_basis]'}
+        if set(body)!=expected or body['ref']!='main' or body['inputs[mode]']!='compare' or body['inputs[pr_number]']!=number: raise AssertionError('unexpected workflow dispatch inputs')
+        basis=body['inputs[verification_request_basis]']
+        if not isinstance(basis,str) or not re.fullmatch(r'[0-9a-f]{64}',basis): raise AssertionError('missing original request correlation')
+        if number in state['dispatches']: raise AssertionError('duplicate synthetic workflow request')
+        state['dispatches'][number]={'request_basis':basis,'inputs':body,'accepted_at':time.time()}; save(state)
+        return None
+    if method=='POST' and path.endswith('/labels'): raise AssertionError('initial request cannot fall back to labels')
     if method=='GET' and '/actions/' in path and path.endswith('/artifacts'): return {'total_count':0,'artifacts':[]}
     if method=='GET' and '/actions/' in path and path.endswith('/runs'): return {'total_count':0,'workflow_runs':[]}
     if method=='GET' and (path.endswith('/files') or path.endswith('/comments') or path.endswith('/reviews')): return []
@@ -222,7 +228,7 @@ def test_late_native_production_act_enters_actual_inner_queue(capacity_host, tmp
     seams.mkdir()
     (seams / "transcript.py").write_text(TRANSCRIPT)
     state = tmp_path / "synthetic-service.json"
-    state.write_text(json.dumps({"labels": {}, "core": {}}))
+    state.write_text(json.dumps({"labels": {}, "dispatches": {}, "core": {}}))
     offset = tmp_path / "clock-offset"
     offset.write_text("0")
     log = tmp_path / "external-methods.jsonl"
@@ -247,7 +253,7 @@ def test_late_native_production_act_enters_actual_inner_queue(capacity_host, tmp
         "#!"
         + sys.executable
         + "\n"
-        + """import json,sys\nfrom transcript import response,event\na=sys.argv[1:];method=a[a.index('--method')+1] if '--method' in a else 'GET'\nfields={}\nfor i,x in enumerate(a):\n if x=='-f':key,value=a[i+1].split('=',1);fields[key]=value\noptions={'api','--include','-i','--method',method}\nendpoint=next(x for x in a if x not in options and not x.startswith('-') and not x.startswith(('query=','labels[]=')))\npath='/' + endpoint.lstrip('/')\nevent('gh-executable',method,path,fields)\nvalue=response(method,path,fields)\nprint(('HTTP/2 200\\nx-ratelimit-limit: 5000\\nx-ratelimit-remaining: 4999\\nx-ratelimit-reset: 9999999999\\n\\n' if '--include' in a or '-i' in a else '')+json.dumps([value] if '--slurp' in a else value))\n"""
+        + """import json,sys\nfrom transcript import response,event\na=sys.argv[1:];method=a[a.index('--method')+1] if '--method' in a else 'GET'\nfields={}\nfor i,x in enumerate(a):\n if x=='-f':key,value=a[i+1].split('=',1);fields[key]=value\noptions={'api','--include','-i','--method',method}\nendpoint=next(x for x in a if x not in options and not x.startswith('-') and not x.startswith(('query=','labels[]=')))\npath='/' + endpoint.lstrip('/')\nevent('gh-executable',method,path,fields)\nvalue=response(method,path,fields)\ncode='204' if method=='POST' and path.endswith('/dispatches') else '200'\nheader=('HTTP/2 '+code+'\\nx-ratelimit-limit: 5000\\nx-ratelimit-remaining: 4999\\nx-ratelimit-reset: 9999999999\\n\\n' if '--include' in a or '-i' in a else '')\npayload='' if value is None else json.dumps([value] if '--slurp' in a else value)\nsys.stdout.write(header+payload)\n"""
     )
     gh.chmod(0o700)
     monkeypatch.setenv("PATH", str(seams) + ":" + os.environ["PATH"])
@@ -399,7 +405,8 @@ fi
         }
         (tmp_path / "production-composition-result.json").write_text(json.dumps(evidence, indent=2))
         assert result["outcome"] == "ok", evidence
-        assert set(json.loads(state.read_text())["labels"]) == {"1", "2"}, evidence
+        assert set(json.loads(state.read_text())["dispatches"]) == {"1", "2"}, evidence
+        assert json.loads(state.read_text())["labels"] == {}, evidence
         assert not (Path(os.environ["HANDOFF_DIR"]) / ".lane-closer.lock").exists()
         detail = json.loads(result["detail"])
         completed = detail["completed_round"]
@@ -460,20 +467,34 @@ fi
         assert all(event["pid"] not in {os.getpid(), row["pid"]} for event in core_http)
         assert all(event["trace_active"] is False for event in core_http)
         assert len({event["pid"] for event in core_http}) == len(core_http)
-        labels = [
+        dispatches = [
             event
             for event in events
-            if event["method"] == "POST" and event["path"].endswith("/labels")
+            if event["method"] == "POST" and event["path"].endswith("/dispatches")
         ]
-        assert sorted(event["path"] for event in labels) == [
-            "/repos/offline/repo1/issues/1/labels",
-            "/repos/offline/repo2/issues/2/labels",
+        assert sorted(event["path"] for event in dispatches) == [
+            "/repos/offline/repo1/actions/workflows/agents-verifier.yml/dispatches",
+            "/repos/offline/repo2/actions/workflows/agents-verifier.yml/dispatches",
         ]
+        assert not any(
+            event["method"] == "POST" and event["path"].endswith("/labels") for event in events
+        )
+        assert all(
+            event["body_keys"]
+            == ["inputs[mode]", "inputs[pr_number]", "inputs[verification_request_basis]", "ref"]
+            for event in dispatches
+        )
         service = json.loads(state.read_text())
         assert len(service["core"]) == 2
         for raw in service["core"].values():
             operation = json.loads(base64.b64decode(raw["content"]))
             assert operation["status"] == "succeeded"
+            mutation = operation["mutation_intent"]["native_binding"]["verification_mutation"]
+            assert mutation["mutation_kind"] == "workflow_dispatch"
+            assert mutation["correlation_input"] == mutation["request_basis"]
+            native_binding = operation["mutation_intent"]["native_binding"]
+            number = native_binding["pr_target"].split("#")[1]
+            assert mutation["request_basis"] == service["dispatches"][number]["request_basis"]
             absolute = datetime.datetime.fromisoformat(
                 operation["lease"]["deadline"].replace("Z", "+00:00")
             ).timestamp()
