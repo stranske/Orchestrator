@@ -2,12 +2,14 @@
 
 No result/origin/qualification validator is replaced. The sole executable is a
 fixture-generated native-result emitter; ps is limited to this test/its children.
+An explicit registration also admits the exact no-effect native host fixture wrapper.
 The fixture's resolved Core source may answer one exact read-only HEAD query.
 """
 
 import copy
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -185,6 +187,294 @@ class InertCaller:
             )
         )
 
+    def register_native_fixture(self, manifest, manifest_path):
+        """Opt in only the existing private host fixture's exact rendered wrapper."""
+        import pwd
+
+        import closer_native_observer as native
+
+        root = self.world.root
+        assert root.is_absolute() and root.resolve(strict=True) == root
+        account = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+        assert root != account and not account.is_relative_to(root)
+        for name in (".codex", ".config", ".aws", ".agents", ".ssh", ".gnupg"):
+            assert not root.is_relative_to(account / name)
+            assert not root.is_relative_to((account / name).resolve())
+        home = root / "home"
+        assert Path(os.environ["HOME"]) == home
+        wrapper = home / ".codex/bin/cursor-lane.sh"
+        manifest_path = Path(manifest_path)
+        assert manifest_path == root / "manifest.json"
+        contract = manifest["mechanism_contract"]
+        assert contract["wrapper"]["path"] == str(wrapper)
+        assert Path(contract["observation_root"]) == root / "native-observations"
+        assert Path(contract["campaign_root"]) == root / "campaigns"
+        assert Path(manifest["module_dir"]) == root / "modules"
+        assert Path(manifest["launcher"]["path"]) == root / "modules/closer_launcher.py"
+        for path in (
+            wrapper,
+            manifest_path,
+            Path(contract["observation_root"]),
+            Path(contract["campaign_root"]),
+            Path(manifest["module_dir"]),
+        ):
+            self._native_fixture_physical(root, path)
+        source = '#!/bin/bash\nset -euo pipefail\nLANE="${1:?}"\ncase "$LANE" in\ncloser|opener) ;;\n*) exit 2 ;;\nesac\n\nexport PATH="$HOME/.local/bin:$HOME/.cursor/bin:$PATH"\n'
+        source += "echo FORBIDDEN_LEGACY_PROVIDER >&2\nexit 99\n"
+        expected = native.render_cursor_wrapper(
+            source,
+            manifest_path=manifest_path,
+            campaign_root=root / "campaigns",
+            interpreter=Path(contract["interpreter"]["path"]),
+            launcher=root / "modules/closer_launcher.py",
+        ).encode()
+        raw, identity = self._native_fixture_file(root, wrapper, 128 * 1024)
+        assert raw == expected and hashlib.sha256(raw).hexdigest() == contract["wrapper"]["sha256"]
+        manifest_bytes, _ = self._native_fixture_file(root, manifest_path, 512 * 1024)
+        assert json.loads(manifest_bytes) == manifest
+        import closer_mechanisms as mechanisms
+
+        observer = Path(mechanisms.__file__).resolve(strict=True)
+        observer_bytes, _ = self._native_fixture_file(observer.parent, observer, 512 * 1024)
+        assert (
+            hashlib.sha256(observer_bytes).hexdigest()
+            == manifest["modules"]["closer_mechanisms.py"]
+        )
+        assert Path(sys.executable).resolve(strict=True) == Path(contract["interpreter"]["path"])
+        self.native_runs = {}
+        self.native_fixture = {
+            "argv": ("/bin/bash", str(wrapper), "closer"),
+            "root": root,
+            "home": home,
+            "wrapper": wrapper,
+            "wrapper_sha256": hashlib.sha256(raw).hexdigest(),
+            "wrapper_identity": identity,
+            "manifest": manifest_path,
+            "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "observation_root": root / "native-observations",
+            "binding": native.binding(manifest),
+            "observer": observer,
+            "observer_sha256": hashlib.sha256(observer_bytes).hexdigest(),
+            "interpreter": sys.executable,
+            "wrapper_argv_sha256": mechanisms._argv_digest(["/bin/bash", str(wrapper), "closer"]),
+            "entry_argv_sha256": mechanisms._argv_digest(
+                native._entry_argv(manifest, manifest_path)
+            ),
+        }
+
+    @staticmethod
+    def _native_fixture_physical(root, path):
+        assert path.is_absolute() and path.is_relative_to(root)
+        assert path.resolve(strict=True) == path
+        current = root
+        for part in path.relative_to(root).parts:
+            current /= part
+            assert not current.is_symlink()
+
+    @classmethod
+    def _native_fixture_file(cls, root, path, limit):
+        import stat
+
+        cls._native_fixture_physical(root, path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            meta = os.fstat(stream.fileno())
+            assert stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1 and 0 < meta.st_size <= limit
+            raw = stream.read(limit + 1)
+            assert len(raw) == meta.st_size
+        return raw, (meta.st_dev, meta.st_ino)
+
+    def _native_fixture_options(self, options):
+        """Recheck exact private bytes immediately before the unchanged Popen."""
+        registered = self.native_fixture
+        if (
+            set(options) - {"env", "stdout", "stderr", "text", "shell"}
+            or options.get("stdout") != subprocess.PIPE
+            or options.get("stderr") != subprocess.PIPE
+            or options.get("text") is not True
+        ):
+            return False
+        env = options.get("env")
+        if not isinstance(env, dict) or env.get("HOME") != str(registered["home"]):
+            return False
+        if any(
+            key in env
+            for key in (
+                "BASH_ENV",
+                "ENV",
+                "LD_PRELOAD",
+                "LD_LIBRARY_PATH",
+                "DYLD_INSERT_LIBRARIES",
+                "DYLD_LIBRARY_PATH",
+            )
+        ):
+            return False
+        try:
+            root = registered["root"]
+            self._native_fixture_physical(root, registered["home"])
+            raw, identity = self._native_fixture_file(root, registered["wrapper"], 128 * 1024)
+            if (
+                identity != registered["wrapper_identity"]
+                or hashlib.sha256(raw).hexdigest() != registered["wrapper_sha256"]
+            ):
+                return False
+            raw, _ = self._native_fixture_file(root, registered["manifest"], 512 * 1024)
+            if hashlib.sha256(raw).hexdigest() != registered["manifest_sha256"]:
+                return False
+            request = Path(env.get("CLOSER_NATIVE_QUALIFICATION_REQUEST", ""))
+            if (
+                request.parent.parent != registered["observation_root"]
+                or request.name != "request.json"
+                or len(request.parent.name) != 32
+                or any(ch not in "0123456789abcdef" for ch in request.parent.name)
+            ):
+                return False
+            raw, _ = self._native_fixture_file(root, request, 32 * 1024)
+            value = json.loads(raw)
+            return (
+                value.get("schema") == "native-wrapper-qualification-request/v1"
+                and value.get("nonce") == request.parent.name
+                and value.get("binding") == registered["binding"]
+                and type(value.get("action_deadline")) in (int, float)
+                and type(value.get("hard_deadline")) in (int, float)
+                and math.isfinite(value["action_deadline"])
+                and math.isfinite(value["hard_deadline"])
+                and time.monotonic() < value["action_deadline"] < value["hard_deadline"]
+                and value["hard_deadline"] - time.monotonic() <= 120
+            )
+        except (OSError, ValueError, TypeError, AssertionError):
+            return False
+
+    @staticmethod
+    def _native_birth(value):
+        return (
+            isinstance(value, str)
+            and 0 < len(value) <= 128
+            and all(32 <= ord(ch) < 127 for ch in value)
+        )
+
+    def _native_observation_targets(self):
+        """Metadata candidates only; the unchanged OS reader must prove ownership."""
+        registered = getattr(self, "native_fixture", None)
+        if registered is None:
+            return {}
+        targets = {}
+        for wrapper_pid, launch in self.native_runs.items():
+            try:
+                if time.monotonic() >= launch["action_deadline"]:
+                    continue
+                raw, _ = self._native_fixture_file(registered["root"], launch["request"], 32 * 1024)
+                if hashlib.sha256(raw).hexdigest() != launch["request_sha256"]:
+                    continue
+                targets[wrapper_pid] = {"birth": None, "hard_deadline": launch["hard_deadline"]}
+                startup_path = launch["request"].parent / "startup.json"
+                if not startup_path.exists():
+                    continue
+                raw, _ = self._native_fixture_file(registered["root"], startup_path, 32 * 1024)
+                startup = json.loads(raw)
+                wrapper, entry = startup.get("wrapper"), startup.get("entry")
+                if not (
+                    startup.get("schema") == "native-wrapper-lifecycle/v1"
+                    and startup.get("nonce") == launch["request"].parent.name
+                    and startup.get("binding") == registered["binding"]
+                    and startup.get("actor") == "cursor"
+                    and startup.get("source") == "owned-native-wrapper-process"
+                    and startup.get("desktop_qualified") is False
+                    and startup.get("scheduler_origin") == "unobserved"
+                    and isinstance(wrapper, dict)
+                    and isinstance(entry, dict)
+                    and type(wrapper.get("pid")) is int
+                    and wrapper["pid"] == wrapper_pid
+                    and wrapper.get("argv_sha256") == registered["wrapper_argv_sha256"]
+                    and entry.get("argv_sha256") == registered["entry_argv_sha256"]
+                    and wrapper.get("source") == entry.get("source") == "os-byte-argv"
+                    and type(entry.get("pid")) is int
+                    and 1 < entry["pid"] <= 2**31 - 1
+                    and entry["pid"] != wrapper_pid
+                    and self._native_birth(wrapper.get("started"))
+                    and self._native_birth(entry.get("started"))
+                ):
+                    continue
+                targets[wrapper_pid] = {
+                    "birth": wrapper["started"],
+                    "hard_deadline": launch["hard_deadline"],
+                }
+                targets[entry["pid"]] = {
+                    "birth": entry["started"],
+                    "hard_deadline": launch["hard_deadline"],
+                }
+            except (OSError, ValueError, TypeError, AssertionError):
+                continue
+        return targets
+
+    def _native_observation_command(self, command):
+        registered = getattr(self, "native_fixture", None)
+        if registered is None:
+            return False
+        try:
+            targets = self._native_observation_targets()
+            if (
+                len(command) == 7
+                and command[:2] == ["ps", "-p"]
+                and command[2].isdigit()
+                and command[3:] == ["-o", "ppid=", "-o", "lstart="]
+            ):
+                return int(command[2]) in targets
+            if len(command) != 7 or command[:4] != [
+                registered["interpreter"],
+                "-I",
+                str(registered["observer"]),
+                "--owned-argv",
+            ]:
+                return False
+            pid, birth, seconds = command[4:]
+            if (
+                not pid.isdigit()
+                or int(pid) not in targets
+                or not self._native_birth(birth)
+                or birth != targets[int(pid)]["birth"]
+            ):
+                return False
+            remaining = float(seconds)
+            if not math.isfinite(remaining) or not 0 < remaining <= min(
+                5, targets[int(pid)]["hard_deadline"] - time.monotonic()
+            ):
+                return False
+            raw, _ = self._native_fixture_file(
+                registered["observer"].parent, registered["observer"], 512 * 1024
+            )
+            return hashlib.sha256(raw).hexdigest() == registered["observer_sha256"]
+        except (OSError, ValueError, TypeError, AssertionError):
+            return False
+
+    def _native_observation_options(self, options):
+        if set(options) - {
+            "capture_output",
+            "stdout",
+            "stderr",
+            "text",
+            "timeout",
+            "check",
+            "shell",
+        }:
+            return False
+        if options.get("text") is not True:
+            return False
+        timeout = options.get("timeout")
+        if timeout is not None and (
+            type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 5
+        ):
+            return False
+        return not any(
+            name in os.environ
+            for name in (
+                "LD_PRELOAD",
+                "LD_LIBRARY_PATH",
+                "DYLD_INSERT_LIBRARIES",
+                "DYLD_LIBRARY_PATH",
+            )
+        )
+
     def allowed(self, command):
         if not isinstance(command, (list, tuple)) or not all(
             isinstance(arg, str) for arg in command
@@ -193,6 +483,11 @@ class InertCaller:
         command = list(command)
         return command and (
             (self.core_head_query is not None and tuple(command) == self.core_head_query)
+            or (
+                getattr(self, "native_fixture", None) is not None
+                and tuple(command) == self.native_fixture["argv"]
+            )
+            or self._native_observation_command(command)
             or command[0] == str(self.world.cli)
             or (
                 Path(command[0]).name == "ps"
@@ -207,6 +502,13 @@ class InertCaller:
     def subprocess_allowed(self, command, options):
         if options.get("shell", False) is not False or not self.allowed(command):
             return False
+        if (
+            getattr(self, "native_fixture", None) is not None
+            and tuple(command) == self.native_fixture["argv"]
+        ):
+            return self._native_fixture_options(options)
+        if self._native_observation_command(list(command)):
+            return self._native_observation_options(options)
         if self.core_head_query is not None and tuple(command) == self.core_head_query:
             # No alternate executable, cwd or injected Git environment may turn
             # the exact metadata query into a different repository/operation.
@@ -215,8 +517,26 @@ class InertCaller:
 
     def popen(self, command, **kwargs):
         assert self.subprocess_allowed(command, kwargs), ("forbidden subprocess", command)
+        native_launch = None
+        if (
+            getattr(self, "native_fixture", None) is not None
+            and tuple(command) == self.native_fixture["argv"]
+        ):
+            request_path = Path(kwargs["env"]["CLOSER_NATIVE_QUALIFICATION_REQUEST"])
+            raw, _ = self._native_fixture_file(self.native_fixture["root"], request_path, 32 * 1024)
+            native_launch = {
+                "request": request_path,
+                "request_sha256": hashlib.sha256(raw).hexdigest(),
+                "action_deadline": json.loads(raw)["action_deadline"],
+                "hard_deadline": json.loads(raw)["hard_deadline"],
+            }
         child = REAL_POPEN(command, **kwargs)
-        if command[0] == str(self.world.cli):
+        if native_launch is not None:
+            self.native_runs[child.pid] = native_launch
+        if command[0] == str(self.world.cli) or (
+            getattr(self, "native_fixture", None) is not None
+            and tuple(command) == self.native_fixture["argv"]
+        ):
             self.children.add(child.pid)
         return child
 
