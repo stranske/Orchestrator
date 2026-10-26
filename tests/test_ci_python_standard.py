@@ -39,6 +39,24 @@ def test_workflow_python_pins_follow_standard():
     assert not violations, "Python 3.12 workflow runtime pins:\n" + "\n".join(violations)
 
 
+def test_coverage_runtime_is_the_primary_runtime():
+    root = Path(__file__).resolve().parents[1]
+    workflow_dir = root / ".github" / "workflows"
+    workflows = sorted(set(workflow_dir.glob("*.yml")) | set(workflow_dir.glob("*.yaml")))
+    gates = [workflow for workflow in workflows if workflow.stem == "pr-00-gate"]
+    assert gates, "No Gate workflow YAML found"
+    for gate in gates:
+        text = gate.read_text(encoding="utf-8")
+        for key in (
+            "coverage-python-version",
+            "primary-python-version",
+            "COVERAGE_REFERENCE_RUNTIME",
+        ):
+            values = re.findall(rf"^\s*{key}\s*:\s*([^\n]+)$", text, re.MULTILINE)
+            pins = [value.split("#", 1)[0].strip().strip("\"'") for value in values]
+            assert pins == ["3.14"], f"{gate.name}: {key} must be 3.14, got {pins}"
+
+
 def test_yaml_workflow_python_pins_are_scanned(tmp_path):
     (tmp_path / "b.yml").write_text("python-version: '3.12'\n", encoding="utf-8")
     (tmp_path / "a.yaml").write_text("python-version: '3.12'\n", encoding="utf-8")
