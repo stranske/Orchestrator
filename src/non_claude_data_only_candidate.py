@@ -28,8 +28,10 @@ precedence still needs source or offline qualification. No invented disable flag
 
 This module imports only the standard library. Preparing a plan never imports
 Vibe/SDKs or reads credentials. Its explicit inert driver exercises the public
-API contract under network denial. Installed backend binding remains an explicit
-unimplemented gate; these controls cannot mint transport/role qualification.
+API contract with trusted same-process fixture TCP-connect/DNS guards.
+Those guards are not a kernel sandbox or an untrusted-code tool fence. The
+emitted isolated interpreter argv is a plan, not executed by the inert driver.
+Installed backend binding remains an explicit unimplemented gate; these controls cannot mint transport/role qualification.
 """
 
 from __future__ import annotations
@@ -399,6 +401,10 @@ def prepare_vibe_candidate(
             "request_actually_sent": False,
         },
         "argv": argv,
+        "bootstrap_execution": "planned_not_executed_by_inert_driver",
+        "inert_guard_scope": "trusted_same_process_tcp_connect_and_dns_only",
+        "isolated_imports_proven": False,
+        "kernel_sandbox": False,
         "stdin": "lossless UTF-8 prompt bytes; never in argv",
         "cwd": str(root / "cwd"),
         "environment": {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", **paths},
@@ -483,9 +489,25 @@ class InertObservingBackend:
         self.observer, self.raw = observer, raw
 
     async def complete(self, **_kwargs):
+        usage = self.raw.get("usage")
+        if not isinstance(usage, dict) or any(
+            type(usage.get(key)) is not int or usage[key] < 0
+            for key in ("prompt_tokens", "completion_tokens")
+        ):
+            raise ValueError("inert response requires nonnegative integer native usage")
         self.observer.observe(self.raw)
         return SimpleNamespace(
-            message=SimpleNamespace(content=self.raw["choices"][0]["message"]["content"])
+            message=SimpleNamespace(
+                role="assistant",
+                content=self.raw["choices"][0]["message"]["content"],
+                reasoning_content=None,
+                tool_calls=None,
+            ),
+            usage=SimpleNamespace(
+                prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"]
+            ),
+            correlation_id=None,
+            stop=None,
         )
 
 
@@ -494,9 +516,11 @@ def load_installed_provider_backend():
 
 
 @contextlib.contextmanager
-def _network_denied() -> Iterator[None]:
+def _fixture_tcp_dns_guard() -> Iterator[None]:
+    """Trusted same-process fixture guard; leaves UDP, existing I/O and processes untouched."""
+
     def deny(*_args, **_kwargs):
-        raise RuntimeError("network forbidden in candidate inert execution")
+        raise RuntimeError("TCP-connect/DNS forbidden in trusted candidate fixture")
 
     patches: list[tuple[Any, str]] = [
         (socket.socket, "connect"),
@@ -544,7 +568,10 @@ def run_vibe_candidate_inert(
     backend_factory: Callable,
     execution_pins: ExecutionPins,
 ) -> dict:
-    """Concrete public-API driver, explicitly inert and network-denied throughout.
+    """Concrete trusted same-process inert public-API driver.
+
+    The emitted -I/-S/-B argv is not executed here. TCP-connect/DNS guards
+    do not isolate imports or constrain UDP, existing connections or processes.
 
     No installed SDK/API loader is provided. Factories are Python-object injection
     from the trusted caller, never import paths or names from candidate text.
@@ -590,7 +617,7 @@ def run_vibe_candidate_inert(
         os.environ.clear()
         os.environ.update(contract["environment"])
         os.chdir(contract["cwd"])
-        with _network_denied():
+        with _fixture_tcp_dns_guard():
             # This order is a source-backed fence, not a settings-file convention.
             api.init_harness_files_manager()
             config = api.VibeConfig(**strict_final(plan.config_json))
@@ -616,6 +643,10 @@ def run_vibe_candidate_inert(
             raise ValueError("mandatory raw-response observation missing")
         return {
             "status": "offline_fixture_unverified",
+            "bootstrap_execution": contract["bootstrap_execution"],
+            "inert_guard_scope": contract["inert_guard_scope"],
+            "isolated_imports_proven": False,
+            "kernel_sandbox": False,
             "activation": False,
             "production_admission": False,
             "provider_attested": False,
@@ -671,6 +702,7 @@ def selftest() -> dict:
 
     raw = {
         "model": MODEL,
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2},
         "choices": [
             {
                 "finish_reason": "stop",

@@ -1,9 +1,13 @@
 """Explicit inert API/bootstrap controls; no installed Vibe, SDK or provider runs."""
 
+import asyncio
+import hashlib
 import json
 import os
 import socket
+import subprocess
 import sys
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +19,7 @@ import non_claude_data_only_candidate as c
 CALLS = []
 RAW = {
     "model": c.MODEL,
+    "usage": {"prompt_tokens": 3, "completion_tokens": 2},
     "choices": [
         {
             "finish_reason": "stop",
@@ -111,6 +116,9 @@ def test_plan_emits_exact_isolation_stdin_config_and_never_native_authority(fixt
     assert doc["argv"][1:4] == ["-I", "-S", "-B"]
     assert "pycache_prefix=" in doc["argv"][5]
     assert doc["argv"][-1] == "--candidate-bootstrap"
+    assert doc["bootstrap_execution"] == "planned_not_executed_by_inert_driver"
+    assert doc["inert_guard_scope"] == "trusted_same_process_tcp_connect_and_dns_only"
+    assert doc["isolated_imports_proven"] is doc["kernel_sandbox"] is False
     assert doc["config"]["mcp_servers"] == [] and not doc["config"]["enable_experimental_hooks"]
     assert not doc["config"]["enable_connectors"] and not doc["config"]["include_project_context"]
     assert not doc["config"]["include_prompt_detail"] and not doc["config"]["experiments"]["enable"]
@@ -132,6 +140,9 @@ def test_driver_zero_sources_precedes_config_and_uses_mandatory_observing_backen
     result = execute(fixture, b"snowman \xe2\x98\x83\n  ")
     assert result["status"] == "offline_fixture_unverified"
     assert not result["provider_attested"] and not result["activation"]
+    assert result["bootstrap_execution"] == "planned_not_executed_by_inert_driver"
+    assert result["inert_guard_scope"] == "trusted_same_process_tcp_connect_and_dns_only"
+    assert result["isolated_imports_proven"] is result["kernel_sandbox"] is False
     assert result["observed_model"] == c.MODEL and result["observed_effort"] == "UNKNOWN"
     assert CALLS[0] == ("sources", (), {})
     assert next(row[1] for row in CALLS if row[0] == "prompt") == "snowman ☃\n  "
@@ -148,7 +159,7 @@ def network_config(**kwargs):
     return make_config(**kwargs)
 
 
-def test_network_is_denied_before_config_discovery_and_environment_restored(fixture):
+def test_fixture_tcp_dns_guard_precedes_config_and_environment_is_restored(fixture):
     plan, api, pins = fixture
     api = replace(api, VibeConfig=network_config)
     pins = replace(
@@ -159,7 +170,7 @@ def test_network_is_denied_before_config_discovery_and_environment_restored(fixt
         ),
     )
     before = dict(os.environ)
-    with pytest.raises(RuntimeError, match="network forbidden"):
+    with pytest.raises(RuntimeError, match="TCP-connect/DNS forbidden"):
         execute((plan, api, pins))
     assert dict(os.environ) == before
 
@@ -325,3 +336,123 @@ def test_manifest_cannot_name_credential_or_arbitrary_support_files(fixture, tmp
     )
     with pytest.raises(ValueError, match="support pins"):
         c.verify_manifest(bad)
+
+
+# Retained installed public boundary source: no native module/SDK import at test time.
+# vibe/core/agent_loop.py:1529-1599; full file SHA256 a144802d59503e030508f9a8e2c8168fc4c9c40e5ec348eef5ce86fe4463a256
+NATIVE_CHAT_SHA256 = "17eb05a4d1f3fab3f9a04c63b6cf8ba1a9c448ad073c7dd1dfe224a23fc4dec3"
+NATIVE_CHAT = 'async def _chat(\n    self, max_tokens: int | None = None, model_override: ModelConfig | None = None\n) -> LLMChunk:\n    active_model = model_override or self.config.get_active_model()\n    provider = self.config.get_provider_for_model(active_model)\n    backend_metadata = self._build_backend_metadata()\n\n    available_tools = self.format_handler.get_available_tools(self.tool_manager)\n    tool_choice = self.format_handler.get_tool_choice()\n\n    last_user_message = self._last_user_message()\n    self.telemetry_client.send_request_sent(\n        model=active_model.alias,\n        nb_context_chars=sum(len(m.content or "") for m in self.messages),\n        nb_context_messages=len(self.messages),\n        nb_prompt_chars=len(last_user_message.content or "")\n        if last_user_message\n        else 0,\n        call_type=backend_metadata.call_type,\n        message_id=backend_metadata.message_id,\n        attachment_counts=build_attachment_counts(\n            last_user_message, supports_images=active_model.supports_images\n        ),\n    )\n\n    try:\n        start_time = time.perf_counter()\n        result = await self.backend.complete(\n            model=active_model,\n            messages=self._messages_for_backend(active_model),\n            temperature=active_model.temperature,\n            tools=available_tools,\n            tool_choice=tool_choice,\n            extra_headers=self._get_extra_headers(provider),\n            max_tokens=max_tokens,\n            metadata=backend_metadata.model_dump(exclude_none=True),\n        )\n        end_time = time.perf_counter()\n\n        if result.usage is None:\n            raise AgentLoopLLMResponseError(\n                "Usage data missing in non-streaming completion response"\n            )\n        self._update_stats(usage=result.usage, time_seconds=end_time - start_time)\n\n        if result.correlation_id:\n            self.telemetry_client.last_correlation_id = result.correlation_id\n\n        processed_message = self.format_handler.process_api_response_message(\n            result.message\n        )\n        self.messages.append(processed_message)\n        if result.stop and result.stop.is_refusal:\n            raise _refusal_error(provider.name, active_model.name, result)\n        return LLMChunk(\n            message=processed_message, usage=result.usage, stop=result.stop\n        )\n\n    except Exception as e:\n        if isinstance(e, RefusalError):\n            raise\n        if _should_raise_rate_limit_error(e):\n            raise RateLimitError(provider.name, active_model.name) from e\n        if _is_context_too_long_error(e):\n            raise ContextTooLongError(provider.name, active_model.name) from e\n        if _is_non_retryable_error(e):\n            raise\n\n        raise RuntimeError(\n            f"API error from {provider.name} (model: {active_model.name}): {e}"\n        ) from e\n'
+# vibe/core/llm/format.py:78-101; full file SHA256 bd6a7243f7965f588a5536535a751220142b80e7acabdd0a9df4786afccb7560
+NATIVE_FORMAT_SHA256 = "293f88d5a45720e64aa04bded98407b493a94b6fd02cc0ca5193a332b67b811a"
+NATIVE_FORMAT = 'def process_api_response_message(self, message: Any) -> LLMMessage:\n    clean_message = {\n        "role": message.role,\n        "content": message.content,\n        "reasoning_content": getattr(message, "reasoning_content", None),\n        "reasoning_state": getattr(message, "reasoning_state", None),\n        "reasoning_signature": getattr(message, "reasoning_signature", None),\n    }\n\n    if message.tool_calls:\n        clean_message["tool_calls"] = [\n            {\n                "id": tc.id,\n                "index": tc.index,\n                "type": "function",\n                "function": {\n                    "name": tc.function.name,\n                    "arguments": tc.function.arguments,\n                },\n            }\n            for tc in message.tool_calls\n        ]\n\n    return LLMMessage.model_validate(clean_message)\n'
+
+
+def retained_native_boundary(backend):
+    """Execute exact retained native attribute access/control flow with inert dependencies."""
+    for source, sha in [(NATIVE_CHAT, NATIVE_CHAT_SHA256), (NATIVE_FORMAT, NATIVE_FORMAT_SHA256)]:
+        assert hashlib.sha256(source.encode()).hexdigest() == sha
+    namespace = {
+        "time": time,
+        "LLMChunk": SimpleNamespace,
+        "LLMMessage": SimpleNamespace(model_validate=lambda values: SimpleNamespace(**values)),
+        "build_attachment_counts": lambda *args, **kwargs: {},
+        "AgentLoopLLMResponseError": ValueError,
+        "RefusalError": type("RefusalError", (Exception,), {}),
+        "_should_raise_rate_limit_error": lambda error: False,
+        "_is_context_too_long_error": lambda error: False,
+        "_is_non_retryable_error": lambda error: False,
+    }
+    exec(
+        compile(
+            "from __future__ import annotations\n" + NATIVE_CHAT + NATIVE_FORMAT,
+            "<retained-native-public-boundary>",
+            "exec",
+        ),
+        namespace,
+    )
+    model = SimpleNamespace(name=c.MODEL, alias="fixture", temperature=0.2, supports_images=False)
+    provider = SimpleNamespace(name="fixture")
+    messages = [SimpleNamespace(content="inert prompt")]
+    stats = []
+    formatter = SimpleNamespace(
+        get_available_tools=lambda manager: [],
+        get_tool_choice=lambda: "auto",
+        process_api_response_message=lambda message: namespace["process_api_response_message"](
+            None, message
+        ),
+    )
+    session = SimpleNamespace(
+        config=SimpleNamespace(
+            get_active_model=lambda: model, get_provider_for_model=lambda model: provider
+        ),
+        _build_backend_metadata=lambda: SimpleNamespace(
+            call_type="fixture", message_id=None, model_dump=lambda **kwargs: {}
+        ),
+        format_handler=formatter,
+        tool_manager=object(),
+        messages=messages,
+        _last_user_message=lambda: messages[0],
+        telemetry_client=SimpleNamespace(send_request_sent=lambda **kwargs: None),
+        backend=backend,
+        _messages_for_backend=lambda model: messages,
+        _get_extra_headers=lambda provider: {},
+        _update_stats=lambda **kwargs: stats.append(kwargs),
+    )
+    result = asyncio.run(namespace["_chat"](session, max_tokens=512))
+    return result, stats, messages
+
+
+def test_inert_chunk_passes_retained_native_chat_and_formatter_boundary():
+    observer = c.RawResponseObserver(c.MODEL)
+    chunk, stats, messages = retained_native_boundary(c.InertObservingBackend(observer, RAW))
+    assert chunk.message.role == "assistant"
+    assert chunk.message.content == RAW["choices"][0]["message"]["content"]
+    assert chunk.usage.prompt_tokens == 3 and chunk.usage.completion_tokens == 2
+    assert stats[0]["usage"] is chunk.usage and len(messages) == 2
+    assert chunk.stop is None and observer.responses == 1
+
+
+@pytest.mark.parametrize("missing", ["usage", "correlation_id", "stop", "role", "tool_calls"])
+def test_retained_native_boundary_rejects_missing_native_chunk_fields(missing):
+    class Broken:
+        async def complete(self, **kwargs):
+            chunk = await c.InertObservingBackend(c.RawResponseObserver(c.MODEL), RAW).complete()
+            delattr(chunk.message if missing in ("role", "tool_calls") else chunk, missing)
+            return chunk
+
+    with pytest.raises(RuntimeError, match=missing):
+        retained_native_boundary(Broken())
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": True, "completion_tokens": 1},
+        {"prompt_tokens": 1, "completion_tokens": -1},
+    ],
+)
+def test_inert_backend_requires_native_usage_without_fabrication(usage):
+    observer = c.RawResponseObserver(c.MODEL)
+    with pytest.raises(ValueError, match="native usage"):
+        asyncio.run(c.InertObservingBackend(observer, {**RAW, "usage": usage}).complete())
+    assert observer.responses == 0
+
+
+def test_guard_scope_leaves_udp_existing_connection_processes_and_import_paths_untouched():
+    originals = (socket.socket.sendto, socket.socket.sendall, subprocess.Popen, sys.path)
+    with c._fixture_tcp_dns_guard():
+        assert (
+            socket.socket.sendto,
+            socket.socket.sendall,
+            subprocess.Popen,
+            sys.path,
+        ) == originals
+        for operation, args in [
+            (socket.getaddrinfo, ("invalid.test", 1)),
+            (socket.create_connection, (("127.0.0.1", 1),)),
+        ]:
+            with pytest.raises(RuntimeError, match="TCP-connect/DNS forbidden"):
+                operation(*args)
+    assert (socket.socket.sendto, socket.socket.sendall, subprocess.Popen, sys.path) == originals
