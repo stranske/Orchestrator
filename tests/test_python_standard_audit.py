@@ -103,6 +103,26 @@ def test_cursor_closer_native_entry_not_refused_line(tmp_path):
     )
     original_closer = closer.read_bytes()
     original_controller = controller.read_bytes()
+
+    # With no retained success receipts, a measured non-refused log and matching pins still
+    # report their own drained state. Noise and unrelated JSON do not enter the denominator.
+    refused_log = log.read_text()
+    clean_log = '{"launcher": "completed"}\n' * 3
+    log.write_text('unrelated output\nnull\n[]\n{"other": "refused"}\n' + clean_log)
+    clean = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    assert switch_review.format_cursor_closer_native_entry(clean) == (
+        "Cursor closer native entry: drained: refused 0/3 launcher results; "
+        "successes seen 0; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    log.write_text("unrelated output\n")
+    empty_line = switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    )
+    assert "unmeasured — no launcher results" in empty_line
+    assert "drained" not in empty_line
+    log.write_text(refused_log)
+
     closer.write_text('model = "changed-closer"\n')
     controller.write_text('model = "changed-controller"\n')
     mismatched = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
@@ -111,6 +131,14 @@ def test_cursor_closer_native_entry_not_refused_line(tmp_path):
     assert "hash mismatches 2" in mismatch_line
     assert "imi-merge-verify-closer/automation.toml" in mismatch_line
     assert "reviewed-repo-automation-controller/automation.toml" in mismatch_line
+    log.write_text(clean_log)
+    zero_refusals_with_drift = switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    )
+    assert "refused 0/3 launcher results" in zero_refusals_with_drift
+    assert "hash mismatches 2" in zero_refusals_with_drift
+    assert "drained" not in zero_refusals_with_drift
+    log.write_text(refused_log)
     rendered = switch_review.format_report(
         {
             "review_days": 7,
@@ -211,9 +239,7 @@ def test_cursor_closer_incomplete_pin_set_is_not_clean(tmp_path):
     closer.parent.mkdir()
     closer.write_text('status = "ACTIVE"\n')
     payload = {
-        "policy": {
-            "toml_sha256": {str(closer): hashlib.sha256(closer.read_bytes()).hexdigest()}
-        },
+        "policy": {"toml_sha256": {str(closer): hashlib.sha256(closer.read_bytes()).hexdigest()}},
         "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
     }
     _observation_root(payload)

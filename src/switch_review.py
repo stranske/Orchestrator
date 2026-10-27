@@ -2178,9 +2178,7 @@ def _cursor_closer_native_successes(manifest: dict) -> tuple[int, int | None]:
             raise ValueError("native terminal receipt path is invalid")
         signed = json.loads(terminal.read_text(encoding="utf-8"))
         record = signed["record"]
-        if not hmac.compare_digest(
-            signed["signature"], closer_mechanisms._signature(record, key)
-        ):
+        if not hmac.compare_digest(signed["signature"], closer_mechanisms._signature(record, key)):
             raise ValueError("native terminal receipt signature differs")
         if record.get("binding") != expected_binding:
             continue
@@ -2300,22 +2298,24 @@ def cursor_closer_native_entry_snapshot(
 
 def format_cursor_closer_native_entry(report: dict) -> str:
     prefix = "Cursor closer native entry: "
+    pins_match = (
+        not report.get("hash_error")
+        and not report.get("pin_set_error")
+        and report.get("hash_mismatch_count") == 0
+    )
     if report.get("log_error"):
         launcher = f"cannot read launcher log ({report['log_error']})"
     elif report.get("results_since_success"):
-        drained = (
-            not report.get("hash_error")
-            and not report.get("pin_set_error")
-            and report.get("hash_mismatch_count") == 0
-        )
-        launcher = ("drained: " if drained else "") + (
+        launcher = ("drained: " if pins_match else "") + (
             f"since last retained success: refused {report['refused_since_success']}/"
             f"{report['results_since_success']}"
         )
     elif report.get("launcher_results") == 0:
         launcher = "unmeasured — no launcher results"
     elif report.get("refused") == 0:
-        launcher = f"refused 0/{report['launcher_results']} launcher results"
+        launcher = ("drained: " if pins_match else "") + (
+            f"refused 0/{report['launcher_results']} launcher results"
+        )
     elif report.get("launcher_results") is None or report.get("refused") is None:
         launcher = "cannot read launcher log (no snapshot)"
     else:
