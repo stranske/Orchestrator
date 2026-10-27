@@ -4600,6 +4600,8 @@ def test_older_active_pipeline_window_cannot_be_hidden_by_a_newer_expired_run(tm
 
 @pytest.mark.parametrize("status", ["submitted", "running", "uncertain"])
 def test_fresh_pipeline_budget_never_releases_a_legacy_operation_barrier(tmp_path, status):
+    import closer_resources
+
     state = _terminal_queue_state(tmp_path)
     state_path = tmp_path / "legacy-queue.json"
     state["items"][TARGET]["operation"] = {
@@ -4608,16 +4610,56 @@ def test_fresh_pipeline_budget_never_releases_a_legacy_operation_barrier(tmp_pat
         "repo_keys": [TARGET.split("#")[0]],
     }
     state_path.write_text(json.dumps(state))
-    _adopted_pipeline(tmp_path)
+    pipeline_path = _adopted_pipeline(tmp_path)
+    assert closer_pipeline.validate_stop(pipeline_path)["valid"] is True
+    pipeline_before = pipeline_path.read_bytes()
     before = state_path.read_bytes()
     requested = time.time() + 310
-    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == (
+    selected, reason = adapter._deadline_with_pipeline_round(requested, state, state_path)
+    assert (selected, reason) == (
         requested,
         "valid_pipeline_stop",
+    )
+
+    # A valid prior stop gets past the earlier regression's refusal. The real
+    # scoped scheduler must still fence the unresolved original queue operation
+    # before any read, reasoning, or mutation callback starts.
+    def forbidden_stage(*_args):
+        pytest.fail("fresh deadline must not bypass the original operation's scope")
+
+    receipt = closer_pipeline.run_pipeline(
+        pipeline_path,
+        [TARGET],
+        prepare=forbidden_stage,
+        interpret=forbidden_stage,
+        exception=forbidden_stage,
+        act=forbidden_stage,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=selected,
+        coordinator_mode="resource_scoped",
+    )
+    row = receipt["targets"][TARGET]
+    assert row["status"] == "deferred"
+    assert row["deferred_reason"] == "scope_quarantined"
+    proof = json.loads(Path(row["scope_proof"]["path"]).read_text())
+    assert proof["stage"] == "target_admission"
+    assert proof["admitted"] is False
+    assert proof["callback_started"] is False
+    assert proof["snapshot"]["global_reasons"] == []
+    assert proof["reason"].startswith("quarantined_resource:")
+    assert any(
+        item["run_id"] == "native_queue"
+        and item["target"] == TARGET
+        and item["reason"] == "unresolved_native_item"
+        and item["source_path"] == str(state_path)
+        for item in proof["snapshot"]["items"]
     )
     with pytest.raises(RuntimeError, match="reconcile it in the original closer queue"):
         adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
     assert state_path.read_bytes() == before
+    assert pipeline_path.read_bytes() == pipeline_before
+    assert closer_pipeline.validate_stop(pipeline_path)["valid"] is True
+    assert closer_resources.unknown_reservations(closer_resources.scoped_root(pipeline_path)) == {}
 
 
 @pytest.mark.parametrize("branch", ["safe_pipeline_continuation", "expired_pipeline_recovery"])

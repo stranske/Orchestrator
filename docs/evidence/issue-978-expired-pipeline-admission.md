@@ -89,4 +89,43 @@ returned both cases to green. This proof used isolated temporary fixtures, with
 no live closer or installed-mirror invocation. New hosted Python 3.13/3.14 and
 flat-mirror checks must validate the recovery commit independently.
 
-CI, delayed review, guarded merge, and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
+### Review follow-up: independently reachable operation gate (2026-10-27)
+
+Head `65473099859d971da83628d1a70d9b55d000e1b9` passed hosted
+[CI 40574625177](https://github.com/stranske/Orchestrator/actions/runs/40574625177)
+and [Gate 40574626304](https://github.com/stranske/Orchestrator/actions/runs/40574626304).
+The submitted CodeRabbit review identified a remaining test gap: the invalid-stop
+regression returns before exercising the unresolved-operation gate. The documentation
+thread is resolved, but this separate finding needed implementation.
+
+The existing parametrized operation-barrier test now runs the real resource-scoped
+scheduler with a valid prior pipeline stop and the selected fresh deadline. For
+submitted, running, and uncertain original operations, target admission refuses with
+`scope_quarantined`. Its retained scope proof names the original native queue item,
+reports a quarantined resource with no malformed-source reasons, and records that no
+callback started. All stage callbacks fail if called. The original queue and pipeline
+ledger remain byte-identical, the prior pipeline stop remains valid, and no mutation
+reservation is created. The separate direct operation-dependency assertion remains.
+The invalid-stop scheduler regression is also retained. No collected cases were added.
+
+Local Python 3.14.8 validation with pytest 9.1.1 from cached wheels:
+
+- Focused operation-barrier regression: **3 passed**.
+- `python3 -m pytest tests/test_closer_dispatcher.py tests/test_closer_pipeline.py -q -m 'not slow' --disable-warnings --maxfail=1`: **511 passed** in 27.25s.
+- Black 26.10.1 formatted the changed file without edits. The required repository-wide
+  `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+  passed: **818 files would be left unchanged**. The sandbox blocks multiprocessing
+  and the single-worker asynchronous check stalled, so all 818 files first passed
+  individual Black CLI checks, populating Black's normal cache. The unchanged
+  repository-wide command then passed with that cache. Formatter code and rules
+  were unchanged. `git diff --check` also passed.
+
+This runner could not stage the follow-up: `git add` failed because `.git/index.lock`
+is on a read-only filesystem. The GitHub connector also refused both the requested
+`needs-human` label and blocker comment because those mutations require approval
+and the current approval policy is `never`. The test change remains uncommitted;
+publication requires a runner with writable Git metadata. PR #982 was verified open
+and ready for review (`isDraft=false`) at head `6547309`.
+
+The hosted green checks above validate the preceding head, not this test follow-up.
+CI, delayed review, guarded merge, and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. Source #978 remains open. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
