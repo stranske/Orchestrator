@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import plistlib
 import subprocess
@@ -10,6 +11,78 @@ import pytest
 
 import python_standard_audit as audit
 import switch_review
+
+
+def test_cursor_closer_native_entry_not_refused_line(tmp_path):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    controller = tmp_path / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir()
+    controller.parent.mkdir()
+    closer.write_text('model = "gpt-6.1-sol"\n')
+    controller.write_text('model = "gpt-6-luna"\n')
+    manifest = tmp_path / "host-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "policy": {
+                    "toml_sha256": {
+                        str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                        str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+                    }
+                }
+            }
+        )
+    )
+    log = tmp_path / "cursor-closer.out"
+    log.write_text(
+        "\n".join(
+            [
+                "unrelated output",
+                '{"launcher": "refused"}',
+                '{"launcher": "refused"}',
+                '{"launcher": "completed"}',
+            ]
+        )
+        + "\n"
+    )
+
+    refused = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    assert switch_review.format_cursor_closer_native_entry(refused) == (
+        "Cursor closer native entry: refused 2/3 launcher results; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    rendered = switch_review.format_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+            "python_standard": {},
+            "cursor_closer_native_entry": refused,
+        }
+    )
+    assert rendered.count("Cursor closer native entry:") == 1
+    assert rendered.index("Python standard:") < rendered.index("Cursor closer native entry:")
+
+    # This concrete M>0 input is the latched-gate Q4 proof for the distinct drained wording.
+    log.write_text('{"launcher": "completed"}\n{"launcher": "completed"}\n')
+    drained = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    drained_line = switch_review.format_cursor_closer_native_entry(drained)
+    assert drained_line == (
+        "Cursor closer native entry: drained: refused 0/2 launcher results; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+
+    log.unlink()
+    unreadable = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    unreadable_line = switch_review.format_cursor_closer_native_entry(unreadable)
+    assert unreadable_line == (
+        "Cursor closer native entry: cannot read launcher log (FileNotFoundError); "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    assert "refused 0/" not in unreadable_line
 
 
 @pytest.fixture

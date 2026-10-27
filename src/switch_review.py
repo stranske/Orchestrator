@@ -47,9 +47,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import math
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -62,6 +64,10 @@ from pathlib import Path
 import capabilities
 import paths
 import python_standard_audit
+
+CURSOR_CLOSER_LOG = Path.home() / ".codex/automations/logs/cursor-closer.out"
+CURSOR_LANE_WRAPPER = Path.home() / ".codex/bin/cursor-lane.sh"
+_CURSOR_MANIFEST_RE = re.compile(r"--manifest\s+(?:'([^']+)'|\"([^\"]+)\"|(\S+))")
 
 # How long a switch may sit unreviewed before the question comes back.
 REVIEW_DAYS = 7
@@ -1736,6 +1742,7 @@ def review(
     value_chain_inputs: dict | None = None,
     credential_exposure_report: dict | None = None,
     python_standard_report: dict | None = None,
+    cursor_closer_native_entry_report: dict | None = None,
     feature_goals_fn=None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why.
@@ -1838,6 +1845,9 @@ def review(
         "weekly_pacing": weekly_pacing_check(now=now),
         # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
         "python_standard": python_standard_report,
+        # Same collection boundary: formatting a stored weekly report must not reread a growing log
+        # or compare a newer automation policy than the snapshot that produced the report.
+        "cursor_closer_native_entry": cursor_closer_native_entry_report,
         # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
         # put it. FYI only, real clock, never counted in `raise_count`.
         "worktree_git_refusals": worktree_git_refusals(),
@@ -2125,6 +2135,107 @@ def review_loop_share_line(rows) -> str:
     return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
 
 
+def _cursor_closer_manifest_path(wrapper_path: Path) -> Path:
+    """Return the manifest named by the live wrapper's pinned native-entry block."""
+    wrapper = wrapper_path.read_text(encoding="utf-8")
+    match = _CURSOR_MANIFEST_RE.search(wrapper)
+    if not match:
+        raise ValueError("wrapper has no --manifest argument")
+    return Path(next(part for part in match.groups() if part is not None))
+
+
+def cursor_closer_native_entry_snapshot(
+    log_path: Path | str | None = None,
+    manifest_path: Path | str | None = None,
+    wrapper_path: Path | str | None = None,
+) -> dict:
+    """Measure native launcher refusals and configured-policy hash drift.
+
+    Explicit arguments win over environment overrides so fixture tests never need to inspect the
+    host. The manifest defaults to the one pinned by the live wrapper; this keeps the sweep aligned
+    after a guarded roll-forward rather than freezing another package path here.
+    """
+    log = Path(log_path or os.environ.get("ORCH_CURSOR_CLOSER_LOG", "") or CURSOR_CLOSER_LOG)
+    wrapper = Path(
+        wrapper_path or os.environ.get("ORCH_CURSOR_LANE_WRAPPER", "") or CURSOR_LANE_WRAPPER
+    )
+    report = {
+        "log_path": str(log),
+        "launcher_results": None,
+        "refused": None,
+        "log_error": None,
+        "manifest_path": None,
+        "hash_mismatch_count": None,
+        "hash_mismatches": [],
+        "hash_error": None,
+    }
+
+    try:
+        launcher_results = refused = 0
+        with log.open(encoding="utf-8", errors="replace") as stream:
+            for raw in stream:
+                try:
+                    row = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(row, dict) or "launcher" not in row:
+                    continue
+                launcher_results += 1
+                refused += row.get("launcher") == "refused"
+        report.update(launcher_results=launcher_results, refused=refused)
+    except OSError as exc:
+        report["log_error"] = type(exc).__name__
+
+    try:
+        manifest_override = (
+            manifest_path or os.environ.get("ORCH_CURSOR_CLOSER_MANIFEST", "") or None
+        )
+        manifest = (
+            Path(manifest_override) if manifest_override else _cursor_closer_manifest_path(wrapper)
+        )
+        report["manifest_path"] = str(manifest)
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        pins = payload["policy"]["toml_sha256"]
+        if not isinstance(pins, dict) or not pins:
+            raise ValueError("manifest policy.toml_sha256 is empty")
+        mismatches = []
+        for filename, pinned in sorted(pins.items()):
+            current = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
+            if current != pinned:
+                path = Path(filename)
+                mismatches.append(f"{path.parent.name}/{path.name}")
+        report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        report["hash_error"] = type(exc).__name__
+    return report
+
+
+def format_cursor_closer_native_entry(report: dict) -> str:
+    prefix = "Cursor closer native entry: "
+    if report.get("log_error"):
+        launcher = f"cannot read launcher log ({report['log_error']})"
+    elif report.get("launcher_results") == 0:
+        launcher = "unmeasured — no launcher results"
+    elif report.get("refused") == 0:
+        launcher = f"drained: refused 0/{report['launcher_results']} launcher results"
+    elif report.get("launcher_results") is None or report.get("refused") is None:
+        launcher = "cannot read launcher log (no snapshot)"
+    else:
+        launcher = f"refused {report['refused']}/{report['launcher_results']} launcher results"
+
+    if report.get("hash_error"):
+        hashes = f"pinned-vs-current automation.toml hashes cannot read ({report['hash_error']})"
+    elif report.get("hash_mismatch_count") is None:
+        hashes = "pinned-vs-current automation.toml hashes cannot read (no snapshot)"
+    else:
+        names = ", ".join(report.get("hash_mismatches") or []) or "none"
+        hashes = (
+            "pinned-vs-current automation.toml hash mismatches "
+            f"{report['hash_mismatch_count']} ({names})"
+        )
+    return prefix + launcher + "; " + hashes
+
+
 def format_report(rep: dict) -> str:
     lines = [
         "# Switch review — held switches must be revisited, not forgotten",
@@ -2369,6 +2480,7 @@ def format_report(rep: dict) -> str:
     if rep.get("weekly_pacing") is not None:
         lines += [rep["weekly_pacing"], ""]
     lines += [python_standard_audit.format_line(rep.get("python_standard") or {}), ""]
+    lines += [format_cursor_closer_native_entry(rep.get("cursor_closer_native_entry") or {}), ""]
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
@@ -3192,6 +3304,7 @@ def main(argv: list[str]) -> int:
         value_chain_inputs=value_chain_inputs,
         credential_exposure_report=credential_exposure(),
         python_standard_report=python_standard_audit.snapshot(),
+        cursor_closer_native_entry_report=cursor_closer_native_entry_snapshot(),
     )
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.
     # Pure report/selftest readers keep their no-network and no-state-write contract.
