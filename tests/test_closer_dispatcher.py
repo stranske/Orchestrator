@@ -4525,10 +4525,33 @@ def test_pipeline_admission_does_not_select_expired_legacy_deadline(tmp_path, op
     assert closer_pipeline.validate_stop(path)["valid"] is False
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     requested = time.time() + 310
-    assert adapter._deadline_with_pipeline_round(requested, legacy, state_path) == (
+    selected, reason = adapter._deadline_with_pipeline_round(requested, legacy, state_path)
+    assert (selected, reason) == (
         requested,
         "legacy_window_expired_fresh_admission",
     )
+
+    # Exercise the real scheduler with the fresh budget: deadline selection must
+    # not authorize work across the unresolved prior run or its reservation.
+    def forbidden_stage(*_args):
+        pytest.fail("fresh deadline must not bypass prior-run admission")
+
+    receipt = closer_pipeline.run_pipeline(
+        path,
+        [TARGET],
+        prepare=forbidden_stage,
+        interpret=forbidden_stage,
+        exception=forbidden_stage,
+        act=forbidden_stage,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=selected,
+        coordinator_mode="legacy",
+    )
+    assert receipt["status"] == "blocked"
+    assert receipt["reason"] == "prior_run_has_no_valid_stop"
+    assert receipt["authority"] is False
+    assert receipt["prior_stop"]["valid"] is False
+    assert receipt["targets"] == {}
     with pytest.raises(RuntimeError, match="reconcile it in the original closer queue"):
         adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
     assert closer_pipeline.validate_stop(path)["valid"] is False
