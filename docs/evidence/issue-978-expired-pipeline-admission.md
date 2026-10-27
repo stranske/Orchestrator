@@ -132,3 +132,36 @@ The linked green checks above validate preceding head `6547309`. Current-head
 checks were independently green at the opener's 2026-10-27 review of `177bbf08`;
 this documentation correction starts a new CI and delayed-review cycle. Guarded
 merge and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. Source #978 remains open. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
+
+### Reservation-gate isolation follow-up (2026-10-27)
+
+At incoming head `80cf549137f17ca752ae37311e784144e1cd73b9`, hosted
+[CI 40583854284](https://github.com/stranske/Orchestrator/actions/runs/40583854284)
+and [Gate 40583854839](https://github.com/stranske/Orchestrator/actions/runs/40583854839)
+succeeded. CodeRabbit's summary identifies that exact head as reviewed with no
+new actionable comments (updated 21:18:10 UTC). The successful Claude opt-in
+workflow skipped review because the PR was not opted in. Both inline review
+threads are resolved. These observations validate the incoming revision only.
+
+The named expired-deadline regression now additionally isolates the reservation
+gate. After its original invalid-stop refusal, it repairs the temporary prior
+pipeline stop and removes the temporary native operation, leaving the retained
+reservation as the sole unresolved barrier. The selected deadline must still be
+fresh, while the real scoped scheduler refuses target admission with
+`scope_quarantined`. Assertions require a retained-resource-intent census entry,
+no unresolved-native-item entry or malformed-source reasons, no callback start,
+and unchanged queue, pipeline ledger, and reservation bytes. The active-window
+control and original operation/refusal assertions remain. No collected test
+cases or production gates changed.
+
+This runner lacks pytest and Black. The dispatcher/pipeline pytest command and
+changed-file Black invocation fail with missing modules; the required repository
+Black command also fails (`black: command not found`). Installing the tools from
+PyPI fails because `pypi.org` cannot resolve. A standalone standard-library probe
+against the production modules confirms the new reservation-isolation scenario
+for all three submitted/running/uncertain fixture statuses, but is not a pytest
+run or a formatting check. The edited module parses and `git diff --check` passes.
+The Python follow-up requires pytest and Black verification before commit, then
+hosted CI and delayed review for its own head. No remaining task is marked complete
+from this partial validation. November 3 live acceptance still requires real
+post-merge evidence; source #978 was open at this inspection.

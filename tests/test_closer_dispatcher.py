@@ -4551,7 +4551,7 @@ def test_pipeline_admission_does_not_select_expired_legacy_deadline(tmp_path, op
     # Exercise the real scheduler with the fresh budget: deadline selection must
     # not authorize work across the unresolved prior run or its reservation.
     def forbidden_stage(*_args):
-        pytest.fail("fresh deadline must not bypass prior-run admission")
+        pytest.fail("fresh deadline must not bypass admission barriers")
 
     receipt = closer_pipeline.run_pipeline(
         path,
@@ -4573,6 +4573,52 @@ def test_pipeline_admission_does_not_select_expired_legacy_deadline(tmp_path, op
         adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
     assert closer_pipeline.validate_stop(path)["valid"] is False
     assert all(p.read_bytes() == raw for p, raw in before.items())
+
+    # Isolate the retained reservation: repair the fixture's prior stop and
+    # remove its native operation so neither earlier refusal can mask this gate.
+    previous["targets"][TARGET]["status"] = "completed"
+    closer_pipeline._save(path, state)
+    legacy["items"][TARGET].pop("operation")
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    state_path.write_text(json.dumps(legacy))
+    assert closer_pipeline._validate_stop_legacy(path)["valid"] is True
+    assert closer_pipeline.validate_stop(path)["reasons"] == ["unresolved_resource_reservations"]
+    reservation_before = {
+        p: p.read_bytes() for p in [state_path, path, *tmp_path.rglob("legacy-intent.json")]
+    }
+    selected, reason = adapter._deadline_with_pipeline_round(requested, legacy, state_path)
+    assert (selected, reason) == (requested, "legacy_window_expired_fresh_admission")
+    receipt = closer_pipeline.run_pipeline(
+        path,
+        [TARGET],
+        prepare=forbidden_stage,
+        interpret=forbidden_stage,
+        exception=forbidden_stage,
+        act=forbidden_stage,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=selected,
+        coordinator_mode="resource_scoped",
+    )
+    row = receipt["targets"][TARGET]
+    assert row["status"] == "deferred"
+    assert row["deferred_reason"] == "scope_quarantined"
+    proof = json.loads(Path(row["scope_proof"]["path"]).read_text())
+    assert proof["stage"] == "target_admission"
+    assert proof["admitted"] is False
+    assert proof["callback_started"] is False
+    assert proof["snapshot"]["global_reasons"] == []
+    assert proof["reason"].startswith("quarantined_resource:")
+    assert any(
+        item["target"] == TARGET and item["reason"] == "retained_resource_intent"
+        for item in proof["snapshot"]["items"]
+    )
+    assert not any(
+        item["reason"] == "unresolved_native_item" for item in proof["snapshot"]["items"]
+    )
+    assert closer_resources.unknown_reservations(closer_resources.scoped_root(path)) == {
+        "pr:" + TARGET: TARGET
+    }
+    assert all(p.read_bytes() == raw for p, raw in reservation_before.items())
 
     previous["deadline"] = time.time() + 45
     previous["receipt_summary"]["deadline"] = previous["deadline"]
