@@ -165,3 +165,27 @@ The Python follow-up requires pytest and Black verification before commit, then
 hosted CI and delayed review for its own head. No remaining task is marked complete
 from this partial validation. November 3 live acceptance still requires real
 post-merge evidence; source #978 was open at this inspection.
+
+### Disjoint-target progress follow-up (2026-10-27)
+
+The existing named regression now gives the real resource-scoped scheduler both
+the reserved target and a disjoint synthetic target, using the selected fresh
+deadline and an explicit resource inventory for the synthetic callbacks. The
+disjoint target completes prepare, interpret, and act; the reserved target stays
+deferred without starting a callback. The original queue, pipeline ledger, and
+retained reservation remain byte-identical. All three incumbent operation-status
+cases pass, without adding collected cases or changing production gates.
+
+Cached wheels supplied pytest 9.1.1 and Black 26.10.1 under `/tmp` for Python 3.14.8.
+Dispatcher/pipeline validation with `-m 'not slow'`: **511 passed**. Black formatted
+the changed test file without edits. After individual file checks populated its
+normal cache, the required repository-wide Black command passed: **818 files
+would be left unchanged**. `git diff --check` passed. Local staging/commit failed
+because `.git/index.lock` is on a read-only filesystem; the changes remain uncommitted.
+
+No `/tmp/closer-*-coord.log` is available here. The November 3 live acceptance and
+pass-number check remain incomplete; these synthetic results do not establish
+either. Source #978 is open, and PR #982 is open and ready for review. A committed
+follow-up still needs its own hosted checks and delayed review.
+The connector also rejected the requested `needs-human` label and blocker comment:
+both require approval, but this run's approval policy is `never`.

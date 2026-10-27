@@ -4588,14 +4588,38 @@ def test_pipeline_admission_does_not_select_expired_legacy_deadline(tmp_path, op
     }
     selected, reason = adapter._deadline_with_pipeline_round(requested, legacy, state_path)
     assert (selected, reason) == (requested, "legacy_window_expired_fresh_admission")
+
+    # The fresh window must also let a disjoint target advance. Checking only
+    # fenced targets would miss a scheduler that still defers the entire round.
+    unrelated = "other/repo#99"
+    stages = []
+
+    def record_stage(stage, target):
+        assert target == unrelated, "retained reservation must still fence its target"
+        stages.append(stage)
+
+    def prepare_unrelated(target, _ctx):
+        record_stage("prepare", target)
+        return {"revision": "unrelated-revision", "snapshot": {"target": target}}
+
+    def interpret_unrelated(target, _ctx):
+        record_stage("interpret", target)
+        return {"substantive_needs": []}
+
+    def act_unrelated(target, _ctx):
+        record_stage("act", target)
+        return {"status": "completed", "target_complete": True}
+
     receipt = closer_pipeline.run_pipeline(
         path,
-        [TARGET],
-        prepare=forbidden_stage,
-        interpret=forbidden_stage,
+        [TARGET, unrelated],
+        prepare=prepare_unrelated,
+        interpret=interpret_unrelated,
         exception=forbidden_stage,
-        act=forbidden_stage,
+        act=act_unrelated,
         capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        # The synthetic backend has no branch/source aliases beyond these keys.
+        resource_keys=lambda target, _ctx: closer_resources.default_resource_keys(target),
         deadline=selected,
         coordinator_mode="resource_scoped",
     )
@@ -4618,6 +4642,8 @@ def test_pipeline_admission_does_not_select_expired_legacy_deadline(tmp_path, op
     assert closer_resources.unknown_reservations(closer_resources.scoped_root(path)) == {
         "pr:" + TARGET: TARGET
     }
+    assert receipt["targets"][unrelated]["status"] == "completed"
+    assert stages == ["prepare", "interpret", "act"]
     assert all(p.read_bytes() == raw for p, raw in reservation_before.items())
 
     previous["deadline"] = time.time() + 45
