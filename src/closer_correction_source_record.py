@@ -874,6 +874,12 @@ def retained_provider_time(proof):
 
     execution_window = closer_coding_worker.historical_window(proof)
     if execution_window is None:
+        import sys
+
+        publication_io = sys.modules.get("closer_coding_publication_io")
+        if publication_io is not None:
+            execution_window = publication_io.historical_window(proof)
+    if execution_window is None:
         execution_window = maintenance._historical_window()
     result = closer._revalidate_controlled_proof(
         proof,

@@ -674,7 +674,9 @@ def _execute(root, controller, operation):
     )
     # Only source-owned native readers may be selected. The base dependency
     # intentionally refuses account, route, spending and confinement proof.
-    reader = ctl.NativeConsumerReader()
+    import closer_codex_owned_stdio as owned_stdio
+
+    reader = owned_stdio.reader_from_worker(root, controller, operation)
     with controller.final_provider_guard(
         operation=operation,
         consumer_id=purpose["consumer_id"],
@@ -722,50 +724,59 @@ def _execute(root, controller, operation):
                 publication_baseline_ref = publication.retain_baseline(
                     root, controller, guard.custody, operation
                 )
-            timeout = request_seconds(
-                root.installation.request_timeout_seconds,
-                remaining=operation["deadline"] - time.time(),
-                session_ms=limits["max_runtime_ms"],
-            )
-            # Final guard authenticates the exact original record/context again and
-            # reserves the stable correction/consumer key at actual before-Popen.
-            result = dispatcher.offload(
-                "codex",
-                prompt,
-                cwd=workspace,
-                profile_id=session.PROFILE,
-                task_type=ACTION,
-                mode="full",
-                data_only=False,
-                isolate=True,
-                timeout=timeout,
-                max_network_retries=0,
-                subject_id=purpose["target"],
-                request_deadline_mono=time.monotonic() + timeout,
-                process_starting_callback=starting,
-                process_started_callback=resources.finite_pool_process_started,
-                process_finished_callback=resources.finite_pool_process_finished,
-                finite_frontier_id=root.installation.finite_frontier["frontier_id"],
-                finite_frontier_target=purpose["target"],
-            )
-            terminal_ref = retain_terminal(
-                root, controller, guard.custody, operation, guard, result
-            )
-            if publication_policy is not None:
-                try:
-                    publication_ref = publication.retain_handoff(
-                        root,
-                        controller,
-                        guard.custody,
-                        operation,
-                        publication_baseline_ref,
-                        result,
-                        terminal_ref,
-                    )
-                except Exception:
-                    # Coding is already known. Delivery refusal cannot erase it,
-                    # rerun the provider or mutate its actual result.
-                    publication_held = True
+            try:
+                timeout = request_seconds(
+                    root.installation.request_timeout_seconds,
+                    remaining=operation["deadline"] - time.time(),
+                    session_ms=limits["max_runtime_ms"],
+                )
+                # Final guard authenticates the exact original record/context again and
+                # reserves the stable correction/consumer key at actual before-Popen.
+                result = dispatcher.offload(
+                    "codex",
+                    prompt,
+                    cwd=workspace,
+                    profile_id=session.PROFILE,
+                    task_type=ACTION,
+                    mode="full",
+                    data_only=False,
+                    isolate=True,
+                    timeout=timeout,
+                    max_network_retries=0,
+                    subject_id=purpose["target"],
+                    request_deadline_mono=time.monotonic() + timeout,
+                    process_starting_callback=starting,
+                    process_started_callback=resources.finite_pool_process_started,
+                    process_finished_callback=resources.finite_pool_process_finished,
+                    finite_frontier_id=root.installation.finite_frontier["frontier_id"],
+                    finite_frontier_target=purpose["target"],
+                )
+                terminal_ref = retain_terminal(
+                    root, controller, guard.custody, operation, guard, result
+                )
+                if publication_policy is not None:
+                    try:
+                        publication_ref = publication.retain_handoff(
+                            root,
+                            controller,
+                            guard.custody,
+                            operation,
+                            publication_baseline_ref,
+                            result,
+                            terminal_ref,
+                        )
+                    except Exception:
+                        # Coding is already known. Delivery refusal cannot erase it,
+                        # rerun the provider or mutate its actual result.
+                        publication_held = True
+            finally:
+                if publication_baseline_ref is not None:
+                    try:
+                        publication.close_baseline(publication_baseline_ref)
+                    except Exception:
+                        # Cleanup uncertainty holds delivery, but cannot erase a
+                        # known coding terminal or replace a provider exception.
+                        publication_held = True
         return {
             "status": "completed",
             "coding_terminal_reference": terminal_ref,

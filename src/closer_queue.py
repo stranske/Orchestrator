@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -38,6 +39,7 @@ MUTATING_ACTIONS = frozenset(
         "respond_review",
         "repair",
         "correction_coding",
+        "correction_publish_existing_pr",
         "initiate_verify",
         "merge",
         "post_merge_verify",
@@ -664,6 +666,53 @@ def _invoke_before_cutoff(
                 return invoke(), invoked_at
     with _callback_invocation(target, operation, now, state_path=state_path):
         return invoke(), invoked_at
+
+
+def _publication_inline_selection(
+    source,
+    caller,
+    *,
+    targets,
+    observe,
+    execute,
+    path,
+    frontier,
+    frontier_target,
+    max_workers,
+    max_passes,
+    max_operation_retries,
+    reconcile,
+    request_timeout_seconds,
+    deadline,
+    receipt_reserve_seconds,
+):
+    # This is a private source selector, never a JSON/boolean scheduling option.
+    import closer_coding_publication_io as publication_io
+
+    if (
+        type(source) is not publication_io._PublicationScope
+        or caller.f_code is not publication_io.run_callback_round.__code__
+        or caller.f_globals is not publication_io.__dict__
+        or caller.f_locals.get("scope") is not source
+        or caller.f_locals.get("observe") is not observe
+        or caller.f_locals.get("execute") is not execute
+    ):
+        raise QueueStateError("actual same-thread publication source required")
+    source.check()
+    if (
+        threading.get_ident() != source.thread
+        or targets != [source.target]
+        or path != Path(source.queue_path)
+        or frontier != source.frontier
+        or frontier_target != source.target
+        or (max_workers, max_passes, max_operation_retries) != (1, 1, 0)
+        or reconcile is not None
+        or deadline is not None
+        or receipt_reserve_seconds != 0
+        or request_timeout_seconds != caller.f_locals.get("remaining")
+    ):
+        raise QueueStateError("publication inline bounds or identity differ")
+    return source
 
 
 def _operation_id(owner: str, target: str, action: str, revision: Any) -> str:
@@ -1637,6 +1686,7 @@ def run_round(
     finite_readmission: Mapping[str, Any] | None = None,
     request_timeout_seconds: float = 120.0,
     _inline_source=None,
+    _publication_inline_source=None,
 ) -> dict[str, Any]:
     """Run a fair, durable, deadline-bounded action round.
 
@@ -1648,6 +1698,8 @@ def run_round(
     """
     path = Path(state_path)
     targets = _assignment_list(assignment_targets)
+    if _inline_source is not None and _publication_inline_source is not None:
+        raise QueueStateError("coding and publication inline sources cannot be combined")
     inline = _coding_inline_selection(
         _inline_source,
         targets,
@@ -1658,6 +1710,26 @@ def run_round(
         max_passes,
         max_operation_retries,
     )
+    publication_inline = None
+    if _publication_inline_source is not None:
+        publication_inline = _publication_inline_selection(
+            _publication_inline_source,
+            inspect.currentframe().f_back,
+            targets=targets,
+            observe=observe,
+            execute=execute,
+            path=path,
+            frontier=finite_frontier,
+            frontier_target=frontier_target,
+            max_workers=max_workers,
+            max_passes=max_passes,
+            max_operation_retries=max_operation_retries,
+            reconcile=reconcile,
+            request_timeout_seconds=request_timeout_seconds,
+            deadline=deadline,
+            receipt_reserve_seconds=receipt_reserve_seconds,
+        )
+
     frontier = None
     if finite_frontier is not None:
         from closer_frontier_policy import request_window, validate_frontier
@@ -1717,7 +1789,12 @@ def run_round(
             from closer_frontier_policy import request_window
 
             assert finite_timeout is not None
-            return request_window(now(), finite_timeout)["deadline"]
+            issued_deadline = request_window(now(), finite_timeout)["deadline"]
+            if publication_inline is not None:
+                # This is a new finite IO request, never an extension of its
+                # actual signed admission while validation/persistence runs.
+                return min(issued_deadline, publication_inline.admission["expires_at"])
+            return issued_deadline
         assert legacy_deadline is not None
         return legacy_deadline - float(receipt_reserve_seconds)
 
@@ -2455,29 +2532,23 @@ def run_round(
                     persist_state()
                     started = monotonic()
                     callback_snapshot = _execution_snapshot(fresh)
-                    if inline:
-                        future = _inline_before_cutoff(
-                            execute,
-                            target,
-                            action,
-                            callback_snapshot,
-                            dict(op),
-                            now,
-                            execution_context,
-                            path,
-                        )
+                    invocation = (
+                        execute,
+                        target,
+                        action,
+                        callback_snapshot,
+                        dict(op),
+                        now,
+                        execution_context,
+                        path,
+                    )
+                    if publication_inline is not None:
+                        publication_inline.check()
+                    if inline or publication_inline is not None:
+                        future = _inline_before_cutoff(*invocation)
                     else:
-                        future = executor.submit(
-                            _invoke_before_cutoff,
-                            execute,
-                            target,
-                            action,
-                            callback_snapshot,
-                            dict(op),
-                            now,
-                            execution_context,
-                            path,
-                        )
+                        future = executor.submit(_invoke_before_cutoff, *invocation)
+
                     launched.append((target, item, op, future, acquired, started))
 
                 # Wait for every action launched this pass before deciding whether to

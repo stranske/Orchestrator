@@ -156,6 +156,7 @@ def test_handoff_refusal_preserves_known_result_without_provider_repeat(error):
         n
         for n in ast.walk(ast.parse(inspect.getsource(worker._execute)))
         if isinstance(n, ast.Try)
+        and not n.finalbody
         and any(isinstance(c, ast.Attribute) and c.attr == "retain_handoff" for c in ast.walk(n))
     )
 

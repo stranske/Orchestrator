@@ -398,10 +398,11 @@ def test_source_issuers_remain_unavailable_and_module_has_no_executor():
     for function, count in (
         (pub.retain_baseline, 4),
         (pub.retain_handoff, 7),
-        (pub.run_if_selected, 5),
     ):
         with pytest.raises(pub.PublicationHeld, match="unavailable"):
             function(*[{"permit": True} for _ in range(count)])
+    # Absent publication mode is deliberately an ordinary no-op after IO source wiring.
+    assert pub.run_if_selected(*[{"permit": True} for _ in range(5)]) is None
     import ast
 
     tree = ast.parse(Path(pub.__file__).read_text())
@@ -443,7 +444,7 @@ def test_public_adapter_missing_issuance_has_zero_external_ports(monkeypatch, cu
         (pub._host_git_context, ({"authorized": True},)),
         (pub._selected_transport, (None, None, None, None, None)),
     ):
-        with pytest.raises(pub.PublicationHeld, match="unavailable"):
+        with pytest.raises(pub.PublicationHeld, match="actual publication IO scope absent"):
             function(*args)
     assert calls == []
 

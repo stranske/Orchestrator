@@ -1234,6 +1234,14 @@ class IndexController:
                 self, custody, operation, record
             )
         if materialized is None:
+            import sys
+
+            publication_io = sys.modules.get("closer_coding_publication_io")
+            if publication_io is not None:
+                materialized = publication_io.retained_materialization(
+                    self, custody, operation, record
+                )
+        if materialized is None:
             materialized = decisions.materialize_selected(**arguments)
         need(
             materialized.get("status") == "materialized"
@@ -2057,10 +2065,18 @@ class _ProviderGuard:
         self.pid, self.thread = os.getpid(), threading.get_ident()
 
     def starting(self, observation):
+        import closer_codex_owned_stdio as owned_stdio
         import closer_resources as resources
         import dispatcher
         import execution_profiles
 
+        bootstrap = owned_stdio.reserve_from_guard(self, inspect.currentframe().f_back, observation)
+        if bootstrap:
+            import closer_coding_session_runtime as runtime
+
+            runtime.issue_before_popen(inspect.currentframe().f_back, bootstrap=True)
+            resources.finite_pool_prepare_request(observation)
+            return
         need(
             self.active and not self.used,
             "original before-provider claim inactive or consumed",
@@ -2106,10 +2122,13 @@ class _ProviderGuard:
             and self.reader.observe(registration) == registration["account_sha256"],
             "current native consumer account/profile changed",
         )
-        need(
-            digest(frame.f_locals["command"]) == registration["transport_argv_sha256"],
-            "actual coding transport differs from source consumer",
-        )
+        if owned_stdio.selected(self):
+            owned_stdio.require_final_transport_from_guard(self, frame)
+        else:
+            need(
+                digest(frame.f_locals["command"]) == registration["transport_argv_sha256"],
+                "actual coding transport differs from source consumer",
+            )
         self.reader.verify_installed_confinement(
             command=frame.f_locals["command"],
             cwd=frame.f_locals["cwd"],
@@ -2219,6 +2238,15 @@ class _ProviderGuard:
                 import closer_coding_route_v2
 
                 source_modules += (closer_coding_session_runtime, closer_coding_route_v2)
+                if owned_stdio.selected(self):
+                    import closer_codex_appserver_bootstrap
+                    import closer_codex_stdio_exchange
+
+                    source_modules += (
+                        owned_stdio,
+                        closer_codex_appserver_bootstrap,
+                        closer_codex_stdio_exchange,
+                    )
             for module in source_modules:
                 source_path = Path(module.__file__)
                 pinned = self.controller.installation.source_closure.get(module.__name__ + ".py")
@@ -2388,6 +2416,12 @@ class _ProviderGuard:
             source_modules = (dispatcher, closer_coding_delivery)
             if is_session_v2:
                 source_modules += (closer_coding_session_runtime,)
+                if owned_stdio.selected(self):
+                    source_modules += (
+                        owned_stdio,
+                        closer_codex_appserver_bootstrap,
+                        closer_codex_stdio_exchange,
+                    )
             for module in source_modules:
                 source_path = Path(module.__file__)
                 pinned = self.controller.installation.source_closure.get(module.__name__ + ".py")
@@ -2417,9 +2451,11 @@ class _ProviderGuard:
                 closer_coding_delivery.require_coding_delivery(frame) == delivery,
                 "source coding delivery changed at final reservation",
             )
+        reused_bootstrap = False
         if is_session_v2:
-            closer_coding_session_runtime.issue_before_popen(frame)
-        resources.finite_pool_prepare_request(observation)
+            reused_bootstrap = closer_coding_session_runtime.issue_before_popen(frame)
+        if not reused_bootstrap:
+            resources.finite_pool_prepare_request(observation)
 
 
 def _inspection_has_no_native_transport(*_args, **_kwargs):

@@ -42,6 +42,11 @@ def assert_offload_allowed():
     """
     if getattr(_CURRENT, "scope", None) is not None:
         raise MaintenanceUnknown(_REFUSAL)
+    import sys
+
+    publication_io = sys.modules.get("closer_coding_publication_io")
+    if publication_io is not None:
+        publication_io.assert_offload_allowed()
 
 
 def assert_effect_allowed(kind):

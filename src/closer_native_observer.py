@@ -74,6 +74,149 @@ def policy_problem(policy):
     return problem.replace("CLI configured", "native configured") if problem else None
 
 
+PRIVATE_TEST = {
+    "schema": "closer-private-native-test-wrapper/v1",
+    "purpose": "codex-account-metadata-only",
+}
+
+
+def private_test_wrapper_text(manifest_path, campaign_root, interpreter, launcher):
+    """Fixed no-fallback test wrapper using the existing native entry producer."""
+    return (
+        '#!/bin/bash\nset -euo pipefail\nLANE="${1:?}"\n'
+        'case "$LANE" in closer) ;; *) exit 78 ;; esac\n'
+        + wrapper_block(manifest_path, campaign_root, interpreter, launcher)
+        + "exit 78\n"
+    )
+
+
+def _private_test_wrapper(manifest, value):
+    """Prospective metadata-only test source, never an installed runner alias."""
+    selection = value.get("private_test")
+    if selection not in (PRIVATE_TEST, {**PRIVATE_TEST, "purpose": "codex-public-coding-test"}):
+        raise mechanisms.MechanismError("unsupported private native test purpose")
+    if selection["purpose"] == "codex-public-coding-test":
+        task = (manifest.get("policy") or {}).get("codex_public_coding_test")
+        if type(task) is not dict or task.get("schema") != "closer-public-coding-canary/v1":
+            raise mechanisms.MechanismError("private public coding task is not source selected")
+    policy = manifest.get("policy") or {}
+    if (
+        type(policy.get("codex_metadata_qualification")) is not dict
+        or type(policy.get("codex_initial_consumer")) is not dict
+        or any(
+            key in policy
+            for key in (
+                "correction_controller_installation",
+                "native_correction_cleanup",
+                "coding_continuation",
+            )
+        )
+    ):
+        raise mechanisms.MechanismError("private native test is metadata-only")
+    capacity = value.get("capacity_publication") or {}
+    if capacity.get("profile_ids") != [] or capacity.get("bounded_trial_agents") != []:
+        raise mechanisms.MechanismError("private native test cannot grant model capacity")
+    root = Path(value.get("observation_root", ""))
+    if (
+        not root.is_absolute()
+        or root.resolve() != root
+        or any(parent.is_symlink() for parent in (root, *root.parents))
+    ):
+        raise mechanisms.MechanismError("private native test root is not canonical")
+    meta = root.stat(follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(meta.st_mode)
+        or meta.st_uid != os.getuid()
+        or stat.S_IMODE(meta.st_mode) != 0o700
+    ):
+        raise mechanisms.MechanismError("private native test root is not owned/private")
+    path = root / "private-test-wrapper.sh"
+    pin = value.get("wrapper") or {}
+    if pin.get("path") != str(path) or path.resolve() != path or path.is_symlink():
+        raise mechanisms.MechanismError("private native test wrapper path differs")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or before.st_mode & 0o222
+            or not before.st_mode & 0o100
+            or not 0 < before.st_size <= 16384
+        ):
+            raise mechanisms.MechanismError("private native test wrapper mode differs")
+        raw = stream.read(16385)
+        after = os.fstat(stream.fileno())
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        current = path.stat(follow_symlinks=False)
+        if (
+            len(raw) != before.st_size
+            or any(getattr(before, k) != getattr(after, k) for k in fields)
+            or any(getattr(after, k) != getattr(current, k) for k in fields)
+            or hashlib.sha256(raw).hexdigest() != pin.get("sha256")
+        ):
+            raise mechanisms.MechanismError("private native test wrapper changed")
+    command = manifest.get("command")
+    if (
+        type(command) is not list
+        or command.count("--manifest") != 1
+        or command.index("--manifest") + 1 >= len(command)
+    ):
+        raise mechanisms.MechanismError("private native test manifest path is unbound")
+    manifest_path = command[command.index("--manifest") + 1]
+    if type(manifest_path) is not str or str(Path(manifest_path).resolve()) != manifest_path:
+        raise mechanisms.MechanismError("private native test manifest path is not canonical")
+    expected = private_test_wrapper_text(
+        manifest_path,
+        value.get("campaign_root"),
+        value.get("interpreter", {}).get("path"),
+        manifest.get("launcher", {}).get("path"),
+    ).encode("utf-8")
+    if raw != expected:
+        raise mechanisms.MechanismError("private native test wrapper source differs")
+    return path
+
+
+def private_test_assignment_source(manifest):
+    """Only the fixed owned private TEST assignment; ordinary discovery unchanged."""
+    value = manifest.get("mechanism_contract") or {}
+    if "private_test" not in value:
+        if "private_test_assignment_sha256" in value:
+            raise mechanisms.MechanismError("private assignment requires explicit test purpose")
+        return (
+            Path.home()
+            / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
+        )
+    _private_test_wrapper(manifest, value)
+    root = Path(value["observation_root"])
+    path = root / "private-test-assignment.json"
+    raw = _bounded_bytes(path, 65536)
+    meta = path.stat(follow_symlinks=False)
+    if (
+        meta.st_uid != os.getuid()
+        or meta.st_nlink != 1
+        or stat.S_IMODE(meta.st_mode) != 0o600
+        or hashlib.sha256(raw).hexdigest() != value.get("private_test_assignment_sha256")
+    ):
+        raise mechanisms.MechanismError("private native test assignment pin/mode differs")
+    from closer_model_contracts import strict_response_json
+
+    doc = strict_response_json(raw.decode("utf-8"))
+    purpose = value["private_test"]["purpose"]
+    targets = [manifest["policy"]["codex_initial_consumer"]["target"]]
+    if purpose == "codex-public-coding-test":
+        targets.append(manifest["policy"]["codex_public_coding_test"]["target"])
+    expected = {
+        "schema": "closer-private-native-test-assignment/v1",
+        "purpose": purpose,
+        "targets": [{"target": target} for target in targets],
+    }
+    if doc != expected or len(set(targets)) != len(targets):
+        raise mechanisms.MechanismError("private native test assignment scope differs")
+    return path
+
+
 def contract(manifest, *, _scope=None):
     value = manifest.get("mechanism_contract") or {}
     if value.get("schema") != mechanisms.CONTRACT or value.get("mechanism") != mechanisms.NATIVE:
@@ -84,7 +227,11 @@ def contract(manifest, *, _scope=None):
 
         native_digests = source._scoped_native_runtime_digests(_scope, manifest)
     # Concrete supported wrapper. Other actors remain independent capabilities.
-    wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
+    wrapper = (
+        _private_test_wrapper(manifest, value)
+        if "private_test" in value
+        else Path.home() / ".codex/bin/cursor-lane.sh"
+    )
     pin = value.get("wrapper") or {}
     if value.get("actor") != "cursor" or pin.get("path") != str(wrapper):
         raise mechanisms.MechanismError("native wrapper/actor is not supported")
@@ -472,14 +619,18 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         context = invocation["context"]
         if context["campaign"] != _campaign_identity(state_path, doc):
             raise mechanisms.MechanismError("native invocation already bound to another campaign")
-        validate_admission(manifest, context, for_effects=True)
+        validate_admission(
+            manifest,
+            context,
+            for_effects=True,
+            for_test="private_test" in manifest["mechanism_contract"],
+        )
         return context
     directory = root / nonce
-    assignment_source = (
-        Path.home()
-        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-    )
+    assignment_source = private_test_assignment_source(manifest)
     demand = doc.get("demand_admission")
+    if "private_test" in manifest["mechanism_contract"] and demand is not None:
+        raise mechanisms.MechanismError("private native test cannot use production demand")
     demand_reference = None
     if demand is not None:
         from closer_demand_admission import RECORD_SCHEMA
@@ -668,9 +819,18 @@ def _campaign_identity(state_path, doc):
     }
 
 
-def validate_admission(manifest, context, *, for_effects, _scope=None):
+def validate_admission(manifest, context, *, for_effects, _scope=None, for_test=False):
     import closer_operational_capacity as scoped
 
+    private = "private_test" in (manifest.get("mechanism_contract") or {})
+    if private and for_effects and not for_test:
+        raise mechanisms.MechanismError(
+            "private native TEST admission cannot authorize business effects"
+        )
+    if for_test and not private:
+        raise mechanisms.MechanismError(
+            "test-only admission selection requires private TEST source"
+        )
     policy = capacity_contract(manifest, control_plane_only=True)
     root = contract(manifest, _scope=_scope)[3]
     if not policy or not isinstance(context, dict):
@@ -722,10 +882,7 @@ def validate_admission(manifest, context, *, for_effects, _scope=None):
         or "finite_frontier" in context
     ):
         raise mechanisms.MechanismError("native original admission deadline differs")
-    source = (
-        Path.home()
-        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-    )
+    source = private_test_assignment_source(manifest)
     for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
         pin = context[key]
         path = directory / name
@@ -744,6 +901,10 @@ def validate_admission(manifest, context, *, for_effects, _scope=None):
             or not Path(pin["source_path"]).is_absolute()
         ):
             raise mechanisms.MechanismError("native immutable workspace configuration differs")
+    if "private_test" in manifest["mechanism_contract"] and any(
+        key in context for key in ("coding_continuation", "demand_assignment")
+    ):
+        raise mechanisms.MechanismError("private native test cannot use production continuation")
     if "coding_continuation" in context:
         _value, _record, _document = _coding_record_from_context(manifest, context)
         selector = context["coding_continuation"]
@@ -2119,9 +2280,17 @@ def _coding_queue_terminal(cfg, candidate):
     original = _submitted_coding_operation(retained)
     result = retained.get("result")
     _coding_knowledge_barriers(row, retained, result)
+    if type(result) is dict and set(result) != {
+        "coding_terminal_reference",
+        "actual",
+        *worker._NO_AUTHORITY,
+    }:
+        import closer_coding_publication as publication
+
+        publication.validate_native_coding_result(cfg, original, result)
     if (
         type(result) is not dict
-        or set(result) != {"coding_terminal_reference", "actual", *worker._NO_AUTHORITY}
+        or not {"coding_terminal_reference", "actual", *worker._NO_AUTHORITY} <= set(result)
         or any(result[k] is not False for k in worker._NO_AUTHORITY)
         or original["finite_frontier"] != frontier
         or original["revision"] != frontier["bindings"][selector["coding_target"]]["revision"]
@@ -3776,6 +3945,8 @@ def entry_active(manifest, *, _scope=None):
 
 
 def authorize_worker(manifest, argv):
+    if "private_test" in (manifest.get("mechanism_contract") or {}):
+        raise mechanisms.MechanismError("private metadata test cannot authorize a worker")
     from closer_correction_maintenance import assert_offload_allowed
 
     assert_offload_allowed()

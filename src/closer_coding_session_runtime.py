@@ -115,7 +115,7 @@ def _require_redaction():
         raise SessionHeld("v2 coding requires enabled credential redaction")
 
 
-def issue_before_popen(frame):
+def issue_before_popen(frame, *, bootstrap=False):
     """Only the actual source guard can issue; supplied JSON is never a permit."""
     import closer_coding_delivery as delivery
     import closer_correction_controller as controller
@@ -129,7 +129,11 @@ def issue_before_popen(frame):
         and caller.f_back is frame
         and type(guard) is controller._ProviderGuard
         and guard.active
-        and guard.used
+        and (
+            guard.used
+            if not bootstrap
+            else __import__("closer_codex_owned_stdio").reserved(frame, guard)
+        )
         and frame.f_code is dispatcher._CODING_DELIVERY_RUN_CODE
         and frame.f_globals is dispatcher.__dict__
     ):
@@ -170,7 +174,23 @@ def issue_before_popen(frame):
         raise SessionHeld("current coding-session callback deadline expired")
     key = (threading.get_ident(), origin)
     if key in _OFFLOADS:
-        raise SessionHeld("coding-session outer submission already issued")
+        import closer_codex_owned_stdio as owned_stdio
+
+        plan = _OFFLOADS[key]
+        if (
+            bootstrap
+            or plan.run is not frame
+            or plan.guard is not guard
+            or plan.delivery != observed
+            or json.loads(plan.budget_utf8) != limits
+            or plan.deadline_mono <= now_mono
+            or _FACTS[key]["outer_submissions"] != 1
+            or not _FACTS[key]["spawn_observed"]
+        ):
+            raise SessionHeld("original bootstrap session changed or expired")
+        owned_stdio.accept_final_guard(frame, guard, plan)
+        return True  # Reuse the sole plan/submission/pool and original deadline.
+
     plan = _Plan(
         guard,
         origin,
@@ -273,11 +293,18 @@ def mark_terminal(frame, observation, captured):
         raise SessionHeld("original coding terminal observation required")
     child = frame.f_locals["child"]
     facts = _FACTS[(plan.thread, plan.origin)]
+    import closer_codex_owned_stdio
+
+    protocol_counts = closer_codex_owned_stdio.counted_bytes(frame)
     facts.update(
         cli_completion_known=type(child.poll()) is int,
         owned_group_terminal=observation.get("cleanup_terminal") is True,
-        captured_stdout_bytes=len(captured["stdout"]),
-        captured_stderr_bytes=len(captured["stderr"]),
+        captured_stdout_bytes=(
+            protocol_counts[0] if protocol_counts is not None else len(captured["stdout"])
+        ),
+        captured_stderr_bytes=(
+            protocol_counts[1] if protocol_counts is not None else len(captured["stderr"])
+        ),
         local_elapsed_ms=max(0, int((time.monotonic() - plan.started_mono) * 1000)),
     )
 
@@ -351,6 +378,9 @@ def release_guard(guard):
     import closer_coding_route_v2
 
     closer_coding_route_v2.release_guard(guard)
+    import closer_codex_owned_stdio
+
+    closer_codex_owned_stdio.release_guard(guard)
     for key, held_guard in tuple(_HISTORY_RESTRICTIONS.items()):
         if held_guard is guard:
             _HISTORY_RESTRICTIONS.pop(key, None)

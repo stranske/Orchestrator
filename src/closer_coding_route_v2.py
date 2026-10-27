@@ -139,6 +139,10 @@ def prepare(frame, argv, cwd, profile):
     guard = runtime._HISTORY_RESTRICTIONS.get(key)
     _need(guard is not None and guard.active and key not in _PREPARED)
     _need(frame.f_locals.get("agent") == "codex" and frame.f_locals.get("data_only") is False)
+    import closer_codex_owned_stdio as owned_stdio
+
+    if owned_stdio.selected(guard):
+        return owned_stdio.prepare(frame, guard, argv, cwd, profile)
     facts = _read_installed_route_facts(guard)
     _validate(facts, guard, argv, profile)
     _physical(cwd)
@@ -234,6 +238,11 @@ def capture(frame):
         and origin.f_code is dispatcher._CODING_DELIVERY_OFFLOAD_CODE
         and origin.f_globals is dispatcher.__dict__
     )
+    import closer_codex_owned_stdio as owned_stdio
+
+    bootstrap = owned_stdio.route_for_run(frame)
+    if bootstrap is not None:
+        return bootstrap
     seal = _PREPARED.get((threading.get_ident(), origin))
     _verify(seal)
     _need(origin.f_locals.get("coding_route") is seal)

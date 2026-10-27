@@ -551,6 +551,24 @@ def _snapshot_current(binding, *, report_path=None, _scope=None, _native_scope=N
     )
     if private is not None:
         return private
+    # Optional module exists only in a source-pinned publication installation.
+    # Absent mode retains the ordinary snapshot and its exact report semantics.
+    import sys
+
+    publication_io = sys.modules.get("closer_coding_publication_io")
+    if publication_io is not None and getattr(publication_io._CURRENT, "scope", None) is not None:
+        path = Path(publication_io.__file__)
+        pinned = value["source_closure"].get(path.name)
+        _need(
+            pinned == {"path": str(path), "sha256": publication_io._SOURCE_SHA256}
+            and hashlib.sha256(path.read_bytes()).hexdigest() == publication_io._SOURCE_SHA256,
+            "loaded publication IO source differs",
+        )
+        private = publication_io.installation_snapshot(
+            binding, value, manifest, native_scope=_native_scope
+        )
+        if private is not None:
+            return private
     selector = report_path if report_path is not None else os.environ.get("CLOSER_CAPACITY_REPORT")
     _need(isinstance(selector, str) and selector, "current native observation selector absent")
     report_file = Path(selector)

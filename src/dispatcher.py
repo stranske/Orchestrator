@@ -2995,6 +2995,9 @@ def run_observed_offload(
         return text
 
     captured = {"stdout": bytearray(), "stderr": bytearray()}
+    import closer_codex_owned_stdio as owned_stdio
+
+    owned_session = None
 
     def bounded_communicate(timeout):
         capture_bound = (
@@ -3166,14 +3169,37 @@ def run_observed_offload(
             supervision = _coding_session_runtime.supervision(sys._getframe())
             if supervision is not None:
                 remaining, output_limit = supervision
-            stdout, stderr = (
-                bounded_communicate(remaining)
-                if (
-                    _coding_session_runtime.capture_limit(sys._getframe()) is not None
-                    or output_limit is not None
+            import closer_codex_owned_stdio as owned_stdio
+
+            owned_session = owned_stdio.session_for_run(sys._getframe())
+            if owned_session is not None:
+                owned_stdio.bootstrap_from_run(sys._getframe())
+                # Reenter delivery custody for final admission without issuing a
+                # new runtime plan, process, pool request or timeout window.
+                _coding_delivery_source._begin(sys._getframe())
+                try:
+                    # Exact original callback in this same original run frame.
+                    starting_callback(observation)
+                    owned_stdio.write_first_turn_from_run(sys._getframe())
+                finally:
+                    _coding_delivery_source._revoke(sys._getframe())
+                stdout, stderr = owned_stdio.finish_turn_from_run(sys._getframe())
+            else:
+                stdout, stderr = (
+                    bounded_communicate(remaining)
+                    if (
+                        _coding_session_runtime.capture_limit(sys._getframe()) is not None
+                        or output_limit is not None
+                    )
+                    else child.communicate(timeout=remaining)
                 )
-                else child.communicate(timeout=remaining)
-            )
+        except owned_stdio.BootstrapHeld as exc:
+            stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            phase = owned_session.phase if owned_session is not None else "unissued"
+            observed["coding_bootstrap_phase"] = phase
+            raise ObservedOffloadFailure(str(exc), observed, child.poll(), "", "") from exc
         except _ObservedOutputLimit as exc:
             stop_known_group()
             if observed.get("cleanup_terminal") is True and finished_callback is not None:
@@ -3252,12 +3278,13 @@ def run_observed_offload(
         try:
             _coding_session_runtime.mark_terminal(sys._getframe(), observed, captured)
         finally:
+            owned_stdio.clear_transient_native_data(sys._getframe())
             token = ""
             if env is not None:
                 env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
             for buffer in captured.values():
                 buffer.clear()
-            for pipe in (child.stdout, child.stderr):
+            for pipe in (child.stdout, child.stderr, child.stdin):
                 if pipe is not None:
                     pipe.close()
 
@@ -4314,7 +4341,12 @@ def offload(
                     },
                     cwd=str(proc_cwd),
                     timeout=attempt_timeout,
-                    stdin=subprocess.DEVNULL,
+                    stdin=(
+                        subprocess.PIPE
+                        if type(coding_route).__name__ == "BootstrapRoute"
+                        and type(coding_route).__module__ == "closer_codex_owned_stdio"
+                        else subprocess.DEVNULL
+                    ),
                     finished_callback=process_finished_callback,
                     starting_callback=process_starting_callback,
                     env=dict(coding_route.environment) if coding_route is not None else None,
