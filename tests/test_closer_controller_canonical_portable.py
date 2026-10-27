@@ -286,8 +286,13 @@ def test_one_serialization_preserves_private_input_and_exact_byte_digest(monkeyp
 
 
 def test_duplicate_and_noncanonical_decode_guards_are_unchanged():
-    for raw in (b'{"a":1,"a":2}', b'{"b":2,"a":1}', b'{ "a": 1 }', b'{"a":NaN}'):
-        with pytest.raises((ctl.ControllerUnknown, ValueError)):
+    for raw, reason in (
+        (b'{"a":1,"a":2}', "duplicate private JSON field"),
+        (b'{"b":2,"a":1}', "private JSON bytes are not canonical"),
+        (b'{ "a": 1 }', "private JSON bytes are not canonical"),
+        (b'{"a":NaN}', "private JSON scalar unsupported"),
+    ):
+        with pytest.raises(ctl.ControllerUnknown, match=reason):
             ctl.decode(raw)
 
 

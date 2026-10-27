@@ -106,11 +106,15 @@ def positive(value):
     return type(value) is int and 0 < value <= 2**53 - 1
 
 
+def matches(pattern, value):
+    return type(value) is str and re.fullmatch(pattern, value) is not None
+
+
 def subject(value):
     exact(value, "kind number node_id")
     need(
         value["kind"] in {"issue", "pull"}
-        and re.fullmatch(r"[1-9][0-9]{0,15}", value["number"])
+        and matches(r"[1-9][0-9]{0,15}", value["number"])
         and type(value["node_id"]) is str
         and 0 < len(value["node_id"]) <= 256,
         "native subject identity missing",
@@ -123,7 +127,7 @@ def native_repository_name(value, canonical_wire_repo):
         type(value) is str
         and type(canonical_wire_repo) is str
         and canonical_wire_repo == canonical_wire_repo.lower()
-        and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is not None
+        and matches(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value)
         and value.casefold() == canonical_wire_repo.casefold()
     )
 
@@ -160,7 +164,7 @@ def seed_selector(value, repository):
     need(
         value["repository"] == repository
         and all(positive(value[k]) for k in ("run_id", "run_attempt", "artifact_id"))
-        and all(_SHA.fullmatch(value[k]) for k in ("archive_sha256", "member_sha256")),
+        and all(matches(_SHA, value[k]) for k in ("archive_sha256", "member_sha256")),
         "original seed selector differs",
     )
 
@@ -168,7 +172,7 @@ def seed_selector(value, repository):
 def selector(value, repository):
     exact(value, "kind record_sha256 seed_selector owner_instruction")
     need(
-        value["kind"] == "local_controller_record" and _SHA.fullmatch(value["record_sha256"]),
+        value["kind"] == "local_controller_record" and matches(_SHA, value["record_sha256"]),
         "protected local record selector required",
     )
     seed_selector(value["seed_selector"], repository)
@@ -179,15 +183,15 @@ def selector(value, repository):
     )
     need(
         row["repository"] == repository
-        and re.fullmatch(r"[1-9][0-9]{0,15}", row["issue_number"])
+        and matches(r"[1-9][0-9]{0,15}", row["issue_number"])
         and positive(row["comment_id"])
         and positive(row["writer_id"])
         and all(
             type(row[k]) is str and 0 < len(row[k]) <= 256
             for k in ("issue_node_id", "comment_node_id")
         )
-        and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", row["updated_at"])
-        and _SHA.fullmatch(row["body_sha256"]),
+        and matches(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", row["updated_at"])
+        and matches(_SHA, row["body_sha256"]),
         "native instruction selector differs",
     )
 
@@ -272,7 +276,7 @@ def validate_index(data, config):
         )
         or (
             data["revision"] > 0
-            and _SHA.fullmatch(data["previous_sha256"] or "")
+            and matches(_SHA, data["previous_sha256"])
             and type(data["last_action"]) is dict
         ),
         "index predecessor missing",
@@ -337,7 +341,7 @@ def validate_index(data, config):
             subject(binding["subject"])
             selector(binding["selector"], config.repository)
             need(
-                binding["subject"] in entry["subjects"] and _SHA.fullmatch(binding["proof_sha256"]),
+                binding["subject"] in entry["subjects"] and matches(_SHA, binding["proof_sha256"]),
                 "subject binding changed",
             )
         phases = set()
@@ -349,7 +353,7 @@ def validate_index(data, config):
             need(
                 stage["phase"] in PHASES
                 and stage["phase"] not in phases
-                and _SHA.fullmatch(stage["intent_sha256"])
+                and matches(_SHA, stage["intent_sha256"])
                 and stage["state"] in {"prepared", "outcome_unknown", "confirmed"},
                 "invalid stage",
             )
@@ -357,14 +361,14 @@ def validate_index(data, config):
             selector(stage["intent_selector"], config.repository)
             if stage["state"] == "confirmed":
                 selector(stage["result_selector"], config.repository)
-                need(_SHA.fullmatch(stage["proof_sha256"]), "native proof missing")
+                need(matches(_SHA, stage["proof_sha256"]), "native proof missing")
                 if stage["phase"] == "autopilot_dispatch":
                     exact(stage["result"], "workflow run_id run_attempt issue")
                     subject(stage["result"]["issue"])
                     need(
                         stage["result"]["workflow"] == ".github/workflows/agents-auto-pilot.yml"
                         and all(
-                            re.fullmatch(r"[1-9][0-9]{0,15}", stage["result"][k])
+                            matches(r"[1-9][0-9]{0,15}", stage["result"][k])
                             for k in ("run_id", "run_attempt")
                         )
                         and stage["result"]["issue"] in entry["subjects"]
@@ -465,7 +469,7 @@ def transition(data, action, config):
             key = subject(action["subject"])
             selector(action["selector"], config.repository)
             need(
-                action["subject"]["kind"] == "pull" and _SHA.fullmatch(action["proof_sha256"]),
+                action["subject"]["kind"] == "pull" and matches(_SHA, action["proof_sha256"]),
                 "native coding PR proof missing",
             )
             binding = {k: copy.deepcopy(action[k]) for k in ("subject", "selector", "proof_sha256")}
@@ -486,7 +490,7 @@ def transition(data, action, config):
                 exact(action, "kind key phase intent_sha256 selector")
                 selector(action["selector"], config.repository)
                 need(
-                    stage is None and _SHA.fullmatch(action["intent_sha256"]),
+                    stage is None and matches(_SHA, action["intent_sha256"]),
                     "stage exists; reconcile never retry",
                 )
                 no_owner = entry["request"]["incumbent"].get("kind") == "no_incumbent"
@@ -527,7 +531,7 @@ def transition(data, action, config):
                 exact(action, "kind key phase proof_sha256 result selector")
                 selector(action["selector"], config.repository)
                 need(
-                    stage is not None and _SHA.fullmatch(action["proof_sha256"]),
+                    stage is not None and matches(_SHA, action["proof_sha256"]),
                     "original intent missing",
                 )
                 if stage["state"] == "confirmed":
