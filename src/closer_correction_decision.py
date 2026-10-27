@@ -155,18 +155,7 @@ def _materialize_selected(
         else:
             # Reconciliation is read-only: missing original custody must hold,
             # never create a new decision or repair an old response/proof.
-            import hashlib
-            import json
-
-            raw = json.dumps(
-                decision, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-            ).encode("utf-8")
-            sha = hashlib.sha256(raw).hexdigest()
-            decision_ref = {
-                "path": str(root / "raw" / sha[:2] / (sha + ".correction-decision.json")),
-                "sha256": sha,
-                "bytes": len(raw),
-            }
+            decision_ref = producer.retained_ref(root, decision, "correction-decision.json")
             if closer._read_controlled_receipt(decision_ref, root) != decision:
                 raise DecisionUnavailable("original materialized decision custody differs")
         return {

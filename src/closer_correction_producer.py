@@ -95,20 +95,38 @@ def _held(error, *, actual=None, request_ref=None):
     }
 
 
-def retain(root, value, suffix):
-    """Use existing content-addressed custody and verify the exact resulting bytes."""
-    import closer_dispatcher as closer
-    import closer_evidence
-
+def _retained_data(root, value, suffix):
     raw = json.dumps(
         value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     ).encode("utf-8")
     if not 0 < len(raw) <= contract.MAX_BYTES:
         raise contract.ContractError("retained correction evidence exceeds bound")
+    sha = hashlib.sha256(raw).hexdigest()
+    return raw, {
+        "path": str(root / "raw" / sha[:2] / (sha + "." + suffix)),
+        "sha256": sha,
+        "bytes": len(raw),
+    }
+
+
+def retained_ref(root, value, suffix):
+    """Derive the existing strict reference without reading or writing custody.
+
+    This is identity data only; callers must still read the original retained
+    bytes through the existing physical custody/source guards.
+    """
+    return _retained_data(root, value, suffix)[1]
+
+
+def retain(root, value, suffix):
+    """Use existing content-addressed custody and verify the exact resulting bytes."""
+    import closer_dispatcher as closer
+    import closer_evidence
+
+    raw, expected_ref = _retained_data(root, value, suffix)
     # The supplied packet root is the sole custody root. Refuse redirected
     # existing descendants BEFORE the existing writer can create anything.
-    sha = hashlib.sha256(raw).hexdigest()
-    destination = root / "raw" / sha[:2] / (sha + "." + suffix)
+    destination = Path(expected_ref["path"])
     if root.resolve() != root or not root.is_dir():
         raise contract.ContractError("correction custody root differs")
     current = root
@@ -120,7 +138,7 @@ def retain(root, value, suffix):
     # Existing reader checks type/no-follow/hash/size before parsing. Diagnostic
     # evidence references do not replace the independent original provider proof.
     checked = closer._read_controlled_receipt(ref, root)
-    if checked != value or ref["sha256"] != hashlib.sha256(raw).hexdigest():
+    if checked != value or ref["sha256"] != expected_ref["sha256"]:
         raise contract.ContractError("retained correction evidence differs")
     return ref
 

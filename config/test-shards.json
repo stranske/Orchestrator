@@ -71,7 +71,8 @@
     "tests/test_vibe_observing_backend.py",
     "tests/test_closer_accepted_read_batch.py",
     "tests/test_ci_storage_diagnostics.py",
-    "tests/test_closer_native_local_validation_dedup.py"
+    "tests/test_closer_native_local_validation_dedup.py",
+    "tests/test_closer_correction_retained_ref.py"
   ],
   "shards": [
     [
@@ -646,7 +647,8 @@
       "tests/test_closer_coding_root_validation_dedup.py",
       "tests/test_closer_accepted_read_batch.py",
       "tests/test_ci_storage_diagnostics.py",
-      "tests/test_closer_native_local_validation_dedup.py"
+      "tests/test_closer_native_local_validation_dedup.py",
+      "tests/test_closer_correction_retained_ref.py"
     ]
   ]
 }
