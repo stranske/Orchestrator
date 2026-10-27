@@ -39,6 +39,10 @@ def test_offline_measurement_cli_preserves_unknowns_and_labels_fixture_values(tm
     assert result.returncode == 0, result.stderr
     report = json.loads(output.read_text())
     assert report["evidence_kind"] == "synthetic_fixture"
+    assert (
+        report["remaining_measurements"]["escalation_acknowledgment"]
+        == "requires installed delivery/ack-window receipts joined to the exact hold"
+    )
     summary = report["summary"]
     assert summary["observed_branches"] == {
         "denominator": 5,
@@ -221,6 +225,7 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
     if artifact_dir:
         path = Path(artifact_dir)
         path.mkdir(parents=True, exist_ok=True)
+        repo = Path(__file__).resolve().parents[1]
         (path / "authenticated-descendant-summary.json").write_text(
             json.dumps(
                 {
@@ -236,8 +241,8 @@ def test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown(
                         "ineligible exact collect-terminal do-not-rerun reason",
                     ],
                     "source_hashes": {
-                        str(p): hashlib.sha256(p.read_bytes()).hexdigest()
-                        for p in (Path("src/closer_stage_feedback.py"), Path(__file__))
+                        p.relative_to(repo).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                        for p in (repo / "src/closer_stage_feedback.py", Path(__file__).resolve())
                     },
                     "scope": "CI wait excluded; completed merge and POST counted; verifier outcome unmeasured",
                 },

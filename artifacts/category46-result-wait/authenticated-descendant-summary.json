@@ -96,7 +96,7 @@
   ],
   "source_hashes": {
     "src/closer_stage_feedback.py": "20ee23de70a0d207dddeac727bfd31ff6ec3e517b38ac1142fb8c46ff4284b6f",
-    "/private/tmp/orchestrator-category46-result-wait/tests/test_closer_acceptance_metrics_composition.py": "ec02e6140da10356caecc88b230edf61f3c8cb197cf575478dc9e7cd86e7c54c"
+    "tests/test_closer_acceptance_metrics_composition.py": "ec02e6140da10356caecc88b230edf61f3c8cb197cf575478dc9e7cd86e7c54c"
   },
   "scope": "CI wait excluded; completed merge and POST counted; verifier outcome unmeasured"
 }

@@ -133,7 +133,7 @@ fail-closed and joins its bound revision to the retained branch revision. Seven
 additional joins reject missing policy, wrong schema, missing owner, target digest
 drift, binding digest drift, malformed action binding with a recomputed digest,
 and a validly rehashed but wrong branch revision. The focused metrics/plumbing
-run remains **70 PASS**, now with **21 negative joins**, in **6.11 seconds**.
+run remains **70 PASS**, now with **21 negative joins**, in **6.083 seconds** (JUnit testsuite duration).
 The 73-case selected acceptance result predates this narrow metrics correction;
 its original source hashes remain attached to that result in `source-bindings.json`.
 No broad rerun, live baseline, escalation acknowledgment or deployment claim is added.

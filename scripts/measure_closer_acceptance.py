@@ -27,6 +27,8 @@ summarize_efficiency = importlib.import_module("closer_stage_feedback").summariz
 
 
 def measure(document):
+    if not isinstance(document, dict):
+        raise ValueError("acceptance workload must be an object")
     if document.get("schema") != "closer-acceptance-workload/v1":
         raise ValueError("unsupported acceptance workload")
     if document.get("evidence_kind") not in {"synthetic_fixture", "retained_observation"}:
@@ -74,10 +76,19 @@ def main():
     parser.add_argument("input", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    if args.input.stat().st_size > 8 * 1024 * 1024:
-        parser.error("workload exceeds 8 MiB")
-    result = measure(json.loads(args.input.read_text()))
-    encoded = json.dumps(result, indent=2, allow_nan=False) + "\n"
+
+    def reject_constant(name):
+        raise ValueError(f"non-finite JSON constant {name} is not allowed")
+
+    try:
+        if args.input.stat().st_size > 8 * 1024 * 1024:
+            parser.error("workload exceeds 8 MiB")
+        result = measure(
+            json.loads(args.input.read_text(encoding="utf-8"), parse_constant=reject_constant)
+        )
+        encoded = json.dumps(result, indent=2, allow_nan=False) + "\n"
+    except (KeyError, ValueError, TypeError, OSError) as exc:
+        parser.error(f"invalid workload: {exc}")
     if args.output:
         args.output.write_text(encoded)
     else:
