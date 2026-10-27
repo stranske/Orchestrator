@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import plistlib
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from test_closer_native_observer import host as host
@@ -199,6 +202,86 @@ def fleet(tmp_path):
         return audit.audit(directory, home=tmp_path, resolver=resolver, **kwargs)
 
     return job, script, measure, calls, directory
+
+
+def test_expand_leaves_longer_variable_names_alone(fleet):
+    job, script, measure, calls, directory = fleet
+    home = directory.parent
+    for value in ("$HOMEBREW_PREFIX/bin", "$PATH_EXTRA", "${HOMEBREW_PREFIX}", "${PATH_EXTRA}"):
+        assert audit.expand(value, home, audit.DEFAULT_PATH) == value
+    assert audit.expand("$HOME:${HOME}:$PATH:${PATH}", home, "/bin") == f"{home}:{home}:/bin:/bin"
+    # Replacement values are not expanded again in the same call.
+    assert audit.expand("$HOME", Path("/literal/$PATH"), "/bin") == "/literal/$PATH"
+    entry = script('export PATH="$HOMEBREW_PREFIX/bin:$PATH"\nexec python3 -c pass\n')
+    job("dynamic-path", ["/bin/bash", entry])
+    report = measure()
+    assert report["status"] == "unmeasured"
+    assert report["rows"][0]["class"] == "unmeasured"
+    assert "dynamic PATH" in " ".join(report["needs"])
+    assert calls == []
+
+
+@pytest.mark.parametrize("first_line", ['"""Run python tests."""', "'''Don't'''"])
+def test_python_entry_without_shebang_is_not_scanned_as_shell(fleet, first_line):
+    job, script, measure, calls, _ = fleet
+    entry = script(first_line + "\n", "task.py")
+    job("no-shebang", [entry])
+    report = measure()
+    assert report["status"] == "measured"
+    assert report["rows"][0]["class"] == "no-python"
+    assert report["rows"][0]["evidence"] == []
+    assert calls == []
+
+
+def test_non_utf8_locale_does_not_lose_measurement(fleet):
+    job, _, _, _, directory = fleet
+    home = directory.parent
+    entry = home / "task.py"
+    entry.write_text('"""Café."""\n', encoding="utf-8")
+    shim = home / ".codex/bin/python3"
+    shim.parent.mkdir(parents=True)
+    shim.write_text('#!/bin/sh\n# Café\nexec "$(standard-python)" "$@"\n', encoding="utf-8")
+    job("utf8", [str(shim), str(entry)])
+    # Use a fresh process: changing LC_ALL after Python starts does not change its encoding.
+    # Disable UTF-8 mode and locale coercion so implicit reads really use the C locale.
+    code = """
+import json
+import locale
+import subprocess
+import sys
+from pathlib import Path
+import python_standard_audit as audit
+
+assert not sys.flags.utf8_mode
+assert locale.getpreferredencoding(False).lower() not in ('utf-8', 'utf8')
+
+def run(argv, **kwargs):
+    output = 'Python 3.14.3' if argv[-1] == '--version' else '/standard/python3'
+    return subprocess.CompletedProcess(argv, 0, output, '')
+
+# Only interpreter lookup/version responses are faked; both UTF-8 file reads are real.
+audit.subprocess.run = run
+print(json.dumps(audit.audit(Path(sys.argv[1]), home=Path(sys.argv[2]))))
+"""
+    result = subprocess.run(
+        [sys.executable, "-X", "utf8=0", "-c", code, str(directory), str(home)],
+        env={
+            **os.environ,
+            "LC_ALL": "C",
+            "PYTHONUTF8": "0",
+            "PYTHONCOERCECLOCALE": "0",
+            "PYTHONPATH": str(Path(audit.__file__).parent),
+        },
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=10,
+    )
+    report = json.loads(result.stdout)
+    assert report["status"] == "measured", report["needs"]
+    assert report["rows"][0]["class"] == "standard"
+    assert report["rows"][0]["evidence"][0]["executable"] == "/standard/python3"
 
 
 @pytest.mark.parametrize(
