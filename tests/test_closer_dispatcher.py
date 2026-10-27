@@ -19,6 +19,7 @@ from test_dispatcher_controlled_data_only import world as _controlled_world
 import claims
 import closer_dispatcher as adapter
 import closer_evidence
+import closer_execution_contracts as contracts
 import closer_pipeline
 import closer_queue
 
@@ -1735,9 +1736,12 @@ def test_unsafe_or_nonspecific_repair_paths_never_admit_writing_worker(
         lambda **kw: pytest.fail("unbound repair must not allocate a writer"),
     )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    assert result["status"] == "pending"
-    assert result["reason"] == "registered_required_test_missing"
-    assert result["next_guarded_action"] == "collect_evidence"
+    assert result["status"] == "uncertain"
+    assert result["reason"] == "original_live_repair_operation_UNMET"
+    assert result["authority"] is False
+    pending = contracts.mechanical_execution_pending(decision["repair"], snapshot())
+    assert pending["reason"] == "registered_required_test_missing"
+    assert pending["next_guarded_action"] == "collect_evidence"
     assert result["pending_evidence"]["target"] == TARGET
     assert calls == []
 
@@ -1760,8 +1764,13 @@ def test_repair_uses_no_generic_writer_until_executor_and_test_are_qualified(
         lambda **kw: pytest.fail("unqualified repair writer must never allocate"),
     )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    assert result["status"] == "pending"
-    assert result["reason"] == "registered_required_test_missing"
+    assert result["status"] == "uncertain"
+    assert result["reason"] in {
+        "original_live_repair_operation_UNMET",
+        "original_mechanical_plan_UNMET",
+    }
+    pending = contracts.mechanical_execution_pending(decision.get("repair"), snapshot())
+    assert pending["reason"] == "registered_required_test_missing"
     assert result["pending_kind"] == "external_event"
     assert result["authority"] is False
     assert result["pending_evidence"]["revision"] == snapshot()["revision"]
@@ -1874,9 +1883,11 @@ def test_repair_workspace_must_be_clean_and_match_approved_head(tmp_path, monkey
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
     # Missing test/executor authority stops before any workspace invocation;
     # physical exact-head/alias tests exercise the pure plan admission separately.
-    assert result["status"] == "pending"
-    assert result["reason"] == "registered_required_test_missing"
-    assert result["next_guarded_action"] == "collect_evidence"
+    assert result["status"] == "uncertain"
+    assert result["reason"] == "original_live_repair_operation_UNMET"
+    pending = contracts.mechanical_execution_pending(decision["repair"], snapshot())
+    assert pending["reason"] == "registered_required_test_missing"
+    assert pending["next_guarded_action"] == "collect_evidence"
     assert calls == []
 
 
