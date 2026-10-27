@@ -5,6 +5,7 @@ B-start producers are synthetic local read-only facts; these tests never issue
 an installed consumer, native admission, process, provider or execution permit.
 """
 
+import contextlib
 import copy
 import hashlib
 import inspect
@@ -114,6 +115,14 @@ def facts(tmp_path, monkeypatch):
         assert value is installation
         return copy.deepcopy(control["start"])
 
+    @contextlib.contextmanager
+    def synthetic_read(value, _frame):
+        # Synthetic leaf only; actual immutable batch is covered separately.
+        if not full_validation(value):
+            raise ValueError("synthetic source installation changed")
+        yield SimpleNamespace(manifest={}, check_inputs=lambda *_: None)
+
+    monkeypatch.setattr(installed, "accepted_coding_validation_read", synthetic_read)
     monkeypatch.setattr(installed, "validate_source_installation", full_validation)
     monkeypatch.setattr(campaign, "load_manifest", lambda *_: {"policy": {}})
     monkeypatch.setattr(native, "validate_admission", admission)

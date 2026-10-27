@@ -2077,26 +2077,34 @@ def accepted_coding_worker_purpose(binding_value):
         if (
             type(installation) is not installed.SourceInstallation
             or installation._binding is not binding_value
-            or not installed.validate_source_installation(installation)
         ):
             raise SourceRecordUnavailable("actual coding installation identity unavailable")
-        context = installation.admission
-        selector = context.get("coding_continuation")
-        if type(selector) is not dict:
-            raise SourceRecordUnavailable("accepted signed coding purpose unavailable")
-        manifest = load_manifest(installation.manifest_path)
-        validate_admission(manifest, context, for_effects=True)
-        start = source_b_start(installation)
-        if start is None or Path(start["path"]).stem != "worker-b-start-" + selector["worker_id"]:
-            raise SourceRecordUnavailable("accepted coding worker B-start differs")
-        return {
-            "schema": "closer-accepted-coding-worker-purpose/v1",
-            "continuation_reference": copy.deepcopy(selector["reference"]),
-            "purpose": copy.deepcopy(selector["purpose"]),
-            "worker_id": selector["worker_id"],
-            "admission_sha256": _hash(contract(manifest)[3] / context["nonce"] / "admission.json"),
-            "native_b_start": start,
-        }
+        with installed.accepted_coding_validation_read(
+            installation, inspect.currentframe()
+        ) as qualified_read:
+            qualified_read.check_inputs(binding_value, qualified_read.manifest)
+            context = installation.admission
+            selector = context.get("coding_continuation")
+            if type(selector) is not dict:
+                raise SourceRecordUnavailable("accepted signed coding purpose unavailable")
+            manifest = load_manifest(installation.manifest_path)
+            validate_admission(manifest, context, for_effects=True)
+            start = source_b_start(installation)
+            if (
+                start is None
+                or Path(start["path"]).stem != "worker-b-start-" + selector["worker_id"]
+            ):
+                raise SourceRecordUnavailable("accepted coding worker B-start differs")
+            return {
+                "schema": "closer-accepted-coding-worker-purpose/v1",
+                "continuation_reference": copy.deepcopy(selector["reference"]),
+                "purpose": copy.deepcopy(selector["purpose"]),
+                "worker_id": selector["worker_id"],
+                "admission_sha256": _hash(
+                    contract(manifest)[3] / context["nonce"] / "admission.json"
+                ),
+                "native_b_start": start,
+            }
     finally:
         del frame
 
@@ -2124,13 +2132,16 @@ def _coding_current_qualified_value(manifest, context):
             or validation.f_globals is not globals()
             or validation.f_locals.get("context") is not context
             or validation.f_locals.get("manifest") is not manifest
-            or snapshot is None
+        ):
+            return None
+        if (
+            snapshot is None
             or snapshot.f_code is not installed._snapshot_current.__code__
             or snapshot.f_globals is not installed.__dict__
             or snapshot.f_locals.get("context") is not context
             or snapshot.f_locals.get("manifest") is not manifest
         ):
-            return None
+            return _accepted_frame_qualified_value(manifest, context, validation)
         value = snapshot.f_locals.get("value")
         binding_value = snapshot.f_locals.get("binding")
         origin = runtime._factory_manifest_origin(binding_value)
@@ -2151,6 +2162,74 @@ def _coding_current_qualified_value(manifest, context):
         return value, manifest
     finally:
         del frame
+
+
+def _accepted_frame_qualified_value(manifest, context, validation):
+    """Only five fixed native paths may reuse immutable accepted-frame work."""
+    import closer_source_installation as installed
+
+    paths = (
+        (accepted_coding_worker_purpose,),
+        (source_b_start, accepted_coding_worker_purpose),
+        (_lifecycle_authority, source_b_start, accepted_coding_worker_purpose),
+        (result_admission_config, source_b_start, accepted_coding_worker_purpose),
+        (admission_config, result_admission_config, source_b_start, accepted_coding_worker_purpose),
+    )
+    matched = None
+    for path in paths:
+        current, chain = validation.f_back, []
+        for function in path:
+            if (
+                current is None
+                or current.f_code is not function.__code__
+                or current.f_globals is not globals()
+            ):
+                break
+            chain.append(current)
+            current = current.f_back
+        else:
+            matched = chain
+            break
+    if matched is None:
+        return None
+    accepted = matched[-1]
+    read = accepted.f_locals.get("qualified_read")
+    if read is None:
+        return None  # Initial full snapshot precedes the active batch local.
+    if type(read) is not installed._AcceptedCodingRead:
+        raise mechanisms.MechanismError("accepted read identity differs")
+    installation = accepted.f_locals.get("installation")
+    if installation is not read.installation:
+        raise mechanisms.MechanismError("accepted installation alias differs")
+    for frame in matched[:-1]:
+        if frame.f_code is source_b_start.__code__:
+            okay = (
+                frame.f_locals.get("installation") is installation
+                and frame.f_locals.get("context") is context
+                and frame.f_locals.get("manifest") == manifest
+            )
+        elif frame.f_code is _lifecycle_authority.__code__:
+            cfg = frame.f_locals.get("cfg")
+            okay = (
+                type(cfg) is dict
+                and cfg.get("native_admission") is context
+                and frame.f_locals.get("manifest") is manifest
+            )
+        else:
+            okay = (
+                frame.f_locals.get("context") is context
+                and frame.f_locals.get("manifest") is manifest
+            )
+        if not okay:
+            raise mechanisms.MechanismError("accepted native argument aliases differ")
+    if len(matched) == 4 and matched[0].f_locals.get("cfg") is not matched[1].f_locals.get("cfg"):
+        raise mechanisms.MechanismError("accepted configuration aliases differ")
+    if context != read.original_value["admission"]:
+        raise mechanisms.MechanismError("accepted admission copy differs")
+    read.check_inputs(installation._binding, manifest)
+    value, pinned = installed._qualified_policy(installation._binding, _accepted_read=read)
+    read.check_inputs(installation._binding, manifest)
+    return value, pinned
 
 
 def _coding_record_from_context(manifest, context):
