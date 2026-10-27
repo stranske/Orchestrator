@@ -2059,7 +2059,19 @@ def _observed_correction_b(command, cfg, hooks, timeout):
         retain=retain,
     )
     if cfg.get("coding_continuation") is not None:
-        witness["coding_delivery"] = native.record_coding_b_delivery(cfg, done, witness)
+        witness["coding_b_observation"] = native.coding_b_observation_summary(done, witness)
+        try:
+            witness["coding_b_observation"] = native.record_coding_b_observation(cfg, done, witness)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+            witness["coding_observation_diagnostic"] = native.coding_b_error_diagnostic(
+                error, stage="coding_b_observation"
+            )
+        try:
+            witness["coding_delivery"] = native.record_coding_b_delivery(cfg, done, witness)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+            witness["coding_delivery_diagnostic"] = native.coding_b_error_diagnostic(
+                error, stage="coding_b_delivery"
+            )
     return done, witness
 
 
@@ -2257,11 +2269,21 @@ def run_native_round(
                 outcome = "ok" if done.returncode == 0 else "unknown"
                 detail = f"dispatcher exit {done.returncode}"
                 if cfg.get("native_admission") is not None:
-                    receipt_bound = isinstance(
-                        hooks, PinnedNativeHooks
-                    ) and hooks.set_terminal_receipt(done, cfg)
+                    delivery_problem = (cleanup_witness or {}).get("coding_delivery_diagnostic")
+                    if delivery_problem is not None:
+                        outcome = (
+                            "denied"
+                            if delivery_problem["code"] == "permission_denied"
+                            else "unknown"
+                        )
+                    receipt_bound = (
+                        delivery_problem is None
+                        and isinstance(hooks, PinnedNativeHooks)
+                        and hooks.set_terminal_receipt(done, cfg)
+                    )
                     if not receipt_bound:
-                        outcome = "unknown"
+                        if outcome != "denied":
+                            outcome = "unknown"
                         detail += "; terminal named receipt refused: " + json.dumps(
                             getattr(hooks, "terminal_receipt_problem", None), sort_keys=True
                         )
@@ -2362,6 +2384,13 @@ def run_native_round(
                 json.dumps(
                     {
                         "actual_detail": "coding actual B/C terminal proof unavailable",
+                        "coding_b_observation": (cleanup_witness or {}).get("coding_b_observation"),
+                        "coding_observation_diagnostic": (cleanup_witness or {}).get(
+                            "coding_observation_diagnostic"
+                        ),
+                        "coding_delivery_diagnostic": (cleanup_witness or {}).get(
+                            "coding_delivery_diagnostic"
+                        ),
                         "coding_terminal_diagnostic": native_source.coding_terminal_diagnostic(
                             error
                         ),

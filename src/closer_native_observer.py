@@ -2138,6 +2138,195 @@ def _coding_queue_terminal(cfg, candidate):
     )
 
 
+_CODING_HELD_STAGES = frozenset(
+    {"worker_entry", "issue_root", "root_check", "preflight_original", "run_queue", "execute"}
+)
+_CODING_HELD_MESSAGES = {
+    "actual admitted dispatcher WORKER root required": "admitted_root_required",
+    "source coding backend required": "source_backend_required",
+    "current native source installation unavailable": "source_installation_unavailable",
+    "accepted coding consumer differs from static capability": "consumer_capability_changed",
+    "source coding assignment/frontier differs": "assignment_frontier_changed",
+    "actual accepted native worker start unavailable": "native_start_unavailable",
+    "source worker root unavailable": "root_lifetime_unavailable",
+    "original source worker root ended": "root_lifetime_ended",
+    "current worker source installation changed": "source_installation_changed",
+    "actual accepted native worker changed": "native_worker_changed",
+    "accepted coding purpose changed": "accepted_purpose_changed",
+    "source coding consumer unavailable": "consumer_unavailable",
+    "coding consumer policy differs": "consumer_policy_changed",
+    "coding profile capacity pools unavailable": "profile_pools_unavailable",
+    "original protected coding admission changed": "original_admission_changed",
+    "original coding consumer differs": "original_consumer_changed",
+    "original coding correction identity differs": "original_identity_changed",
+}
+_CODING_HELD_CODES = frozenset(
+    {*_CODING_HELD_MESSAGES.values(), "source_refusal", "os_error", "invalid_source_data"}
+)
+
+
+def coding_worker_held(error):
+    """Project actual traceback code identities and fixed codes, never error text."""
+    import closer_coding_worker as worker
+
+    stages = (
+        (worker._issue_root.__code__, "issue_root"),
+        (worker._Root.check.__code__, "root_check"),
+        (worker._preflight_original.__code__, "preflight_original"),
+        (worker._run_queue.__code__, "run_queue"),
+        (worker._execute.__code__, "execute"),
+    )
+    stage = "worker_entry"
+    trace = error.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        if frame.f_globals is worker.__dict__:
+            for code_object, name in stages:
+                if frame.f_code is code_object:
+                    stage = name
+        trace = trace.tb_next
+    code = (
+        "os_error"
+        if isinstance(error, OSError)
+        else (
+            "invalid_source_data"
+            if isinstance(error, (ValueError, TypeError, KeyError))
+            else "source_refusal"
+        )
+    )
+    if type(error) is worker.WorkerHeld:
+        code = "source_refusal"
+        if stage != "worker_entry" and len(error.args) == 1 and type(error.args[0]) is str:
+            code = _CODING_HELD_MESSAGES.get(error.args[0], code)
+    return {
+        "schema": "closer-coding-worker-held/v1",
+        "status": "held",
+        "reason": "coding_worker_source_refused",
+        "diagnostic": {"stage": stage, "code": code},
+        "execution_authorized": False,
+        "retry_authorized": False,
+    }
+
+
+def _coding_held_diagnostic(stdout):
+    """Accept only the complete small typed source frame, not arbitrary child JSON."""
+    fallback = {"stage": "coding_b_output", "code": "no_typed_held_frame"}
+    if type(stdout) is not str or len(stdout.encode("utf-8")) > 4096:
+        return fallback
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic field")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(stdout, object_pairs_hook=unique)
+        if (
+            type(value) is not dict
+            or set(value)
+            != {
+                "schema",
+                "status",
+                "reason",
+                "diagnostic",
+                "execution_authorized",
+                "retry_authorized",
+            }
+            or value["schema"] != "closer-coding-worker-held/v1"
+            or value["status"] != "held"
+            or value["reason"] != "coding_worker_source_refused"
+            or value["execution_authorized"] is not False
+            or value["retry_authorized"] is not False
+            or type(value["diagnostic"]) is not dict
+            or set(value["diagnostic"]) != {"stage", "code"}
+            or value["diagnostic"]["stage"] not in _CODING_HELD_STAGES
+            or value["diagnostic"]["code"] not in _CODING_HELD_CODES
+        ):
+            return fallback
+        return dict(value["diagnostic"])
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return fallback
+
+
+def coding_b_error_diagnostic(error, *, stage):
+    """Fixed secondary categories; no paths, exception messages or user output."""
+    if stage not in {"coding_b_observation", "coding_b_delivery"}:
+        raise mechanisms.MechanismError("unsupported coding diagnostic stage")
+    code = (
+        "permission_denied"
+        if isinstance(error, PermissionError)
+        else (
+            "file_missing"
+            if isinstance(error, FileNotFoundError)
+            else (
+                "invalid_data"
+                if isinstance(error, (ValueError, TypeError, KeyError))
+                else "source_refusal"
+            )
+        )
+    )
+    return {"stage": stage, "code": code}
+
+
+def coding_b_observation_summary(done, witness):
+    """Necessary bounded projection; only the source producer below signs custody."""
+    if (
+        type(done.returncode) is not int
+        or not -128 <= done.returncode <= 255
+        or any(
+            type(value) is not str or len(value.encode("utf-8")) > 32 * 1024 * 1024
+            for value in (done.stdout, done.stderr)
+        )
+    ):
+        raise mechanisms.MechanismError("bounded coding B observation required")
+    return {
+        "exit_code": done.returncode,
+        "cleanup_terminal": witness.get("finished", {}).get("cleanup_terminal") is True,
+        "diagnostic": _coding_held_diagnostic(done.stdout),
+        "execution_authorized": False,
+        "acceptance_authorized": False,
+    }
+
+
+def record_coding_b_observation(cfg, done, witness):
+    """Separate signed transport diagnostic; never delivery, terminal or C authority."""
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime._observed_correction_b.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("cfg") is not cfg
+        or caller.f_locals.get("done") is not done
+        or caller.f_locals.get("witness") is not witness
+        or witness.get("finished", {}).get("cleanup_terminal") is not True
+    ):
+        raise mechanisms.MechanismError("actual source coding B observation required")
+    summary = coding_b_observation_summary(done, witness)
+    record = {
+        "schema": "closer-native-coding-b-observation/v1",
+        "worker_id": witness["worker_id"],
+        "native_b_start": witness["start"],
+        "worker_config_sha256": mechanisms.digest(cfg),
+        "process": {
+            key: witness["finished"][key] for key in ("pid", "process_group", "os_started")
+        },
+        **summary,
+        "stdout_bytes": len(done.stdout.encode("utf-8")),
+        "stderr_bytes": len(done.stderr.encode("utf-8")),
+        "stdout_sha256": hashlib.sha256(done.stdout.encode("utf-8")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(done.stderr.encode("utf-8")).hexdigest(),
+        "domain_completed": False,
+        "global_stop_valid": False,
+        "provider_completion_asserted": False,
+    }
+    reference = witness["retain"]("coding-b-observation-" + witness["worker_id"] + ".json", record)
+    return {**summary, "reference": reference}
+
+
 def record_coding_b_delivery(cfg, done, witness):
     """Retain actual original supervised B output before C, granting no execution."""
     import closer_runtime_binding as runtime

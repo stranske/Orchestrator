@@ -10958,12 +10958,9 @@ def _main_admitted(args, p, assignment_rows, targets):
         try:
             result = closer_coding_worker.run_from_root(args, backend, targets)
         except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
-            result = {
-                "status": "held",
-                "reason": str(error),
-                "execution_authorized": False,
-                "retry_authorized": False,
-            }
+            from closer_native_observer import coding_worker_held
+
+            result = coding_worker_held(error)
         print(json.dumps(result, sort_keys=True))
         # A coding queue is not a pipeline terminal receipt or acceptance.
         return 78
