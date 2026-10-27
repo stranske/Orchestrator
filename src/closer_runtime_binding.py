@@ -868,6 +868,26 @@ class RuntimeBinding:
                             "status": "blocked",
                             "reason": "invalid prepared verification mutation",
                         }
+                correlation = (
+                    (verification_mutation or {})
+                    .get("fields", {})
+                    .get("inputs[verification_request_basis]")
+                )
+                if correlation is not None:
+                    if (
+                        mutation["mutation_kind"] != "workflow_dispatch"
+                        or correlation != mutation["request_basis"]
+                    ):
+                        return {
+                            "status": "not_started",
+                            "reason": "verification correlation input differs",
+                        }
+                    mutation["correlation_input"] = correlation
+                    import closer_verifier_followup
+
+                    native_binding["verification_source_requirements"] = (
+                        closer_verifier_followup.source_requirements(snapshot)
+                    )
                 if mutation["mutation_kind"] == "workflow_dispatch" and not (
                     callable(getattr(self.bundle.runtime, "reject_not_accepted", None))
                     and callable(getattr(self.bundle.runtime, "VerificationRequestRejected", None))
@@ -929,6 +949,75 @@ class RuntimeBinding:
 
         outcome = submit_effect(adapter, NativePort(), spec, {}, holder=operation["owner"])
         if outcome == "not_accepted":
+            # Stamp only this actual completed rejection CAS, before the queue
+            # persists its result. Later recovery/unknown outcomes cannot mint
+            # an original Core identity, nor can native/caller data supply one.
+            proof = result.get("verification_rejection_proof")
+            if isinstance(proof, dict) and "core_identity" in proof:
+                result["verification_rejection_proof"] = {
+                    key: value for key, value in proof.items() if key != "core_identity"
+                }
+                proof = None  # A native/caller-provided pin is never retained or restamped.
+            try:
+                core = self.bundle.runtime
+                record = adapter.store.read(adapter.target_fence_key(spec))
+                history = (record or {}).get("prior_operations", [])
+                bounded = (
+                    isinstance(history, list)
+                    and len(history) <= 64
+                    and all(
+                        isinstance(entry, dict)
+                        and isinstance(entry.get("record"), dict)
+                        and "prior_operations" not in entry["record"]
+                        for entry in history
+                    )
+                )
+                size = 0
+                for chunk in json.JSONEncoder(allow_nan=False).iterencode(record):
+                    size += len(chunk.encode("utf-8"))
+                    if size > 1024 * 1024:
+                        bounded = False
+                        break
+                if (
+                    bounded
+                    and isinstance(record, dict)
+                    and not record.get("denial")
+                    and not core.validate_operation_record(record)
+                    and core.verification_request_not_accepted(record)
+                    and record["operation_key"] == core.canonical_operation_key(ospec)
+                    and record["target_fence_key"] == core.canonical_target_fence_key(ospec)
+                    and (record.get("mutation_intent") or {}).get("native_binding")
+                    == native_binding
+                    and isinstance(proof, dict)
+                    and "core_identity" not in proof
+                    and proof.get("schema") == "closer-verification-rejection/v1"
+                    and proof.get("producer")
+                    == "submit_verify/GitHubNoEffectRejected/live-queue-invocation"
+                    and proof.get("operation_id") == operation["id"]
+                    and proof.get("revision") == operation["revision"]
+                    and proof.get("action") == action
+                    and proof.get("core_namespace") == self.bundle.namespace
+                    and proof.get("post_attempted") is True
+                    and proof.get("request_accepted") is False
+                ):
+                    archived = {
+                        key: value for key, value in record.items() if key != "prior_operations"
+                    }
+                    result["verification_rejection_proof"] = {
+                        **proof,
+                        "core_identity": {
+                            "schema": "closer-verification-core-rejection/v1",
+                            "namespace": self.bundle.namespace,
+                            "operation_key": record["operation_key"],
+                            "target_fence_key": record["target_fence_key"],
+                            "criteria_fingerprint": record["criteria_fingerprint"],
+                            "native_binding_sha256": record["guard_versions"]["native_binding"],
+                            "record_sha256": core._hash_canonical(archived),
+                            "digest_scope": "canonical_core_record_excluding_prior_operations",
+                        },
+                    }
+            except Exception:
+                pass  # No pin is unknown provenance, never permission to retry.
             return {**result, "core_rejected_not_accepted": True}
         if outcome in {"ok", "unknown"}:
             try:
@@ -941,6 +1030,43 @@ class RuntimeBinding:
             except Exception:
                 recovered = {}
             if recovered.get("status") == "completed":
+                # Retain correlation only from this ACTUAL acknowledged POST and
+                # its exact succeeded original Core intent. An old succeeded
+                # fence without this native_result never gets upgraded here.
+                acknowledged = result.get("verification_post_accepted")
+                try:
+                    settled = adapter.store.read(adapter.target_fence_key(spec))
+                    original = (settled.get("mutation_intent") or {}).get("native_binding")
+                    if (
+                        isinstance(acknowledged, dict)
+                        and acknowledged.get("mutation_kind") == "workflow_dispatch"
+                        and acknowledged.get("correlation_input")
+                        == acknowledged.get("request_basis")
+                        and re.fullmatch(
+                            r"[0-9a-f]{64}", str(acknowledged.get("correlation_input"))
+                        )
+                        and settled.get("status") == "succeeded"
+                        and settled.get("action") == "verify_request"
+                        and isinstance(original, dict)
+                        and original.get("queue_operation_id") == operation["id"]
+                        and original.get("verification_mutation") == acknowledged
+                        and settled["guard_versions"].get("native_binding") == sha256_json(original)
+                        and settled["operation_key"]
+                        == self.bundle.runtime.canonical_operation_key(ospec)
+                    ):
+                        result["core_request_correlation"] = {
+                            "schema": "closer-core-request-correlation/v1",
+                            "operation_id": operation["id"],
+                            "core_operation_key": settled["operation_key"],
+                            "core_target_fence_key": settled["target_fence_key"],
+                            "core_package_digest": self.bundle.namespace.removeprefix(
+                                "_closer_core_"
+                            ),
+                            "native_binding": original,
+                            "native_binding_sha256": sha256_json(original),
+                        }
+                except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                    pass  # Missing proof is unknown correlation, not resend authority.
                 return {**result, **recovered}
         return {
             "status": "unknown" if outcome in {"ok", "unknown"} else "blocked",
@@ -1045,6 +1171,8 @@ class PinnedNativeHooks:
                 ):
                     raise BindingError("native admission cfg differs from signed invocation")
                 admitted_assignment = Path(context["assignment"]["path"])
+                if "demand_assignment" in context:
+                    self.assignment_source = Path(context["demand_assignment"]["path"])
             canonical = {
                 "interpreter": self.interpreter_anchor.resolve(),
                 "dispatcher": self.dispatcher_anchor.resolve(),
@@ -1310,6 +1438,9 @@ class PinnedNativeHooks:
         self.env = getattr(self, "env", {})
         self.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
         self.terminal_receipt_problem = None
+        self.descendant_bundle = None
+        self.descendant_bundle_problem: str | None = None
+        self.descendant_cfg: dict[str, Any] | None = None
         try:
             if done.returncode not in {0, 78}:
                 raise ValueError("ACTION B did not return a supported terminal receipt")
@@ -1366,9 +1497,13 @@ class PinnedNativeHooks:
                 or verdict.get("run_ids") != receipt.get("run_ids")
             ):
                 raise ValueError("terminal receipt bytes/assignment/run binding mismatch")
+            from closer_native_descendants import seal_bundle
+
+            self.descendant_bundle = seal_bundle(cfg, candidate, watermark)
+            self.descendant_cfg = cfg
             self.env["CLOSER_POSTRUN_ROUND_ID"] = round_id
             return True
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             self.terminal_receipt_problem = {
                 "type": type(exc).__name__,
                 "errno": getattr(exc, "errno", None),
@@ -1413,6 +1548,30 @@ class PinnedNativeHooks:
             self.cleanup_receipt(token, result) if self._pins_match() else None
         )
         self.postrun_result["refusal"] = self.postrun_refusal(result)
+        if getattr(self, "descendant_bundle", None) is not None:
+            try:
+                from closer_native_descendants import finalize_bundle
+
+                stderr = self.postrun_result["stderr"]
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode("utf-8", errors="replace")
+                if not self.postrun_result["dependencies_valid"] or not (
+                    result.returncode == 0
+                    or (
+                        result.returncode == 65
+                        and stderr.strip()
+                        == "handoff-postrun: closer stop rejected; preserve ledger and resume actionable work"
+                    )
+                ):
+                    raise ValueError("descendant actual C did not reach reviewed cleanup boundary")
+                self.descendant_bundle = finalize_bundle(
+                    self.descendant_cfg,
+                    self.descendant_bundle,
+                    self.postrun_result["cleanup"],
+                    token,
+                )
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                self.descendant_bundle_problem = str(exc)[:512]
         return result.returncode
 
     def postrun_refusal(self, result):
@@ -1473,6 +1632,10 @@ def scoped_continuation_proof(cfg, candidate):
 
     if cfg.get("mechanism") != "native-handoff/v1" or not isinstance(candidate, dict):
         return None
+    if candidate.get("schema") == "native-descendant-continuation/v1":
+        from closer_native_descendants import continuation_proof
+
+        return continuation_proof(cfg, candidate)
     try:
         assignment = Path(cfg["assignment"])
         expected = cfg["native_hooks"]["postrun_dependencies"]["assignment"]
@@ -1658,6 +1821,9 @@ def run_native_round(
             return "unavailable", "native B requires pinned Runtime Python interpreter"
         command = [str(interpreter), *command[1:]]
     if isinstance(hooks, PinnedNativeHooks):
+        hooks.descendant_bundle = None
+        hooks.descendant_bundle_problem = None
+        hooks.descendant_cfg = None
         hooks.env = getattr(hooks, "env", {})
         hooks.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
         hooks.env["CLOSER_POSTRUN_REQUIRE_NAMED_ROUND"] = (
@@ -1696,6 +1862,8 @@ def run_native_round(
         except (ValueError, TypeError):
             value = {"actual_detail": text}
         value["native_execution"] = execution_report()
+        if isinstance(hooks, PinnedNativeHooks) and getattr(hooks, "descendant_bundle", None):
+            value["descendant_bundle"] = hooks.descendant_bundle
         return json.dumps(value, sort_keys=True)
 
     outcome, detail = "unknown", "native prerun outcome unknown"
@@ -1879,6 +2047,36 @@ def run_native_round(
             )
         if outcome != "denied":
             outcome = "unknown"
+    if isinstance(hooks, PinnedNativeHooks) and getattr(hooks, "descendant_bundle", None):
+        # TOP completion can never erase a descendant's unknown effect or hold.
+        try:
+            from closer_native_descendants import bundle_record, continuation_proof
+
+            descendants = bundle_record(cfg, hooks.descendant_bundle)
+            if getattr(hooks, "descendant_bundle_problem", None):
+                raise ValueError(hooks.descendant_bundle_problem)
+            if descendants["aggregate"] == "unknown":
+                raise ValueError("descendant effect outcome unknown; preserve original owner")
+            if descendants["aggregate"] == "known_held":
+                proof = continuation_proof(cfg, {"descendant_bundle": hooks.descendant_bundle})
+                if proof is None or outcome == "denied":
+                    raise ValueError(
+                        "descendant known hold lacks actual cleanup continuation proof"
+                    )
+                return "scoped_continuation", reported(
+                    json.dumps(
+                        {
+                            "proof": proof,
+                            "actual_detail": detail,
+                            "action_b_exit": terminal_b.returncode if terminal_b else None,
+                            "action_c_exit": getattr(hooks, "postrun_result", {}).get("code"),
+                        }
+                    )
+                )
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            return ("denied" if outcome == "denied" else "unknown"), reported(
+                detail + "; descendant receipt boundary unavailable: " + str(exc)[:512]
+            )
     if (
         cfg.get("mechanism") == "native-handoff/v1"
         and isinstance(hooks, PinnedNativeHooks)

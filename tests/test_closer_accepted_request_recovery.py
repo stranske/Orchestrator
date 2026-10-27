@@ -164,7 +164,7 @@ def test_recovery_cas_and_live_owner_lock_do_not_change_unknown_row(tmp_path):
 
 
 @pytest.mark.parametrize("duplicate_frontier", [False, True, "completed_read"])
-def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
+def test_legacy_recovered_request_keeps_owned_wait_without_correlated_terminal(
     tmp_path, duplicate_frontier
 ):
     path, target, frontier, posts, inner, _before = case(tmp_path)
@@ -254,20 +254,20 @@ def test_recovered_request_uses_normal_causal_successor_after_fresh_result(
         },
         "evidence": {"verifier_lifecycle": {"verdict": "NON_PASS", "run_id": "123"}},
     }
-    result = continuation.create_successor(
-        path,
-        inner["path"],
-        predecessor=frontier,
-        target=target,
-        observation=observation,
-        canonical_path=canonical,
-        canonical_row=assignment,
-        admission=lambda: {"paused": False, "dependency": None, "live_owner": False},
-        now=lambda: observed_at + 1,
-    )
-    assert result["execution_targets"] == [target] and posts == ["POST"]
-    successor = pipeline._load(path)["stage_successors"][result["finite_frontier"]["frontier_id"]]
-    assert "items" not in successor and "results" not in successor
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="correlated terminal proof"):
+        continuation.create_successor(
+            path,
+            inner["path"],
+            predecessor=frontier,
+            target=target,
+            observation=observation,
+            canonical_path=canonical,
+            canonical_row=assignment,
+            admission=lambda: {"paused": False, "dependency": None, "live_owner": False},
+            now=lambda: observed_at + 1,
+        )
+    assert path.read_bytes() == before and posts == ["POST"]
 
 
 @pytest.mark.parametrize(

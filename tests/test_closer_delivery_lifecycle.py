@@ -12,11 +12,11 @@ import json
 import sqlite3
 import time
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from closer_inert_dispatcher_support import InertCaller
 from test_closer_disposition import BODY, HEAD, TARGET, fixture
 
 import claims
@@ -25,10 +25,16 @@ import closer_pipeline
 import dispatcher
 import verifier_evidence
 
+_SOURCE_LOW_ROUTE = adapter._pipeline_low_route
+_SOURCE_EXCEPTION_ROUTE = adapter._exception_route
+_SOURCE_CAPACITY_REPORT = adapter._fresh_capacity_report
+
 
 class OfflineDelivery:
-    def __init__(self, tmp_path, monkeypatch):
+    def __init__(self, tmp_path, monkeypatch, *, native=False):
         self.root = tmp_path
+        self.native = native
+        self.patch = monkeypatch
         self.guard_calls = []
         self.provider_calls = []
         self.api_calls = []
@@ -100,6 +106,53 @@ class OfflineDelivery:
             self.backend, "campaign_admission", lambda *a, **kw: {"allowed": True, "timeout": 60}
         )
 
+        if native:
+            self._enable_native()
+
+    def _enable_native(self):
+        """Opt in only these lifecycle tests; imported pure units keep their defaults."""
+        from closer_native_closure_fixture import NativeClosureFixture
+        from test_dispatcher_controlled_data_only import world
+
+        self.patch.setenv("HOME", str(self.root / "private-home"))
+        self.caller = InertCaller(world.__wrapped__(self.root, self.patch), self.patch)
+        self.caller.seed_capacity()
+        self.patch.setattr(adapter, "_pipeline_low_route", _SOURCE_LOW_ROUTE)
+        self.patch.setattr(adapter, "_exception_route", _SOURCE_EXCEPTION_ROUTE)
+        self.patch.setattr(adapter, "_fresh_capacity_report", _SOURCE_CAPACITY_REPORT)
+        self.native_closure = NativeClosureFixture(
+            self.root / "native-closure",
+            self,
+            self.caller,
+            self.patch,
+            source=Path(adapter.__file__).parent,
+        )
+        original_frontier = self.caller.frontier
+
+        def observed_frontier(snapshots, backend=None):
+            from closer_frontier_policy import make_frontier
+
+            observed = original_frontier(snapshots, backend)
+            return make_frontier(
+                list(snapshots),
+                owner=observed["owner"],
+                frontier_id="lifecycle-" + adapter.digest(observed["bindings"])[:24],
+                bindings=observed["bindings"],
+            )
+
+        self.caller.frontier = observed_frontier
+
+    def sync_native_closure(self):
+        for path in self.native_closure.files:
+            if path not in getattr(self, "synced_closures", set()) and path.is_file():
+                observed = json.loads(path.read_text())
+                if observed["issue"]["state"] == "closed":
+                    self.source_issue = observed["issue"]
+                    self.current["sources"][0]["state"] = "closed"
+                    self.api_calls.extend(tuple(call) for call in observed["calls"])
+                    self.synced_closures = getattr(self, "synced_closures", set()) | {path}
+                    self.refresh()
+
     @staticmethod
     def forbidden(*a, **kw):
         raise AssertionError("live subprocess is forbidden in this offline lifecycle")
@@ -110,11 +163,27 @@ class OfflineDelivery:
         )
 
     def snapshot(self, target):
+        if self.native:
+            self.sync_native_closure()
         assert target == TARGET
         return copy.deepcopy(self.current)
 
     def api(self, endpoint, *, method="GET", fields=None, **kw):
         self.api_calls.append((endpoint, method, fields))
+        if endpoint == "repos/owner/repo" and method == "GET":
+            return {"default_branch": "main"}
+        if endpoint == "repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches":
+            assert method == "POST"
+            assert self.current["state"] == "MERGED"
+            assert fields == {
+                "ref": "main",
+                "inputs[pr_number]": "12",
+                "inputs[mode]": "compare",
+                "inputs[verification_request_basis]": self.backend.verification_request_basis(
+                    self.current
+                ),
+            }
+            return {"accepted": True}
         if endpoint == "graphql":
             return {
                 "data": {
@@ -156,23 +225,19 @@ class OfflineDelivery:
             return {"workflow_runs": [], "total_count": 0}
         if "/actions/runs?" in endpoint:
             return {"workflow_runs": [{"id": 7, "head_sha": HEAD}]}
-        if endpoint.endswith("/issues/12/labels") and method == "POST":
-            assert fields == {"labels[]": "verify:compare"}
-            self.current["labels"] = ["verify:compare"]
-            self.current["label_events_complete"] = True
-            self.current["label_events"] = [
-                {
-                    "id": "offline-label-event-1",
-                    "label": "verify:compare",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ]
-            self.refresh()
-            return []
         raise AssertionError((endpoint, method, fields))
 
+    def verification_dispatches(self):
+        return [
+            call
+            for call in self.api_calls
+            if len(call) == 3
+            and call[0] == "repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches"
+            and call[1] == "POST"
+        ]
+
     def offload(self, agent, prompt, **kw):
-        assert agent == "gemini"
+        assert agent == ("claude" if self.native else "gemini")
         self.provider_calls.append(prompt)
         proposal = copy.deepcopy(self.proposal)
         mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
@@ -190,19 +255,24 @@ class OfflineDelivery:
         if self.invalid_proof:
             proposal["decision"]["criteria"][0]["proofs"][0]["run_attempt"] = 999
         if self.transport_uncertain:
-            return {
+            result = {
                 "exit": 1,
                 "run_id": "offline:uncertain",
                 "outcome_uncertain": True,
                 "outcome_status": "uncertain",
                 "retry_safe": False,
             }
-        return {
-            "exit": 0,
-            "run_id": f"offline:low:{len(self.provider_calls)}",
-            "output": json.dumps(proposal),
-            "profile_id": "offline-low",
-        }
+        else:
+            result = {
+                "exit": 0,
+                "run_id": f"offline:low:{len(self.provider_calls)}",
+                "output": json.dumps(proposal),
+                "profile_id": "offline-low",
+            }
+        if self.native:
+            self.last_actual = self.caller.response(result, agent, prompt, **kw)
+            return self.last_actual
+        return result
 
     def guard(self, command, *, timeout):
         if command[1] == "-c":
@@ -319,6 +389,9 @@ class OfflineDelivery:
         )
 
     def run(self, *, blocker_fn=None):
+        if self.native and self.current["state"] != "OPEN":
+            assert blocker_fn is None
+            return self.run_native()
         self.deadline = time.time() + 600
         # A process restart has no injected coordinator decisions or live objects.
         # Only production pipeline/inner ledgers and the external snapshot persist.
@@ -334,17 +407,109 @@ class OfflineDelivery:
         args = SimpleNamespace(state=str(self.root / "queue.json"), max_workers=1, shadow=False)
         return adapter._run_staged_pipeline(args, [TARGET], self.backend, time.time() + 330)
 
+    def run_native(self):
+        """Finite collection first; only an actual validated result may select a successor."""
+        import closer_disposition
+        import closer_evidence
+
+        dispositions = self.root / "actual-native-dispositions.json"
+        saved = json.loads(dispositions.read_text()) if dispositions.exists() else {}
+        self.backend = adapter.Closer(
+            self,
+            state_path=self.root / "queue.json",
+            apply=True,
+            workers=True,
+            dispositions=saved,
+        )
+        args = SimpleNamespace(state=str(self.root / "queue.json"), max_workers=1, shadow=False)
+        accepted = []
+        original_integrate = closer_disposition.integrate_ordinary
+
+        def observe_integration(*values, **options):
+            actual = original_integrate(*values, **options)
+            if actual["status"] == "accepted":
+                accepted.append(copy.deepcopy(actual["disposition"]))
+            return actual
+
+        def collect(snapshot, api, destination, **options):
+            packet, _ref, proposal = self.caller.packet(snapshot, destination)
+            self.proposal = proposal
+            return packet
+
+        with self.patch.context() as local:
+            local.setattr(adapter, "GitHub", lambda **_kw: self)
+            local.setattr(closer_evidence, "collect_evidence", collect)
+            local.setattr(closer_disposition, "integrate_ordinary", observe_integration)
+            receipt = self.caller.staged(
+                args,
+                [TARGET],
+                self.backend,
+                time.time() + 330,
+                coordinator=True,
+                snapshot_fn=self.snapshot,
+            )
+            first = receipt["targets"][TARGET]
+            if first.get("deferred_reason") == "finite_frontier_identity_mismatch" and accepted:
+                actual = accepted[-1]
+                if adapter.acceptance_ok(self.current, actual):
+                    # Persist only the unchanged actual consumer result. A new
+                    # observed frontier, never predicted ACT, owns closure.
+                    dispositions.write_text(json.dumps({TARGET: actual}, sort_keys=True))
+                    self.backend.dispositions = {TARGET: actual}
+                    before = len(self.caller.results)
+                    self.initial_native_receipt = copy.deepcopy(receipt)
+                    receipt = self.caller.staged(
+                        args,
+                        [TARGET],
+                        self.backend,
+                        time.time() + 330,
+                        coordinator=True,
+                        snapshot_fn=self.snapshot,
+                    )
+                    assert len(self.caller.results) == before
+                    assert (
+                        receipt["finite_frontier"]["frontier_id"]
+                        != self.initial_native_receipt["finite_frontier"]["frontier_id"]
+                    )
+        self.sync_native_closure()
+        # Count only the original actor output preserved by the real native
+        # queue, never infer a successful actor result from a PATCH observation.
+        for path in self.root.rglob("*.json"):
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict) or value.get("schema") != "closer-queue/v1":
+                continue
+            for bucket in [value, *(value.get("frontiers") or {}).values()]:
+                item = bucket.get("items", {}).get(TARGET, {})
+                operation = item.get("operation") or {}
+                actor = operation.get("result", {}).get("actor")
+                if operation.get("status") == "completed" and actor is not None:
+                    seen = getattr(self, "seen_closure_operations", set())
+                    if operation["id"] not in seen:
+                        self.closure_calls.append(copy.deepcopy(actor))
+                        self.seen_closure_operations = seen | {operation["id"]}
+        return receipt
+
     def state(self):
+        if self.native:
+            files = list(self.root.glob("queue.json.pipeline.json.scoped/targets/*/state.json"))
+            assert len(files) == 1
+            return json.loads(files[0].read_text())
         return json.loads((self.root / "queue.json.pipeline.json").read_text())
 
 
 def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_path, monkeypatch):
-    delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery = OfflineDelivery(tmp_path, monkeypatch, native=True)
     result = delivery.run()
     assert len(delivery.guard_calls) == 1, result
     assert not delivery.provider_calls  # Objective premerge path never calls a model.
+    assert not delivery.caller.results
     assert delivery.current["state"] == "MERGED"
-    assert "verify:compare" in delivery.current["labels"]
+    dispatches = delivery.verification_dispatches()
+    assert len(dispatches) == 1, result
+    basis = dispatches[0][2]["inputs[verification_request_basis]"]
+    assert basis == delivery.backend.verification_request_basis(delivery.current)
+    changed_head = dict(delivery.current, head="e" * 40)
+    assert delivery.backend.verification_request_basis(changed_head) != basis
     assert closer_pipeline.validate_stop(
         tmp_path / "queue.json.pipeline.json", assignment_targets=[TARGET]
     )["valid"], result
@@ -358,6 +523,16 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     assert len(delivery.closure_calls) == 1
     assert delivery.closure_calls[0]["closed"] == 1
     assert delivery.closure_calls[0]["errors"] == 0
+    first = delivery.initial_native_receipt
+    assert first["targets"][TARGET]["deferred_reason"] == "finite_frontier_identity_mismatch"
+    assert first["targets"][TARGET]["deferred_next_trigger"] == "new_frontier_required"
+    assert (
+        first["finite_frontier"]["bindings"][TARGET]["action_id"]
+        != completed["finite_frontier"]["bindings"][TARGET]["action_id"]
+    )
+    assert len(delivery.native_closure.children) == 1
+    assert delivery.native_closure.children[0].poll() == 0
+    assert len(delivery.caller.results) == 1
     operations = list((tmp_path / "supervisor" / "supervisor-close-operations").glob("*.json"))
     assert len(operations) == 1
     operation = json.loads(operations[0].read_text())
@@ -371,6 +546,7 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     restarted = delivery.run()
     assert restarted["targets"][TARGET]["status"] == "completed", restarted
     assert len(delivery.guard_calls) == len(delivery.closure_calls) == 1
+    assert len(delivery.native_closure.children) == 1
     provider_calls = len(delivery.provider_calls)
     settled = delivery.run()
     assert settled["targets"][TARGET]["status"] == "completed", settled
@@ -378,13 +554,9 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
     # drift review; it cannot create a second terminal effect or learning outcome.
     assert len(delivery.provider_calls) <= provider_calls + 1
     assert len(delivery.guard_calls) == len(delivery.closure_calls) == 1
-    label_posts = [
-        call
-        for call in delivery.api_calls
-        if len(call) == 3 and call[0].endswith("/issues/12/labels") and call[1] == "POST"
-    ]
     source_patches = [call for call in delivery.api_calls if "PATCH" in call]
-    assert len(label_posts) == len(source_patches) == 1
+    assert delivery.verification_dispatches() == dispatches
+    assert len(source_patches) == 1
     assert delivery.current["verifier"]["verdict"] == "PASS"
     assert delivery.current["sources"][0]["state"] == "closed"
     assert json.loads(operations[0].read_text())["phase"] == "settled"
@@ -397,7 +569,7 @@ def test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait(tmp_
 
 @pytest.mark.parametrize("barrier", ["wrong_attempt", "changed_head", "provider_uncertain"])
 def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypatch, barrier):
-    delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery = OfflineDelivery(tmp_path, monkeypatch, native=True)
     delivery.current.update(state="MERGED", merge="d" * 40, merged_at="2026-10-18T00:00:00Z")
     delivery.supply_native_pass(monkeypatch)
     if barrier == "wrong_attempt":
@@ -423,20 +595,30 @@ def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypat
     if barrier == "wrong_attempt":
         assert "criterion_proof_unbound_or_unrelated" in serialized
     elif barrier == "provider_uncertain":
-        assert "offline:uncertain" in serialized
+        assert delivery.last_actual["run_id"] in serialized
+        assert delivery.last_actual["outcome_uncertain"] is True
         assert "provider_outcome_uncertain" in serialized
         assert len(delivery.provider_calls) == 1
         delivery.run()
         assert len(delivery.provider_calls) == 1
         assert not delivery.guard_calls
-        assert "offline:uncertain" in json.dumps(delivery.state())
+        assert delivery.last_actual["run_id"] in json.dumps(delivery.state())
     else:
         assert delivery.current["head"] == "e" * 40
-        inner_paths = list(tmp_path.glob("queue.json.pipeline.actions/*.json"))
+        inner_paths = list(
+            tmp_path.glob(
+                "queue.json.pipeline.json.scoped/targets/*/state.actions/"
+                + closer_pipeline._digest(TARGET)
+                + ".json"
+            )
+        )
         assert len(inner_paths) == 1
         inner = json.loads(inner_paths[0].read_text())
-        assert inner["items"][TARGET]["evidence"]["head"] == "e" * 40
-        assert inner["items"][TARGET]["action"] != "close_source"
+        selected = inner["frontiers"][result["finite_frontier"]["frontier_id"]]
+        assert selected["items"][TARGET]["evidence"]["head"] == "e" * 40
+        assert selected["items"][TARGET]["action"] != "close_source"
+        assert selected["items"][TARGET].get("operation") is None
+        assert not delivery.native_closure.children
 
 
 def test_unknown_merge_transport_outcome_is_durable_and_never_repeated(tmp_path, monkeypatch):
@@ -507,7 +689,11 @@ def test_generic_needs_human_label_preserves_objective_merge_and_verifier_succes
     assert len(delivery.guard_calls) == 1, result
     assert not delivery.provider_calls
     assert delivery.current["state"] == "MERGED"
-    assert "verify:compare" in delivery.current["labels"]
+    dispatches = delivery.verification_dispatches()
+    assert len(dispatches) == 1, result
+    assert dispatches[0][2]["inputs[verification_request_basis]"] == (
+        delivery.backend.verification_request_basis(delivery.current)
+    )
     assert delivery.current["sources"][0]["state"] == "open"
 
 

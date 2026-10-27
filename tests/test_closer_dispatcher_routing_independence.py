@@ -11,8 +11,12 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import test_closer_execution_contract_routes as contract_routes
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import closer_dispatcher as adapter
+
+controlled_world = _controlled_world
 
 # Eligible agents for exception work (excluding Aider)
 ELIGIBLE_AGENTS = ("codex", "claude", "gemini", "cursor", "vibe", "muse")
@@ -246,86 +250,59 @@ class TestExceptionRoute:
 class TestExceptionCallbackIdentity:
     """Pipeline exception callback must preserve router-selected provider identity."""
 
+    @pytest.mark.usefixtures("callback_inert_transport")
     def test_non_codex_exception_callback_identity(self, tmp_path, monkeypatch):
-        from test_closer_dispatcher import (
-            TARGET,
-            FakeGitHub,
-            snapshot,
-            stub_action_readiness_for_transport_test,
-        )
+        # The wrapper below runs this assertion inside actual CLI registration.
+        from closer_inert_dispatcher_support import SECOND
+        from test_closer_disposition import TARGET
+        from test_closer_execution_contract_routes import named, prepared, scoped_answer
 
-        stub_action_readiness_for_transport_test(monkeypatch)
-
-        import closer_pipeline
-
-        current = snapshot()
-        fake_gh = FakeGitHub(current)
+        delivery, callbacks, context = prepared(tmp_path, monkeypatch)
+        row = named(context["interpret"])
         route = {
             "agent": "claude",
-            "profile_id": "claude-offload-assess",
+            "profile_id": SECOND,
             "pools": ["claude-subscription"],
             "mode": "assess",
         }
-        worker_calls = []
-        monkeypatch.setattr(
-            adapter, "_execute_profile_route", lambda route, invoke, **kw: (invoke(route), route)
-        )
+        calls = []
 
         def exception_route(**kwargs):
             load = kwargs.get("load") or {}
             load["claude"] = load.get("claude", 0) + 1
             load["pool:claude-subscription"] = load.get("pool:claude-subscription", 0) + 1
-            return (route, "available")
+            return route, "available"
 
         monkeypatch.setattr(adapter, "_exception_route", exception_route)
-        monkeypatch.setattr(adapter, "GitHub", lambda **kw: fake_gh)
-        backend = adapter.Closer(
-            fake_gh,
-            state_path=tmp_path / "state.json",
-            apply=True,
-            workers=True,
-            workspaces={"o/r": str(tmp_path)},
-        )
 
-        def worker_stub(target, action, snap, op, **kwargs):
-            worker_calls.append(kwargs)
-            return {
-                "status": "completed",
-                "worker": {
-                    "exit": 0,
-                    "output": json.dumps(
-                        {
-                            "classification": "uncertain",
-                            "substantive_needs": ["needs senior review"],
-                        }
-                    ),
-                },
-            }
+        def strong(envelope, _prompt, options):
+            request = envelope["adjudication_request"]
+            calls.append((request, options))
+            return {"exit": 0, "output": json.dumps(scoped_answer(request, row))}
 
-        monkeypatch.setattr(backend, "worker", worker_stub)
-        callbacks = {}
-
-        def capture(_path, _targets, **kwargs):
-            callbacks.update(kwargs)
-            return {"targets": {}}
-
-        monkeypatch.setattr(closer_pipeline, "run_pipeline", capture)
-        args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-        adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 600)
-        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 180})
-        context = {
-            "prepare": prep,
-            "deadline": time.time() + 180,
-            "revision": prep["revision"],
-            "work_key": "non-codex-exception",
-        }
-        result = callbacks["exception"](
-            TARGET,
-            {**context, "interpret": {"proposal": {}, "substantive_needs": []}},
-        )
+        delivery.strong_response = strong
+        result = callbacks["exception"](TARGET, context)
+        assert result["validated"]["scoped_adjudication"]["outcome"] == "satisfied"
         assert result["requested_agent"] == "claude"
-        assert result["requested_profile"] == "claude-offload-assess"
-        assert worker_calls[0]["profile_id"] == "claude-offload-assess"
+        assert result["requested_profile"] == SECOND
+        assert len(calls) == 1 and calls[0][1]["profile_id"] == SECOND
+        assert calls[0][0]["basis"]["source"] == row["source"]
+        actual = delivery.inert_caller.results[-1]
+        assert actual["data_only_origin"]["profile_id"] == SECOND
+        assert actual["data_only_origin"]["process_observation"]["agent"] == "claude"
+        assert actual["provider_result_ref"]["path"]
+
+
+@pytest.fixture
+def callback_inert_transport(controlled_world, monkeypatch):
+    return contract_routes.inert_transport.__wrapped__(controlled_world, monkeypatch)
+
+
+TestExceptionCallbackIdentity.test_non_codex_exception_callback_identity = (
+    contract_routes.native_callback_case(
+        TestExceptionCallbackIdentity.test_non_codex_exception_callback_identity
+    )
+)
 
 
 class TestInterpretationCapacityDeferral:

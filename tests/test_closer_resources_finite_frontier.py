@@ -532,7 +532,11 @@ def test_finite_scope_check_cannot_wait_past_request(tmp_path):
     assert result["targets"]["owner/repo#1"]["status"] != "completed"
 
 
-def test_finite_journal_timeout_after_effect_retains_unknown_intent(tmp_path):
+def test_finite_journal_timeout_after_effect_retains_unknown_intent(tmp_path, monkeypatch):
+    # Admission latency is not the phase under test. Expire the unchanged 0.2s
+    # request only after the effect and the real private inventory lock exist.
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
     path = tmp_path / "state.json"
     root = resources.scoped_root(path)
     held = []
@@ -543,11 +547,14 @@ def test_finite_journal_timeout_after_effect_retains_unknown_intent(tmp_path):
         lock = held_inventory(root)
         lock.__enter__()
         held.append(lock)
+        clock[0] += 1
         return {"status": "completed", "target_complete": True}
 
     try:
         started = time.monotonic()
-        result = run_selected(path, frontier(), request_timeout_seconds=0.2, act=act)
+        result = run_selected(
+            path, frontier(), request_timeout_seconds=0.2, act=act, now=lambda: clock[0]
+        )
         assert time.monotonic() - started < 1.5
         assert result["targets"]["owner/repo#1"]["status"] != "completed"
         assert effects == ["effect"]

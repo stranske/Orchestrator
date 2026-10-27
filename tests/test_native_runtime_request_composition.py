@@ -80,7 +80,9 @@ def runtime_request(capacity_host, public_merge_world, monkeypatch, tmp_path, re
     (root / "native-active.json").unlink()
     native._CURRENT_ENTRY.pop(str(root), None)
     native._CURRENT_ADMISSION.pop(str(root), None)
-    qualified = native.supervise_native(manifest, manifest_path, budget_seconds=45)
+    world.inert_caller.register_native_fixture(manifest, manifest_path)
+    with world.inert_caller.native_fixture_environment():
+        qualified = native.supervise_native(manifest, manifest_path, budget_seconds=45)
     assert qualified["passed"] and qualified["desktop_qualified"] is False
     assert campaign.qualify(manifest, manifest_path.parent) == []
 

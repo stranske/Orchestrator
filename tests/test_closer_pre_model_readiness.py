@@ -393,27 +393,28 @@ def test_ready_collector_packet_reaches_one_actual_advisory_boundary(tmp_path, m
         "path": str(manifest_path),
         "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
     }
+    from test_closer_evidence_recovery import inert_caller
+
+    import dispatcher as transport
+
+    caller = inert_caller(tmp_path, monkeypatch)
     calls = []
 
     def offload(*args, **kwargs):
         calls.append((args, kwargs))
-        return {
-            "exit": 0,
-            "run_id": "offline-complete-advisory",
-            "output": json.dumps(response["proposal"]),
-        }
+        return caller.response(
+            {
+                "exit": 0,
+                "output": json.dumps(response["proposal"]),
+            },
+            args[0],
+            args[1],
+            **kwargs,
+        )
 
-    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace(offload=offload))
-    monkeypatch.setattr(
-        adapter,
-        "_pipeline_low_route",
-        lambda **_k: (
-            {"agent": "codex", "profile_id": "codex-6-luna-low", "pools": []},
-            "available",
-        ),
-    )
+    monkeypatch.setattr(transport, "offload", offload)
+
     backend = runtime_fixture.closer(tmp_path, snap)
-    backend.campaign_admission = lambda *_a: {"allowed": True}
     seen = {}
 
     def run_pipeline(_path, _targets, **callbacks):
@@ -424,7 +425,8 @@ def test_ready_collector_packet_reaches_one_actual_advisory_boundary(tmp_path, m
 
     monkeypatch.setattr(closer_pipeline, "run_pipeline", run_pipeline)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), shadow=False, max_workers=1)
-    adapter._run_staged_pipeline(args, [snap["target"]], backend, time.time() + 60)
+    monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: backend.gh)
+    caller.staged(args, [snap["target"]], backend, time.time() + 60)
     assert len(calls) == 1
     assert seen["actual"]["exit"] == 0
     assert seen["classification"] != "evidence_pending"
@@ -699,37 +701,38 @@ def test_delivery_producer_to_consumer_preserves_criteria_and_uses_only_ready_ev
 ):
     observed = CapturedShapeGitHub(variant)
     monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: observed.github)
-    backend = runtime_fixture.closer(tmp_path, {})
-    backend.campaign_admission = lambda *_a: {"allowed": True}
+    backend = adapter.Closer(observed.github, state_path=tmp_path / "state.json")
+    from test_closer_evidence_recovery import inert_caller
+
+    import dispatcher as transport
+
+    caller = inert_caller(tmp_path, monkeypatch)
     calls = []
 
     def offload(*args, **kwargs):
         calls.append((args, kwargs))
-        return {
-            "exit": 0,
-            "run_id": "offline-producer-assessment",
-            "output": json.dumps(
-                {
-                    "target": observed.source,
-                    "head": observed.head,
-                    "base": observed.base,
-                    "classification": "uncertain",
-                    "substantive_needs": ["Offline model stub grants no acceptance"],
-                    "findings": [],
-                    "decision": {"criteria": []},
-                }
-            ),
-        }
+        return caller.response(
+            {
+                "exit": 0,
+                "output": json.dumps(
+                    {
+                        "target": observed.source,
+                        "head": observed.head,
+                        "base": observed.base,
+                        "classification": "uncertain",
+                        "substantive_needs": ["Offline model stub grants no acceptance"],
+                        "findings": [],
+                        "decision": {"criteria": []},
+                    }
+                ),
+            },
+            args[0],
+            args[1],
+            **kwargs,
+        )
 
-    monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace(offload=offload))
-    monkeypatch.setattr(
-        adapter,
-        "_pipeline_low_route",
-        lambda **_kw: (
-            {"agent": "codex", "profile_id": "codex-6-luna-low", "pools": []},
-            "available",
-        ),
-    )
+    monkeypatch.setattr(transport, "offload", offload)
+
     monkeypatch.setattr(
         adapter,
         "_exception_route",
@@ -769,7 +772,9 @@ def test_delivery_producer_to_consumer_preserves_criteria_and_uses_only_ready_ev
 
     monkeypatch.setattr(closer_pipeline, "run_pipeline", run_pipeline)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), shadow=False, max_workers=1)
-    adapter._run_staged_pipeline(args, [observed.source], backend, time.time() + 60)
+    caller.staged(
+        args, [observed.source], backend, time.time() + 60, deterministic=variant != "ready-linear"
+    )
     if variant in {"linear", "ready-linear"}:
         assert seen["snapshot"]["pr_target"] == "offline/example#142"
         assert seen["snapshot"]["head"] == observed.head
