@@ -2316,9 +2316,30 @@ class Closer:
         }
         if self.runtime_binding is not None:
             try:
-                from closer_source_installation import controller_policy_projection
+                import closer_runtime_binding
+                import closer_source_installation
 
-                projection = controller_policy_projection(self.runtime_binding)
+                project = closer_source_installation.controller_policy_projection
+                origin = closer_runtime_binding._factory_manifest_origin(self.runtime_binding)
+                identity = (
+                    self.runtime_binding,
+                    getattr(self.runtime_binding, "bundle", None),
+                    getattr(self.runtime_binding, "mechanism", None),
+                    origin,
+                    getattr(origin, "path", None),
+                    getattr(origin, "sha256", None),
+                    digest(getattr(self.runtime_binding, "policy", None)),
+                    closer_source_installation._SOURCE_SHA256,
+                    project,
+                    getattr(project, "__code__", None),
+                )
+                # Freeze only an unavailable correlation for this exact source
+                # identity. Never cache positive qualification or effects data.
+                if getattr(self, "_missing_correction_projection", None) == identity:
+                    projection = None
+                else:
+                    projection = project(self.runtime_binding)
+                    self._missing_correction_projection = identity if projection is None else None
                 if (
                     isinstance(projection, dict)
                     and projection.get("schema")

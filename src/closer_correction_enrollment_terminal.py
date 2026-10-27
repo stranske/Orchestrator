@@ -680,10 +680,15 @@ def _queue_operation(record, proof_ref, target, finite_frontier, expected_operat
         for other in entry_bucket.get("items", {}).values():
             _no_uncertainty(other)
             for prior in [other.get("operation"), *other.get("operation_history", [])]:
+                accepted = (
+                    {"completed"}
+                    if prior is other.get("operation")
+                    else {"completed", "confirmed_not_started", "abandoned"}
+                )
                 _need(
                     prior is None
                     or (
-                        prior.get("status") == "completed"
+                        prior.get("status") in accepted
                         and prior.get("result", {}).get("outcome_uncertain") is not True
                         and prior.get("result", {}).get("status") not in {"uncertain", "unknown"}
                     ),

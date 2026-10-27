@@ -1235,7 +1235,8 @@ _FAILURE_STAGES = frozenset(
     "writer_exit issue_source_selection issue_enrolled_read issue_plan_capture issue_plan_persist "
     "issue_prepare_register issue_prepare_apply issue_prepared_read issue_plan_revalidate "
     "issue_remaining_before_post issue_post issue_response_validate issue_transition "
-    "issue_transition_read issue_source_revalidate issue_origin_persist issue_confirm issue_replay unknown".split()
+    "issue_transition_read issue_source_revalidate issue_origin_persist issue_confirm issue_replay "
+    "coding_registration unknown".split()
 )
 _FAILURE_CODES = {
     "scoped original queue operation changed or expired": "original_callback_unavailable",
@@ -1262,7 +1263,7 @@ _FAILURE_CODES = {
     "original write high-water changed": "original_highwater_changed",
 }
 _FAILURE_EXCEPTIONS = frozenset(
-    "ImportError OSError ValueError TypeError KeyError RuntimeError AttributeError StopIteration SourceRecordUnavailable ControllerUnknown TimeoutExpired".split()
+    "ImportError OSError ValueError TypeError KeyError RuntimeError AttributeError NameError StopIteration SourceRecordUnavailable ControllerUnknown TimeoutExpired".split()
 )
 
 
@@ -1427,6 +1428,7 @@ def execute_candidate(candidate, operation):
                 )
             coding_reference = None
             coding_registration_held = False
+            coding_registration_diagnostic = None
             if terminal is not None:
                 # Coding-only registration cannot erase an already known
                 # original source enrollment. Fatal process exits propagate.
@@ -1436,8 +1438,11 @@ def execute_candidate(candidate, operation):
                     coding_reference = coding_continuation.retain_after_confirmation_locked(
                         controller, custody, operation, selection, terminal
                     )
-                except Exception:
+                except Exception as error:
                     coding_registration_held = True
+                    coding_registration_diagnostic = _failure_diagnostic(
+                        error, "coding_registration"
+                    )
             stage = "writer_exit"
             return {
                 "status": "completed",
@@ -1468,6 +1473,7 @@ def execute_candidate(candidate, operation):
                         "coding_continuation": {
                             "status": "held",
                             "reason": "coding_registration_unavailable",
+                            "failure_diagnostic": coding_registration_diagnostic,
                             "execution_authorized": False,
                             "retry_authorized": False,
                         }
