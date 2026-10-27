@@ -545,6 +545,372 @@ def _budget_available(
     return available > 0 and available >= minimum
 
 
+_READ_DIAGNOSTIC_SEAL = object()
+
+
+def _safe_read_endpoint(method, endpoint):
+    """Closed route templates only: never a query, hostname, owner, ref or body."""
+    import re
+
+    verb = (
+        method
+        if type(method) is str and method in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}
+        else "OTHER"
+    )
+    unknown = (verb, "unclassified", "/{unclassified}")
+    if type(endpoint) is not str or len(endpoint) > 4096:
+        return unknown
+    path = endpoint.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+    if path in {"graphql", "user", "rate_limit"}:
+        return verb, path, "/" + path
+    match = re.fullmatch(r"repos/[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}(?:/(.*))?", path)
+    if match is None:
+        return unknown
+    suffix = match.group(1) or ""
+    base = "/repos/{owner}/{repo}"
+    if not suffix:
+        return verb, "repository", base
+    numeric = re.fullmatch(
+        r"(issues|pulls|issues/comments)/([1-9][0-9]{0,9})(/(?:timeline|events|comments))?", suffix
+    )
+    if numeric:
+        category = numeric.group(1).replace("/", "_") + (numeric.group(3) or "").replace("/", "_")
+        return (
+            verb,
+            category,
+            base + "/" + numeric.group(1) + "/" + numeric.group(2) + (numeric.group(3) or ""),
+        )
+    if re.fullmatch(r"contents/[A-Za-z0-9_.%/-]{1,2048}", suffix):
+        return verb, "contents", base + "/contents/{path}"
+    if re.fullmatch(r"git/refs?/[A-Za-z0-9_.%/-]{1,2048}", suffix):
+        return verb, "git_ref", base + "/git/ref/{ref}"
+    if re.fullmatch(r"collaborators/[^/]+/permission", suffix):
+        return verb, "collaborator_permission", base + "/collaborators/{login}/permission"
+    return unknown
+
+
+class _ReadTiming:
+    """Private diagnostics only; cannot authorize an action or a retry."""
+
+    def __init__(self, current):
+        self.seal, self.current = _READ_DIAGNOSTIC_SEAL, current
+        self.pid, self.thread = os.getpid(), threading.get_ident()
+        self.started = time.monotonic()
+        self.calls, self.seconds, self.points = 0, 0.0, []
+        self.failure, self.error = None, None
+
+
+def _read_timing():
+    value = getattr(_callback_threads, "read_timing", None)
+    current = getattr(_callback_threads, "invocation", None)
+    if (
+        type(value) is _ReadTiming
+        and value.seal is _READ_DIAGNOSTIC_SEAL
+        and value.current is current
+        and type(current) is dict
+        and value.pid == os.getpid()
+        and value.thread == threading.get_ident()
+    ):
+        return value
+    return None
+
+
+def _read_api_caller(frame):
+    import sys
+
+    source = sys.modules.get("closer_dispatcher")
+    return (
+        source is not None
+        and frame.f_code is source.GitHub.api.__code__
+        and frame.f_globals is source.__dict__
+    )
+
+
+def _read_timing_start(method, endpoint):
+    try:
+        caller = inspect.currentframe().f_back
+        value = _read_timing()
+        if not _read_api_caller(caller) or value is None:
+            return None
+        if (
+            caller.f_locals.get("method") is not method
+            or caller.f_locals.get("endpoint") is not endpoint
+        ):
+            return None
+        value.calls = min(10000, value.calls + 1)
+        return (value, time.monotonic(), _safe_read_endpoint(method, endpoint))
+    except Exception:
+        return None
+
+
+def _read_timing_finish(call):
+    try:
+        if (
+            not _read_api_caller(inspect.currentframe().f_back)
+            or type(call) is not tuple
+            or len(call) != 3
+        ):
+            return
+        value, started, _ = call
+        elapsed = time.monotonic() - started
+        if value is _read_timing() and 0 <= elapsed <= 3600:
+            value.seconds = min(3600.0, value.seconds + elapsed)
+    except Exception:
+        pass
+
+
+def _coding_timing_point(stage):
+    try:
+        import sys
+
+        worker = sys.modules.get("closer_coding_worker")
+        caller = inspect.currentframe().f_back
+        value = _read_timing()
+        if (
+            worker is None
+            or caller.f_code is not worker._execute.__code__
+            or caller.f_globals is not worker.__dict__
+            or value is None
+            or stage not in {"coding_entry", "baseline_start", "baseline_end"}
+            or stage not in caller.f_code.co_consts
+            or len(value.points) >= 3
+        ):
+            return
+        elapsed = time.monotonic() - value.started
+        if 0 <= elapsed <= 3600:
+            value.points.append(
+                {
+                    "stage": stage,
+                    "callback_elapsed_seconds": round(elapsed, 6),
+                    "api_calls": value.calls,
+                    "api_seconds": round(value.seconds, 6),
+                }
+            )
+    except Exception:
+        pass
+
+
+def _read_deadline_failure(call, error, remaining, phase):
+    try:
+        import sys
+
+        source = sys.modules.get("closer_dispatcher")
+        caller = inspect.currentframe().f_back
+        if (
+            not _read_api_caller(caller)
+            or type(call) is not tuple
+            or len(call) != 3
+            or source is None
+            or type(error) is not source.RoundDeadlineExhausted
+            or phase not in {"before_throttle", "after_throttle"}
+            or phase not in caller.f_code.co_consts
+        ):
+            return
+        value, started, route = call
+        if (
+            value is not _read_timing()
+            or type(remaining) not in (int, float)
+            or not math.isfinite(remaining)
+        ):
+            return
+        now = time.monotonic()
+        elapsed = now - value.started
+        operation = value.current.get("operation", {})
+        request_started = operation.get("request_started_at")
+        request_elapsed = (
+            time.time() - request_started if type(request_started) in (int, float) else None
+        )
+        if (
+            not 0 <= elapsed <= 3600
+            or not -3600 <= remaining < 2
+            or request_elapsed is None
+            or not math.isfinite(request_elapsed)
+            or not 0 <= request_elapsed <= 3600
+        ):
+            return
+        verb, kind, path = route
+        value.error = error
+        value.failure = {
+            "schema": "closer-read-deadline-diagnostic/v1",
+            "authority": False,
+            "retry_authorized": False,
+            "method": verb,
+            "endpoint_kind": kind,
+            "sanitized_path": path,
+            "phase": phase,
+            "remaining_seconds": round(remaining, 6),
+            "request_elapsed_seconds": round(request_elapsed, 6),
+            "callback_elapsed_seconds": round(elapsed, 6),
+            "current_api_seconds": round(max(0, now - started), 6),
+            "api_calls": value.calls,
+            "completed_api_seconds": round(value.seconds, 6),
+            "coding_waypoints": _json_copy(value.points),
+        }
+    except Exception:
+        pass
+
+
+def _validated_read_payload(payload):
+    """Reject malformed/private extras even on an already-private record."""
+    try:
+        keys = {
+            "schema",
+            "authority",
+            "retry_authorized",
+            "method",
+            "endpoint_kind",
+            "sanitized_path",
+            "phase",
+            "remaining_seconds",
+            "request_elapsed_seconds",
+            "callback_elapsed_seconds",
+            "current_api_seconds",
+            "api_calls",
+            "completed_api_seconds",
+            "coding_waypoints",
+        }
+        if type(payload) is not dict or set(payload) not in (
+            keys,
+            keys | {"same_exception_as_callback"},
+        ):
+            return None
+        if (
+            payload["schema"] != "closer-read-deadline-diagnostic/v1"
+            or payload["authority"] is not False
+            or payload["retry_authorized"] is not False
+        ):
+            return None
+        if (
+            "same_exception_as_callback" in payload
+            and type(payload["same_exception_as_callback"]) is not bool
+        ):
+            return None
+        path = payload["sanitized_path"]
+        if type(path) is not str or len(path) > 256:
+            return None
+        candidate = path
+        for label in ("owner", "repo", "path", "ref", "login"):
+            candidate = candidate.replace("{" + label + "}", "safe")
+        if _safe_read_endpoint(payload["method"], candidate) != (
+            payload["method"],
+            payload["endpoint_kind"],
+            path,
+        ):
+            return None
+        if payload["phase"] not in {"before_throttle", "after_throttle"}:
+            return None
+        for key in (
+            "remaining_seconds",
+            "request_elapsed_seconds",
+            "callback_elapsed_seconds",
+            "current_api_seconds",
+            "completed_api_seconds",
+        ):
+            value = payload[key]
+            if (
+                type(value) not in (int, float)
+                or not math.isfinite(value)
+                or not (-3600 <= value < 2 if key == "remaining_seconds" else 0 <= value <= 3600)
+            ):
+                return None
+        if type(payload["api_calls"]) is not int or not 1 <= payload["api_calls"] <= 10000:
+            return None
+        points = payload["coding_waypoints"]
+        if type(points) is not list or len(points) > 3:
+            return None
+        for index, point in enumerate(points):
+            if (
+                type(point) is not dict
+                or set(point) != {"stage", "callback_elapsed_seconds", "api_calls", "api_seconds"}
+                or point["stage"] != ("coding_entry", "baseline_start", "baseline_end")[index]
+            ):
+                return None
+            if type(point["api_calls"]) is not int or not 0 <= point["api_calls"] <= 10000:
+                return None
+            if any(
+                type(point[k]) not in (int, float)
+                or not math.isfinite(point[k])
+                or not 0 <= point[k] <= 3600
+                for k in ("callback_elapsed_seconds", "api_seconds")
+            ):
+                return None
+        return _json_copy(payload)
+    except Exception:
+        return None
+
+
+class _ReadFailureEnvelope:
+    def __init__(self, error, operation, payload):
+        self.seal, self.error = _READ_DIAGNOSTIC_SEAL, error
+        self.operation = tuple(operation.get(k) for k in ("id", "request_started_at", "deadline"))
+        self.payload = _json_copy(payload)
+
+
+def _attach_read_failure(error):
+    """Only the existing queue context's exception exit may retain the diagnostic."""
+    try:
+        caller = inspect.currentframe().f_back
+        value = _read_timing()
+        if (
+            caller.f_code is not _callback_invocation.__wrapped__.__code__
+            or caller.f_globals is not globals()
+            or value is None
+            or value.failure is None
+        ):
+            return
+        payload = _validated_read_payload(value.failure)
+        if payload is None:
+            return
+        payload["same_exception_as_callback"] = value.error is error
+        error._closer_read_failure = _ReadFailureEnvelope(
+            error, value.current["operation"], payload
+        )
+    except Exception:
+        pass
+
+
+def _native_read_failure(error):
+    try:
+        import sys
+
+        source = sys.modules.get("dispatcher")
+        caller = inspect.currentframe().f_back
+        value = _read_timing()
+        if (
+            source is not None
+            and caller.f_code is source._CODING_DELIVERY_ATTEMPT_CODE
+            and caller.f_globals is source.__dict__
+            and caller.f_back is not None
+            and caller.f_back.f_code is source._CODING_DELIVERY_OFFLOAD_CODE
+            and caller.f_back.f_globals is source.__dict__
+            and value is not None
+            and value.error is error
+        ):
+            return _validated_read_payload(value.failure)
+    except Exception:
+        pass
+    return None
+
+
+def _queued_read_failure(error, operation):
+    try:
+        caller = inspect.currentframe().f_back
+        value = getattr(error, "_closer_read_failure", None)
+        if (
+            caller.f_code is run_round.__code__
+            and caller.f_globals is globals()
+            and type(value) is _ReadFailureEnvelope
+            and value.seal is _READ_DIAGNOSTIC_SEAL
+            and value.error is error
+            and value.operation
+            == tuple(operation.get(k) for k in ("id", "request_started_at", "deadline"))
+        ):
+            return _validated_read_payload(value.payload)
+    except Exception:
+        pass
+    return None
+
+
 @contextlib.contextmanager
 def _callback_invocation(target, operation, now, *, state_path=None):
     """Private live callback identity; never serialized or restored on restart."""
@@ -559,8 +925,20 @@ def _callback_invocation(target, operation, now, *, state_path=None):
         "state_path": str(Path(state_path).resolve()) if state_path is not None else None,
     }
     try:
+        _callback_threads.read_timing = (
+            _ReadTiming(_callback_threads.invocation)
+            if operation.get("action") == "correction_coding"
+            else None
+        )
+    except Exception:
+        _callback_threads.read_timing = None
+    try:
         yield
+    except BaseException as error:
+        _attach_read_failure(error)
+        raise
     finally:
+        del _callback_threads.read_timing
         del _callback_threads.invocation
 
 
@@ -2802,6 +3180,11 @@ def run_round(
                             "execute_uncertain",
                             error_type=type(exc).__name__,
                             **({"fixed_refusal": diagnostic} if diagnostic is not None else {}),
+                            **(
+                                {"read_only_deadline_diagnostic": read_diagnostic}
+                                if (read_diagnostic := _queued_read_failure(exc, op)) is not None
+                                else {}
+                            ),
                         )
                         if result_persist_failed:
                             # Durable control-plane failures are fatal, not provider

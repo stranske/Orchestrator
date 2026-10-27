@@ -644,9 +644,11 @@ def _execute(root, controller, operation):
     import closer_coding_session_runtime as runtime
     import closer_coding_session_v2 as session
     import closer_correction_controller as ctl
+    import closer_queue as queue
     import closer_resources as resources
     import dispatcher
 
+    queue._coding_timing_point("coding_entry")
     root.check()
     purpose = root.purpose
     consumer = controller.config.consumers.get(purpose["consumer_id"])
@@ -712,9 +714,11 @@ def _execute(root, controller, operation):
                 + ctl.canonical(payload).decode()
             )
             if publication_policy is not None:
+                queue._coding_timing_point("baseline_start")
                 publication_baseline_ref = publication.retain_baseline(
                     root, controller, guard.custody, operation
                 )
+                queue._coding_timing_point("baseline_end")
             try:
                 timeout = request_seconds(
                     root.installation.request_timeout_seconds,

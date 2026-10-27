@@ -1874,40 +1874,50 @@ class GitHub:
         return self.api(endpoint, _text=True)
 
     def api(self, endpoint, *, method="GET", fields=None, resource="core", _text=False):
-        remaining = self.deadline - time.time()
-        if remaining < 2:
-            raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
-        throttle = gh_capacity.throttle(resource, allow_wait_s=min(2, remaining))
-        if throttle.get("action") == "defer":
-            raise RoundCapacityDeferred(
-                resource=resource, throttle=throttle, observed_at=time.time()
+        import closer_queue
+
+        read_call = closer_queue._read_timing_start(method, endpoint)
+        try:
+            remaining = self.deadline - time.time()
+            if remaining < 2:
+                error = RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
+                closer_queue._read_deadline_failure(read_call, error, remaining, "before_throttle")
+                raise error
+            throttle = gh_capacity.throttle(resource, allow_wait_s=min(2, remaining))
+            if throttle.get("action") == "defer":
+                raise RoundCapacityDeferred(
+                    resource=resource, throttle=throttle, observed_at=time.time()
+                )
+            remaining = self.deadline - time.time()
+            if remaining < 2:
+                error = RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
+                closer_queue._read_deadline_failure(read_call, error, remaining, "after_throttle")
+                raise error
+            args = ["api", "--method", method, endpoint]
+            for key, value in (fields or {}).items():
+                args += ["-f", f"{key}={value}"]
+            rc, doc = self.api_fn(
+                args,
+                resource=resource,
+                timeout_s=max(1, min(25, int(remaining))),
+                **({"raw_body": True} if _text else {}),
             )
-        remaining = self.deadline - time.time()
-        if remaining < 2:
-            raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
-        args = ["api", "--method", method, endpoint]
-        for key, value in (fields or {}).items():
-            args += ["-f", f"{key}={value}"]
-        rc, doc = self.api_fn(
-            args,
-            resource=resource,
-            timeout_s=max(1, min(25, int(remaining))),
-            **({"raw_body": True} if _text else {}),
-        )
-        is_dispatch = method == "POST" and endpoint.endswith(
-            "/actions/workflows/agents-verifier.yml/dispatches"
-        )
-        if is_dispatch and rc and isinstance(doc, dict) and str(doc.get("status")) == "422":
-            raise GitHubNoEffectRejected("GitHub rejected verifier dispatch inputs (HTTP 422)")
-        if is_dispatch and not rc and doc is None:
-            return {"accepted": True}  # workflow_dispatch returns 204 without a body.
-        if (
-            rc
-            or not isinstance(doc, str if _text else (dict, list))
-            or (isinstance(doc, dict) and doc.get("errors"))
-        ):
-            raise RuntimeError(f"GitHub outcome unknown: {method} {endpoint}: {str(doc)[:400]}")
-        return doc
+            is_dispatch = method == "POST" and endpoint.endswith(
+                "/actions/workflows/agents-verifier.yml/dispatches"
+            )
+            if is_dispatch and rc and isinstance(doc, dict) and str(doc.get("status")) == "422":
+                raise GitHubNoEffectRejected("GitHub rejected verifier dispatch inputs (HTTP 422)")
+            if is_dispatch and not rc and doc is None:
+                return {"accepted": True}  # workflow_dispatch returns 204 without a body.
+            if (
+                rc
+                or not isinstance(doc, str if _text else (dict, list))
+                or (isinstance(doc, dict) and doc.get("errors"))
+            ):
+                raise RuntimeError(f"GitHub outcome unknown: {method} {endpoint}: {str(doc)[:400]}")
+            return doc
+        finally:
+            closer_queue._read_timing_finish(read_call)
 
     def snapshot(self, target):
         repo, num = target.split("#")
