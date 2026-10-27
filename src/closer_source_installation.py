@@ -527,7 +527,7 @@ def _coding_snapshot_membership(value, manifest, context, state):
             record["controller_config_sha256"] == _digest(value["config"])
             and record["manifest_path"] == value["manifest_path"]
             and record["manifest_sha256"] == value["manifest_sha256"]
-            and record["source_closure_sha256"] == _digest(value["source_closure"]),
+            and record["source_closure_sha256"] == ctl.digest(value["source_closure"]),
             "coding installation original source binding differs",
         )
         native._validate_coding_selector(
