@@ -120,12 +120,15 @@ Local Python 3.14.8 validation with pytest 9.1.1 from cached wheels:
   repository-wide command then passed with that cache. Formatter code and rules
   were unchanged. `git diff --check` also passed.
 
-This runner could not stage the follow-up: `git add` failed because `.git/index.lock`
-is on a read-only filesystem. The GitHub connector also refused both the requested
-`needs-human` label and blocker comment because those mutations require approval
-and the current approval policy is `never`. The test change remains uncommitted;
-publication requires a runner with writable Git metadata. PR #982 was verified open
-and ready for review (`isDraft=false`) at head `6547309`.
+The implementation runner initially could not stage the follow-up: `git add`
+failed because `.git/index.lock` was on a read-only filesystem. Its GitHub connector
+also refused the requested label and comment mutations under its approval policy.
+These are historical runner failures, not a current publication blocker: the hosted
+commit-and-push step subsequently published the follow-up in
+`177bbf08207b5eaad3d0ab0fb3e330a8fd05c3c0`. PR #982 is open and ready for review
+(`isDraft=false`) at that revision.
 
-The hosted green checks above validate the preceding head, not this test follow-up.
-CI, delayed review, guarded merge, and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. Source #978 remains open. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
+The linked green checks above validate preceding head `6547309`. Current-head
+checks were independently green at the opener's 2026-10-27 review of `177bbf08`;
+this documentation correction starts a new CI and delayed-review cycle. Guarded
+merge and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. Source #978 remains open. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
