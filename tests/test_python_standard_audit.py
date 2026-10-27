@@ -8,6 +8,7 @@ import plistlib
 import subprocess
 
 import pytest
+from test_closer_native_observer import host as host
 
 import python_standard_audit as audit
 import switch_review
@@ -40,7 +41,7 @@ def test_cursor_closer_native_entry_not_refused_line(tmp_path):
                 "unrelated output",
                 '{"launcher": "refused"}',
                 '{"launcher": "refused"}',
-                '{"launcher": "completed"}',
+                '{"launcher": "refused"}',
             ]
         )
         + "\n"
@@ -48,9 +49,19 @@ def test_cursor_closer_native_entry_not_refused_line(tmp_path):
 
     refused = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
     assert switch_review.format_cursor_closer_native_entry(refused) == (
-        "Cursor closer native entry: refused 2/3 launcher results; "
+        "Cursor closer native entry: refused 3/3 launcher results; "
         "pinned-vs-current automation.toml hash mismatches 0 (none)"
     )
+    original_closer = closer.read_bytes()
+    original_controller = controller.read_bytes()
+    closer.write_text('model = "changed-closer"\n')
+    controller.write_text('model = "changed-controller"\n')
+    mismatched = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    mismatch_line = switch_review.format_cursor_closer_native_entry(mismatched)
+    assert "refused 3/3 launcher results" in mismatch_line
+    assert "hash mismatches 2" in mismatch_line
+    assert "imi-merge-verify-closer/automation.toml" in mismatch_line
+    assert "reviewed-repo-automation-controller/automation.toml" in mismatch_line
     rendered = switch_review.format_report(
         {
             "review_days": 7,
@@ -60,14 +71,23 @@ def test_cursor_closer_native_entry_not_refused_line(tmp_path):
             "unconditioned": [],
             "mirror_drift": {"status": "ok"},
             "python_standard": {},
-            "cursor_closer_native_entry": refused,
+            "cursor_closer_native_entry": mismatched,
         }
     )
     assert rendered.count("Cursor closer native entry:") == 1
     assert rendered.index("Python standard:") < rendered.index("Cursor closer native entry:")
+    assert mismatch_line in rendered
 
     # This concrete M>0 input is the latched-gate Q4 proof for the distinct drained wording.
     log.write_text('{"launcher": "completed"}\n{"launcher": "completed"}\n')
+    still_mismatched = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    mismatch_line = switch_review.format_cursor_closer_native_entry(still_mismatched)
+    assert "refused 0/2 launcher results" in mismatch_line
+    assert "hash mismatches 2" in mismatch_line
+    assert "drained" not in mismatch_line
+
+    closer.write_bytes(original_closer)
+    controller.write_bytes(original_controller)
     drained = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
     drained_line = switch_review.format_cursor_closer_native_entry(drained)
     assert drained_line == (
@@ -83,6 +103,67 @@ def test_cursor_closer_native_entry_not_refused_line(tmp_path):
         "pinned-vs-current automation.toml hash mismatches 0 (none)"
     )
     assert "refused 0/" not in unreadable_line
+
+
+@pytest.mark.parametrize("manifest_contents", [None, "invalid json", "[]", "{}"])
+def test_cursor_closer_cannot_drain_without_readable_policy_pins(tmp_path, manifest_contents):
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+    manifest = tmp_path / "host-manifest.json"
+    if manifest_contents is not None:
+        manifest.write_text(manifest_contents)
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+    assert "refused 0/1 launcher results" in line
+    assert "hashes cannot read" in line
+    assert "drained" not in line
+
+
+def test_cursor_closer_native_status_refuses_changed_pin_then_recovers(host, tmp_path):
+    manifest, manifest_path, _ = host
+    original = manifest_path.read_bytes()
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+    command = [
+        manifest["runtime"]["python"],
+        manifest["launcher"]["path"],
+        "native-status",
+        "--manifest",
+        str(manifest_path),
+    ]
+
+    healthy = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+    assert json.loads(healthy.stdout).get("launcher") != "refused"
+    assert "drained" in switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest_path)
+    )
+
+    pinned_path = next(path for path in manifest["policy"]["toml_sha256"] if "imi-merge" in path)
+    try:
+        manifest["policy"]["toml_sha256"][pinned_path] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest))
+        broken = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        assert broken.returncode == 78, broken.stdout + broken.stderr
+        result = json.loads(broken.stdout)
+        assert result["launcher"] == "refused"
+        assert "configured policy changed since host pin" in str(result["problems"])
+        line = switch_review.format_cursor_closer_native_entry(
+            switch_review.cursor_closer_native_entry_snapshot(log, manifest_path)
+        )
+        assert "hash mismatches 1 (imi-merge-verify-closer/automation.toml)" in line
+        assert "drained" not in line
+    finally:
+        manifest_path.write_bytes(original)
+
+    restored = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert json.loads(restored.stdout).get("launcher") != "refused"
+    line = switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest_path)
+    )
+    assert "drained: refused 0/1" in line
+    assert "hash mismatches 0 (none)" in line
 
 
 @pytest.fixture

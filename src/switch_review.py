@@ -2218,7 +2218,11 @@ def format_cursor_closer_native_entry(report: dict) -> str:
     elif report.get("launcher_results") == 0:
         launcher = "unmeasured — no launcher results"
     elif report.get("refused") == 0:
-        launcher = f"drained: refused 0/{report['launcher_results']} launcher results"
+        # Historical successes cannot drain a gate whose current policy pins have drifted.
+        drained = not report.get("hash_error") and report.get("hash_mismatch_count") == 0
+        launcher = ("drained: " if drained else "") + (
+            f"refused 0/{report['launcher_results']} launcher results"
+        )
     elif report.get("launcher_results") is None or report.get("refused") is None:
         launcher = "cannot read launcher log (no snapshot)"
     else:
