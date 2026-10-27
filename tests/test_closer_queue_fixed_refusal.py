@@ -163,3 +163,33 @@ def test_missing_controller_registry_omits_diagnostic(monkeypatch):
     except ctl.ControllerUnknown as error:
         monkeypatch.setitem(sys.modules, "closer_correction_controller", SimpleNamespace())
         assert queue._fixed_controller_refusal(error) is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["credential-secret-never-export", "x" * 200, "line\nbreak", {"secret": "never stringify"}],
+)
+def test_dynamic_registered_guard_retains_stage_not_message(payload):
+    value = capture(lambda: ctl.IndexController._physical_state("relative", payload))
+    assert value["stage"] == "IndexController._physical_state"
+    assert value["line"] > 0 and value["module"] == "closer_correction_controller"
+    assert value["fixed_reason"] == "UNCLASSIFIED_SOURCE_REFUSAL"
+    assert value["reason_kind"] == "stage_only"
+    assert not value["authority"] and not value["retry_authorized"]
+    assert "secret" not in json.dumps(value) and "line\nbreak" not in json.dumps(value)
+
+
+def test_dynamic_stage_survives_actual_queue_catch_without_secret(tmp_path):
+    path = tmp_path / "queue.json"
+
+    def execute(*_):
+        ctl.IndexController._physical_state("relative", "credential-secret-never-export")
+
+    _run(path, ["org/repo#1"], lambda _: _snapshot("same", "merge"), execute, owner="round-1")
+    raw = path.read_text()
+    assert "credential-secret-never-export" not in raw
+    state = json.loads(raw)
+    event = next(e for e in state["round"]["events"] if e["kind"] == "execute_uncertain")
+    assert event["fixed_refusal"]["stage"] == "IndexController._physical_state"
+    assert event["fixed_refusal"]["reason_kind"] == "stage_only"
+    assert state["items"]["org/repo#1"]["operation"]["status"] == "uncertain"

@@ -1444,17 +1444,13 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
 
 
 def _fixed_controller_refusal(error):
-    """Literal-only diagnostic; never authority or an exception-text exporter."""
+    """Fixed literal or registered stage only; never an exception-text exporter."""
     import sys
 
     controller = sys.modules.get("closer_correction_controller")
     if controller is None or type(error) is not getattr(controller, "ControllerUnknown", None):
         return None
-    if len(error.args) != 1 or type(error.args[0]) is not str:
-        return None
-    reason = error.args[0]
-    if not 0 < len(reason) <= 160 or any(ord(char) < 32 for char in reason):
-        return None
+    reason = error.args[0] if len(error.args) == 1 and type(error.args[0]) is str else None
     try:
         codes = set()
         for value in list(vars(controller).values()):
@@ -1482,19 +1478,22 @@ def _fixed_controller_refusal(error):
             if len(frames) < 2:
                 return None
             frame, line = frames[-2]
-        if (
-            frame.f_code not in codes
-            or frame.f_globals is not controller.__dict__
-            or reason not in frame.f_code.co_consts
-        ):
+        if frame.f_code not in codes or frame.f_globals is not controller.__dict__:
             return None
+        literal = (
+            type(reason) is str
+            and 0 < len(reason) <= 160
+            and not any(ord(char) < 32 for char in reason)
+            and reason in frame.f_code.co_consts
+        )
         return {
             "schema": "closer-fixed-controller-refusal/v1",
             "error_type": "ControllerUnknown",
             "module": controller.__name__,
             "stage": frame.f_code.co_qualname,
             "line": line,
-            "fixed_reason": reason,
+            "fixed_reason": reason if literal else "UNCLASSIFIED_SOURCE_REFUSAL",
+            "reason_kind": "source_literal" if literal else "stage_only",
             "authority": False,
             "retry_authorized": False,
         }
