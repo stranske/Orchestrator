@@ -35,8 +35,12 @@ Resolver = Callable[[str, str, bool, Path], Resolution]
 
 def expand(value: str, home: Path, path: str) -> str:
     """Expand only the two known variables; never evaluate shell input."""
-    for name, replacement in (("HOME", str(home)), ("PATH", path)):
-        value = value.replace("${" + name + "}", replacement).replace("$" + name, replacement)
+    known = {"HOME": str(home), "PATH": path}
+    value = re.sub(
+        r"\$(?:\{(HOME|PATH)\}|(HOME|PATH)(?!\w))",
+        lambda match: known[match[1] or match[2]],
+        value,
+    )
     if value.startswith("~/"):
         value = str(home / value[2:])
     return value
@@ -65,7 +69,7 @@ def resolve_python(command: str, path: str, login: bool, home: Path) -> Resoluti
         raise ValueError("command lookup did not return one absolute executable")
     shims = {home / ".codex/python-bin/python3", home / ".codex/bin/python3"}
     if Path(executable) in shims:
-        if "standard-python" not in Path(executable).read_text():
+        if "standard-python" not in Path(executable).read_text(encoding="utf-8"):
             raise ValueError(f"unrecognized shared shim {executable}")
         executable = run([str(home / ".codex/bin/standard-python")])
         if not Path(executable).is_absolute() or "\n" in executable:
@@ -298,12 +302,12 @@ def inspect_job(job: dict, *, home: Path, resolver: Resolver) -> dict:
                 raise ValueError(f"absolute entry script or WorkingDirectory for {entry}")
             script = Path(working) / script
         # Python source is not shell. Its shebang matters only for direct execution.
-        text = script.read_text()
+        text = script.read_text(encoding="utf-8")
         shebang = shlex.split(text.splitlines()[0][2:]) if text.startswith("#!") else []
         if script.suffix == ".py" or any(PYTHON.fullmatch(token) for token in shebang):
             if refs:
                 text = "\n".join(text.splitlines()[1:]) if text.startswith("#!") else text
-            else:
+            elif text.startswith("#!"):
                 refs.extend(references(text.splitlines()[0] if text else "", path, home))
             # Hard-coded paths/standard selectors in source still belong to the audit.
             refs.extend(references(text, path, home, shell=False))
