@@ -116,9 +116,9 @@ def test_unrelated_completed_real_round_preserves_original_ci_no_effect_proof(
     # remains a global barrier. Each read must preserve the original bytes.
     for status in ["submitted", "running", "uncertain", "unknown"]:
         changed = copy.deepcopy(document)
-        changed["frontiers"][frontier["frontier_id"]]["items"][target]["operation"]["status"] = (
-            status
-        )
+        changed["frontiers"][frontier["frontier_id"]]["items"][target]["operation"][
+            "status"
+        ] = status
         path.write_text(json.dumps(changed))
         blocked_bytes = path.read_bytes()
         with pytest.raises(queue.QueueStateError, match="unresolved outcome"):

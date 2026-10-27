@@ -40,7 +40,10 @@ def _wait_actual_exit(pid: int, *, seconds: float = 15) -> None:
             try:
                 state = subprocess.run(
                     ["ps", "-o", "stat=", "-p", str(pid)],
-                    capture_output=True, text=True, check=False, timeout=1,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=1,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 pass

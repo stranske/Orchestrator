@@ -39,7 +39,10 @@ def test_offline_measurement_cli_preserves_unknowns_and_labels_fixture_values(tm
     assert result.returncode == 0, result.stderr
     report = json.loads(output.read_text())
     assert report["evidence_kind"] == "synthetic_fixture"
-    assert report["remaining_measurements"]["escalation_acknowledgment"] == "requires installed delivery/ack-window receipts joined to the exact hold"
+    assert (
+        report["remaining_measurements"]["escalation_acknowledgment"]
+        == "requires installed delivery/ack-window receipts joined to the exact hold"
+    )
     summary = report["summary"]
     assert summary["observed_branches"] == {
         "denominator": 5,

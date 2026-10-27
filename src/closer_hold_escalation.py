@@ -649,7 +649,11 @@ def preserve_assignment(manifest_path: str, controller_root: str, assignment: di
         raise ValueError("malformed escalation journal")
     for key, row in rows.items():
         if not isinstance(row.get("request"), dict) or row.get("status") not in {
-            "confirmed_not_started", "outcome_unknown", "delivered", "acknowledged", "ack_overdue"
+            "confirmed_not_started",
+            "outcome_unknown",
+            "delivered",
+            "acknowledged",
+            "ack_overdue",
         }:
             raise ValueError("malformed escalation journal")
         _row(key, row)

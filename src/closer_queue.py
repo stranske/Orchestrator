@@ -1036,7 +1036,11 @@ def _require_ci_no_effect_history(document, *, selected=True):
             for key, child in value.items():
                 if selected and key == "operation" and child is not None:
                     raise QueueStateError("CI wait contains operation history")
-                if selected and key in {"operation_history", "action_history"} and child not in (None, []):
+                if (
+                    selected
+                    and key in {"operation_history", "action_history"}
+                    and child not in (None, [])
+                ):
                     raise QueueStateError("CI wait contains operation history")
                 if key in {
                     "provider_outcome_uncertain",
@@ -1049,8 +1053,10 @@ def _require_ci_no_effect_history(document, *, selected=True):
                 if (
                     key == "status"
                     and isinstance(child, str)
-                    and (child in PENDING_OPERATION_STATES | {"unknown"}
-                         or (selected and child in {"completed", "complete"}))
+                    and (
+                        child in PENDING_OPERATION_STATES | {"unknown"}
+                        or (selected and child in {"completed", "complete"})
+                    )
                 ):
                     raise QueueStateError("CI wait contains completed or unresolved outcome")
                 pending.append(child)
