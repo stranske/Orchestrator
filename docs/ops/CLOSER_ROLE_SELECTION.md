@@ -140,3 +140,10 @@ unchanged. Old model observations/packets are not rebound or regraded.
 Terra, Muse and Cursor bindings remain null; runtime role records stay empty,
 and Cursor diagnostic receiving enforcement remains required before binding.
 Source preparation and a quality-scope category are not runtime enrollment.
+
+The exact typed-v2 assessment has no optional producer-drift-audit carrier.
+The controller reports `audit_unavailable_current_contract`, preserves ordinary
+per-PR interpretation independently, and does not invalidate its evidence cache
+or buy another model turn for that unsupported audit. It issues no audit
+completion timestamp or new producer-audit credit. Prior genuine audit receipts
+remain historical; all current source/packet/identity and action guards still apply.

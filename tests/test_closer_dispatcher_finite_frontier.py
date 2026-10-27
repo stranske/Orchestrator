@@ -43,9 +43,10 @@ def install_inert_native_transport(w, world, monkeypatch):
                     deadline=time.time(),
                 ):
                     pytest.fail("native reasoning did not hold the real shared pool")
-        return caller.response(
-            {"exit": 0, "output": json.dumps(w.response)}, agent, prompt, **kwargs
-        )
+        from test_closer_reasoning_boundary import declared_report_assessment
+
+        response = declared_report_assessment(prompt, w.response, w.snapshot)
+        return caller.response({"exit": 0, "output": json.dumps(response)}, agent, prompt, **kwargs)
 
     monkeypatch.setattr(offload_dispatcher, "offload", provider)
     return caller

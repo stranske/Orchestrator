@@ -92,7 +92,8 @@
     "tests/test_closer_semantic_required_followup_scope.py",
     "tests/test_closer_semantic_role_receiving.py",
     "tests/test_closer_semantic_strong_role_view.py",
-    "tests/test_closer_typed_semantic_broker_fixture.py"
+    "tests/test_closer_typed_semantic_broker_fixture.py",
+    "tests/test_closer_optional_audit_deferral.py"
   ],
   "shards": [
     [
@@ -688,7 +689,8 @@
       "tests/test_closer_semantic_required_followup_scope.py",
       "tests/test_closer_semantic_role_receiving.py",
       "tests/test_closer_semantic_strong_role_view.py",
-      "tests/test_closer_typed_semantic_broker_fixture.py"
+      "tests/test_closer_typed_semantic_broker_fixture.py",
+      "tests/test_closer_optional_audit_deferral.py"
     ]
   ]
 }

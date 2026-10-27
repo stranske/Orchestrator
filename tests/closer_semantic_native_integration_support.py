@@ -37,5 +37,24 @@ def integrated_reference(base):
     if dispatcher is not None:
         dispatcher["top_level_ast"] = current["top_level_ast"]
         dispatcher["unreserved_pipeline_ast_sha256"] = current["unreserved_pipeline_ast_sha256"]
-        dispatcher["nested_pipeline_ast"] = current["nested_pipeline_ast"]
+        dispatcher["nested_pipeline_ast"] = copy.deepcopy(current["nested_pipeline_ast"])
+        # A separate pinned prospective audit covers ONLY the now unsupported
+        # optional-audit job/cache changes; original7488 data stays immutable.
+        deferred = audit_deferral_reference()
+        dispatcher["nested_pipeline_ast"]["prepare"] = deferred["after_prepare_ast_sha256"]
+        dispatcher["unreserved_pipeline_ast_sha256"] = deferred[
+            "after_unreserved_pipeline_ast_sha256"
+        ]
     return original
+
+
+AUDIT_DEFERRAL_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/optional_audit_deferral_v1.json"
+)
+AUDIT_DEFERRAL_SHA256 = "6fa689b6f2677979ef29483bed8d4c7545f0fec97000ad1ce9d5fa1b69d6afc1"
+
+
+def audit_deferral_reference():
+    raw = AUDIT_DEFERRAL_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == AUDIT_DEFERRAL_SHA256
+    return json.loads(raw)

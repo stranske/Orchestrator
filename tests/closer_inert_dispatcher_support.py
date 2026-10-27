@@ -1080,16 +1080,18 @@ class InertCaller:
         if native_mode is not None:
             return result
         assert result["exit"] == 0, result
+        canonical, followup = semantic.adjudication_candidate(
+            closer._worker_proposal(result, agent="claude"),
+            snapshot=snap,
+            packet=packet,
+            packet_ref=ref,
+            retained_dir=root,
+            expected_catalog_sha256=semantic.catalog_digest(inventory),
+        )
+        canonical["semantic_followup"] = followup
         return {
             "actual": closer._worker_actual(result),
-            "proposal": semantic.materialize(
-                closer._worker_proposal(result, agent="claude"),
-                snapshot=snap,
-                packet=packet,
-                packet_ref=ref,
-                retained_dir=root,
-                expected_catalog_sha256=semantic.catalog_digest(inventory),
-            ),
+            "proposal": canonical,
             "requested_agent": "claude",
             "requested_profile": LOW,
             "substantive_needs": [],

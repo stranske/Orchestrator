@@ -6480,7 +6480,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if backend.assignment_rows.get(t, {}).get("execution_state") in {None, "active"}
     ]
     drift_candidate = min(audit_targets) if audit_targets else None
-    audit_generation = int(time.time())
 
     def previous_preparations(target):
         history = (
@@ -7240,21 +7239,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             else []
         )
         semantic_cache_key = packet.get("semantic_cache_key")
-        # Stable evidence keys permit ordinary interpretation reuse. A due semantic
-        # audit intentionally changes only one target's key per invocation, so the
-        # sampled audit cannot be swallowed by that cache or fan out to the fleet.
+        # The current typed-v2 contract cannot carry the optional producer audit.
+        # Keep its due marker for honest deferral, but never invalidate an otherwise
+        # reusable per-PR assessment merely to request unsupported audit work.
         audit_due = target == drift_candidate and (
             not latest_drift
             or latest_drift.get("producer_sha256") != packet.get("producer_sha256")
             or time.time() - float(latest_drift.get("drift_review_at", 0) or 0) >= 24 * 3600
         )
-        if audit_due and isinstance(semantic_cache_key, str):
-            semantic_cache_key = (
-                "closer-evidence-semantic/v1:"
-                + hashlib.sha256(
-                    f"{semantic_cache_key}:drift:{audit_generation}".encode()
-                ).hexdigest()
-            )
         compact_sections = {}
         for name, section in packet.get("sections", {}).items():
             compact_sections[name] = {
@@ -7961,11 +7953,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         )
         run_drift = False
         drift_deferred_for_budget = False
-        with drift_lock:
-            nonlocal drift_claimed
-            if drift_due and not drift_claimed and not collection_mode:
-                drift_claimed = True
-                run_drift = True
+        # The exact typed-v2 carrier has no producer-audit fields. Do not ask
+        # this assessment to perform an unsupported optional second job, spend
+        # another model turn, or manufacture audit completion/timestamps.
+        nonlocal drift_claimed
+        audit_unavailable_current_contract = drift_due
         drift_cases = packet.get("drift_sample", []) if isinstance(packet, dict) else []
         drift_sections = {}
         if run_drift:
@@ -8486,7 +8478,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "status": (
                 ("complete" if valid and drift_complete else "pending")
                 if run_drift
-                else ("deferred_prompt_budget" if drift_deferred_for_budget else "not_due")
+                else (
+                    "audit_unavailable_current_contract"
+                    if audit_unavailable_current_contract
+                    else ("deferred_prompt_budget" if drift_deferred_for_budget else "not_due")
+                )
             ),
             "producer_sha256": producer_sha,
             "summary": None,
