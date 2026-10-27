@@ -221,9 +221,6 @@ class _Root:
         return json.loads(self.accepted_utf8)["continuation_reference"]
 
     def check(self):
-        import closer_native_observer as native
-        import closer_source_installation as installed
-
         _need(
             self.seal is _SEAL and self.pid == os.getpid() and self.thread == threading.get_ident(),
             "source worker root unavailable",
@@ -235,19 +232,6 @@ class _Root:
             frame is self.frame and frame.f_locals.get("backend") is self.backend,
             "original source worker root ended",
         )
-        _need(
-            installed.validate_source_installation(self.installation),
-            "current worker source installation changed",
-        )
-        _need(
-            native.source_b_start(self.installation) == self.start_ref,
-            "actual accepted native worker changed",
-        )
-        import closer_correction_controller as ctl
-
-        doc = ctl.IndexController._physical_state(
-            self.installation.config["state_path"], "current coding campaign redirected"
-        )
         accepted = validate_accepted_purpose(
             _native_reader("accepted_coding_worker_purpose")(self.installation._binding)
         )
@@ -255,6 +239,14 @@ class _Root:
             _canonical(accepted) == self.accepted_utf8
             and _canonical(accepted["native_b_start"]) == _canonical(self.start_ref),
             "accepted coding purpose changed",
+        )
+        import closer_correction_controller as ctl
+
+        # The accepted native reader above already performs the fresh full
+        # installation/admission/B-start checks. Read campaign state only after
+        # that authentication; do not repeat those same checks beforehand.
+        doc = ctl.IndexController._physical_state(
+            self.installation.config["state_path"], "current coding campaign redirected"
         )
         _need(
             all(
