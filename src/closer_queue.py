@@ -1027,16 +1027,16 @@ def validate_stop(
         )
 
 
-def _require_ci_no_effect_history(document):
+def _require_ci_no_effect_history(document, *, selected=True):
     """A CI read wait is not proof that an earlier operation never executed."""
     pending = [document]
     while pending:
         value = pending.pop()
         if isinstance(value, Mapping):
             for key, child in value.items():
-                if key == "operation" and child is not None:
+                if selected and key == "operation" and child is not None:
                     raise QueueStateError("CI wait contains operation history")
-                if key in {"operation_history", "action_history"} and child not in (None, []):
+                if selected and key in {"operation_history", "action_history"} and child not in (None, []):
                     raise QueueStateError("CI wait contains operation history")
                 if key in {
                     "provider_outcome_uncertain",
@@ -1049,15 +1049,8 @@ def _require_ci_no_effect_history(document):
                 if (
                     key == "status"
                     and isinstance(child, str)
-                    and child
-                    in {
-                        "unknown",
-                        "uncertain",
-                        "running",
-                        "submitted",
-                        "completed",
-                        "complete",
-                    }
+                    and (child in PENDING_OPERATION_STATES | {"unknown"}
+                         or (selected and child in {"completed", "complete"}))
                 ):
                     raise QueueStateError("CI wait contains completed or unresolved outcome")
                 pending.append(child)
@@ -1080,10 +1073,11 @@ def _ci_wait_proof_data(document, target, *, frontier, receipt, evidence, now_va
         and evidence.get("observed_revision") == frontier["bindings"][target]["revision"]
     ):
         raise QueueStateError("CI wait evidence identity is incomplete")
-    _require_ci_no_effect_history(document)
+    _require_ci_no_effect_history(document, selected=False)
     selected = state_for_frontier(document, frontier["frontier_id"], expected_policy=frontier)
     if selected is None or selected["round"].get("receipt") != receipt:
         raise QueueStateError("CI wait original receipt differs")
+    _require_ci_no_effect_history({"items": selected["items"], "round": selected["round"]})
     checked = _validate_data(
         selected, receipt, assignment_targets=[target], now_value=now_value, holder_fn=claims.holder
     )
