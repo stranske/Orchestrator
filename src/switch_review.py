@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -69,6 +70,12 @@ import python_standard_audit
 CURSOR_CLOSER_LOG = Path.home() / ".codex/automations/logs/cursor-closer.out"
 CURSOR_LANE_WRAPPER = Path.home() / ".codex/bin/cursor-lane.sh"
 _CURSOR_MANIFEST_RE = re.compile(r"--manifest\s+(?:'([^']+)'|\"([^\"]+)\"|(\S+))")
+_CURSOR_POLICY_PINS = frozenset(
+    {
+        "imi-merge-verify-closer/automation.toml",
+        "reviewed-repo-automation-controller/automation.toml",
+    }
+)
 
 # How long a switch may sit unreviewed before the question comes back.
 REVIEW_DAYS = 7
@@ -2145,6 +2152,52 @@ def _cursor_closer_manifest_path(wrapper_path: Path) -> Path:
     return Path(next(part for part in match.groups() if part is not None))
 
 
+def _cursor_closer_native_successes(manifest: dict) -> tuple[int, int | None]:
+    """Count authenticated successful entries for this exact retained package binding."""
+    import closer_mechanisms
+
+    contract = manifest["mechanism_contract"]
+    root = Path(contract["observation_root"])
+    if not root.is_absolute() or root.resolve() != root or not root.is_dir():
+        raise ValueError("native observation root is not a canonical directory")
+    expected_binding = {
+        "mechanism": closer_mechanisms.NATIVE,
+        "mechanism_contract_digest": closer_mechanisms.digest(contract),
+        "policy_digest": closer_mechanisms.digest(manifest["policy"]),
+        **{key: manifest.get(key) for key in closer_mechanisms.PIN_KEYS},
+    }
+    key = closer_mechanisms._key(root)
+    successes = []
+    for terminal in root.glob("*/terminal.json"):
+        if (
+            terminal.is_symlink()
+            or terminal.resolve() != terminal
+            or terminal.parent.parent != root
+            or not re.fullmatch(r"[0-9a-f]{32}", terminal.parent.name)
+        ):
+            raise ValueError("native terminal receipt path is invalid")
+        signed = json.loads(terminal.read_text(encoding="utf-8"))
+        record = signed["record"]
+        if not hmac.compare_digest(
+            signed["signature"], closer_mechanisms._signature(record, key)
+        ):
+            raise ValueError("native terminal receipt signature differs")
+        if record.get("binding") != expected_binding:
+            continue
+        if (
+            record.get("schema") == "native-wrapper-lifecycle/v1"
+            and record.get("kind") == "native-wrapper-invocation"
+            and record.get("passed") is True
+        ):
+            started = record.get("entry", {}).get("started")
+            if not isinstance(started, str):
+                raise ValueError("native terminal receipt has no signed entry timestamp")
+            successes.append(
+                int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp() * 1e9)
+            )
+    return len(successes), max(successes, default=None)
+
+
 def cursor_closer_native_entry_snapshot(
     log_path: Path | str | None = None,
     manifest_path: Path | str | None = None,
@@ -2164,10 +2217,17 @@ def cursor_closer_native_entry_snapshot(
         "log_path": str(log),
         "launcher_results": None,
         "refused": None,
+        "log_mtime_ns": None,
         "log_error": None,
         "manifest_path": None,
+        "successes_seen": None,
+        "last_success_mtime_ns": None,
+        "success_error": None,
+        "refused_since_success": None,
+        "results_since_success": None,
         "hash_mismatch_count": None,
         "hash_mismatches": [],
+        "pin_set_error": None,
         "hash_error": None,
     }
 
@@ -2183,7 +2243,11 @@ def cursor_closer_native_entry_snapshot(
                     continue
                 launcher_results += 1
                 refused += row.get("launcher") == "refused"
-        report.update(launcher_results=launcher_results, refused=refused)
+        report.update(
+            launcher_results=launcher_results,
+            refused=refused,
+            log_mtime_ns=log.stat().st_mtime_ns,
+        )
     except OSError as exc:
         report["log_error"] = type(exc).__name__
 
@@ -2199,15 +2263,38 @@ def cursor_closer_native_entry_snapshot(
         pins = payload["policy"]["toml_sha256"]
         if not isinstance(pins, dict) or not pins:
             raise ValueError("manifest policy.toml_sha256 is empty")
-        mismatches = []
-        for filename, pinned in sorted(pins.items()):
-            current = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
-            if current != pinned:
-                path = Path(filename)
-                mismatches.append(f"{path.parent.name}/{path.name}")
-        report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
+        named_pins = {f"{Path(name).parent.name}/{Path(name).name}" for name in pins}
+        if len(pins) != 2 or named_pins != _CURSOR_POLICY_PINS:
+            report["pin_set_error"] = {
+                "missing": sorted(_CURSOR_POLICY_PINS - named_pins),
+                "unexpected": sorted(named_pins - _CURSOR_POLICY_PINS),
+            }
+        else:
+            mismatches = []
+            for filename, pinned in sorted(pins.items()):
+                current = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
+                if current != pinned:
+                    path = Path(filename)
+                    mismatches.append(f"{path.parent.name}/{path.name}")
+            report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
+        try:
+            successes, latest = _cursor_closer_native_successes(payload)
+            report.update(successes_seen=successes, last_success_mtime_ns=latest)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            report["success_error"] = type(exc).__name__
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
         report["hash_error"] = type(exc).__name__
+        report["success_error"] = type(exc).__name__
+
+    if (
+        report.get("last_success_mtime_ns") is not None
+        and report.get("log_mtime_ns") is not None
+        and report["last_success_mtime_ns"] >= report["log_mtime_ns"]
+    ):
+        # The refusal stream has no per-line timestamps. A newer authenticated terminal receipt's
+        # signed process-start time is the one exact boundary it can prove: every retained refusal
+        # predates that successful entry.
+        report.update(refused_since_success=0, results_since_success=1)
     return report
 
 
@@ -2215,20 +2302,41 @@ def format_cursor_closer_native_entry(report: dict) -> str:
     prefix = "Cursor closer native entry: "
     if report.get("log_error"):
         launcher = f"cannot read launcher log ({report['log_error']})"
+    elif report.get("results_since_success"):
+        drained = (
+            not report.get("hash_error")
+            and not report.get("pin_set_error")
+            and report.get("hash_mismatch_count") == 0
+        )
+        launcher = ("drained: " if drained else "") + (
+            f"since last retained success: refused {report['refused_since_success']}/"
+            f"{report['results_since_success']}"
+        )
     elif report.get("launcher_results") == 0:
         launcher = "unmeasured — no launcher results"
     elif report.get("refused") == 0:
-        # Historical successes cannot drain a gate whose current policy pins have drifted.
-        drained = not report.get("hash_error") and report.get("hash_mismatch_count") == 0
-        launcher = ("drained: " if drained else "") + (
-            f"refused 0/{report['launcher_results']} launcher results"
-        )
+        launcher = f"refused 0/{report['launcher_results']} launcher results"
     elif report.get("launcher_results") is None or report.get("refused") is None:
         launcher = "cannot read launcher log (no snapshot)"
     else:
         launcher = f"refused {report['refused']}/{report['launcher_results']} launcher results"
 
-    if report.get("hash_error"):
+    if report.get("success_error"):
+        successes = f"successes seen cannot read ({report['success_error']})"
+    elif report.get("successes_seen") is None:
+        successes = "successes seen cannot read (no snapshot)"
+    else:
+        successes = f"successes seen {report['successes_seen']}"
+
+    if report.get("pin_set_error"):
+        detail = report["pin_set_error"]
+        parts = []
+        if detail.get("missing"):
+            parts.append("missing " + ", ".join(detail["missing"]))
+        if detail.get("unexpected"):
+            parts.append("unexpected " + ", ".join(detail["unexpected"]))
+        hashes = "pinned-vs-current automation.toml incomplete pin set (" + "; ".join(parts) + ")"
+    elif report.get("hash_error"):
         hashes = f"pinned-vs-current automation.toml hashes cannot read ({report['hash_error']})"
     elif report.get("hash_mismatch_count") is None:
         hashes = "pinned-vs-current automation.toml hashes cannot read (no snapshot)"
@@ -2238,7 +2346,7 @@ def format_cursor_closer_native_entry(report: dict) -> str:
             "pinned-vs-current automation.toml hash mismatches "
             f"{report['hash_mismatch_count']} ({names})"
         )
-    return prefix + launcher + "; " + hashes
+    return prefix + launcher + "; " + successes + "; " + hashes
 
 
 def format_report(rep: dict) -> str:
