@@ -1256,14 +1256,35 @@ def requirements(body):
     """
     found = []
     section = ""
+    fence = None
     for line in body.splitlines():
+        was_fenced = fence is not None
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            token, tail = marker.groups()
+            if fence is None:
+                fence = (token[0], len(token))
+            elif token[0] == fence[0] and len(token) >= fence[1] and not tail.strip():
+                fence = None
+        # Preserve existing Markdown section behavior. Only the new exact plain
+        # heading is gated by fences; arbitrary prose/quotes do not open scope.
         if re.match(r"^#{1,6}\s", line):
             section = line.lower()
             continue
+        active = any(word in section for word in ("task", "acceptance", "success criteria"))
         if (
-            any(word in section for word in ("task", "acceptance", "success criteria"))
-            and line.strip()
+            not active
+            and not was_fenced
+            and marker is None
+            and re.fullmatch(
+                r" {0,3}tasks[ \t]+and[ \t]+acceptance[ \t]+criteria[ \t]*:[ \t]*",
+                line,
+                flags=re.IGNORECASE,
+            )
         ):
+            section = "tasks and acceptance criteria"
+            continue
+        if active and line.strip():
             text = re.sub(r"^\s*(?:[-*+] |\d+[.)] )(?:\[[ xX]\]\s*)?", "", line).strip()
             if text:
                 found.append(text)

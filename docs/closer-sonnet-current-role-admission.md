@@ -58,18 +58,16 @@ checks remain fresh. Native request identity is not proof of a served reasoning
 level, current plan entitlement or subscription-only accounting. The canary does
 not alter the API route used by production Verify.
 
-## Current real-input prerequisite
+## Original plain-heading compatibility
 
-At the frozen a715 base, `closer_dispatcher.requirements` recognizes only Markdown
-heading sections. The unchanged issue 983 body uses the plain heading
-`Tasks and acceptance criteria:`; the actual parser currently returns zero
-criteria. Consequently the strict current request builder refuses this real CSV
-criterion before any pool, OAuth or native call. The short `## Tasks` source used
-in inert controls does not establish that this real-input seam works.
+A separate requirements-parser commit recognizes the exact plain heading
+`Tasks and acceptance criteria:` (case and ordinary spacing variants). It does
+not rewrite the original issue body. All six unchanged issue 983 clauses,
+nonblank normative prose, order and duplicate obligations are retained. Unknown
+headings, quoted/incidental mentions and headings inside fenced code do not open
+new scope. Existing Markdown-section parsing remains unchanged.
 
-This leaf deliberately does not change the source body or parser. Before the
-one actual canary, the existing source owner must resolve that inventory grammar
-with a separately reviewed requirements-preserving change (or supply a genuine
-admitted native finding using the corresponding supported named-finding path).
-A changed selected parser source requires the final current descriptor and
-packet to be rebuilt. No historical proof or answer is rebound to that source.
+This real-body control uses a fresh inert current-producer packet and the actual
+named request/response builder and proof validators; it is not a native provider
+or historical author execution proof. After composition, source and packet pins
+must still be regenerated before the single actual current-source canary.

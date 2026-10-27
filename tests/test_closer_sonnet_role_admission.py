@@ -28,7 +28,7 @@ _ACTUAL_QUALITY = admission._quality
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path, monkeypatch, request):
     def forbidden(*_a, **_kw):
         raise AssertionError("No subprocess/auth/native call in source admission control")
 
@@ -61,7 +61,7 @@ def world(tmp_path, monkeypatch):
         raise ProcessLookupError
 
     monkeypatch.setattr(os, "killpg", absent)
-    body = "## Tasks\n- [ ] " + admission.PUBLIC_CRITERION
+    body = getattr(request, "param", "## Tasks\n- [ ] " + admission.PUBLIC_CRITERION)
     monkeypatch.setattr(
         admission, "PUBLIC_SOURCE_SHA256", hashlib.sha256(body.encode()).hexdigest()
     )
@@ -115,7 +115,7 @@ def world(tmp_path, monkeypatch):
                     "evidence": [],
                     "proofs": [],
                 }
-                for text in (body, admission.PUBLIC_CRITERION)
+                for text in (body, *closer.requirements(body))
             ]
         },
     }
@@ -584,3 +584,22 @@ def test_existing_outer_pool_cannot_be_reused_as_qualification_authority(world):
             expected={k: reservation[k] for k in ("agent", "profile_id", "frontier_id", "target")}
         )
     assert not world.calls
+
+
+@pytest.mark.parametrize(
+    "world",
+    [(Path(__file__).parent / "fixtures/sonnet_role_admission/original-983-body.txt").read_text()],
+    indirect=True,
+)
+def test_unchanged_real983_body_reaches_current_request_and_protected_receiver(world):
+    original = copy.deepcopy(world.proposal["original"])
+    value = run(world)
+    assert value["capability_pass"]
+    report = admission._read(value["report_ref"])
+    assert report["request"]["criterion"] == admission.PUBLIC_CRITERION
+    assert len(original["decision"]["criteria"]) == 7  # whole BODY plus all six clauses
+    assert world.proposal["original"] == original
+    proposed = admission.reviewed_record_proposal(value["report_ref"])
+    assert proposed["record"]["status"] == "pending_review"
+    assert proposed["record"]["expires_at"] is None
+    assert roles.ROLE_QUALIFICATIONS == {}
