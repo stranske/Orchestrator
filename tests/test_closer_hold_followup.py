@@ -405,7 +405,7 @@ def test_campaign_metrics_use_only_exact_authenticated_native_round_receipt(capa
     ],
 )
 def test_actual_io_release_observes_original_shared_pool(
-    capacity_host, tmp_path, monkeypatch, capsys, stage, state
+    capacity_host, tmp_path, monkeypatch, capsys, request, stage, state
 ):
     import copy
     import hashlib
@@ -433,7 +433,7 @@ def test_actual_io_release_observes_original_shared_pool(
 
     work = tmp_path / "actual-native"
     work.mkdir()
-    native = native_world.__wrapped__(work, monkeypatch)
+    native = native_world.__wrapped__(work, monkeypatch, request)
     native.ad.unlink()
     target = "owner/repo#12"
     native.snapshot.update(
@@ -445,15 +445,25 @@ def test_actual_io_release_observes_original_shared_pool(
         pending_check_head=native.snapshot["head"],
     )
     native.snapshot["revision"] = "rev"
-    monkeypatch.setattr(
-        dispatcher,
-        "_pipeline_capacity",
-        lambda: {
-            "io": int(stage == "act" and native.events["prepare"] == 0),
+
+    def stage_capacity():
+        # Pending-CI INTERPRET is now real native IO. Deny only the requested
+        # durable stage rather than denying all IO after PREPARE.
+        source_path = (
+            resources.shard_dir(resources.scoped_root(native.ledger), target) / "state.json"
+        )
+        retained = pipeline._load(source_path)
+        current = (
+            (retained.get("frontiers") or {}).get(native.frontier["frontier_id"], {}).get("items")
+            or {}
+        ).get(target, {})
+        return {
+            "io": int(stage == "act" and current.get("stage", "prepare") != "act"),
             "low": 1,
             "exception": 1,
-        },
-    )
+        }
+
+    monkeypatch.setattr(dispatcher, "_pipeline_capacity", stage_capacity)
     observer = dispatcher.Closer(
         dispatcher.GitHub(deadline=clock[0] + 30), state_path=native.raw, apply=True, workers=True
     )
@@ -475,6 +485,14 @@ def test_actual_io_release_observes_original_shared_pool(
     result = json.loads(capsys.readouterr().out)
     assert result["targets"][target]["status"] == "capacity_blocked", result["targets"][target]
     assert result["targets"][target]["stage"] == stage
+    if stage == "act":
+        assert (
+            result["targets"][target]["results"]["interpret"]["classification"]
+            == "deterministic_wait"
+        )
+        assert not (
+            resources.scoped_root(native.ledger) / "pools" / "low"
+        ).exists(), "deterministic pending CI must use IO, not acquire a model lane"
     assert native.events["provider"] == native.events["effect"] == 0
     clock[0] = real_clock()
     monkeypatch.setattr(time, "time", lambda: clock[0])
@@ -634,18 +652,99 @@ def test_actual_io_release_observes_original_shared_pool(
         assert native.events["provider"] == native.events["effect"] == 0
 
 
-def test_plain_ci_hold_kind_is_refused_before_backend_observation(monkeypatch):
+@pytest.mark.parametrize(
+    "source", [None, {}, {"state_path": None}, {"state_path": "relative/state.json"}]
+)
+def test_malformed_ci_source_waits_before_backend_observation(monkeypatch, source):
+    import closer_ci_followup as ci
     import closer_hold_followup as holds
 
     monkeypatch.setattr(
         holds,
         "_backend",
-        lambda *_: pytest.fail("unsupported release kind must not spend GitHub reads"),
+        lambda *_: pytest.fail("malformed CI source must not construct or observe a backend"),
     )
-    result = holds._probe_ci(
-        {"target": "offline/repo#1", "release_proof": {"kind": "ci_terminal"}}, "unused", {}, {}
+    monkeypatch.setattr(
+        ci,
+        "read_terminal",
+        lambda *_a, **_kw: pytest.fail("malformed CI source must not read retained input"),
     )
+    record = {"target": "offline/repo#1", "release_proof": {"kind": "ci_terminal"}}
+    if source is not None:
+        record["source"] = source
+    result = holds._probe_ci(record, "unused", {}, {})
     assert result == {
         "status": "waiting",
-        "reason": "fresh CI requires a normally admitted new frontier",
+        "reason": "CI original source binding is missing or invalid",
     }
+
+
+@pytest.mark.parametrize(
+    "damage", ["kind", "relative", "shard", "hash", "run", "revision", "unknown"]
+)
+def test_invalid_ci_source_join_never_reaches_backend_or_input_reads(tmp_path, monkeypatch, damage):
+    import copy
+
+    import closer_ci_followup as ci
+    import closer_hold_followup as holds
+    import closer_resources as resources
+    from closer_frontier_policy import make_frontier
+
+    target = "offline/repo#1"
+    frontier = make_frontier(
+        [target],
+        owner="owner",
+        frontier_id="source-join",
+        bindings={target: {"revision": "rev", "action_id": "a" * 64}},
+    )
+    row = {
+        "revision": "rev",
+        "status": "held",
+        "stage": "act",
+        "stage_status": "completed",
+        "results": {
+            "act": {
+                "status": "pending",
+                "pending_kind": "ci",
+                "pending_evidence": {"check_run_id": 123},
+            }
+        },
+    }
+    source = resources.shard_dir(tmp_path / "source.pipeline.json.scoped", target) / "state.json"
+    record = {
+        "target": target,
+        "revision": "rev",
+        "run_id": holds._digest(["finite-frontier/v2", frontier["frontier_id"], frontier["owner"]])[
+            :32
+        ],
+        "execution_state": "confirmed_not_started",
+        "frontier": frontier,
+        "release_proof": {"kind": "ci_terminal"},
+        "source": {"kind": "pipeline", "state_path": str(source), "row_sha256": holds._digest(row)},
+    }
+    if damage == "kind":
+        record["source"]["kind"] = "campaign_worker"
+    elif damage == "relative":
+        record["source"]["state_path"] = "relative/" + source.name
+    elif damage == "shard":
+        record["source"]["state_path"] = str(source.with_name("unbound.json"))
+    elif damage == "hash":
+        record["source"]["row_sha256"] = "f" * 64
+    elif damage == "run":
+        record["run_id"] = "foreign-run"
+    elif damage == "revision":
+        record["revision"] = "foreign-revision"
+    else:
+        record["execution_state"] = "action_outcome_unknown"
+    before = copy.deepcopy(record)
+    monkeypatch.setattr(
+        holds, "_backend", lambda *_: pytest.fail("invalid CI join reached backend")
+    )
+    monkeypatch.setattr(
+        ci, "read_terminal", lambda *_a, **_kw: pytest.fail("invalid CI join read retained inputs")
+    )
+    assert holds._probe_ci(record, "unused", {}, row) == {
+        "status": "waiting",
+        "reason": "CI original source binding is missing or invalid",
+    }
+    assert record == before

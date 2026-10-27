@@ -1,0 +1,156 @@
+{
+  "schema": "closer-acceptance-measurement/v1",
+  "evidence_kind": "synthetic_fixture",
+  "workload_sha256": "b5a402f88fd243abe57f19455f4929219ce2ece6d84b285860ac9824af318eb8",
+  "summary": {
+    "schema": "closer-efficiency-summary/v1",
+    "freshness": "current_bindings_checked",
+    "observed_branches": {
+      "denominator": 5,
+      "deterministic_zero_reasoning": 2,
+      "with_retained_model_runs": 3,
+      "excluded_waits": 4
+    },
+    "model_runs": {
+      "ids": [
+        "classify-1",
+        "repair-1",
+        "strong-1"
+      ],
+      "count": 3,
+      "bindings": {
+        "classify-1": {
+          "target": "offline/example#12",
+          "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "repair-1": {
+          "target": "offline/example#12",
+          "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "strong-1": {
+          "target": "offline/example#12",
+          "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "stage_event_coverage": 1.0
+    },
+    "observed_latency_seconds": {
+      "total_or_null": 9.0,
+      "measured_runs": 3,
+      "total_runs": 3,
+      "coverage": 1.0,
+      "status": "complete"
+    },
+    "observed_cost_usd": {
+      "total_or_null": 0.25,
+      "measured_runs": 2,
+      "total_runs": 3,
+      "coverage": 0.6666666666666666,
+      "status": "partial"
+    },
+    "branch_stage_latency_seconds": {
+      "capacity_deferred": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "criterion_unresolved": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_merge": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_post_merge_verify": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_wait": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "evidence_pending": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "mechanical": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "relevant": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "unknown_provider": {
+        "total_or_null": 3.1,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      }
+    },
+    "independent_outcomes": {
+      "measured_runs": 1,
+      "false_acceptance_measured_runs": 1,
+      "false_acceptance_count": 0,
+      "false_acceptance_rate": 0.0,
+      "rework_measured_runs": 1,
+      "rework_count": 1,
+      "rework_rate": 1.0
+    },
+    "holds": {
+      "active": 1,
+      "due": 1,
+      "escalated": 1,
+      "unowned": 0,
+      "aged": 2,
+      "oldest_age_seconds": 4000.0
+    },
+    "rejected": {},
+    "counterfactual_savings_usd": null,
+    "authority": false
+  },
+  "measurement_plumbing": {
+    "wall_seconds": 0.0006108329980634153,
+    "cpu_seconds": 0.0006099999999999994,
+    "process_peak_rss_platform_units": 18087936,
+    "scope": "local summary computation only; RSS is process peak, not provider cost"
+  },
+  "baseline": {
+    "status": "not_established",
+    "live_savings_usd": null,
+    "live_model_call_avoidance": null,
+    "required": "paired exact-version installed observations with same task/criteria and independent outcome labels"
+  },
+  "remaining_measurements": {
+    "repeat_classification": "needs evidence-identity/semantic dispatch ledger join",
+    "missed_wake": "needs scheduled-due versus actual consumer invocation receipts; due is not missed",
+    "escalation_acknowledgment": "unmet: no durable recipient delivery/ack-window consumer",
+    "provider_quota_pressure": "requires measured provider/account records"
+  },
+  "authority": false
+}

@@ -171,6 +171,19 @@ PROFILE_REGISTRY: dict[str, dict[str, Any]] = {
             pool="claude-subscription",
             adapter_version="claude-cli-profile-v2",
         ),
+        # Prospective explicit-effort identity. Keep the historical high/v1
+        # definition and its evidence unchanged; this candidate grants no role
+        # qualification and is excluded from automatic profile selection.
+        _profile(
+            "claude-sonnet-5-5-high-v2",
+            "claude-sonnet-5-5",
+            "high",
+            agent="claude",
+            provider="anthropic",
+            pool="claude-subscription",
+            adapter_version="claude-cli-profile-v2",
+            requires_explicit_selection=True,
+        ),
         # Exact ID is present in installed Claude Code 2.1.296 and the existing
         # adapter full tier. New profiles carry explicit effort; no historical
         # Sonnet definition or semantic role qualification is changed.

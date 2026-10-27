@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -11,13 +12,33 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from closer_inert_dispatcher_support import InertCaller
 from test_closer_dispatcher import FakeGitHub, closer
 from test_closer_disposition import TARGET, fixture
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import claims
 import closer_dispatcher as adapter
 import closer_disposition
 import closer_pipeline as pipeline
+
+controlled_world = _controlled_world
+
+
+@pytest.fixture
+def inert_caller(controlled_world, monkeypatch):
+    monkeypatch.setenv("HANDOFF_DIR", str(controlled_world.root / "handoff"))
+    monkeypatch.setenv("HOME", str(controlled_world.root / "private-home"))
+    return InertCaller(controlled_world, monkeypatch)
+
+
+def retain_snapshot(prepared, snapshot, root):
+    path = root / "original-act-snapshot.json"
+    path.write_text(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+    prepared["snapshot_ref"] = {
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
 
 
 class InjectedProcessDeath(BaseException):
@@ -39,7 +60,7 @@ class InjectedProcessDeath(BaseException):
     ],
 )
 def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
-    tmp_path, monkeypatch, barrier
+    tmp_path, monkeypatch, barrier, inert_caller
 ):
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
@@ -61,6 +82,7 @@ def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
             "evaluated_sha": "d" * 40,
         },
     )
+    interpretation = inert_caller.interpretation(snap, _packet, ref, interpretation["proposal"])
     accepted = closer_disposition.integrate_ordinary(TARGET, snap, ref, prep, interpretation)
     assert accepted["status"] == "accepted"
     decision = accepted["disposition"]
@@ -69,6 +91,7 @@ def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
     refused["proposal"].update(
         classification="uncertain", substantive_needs=["Original proof missing"]
     )
+    refused = inert_caller.interpretation(snap, _packet, ref, refused["proposal"])
     prep = {
         **prep,
         "identity": TARGET,
@@ -95,6 +118,7 @@ def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
         return SimpleNamespace(returncode=0, stdout=json.dumps({"closed": 1, "errors": 0}))
 
     def callbacks_for(dispositions):
+        retain_snapshot(prep, snap, tmp_path)
         backend = closer(
             tmp_path,
             snap,
@@ -175,7 +199,9 @@ def test_new_valid_acceptance_supersedes_a_durable_nonaccepting_refusal(
             # valid receipt_reserve deferral instead, which is a flake not a proof.
             "deadline": time.time() + 30,
         }
-        if barrier == "claim_held":
+        if barrier in {"claim_held", "native_nonpass"}:
+            # A denied claim or changed native verdict cannot prove a valid
+            # inner continuation; neither may be reported as completed.
             with pytest.raises(RuntimeError, match="valid continuation boundary"):
                 resumed["act"](TARGET, action_context)
         else:
