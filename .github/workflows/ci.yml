@@ -37,58 +37,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # THIS REPO'S COVERAGE NUMBER HAS BEEN WRONG BY 48 POINTS, AND NOTHING SAID SO.
-  #
-  # pr-00-gate.yml measures coverage with pytest alone and reports 34.11%. This job, run here on
-  # 2026-08-30: 80.3%, over 44,741 statements with 8,828 missed, combined from 94 instrumented
-  # processes.
-  #
-  # THE AUTHORITATIVE NUMBER IS THE ONE FROM THIS RUNNER, NOT FROM A DEVELOPER MACHINE, and the
-  # difference is real rather than noise. The same command on the owner's machine reports 82.1%
-  # with 8,026 missed -- 802 statements that execute only where this instance's prerequisites
-  # exist (agent CLIs, ~/.codex, a populated ledger) and are missed on a bare runner. Those are
-  # exactly the paths env_prereq guards. CLAUDE.md already says to take coverage from CI rather
-  # than a local run; this job is why that rule has teeth, and quoting the local figure would
-  # overstate the repo by nearly two points.
-  #
-  # The gap against the Gate exists because
-  # 79 of 102 modules are exercised by a `--selftest` entry point rather
-  # than a pytest file -- the original design, from the initial commit -- and a selftest runs as a
-  # SUBPROCESS that pytest-cov cannot see. So the Gate has been measuring the instrument's blind
-  # spot and calling it a score, which is the same defect stranske/Workflows#3251 drained out of
-  # the fleet reporter: a number nobody could measure rendered as a number that was measured.
-  #
-  # That mattered beyond cosmetics. Every other repo in the fleet now carries a
-  # config/coverage-baseline.json set at measured current, and this one was deliberately SKIPPED,
-  # because a baseline against the wrong instrument would bake the blind spot in permanently.
-  #
-  # A SEPARATE JOB, NOT A FLAG ON THE VERDICT, and the reasons are both real:
-  #   * verify.py --coverage wraps ~90 child processes in `coverage run --parallel-mode`, so it is
-  #     materially slower than the verdict. Measured in CI: the verify job is ~1m30s, and the
-  #     verdict is on the critical path for every PR. This runs beside it, not in front of it.
-  #   * `--coverage` deliberately never touches the exit code (verify.py pins that in a test),
-  #     precisely so measuring cannot change a verdict. Keeping it in its own job keeps that true
-  #     by construction rather than by promise.
-  #
-  # continue-on-error: a coverage MEASUREMENT that fails must never redden a green verdict. If it
-  # cannot run, the summary says so and the verdict is untouched -- but the failure is visible in
-  # the job list rather than swallowed.
-  #
-  # NOT YET WIRED TO THE GUARD, and saying so is the point. Maint Coverage Guard reads
-  # pr-00-gate.yml runs by a hardcoded workflowId, so it cannot see this job's number. Publishing
-  # the honest figure is step one; making the guard able to read it is a separate change, and
-  # until then this repo still has no baseline. The summary states that rather than implying the
-  # number is being enforced.
-  combined-coverage:
-    name: combined coverage (pytest + selftests, the honest number)
+  # One measured module partition, with all floor/ceiling/gate rules applied only to sums.
+  # Shards retain the printed pytest output; XML supplies replay verdicts, never counts.
+  pytest-shards:
+    name: pytest + coverage shard ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    continue-on-error: true
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      VERIFY_PYTEST_WORKERS: "4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - name: Check out the pinned Workflows Closer Core for conformance
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,34 +60,99 @@ jobs:
           ref: ${{ env.CLOSER_CORE_SOURCE_REVISION }}
           path: .closer-core-source
           persist-credentials: false
-
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.14'
-
-      # Run native shell guard regressions instead of spending the skip budget.
       - name: Install native shell test prerequisite
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends zsh
-          command -v zsh
-
+          if ! command -v zsh; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
+          fi
       - name: Install dependencies
-        run: python -m pip install --quiet pytest PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
-      - name: Measure combined coverage
-        shell: bash
+      - name: Run the instrumented shard
         env:
           ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
         run: |
-          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
-          # --floor-may-lag unconditionally: this job is a MEASUREMENT, and a lagging floor is the
-          # verify job's business to report. Duplicating that failure here would mean one drift
-          # reddening two jobs and telling you nothing extra.
-          python3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt
+          python3 src/verify.py --pytest-shard ${{ matrix.shard }}/6 --coverage --shard-output shard-results
+      - name: Stage worker coverage measurement
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
+        shell: bash
+        run: |
+          # Missing coverage is a named measurement gap, never a failed test verdict.
+          shopt -s nullglob
+          data=(.coverage.shard-${{ matrix.shard }}.*)
+          if (( ${#data[@]} )); then
+            cp "${data[@]}" shard-results/
+          else
+            echo "::warning::No worker coverage data; shard verdict is unchanged."
+          fi
+      - name: Upload printed summary, gate verdicts and worker coverage
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pytest-shard-${{ matrix.shard }}
+          include-hidden-files: true
+          path: shard-results/
+          if-no-files-found: error
+          retention-days: 7
 
+  # Unlike main's coverage-only job, this job owns the verification verdict.
+  # verify.py keeps coverage reporting out of its exit code; only publishing is soft.
+  verify:
+    name: verify.py aggregate + combined coverage
+    needs: pytest-shards
+    # Run even if a shard crashed: the aggregate names missing evidence rather than skipping.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the pinned Workflows Closer Core for conformance
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stranske/Workflows
+          ref: ${{ env.CLOSER_CORE_SOURCE_REVISION }}
+          path: .closer-core-source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+      - name: Install native shell test prerequisite
+        run: |
+          if ! command -v zsh; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
+          fi
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
+
+      - name: Download shard evidence
+        continue-on-error: true # Missing evidence must be named by the aggregate.
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: pytest-shard-*
+          path: shard-evidence
+          merge-multiple: true
+      - name: Aggregate printed counts, run selftests and gates, combine coverage
+        env:
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+        shell: bash
+        run: |
+          # --floor-may-lag remains PR-only for the verdict; collection drops always fail.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt
+          else
+            python3 src/verify.py --aggregate shard-evidence --coverage 2>&1 | tee /tmp/combined.txt
+          fi
       - name: Build the trend record the coverage guard reads
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
         if: always()
         run: |
           # tools/coverage_trend.py is synced from Workflows and is the SAME producer every other
@@ -151,6 +180,7 @@ jobs:
       # preferred first, so using it keeps this job's payload unambiguous on a run that may also
       # carry the Gate's.
       - name: Publish the payload the coverage guard reads
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
         if: always() && hashFiles('coverage.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -159,6 +189,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish the coverage trend
+        continue-on-error: true # Coverage measurement must never change the verification verdict.
         if: always() && hashFiles('coverage-trend.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -166,50 +197,21 @@ jobs:
           path: coverage-trend.json
           if-no-files-found: error
 
-      - name: Publish the figure
-        if: always()
-        run: |
-          {
-            echo "## Combined coverage — pytest AND selftests"
-            echo
-            if grep -q "^coverage:" /tmp/combined.txt 2>/dev/null; then
-              grep -E '^(coverage:|TOTAL[[:space:]])' /tmp/combined.txt
-            else
-              echo "NOT MEASURED — verify.py --coverage produced no coverage block."
-              echo "Treat that as a missing measurement, not as a low one."
-            fi
-            echo
-            echo "The Gate's own coverage number is pytest-only and reads far lower, because 79 of"
-            echo "102 modules are exercised by a \`--selftest\` subprocess that pytest-cov cannot"
-            echo "see. The figure above is the one comparable to the rest of the fleet."
-            echo
-            echo "ENFORCED as of 2026-08-30. Maint Coverage Guard reads this job, because"
-            echo "\`config/coverage-baseline.json\` names it in \`source_workflows\` (Workflows"
-            echo "#3270) and this job publishes the \`gate-coverage\` payload and"
-            echo "\`gate-coverage-trend\` record the guard requires. A drop past the baseline"
-            echo "opens an issue; it does not block a merge."
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload the coverage data
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: combined-coverage
-          path: |
-            .coverage
-            /tmp/combined.txt
-          if-no-files-found: warn
-          retention-days: 7
-
-  verify:
-    name: verify.py (real pytest counts + selftests + capability gates)
+  exec-mirror-shards:
+    name: flat exec-mirror shard ${{ matrix.shard }}/6
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      VERIFY_PYTEST_WORKERS: "4"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - name: Check out the pinned Workflows Closer Core for conformance
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -217,127 +219,20 @@ jobs:
           ref: ${{ env.CLOSER_CORE_SOURCE_REVISION }}
           path: .closer-core-source
           persist-credentials: false
-
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.14'
-
-      # Run native shell guard regressions instead of spending the skip budget.
       - name: Install native shell test prerequisite
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends zsh
-          command -v zsh
-
-      - name: Install dependencies
-        run: python -m pip install --quiet pytest PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
-
-      - name: Verify
-        env:
-          # State is machine-local by design, and it lives behind TWO variables. Setting only one
-          # is what made the "state-independent" claim above wrong for two months of one day.
-          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
-          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
-        run: |
-          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
-          # `--floor-may-lag` ON PULL REQUESTS ONLY, and the asymmetry is the whole point.
-          #
-          # `.verify-floor.json`'s `collected` is an EQUALITY, which is right: a floor behind
-          # reality is permissive by exactly the gap. But the correct number is only knowable on
-          # the MERGE RESULT, and this repo merges fast — one one-line change needed SIX
-          # re-measurements in two hours while main moved eight times, and that file's own note
-          # records the floor being found behind reality four separate times before that. Demanding
-          # the exact number from a branch author is demanding something no amount of care delivers.
-          #
-          # So on a PR a LAGGING floor is reported and not fatal, while a collection DROP stays
-          # fatal (see `_blocks_floor_update`). On main the equality is enforced by this same job
-          # WITHOUT the flag, and the reconcile-floor job below heals a lag within one run — so the
-          # invariant "main's floor equals main's reality" is unchanged. Nothing is skipped and
-          # nothing is silenced: the lag still prints.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python3 src/verify.py --floor-may-lag
-          else
-            python3 src/verify.py
+          if ! command -v zsh; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
           fi
-
-      # verify.py already fails on: any pytest failure, ZERO tests collected, a collection count
-      # below the recorded floor, passed+skipped dropping below the floor, MORE SKIPS THAN THE
-      # AGREED CEILING, a module selftest that exits 0 without saying anything, a selftest or gate
-      # that exits 0 having skipped without naming what is missing, and any of the five capability
-      # gates. Deliberately no `|| true` anywhere — an exit code that cannot fail is the defect
-      # this repo exists to stop repeating.
-      #
-      # It also prints every skip and its reason, so a green run here always states what it did
-      # not check. If that list grows, the ceiling turns it into a red rather than a footnote.
-
-  # ---------------------------------------------------------------------------------------------
-  # THE FLAT EXEC-MIRROR SHAPE, VERIFIED ON EVERY PR (2026-10-04).
-  #
-  # WHAT THIS FIXES. The `verify` job above judges a CHECKOUT. launchd runs a different tree: the
-  # exec mirror, a FLAT copy (modules at the root, no .git). On 2026-10-04 the owner's verified sync
-  # was refused for three independent defects that existed only in that shape, each green here on
-  # its own PR (#408): tests that read `src/<module>` by path, loaders seeding deployment-owned
-  # registries, and a test child that seeded one into the deployable tree. The only detector was
-  # scripts/verify_before_sync.sh, which runs when the owner syncs, i.e. after merge.
-  #
-  # WHAT IT RUNS: that same script, not a second procedure. ORCH_SYNC_SCRIPT points it at
-  # scripts/build_exec_mirror.sh, which is the copy contract the owner's copier calls
-  # (docs/MIRROR_SYNC_PATCH.md, "One copy contract"), so this verifies the tree a sync ships. It
-  # builds a scratch flat copy, hashes the deployment-owned bytes, runs verify.py there with every
-  # registry and state path in scratch, and fails if verification changed a deployed byte (the VOID
-  # that caught two of the three causes) or if the source moved.
-  #
-  # ITS OWN CEILINGS. On a runner the flat copy lacks the git family (like the owner's mirror) AND
-  # every local prerequisite (like this runner's checkout), so it is a third shape. verify.py
-  # detects it (env_prereq.exec_mirror_shape AND env_prereq.bare_machine, never $CI) and bounds it
-  # by `bare_mirror_*` in .verify-floor.json, measured here. VERIFY_BEFORE_SYNC_TREE makes the
-  # script refuse any other classification, so a mislabelled tree is a red, not a looser number.
-  #
-  # LATCHED-GATE ANSWERS. 1: a red here is cleared by the PR that fixes the mirror-only defect (or
-  # ships the missing file from the builder), or by a deliberate, named ceiling raise. 2: both run
-  # while the job is red, since nothing here blocks a push or a re-run. 3: the bare ceilings are
-  # measured in this job, the only place that shape is detected, and the digest is the installer's
-  # one function before and after. 4: drained, it prints `tree: BARE EXEC MIRROR`, `N/N max
-  # [bare_mirror_skipped_max]` and `== verify-before-sync: VERIFIED`, and every green run of this
-  # job is an input that produced it.
-  #
-  # --floor-may-lag on every event: a lagging floor is the `verify` job's business, and a collection
-  # DROP still fails here. Runs beside `verify`, so a PR waits no longer than before.
-  exec-mirror:
-    name: verify.py in the flat exec-mirror shape (the tree a sync ships)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Check out the pinned Workflows Closer Core for conformance
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: stranske/Workflows
-          ref: ${{ env.CLOSER_CORE_SOURCE_REVISION }}
-          path: .closer-core-source
-          persist-credentials: false
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.14'
-
-      # Run native shell guard regressions instead of spending the skip budget.
-      - name: Install native shell test prerequisite
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends zsh
-          command -v zsh
-
       - name: Install dependencies
-        run: python -m pip install --quiet pytest PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
-      - name: Build the flat copy with the sync's copy contract and verify it there
+      - name: Build the sync's flat copy and run the shard with payload integrity checks
         env:
-          # Keep scratch mirrors, pytest temps and verdict writes off /tmp: that volume
-          # hits EDQUOTA (errno 122) on this job while the suite is otherwise green.
           TMPDIR: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
@@ -346,6 +241,67 @@ jobs:
           ORCH_SYNC_SCRIPT: ${{ github.workspace }}/scripts/build_exec_mirror.sh
           VERIFY_BEFORE_SYNC_TREE: BARE EXEC MIRROR
           VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG: '1'
+          VERIFY_BEFORE_SYNC_PYTEST_SHARD: ${{ matrix.shard }}/6
+          VERIFY_BEFORE_SYNC_SHARD_OUTPUT: ${{ runner.temp }}/mirror-results
+        run: |
+          mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
+          bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"
+      - name: Upload flat-copy shard evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mirror-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/mirror-results/shard-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  exec-mirror:
+    name: verify.py aggregate in the flat exec-mirror shape
+    needs: exec-mirror-shards
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the pinned Workflows Closer Core for conformance
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: stranske/Workflows
+          ref: ${{ env.CLOSER_CORE_SOURCE_REVISION }}
+          path: .closer-core-source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+      - name: Install native shell test prerequisite
+        run: |
+          if ! command -v zsh; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends zsh
+          fi
+      - name: Install dependencies
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
+
+      - name: Download flat-copy evidence
+        continue-on-error: true # Missing evidence must be named by the aggregate.
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: mirror-shard-*
+          path: mirror-evidence
+          merge-multiple: true
+      - name: Aggregate in the sync's flat copy with payload integrity checks
+        env:
+          TMPDIR: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+          ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
+          ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+          ORCH_SYNC_SCRIPT: ${{ github.workspace }}/scripts/build_exec_mirror.sh
+          VERIFY_BEFORE_SYNC_TREE: BARE EXEC MIRROR
+          VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG: '1'
+          VERIFY_BEFORE_SYNC_AGGREGATE: ${{ github.workspace }}/mirror-evidence
         run: |
           mkdir -p "$ORCH_STATE_DIR" "$ORCH_LOCAL_RUNTIME"
           bash scripts/verify_before_sync.sh "$GITHUB_WORKSPACE"
@@ -440,7 +396,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest PyYAML==6.0.3 requests==2.34.2 jsonschema==4.26.0 coverage
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
 
       - name: Reconcile
         env:

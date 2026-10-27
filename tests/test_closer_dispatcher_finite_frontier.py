@@ -1,18 +1,54 @@
 """Offline CLI admission for the explicit immutable finite-frontier mode."""
 
+import hashlib
 import json
 import subprocess
 import sys
 import time
 
 import pytest
+from closer_inert_dispatcher_support import InertCaller
 from test_closer_reasoning_boundary import native_world as native_world
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
+import adapters
 import closer_dispatcher as dispatcher
 import closer_pipeline as pipeline
 import closer_resources as resources
 import dispatcher as offload_dispatcher
 from closer_frontier_policy import action_identity, make_frontier
+
+controlled_world = _controlled_world
+_REAL_DATA_ONLY_PROBLEM = adapters.data_only_problem
+
+
+def install_inert_native_transport(w, world, monkeypatch):
+    """Keep the public CLI/pool proof; replace only the old unproved emitter."""
+    # native_world already owns the physical emitter; a second construction
+    # would rewrite its executable after the original hash was admitted.
+    caller = getattr(w, "inert_caller", None) or InertCaller(world, monkeypatch)
+    monkeypatch.setattr(adapters, "data_only_problem", _REAL_DATA_ONLY_PROBLEM)
+
+    def provider(agent, prompt, **kwargs):
+        assert agent == "claude" and kwargs["data_only"] is True
+        assert kwargs["max_network_retries"] == 0
+        w.events["provider"] += 1
+        w.events["prompts"].append(prompt)
+        for pool in ("claude-subscription",):
+            with pytest.raises(resources.ResourceBlocked):
+                with resources.pool_slot(
+                    w.root / "private-handoff" / "closer-profile-execution",
+                    hashlib.sha256(pool.encode()).hexdigest(),
+                    1,
+                    deadline=time.time(),
+                ):
+                    pytest.fail("native reasoning did not hold the real shared pool")
+        return caller.response(
+            {"exit": 0, "output": json.dumps(w.response)}, agent, prompt, **kwargs
+        )
+
+    monkeypatch.setattr(offload_dispatcher, "offload", provider)
+    return caller
 
 
 def command(tmp_path, targets=("owner/repo#1",)):
@@ -354,7 +390,7 @@ def test_bounded_run_reaps_child_when_start_publication_fails(tmp_path, monkeypa
 
 
 def test_public_finite_reentry_reuses_packet_and_reaches_native_interpret(
-    native_world, monkeypatch, capsys
+    native_world, monkeypatch, capsys, controlled_world
 ):
     """Public CLI -> real held row -> public CAS re-entry -> same production callbacks."""
     import copy
@@ -362,6 +398,7 @@ def test_public_finite_reentry_reuses_packet_and_reaches_native_interpret(
     import adapters
 
     w = native_world
+    caller = install_inert_native_transport(w, controlled_world, monkeypatch)
     target = w.snapshot["target"]
     monkeypatch.setattr(adapters, "data_only_problem", lambda *_: "fixture CLI absent")
     assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
@@ -379,14 +416,7 @@ def test_public_finite_reentry_reuses_packet_and_reaches_native_interpret(
     assert w.events["provider"] == w.events["effect"] == 0
     frontier_file = w.root / "frozen-frontier.json"
     frontier_file.write_text(json.dumps(w.frontier))
-    monkeypatch.setattr(
-        adapters,
-        "data_only_problem",
-        lambda agent, mode="assess": (
-            None if agent == "claude" and mode == "assess" else "unsupported"
-        ),
-    )
-    monkeypatch.setattr(adapters, "_data_only_claude_binary", lambda: str(w.root / "qualified-cli"))
+    monkeypatch.setattr(adapters, "data_only_problem", _REAL_DATA_ONLY_PROBLEM)
     retry_args = [
         "finite-reentry",
         "--state",
@@ -415,7 +445,8 @@ def test_public_finite_reentry_reuses_packet_and_reaches_native_interpret(
     assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
     result = json.loads(capsys.readouterr().out)
     assert w.events["prepare"] == 1, result
-    assert w.events["provider"] == 1, result  # Actual native interpret invokes external transport.
+    assert w.events["provider"] == len(caller.results) == 1, result
+    assert caller.results[0]["exit"] == 0 and caller.results[0]["run_id"]
     assert w.events["effect"] == 0  # Existing historical advertisement remains authoritative.
     after = json.loads(shard.read_text())
     entry = after["frontiers"][w.frontier["frontier_id"]]
@@ -489,11 +520,12 @@ def test_public_finite_max_workers_caps_actual_target_executor(native_world, mon
 
 
 def test_public_finite_reentry_refuses_unknown_effect_and_never_replays(
-    native_world, monkeypatch, capsys
+    native_world, monkeypatch, capsys, controlled_world
 ):
     import closer_queue
 
     w = native_world
+    caller = install_inert_native_transport(w, controlled_world, monkeypatch)
     target = w.snapshot["target"]
     # This self-owned test advertisement is the only alias overlap. Preserve all
     # actual historical ledger bytes; removing its fixture copy allows the normal
@@ -535,5 +567,5 @@ def test_public_finite_reentry_refuses_unknown_effect_and_never_replays(
     assert dispatcher.main(w.argv + ["--max-workers", "1"]) == 78
     capsys.readouterr()
     assert calls == ["possibly-started-effect"]
-    assert w.events["provider"] == 1
+    assert w.events["provider"] == len(caller.results) == 1
     assert all(path.read_bytes() == raw for path, raw in w.originals.items() if path != w.ad)

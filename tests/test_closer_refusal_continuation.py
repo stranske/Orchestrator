@@ -8,19 +8,40 @@ separate, explicitly copied diagnostic.
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from closer_inert_dispatcher_support import InertCaller
 from test_closer_dispatcher import FakeGitHub, closer
 from test_closer_disposition import TARGET, fixture
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import claims
 import closer_dispatcher as adapter
 import closer_disposition
 import closer_pipeline as pipeline
 import closer_queue as queue
+
+controlled_world = _controlled_world
+
+
+@pytest.fixture
+def inert_caller(controlled_world, monkeypatch):
+    return InertCaller(controlled_world, monkeypatch)
+
+
+def retain_snapshot(prepared, snapshot, root):
+    path = root / "original-act-snapshot.json"
+    path.write_text(json.dumps(snapshot, sort_keys=True, separators=(",", ":")))
+    prepared["snapshot_ref"] = {
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
 
 REASONS = ("substantive_or_ambiguous_finding", "source_coverage_incomplete")
 TRIGGER = "source owner supplies current-head proof or resolves the named finding"
@@ -81,7 +102,7 @@ def native_refusal(tmp_path, reason):
 
 @pytest.mark.parametrize("reason", REASONS)
 def test_real_adapter_refusal_persists_and_restart_has_no_offload_or_action(
-    tmp_path, monkeypatch, reason
+    tmp_path, monkeypatch, reason, inert_caller
 ):
     # Produce each reason through the real original-criteria integrator, then use
     # the actual adapter act callback, native queue and outer pipeline together.
@@ -143,6 +164,7 @@ def test_real_adapter_refusal_persists_and_restart_has_no_offload_or_action(
         )
     else:
         interpreted["proposal"]["decision"]["criteria"] = []
+    interpreted = inert_caller.interpretation(snap, _packet, ref, interpreted["proposal"])
     integration = closer_disposition.integrate_ordinary(TARGET, snap, ref, prep, interpreted)
     assert integration["reason"] == reason
     assert integration["status"] in {"exception", "wait"}
@@ -164,6 +186,7 @@ def test_real_adapter_refusal_persists_and_restart_has_no_offload_or_action(
         return callbacks
 
     def adapter_callbacks():
+        retain_snapshot(prep, snap, tmp_path)
         backend = closer(tmp_path, snap, apply=True, workers=True)
         monkeypatch.setattr(backend, "campaign_admission", lambda *a, **kw: {"allowed": True})
         with monkeypatch.context() as scope:

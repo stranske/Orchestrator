@@ -1911,6 +1911,123 @@ def _data_only_claude_eligibility_binary() -> str:
         return verified
 
 
+# Installed-source findings are candidate metadata, never execution authority.
+# Do not turn an advertised flag, environment override or fixture success into
+# a native no-tools fence. A real supported builder needs a separate reviewed
+# immutable runtime and confinement contract before this refusal can change.
+_NON_CLAUDE_DATA_ONLY_GAPS = {
+    "cursor": (
+        "empty allowed-tools is an unverified remote header, not a local execution fence",
+        "hook loading is independent of workspace-context exclusion",
+        "no complete MCP/hooks/no-fallback launch contract is established",
+        "wrapper identity omits bundled node, JavaScript and native dependency closure",
+    ),
+    "vibe": (
+        "native wildcard denial and zero-source discovery exist; production admission is not wired",
+        "experimental public-API candidate needs an observing backend and imports/closure review",
+        "exact model and high thinking are configurable; served identity/effort remain unmeasured",
+        "exact server model acceptance and subscription/no-paid-route assurance are unprobed",
+    ),
+    "gemini": (
+        "print/plan/sandbox and slash-command disabling do not disable all tools",
+        "no complete MCP/hooks/project-context/no-fallback launch contract is established",
+    ),
+    "muse": (
+        "selective tool disables and empty preset do not establish a universal tool fence",
+        "no complete MCP/hooks/project-context/no-fallback launch contract is established",
+        "auto-updating wrapper and selected native payload require separate immutable identities",
+    ),
+}
+
+
+def non_claude_data_only_boundary(agent: str, mode: str | None = "assess") -> dict[str, Any]:
+    """Pure fail-closed builder admission; never probes auth, CLIs or config.
+
+    This reports transport engineering gaps, not model capability or entitlement.
+    All currently inspected non-Claude candidates remain unsupported. The return
+    value is diagnostic evidence only and cannot enable a command or a role.
+    """
+    if agent == "claude":
+        raise ValueError("Claude retains its independent installed-binary confinement gate")
+    gaps = list(
+        _NON_CLAUDE_DATA_ONLY_GAPS.get(
+            agent, ("no reviewed data-only builder and complete native confinement contract",)
+        )
+    )
+    problem = (
+        "data-only transport requires explicit assess mode"
+        if mode != "assess"
+        else f"data-only tool boundary unsupported for {agent}"
+    )
+    return {
+        "agent": agent,
+        "transport": "offload",
+        "mode": mode,
+        "status": "unsupported",
+        "command_available": False,
+        "native_confinement_qualified": False,
+        "model_suitability": "not_assessed",
+        "entitlement": "unknown",
+        "evidence_kind": (
+            "installed_source_metadata_only"
+            if agent in _NON_CLAUDE_DATA_ONLY_GAPS
+            else "no_reviewed_transport_evidence"
+        ),
+        "unresolved_controls": gaps,
+        "detail": "; ".join(gaps),
+        "problem": problem,
+    }
+
+
+def prepare_non_claude_data_only_candidate(
+    agent: str,
+    *,
+    manifest: Any,
+    private_root: str | Path,
+    profile: str = "vibe-medium-3.5",
+    mode: str | None = "assess",
+    transport: str = "offload",
+) -> dict[str, Any]:
+    """Prepare an unverified experimental plan; never admit or invoke a transport.
+
+    The installed Vibe public API has sterile discovery/config primitives that
+    the ordinary CLI path does not wire. This helper binds those candidate
+    controls to the existing exact profile and reviewed runtime manifest. The
+    separate real backend, account and confinement evidence gates remain closed.
+    """
+    if mode != "assess" or transport != "offload":
+        raise ValueError("candidate preparation requires an explicit assess offload")
+    if agent != "vibe" or profile != "vibe-medium-3.5":
+        raise ValueError("only the exact Vibe Medium 3.5 candidate builder is implemented")
+    selected = execution_profiles.get_profile(profile)
+    if (
+        not selected
+        or selected["agent"] != agent
+        or selected["requested_model"] != "mistral-medium-3.5"
+        or selected["reasoning_effort"] != "high"
+    ):
+        raise ValueError("candidate profile identity changed")
+    import closer_role_qualification
+    import non_claude_data_only_candidate as candidate
+
+    if not isinstance(manifest, candidate.RuntimeManifest):
+        raise ValueError("an explicit pinned candidate runtime manifest is required")
+    plan = candidate.prepare_vibe_candidate(
+        requested_model=selected["requested_model"],
+        requested_effort=selected["reasoning_effort"],
+        manifest=manifest,
+        private_root=Path(private_root),
+    ).to_dict()
+    return {
+        **plan,
+        "candidate_builder": "vibe-zero-source-programmatic/v1",
+        "profile_identity": closer_role_qualification.profile_identity(selected),
+        "adapter_build_sha256": candidate.pin_file(Path(__file__)).sha256,
+        "production_admission": False,
+        "activation": False,
+    }
+
+
 def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
 
@@ -1920,7 +2037,7 @@ def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
     if mode != "assess":
         return "data-only transport requires explicit assess mode"
     if agent != "claude":
-        return f"data-only tool boundary unsupported for {agent}"
+        return non_claude_data_only_boundary(agent, mode)["problem"]
     try:
         _data_only_claude_eligibility_binary()
     except (OSError, ValueError) as exc:

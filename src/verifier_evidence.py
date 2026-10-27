@@ -20,6 +20,13 @@ TRUSTED_AUTHORS = {"github-actions", "github-actions[bot]"}
 VALID_PROVIDER_VERDICTS = {"PASS", "CONCERNS", "FAIL", "NON_PASS"}
 
 
+def _valid_request_correlation(record):
+    if "verification_request_basis" not in record:
+        return True
+    value = record["verification_request_basis"]
+    return isinstance(value, str) and verification_events.HEX256.fullmatch(value) is not None
+
+
 def _valid_result_admission(record):
     admission = record.get("result_admission")
     assessment = record.get("assessment_identity")
@@ -81,6 +88,84 @@ def decision_matches_identity(decision: Any, repo: str, number: int, head: Any, 
     return decision.get("verdict") == expected
 
 
+def _request_correlations(comments, selected, candidates, repo, number, head, merge):
+    """Authenticate inert aliases ONLY after normal terminal conflict selection."""
+    if not isinstance(selected, dict) or "verdict" not in selected:
+        return []
+    event = selected.get("verification_event")
+    assessment = selected.get("assessment_identity")
+    if not (
+        verification_events.valid_event(event, repo, number, head, merge)
+        and isinstance(assessment, dict)
+        and assessment.get("canonical") is True
+        and assessment.get("mode") in {"evaluate", "compare"}
+        and all(isinstance(assessment.get(key), str) for key in ("provider", "model", "model2"))
+    ):
+        return []
+    prefix = f"https://github.com/{repo.lower()}/pull/{number}#issuecomment-"
+    exact_url = re.compile(re.escape(prefix) + r"[1-9][0-9]*")
+    references = {
+        (url, verification_events.content_hash(raw))
+        for raw, url in candidates
+        if _public_record(raw) == selected and exact_url.fullmatch(url.lower())
+    }
+    aliases = []
+    pattern = re.compile(r"<!-- verifier-request-correlation/v1 (\{[^\n]+\}) -->")
+    prefix = f"https://github.com/{repo.lower()}/pull/{number}#issuecomment-"
+    for comment in comments:
+        if (
+            not isinstance(comment, dict)
+            or (comment.get("author") or {}).get("login") not in TRUSTED_AUTHORS
+            or not exact_url.fullmatch(str(comment.get("url", "")).lower())
+        ):
+            continue
+        for raw in pattern.findall(str(comment.get("body") or "")):
+            try:
+                alias = json.loads(raw)
+                if not (
+                    isinstance(alias, dict)
+                    and alias.get("schema") == "verifier-request-correlation/v1"
+                    and "verdict" not in alias
+                    and alias.get("repo") == repo.lower()
+                    and alias.get("pr") == str(number)
+                    and alias.get("head_sha") == head
+                    and alias.get("evaluated_sha") == merge
+                    and _valid_request_correlation(alias)
+                    and "verification_request_basis" in alias
+                    and alias.get("verification_event") == event
+                    and alias.get("assessment_identity") == assessment
+                    and isinstance(alias.get("result_run_id"), str)
+                    and alias["result_run_id"] == str(selected.get("run_id"))
+                    and isinstance(alias.get("result_run_attempt"), str)
+                    and alias["result_run_attempt"] == str(selected.get("run_attempt"))
+                    and (alias.get("result_comment_url"), alias.get("result_decision_sha256"))
+                    in references
+                    and all(
+                        isinstance(alias.get(key), str)
+                        and re.fullmatch(r"[1-9][0-9]{0,19}", alias[key])
+                        for key in ("correlation_run_id", "correlation_run_attempt")
+                    )
+                ):
+                    continue
+                aliases.append(
+                    {
+                        "record": alias,
+                        "source_url": comment["url"],
+                        "sha256": verification_events.content_hash(alias),
+                    }
+                )
+            except (ValueError, TypeError, KeyError):
+                continue
+    return sorted(
+        aliases,
+        key=lambda item: (
+            int(item["record"]["correlation_run_id"]),
+            int(item["record"]["correlation_run_attempt"]),
+            int(item["source_url"].rsplit("issuecomment-", 1)[-1]),
+        ),
+    )
+
+
 def decision_from_pr(
     repo: str, pr: dict[str, Any], *, include_pending: bool = False
 ) -> dict[str, Any] | None:
@@ -94,6 +179,8 @@ def decision_from_pr(
         return None
     comments = (pr.get("comments") or {}).get("nodes") or []
     candidates = []
+    terminal_sources = []
+    state_sources = []
     states = []
     unorderable_invalid_event = False
     invalid_observations = []
@@ -115,6 +202,7 @@ def decision_from_pr(
                 continue
             if _valid_state(state, repo, number, head, merge):
                 states.append(state)
+                state_sources.append((state, url))
             elif _same_subject(state, repo, number, head, merge):
                 observation = _invalid_observation(state, repo, number, head, merge, url, raw)
                 if observation is None:
@@ -142,6 +230,7 @@ def decision_from_pr(
                 continue
             run, attempt = str(decision["run_id"]), str(decision["run_attempt"])
             candidates.append((int(run), int(attempt), decision))
+            terminal_sources.append((decision, url))
     if unorderable_invalid_event:
         return unusable_observation(repo, number, head, merge) if include_pending else None
     if not candidates and not states and not invalid_observations:
@@ -158,7 +247,31 @@ def decision_from_pr(
             if include_pending
             else None
         )
-    return {**selected, "_lifecycle_history": [*records, *states]}
+    aliases = _request_correlations(comments, selected, terminal_sources, repo, number, head, merge)
+    # Correlation is projected AFTER semantic conflict/lifecycle selection.
+    # Invalid or conflicting optional metadata disables this bridge only.
+    selected_sources = [
+        raw
+        for raw, _url in [*terminal_sources, *state_sources]
+        if _public_record(raw) == selected and "verification_request_basis" in raw
+    ]
+    invalid_correlation = any(not _valid_request_correlation(raw) for raw in selected_sources)
+    bases = {
+        raw["verification_request_basis"]
+        for raw in selected_sources
+        if _valid_request_correlation(raw)
+    }
+    inert = (
+        {"_request_correlation_unusable": True}
+        if invalid_correlation or len(bases) > 1
+        else {"verification_request_basis": next(iter(bases))} if bases else {}
+    )
+    return {
+        **selected,
+        "_lifecycle_history": [*records, *states],
+        **inert,
+        **({"_request_correlations": aliases} if aliases else {}),
+    }
 
 
 def unusable_observation(repo, number, head, merge):

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 from test_closer_reasoning_boundary import native_world as native_world
+from test_closer_runtime_binding import bundle as bundle
 from test_closer_stage_continuation import case as _successor_case
 
 import closer_dispatcher as dispatcher
@@ -501,15 +502,57 @@ def test_public_finite_main_verifies_selected_merge_despite_foreign_history(
 
 
 def test_public_cli_continues_accepted_request_after_result_without_replaying_post(
-    public_merge_world, capsys, monkeypatch
+    public_merge_world, capsys, monkeypatch, bundle
 ):
+    from test_closer_runtime_binding import Contents
+
+    import closer_runtime_binding as runtime
+
     w = public_merge_world
+    monkeypatch.setattr(bundle.runtime, "fetch_live_pr_labels", lambda *_: [])
+    contents = Contents()
+
+    def core_transport(method, path, body):
+        if method == "GET" and path == "/repos/owner/repo/pulls/12":
+            return {
+                "head": {"sha": w.snapshot["head"]},
+                "merged": w.snapshot["state"] == "MERGED",
+                "merge_commit_sha": w.snapshot["merge"],
+            }
+        return contents(method, path, body)
+
+    worker_toml = w.root / "core-worker.toml"
+    worker_toml.write_text('status = "ACTIVE"\n')
+    monkeypatch.setattr(runtime, "_POLICY_READERS", {})
+    runtime.register_policy_reader(
+        "followup-fixture",
+        lambda: {
+            "source": "controller-app-readback",
+            "observed_at": time.time(),
+            "worker_toml_digests": {str(worker_toml): runtime._hash(worker_toml)},
+            "controller_status": "ACTIVE",
+            "worker_statuses": ["ACTIVE"],
+        },
+    )
+    core_binding = runtime.RuntimeBinding(
+        bundle,
+        {"worker_tomls": [str(worker_toml)], "reader_id": "followup-fixture"},
+        transport=core_transport,
+    )
+    monkeypatch.setattr(runtime, "binding_from_manifest", lambda *_: core_binding)
+    manifest_file = w.root / "test-runtime.json"
+    manifest_file.write_text("{}")
+    w.argv += ["--runtime-manifest", str(manifest_file)]
+    w.argv[w.argv.index("--coordinator-contract-pin") + 1] = json.dumps(
+        pipeline.scoped_capability()
+    )
     dispatcher.main(w.argv)
     initial = json.loads(capsys.readouterr().out)
     requested = initial["merge_verification_successors"]["owner/repo#12"]
     accepted_frontier = requested["lineage"]["finite_frontier"]
-    # Retain the actual native POST, but normalize its subsequent observation
-    # to the accepted-wait shape returned by the seven production regressions.
+    # The registered merge -> verification successor already produced this
+    # accepted wait and its own shared context. Resume that real row directly;
+    # do not synthesize another frontier by copying its original lane context.
     target = "owner/repo#12"
     shard = (
         resources.shard_dir(resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target)
@@ -517,81 +560,35 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     )
     action_path = shard.parent / "state.actions" / f"{pipeline._digest(target)}.json"
     stored_queue = queue._read_state(action_path)
-    operation = stored_queue["frontiers"][accepted_frontier["frontier_id"]]["items"][target][
-        "operation"
-    ]
-    prior_frontier = accepted_frontier
-    accepted_frontier = policy.make_frontier(
-        [target],
-        owner=prior_frontier["owner"],
-        frontier_id="accepted-observation",
-        bindings={
-            target: {
-                "revision": "verify-requested",
-                "action_id": policy.action_identity(
-                    target, "verify-requested", "wait", operation["binding"]
-                ),
-            }
-        },
+    original_queue_bucket = copy.deepcopy(
+        stored_queue["frontiers"][accepted_frontier["frontier_id"]]
     )
-    receipt = queue.run_round(
-        action_path,
-        [target],
-        lambda _t: {
-            "target": target,
-            "revision": "verify-requested",
-            "action": "wait",
-            "eligible": False,
-            "reason": "same verification request already accepted",
-            "next_trigger": "authenticated result",
-            "operation_binding": operation["binding"],
-            "evidence": {"target": target, **copy.deepcopy(w.snapshot)},
-        },
-        lambda *_: pytest.fail("already accepted native POST cannot replay"),
-        finite_frontier=accepted_frontier,
-        frontier_target=target,
-        deadline=None,
-        request_timeout_seconds=25,
-        receipt_reserve_seconds=0,
-        max_operation_retries=0,
-    )
-    evidence = {
-        "target": target,
-        "observed_revision": "verify-requested",
-        "head": w.snapshot["head"],
-        "merge": w.snapshot["merge"],
-        "operation_id": operation["id"],
-        "event_id": operation["result"]["verification_request_basis"],
-    }
-    proof = queue.accepted_verifier_wait_proof(
-        action_path, target, frontier=accepted_frontier, receipt=receipt, evidence=evidence
-    )
-    assert proof is not None
+    operation = original_queue_bucket["items"][target]["operation"]
     state = pipeline._load(shard)
-    bucket = copy.deepcopy(state["frontiers"][prior_frontier["frontier_id"]])
-    bucket["finite_frontier"] = accepted_frontier
-    bucket["run_id"] = pipeline._digest(
-        ["finite-frontier/v2", accepted_frontier["frontier_id"], accepted_frontier["owner"]]
-    )[:32]
-    state["frontiers"][accepted_frontier["frontier_id"]] = bucket
-    row = bucket["items"][target]
-    row.update(
-        status="held",
-        stage_status="completed",
-        deferred_reason="accepted_verifier_request",
-        deferred_next_trigger="authenticated result",
-        queue_receipt=receipt,
-        resource_evidence={"accepted_verifier_request": proof},
+    row = state["frontiers"][accepted_frontier["frontier_id"]]["items"][target]
+    assert row["stage"] == "act" and row["status"] == "held", row
+    assert row["deferred_reason"] == "accepted_verifier_request", requested
+    action = row["results"]["act"]
+    assert action["status"] == "pending" and action["pending_kind"] == "external_event"
+    proof = queue.accepted_verifier_wait_proof(
+        action_path,
+        target,
+        frontier=accepted_frontier,
+        receipt=action["queue_receipt"],
+        evidence=action["pending_evidence"],
     )
-    row.pop("error", None)
-    row["results"]["act"] = {
-        "status": "pending",
-        "pending_kind": "external_event",
-        "pending_evidence": evidence,
-        "queue_receipt": receipt,
-        "next_trigger": "authenticated result",
-    }
-    pipeline._save(shard, state)
+    assert proof is not None and proof["operation_id"] == operation["id"]
+    assert proof["event_id"] == operation["result"]["verification_request_basis"]
+    assert proof["head"] == operation["binding"]["head"] == w.snapshot["head"]
+    assert proof["merge"] == operation["binding"]["merge"] == w.snapshot["merge"]
+    assert proof["operation_frontier"] == operation["finite_frontier"]["frontier_id"]
+    context = copy.deepcopy(row["shared_lane_context"])
+    initial_context = copy.deepcopy(
+        state["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
+    )
+    assert context["frontier_sha256"] == pipeline._digest(accepted_frontier)
+    assert context["frontier_sha256"] != initial_context["frontier_sha256"]
+    assert len(w.merges) == len(w.verifies) == 1
     w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(accepted_frontier)
     w.snapshot["verifier"] = {
         "schema": "verifier-corpus-decision/v1",
@@ -605,6 +602,36 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
         "provider_verdicts": ["CONCERNS"],
         "ci_failed": False,
     }
+    import verification_events
+
+    marker = w.snapshot["verifier"]
+    event = {
+        "schema": verification_events.SCHEMA,
+        "repo": "owner/repo",
+        "pr": "12",
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "request_sha256": "c" * 64,
+        "material_sha256": "e" * 64,
+    }
+    event["event_id"] = verification_events.event_id(event)
+    marker["verification_event"] = event
+    marker["verification_request_basis"] = operation["result"]["verification_request_basis"]
+    marker["assessment_identity"] = {
+        "canonical": True,
+        "mode": "compare",
+        "provider": "",
+        "model": "",
+        "model2": "",
+    }
+    w.snapshot["verifier_lifecycle"] = copy.deepcopy(marker)
+    correlation = operation["result"]["core_request_correlation"]
+    assert correlation["operation_id"] == operation["id"]
+    assert correlation["native_binding"]["queue_operation_id"] == operation["id"]
+    assert (
+        operation["result"]["verification_post_accepted"]["correlation_input"]
+        == marker["verification_request_basis"]
+    )
     w.snapshot["verifier_runs"][0].update(status="completed", conclusion="success")
     w.snapshot["revision"] = "authenticated-terminal-result"
     original_transport = dispatcher.gh_capacity.gh_run
@@ -632,7 +659,33 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
     assert following["predecessor_kind"] == "accepted_verifier_request"
     assert following["lineage"]["finite_frontier"] != accepted_frontier
     assert len(w.merges) == len(w.verifies) == 1
+    retained = pipeline._load(shard)
+    assert (
+        retained["frontiers"][accepted_frontier["frontier_id"]]["items"][target][
+            "shared_lane_context"
+        ]
+        == context
+    )
+    assert (
+        retained["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
+        == initial_context
+    )
+    assert (
+        queue._read_state(action_path)["frontiers"][accepted_frontier["frontier_id"]]
+        == original_queue_bucket
+    )
     assert all(path.read_bytes() == original for path, original in w.originals.items())
+    child_id = following["lineage"]["finite_frontier"]["frontier_id"]
+    before_restart = pipeline._load(shard)
+    dispatcher.main(w.argv)
+    restarted = json.loads(capsys.readouterr().out)
+    assert len(w.merges) == len(w.verifies) == 1
+    after_restart = pipeline._load(shard)
+    assert after_restart["stage_successors"] == before_restart["stage_successors"]
+    assert after_restart["frontiers"][child_id] == before_restart["frontiers"][child_id]
+    # A held active descendant can stop ordinary root admission before the
+    # continuation callback. Its exact existing child still owns the work.
+    assert restarted["validation"]["global_stop_valid"] is False
 
 
 @pytest.mark.parametrize("guard_mode", ["blocked", "uncertain"])
@@ -778,3 +831,368 @@ def test_registered_backend_cannot_launch_child_from_external_caller(
     ):
         _REAL_STAGED_PIPELINE(captured["args"], ["owner/repo#12"], captured["backend"], None)
     assert len(w.merges) == 1 and len(w.verifies) == 1 and w.events["provider"] == 0
+
+
+def test_public_post_produces_authenticated_accepted_wait_without_normalization(
+    public_merge_world, capsys
+):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    child = produced["merge_verification_successors"]["owner/repo#12"]
+    row = child["native_result"]["targets"]["owner/repo#12"]
+    assert len(w.merges) == len(w.verifies) == 1
+    assert row.get("deferred_reason") == "accepted_verifier_request", {
+        "status": row.get("status"),
+        "stage": row.get("stage"),
+        "deferred_reason": row.get("deferred_reason"),
+        "act": row.get("results", {}).get("act", {}),
+    }
+    action = row["results"]["act"]
+    assert action["status"] == "pending" and action["pending_kind"] == "external_event"
+    assert (
+        row["resource_evidence"]["accepted_verifier_request"]["operation_id"]
+        == action["pending_evidence"]["operation_id"]
+    )
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing_submit",
+        "missing_advance",
+        "wrong_submit_id",
+        "wrong_advance_id",
+        "foreign_namespace",
+        "stale_head",
+        "unknown",
+        "no_effect",
+        "missing_ack",
+        "not_started_422",
+        "provider_unknown",
+    ],
+)
+@pytest.mark.parametrize("wait_shape", ["ineligible", "historical_progress"])
+def test_actual_completed_request_wait_rejects_unbound_progress(
+    public_merge_world, capsys, damage, wait_shape
+):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    child = produced["merge_verification_successors"]["owner/repo#12"]
+    frontier = child["lineage"]["finite_frontier"]
+    row = child["native_result"]["targets"]["owner/repo#12"]
+    action = row["results"]["act"]
+    root = resources.scoped_root(dispatcher._pipeline_state_path(w.raw))
+    shard = resources.shard_dir(root, "owner/repo#12") / "state.json"
+    path = shard.parent / "state.actions" / f"{pipeline._digest('owner/repo#12')}.json"
+    document = queue._read_state(path)
+    bucket = document["frontiers"][frontier["frontier_id"]]
+    item = bucket["items"]["owner/repo#12"]
+    operation = item["operation"]
+    receipt = bucket["round"]["receipt"]
+    evidence = action["pending_evidence"]
+    if wait_shape == "historical_progress":
+        # Historical eligible collection remains supported, but cannot bypass
+        # either the original POST provenance or the uncertainty barriers.
+        item.update(eligible=True, deferred_reason="pass_limit")
+        receipt["accounting"] = [queue._account_row("owner/repo#12", item)]
+        receipt["deferred"] = copy.deepcopy(receipt["accounting"])
+        receipt["eligible_remaining"] = ["owner/repo#12"]
+        receipt["continuation_required"] = True
+        path.write_text(json.dumps(document))
+        assert (
+            queue.accepted_verifier_wait_proof(
+                path, "owner/repo#12", frontier=frontier, receipt=receipt, evidence=evidence
+            )
+            is not None
+        )
+    if damage in {"missing_submit", "missing_advance"}:
+        kind = "operation_submitted" if damage == "missing_submit" else "action_advanced"
+        receipt["events"] = [event for event in receipt["events"] if event.get("kind") != kind]
+    elif damage in {"wrong_submit_id", "wrong_advance_id"}:
+        kind = "operation_submitted" if damage == "wrong_submit_id" else "action_advanced"
+        next(event for event in receipt["events"] if event.get("kind") == kind)[
+            "operation_id"
+        ] = "foreign-operation"
+    elif damage == "foreign_namespace":
+        foreign = copy.deepcopy(bucket)
+        document["frontiers"]["unrelated"] = foreign
+    elif damage == "stale_head":
+        item["evidence"]["head"] = "f" * 40
+    elif damage == "unknown":
+        operation["status"] = "uncertain"
+    elif damage == "no_effect":
+        operation["result"]["no_effect"] = True
+    elif damage == "provider_unknown":
+        item["provider_outcome_uncertain"] = {"run_id": "original-unknown-run"}
+    elif damage == "missing_ack":
+        operation["result"].pop("verification_post_accepted")
+    else:
+        operation.update(status="completed", result={"no_effect": True, "http_status": 422})
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    assert (
+        queue.accepted_verifier_wait_proof(
+            path, "owner/repo#12", frontier=frontier, receipt=receipt, evidence=evidence
+        )
+        is None
+    )
+    assert path.read_bytes() == before and len(w.merges) == len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "missing_submit",
+        "missing_advance",
+        "wrong_submit_id",
+        "wrong_advance_id",
+        "provider_unknown",
+        "outcome_unknown",
+        "recovery_barrier",
+    ],
+)
+def test_cross_frontier_wait_checks_original_post_receipt(public_merge_world, capsys, damage):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    target = "owner/repo#12"
+    child = produced["merge_verification_successors"][target]
+    origin = child["lineage"]["finite_frontier"]
+    shard = resources.shard_dir(
+        resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target
+    )
+    path = shard / "state.actions" / f"{pipeline._digest(target)}.json"
+    # Actual per-target state.actions is beside state.json in the shard.
+    document = queue._read_state(path)
+    bucket = document["frontiers"][origin["frontier_id"]]
+    original_item = bucket["items"][target]
+    operation = original_item["operation"]
+    following = policy.make_frontier(
+        [target],
+        owner=origin["owner"],
+        frontier_id="later-accepted-observation",
+        bindings={
+            target: {
+                "revision": w.snapshot["revision"],
+                "action_id": policy.action_identity(
+                    target, w.snapshot["revision"], "wait", operation["binding"]
+                ),
+            }
+        },
+    )
+    receipt = queue.run_round(
+        path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": w.snapshot["revision"],
+            "action": "wait",
+            "eligible": False,
+            "reason": "same verification request already accepted",
+            "next_trigger": "authenticated result",
+            "operation_binding": operation["binding"],
+            "evidence": {"target": target, **copy.deepcopy(w.snapshot)},
+        },
+        lambda *_: pytest.fail("a later wait must never issue another POST"),
+        finite_frontier=following,
+        frontier_target=target,
+        deadline=None,
+        request_timeout_seconds=25,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+    )
+    evidence = {
+        "target": target,
+        "observed_revision": w.snapshot["revision"],
+        "head": w.snapshot["head"],
+        "merge": w.snapshot["merge"],
+        "operation_id": operation["id"],
+        "event_id": operation["result"]["verification_request_basis"],
+    }
+    assert (
+        queue.accepted_verifier_wait_proof(
+            path, target, frontier=following, receipt=receipt, evidence=evidence
+        )
+        is not None
+    )
+    document = queue._read_state(path)
+    bucket = document["frontiers"][origin["frontier_id"]]
+    original_item = bucket["items"][target]
+    if damage in {"missing_submit", "missing_advance", "wrong_submit_id", "wrong_advance_id"}:
+        kind = "operation_submitted" if "submit" in damage else "action_advanced"
+        # Keep both copies consistent: refusal must check actual causal binding,
+        # not merely detect different round/receipt serializations.
+        for record in (bucket["round"], bucket["round"]["receipt"]):
+            if damage.startswith("missing"):
+                record["events"] = [event for event in record["events"] if event["kind"] != kind]
+            else:
+                next(event for event in record["events"] if event["kind"] == kind)[
+                    "operation_id"
+                ] = "foreign"
+    elif damage == "provider_unknown":
+        original_item["provider_outcome_uncertain"] = {"run_id": "unknown-original"}
+    elif damage == "outcome_unknown":
+        original_item["operation"]["result"]["outcome_uncertain"] = True
+    elif damage == "recovery_barrier":
+        original_item["recovery_barrier"] = {"run_id": "unknown-original"}
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    checked = queue.accepted_verifier_wait_proof(
+        path, target, frontier=following, receipt=receipt, evidence=evidence
+    )
+    assert (checked is not None) is (damage is None)
+    assert path.read_bytes() == before and len(w.merges) == len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize("remove_progress", [False, True])
+def test_static_ack_action_change_requires_original_progress_event(
+    tmp_path, monkeypatch, remove_progress
+):
+    import test_closer_accepted_request_wait as static_wait
+
+    backend, remote, path, frontier = static_wait.world.__wrapped__(tmp_path, monkeypatch)
+    receipt = static_wait.run(
+        backend, path, frontier, lambda *_: static_wait.submit(backend, remote)
+    )
+    assert static_wait.proof(path, frontier, receipt, backend, remote) is not None
+    document = queue._read_state(path)
+    bucket = document["frontiers"][frontier["frontier_id"]]
+    item = bucket["items"][static_wait.TARGET]
+    operation = item["operation"]
+    assert item["revision"] == operation["revision"] == remote.current["revision"]
+    assert operation["action"] == "post_merge_verify" and item["action"] == "collect_evidence"
+    if remove_progress:
+        # Remove both redundant copies consistently. The accounting action
+        # change still claims progress even when the remote revision is static.
+        for record in (bucket["round"], bucket["round"]["receipt"]):
+            record["events"] = [
+                event for event in record["events"] if event["kind"] != "action_advanced"
+            ]
+            record["progress"] = []
+    receipt = bucket["round"]["receipt"]
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    checked = static_wait.proof(path, frontier, receipt, backend, remote)
+    assert (checked is not None) is (not remove_progress)
+    assert path.read_bytes() == before and len(remote.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "change", [None, "head", "merge"], ids=["compact-positive", "changed-head", "changed-merge"]
+)
+def test_actual_compact_prepare_wait_uses_authenticated_request_merge_identity(
+    public_merge_world, capsys, monkeypatch, change
+):
+    import closer_hold_followup as holds
+
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    child = produced["merge_verification_successors"]["owner/repo#12"]
+    row = child["native_result"]["targets"]["owner/repo#12"]
+    assert "merge" not in row["results"]["prepare"]["snapshot"]
+    root = resources.scoped_root(dispatcher._pipeline_state_path(w.raw))
+    shard = resources.shard_dir(root, "owner/repo#12") / "state.json"
+    queue_path = shard.parent / "state.actions" / f"{pipeline._digest('owner/repo#12')}.json"
+    before_queue = queue_path.read_bytes()
+    if change is not None:
+        w.snapshot[change] = "f" * 40
+    observer = dispatcher.Closer(
+        dispatcher.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=False, workers=False
+    )
+    monkeypatch.setattr(holds, "_backend", lambda *_: observer)
+
+    def probe():
+        return holds._probe_ci(
+            {
+                "target": "owner/repo#12",
+                "frontier": child["lineage"]["finite_frontier"],
+                "release_proof": {"kind": "accepted_verifier_terminal"},
+                "source": {"state_path": str(shard)},
+            },
+            "unused",
+            {},
+            row,
+        )
+
+    if change is not None:
+        with pytest.raises(ValueError, match="head or merge identity changed"):
+            probe()
+    else:
+        assert probe() == {
+            "status": "waiting",
+            "reason": "original sent correlation lacks a current authenticated terminal event/run/attempt",
+        }
+    assert queue_path.read_bytes() == before_queue
+    assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0
+
+
+def test_followup_reader_evaluates_nonpass_route_without_execution(
+    public_merge_world, capsys, monkeypatch
+):
+    import hashlib
+
+    import closer_hold_followup as holds
+    import dispatcher as offloader
+
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    capsys.readouterr()
+    w.snapshot["verifier"] = {
+        "schema": "verifier-corpus-decision/v1",
+        "verdict": "NON_PASS",
+        "repo": "owner/repo",
+        "pr": 12,
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "run_id": 42,
+        "run_attempt": 1,
+        "provider_verdicts": ["CONCERNS"],
+        "ci_failed": False,
+    }
+    w.snapshot["verifier_lifecycle"] = copy.deepcopy(w.snapshot["verifier"])
+    w.snapshot["verifier_runs"][0].update(status="completed", conclusion="success")
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("read-only applicability check attempted a provider call")
+
+    monkeypatch.setattr(offloader, "offload", forbidden)
+    control = dispatcher.Closer(
+        dispatcher.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=False, workers=False
+    )
+    before = control.observe("owner/repo#12")
+    assert before["eligible"] is False and before["action"] == "disposition"
+    reader = holds._backend(
+        str(w.root / "no-execution-manifest.json"),
+        {"worker_config": {"dispatch_state": str(w.raw)}},
+    )
+    after = reader.observe("owner/repo#12")
+    assert reader.apply is False and reader.workers is True
+    assert after["eligible"] is True and after["action"] == "disposition"
+    assert reader.execute("owner/repo#12", "disposition", after, {"id": "reader-tripwire"}) == {
+        "status": "deferred",
+        "reason": "inventory only",
+        "next_trigger": "authorized apply",
+    }
+    witness = {
+        "schema": "closer-reader-applicability-witness/v1",
+        "fixture": "actual public CLI originalPOST, synthetic external transports; no provider calls",
+        "source_sha256": hashlib.sha256(Path(holds.__file__).read_bytes()).hexdigest(),
+        "control_workers_false": {
+            key: before.get(key) for key in ("action", "eligible", "reason", "next_trigger")
+        },
+        "collector_workers_true_apply_false": {
+            key: after.get(key) for key in ("action", "eligible", "reason", "next_trigger")
+        },
+        "new_effect_count": 0,
+        "new_provider_call_count": 0,
+        "authority": False,
+    }
+    (w.root / "reader-applicability-witness.json").write_text(json.dumps(witness, sort_keys=True))
+    assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0

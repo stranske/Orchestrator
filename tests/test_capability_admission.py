@@ -14,6 +14,7 @@ next mistake, keep the old debt visible.
 
 from __future__ import annotations
 
+import inspect
 import pathlib
 import sys
 import tempfile
@@ -724,6 +725,41 @@ def test_consumer_report_excludes_waived_rows_and_names_the_drained_states(tmp_p
     assert "unmeasured 1" in drained_line and "has acted" not in drained_line
 
 
+def _run_standalone_check(check, verdicts) -> None:
+    """Replay unchanged, or supply this gate's two disposable pytest fixtures.
+
+    The script runner has no pytest fixture resolver. Never turn an unsupported
+    dependency or fixture error into a pass/skip, and never borrow machine state.
+    Normal pytest still resolves the original check signatures itself.
+    """
+    if check.__name__ in verdicts:
+        env_prereq.run_or_replay(check, verdicts)
+        return
+    parameters = inspect.signature(check).parameters
+    if not parameters:
+        env_prereq.run_or_replay(check, verdicts)
+        return
+    unsupported = [
+        name
+        for name, parameter in parameters.items()
+        if name not in {"tmp_path", "monkeypatch"}
+        or parameter.kind
+        not in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    ]
+    if unsupported:
+        raise TypeError("unsupported standalone fixtures: " + ", ".join(unsupported))
+    import pytest
+
+    # Keep a nested root: the confinement test deliberately writes a sibling
+    # outside tmp_path, which must also disappear at the end of this check.
+    with tempfile.TemporaryDirectory(prefix="admission-check-") as scratch:
+        tmp_path = pathlib.Path(scratch) / "tmp"
+        tmp_path.mkdir()
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            fixtures = {"tmp_path": tmp_path, "monkeypatch": monkeypatch}
+            check(**{name: fixtures[name] for name in parameters})
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     # verify.py hands over the verdicts its pytest run just reached on these same checks, so they
@@ -735,7 +771,7 @@ def main() -> int:
     for fn in tests:
         via = "  (pytest verdict, this run)" if fn.__name__ in verdicts else ""
         try:
-            env_prereq.run_or_replay(fn, verdicts)
+            _run_standalone_check(fn, verdicts)
             print(f"  OK   {fn.__name__}{via}")
         # A skip is not a pass and not a failure. Catching it BEFORE AssertionError matters:
         # MissingPrerequisite is a SkipTest, not an AssertionError, so an uncaught one would

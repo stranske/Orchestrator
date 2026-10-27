@@ -446,7 +446,14 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     if not isinstance(runtime_context, dict):
         errors.append("runtime_context must be an object when present")
         runtime_context = {}
-    for key in ("worktree", "serve_command", "health_url", "base_ref", "browser_endpoint"):
+    for key in (
+        "worktree",
+        "serve_command",
+        "health_url",
+        "base_ref",
+        "browser_endpoint",
+        "python_interpreter",
+    ):
         if (
             key in runtime_context
             and runtime_context[key] is not None
@@ -651,7 +658,13 @@ def _local_verify_command(check: dict[str, Any], runtime_context: dict[str, Any]
         "--base-ref",
         base_ref,
         "--test-cmd",
-        shlex.join(_pytest_without_coverage(shlex.split(check["test_cmd"]))),
+        shlex.join(
+            _pytest_without_coverage(
+                _repository_python(
+                    shlex.split(check["test_cmd"]), runtime_context.get("python_interpreter")
+                )
+            )
+        ),
     ]
     for path in check.get("test_paths") or []:
         parts.extend(["--test-path", path])
@@ -782,6 +795,7 @@ def build_dry_run_plan(spec: dict[str, Any]) -> dict[str, Any]:
             "health_url": runtime_context.get("health_url"),
             "base_ref": runtime_context.get("base_ref") or "HEAD",
             "browser_endpoint": runtime_context.get("browser_endpoint"),
+            "python_interpreter": runtime_context.get("python_interpreter"),
             "notes": runtime_context.get("notes") or [],
         },
         "acceptance_criteria": [
@@ -1149,11 +1163,36 @@ def _completed_result(
     }
 
 
-def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dict[str, Any]:
+def _repository_python(argv: list[str], interpreter: str | None) -> list[str]:
+    """Bind Python launchers, including pytest console scripts, to the checkout."""
+    if not interpreter or not argv:
+        return argv
+    name = Path(argv[0]).name
+    if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", name):
+        return [interpreter, *argv[1:]]
+    if name in {"pytest", "pytest.exe"}:
+        return [interpreter, "-m", "pytest", *argv[1:]]
+    return argv
+
+
+def _run_command_check(
+    check: dict[str, Any], *, cwd: Path, timeout: int, python_interpreter: str | None = None
+) -> dict[str, Any]:
     started = time.time()
-    argv = shlex.split(check["command"])
+    argv = _repository_python(shlex.split(check["command"]), python_interpreter)
     normalized = _pytest_without_coverage(argv)
     run_env = os.environ.copy()
+    if python_interpreter:
+        # Children launched by name must select the same venv as sys.executable.
+        # Discard scheduler import paths so they cannot mask a missing repo dependency.
+        run_env["PATH"] = (
+            str(Path(python_interpreter).parent) + os.pathsep + run_env.get("PATH", "")
+        )
+        run_env["VIRTUAL_ENV"] = str(Path(python_interpreter).parent.parent)
+        run_env.pop("PYTHONHOME", None)
+        # Keep these relative: local_verify also runs the tests in an extracted
+        # base tree, whose imports must come from that tree rather than the merge.
+        run_env["PYTHONPATH"] = os.pathsep.join(("src", "."))
     if normalized != argv or _is_pytest(argv):
         run_env["PYTEST_ADDOPTS"] = shlex.join(
             _strip_coverage_options(shlex.split(run_env.get("PYTEST_ADDOPTS", "")))
@@ -1176,6 +1215,7 @@ def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dic
             "status": "ERROR",
             "reason": f"timed out after {timeout}s",
             "command": check.get("command"),
+            "interpreter": python_interpreter,
             "duration_s": round(time.time() - started, 3),
             "stdout_tail": _tail((exc.stdout or "") if isinstance(exc.stdout, str) else ""),
             "stderr_tail": _tail((exc.stderr or "") if isinstance(exc.stderr, str) else ""),
@@ -1187,13 +1227,16 @@ def _run_command_check(check: dict[str, Any], *, cwd: Path, timeout: int) -> dic
             "status": "ERROR",
             "reason": str(exc),
             "command": check.get("command"),
+            "interpreter": python_interpreter,
             "duration_s": round(time.time() - started, 3),
             "stdout_tail": "",
             "stderr_tail": "",
         }
-    return _completed_result(
+    result = _completed_result(
         {**check, "command": shlex.join(argv)}, completed, time.time() - started
     )
+    result["interpreter"] = python_interpreter
+    return result
 
 
 def _is_pytest(argv: list[str]) -> bool:
@@ -1256,6 +1299,7 @@ def run_verification(
 
     plan = build_dry_run_plan(spec)
     cwd = Path(plan["runtime_context"]["worktree"]).resolve()
+    python_interpreter = plan["runtime_context"].get("python_interpreter")
     selected = set(check_ids) if check_ids else None
     results: list[dict[str, Any]] = []
     for check in _planned_checks_for_run(plan, selected):
@@ -1310,7 +1354,11 @@ def run_verification(
                 }
             )
             continue
-        results.append(_run_command_check(check, cwd=cwd, timeout=timeout))
+        results.append(
+            _run_command_check(
+                check, cwd=cwd, timeout=timeout, python_interpreter=python_interpreter
+            )
+        )
 
     gate = evaluate_results(spec, {"check_results": results})
     return {
@@ -1320,6 +1368,7 @@ def run_verification(
         "confirmed_run": True,
         "allow_command_checks": allow_command_checks,
         "timeout": timeout,
+        "interpreter": python_interpreter,
         "check_results": results,
         "gate": gate,
     }

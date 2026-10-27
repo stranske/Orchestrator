@@ -104,6 +104,7 @@ def world(tmp_path, monkeypatch):
         run=run,
         data=archive(),
         posts=[],
+        post_fields=[],
         reads=[],
         downloads=[],
         history_extra=0,
@@ -118,12 +119,14 @@ def world(tmp_path, monkeypatch):
         w.reads.append(endpoint)
         if kwargs.get("method") == "POST":
             w.posts.append(endpoint)
+            w.post_fields.append(copy.deepcopy(kwargs.get("fields")))
             if w.post_timeout:
                 raise TimeoutError("POST uncertain")
-            w.current["labels"] = ["verify:compare"]
             return []
         if w.fail:
             raise w.fail
+        if endpoint == "repos/owner/repo":
+            return {"default_branch": "main"}
         if endpoint.endswith("/actions/runs/99"):
             return copy.deepcopy(w.run)
         if endpoint.endswith("/artifacts?per_page=100"):
@@ -237,6 +240,18 @@ def test_timeout_after_post_is_never_a_known_no_effect(world):
     with pytest.raises(TimeoutError, match="POST uncertain"):
         world.backend.initiate_verify(TARGET, world.snapshot)
     assert len(world.posts) == 1
+    assert world.posts == ["repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches"]
+    assert world.post_fields == [
+        {
+            "ref": "main",
+            "inputs[pr_number]": "12",
+            "inputs[mode]": "compare",
+            "inputs[verification_request_basis]": world.backend.verification_request_basis(
+                world.snapshot
+            ),
+        }
+    ]
+    assert world.current["labels"] == []
 
 
 def test_rehashed_binding_or_cause_mutation_still_refused(world):
@@ -849,7 +864,18 @@ def test_foreign_evaluation_capture_does_not_become_target_acceptance(world):
     assert not world.posts
     result = world.backend.initiate_verify(target, world.snapshot)
     assert result["status"] == "completed"
-    assert len(world.posts) == 1 and world.posts == ["repos/owner/repo/issues/656/labels"]
+    assert world.posts == ["repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches"]
+    assert world.post_fields == [
+        {
+            "ref": "main",
+            "inputs[pr_number]": "656",
+            "inputs[mode]": "compare",
+            "inputs[verification_request_basis]": world.backend.verification_request_basis(
+                world.snapshot
+            ),
+        }
+    ]
+    assert world.current["labels"] == []
     assert "verdict" not in result and "native_diagnostic_reference" not in result
     assert world.snapshot.get("verifier") is None
     assert len(world.downloads) == 1
