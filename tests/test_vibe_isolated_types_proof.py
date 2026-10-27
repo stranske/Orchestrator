@@ -3,6 +3,9 @@
 import ast
 import hashlib
 import importlib.machinery
+import importlib.util
+import os
+import py_compile
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -146,3 +149,96 @@ def test_actual_launcher_flags_and_clean_environment(monkeypatch):
     assert kwargs["env"]["HOME"] == str(kwargs["cwd"])
     assert result["cache_files_after"] == []
     assert "INERT_ENV_CANARY" not in str(result)
+
+
+@pytest.fixture
+def method_manifest_tree(tmp_path, monkeypatch):
+    """Only disposable source bytes; never inspect installed interpreter/packages."""
+    packages = tmp_path / "packages"
+    methods = packages / "vibe" / "core"
+    (methods / "llm").mkdir(parents=True)
+    files = {
+        "agent_loop.py": "# synthetic method source\n",
+        "llm/format.py": "# synthetic formatter source\n",
+    }
+    pins = {}
+    for name, text in files.items():
+        path = methods / name
+        path.write_text(text)
+        pins[name] = proof.digest(path)
+    alias = tmp_path / "package-alias"
+    alias.symlink_to(packages, target_is_directory=True)
+    stdlib = tmp_path / "empty-stdlib"
+    stdlib.mkdir()
+    interpreter = tmp_path / "never-executed-interpreter"
+    interpreter.write_bytes(b"synthetic pin only; never executed")
+    monkeypatch.setattr(proof, "PACKAGES", alias)
+    monkeypatch.setattr(proof, "STDLIB", stdlib)
+    monkeypatch.setattr(proof, "INTERPRETER", interpreter)
+    monkeypatch.setattr(proof, "METHOD_FILES", pins)
+    monkeypatch.setattr(proof, "PUBLIC", ())
+    monkeypatch.setattr(proof, "DEPENDENCIES", ())
+    return alias, packages, pins
+
+
+def test_method_manifest_uses_canonical_keys_for_symlinked_package_tree(method_manifest_tree):
+    alias, packages, pins = method_manifest_tree
+    manifest = proof.prepare_manifest()
+    for name, expected in pins.items():
+        aliased = alias / "vibe/core" / name
+        canonical = (packages / "vibe/core" / name).resolve()
+        assert str(aliased) not in manifest["files"]
+        assert manifest["files"][str(canonical)] == expected
+        # Directly exercise the same resolved lookup made by the audit hook.
+        proof.audit("open", (str(aliased), "r", 0), manifest["files"])
+
+
+def test_method_manifest_still_rejects_source_drift(method_manifest_tree):
+    _alias, packages, _pins = method_manifest_tree
+    (packages / "vibe/core/agent_loop.py").write_text("# changed source\n")
+    with pytest.raises(ValueError, match="native method source drift"):
+        proof.prepare_manifest()
+
+
+def test_method_manifest_pin_does_not_authorize_retargeted_symlink(method_manifest_tree, tmp_path):
+    alias, packages, pins = method_manifest_tree
+    manifest = proof.prepare_manifest()
+    replacement = tmp_path / "replacement"
+    (replacement / "vibe/core/llm").mkdir(parents=True)
+    for name in pins:
+        (replacement / "vibe/core" / name).write_bytes((packages / "vibe/core" / name).read_bytes())
+    alias.unlink()
+    alias.symlink_to(replacement, target_is_directory=True)
+    # Even identical bytes at a different canonical path were not reviewed.
+    with pytest.raises(PermissionError, match="non-code read"):
+        proof.audit("open", (str(alias / "vibe/core/agent_loop.py"), "r", 0), manifest["files"])
+
+
+@pytest.mark.parametrize("symlinked", [False, True])
+def test_real_pinned_find_spec_loads_verified_source_and_records_digest(tmp_path, symlinked):
+    directory = tmp_path / "actual-modules"
+    directory.mkdir()
+    source = directory / "typing_extensions.py"
+    source.write_text('VALUE = "stale"\n')
+    before = source.stat()
+    py_compile.compile(str(source), doraise=True)
+    source.write_text('VALUE = "fresh"\n')  # Same length and timestamp: old pyc is eligible.
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    search = directory
+    if symlinked:
+        search = tmp_path / "module-alias"
+        search.symlink_to(directory, target_is_directory=True)
+    canonical = str(source.resolve())
+    expected = proof.digest(source)
+    guard = proof.Guard({canonical: expected})
+    # Real PathFinder and real PinnedSource; no replacement finder/loader/guard.
+    spec = guard.find_spec("typing_extensions", [str(search)])
+    assert spec is not None and isinstance(spec.loader, proof.PinnedSource)
+    assert spec.loader.expected == expected and spec.loader.path == canonical
+    assert guard.loaded == {"typing_extensions": {"path": canonical, "sha256": expected}}
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.VALUE == "fresh"
+    source.write_text('raise AssertionError("changed source must not execute")\n')
+    with pytest.raises(ImportError, match="source drift before compilation"):
+        spec.loader.exec_module(module)

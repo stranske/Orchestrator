@@ -101,7 +101,7 @@ def prepare_manifest() -> dict[str, Any]:
         path = PACKAGES / "vibe/core" / name
         if digest(path) != expected:
             raise ValueError("native method source drift")
-        files[str(path)] = expected
+        files[str(path.resolve())] = expected
     files[str(Path(__file__).resolve())] = digest(Path(__file__))
     return {
         "interpreter": str(INTERPRETER),
