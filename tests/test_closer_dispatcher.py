@@ -4300,8 +4300,11 @@ def _adopted_pipeline(tmp_path, *, active=False):
     return path
 
 
+@pytest.mark.parametrize(
+    "admission_reason", ["valid_pipeline_stop", "legacy_window_expired_fresh_admission"]
+)
 def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, admission_reason
 ):
     start = time.time()
     monkeypatch.setattr(adapter.time, "time", lambda: start)
@@ -4311,7 +4314,14 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     state_path.write_text(json.dumps(state))
     before = state_path.read_bytes()
     assert adapter._validly_finished_legacy_round(state_path, state) is False
-    _adopted_pipeline(tmp_path)
+    pipeline_path = _adopted_pipeline(tmp_path)
+    if admission_reason == "legacy_window_expired_fresh_admission":
+        pipeline_state = closer_pipeline._load(pipeline_path)
+        previous = next(iter(pipeline_state["runs"].values()))
+        previous["targets"][TARGET]["status"] = "deferred"
+        closer_pipeline._save(pipeline_path, pipeline_state)
+        assert closer_pipeline.validate_stop(pipeline_path)["valid"] is False
+    pipeline_before = pipeline_path.read_bytes()
     assignment = tmp_path / "assignment.json"
     assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
@@ -4344,7 +4354,7 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     admission = json.loads(capsys.readouterr().out)["budget_admission"]
     assert seen == [start + 10 + 300]
     assert admission == {
-        "reason": "valid_pipeline_stop",
+        "reason": admission_reason,
         "scope": "pipeline",
         "requested_deadline": start + 310,
         "selected_deadline": start + 310,
@@ -4354,7 +4364,9 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
         "legacy_state_digest": adapter.digest(state),
         "legacy_round_renewed": False,
     }
+    assert admission["selected_deadline"] > start
     assert state_path.read_bytes() == before
+    assert pipeline_path.read_bytes() == pipeline_before
     assert (
         adapter._deadline_with_legacy_round(time.time() + 310, state, state_path)
         == state["round"]["deadline"]

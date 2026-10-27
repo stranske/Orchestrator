@@ -40,4 +40,22 @@ Publication blocker: this run exposes `.git` as read-only. The GitHub connector 
 
 ## Remaining live acceptance
 
+### CLI admission follow-up (2026-10-27, unverified)
+
+The existing CLI budget receipt test now covers both a valid prior stop and an expired
+prior run with an invalid stop. The latter case requires
+`legacy_window_expired_fresh_admission`, a future selected deadline, false/zero expiry
+diagnostics, and unchanged legacy and pipeline state bytes. This is an additional
+test change; the production admission and diagnostic changes are already present.
+
+This runner has neither pytest nor Black installed. The targeted dispatcher/pipeline
+test command failed before collection (`No module named pytest`). Both the changed-file
+Black invocation and the required repository-wide Black check could not run because
+Black is absent. Installing the tools into `/tmp` failed because PyPI DNS resolution
+is unavailable; no existing local installation was found. The changed test module
+parses and `git diff --check` passes, but those checks do not establish test success.
+The new test changes remain unverified and uncommitted: the mandatory Black gate
+must pass before committing or pushing Python changes. No additional task checkbox
+is complete on the strength of this follow-up.
+
 CI, delayed review, guarded merge, and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
