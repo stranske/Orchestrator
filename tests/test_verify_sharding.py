@@ -1,7 +1,9 @@
 """Shards must preserve the whole suite and the existing aggregate verification rules."""
 
 import contextlib
+import importlib.util
 import json
+import pathlib
 import subprocess
 import sys
 from collections import Counter
@@ -241,7 +243,11 @@ def test_aggregate_coverage_requires_every_shard_without_changing_verdict(
 
 @pytest.fixture
 def planner_junit(tmp_path, monkeypatch):
-    from tools import make_test_shards
+    planner_path = pathlib.Path(__file__).resolve().parents[1] / "tools" / "make_test_shards.py"
+    spec = importlib.util.spec_from_file_location("make_test_shards", planner_path)
+    assert spec is not None and spec.loader is not None
+    make_test_shards = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(make_test_shards)
 
     (tmp_path / "tests").mkdir()
     for name in ("a", "b", "c", "untimed"):

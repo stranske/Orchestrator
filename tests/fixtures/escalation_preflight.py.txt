@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Bounded read-only preflight. Invoke with shell yield_time_ms=30000."""
+import concurrent.futures
+import json
+import sqlite3
+import subprocess
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+EXCLUDED = {"stranske/Collab-Deliverables", "stranske/Collab-Admin"}
+QUERY = 'query($cursor:String){user(login:"stranske"){repositories(first:100,after:$cursor,ownerAffiliations:OWNER){pageInfo{hasNextPage endCursor} nodes{nameWithOwner pullRequests(first:100,states:OPEN){pageInfo{hasNextPage} nodes{number headRefOid isDraft updatedAt createdAt baseRefName}}}}}}'
+
+def command(args):
+    result = subprocess.run(args, capture_output=True, text=True, cwd="/tmp", timeout=110)
+    if result.returncode:
+        raise RuntimeError(result.stderr[:1000] or "command failed")
+    return json.loads(result.stdout)
+
+def inventory():
+    prs, cursor = [], None
+    while True:
+        args = ["gh", "api", "graphql", "-f", "query=" + QUERY]
+        if cursor:
+            args += ["-f", "cursor=" + cursor]
+        data = command(args)
+        if data.get("errors"):
+            raise RuntimeError(str(data["errors"])[:1000])
+        repos = data["data"]["user"]["repositories"]
+        for repo in repos["nodes"]:
+            if repo["nameWithOwner"] in EXCLUDED:
+                continue
+            if repo["pullRequests"]["pageInfo"]["hasNextPage"]:
+                raise RuntimeError("Incomplete PR pagination: " + repo["nameWithOwner"])
+            for pr in repo["pullRequests"]["nodes"]:
+                prs.append(dict(target=repo["nameWithOwner"] + "#" + str(pr.pop("number")), **pr))
+        if not repos["pageInfo"]["hasNextPage"]:
+            return prs
+        cursor = repos["pageInfo"]["endCursor"]
+
+def guard():
+    data = command(["/Users/teacher/.codex/bin/opener-liveness-guard.py", "--json"])
+    return {k: v for k, v in data.items() if isinstance(v, (int, float, bool)) or k == "generated_at"}
+
+def main():
+    started = time.monotonic()
+    result = {"errors": [], "coverage_json": None, "coverage_status": "unknown"}
+    try:
+        assignment = json.loads((ROOT.parent / "reviewed-repo-automation-controller/escalator-assignment.json").read_text())
+        result["controller_assignment"] = assignment
+    except Exception as exc:
+        result["controller_assignment"] = None
+        result["errors"].append("Missing controller assignment: " + str(exc)[:300])
+    try:
+        memory = json.loads((ROOT / "memory.md").read_text())
+        result["coverage_json"] = memory.get("coverage_json")
+        if isinstance(result["coverage_json"], dict):
+            assigned = {row["target"] for row in (result.get("controller_assignment") or {}).get("targets", [])}
+            result["coverage_json"] = {k: v for k, v in result["coverage_json"].items() if k in assigned}
+        if isinstance(result["coverage_json"], (dict, list)) and result["coverage_json"]:
+            result["coverage_status"] = "available_requires_exact_head_validation"
+        else:
+            result["coverage_json"] = None
+            result["coverage_reason"] = "No prior coverage; classify live targets as uncovered, never covered."
+    except Exception as exc:
+        result["errors"].append(str(exc)[:1000])
+    try:
+        with sqlite3.connect("file:/Users/teacher/.codex/sqlite/codex-dev.db?mode=ro", uri=True) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute("SELECT thread_id,created_at FROM automation_runs WHERE automation_id=? ORDER BY created_at DESC LIMIT 1", ("reviewed-repo-stall-escalator",)).fetchone()
+            result["current_run"] = dict(row) if row else None
+            if not row:
+                result["errors"].append("Missing current automation run")
+    except Exception as exc:
+        result["errors"].append(str(exc)[:1000])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {"inventory": pool.submit(inventory), "guard_counts": pool.submit(guard)}
+        for name, future in futures.items():
+            try:
+                result[name] = future.result()
+            except Exception as exc:
+                result["errors"].append(name + ": " + str(exc)[:1000])
+    result["elapsed_seconds"] = round(time.monotonic() - started, 2)
+    print(json.dumps(result, separators=(",", ":")), flush=True)
+
+if __name__ == "__main__":
+    main()

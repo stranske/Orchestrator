@@ -2,3 +2,5 @@ PyYAML==6.0.3
 requests==2.34.2
 jsonschema==4.26.0
 psutil==7.2.2
+# Test-only: exercise retained native LLMUsage/LLMChunk validation without SDK imports.
+pydantic==2.13.4

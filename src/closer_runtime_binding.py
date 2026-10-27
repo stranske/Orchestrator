@@ -1171,6 +1171,8 @@ class PinnedNativeHooks:
                 ):
                     raise BindingError("native admission cfg differs from signed invocation")
                 admitted_assignment = Path(context["assignment"]["path"])
+                if "demand_assignment" in context:
+                    self.assignment_source = Path(context["demand_assignment"]["path"])
             canonical = {
                 "interpreter": self.interpreter_anchor.resolve(),
                 "dispatcher": self.dispatcher_anchor.resolve(),
@@ -1436,6 +1438,9 @@ class PinnedNativeHooks:
         self.env = getattr(self, "env", {})
         self.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
         self.terminal_receipt_problem = None
+        self.descendant_bundle = None
+        self.descendant_bundle_problem: str | None = None
+        self.descendant_cfg: dict[str, Any] | None = None
         try:
             if done.returncode not in {0, 78}:
                 raise ValueError("ACTION B did not return a supported terminal receipt")
@@ -1492,9 +1497,13 @@ class PinnedNativeHooks:
                 or verdict.get("run_ids") != receipt.get("run_ids")
             ):
                 raise ValueError("terminal receipt bytes/assignment/run binding mismatch")
+            from closer_native_descendants import seal_bundle
+
+            self.descendant_bundle = seal_bundle(cfg, candidate, watermark)
+            self.descendant_cfg = cfg
             self.env["CLOSER_POSTRUN_ROUND_ID"] = round_id
             return True
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             self.terminal_receipt_problem = {
                 "type": type(exc).__name__,
                 "errno": getattr(exc, "errno", None),
@@ -1539,6 +1548,30 @@ class PinnedNativeHooks:
             self.cleanup_receipt(token, result) if self._pins_match() else None
         )
         self.postrun_result["refusal"] = self.postrun_refusal(result)
+        if getattr(self, "descendant_bundle", None) is not None:
+            try:
+                from closer_native_descendants import finalize_bundle
+
+                stderr = self.postrun_result["stderr"]
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode("utf-8", errors="replace")
+                if not self.postrun_result["dependencies_valid"] or not (
+                    result.returncode == 0
+                    or (
+                        result.returncode == 65
+                        and stderr.strip()
+                        == "handoff-postrun: closer stop rejected; preserve ledger and resume actionable work"
+                    )
+                ):
+                    raise ValueError("descendant actual C did not reach reviewed cleanup boundary")
+                self.descendant_bundle = finalize_bundle(
+                    self.descendant_cfg,
+                    self.descendant_bundle,
+                    self.postrun_result["cleanup"],
+                    token,
+                )
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                self.descendant_bundle_problem = str(exc)[:512]
         return result.returncode
 
     def postrun_refusal(self, result):
@@ -1599,6 +1632,10 @@ def scoped_continuation_proof(cfg, candidate):
 
     if cfg.get("mechanism") != "native-handoff/v1" or not isinstance(candidate, dict):
         return None
+    if candidate.get("schema") == "native-descendant-continuation/v1":
+        from closer_native_descendants import continuation_proof
+
+        return continuation_proof(cfg, candidate)
     try:
         assignment = Path(cfg["assignment"])
         expected = cfg["native_hooks"]["postrun_dependencies"]["assignment"]
@@ -1784,6 +1821,9 @@ def run_native_round(
             return "unavailable", "native B requires pinned Runtime Python interpreter"
         command = [str(interpreter), *command[1:]]
     if isinstance(hooks, PinnedNativeHooks):
+        hooks.descendant_bundle = None
+        hooks.descendant_bundle_problem = None
+        hooks.descendant_cfg = None
         hooks.env = getattr(hooks, "env", {})
         hooks.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
         hooks.env["CLOSER_POSTRUN_REQUIRE_NAMED_ROUND"] = (
@@ -1822,6 +1862,8 @@ def run_native_round(
         except (ValueError, TypeError):
             value = {"actual_detail": text}
         value["native_execution"] = execution_report()
+        if isinstance(hooks, PinnedNativeHooks) and getattr(hooks, "descendant_bundle", None):
+            value["descendant_bundle"] = hooks.descendant_bundle
         return json.dumps(value, sort_keys=True)
 
     outcome, detail = "unknown", "native prerun outcome unknown"
@@ -2005,6 +2047,36 @@ def run_native_round(
             )
         if outcome != "denied":
             outcome = "unknown"
+    if isinstance(hooks, PinnedNativeHooks) and getattr(hooks, "descendant_bundle", None):
+        # TOP completion can never erase a descendant's unknown effect or hold.
+        try:
+            from closer_native_descendants import bundle_record, continuation_proof
+
+            descendants = bundle_record(cfg, hooks.descendant_bundle)
+            if getattr(hooks, "descendant_bundle_problem", None):
+                raise ValueError(hooks.descendant_bundle_problem)
+            if descendants["aggregate"] == "unknown":
+                raise ValueError("descendant effect outcome unknown; preserve original owner")
+            if descendants["aggregate"] == "known_held":
+                proof = continuation_proof(cfg, {"descendant_bundle": hooks.descendant_bundle})
+                if proof is None or outcome == "denied":
+                    raise ValueError(
+                        "descendant known hold lacks actual cleanup continuation proof"
+                    )
+                return "scoped_continuation", reported(
+                    json.dumps(
+                        {
+                            "proof": proof,
+                            "actual_detail": detail,
+                            "action_b_exit": terminal_b.returncode if terminal_b else None,
+                            "action_c_exit": getattr(hooks, "postrun_result", {}).get("code"),
+                        }
+                    )
+                )
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            return ("denied" if outcome == "denied" else "unknown"), reported(
+                detail + "; descendant receipt boundary unavailable: " + str(exc)[:512]
+            )
     if (
         cfg.get("mechanism") == "native-handoff/v1"
         and isinstance(hooks, PinnedNativeHooks)

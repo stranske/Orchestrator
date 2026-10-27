@@ -1027,6 +1027,127 @@ def validate_stop(
         )
 
 
+def _require_ci_no_effect_history(document, *, selected=True):
+    """A CI read wait is not proof that an earlier operation never executed."""
+    pending = [document]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                if selected and key == "operation" and child is not None:
+                    raise QueueStateError("CI wait contains operation history")
+                if (
+                    selected
+                    and key in {"operation_history", "action_history"}
+                    and child not in (None, [])
+                ):
+                    raise QueueStateError("CI wait contains operation history")
+                if key in {
+                    "provider_outcome_uncertain",
+                    "recovery_barrier",
+                    "outcome_uncertain",
+                } and child not in (None, False):
+                    raise QueueStateError("CI wait contains uncertain outcome")
+                if key == "status" and child is not None and not isinstance(child, str):
+                    raise QueueStateError("CI wait contains malformed outcome status")
+                if (
+                    key == "status"
+                    and isinstance(child, str)
+                    and (
+                        child in PENDING_OPERATION_STATES | {"unknown"}
+                        or (selected and child in {"completed", "complete"})
+                    )
+                ):
+                    raise QueueStateError("CI wait contains completed or unresolved outcome")
+                pending.append(child)
+        elif isinstance(value, list):
+            pending.extend(value)
+
+
+def _ci_wait_proof_data(document, target, *, frontier, receipt, evidence, now_value):
+    import re
+
+    from closer_frontier_policy import validate_frontier
+
+    frontier = validate_frontier(frontier)
+    if not (
+        isinstance(evidence, Mapping)
+        and evidence.get("target") == target
+        and type(evidence.get("check_run_id")) is int
+        and evidence["check_run_id"] > 0
+        and re.fullmatch(r"[0-9a-f]{40}", str(evidence.get("head", "")))
+        and evidence.get("observed_revision") == frontier["bindings"][target]["revision"]
+    ):
+        raise QueueStateError("CI wait evidence identity is incomplete")
+    _require_ci_no_effect_history(document, selected=False)
+    selected = state_for_frontier(document, frontier["frontier_id"], expected_policy=frontier)
+    if selected is None or selected["round"].get("receipt") != receipt:
+        raise QueueStateError("CI wait original receipt differs")
+    _require_ci_no_effect_history({"items": selected["items"], "round": selected["round"]})
+    checked = _validate_data(
+        selected, receipt, assignment_targets=[target], now_value=now_value, holder_fn=claims.holder
+    )
+    if checked.get("valid") is not True or checked.get("stop_valid") is not True:
+        raise QueueStateError("CI wait original queue validation refused")
+    rows = [
+        row
+        for row in receipt.get("accounting", [])
+        if isinstance(row, Mapping) and row.get("target") == target
+    ]
+    item = selected["items"].get(target)
+    snapshot = item.get("evidence") if isinstance(item, Mapping) else None
+    if not (
+        len(rows) == 1
+        and isinstance(snapshot, Mapping)
+        and rows[0].get("eligible") is False
+        and rows[0].get("action") == "wait"
+        and rows[0].get("reason") == "current-head checks pending or unknown"
+        and rows[0].get("status") in {"deferred", "ineligible"}
+        and rows[0].get("revision") == evidence["observed_revision"]
+        and item.get("observation_freshness") == "fresh"
+        and snapshot.get("target") == target
+        and snapshot.get("checks") == "PENDING"
+        and snapshot.get("head") == snapshot.get("pending_check_head") == evidence["head"]
+        and evidence["check_run_id"] in (snapshot.get("pending_check_run_ids") or [])
+    ):
+        raise QueueStateError("CI wait is not the original exact pending check observation")
+    return {
+        "schema": "closer-ci-no-effect-wait/v1",
+        "target": target,
+        "frontier_id": frontier["frontier_id"],
+        "frontier_sha256": _digest(frontier),
+        "check_run_id": evidence["check_run_id"],
+        "head": evidence["head"],
+        "observed_revision": evidence["observed_revision"],
+        "receipt_sha256": _digest(receipt),
+        "confirmed_no_effect": True,
+        "authority": False,
+    }
+
+
+def ci_wait_no_effect_proof(state_path, target, *, frontier, receipt, evidence):
+    """Read original queue under its real lock; never infer no-start from absence."""
+    path = Path(state_path)
+    if path.resolve() != path or path.is_symlink():
+        raise QueueStateError("CI wait queue path is aliased")
+    with _ledger_lock(path, cutoff=time.time() + 1.0, now=time.time) as locked:
+        if not locked:
+            raise QueueStateError("CI wait queue remains owned")
+        raw = path.read_bytes()
+        document = _read_state(path)
+        proof = _ci_wait_proof_data(
+            document,
+            target,
+            frontier=frontier,
+            receipt=receipt,
+            evidence=evidence,
+            now_value=time.time(),
+        )
+        if path.read_bytes() != raw:
+            raise QueueStateError("CI wait queue changed while validating")
+        return {**proof, "queue_sha256": hashlib.sha256(raw).hexdigest()}
+
+
 def completed_progress_events(receipt, target, operation):
     """Exact submitted/advanced causal events shared by finite progress and waits."""
     events = receipt.get("events")

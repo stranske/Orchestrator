@@ -6,6 +6,8 @@ limitations so a green wiring result cannot be mistaken for current-demand admis
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from scripts import install_closer_campaign_hook as hook
 
@@ -22,6 +24,20 @@ def isolated_state(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
     monkeypatch.delenv("ORCH_CLOSER_CAMPAIGN_DIR", raising=False)
     monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_TICK", "1")
+
+
+def write_valid_non_native_pin(root):
+    """Real manifest validation and module hashes; no native/runner qualification."""
+    pin = root / "pin.manifest.json"
+    manifest = campaign.make_manifest(
+        Path(campaign.__file__).parent,
+        candidate_sha="a" * 40,
+        state_versions={"campaign": 1, "release": 1},
+        campaign_root=root,
+        manifest_path=pin,
+    )
+    campaign.write_manifest(pin, manifest)
+    return pin
 
 
 def test_missing_pin_never_calls_tick(tmp_path, monkeypatch):
@@ -42,8 +58,7 @@ def test_explicit_optout_never_calls_tick(tmp_path, monkeypatch):
 def test_explicit_root_binds_state_and_pin_together(tmp_path, monkeypatch):
     root = tmp_path / "chosen"
     root.mkdir()
-    pin = root / "pin.manifest.json"
-    pin.write_text("{}")
+    pin = write_valid_non_native_pin(root)
     seen = []
     monkeypatch.setattr(campaign, "tick", lambda *args: seen.append(args) or [])
     assert campaign.tick_safe(str(root)) == []
@@ -67,7 +82,7 @@ def test_hook_currently_ticks_before_demand_refresh(monkeypatch):
 def test_tick_failure_keeps_existing_demand_path(tmp_path, monkeypatch):
     root = tmp_path / "closer-campaigns"
     root.mkdir()
-    (root / "pin.manifest.json").write_text("{}")
+    write_valid_non_native_pin(root)
 
     def fail(*args):
         raise RuntimeError("offline fixture")

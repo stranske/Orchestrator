@@ -86,6 +86,7 @@ def source(tmp_path: Path) -> Path:
     _write(src / "orchestrate.sh", "echo tick\n", 0o755)
     _write(src / "tests" / "test_a.py", "def test_a():\n    assert True\n")
     _write(src / "tests" / "fixtures" / "f.txt", "fixture\n")
+    _write(src / "tools" / "make_test_shards.py", "def make_plan():\n    return {}\n")
     _write(src / "scripts" / "check_checks_reported.py", "print('ok')\n", 0o644)
     for real in (BUILDER, INSTALLER, GUARD):
         shutil.copy2(real, src / "scripts" / real.name)
@@ -137,6 +138,7 @@ def test_the_mirror_is_flat_and_carries_the_committed_trees(source: Path, tmp_pa
     assert "def test_a" in (mirror / "tests" / "test_a.py").read_text()
     assert not (mirror / "tests" / "test_untracked.py").exists()
     assert (mirror / "tests" / "fixtures" / "f.txt").read_text() == "fixture\n"
+    assert (mirror / "tools" / "make_test_shards.py").is_file()
     assert "uncommitted test edits are NOT shipped" in proc.stdout
     for executable in ("orchestrate.sh", "scripts/check_checks_reported.py"):
         assert os.access(mirror / executable, os.X_OK), executable
@@ -230,6 +232,7 @@ def test_everything_the_builder_ships_is_owned_by_the_installer(tmp_path: Path) 
     _write(src / "src" / "base.py", "BASE = 1\n")
     _write(src / "orchestrate.sh", "echo tick\n", 0o755)
     _write(src / "tests" / "test_a.py", "def test_a():\n    pass\n")
+    _write(src / "tools" / "make_test_shards.py", "def make_plan():\n    return {}\n")
     _write(src / "scripts" / "check_checks_reported.py", "print('ok')\n")
     shutil.copy2(INSTALLER, src / "scripts" / INSTALLER.name)
     _write(src / "docs" / "guide.md", "guide\n")
