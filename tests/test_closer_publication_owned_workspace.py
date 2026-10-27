@@ -138,10 +138,32 @@ def frame_data(workspace):
         "guard": SimpleNamespace(custody=custody),
         "workspace": str(workspace),
     }
-    origin = SimpleNamespace(
+    closure = dict(zip(dispatcher.offload.__code__.co_freevars, dispatcher.offload.__closure__))
+    signature = closure["signature"].cell_contents
+    args, kwargs = ("codex", "synthetic"), {
+        "cwd": str(workspace),
+        "isolate": False,
+        "data_only": False,
+    }
+    bound = signature.bind(*args, **kwargs)
+    wrapper = SimpleNamespace(
         f_back=caller,
+        f_code=dispatcher.offload.__code__,
+        f_globals=dispatcher.__dict__,
+        f_locals={
+            "function": dispatcher.offload.__wrapped__,
+            "signature": signature,
+            "bound": bound,
+            "values": bound.arguments,
+            "args": args,
+            "kwargs": kwargs,
+        },
+    )
+    origin = SimpleNamespace(
+        f_back=wrapper,
         f_code=dispatcher._CODING_DELIVERY_OFFLOAD_CODE,
         f_globals=dispatcher.__dict__,
+        f_locals={"agent": "codex", "cwd": str(workspace)},
     )
     return origin, caller, baseline
 
@@ -162,6 +184,13 @@ def frame_data(workspace):
         "custody",
         "ended",
         "host_observation",
+        "wrapper_code",
+        "wrapper_globals",
+        "wrapped_function",
+        "signature",
+        "values",
+        "kwargs",
+        "data_only",
     ],
 )
 def test_selected_workspace_and_source_identity_refusals(tmp_path, monkeypatch, change):
@@ -170,6 +199,21 @@ def test_selected_workspace_and_source_identity_refusals(tmp_path, monkeypatch, 
     # Synthetic leaf DATA only: full source issuance is not claimed by these controls.
     monkeypatch.setattr(pub._BaselineLease, "check", lambda self: checked.append(self))
     cwd = str(tmp_path)
+    wrapper = origin.f_back
+    if change == "wrapper_code":
+        wrapper.f_code = test_selected_workspace_and_source_identity_refusals.__code__
+    elif change == "wrapper_globals":
+        wrapper.f_globals = {}
+    elif change == "wrapped_function":
+        wrapper.f_locals["function"] = lambda: None
+    elif change == "signature":
+        wrapper.f_locals["signature"] = inspect.signature(lambda: None)
+    elif change == "values":
+        wrapper.f_locals["values"] = dict(wrapper.f_locals["values"])
+    elif change == "kwargs":
+        wrapper.f_locals["kwargs"] = dict(wrapper.f_locals["kwargs"], cwd="/wrong")
+    elif change == "data_only":
+        wrapper.f_locals["values"]["data_only"] = True
     if change in {"copy", "relocated"}:
         cwd = str(tmp_path / change)
     elif change == "origin_code":
@@ -214,3 +258,40 @@ def test_unissued_lease_cannot_bypass_real_baseline_check(tmp_path):
     baseline.closed = True
     with pytest.raises(pub.PublicationHeld, match="lease closed"):
         pub.validate_coding_workspace(origin, str(tmp_path))
+
+
+def test_real_decorated_call_has_exact_wrapper_and_bound_argument_chain(monkeypatch, tmp_path):
+    import closer_correction_maintenance as maintenance
+
+    monkeypatch.setattr(maintenance, "assert_offload_allowed", lambda: None)
+    captured = []
+
+    class StopBeforeBody(Exception):
+        pass
+
+    def observe(frame, event, arg):
+        if event == "call" and frame.f_code is dispatcher._CODING_DELIVERY_OFFLOAD_CODE:
+            wrapper = frame.f_back
+            captured.append(
+                (
+                    wrapper.f_code is dispatcher.offload.__code__,
+                    wrapper.f_globals is dispatcher.__dict__,
+                    wrapper.f_locals["function"] is dispatcher.offload.__wrapped__,
+                    wrapper.f_locals["bound"].arguments is wrapper.f_locals["values"],
+                    dict(wrapper.f_locals["values"]),
+                )
+            )
+            raise StopBeforeBody
+
+    previous = sys.getprofile()
+    try:
+        sys.setprofile(observe)
+        with pytest.raises(StopBeforeBody):
+            dispatcher.offload(
+                "codex", "synthetic", cwd=str(tmp_path), isolate=False, data_only=False
+            )
+    finally:
+        sys.setprofile(previous)
+    assert len(captured) == 1 and captured[0][:4] == (True, True, True, True)
+    assert captured[0][4]["cwd"] == str(tmp_path)
+    assert captured[0][4]["isolate"] is False

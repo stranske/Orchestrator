@@ -733,14 +733,40 @@ def validate_coding_workspace(origin, cwd):
     import closer_coding_worker as worker
     import dispatcher
 
-    caller = origin.f_back
+    wrapper = origin.f_back
+    caller = wrapper.f_back if wrapper is not None else None
+    closure = dict(
+        zip(dispatcher.offload.__code__.co_freevars, dispatcher.offload.__closure__ or ())
+    )
+    signature = closure.get("signature")
     _need(
         origin.f_code is dispatcher._CODING_DELIVERY_OFFLOAD_CODE
         and origin.f_globals is dispatcher.__dict__
+        and wrapper is not None
+        and wrapper.f_code is dispatcher.offload.__code__
+        and wrapper.f_globals is dispatcher.__dict__
+        and wrapper.f_locals.get("function") is dispatcher.offload.__wrapped__
+        and signature is not None
+        and wrapper.f_locals.get("signature") is signature.cell_contents
         and caller is not None
         and caller.f_code is worker._execute.__code__
         and caller.f_globals is worker.__dict__,
         "actual coding workspace source unavailable",
+    )
+    bound = wrapper.f_locals.get("bound")
+    values = wrapper.f_locals.get("values")
+    _need(
+        type(bound) is inspect.BoundArguments
+        and bound.signature is signature.cell_contents
+        and bound.arguments is values
+        and signature.cell_contents.bind(
+            *wrapper.f_locals["args"], **wrapper.f_locals["kwargs"]
+        ).arguments
+        == values
+        and values.get("agent") == origin.f_locals.get("agent") == "codex"
+        and values.get("cwd") == origin.f_locals.get("cwd") == caller.f_locals.get("workspace")
+        and values.get("data_only") is False,
+        "actual coding workspace invocation differs",
     )
     baseline = caller.f_locals.get("publication_baseline_ref")
     policy = caller.f_locals.get("publication_policy")
