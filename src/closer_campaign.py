@@ -43,6 +43,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
+# The physical CLI file and native source-frame checks share one module object.
+# Refuse a prior named import rather than execute two independently loaded copies.
+if __name__ == "__main__":
+    _entry_module = sys.modules.get("__main__")
+    if _entry_module is None or _entry_module.__dict__ is not globals():
+        raise RuntimeError("campaign entry module identity unavailable")
+    _canonical_module = sys.modules.get("closer_campaign")
+    if _canonical_module is not None and _canonical_module is not _entry_module:
+        raise RuntimeError("conflicting canonical campaign module")
+    sys.modules["closer_campaign"] = _entry_module
+
 # Published packages remain immutable, including their Python import artifacts.
 if (Path(__file__).resolve().parent / "closer-runtime-package.json").is_file():
     sys.dont_write_bytecode = True
