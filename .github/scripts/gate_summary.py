@@ -51,6 +51,11 @@ PRIORITY: dict[str, int] = {
 
 STABLE_SYNC_BRANCHES = {"sync/workflows-candidate", "sync/workflows-delivery"}
 DELIVERY_RECORD_PATTERN = re.compile(r"<!--\s*sync-pr-delivery-record:v1\s+([\s\S]*?)\s*-->")
+PYTHON_SHARD_COUNT = 6
+PYTHON_SHARD_RUNTIMES = ("3.13", "3.14")
+PYTHON_SHARD_ARTIFACT = re.compile(
+    r"^gate-shard-(?P<shard>[1-9]\d*)-coverage-" r"(?P<runtime>3\.13|3\.14)-(?P<attempt>[1-9]\d*)$"
+)
 
 
 def _delivery_seal_from_event(event_path: Path | None) -> tuple[bool, bool, str]:
@@ -164,6 +169,7 @@ def _normalize_check_outcome(section: Mapping[str, object] | None) -> str:
 
 def _load_summary_records(artifacts_root: Path) -> list[dict]:
     records: list[dict] = []
+    latest_shards: dict[tuple[int, str], dict] = {}
     base = artifacts_root / "downloads"
     if not base.exists():
         return records
@@ -181,9 +187,36 @@ def _load_summary_records(artifacts_root: Path) -> list[dict]:
 
         if isinstance(data, dict):
             data.setdefault("job_name", job_name)
-            records.append(data)
+            match = PYTHON_SHARD_ARTIFACT.fullmatch(job_name)
+            if match:
+                shard = int(match.group("shard"))
+                runtime = match.group("runtime")
+                attempt = int(match.group("attempt"))
+                data["shard"] = shard
+                data["run_attempt"] = attempt
+                key = (shard, runtime)
+                current = latest_shards.get(key)
+                if current is None or attempt > int(current["run_attempt"]):
+                    latest_shards[key] = data
+            else:
+                records.append(data)
 
+    records.extend(latest_shards[key] for key in sorted(latest_shards))
     return records
+
+
+def _missing_python_shard_receipts(records: Iterable[Mapping[str, object]]) -> list[str]:
+    observed = {
+        (record.get("shard"), record.get("python_version"))
+        for record in records
+        if isinstance(record.get("shard"), int) and isinstance(record.get("python_version"), str)
+    }
+    return [
+        f"shard {shard}/{PYTHON_SHARD_COUNT} (Python {runtime})"
+        for shard in range(1, PYTHON_SHARD_COUNT + 1)
+        for runtime in PYTHON_SHARD_RUNTIMES
+        if (shard, runtime) not in observed
+    ]
 
 
 def _detect_cosmetic_failure(
@@ -239,8 +272,15 @@ def _collect_table(
     coverage_percents: list[str] = []
     job_results: dict[str, list[str]] = {}
 
-    for record in sorted(records, key=lambda item: str(item.get("python_version", ""))):
+    for record in sorted(
+        records,
+        key=lambda item: (int(item.get("shard", 0)), str(item.get("python_version", ""))),
+    ):
         runtime = str(record.get("python_version", "unknown"))
+        shard = record.get("shard")
+        runtime_label = (
+            f"{runtime} shard {shard}/{PYTHON_SHARD_COUNT}" if isinstance(shard, int) else runtime
+        )
         job_name = str(record.get("job_name") or runtime)
         checks = record.get("checks") if isinstance(record.get("checks"), Mapping) else {}
 
@@ -254,10 +294,10 @@ def _collect_table(
         tests = _check("tests")
         coverage_min = _check("coverage_minimum")
 
-        lint_entries.append((runtime, lint))
-        type_entries.append((runtime, typing))
-        test_entries.append((runtime, tests))
-        coverage_entries.append((runtime, coverage_min))
+        lint_entries.append((runtime_label, lint))
+        type_entries.append((runtime_label, typing))
+        test_entries.append((runtime_label, tests))
+        coverage_entries.append((runtime_label, coverage_min))
         job_results.setdefault(job_name, []).extend([lint, typing, tests, coverage_min])
 
         coverage_info = (
@@ -265,13 +305,13 @@ def _collect_table(
         )
         percent = coverage_info.get("percent") if isinstance(coverage_info, Mapping) else None
         if isinstance(percent, (int, float)):
-            coverage_percents.append(f"{runtime}: {percent:.2f}%")
+            coverage_percents.append(f"{runtime_label}: {percent:.2f}%")
             percent_display = f"{percent:.2f}%"
         else:
             percent_display = "—"
 
         row = (
-            f"| {runtime}"
+            f"| {runtime_label}"
             f" | {_emoji(lint)} {_friendly(lint)}"
             f" | {_emoji(typing)} {_friendly(typing)}"
             f" | {_emoji(tests)} {_friendly(tests)}"
@@ -401,6 +441,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
 
     records = _load_summary_records(context.artifacts_root)
     has_records = bool(records)
+    missing_shards = _missing_python_shard_receipts(records) if context.python_required else []
 
     (
         table,
@@ -424,6 +465,10 @@ def summarize(context: SummaryContext) -> SummaryResult:
         context.docker_result,
         context.test_quality_result,
     )
+    if missing_shards:
+        lines.append("- Python shard artifacts: ❌ missing " + ", ".join(missing_shards) + ".")
+    elif context.python_required:
+        lines.append("- Python shard artifacts: ✅ all 6 shards reported for Python 3.13 and 3.14.")
 
     state = "success"
     description = "All Gate checks succeeded."
@@ -435,7 +480,10 @@ def summarize(context: SummaryContext) -> SummaryResult:
     failure_checks: tuple[str, ...] = ()
     format_failure = False
 
-    if docs_guard_result == "cancelled":
+    if missing_shards:
+        state = "failure"
+        description = "Python CI artifacts missing: " + ", ".join(missing_shards) + "."
+    elif docs_guard_result == "cancelled":
         state = "pending"
         description = "Docs guard cancelled; waiting for rerun."
     elif docs_guard_result not in ("success", "skipped"):

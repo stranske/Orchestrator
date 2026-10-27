@@ -114,6 +114,7 @@ jobs:
       cache: ${{ steps.python_ci_toggles.outputs.cache || 'true' }}
       pytest_markers: >-
         ${{ steps.python_ci_toggles.outputs.pytest_markers || 'not quarantine and not slow' }}
+      python_ci_matrix: ${{ steps.python_ci_matrix.outputs.matrix }}
       workflow_changed: >-
         ${{ steps.classify.outputs.is-workflow-change
         || steps.diff.outputs.workflow_changed
@@ -152,6 +153,7 @@ jobs:
             .github/actions/path-classifier
             .github/path-classification.yml
             .github/scripts
+            config/test-shards.json
           sparse-checkout-cone-mode: false
       - name: Classify changed paths
         id: classify
@@ -259,6 +261,54 @@ jobs:
         env:
           RUN_CORE: ${{ steps.diff.outputs.run_core || 'false' }}
 
+      - name: Build Python CI shard matrix
+        id: python_ci_matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
+
+          plan_path = Path("config/test-shards.json")
+          payload = json.loads(plan_path.read_text(encoding="utf-8"))
+          shards = payload.get("shards")
+          if not isinstance(shards, list) or len(shards) != 6:
+              raise SystemExit("config/test-shards.json must contain exactly 6 shards")
+
+          seen: set[str] = set()
+          include: list[dict[str, object]] = []
+          for index, shard in enumerate(shards, 1):
+              if not isinstance(shard, list) or not shard:
+                  raise SystemExit(f"test shard {index}/6 must be a nonempty list")
+              for module in shard:
+                  path = PurePosixPath(module) if isinstance(module, str) else None
+                  if (
+                      path is None
+                      or path.is_absolute()
+                      or ".." in path.parts
+                      or not module.startswith("tests/")
+                      or not module.endswith(".py")
+                      or module in seen
+                  ):
+                      raise SystemExit(f"invalid or duplicate module in shard {index}/6: {module!r}")
+                  seen.add(module)
+              include.append(
+                  {
+                      "shard": index,
+                      "pytest_args": " ".join(shard),
+                      "artifact_prefix": f"gate-shard-{index}-",
+                      "run_static": index == 1,
+                  }
+              )
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write("matrix=" + json.dumps({"include": include}, separators=(",", ":")) + "\n")
+          print(f"planned {len(include)} shards covering {len(seen)} unique test modules")
+          PY
+
   environment-gate:
     name: privilege environment gate
     needs: detect
@@ -297,7 +347,7 @@ jobs:
           pull-request-json: ${{ needs.resolve-pr.outputs.pull_request }}
 
   python-ci:
-    name: python ci
+    name: python ci shard ${{ matrix.shard }}/6
     needs:
       - detect
       - environment-gate
@@ -312,27 +362,32 @@ jobs:
     permissions:
       contents: read
       actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect.outputs.python_ci_matrix) }}
     with:
       primary-python-version: '3.14'
       coverage-python-version: '3.14'
       python-versions: '["3.13", "3.14"]'
       marker: "not quarantine and not slow"
       pytest_markers: ${{ needs.detect.outputs.pytest_markers }}
-      # These read the toggles computed once in `detect`. `typecheck`/`run-mypy` and `coverage`
-      # resolve to false there, with the blocking AND drainable count for each stated at that one
-      # place; do not hardcode a second `false` here or the two literals will drift.
-      lint: ${{ needs.detect.outputs.lint == 'true' }}
-      format_check: ${{ needs.detect.outputs.format_check == 'true' }}
-      typecheck: ${{ needs.detect.outputs.typecheck == 'true' }}
-      run-mypy: ${{ needs.detect.outputs.typecheck == 'true' }}
+      pytest_args: ${{ matrix.pytest_args }}
+      pytest-workers: '4'
+      # Static checks execute once, on shard 1; shards 2-6 keep their called-workflow checks as
+      # explicit skips instead of multiplying identical lint/typecheck work. Coverage stays on
+      # every 3.14 test shard, while 3.13 remains uninstrumented.
+      lint: ${{ matrix.run_static && needs.detect.outputs.lint == 'true' }}
+      format_check: ${{ matrix.run_static && needs.detect.outputs.format_check == 'true' }}
+      typecheck: ${{ matrix.run_static && needs.detect.outputs.typecheck == 'true' }}
+      run-mypy: ${{ matrix.run_static && needs.detect.outputs.typecheck == 'true' }}
       coverage: ${{ needs.detect.outputs.coverage == 'true' }}
       # Keep coverage threshold informational; reusable Python CI owns source selection.
       coverage-min: ''
       cache: ${{ needs.detect.outputs.cache == 'true' }}
       enable-soft-gate: ${{ needs.detect.outputs.coverage == 'true' }}
-      # Use the shared gate- prefix so downstream Maint workflows can locate the
-      # coverage artifacts without special-casing runtime names.
-      artifact-prefix: 'gate-'
+      # Each call must own distinct artifact names. The summary reads the shard and attempt from
+      # these names and refuses success unless every shard/runtime receipt exists.
+      artifact-prefix: ${{ matrix.artifact_prefix }}
 
   docs-guard:
     name: docs guard
@@ -710,7 +765,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: gate-*
-          merge-multiple: true
+          merge-multiple: false
           path: gate_artifacts/downloads
 
       - name: Load coverage summary snippet

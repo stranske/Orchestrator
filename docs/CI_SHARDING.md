@@ -5,6 +5,12 @@ exec mirror. Each shape has one aggregate that runs the existing selftests and g
 The checkout aggregate also combines pytest-worker, selftest and gate coverage and
 publishes `gate-coverage` and `gate-coverage-trend`.
 
+The Gate's reusable Python CI uses this same module plan for both Python 3.13 and
+3.14. Its six caller-matrix entries pass the module paths through `pytest_args`;
+coverage remains enabled only on 3.14. Each call uses a shard-specific artifact
+prefix. The Gate summary requires all twelve shard/runtime receipts and fails if
+one is missing, even if the matrix-level result were to arrive as successful.
+
 Counts come from the final **printed pytest summary** of each shard. JUnit supplies
 gate replay verdicts and skip reasons, never counts. Every summary must be present
 and match the shard plan and tree shape. The original collection equality, pass
@@ -37,10 +43,12 @@ python3 -m pytest -q tests/test_verify_sharding.py
 
 The generator balances modules by summed JUnit timing, with deterministic ties.
 It lists modules absent from the timing sample and assigns them the median measured
-duration. The initial plan used the 2026-10-25 local control; the current
-plan uses this PR's hosted run 40328210708. JUnit is used here only for balancing
-timings. Hosted job minutes and pipeline wall time are read separately from
-`gh run view --json jobs`.
+duration. The initial plan used the 2026-10-25 local control; the current plan
+uses hosted run 40422953711. The newly merged
+`tests/test_closer_coding_session_v2.py` was measured locally at 0.41 test seconds
+and assigned to shard 5 as untimed input until the next hosted JUnit refresh.
+JUnit is used here only for balancing timings. Hosted job minutes and pipeline
+wall time are read separately from `gh run view --json jobs`.
 
 Acceptance remains the issue's dated measurement: on 2026-11-22, inspect the five
 latest successful PR CI runs using `gh run view <id> --json jobs`. Measure from the
