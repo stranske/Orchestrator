@@ -680,17 +680,52 @@ with l.held_subscription_lease('supervisor-death', deadline=time.time(), offline
 
 
 def test_failed_group_cleanup_keeps_durable_fence_after_flock_release(wave, tmp_path, monkeypatch):
+    # A short wall-clock cell allowance can expire during durable prelaunch IO,
+    # before Popen. This test targets failed cleanup AFTER real child startup.
+    ready = tmp_path / "cleanup-child-ready"
     binary = wave[0].with_name("timeout")
-    binary.write_bytes(wave[0].read_bytes())
+    binary.write_bytes(
+        f"#!{sys.executable}\nfrom pathlib import Path\n"
+        f"Path({str(ready)!r}).write_text('ready')\n".encode() + FIXTURE.read_bytes()
+    )
     binary.chmod(0o700)
     prepared = launcher.synthetic_wave(binary)
     pool = tmp_path / "cleanup-pool"
+    original_capture = launcher._capture
+    original_cleanup = launcher._kill_group
+    processes = []
+    started = []
+
+    def capture_after_started(*args, **kwargs):
+        original_started = kwargs["on_started"]
+        clock = [0.0]
+
+        def on_started(pid):
+            original_started(pid)  # Actual durable reservation and OS identity.
+            started.append(pid)
+            deadline = time.monotonic() + 10
+            while not ready.exists():
+                assert time.monotonic() < deadline, "inert child did not signal readiness"
+                time.sleep(0.01)
+            assert ready.read_text() == "ready"
+            # Expire only the local capture clock after the real child and its
+            # uncertain reservation exist. Production budgets remain unchanged.
+            clock[0] = 2.0
+
+        from types import SimpleNamespace
+
+        with monkeypatch.context() as capture_patch:
+            capture_patch.setattr(launcher, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+            return original_capture(*args, **{**kwargs, "deadline": 1.0, "on_started": on_started})
 
     def failed_cleanup(proc):
+        processes.append(proc)  # Always retain the handle for real finally-cleanup.
+        assert started == [proc.pid]
+        assert json.loads(_pool_record(pool).read_text())["process_group"] == proc.pid
         raise RuntimeError("inert cleanup failure")
 
+    monkeypatch.setattr(launcher, "_capture", capture_after_started)
     monkeypatch.setattr(launcher, "_kill_group", failed_cleanup)
-    child = None
     try:
         with launcher.held_subscription_lease(
             "cleanup", deadline=time.time(), offline_root=pool
@@ -703,19 +738,19 @@ def test_failed_group_cleanup_keeps_durable_fence_after_flock_release(wave, tmp_
                 execute=True,
                 oauth_token=TOKEN,
                 runtime=launcher.FixtureRuntime(binary, launcher.file_sha(binary)),
-                cell_seconds=0.25,
             )
         child = read_receipt(report)["process_group"]
+        assert started == [child] and processes
         assert report["status"] == "stopped" and report["cli_launch_count"] == 1
+        assert read_receipt(report)["failure_stage"] == "process_supervision"
         os.killpg(child, 0)
         assert json.loads(_pool_record(pool).read_text())["status"] == "uncertain"
         _refuses_reacquisition(pool)
     finally:
-        if child is not None:
-            try:
-                os.killpg(child, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        if processes:
+            original_cleanup(processes[0])
+            with pytest.raises(ProcessLookupError):
+                os.killpg(processes[0].pid, 0)
 
 
 def test_spawn_journal_gap_preserves_assigned_starting_intent(wave, tmp_path, monkeypatch):
