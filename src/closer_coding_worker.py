@@ -576,8 +576,8 @@ def _original_history(root, controller, custody, record):
     """Re-read original native/queue/provider joins, including final reservation."""
     import closer_correction_controller as ctl
 
-    root.check()
-    reference = root.continuation_reference
+    # The exact native reader below owns fresh entry/exit Root checks.
+    reference = json.loads(root.accepted_utf8)["continuation_reference"]
     history = _native_reader("coding_original_history")(root.installation, reference)
     _need(
         type(history) is dict
@@ -606,7 +606,6 @@ def _original_history(root, controller, custody, record):
         == _canonical(record["source_record_ref"]),
         "original instruction admission/history differs",
     )
-    root.check()
     return copy.deepcopy(history)
 
 

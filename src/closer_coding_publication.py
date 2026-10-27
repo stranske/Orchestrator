@@ -1339,7 +1339,7 @@ def _live_worker_custody(root, controller, custody, operation, caller):
         "actual controller writer custody required",
     )
     _need(type(root) is worker._Root, "actual source coding root required")
-    root.check()
+    # Exact scope.check below begins with this same Root validation.
     scope = getattr(worker._CURRENT, "continuation", None)
     _need(
         type(scope) is worker._Continuation

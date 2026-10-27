@@ -1458,6 +1458,11 @@ def rearm_on_assignment_change(campaign, doc, manifest):
 
 def binding(manifest, *, _scope=None):
     value, _wrapper, _python, _root = contract(manifest, _scope=_scope)
+    return _binding_from_contract(manifest, value)
+
+
+def _binding_from_contract(manifest, value):
+    """Pure projection of an already validated local contract; no authority."""
     return {
         "mechanism": mechanisms.NATIVE,
         "mechanism_contract_digest": mechanisms.digest(value),
@@ -3670,7 +3675,7 @@ def coding_original_history(installation, reference):
         ):
             raise SourceRecordUnavailable("actual accepted worker historical reader required")
         root.check()
-        if root.continuation_reference != reference:
+        if json.loads(root.accepted_utf8)["continuation_reference"] != reference:
             raise SourceRecordUnavailable("accepted worker historical reference differs")
         doc = ctl.IndexController._physical_state(
             installation.config["state_path"], "coding campaign redirected"
@@ -4489,48 +4494,94 @@ def supervise_native(manifest, manifest_path, *, budget_seconds):
             raise
 
 
+def _qualification_source_identity(manifest):
+    """Same-call mutation sensitivity; never stores validation permission."""
+    value = manifest["mechanism_contract"]
+    names = [
+        value["wrapper"]["path"],
+        value["interpreter"]["path"],
+        *(manifest.get("policy", {}).get("toml_sha256") or {}),
+    ]
+    files = tuple(
+        (
+            name,
+            tuple(
+                getattr(info, key)
+                for key in (
+                    "st_dev",
+                    "st_ino",
+                    "st_mode",
+                    "st_nlink",
+                    "st_uid",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                )
+            ),
+        )
+        for name in names
+        for info in [os.lstat(name)]
+    )
+    parents = sorted({str(parent) for name in names for parent in Path(name).parents})
+    ancestry = tuple(
+        (name, info.st_dev, info.st_ino, info.st_mode, info.st_uid)
+        for name in parents
+        for info in [os.lstat(name)]
+    )
+    return files, ancestry
+
+
+def _qualified_receipt_root(manifest, *, _scope=None):
+    """One authenticated local contract plus fresh signer/lifecycle evidence."""
+    physical = _qualification_source_identity(manifest)
+    _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
+    signed = _read(root / "native-qualification.json")
+    record = signed["record"]
+    if not hmac.compare_digest(
+        signed["signature"], mechanisms._signature(record, mechanisms._key(root))
+    ):
+        raise mechanisms.MechanismError("native observer signature differs")
+    if (
+        record.get("schema") != OBSERVATION
+        or record.get("kind") != "native-wrapper-qualification"
+        or record.get("binding") != _binding_from_contract(manifest, _value)
+        or record.get("passed") is not True
+        or record.get("desktop_qualified") is not False
+        or record.get("source") != "owned-native-wrapper-process"
+        or record.get("actor") != "cursor"
+        or record.get("scheduler_origin") != "unobserved"
+    ):
+        raise mechanisms.MechanismError("native lifecycle belongs to another capability or pin")
+    directory = root / record["nonce"]
+    if directory.parent != root or directory.is_symlink():
+        raise mechanisms.MechanismError("native observation artifact path escaped")
+    expected = {
+        "startup": "startup.json",
+        "handoff": "child-journal.json",
+        "crash_restart": "crash.json",
+        "result_recording": "child-result.json",
+    }
+    for phase, name in expected.items():
+        ref = record["phases"][phase]
+        if ref != {"file": name, "sha256": _hash(directory / name)}:
+            raise mechanisms.MechanismError("native phase artifact changed: " + phase)
+    result = _read(directory / "child-result.json")
+    if (
+        result.get("binding") != record["binding"]
+        or result.get("nonce") != record["nonce"]
+        or result.get("no_effect") is not True
+        or _read(directory / "crash.json").get("exit") != -signal.SIGKILL
+    ):
+        raise mechanisms.MechanismError("native result belongs to another package or lifecycle")
+    if physical != _qualification_source_identity(manifest):
+        raise mechanisms.MechanismError("native qualification source changed during read")
+    return root, physical
+
+
 def qualification_receipt_problems(manifest, *, _scope=None):
     """Authenticate immutable package/lifecycle evidence; grants no ACT eligibility."""
     try:
-        _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
-        signed = _read(root / "native-qualification.json")
-        record = signed["record"]
-        if not hmac.compare_digest(
-            signed["signature"], mechanisms._signature(record, mechanisms._key(root))
-        ):
-            raise mechanisms.MechanismError("native observer signature differs")
-        if (
-            record.get("schema") != OBSERVATION
-            or record.get("kind") != "native-wrapper-qualification"
-            or record.get("binding") != binding(manifest, _scope=_scope)
-            or record.get("passed") is not True
-            or record.get("desktop_qualified") is not False
-            or record.get("source") != "owned-native-wrapper-process"
-            or record.get("actor") != "cursor"
-            or record.get("scheduler_origin") != "unobserved"
-        ):
-            raise mechanisms.MechanismError("native lifecycle belongs to another capability or pin")
-        directory = root / record["nonce"]
-        if directory.parent != root or directory.is_symlink():
-            raise mechanisms.MechanismError("native observation artifact path escaped")
-        expected = {
-            "startup": "startup.json",
-            "handoff": "child-journal.json",
-            "crash_restart": "crash.json",
-            "result_recording": "child-result.json",
-        }
-        for phase, name in expected.items():
-            ref = record["phases"][phase]
-            if ref != {"file": name, "sha256": _hash(directory / name)}:
-                raise mechanisms.MechanismError("native phase artifact changed: " + phase)
-        result = _read(directory / "child-result.json")
-        if (
-            result.get("binding") != record["binding"]
-            or result.get("nonce") != record["nonce"]
-            or result.get("no_effect") is not True
-            or _read(directory / "crash.json").get("exit") != -signal.SIGKILL
-        ):
-            raise mechanisms.MechanismError("native result belongs to another package or lifecycle")
+        _qualified_receipt_root(manifest, _scope=_scope)
         return []
     except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
         return [f"native handoff qualification held: {exc}"]
@@ -4538,16 +4589,15 @@ def qualification_receipt_problems(manifest, *, _scope=None):
 
 def qualification_problems(manifest, *, _scope=None):
     """ACT qualification retains the original current-entry/unknown barrier."""
-    problems = qualification_receipt_problems(manifest, _scope=_scope)
-    if problems:
-        return problems
     try:
-        _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
+        root, physical = _qualified_receipt_root(manifest, _scope=_scope)
         active = _read(root / "native-active.json")
         if active.get("status") != "terminal" and _CURRENT_ENTRY.get(str(root)) != active.get(
             "nonce"
         ):
             raise mechanisms.MechanismError("native submission remains unknown")
+        if physical != _qualification_source_identity(manifest):
+            raise mechanisms.MechanismError("native qualification source changed during read")
         return []
     except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
         return [f"native handoff qualification held: {exc}"]
