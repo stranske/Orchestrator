@@ -82,9 +82,9 @@ jobs:
   combined-coverage:
     name: combined coverage (pytest + selftests, the honest number)
     runs-on: ubuntu-latest
-    # Full-suite runs also hit the measured 25-minute ceiling; retain the
-    # same bounded completion margin as the mirror, without changing gates.
-    timeout-minutes: 35
+    # The measured full-suite coverage run reached its report at the 35-minute
+    # ceiling; reserve bounded time for report upload and cleanup, keeping all gates.
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

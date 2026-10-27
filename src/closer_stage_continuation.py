@@ -453,12 +453,14 @@ def retain_receipt(state_path, root_path, *, target, frontier, native):
         if not isinstance(record, dict) or record.get("finite_frontier") != descriptor:
             raise ValueError("stage receipt has no exact journaled child")
         refs = record.setdefault("receipt_refs", [])
-        if not isinstance(refs, list) or len(refs) >= 32:
-            raise ValueError("stage receipt retention bound exceeded")
+        if not isinstance(refs, list):
+            raise ValueError("stage receipt retention journal malformed")
         prior = [value for value in refs if value.get("round_id") == round_id]
         if prior and prior != [ref]:
             raise ValueError("stage round receipt identity conflicts")
         if not prior:
+            if len(refs) >= 32:
+                raise ValueError("stage receipt retention bound exceeded")
             refs.append(ref)
             pipeline._save(path, state)
     return ref

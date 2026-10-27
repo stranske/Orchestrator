@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 import sqlite3
@@ -117,50 +118,58 @@ def main():
         ledger["record_kind"] = "owner_followup"
         ledger["corrects_prior_record"] = payload.get("corrects_prior_record")
         ledger["inventory_evidence"] = payload.get("inventory_evidence")
-    memory = dict(payload)
-    # Preserve exact-target dispositions across runs; replacing the last result
-    # must not erase coverage and manufacture another cold start.
-    try:
-        previous = json.loads((args.root / "memory.md").read_text())
-    except (OSError, ValueError):
-        previous = {}
-    coverage = previous.get("coverage_json") or {}
-    if not isinstance(coverage, dict):
-        coverage = {}
-    coverage.update(payload.get("coverage_json") or {})
-    target = payload.get("selected_target")
-    selected = (payload.get("inventory_evidence") or {}).get("selected") or {}
-    if target:
-        coverage[target] = {
-            "head": selected.get("head_sha") or payload.get("head"),
-            "fingerprint": payload.get("fingerprint") or selected.get("fingerprint"),
-            "accountability_episode": payload.get("accountability_episode") or selected.get("accountability_episode"),
-            "completed_at_utc": completed_at,
-            "outcome_class": outcome,
-            "decision": payload.get("decision"),
-            "owner": payload.get("owner"),
-            "action": payload.get("action"),
-            "due": payload.get("due"),
-            "execution_error": payload.get("execution_error"),
-            "park_until_material_change": outcome in {"no_productive_action", "stall_but_blocked"} and not payload.get("execution_error"),
-        }
-    memory["coverage_json"] = coverage
-    memory.update(
-        thread_id=thread_id,
-        automation_created_at_ms=created_at_ms,
-        completed_at_utc=completed_at,
-        elapsed_ms=elapsed_ms,
-    )
-    memory.pop("outcome_class", None)
+    args.root.mkdir(parents=True, exist_ok=True)
+    with (args.root / ".terminal.lock").open("a+b") as memory_lock:
+        fcntl.flock(memory_lock, fcntl.LOCK_EX)
+        memory = dict(payload)
+        # Preserve exact-target dispositions across runs; replacing the last result
+        # must not erase coverage and manufacture another cold start.
+        try:
+            previous = json.loads((args.root / "memory.md").read_text())
+        except (OSError, ValueError):
+            previous = {}
+        coverage = previous.get("coverage_json") or {}
+        if not isinstance(coverage, dict):
+            coverage = {}
+        coverage.update(payload.get("coverage_json") or {})
+        target = payload.get("selected_target")
+        selected = (payload.get("inventory_evidence") or {}).get("selected") or {}
+        head = selected.get("head_sha") or payload.get("head")
+        if target and head:
+            coverage[target] = {
+                "head": head,
+                "fingerprint": payload.get("fingerprint") or selected.get("fingerprint"),
+                "accountability_episode": payload.get("accountability_episode") or selected.get("accountability_episode"),
+                "completed_at_utc": completed_at,
+                "outcome_class": outcome,
+                "decision": payload.get("decision"),
+                "owner": payload.get("owner"),
+                "action": payload.get("action"),
+                "due": payload.get("due"),
+                "execution_error": payload.get("execution_error"),
+                "park_until_material_change": outcome in {"no_productive_action", "stall_but_blocked"} and not payload.get("execution_error"),
+            }
+        memory["coverage_json"] = coverage
+        memory.update(
+            thread_id=thread_id,
+            automation_created_at_ms=created_at_ms,
+            completed_at_utc=completed_at,
+            elapsed_ms=elapsed_ms,
+        )
+        memory.pop("outcome_class", None)
 
-    atomic_write(args.root / "memory.md", json.dumps(memory, indent=2, sort_keys=True) + "\n")
-    ledger_name = "owner-followups.jsonl" if args.owner_followup else "run-ledger.jsonl"
-    ledger_path = args.root / "metrics" / ledger_name
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with ledger_path.open("a") as stream:
-        stream.write(json.dumps(ledger, separators=(",", ":")) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+        atomic_write(args.root / "memory.md", json.dumps(memory, indent=2, sort_keys=True) + "\n")
+        ledger_name = "owner-followups.jsonl" if args.owner_followup else "run-ledger.jsonl"
+        ledger_path = args.root / "metrics" / ledger_name
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        with ledger_path.open("a+") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX)
+            stream.seek(0)
+            recorded = any(json.loads(line).get("thread_id") == thread_id for line in stream if line.strip())
+            if not recorded:
+                stream.write(json.dumps(ledger, separators=(",", ":")) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
     print(json.dumps({"recorded": True, "thread_id": thread_id, "elapsed_wall_ms": elapsed_ms}))
 
 

@@ -78,7 +78,7 @@
   "negative_join_cases": 21,
   "source_hashes": {
     "src/closer_stage_feedback.py": "79cee7f076027d633677d5cb2347edc3e5310f502495099085cdd1251613b53d",
-    "/private/tmp/orchestrator-category46-acceptance/tests/test_closer_acceptance_metrics_composition.py": "1c756e08c478cd31dcec531db9a6837a2cd4a865955dcf275b08701cb0567cdc"
+    "tests/test_closer_acceptance_metrics_composition.py": "1c756e08c478cd31dcec531db9a6837a2cd4a865955dcf275b08701cb0567cdc"
   },
   "scope": "CI wait excluded; completed merge and POST counted; verifier outcome unmeasured"
 }

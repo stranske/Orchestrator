@@ -555,15 +555,13 @@ def receiver_ack(manifest_path: str, source_path: str) -> list[str]:
         assignment = json.loads(assignment_bytes)
         doc = campaign.read()
         for request_id, row in doc.get("hold_escalations", {}).items():
-            if row["status"] not in {"delivered", "acknowledged"}:
+            if row["status"] != "delivered":
                 continue
             _row(request_id, row, policy)
             request = row["request"]
             _bound(doc, request)
             _delivery(campaign, request_id, row, policy)
             if assignment.get("closer_hold_escalations", {}).get(request_id) != request:
-                continue
-            if row["status"] == "acknowledged":
                 continue
             accepted = []
 
@@ -645,7 +643,22 @@ def preserve_assignment(manifest_path: str, controller_root: str, assignment: di
     campaign = Campaign(manifest["hold_escalation_campaign_path"])
     doc = campaign.read()
     if doc is None:
-        raise ValueError("no campaign")
+        return copy.deepcopy(assignment)
+    rows = doc.get("hold_escalations", {})
+    if not isinstance(rows, dict) or any(not isinstance(row, dict) for row in rows.values()):
+        raise ValueError("malformed escalation journal")
+    for key, row in rows.items():
+        if not isinstance(row.get("request"), dict) or row.get("status") not in {
+            "confirmed_not_started",
+            "outcome_unknown",
+            "delivered",
+            "acknowledged",
+            "ack_overdue",
+        }:
+            raise ValueError("malformed escalation journal")
+        _row(key, row)
+    if not any(row.get("status") in {"delivered", "outcome_unknown"} for row in rows.values()):
+        return copy.deepcopy(assignment)
     policy = route(doc, manifest, manifest_path)
     if controller_root != policy["controller_root"]:
         raise ValueError("foreign controller assignment writer")
