@@ -320,6 +320,12 @@ def pipe_native_data(monkeypatch, *, feature_output=b"plugins  stable  false\n")
     calls = []
     messages = []
 
+    def no_os_process(*_args):
+        pytest.fail("pipe-only fixture has no OS process group")
+
+    monkeypatch.setattr(source.os, "getpgid", no_os_process)
+    monkeypatch.setattr(source.os, "killpg", no_os_process)
+
     class PipeChild:
         def __init__(self, argv, **kwargs):
             calls.append((argv, kwargs))
