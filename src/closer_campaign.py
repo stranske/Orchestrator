@@ -890,16 +890,16 @@ def _complete_rows_from_leaves(manifest, cfg, detail, leaves):
     return {target: sha256_json(covered[target]) for target in targets}
 
 
-def _completed_cohort_rows(manifest, cfg, detail):
+def _completed_cohort_rows(manifest, cfg, detail, doc):
     leaves = []
     if detail.get("descendant_bundle") is not None:
-        from closer_native_descendants import _HistoryBudget, observed_leaves
+        from closer_native_descendants import _HistoryBudget, _physical, observed_leaves
 
         budget = _HistoryBudget()
-        state = Path(cfg["native_worker"]["state"])
+        state = _physical(cfg["native_worker"]["state"])
         budget.reserve_path(state)
         budget.campaign_path = state
-        budget.campaign_doc = Campaign(state).read()
+        budget.campaign_doc = doc
         leaves = observed_leaves(
             cfg, detail["descendant_bundle"], require_finalized=True, _history_budget=budget
         )
@@ -1238,7 +1238,7 @@ def _retirement_evidence(state_path, doc, manifest):
         or terminal.get("completed") is not True
         or terminal.get("campaign") != native._campaign_identity(state_path, doc)
         or detail.get("cohort_completion") != detail.get("cohort_terminal")
-        or terminal["row_sha256"] != _completed_cohort_rows(manifest, cfg, detail)
+        or terminal["row_sha256"] != _completed_cohort_rows(manifest, cfg, detail, doc)
     ):
         raise CampaignError("cohort has no final authenticated full completion")
     if cfg["native_admission"].get("demand_continuations", []) != doc.get(
