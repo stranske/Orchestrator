@@ -214,6 +214,8 @@ def test_gate_summary_requires_every_shard_runtime_receipt(tmp_path):
         summary_path=None,
         output_path=None,
         python_required=True,
+        combined_coverage_status="complete",
+        combined_coverage_percent=81.25,
     )
 
     green = gate_summary.summarize(context)
@@ -223,12 +225,40 @@ def test_gate_summary_requires_every_shard_runtime_receipt(tmp_path):
         "- Python shard artifacts: ✅ all 6 shards reported for Python 3.13 and 3.14."
         in green.lines
     )
+    assert "- Combined coverage: ✅ 81.25% from CI verify.py aggregate." in green.lines
 
     summaries[(4, "3.14")].unlink()
     missing = gate_summary.summarize(context)
     assert missing.state == "failure"
     assert missing.description == "Python CI artifacts missing: shard 4/6 (Python 3.14)."
     assert "- Python shard artifacts: ❌ missing shard 4/6 (Python 3.14)." in missing.lines
+
+
+def test_gate_summary_never_turns_missing_combined_coverage_into_zero_or_pass(tmp_path):
+    gate_summary = _load_gate_summary()
+    for shard in range(1, 7):
+        for runtime in ("3.13", "3.14"):
+            _write_shard_summary(tmp_path, shard, runtime)
+    context = gate_summary.SummaryContext(
+        doc_only=False,
+        run_core=True,
+        reason="code_changes",
+        python_result="success",
+        docker_result="skipped",
+        docker_changed=False,
+        artifacts_root=tmp_path,
+        summary_path=None,
+        output_path=None,
+        python_required=True,
+        combined_coverage_status="missing-or-invalid-combined-trend",
+    )
+
+    result = gate_summary.summarize(context)
+    line = next(line for line in result.lines if line.startswith("- Combined coverage:"))
+    assert "UNKNOWN" in line
+    assert "missing-or-invalid-combined-trend" in line
+    assert "✅" not in line
+    assert re.search(r"\b\d+(?:\.\d+)?%", line) is None
 
 
 def test_gate_summary_uses_the_newest_rerun_receipt(tmp_path):
@@ -248,3 +278,18 @@ def test_gate_summary_uses_the_newest_rerun_receipt(tmp_path):
         if record.get("shard") == 2 and record.get("python_version") == "3.14"
     ]
     assert len(shard_two) == 1 and shard_two[0]["run_attempt"] == 2
+
+
+def test_gate_coverage_reads_and_republishes_only_the_exact_head_combined_measurement():
+    text = GATE.read_text(encoding="utf-8")
+    assert "workflow_id: 'ci.yml'" in text
+    assert "head_sha: headSha" in text
+    assert "candidate.head_sha === headSha" in text
+    assert "run-id: ${{ steps.combined_coverage.outputs.run_id }}" in text
+    assert "root = Path('gate_artifacts/combined')" in text
+    assert "root / 'gate-coverage' / 'coverage.json'" in text
+    assert "root / 'gate-coverage-trend' / 'coverage-trend.json'" in text
+    assert "combined-payload-trend-mismatch" in text
+    assert "no percentage or pass is inferred" in text
+    assert "path: gate-combined/coverage.json" in text
+    assert "path: gate-combined/coverage-trend.json" in text

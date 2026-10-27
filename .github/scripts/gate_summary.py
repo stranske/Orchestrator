@@ -28,6 +28,8 @@ class SummaryContext:
     delivery_seal_required: bool = False
     delivery_seal_valid: bool = True
     delivery_seal_reason: str = ""
+    combined_coverage_status: str = "not-requested"
+    combined_coverage_percent: float | None = None
 
 
 @dataclass(slots=True)
@@ -469,6 +471,18 @@ def summarize(context: SummaryContext) -> SummaryResult:
         lines.append("- Python shard artifacts: ❌ missing " + ", ".join(missing_shards) + ".")
     elif context.python_required:
         lines.append("- Python shard artifacts: ✅ all 6 shards reported for Python 3.13 and 3.14.")
+    if context.combined_coverage_status == "complete" and isinstance(
+        context.combined_coverage_percent, (int, float)
+    ):
+        lines.append(
+            "- Combined coverage: ✅ "
+            f"{context.combined_coverage_percent:.2f}% from CI verify.py aggregate."
+        )
+    elif context.combined_coverage_status != "not-requested":
+        lines.append(
+            "- Combined coverage: ❔ UNKNOWN "
+            f"({context.combined_coverage_status}); no percentage or pass is inferred."
+        )
 
     state = "success"
     description = "All Gate checks succeeded."
@@ -560,6 +574,13 @@ def build_context() -> SummaryContext:
     test_quality_result = os.environ.get("TEST_QUALITY_RESULT") or "skipped"
     docker_changed = _normalize(os.environ.get("DOCKER_CHANGED"), "false") == "true"
     python_required = _normalize(os.environ.get("PYTHON_REQUIRED"), "true") == "true"
+    combined_coverage_status = _normalize(
+        os.environ.get("COMBINED_COVERAGE_STATUS"), "not-requested"
+    )
+    try:
+        combined_coverage_percent = float(os.environ["COMBINED_COVERAGE_PERCENT"])
+    except (KeyError, TypeError, ValueError):
+        combined_coverage_percent = None
     artifacts_root = Path(os.environ.get("GATE_ARTIFACTS_ROOT", "gate_artifacts"))
     summary_path = _resolve_path("GITHUB_STEP_SUMMARY")
     output_path = _resolve_path("GITHUB_OUTPUT")
@@ -587,6 +608,8 @@ def build_context() -> SummaryContext:
         delivery_seal_required=delivery_seal_required,
         delivery_seal_valid=delivery_seal_valid,
         delivery_seal_reason=delivery_seal_reason,
+        combined_coverage_status=combined_coverage_status,
+        combined_coverage_percent=combined_coverage_percent,
     )
 
 
