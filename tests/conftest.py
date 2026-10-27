@@ -335,6 +335,75 @@ def pytest_terminal_summary(terminalreporter) -> None:
         terminalreporter.write_line(f"tracked test inputs: {state} -- {_GUARD.detail}")
 
 
+# Repo-specific full-suite storage evidence. Copied standalone guard fixtures may omit
+# this helper; their original guard behavior and test outcome stay unchanged.
+def pytest_sessionstart(session):
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    session.config._owned_storage_rows = {
+        "start": {"status": "unavailable", "reason": "helper_or_base_unavailable"}
+    }
+    try:
+        import runpy
+
+        helper = TESTS_DIR / "ci_storage_diagnostics.py"
+        if helper.is_file():
+            probe = runpy.run_path(str(helper))["snapshot"]
+            base = session.config._tmp_path_factory.getbasetemp()
+            session.config._owned_storage_probe = (probe, base)
+            session.config._owned_storage_rows = {"start": probe(base)}
+    except Exception:
+        pass  # Diagnostics cannot change pytest admission or its original exit.
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    try:
+        config = session.config
+        rows = getattr(config, "_owned_storage_rows", None)
+        if rows is None:
+            return
+        state = getattr(config, "_owned_storage_probe", None)
+        rows["finish"] = {"status": "unavailable", "reason": "helper_or_base_unavailable"}
+        if state is not None:
+            probe, base = state
+            rows["finish"] = probe(base)
+        rows["exitstatus"] = int(exitstatus)
+        if hasattr(config, "workeroutput"):
+            config.workeroutput["owned_storage"] = rows
+        else:
+            import json
+
+            reporter = config.pluginmanager.getplugin("terminalreporter")
+            if reporter:
+                reporter.write_line("CI_STORAGE_DIAGNOSTIC " + json.dumps(rows, sort_keys=True))
+    except Exception:
+        pass
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    try:
+        import json
+
+        rows = getattr(node, "workeroutput", {}).get("owned_storage")
+        reporter = node.config.pluginmanager.getplugin("terminalreporter")
+        if reporter:
+            reporter.write_line(
+                "CI_STORAGE_WORKER "
+                + json.dumps(
+                    {
+                        "worker": node.gateway.id,
+                        "diagnostic": rows,
+                        "worker_error_present": error is not None,
+                    },
+                    sort_keys=True,
+                )
+            )
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def tracked_inputs_guard() -> Guard | None:
     """The guard this session armed, for the test that asserts it armed where it should."""
