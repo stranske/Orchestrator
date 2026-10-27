@@ -189,3 +189,29 @@ either. Source #978 is open, and PR #982 is open and ready for review. A committ
 follow-up still needs its own hosted checks and delayed review.
 The connector also rejected the requested `needs-human` label and blocker comment:
 both require approval, but this run's approval policy is `never`.
+
+### CLI receipt and scheduler composition follow-up (2026-10-27)
+
+The existing CLI budget regression now invokes the real pipeline scheduler with
+synthetic stage callbacks and the CLI's original coordination admission. The
+valid-stop control emits a completed target after prepare, interpret, and act.
+The expired invalid-stop case selects a fresh deadline but retains exit 78,
+false authority, no target callbacks, and byte-identical pipeline state. Legacy
+state bytes remain unchanged in both cases. No production gates or collected
+test counts changed. These synthetic receipts do not establish live acceptance.
+
+Dispatcher/pipeline validation with `-m 'not slow'`: **511 passed** in 42.57s.
+Changed-file Black formatting passed without edits. Sequential Black checks
+populated its normal cache, then the required repository-wide command
+`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+passed with **818 files unchanged**. `git diff --check` passed.
+
+`git add` failed because `.git/index.lock` is on a read-only filesystem; the
+Python test change remains uncommitted. Publication by an authorized runner,
+then hosted checks and review for that revision, remain necessary. The connector
+rejected both the `needs-human` label and blocker comment because approval is
+required and this run's approval policy is `never`.
+
+No `/tmp/closer-*-coord.log` is available. Both November 3 acceptance checks remain
+unchecked; source #978 is open and PR #982 is open and ready for review. The runtime
+owner must retain the first real post-merge closer receipt to establish acceptance.

@@ -4330,11 +4330,38 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
     monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
     monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
-    monkeypatch.setattr(
-        adapter,
-        "_run_staged_pipeline",
-        lambda _a, _t, _b, deadline: seen.append(deadline) or {"status": "budget-observed"},
-    )
+    stages = []
+
+    def prepare(target, _ctx):
+        stages.append(("prepare", target))
+        return {"revision": "fresh-read", "snapshot": {"target": target}}
+
+    def interpret(target, _ctx):
+        stages.append(("interpret", target))
+        return {"substantive_needs": []}
+
+    def act(target, _ctx):
+        stages.append(("act", target))
+        return {"status": "completed", "target_complete": True}
+
+    def run_scheduler(args, targets, _backend, deadline):
+        # Exercise the emitted CLI receipt with real scheduling and stop validation.
+        # Only the external stage callbacks are synthetic.
+        seen.append(deadline)
+        return closer_pipeline.run_pipeline(
+            adapter._pipeline_state_path(args.state),
+            targets,
+            prepare=prepare,
+            interpret=interpret,
+            exception=lambda *_: pytest.fail("no exception stage expected"),
+            act=act,
+            capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+            deadline=deadline,
+            coordinator_mode=args.coordinator_mode,
+            coordination_admission=args._coordination_admission,
+        )
+
+    monkeypatch.setattr(adapter, "_run_staged_pipeline", run_scheduler)
     assert (
         adapter.main(
             [
@@ -4356,6 +4383,14 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     assert receipt["validation"]["valid"] is stop_valid
     if not stop_valid:
         assert "unverified_deferral:" + TARGET in receipt["validation"]["reasons"]
+        assert receipt["reason"] == "prior_run_has_no_valid_stop"
+        assert receipt["authority"] is False
+        assert receipt["targets"] == {}
+        assert stages == []
+        assert pipeline_path.read_bytes() == pipeline_before
+    else:
+        assert receipt["targets"][TARGET]["status"] == "completed"
+        assert stages == [("prepare", TARGET), ("interpret", TARGET), ("act", TARGET)]
     admission = receipt["budget_admission"]
     assert seen == [start + 10 + 300]
     assert admission == {
@@ -4371,7 +4406,6 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     }
     assert admission["selected_deadline"] > start
     assert state_path.read_bytes() == before
-    assert pipeline_path.read_bytes() == pipeline_before
     assert (
         adapter._deadline_with_legacy_round(time.time() + 310, state, state_path)
         == state["round"]["deadline"]
