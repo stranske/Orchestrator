@@ -1,0 +1,11 @@
+# Correction-index foundation and operational source layers
+
+The initial standalone foundation in PR #974 contained self-contained private-index data primitives and the unsupported native-reader interface. The separate controller/native source projection now adds the reviewed operational module with its actual source dependencies. Neither source stage changes installed configuration or supplies a supported native account reader.
+
+The retained functions cover canonical JSON bytes, digests, exact schemas and selectors, index validation and pure transitions, and construction of write-intent data. `ControllerConfig` is a frozen data container. A write-intent object or selector is not authenticated custody and cannot execute a write. `NativeConsumerReader` retains the default unsupported account, confinement, execution-limit and budget reads; it supplies no installed-positive implementation or probe command.
+
+The portable tests retain the reviewed original canonical oracle and its expected structural hash. Empty AST fields are explicitly included on Python versions that omit them by default, preserving the same structural comparison across Python 3.12, 3.13 and 3.14. Broad byte/rejection equivalence, wire goldens and default-reader refusals remain unchanged. Historical copied evidence and whole-parent AST checks remain local review evidence rather than repository fixtures.
+
+Operational `NativeIndexStore`, custody, `IndexController`, provider guard and inspection paths were deliberately outside the first foundation. They are present in the controller/native source layer together with source-installation, native-effect, maintenance and coding-session dependencies. No missing-module suppression or successful implementation stub replaces those dependencies. The physical campaign CLI uses the reviewed canonical module identity before application imports, preserving the existing private source-frame guards.
+
+The current branch is a source composition, not evidence of an actual enrollment, native CAS, provider launch, installed qualification or activation. No installation or mirror synchronization occurs. Installed reader failures remain held. Publishing this source does not recover or replay historical UNKNOWN outcomes; the original source, writer, deadline, native admission and proof guards still govern every operational path.

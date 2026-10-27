@@ -7,6 +7,7 @@ review receipts; this portable slice exercises no retained instance history.
 
 import ast
 import hashlib
+import inspect
 import itertools
 import json
 import random
@@ -72,9 +73,12 @@ def test_oracle_is_exact_original_function_except_name():
         n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "original_canonical"
     )
     node.name = "canonical"
-    assert hashlib.sha256(ast.dump(node, include_attributes=False).encode()).hexdigest() == (
-        "81c250f05a3a17b4b3e563d97ee2581e6bfd90d9f3283667d2731d810d1e88e4"
-    )
+    # Python 3.13+ omits empty fields by default; retain the original structural
+    # representation rather than accepting a different oracle or expected hash.
+    options = {"show_empty": True} if "show_empty" in inspect.signature(ast.dump).parameters else {}
+    assert hashlib.sha256(
+        ast.dump(node, include_attributes=False, **options).encode()
+    ).hexdigest() == ("81c250f05a3a17b4b3e563d97ee2581e6bfd90d9f3283667d2731d810d1e88e4")
 
 
 def test_all_unicode_scalar_characters_in_bounded_strings_and_keys():

@@ -91,6 +91,7 @@ for snapshot in \
   experiments/repo_knowledge.json \
   data/feedback-snapshot.json \
   config/coverage-baseline.json \
+  config/test-shards.json \
   config/model_epochs.json; do
   if [[ -f "$SRC/$snapshot" ]]; then
     cp "$SRC/$snapshot" "$MIRROR/$snapshot"
@@ -113,6 +114,17 @@ if git -C "$SRC" rev-parse --verify -q HEAD:scripts >/dev/null 2>&1; then
   git -C "$SRC" archive --format=tar HEAD scripts | { tar -x -C "$MIRROR" && cat >/dev/null; }
   chmod +x "$MIRROR/scripts/check_checks_reported.py"
   echo "scripts/ shipped from git HEAD ($(find "$MIRROR/scripts" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ') entries)"
+  extra=$((extra + 1))
+fi
+# Planner behavior is tested from its repository-relative path in both checkout and flat shapes.
+# Ship the tool from git alongside the tests that load it; working-tree edits are intentionally
+# excluded by the same committed-HEAD contract used for tests/ and scripts/.
+mkdir -p "$MIRROR/tools"
+rm -f "$MIRROR/tools/make_test_shards.py"
+if git -C "$SRC" rev-parse --verify -q HEAD:tools/make_test_shards.py >/dev/null 2>&1; then
+  git -C "$SRC" archive --format=tar HEAD tools/make_test_shards.py | {
+    tar -x -C "$MIRROR" && cat >/dev/null
+  }
   extra=$((extra + 1))
 fi
 # Campaign contracts are read by the campaign CLI and its acceptance tests in both shapes.
