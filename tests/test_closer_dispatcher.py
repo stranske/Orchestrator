@@ -1888,7 +1888,7 @@ def test_repair_without_original_operation_stays_uncertain(tmp_path, monkeypatch
 @pytest.mark.parametrize(
     "changed", [None, "fix.py", "ruff.toml"], ids=["exact", "target", "config"]
 )
-def test_mechanical_source_inventory_matches_selected_head_bytes(tmp_path, changed):
+def test_mechanical_source_inventory_matches_selected_head_bytes(tmp_path, monkeypatch, changed):
     import base64
     from urllib.parse import quote
 
@@ -1896,10 +1896,13 @@ def test_mechanical_source_inventory_matches_selected_head_bytes(tmp_path, chang
 
     workspace = tmp_path / "source-workspace"
     workspace.mkdir()
+    # This byte-inventory unit needs no repository configuration or installed tool.
+    # The flat exec mirror deliberately has no .github source tree.
+    monkeypatch.setattr(mechanical, "SOURCE_ROOT", tmp_path / "absent-repository-source")
     original = {
         "fix.py": b"value = 1\n",
         **{
-            name: (mechanical.SOURCE_ROOT / name).read_bytes()
+            name: f"# retained source fixture: {name}\n".encode()
             for name in mechanical.catalog.SOURCE_FILES
         },
     }
