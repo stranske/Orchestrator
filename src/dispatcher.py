@@ -2642,7 +2642,19 @@ def _controlled_data_only_entry(function):
     def invoke(*args, **kwargs):
         import closer_correction_maintenance
 
-        closer_correction_maintenance.assert_offload_allowed()
+        try:
+            closer_correction_maintenance.assert_offload_allowed()
+        except closer_correction_maintenance.MaintenanceUnknown:
+            return {
+                "agent": kwargs.get("agent", args[0] if args else None),
+                "exit": 2,
+                "output": "",
+                "run_id": None,
+                "error": "deterministic correction maintenance forbids provider offload",
+                "process_started": False,
+                "outcome_uncertain": False,
+                "retry_safe": False,
+            }
         bound = signature.bind(*args, **kwargs)
         values = bound.arguments
         if values.get("data_only") is not True:
@@ -3223,8 +3235,12 @@ def run_observed_offload(
         if _coding_session_runtime.capture_limit(sys._getframe()) is not None and observed.get(
             "invalid_utf8_output"
         ):
-            raise _coding_session_runtime.SessionHeld(
-                "coding-session native output encoding invalid"
+            raise ObservedOffloadFailure(
+                "coding-session native output encoding invalid",
+                observed,
+                child.returncode,
+                stdout,
+                stderr,
             )
         result = subprocess.CompletedProcess(
             command, child.returncode, safe_output(stdout), safe_output(stderr)

@@ -410,7 +410,12 @@ def collect_source_registration(backend, target, snapshot, prepared_inputs, orig
                             # A generic native verdict has no mechanical path claim;
                             # leave that finding untouched and inspect later rows.
                             continue
-                        diagnostics = parse_diagnostics(policy.operation, log, paths)
+                        try:
+                            diagnostics = parse_diagnostics(policy.operation, log, paths)
+                        except SourceUnavailable:
+                            # This exact finding/policy/log has no matching diagnostic.
+                            # It must not erase registrations from other findings.
+                            continue
                         if not all(row["message"] in raw_finding for row in diagnostics):
                             continue
                         installed = _installation(policy)
