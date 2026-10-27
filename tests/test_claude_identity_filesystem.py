@@ -11,12 +11,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import adapters
 import dispatcher
 import execution_profiles
 import feedback
 import ledger_reconcile
+
+controlled_world = _controlled_world
 
 PROFILE = "claude-sonnet-5-5-low"
 REASON = "claude_transcript_probe_oserror:ENAMETOOLONG"
@@ -634,134 +637,79 @@ def test_interrupt_retention_failure_is_not_retried(long_workspace, monkeypatch)
 
 
 def test_real_retention_barrier_reaches_closer_interpret_uncertainty(
-    tmp_path, monkeypatch, long_workspace
+    tmp_path, monkeypatch, long_workspace, controlled_world
 ):
-    import copy
-    import sys
     import time
 
-    from test_closer_dispatcher import (
-        HEAD,
-        FakeGitHub,
-        adapter,
-        closer,
-        snapshot,
-        stub_action_readiness_for_transport_test,
-    )
+    from closer_inert_dispatcher_support import LOW, InertCaller
+    from test_closer_dispatcher import FakeGitHub, adapter, closer, snapshot
 
-    accounting_pending = False
-
-    def unavailable(*args, **kwargs):
-        raise OSError(errno.ENOSPC, "private fixture")
-
-    monkeypatch.setattr(dispatcher, "_retain_provider_result", unavailable)
-    held, provider_calls = _offload(monkeypatch, long_workspace)
-    assert len(provider_calls) == 1 and held["outcome_status"] == "uncertain"
-    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_evidence
+    import closer_pipeline
 
+    monkeypatch.setenv("HOME", str(controlled_world.root / "private-home"))
+    monkeypatch.setenv("HANDOFF_DIR", str(controlled_world.root / "private-handoff"))
+    caller = InertCaller(controlled_world, monkeypatch)
     target = "o/r#41"
-    base = "c" * 40
-    current = snapshot(target=target, base=base)
+    current = snapshot(
+        target=target,
+        base="c" * 40,
+        state="MERGED",
+        merge="b" * 40,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": "b" * 40},
+    )
+    prepared_payload = {}
 
     class PreparedGitHub(FakeGitHub):
         def __init__(self, *, deadline):
-            super().__init__(None)
+            super().__init__(current)
             self.deadline = deadline
 
-        def snapshot(self, _target):
-            return copy.deepcopy(current)
-
     monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
-    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _packet: True)
-    monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_args, **_kwargs: [])
+
+    def collect(snap, _api, retained_dir, **_kwargs):
+        packet, _ref, proposal = caller.packet(snap, retained_dir)
+        prepared_payload["proposal"] = proposal
+        return packet
+
+    monkeypatch.setattr(closer_evidence, "collect_evidence", collect)
     backend = closer(tmp_path, current)
-    monkeypatch.setattr(
-        backend, "campaign_admission", lambda *_args, **_kwargs: {"allowed": True, "timeout": 60}
-    )
-    chosen = []
-
-    def route(*, load, unavailable_profiles, data_only, with_status=False):
-        assert data_only is True
-        profile = PROFILE if PROFILE not in unavailable_profiles else "no-fallback"
-        chosen.append(profile)
-        value = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
-        return (value, "available") if with_status else value
-
-    monkeypatch.setattr(adapter, "_pipeline_low_route", route)
-    monkeypatch.setattr(
-        adapter, "_execute_profile_route", lambda chosen, invoke, **kwargs: (invoke(chosen), chosen)
-    )
     calls = []
 
-    def offload(agent, _prompt, **kwargs):
+    def unavailable(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "private fixture")
+
+    monkeypatch.setattr(dispatcher, "_retain_provider_result", unavailable)
+
+    def offload(agent, prompt, **kwargs):
         calls.append((agent, kwargs["profile_id"]))
-        return held
+        return caller.response(
+            {"exit": 0, "output": json.dumps(prepared_payload["proposal"])}, agent, prompt, **kwargs
+        )
 
     monkeypatch.setattr(dispatcher, "offload", offload)
-    packets = {}
-
-    def prepare(target_name):
-        packet = {
-            "schema": "closer-evidence/v1",
-            "target": target_name,
-            "head": HEAD,
-            "base": base,
-            "producer_sha256": "d" * 64,
-            "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
-            "sections": {},
-            "manifest": {"packet_sha256": "f" * 64},
-        }
-        packet_path = tmp_path / "uncertain-packet.json"
-        packet_path.write_text(json.dumps(packet))
-        snap = copy.deepcopy(current)
-        snap_path = tmp_path / "uncertain-snapshot.json"
-        snap_path.write_text(json.dumps(snap, sort_keys=True, separators=(",", ":")))
-        prepared = {
-            "revision": snap["revision"],
-            "identity": target_name,
-            "semantic_cache_key": packet["semantic_cache_key"],
-            "producer_sha256": packet["producer_sha256"],
-            "snapshot": {
-                "target": target_name,
-                "head": HEAD,
-                "base": base,
-                "revision": snap["revision"],
-            },
-            "snapshot_ref": {
-                "path": str(snap_path),
-                "sha256": hashlib.sha256(snap_path.read_bytes()).hexdigest(),
-            },
-            "packet_ref": {
-                "path": str(packet_path),
-                "sha256": hashlib.sha256(packet_path.read_bytes()).hexdigest(),
-            },
-            "evidence_summary": {"drift_sample": [], "sections": {}},
-        }
-        packets[target_name] = prepared
-        return prepared
 
     def pipeline_stub(_path, targets, **callbacks):
-        target_name = targets[0]
-        interpreted = callbacks["interpret"](
-            target_name,
-            {"prepare": prepare(target_name), "deadline": time.time() + 60},
-        )
-        assert interpreted["status"] == "uncertain"
-        assert interpreted["provider_outcome"]["actual"]["run_id"] == (held["run_id"])
-        if accounting_pending:
-            actual = interpreted["provider_outcome"]["actual"]
-            assert actual["provider_completed"] and actual["raw_exit"] == 0
-            assert actual["completion_persistence"]["status"] == "pending"
+        name = targets[0]
+        context = {"deadline": time.time() + 60}
+        context["prepare"] = callbacks["prepare"](name, context)
+        interpreted = callbacks["interpret"](name, context)
+        assert interpreted["status"] == "uncertain", interpreted
+        held = caller.results[0]
+        assert interpreted["provider_outcome"]["actual"]["run_id"] == held["run_id"]
+        assert held["process_started"] is True and held["outcome_uncertain"] is True
+        assert held["error"] == "provider_result_retention_failed:OSError"
+        assert held["provider_completed"] is True and held["raw_exit"] == 0
+        assert held["retry_safe"] is False
         assert "substantive_needs" in interpreted
-        return {"targets": {target_name: interpreted}}
+        return {"targets": {name: interpreted}}
 
-    monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
     args = SimpleNamespace(state=str(tmp_path / "pipeline-state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
-
-    assert chosen == [PROFILE]
-    assert calls == [("claude", PROFILE)]
+    caller.staged(args, [target], backend, time.time() + 180)
+    assert calls == [("claude", LOW)] and len(caller.results) == 1
+    assert controlled_world.events["auth"] == controlled_world.events["auth_closed"] == 1
+    assert not backend.gh.calls
 
 
 def test_actual_inaccessible_claude_directory_is_named(tmp_path):

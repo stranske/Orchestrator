@@ -43,9 +43,10 @@ path; this module supplies no retry or closure authority.
 
 Healthy capacity without an eligible role/policy is recorded as
 `qualification_unavailable`, rather than reported as quota exhaustion. The
-pending event retains target, revision and role for controller re-entry. Typed
-hold owners, scheduling, attempt budgets and escalation consumers remain the
-next implementation slice.
+pending event retains target, revision and role for controller re-entry. The
+typed owner, deadline, attempt-budget and scheduled follow-up contracts are
+implemented by `closer_hold_followup`; see [Closer hold follow-up](CLOSER_HOLD_FOLLOWUP.md).
+Deployment and live acceptance of each route remain separate requirements.
 
 ## Candidate inventory and Claude policy
 

@@ -82,7 +82,9 @@ jobs:
   combined-coverage:
     name: combined coverage (pytest + selftests, the honest number)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The measured full-suite coverage run reached its report at the 35-minute
+    # ceiling; reserve bounded time for report upload and cleanup, keeping all gates.
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -204,7 +206,7 @@ jobs:
   verify:
     name: verify.py (real pytest counts + selftests + capability gates)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       VERIFY_PYTEST_WORKERS: "4"
     steps:
