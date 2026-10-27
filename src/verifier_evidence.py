@@ -274,6 +274,69 @@ def decision_from_pr(
     }
 
 
+def terminal_origin_from_pr(repo, pr, decision):
+    """Project the actual selected bot comment separately from immutable findings.
+
+    This records local authenticated-read provenance, not remote correction authority.
+    Absence/partial inventory never supplies a comment or decision identity.
+    """
+    import hashlib
+
+    if (
+        not isinstance(decision, dict)
+        or decision.get("verdict") != "NON_PASS"
+        or (pr.get("comments") or {}).get("pageInfo", {}).get("hasPreviousPage") is not False
+        or _public_record(decision_from_pr(repo, pr) or {}) != _public_record(decision)
+    ):
+        return None
+    number = pr.get("number")
+    exact = re.compile(
+        r"https://github\.com/"
+        + re.escape(repo.lower())
+        + r"/pull/"
+        + str(number)
+        + r"#issuecomment-([1-9][0-9]*)\Z"
+    )
+    origins = []
+    for comment in (pr.get("comments") or {}).get("nodes") or []:
+        if not isinstance(comment, dict):
+            continue
+        author = comment.get("author") or {}
+        if not isinstance(author, dict):
+            continue
+        body, url = comment.get("body"), comment.get("url")
+        match = exact.fullmatch(url.lower()) if isinstance(url, str) else None
+        if (
+            author.get("login") != "github-actions[bot]"
+            or author.get("__typename") != "Bot"
+            or not isinstance(body, str)
+            or len(body.encode()) > 65536
+            or match is None
+        ):
+            continue
+        markers = MARKER_RE.findall(body)
+        if len(markers) != 1:
+            continue
+        try:
+            raw = json.loads(markers[0])
+            if _public_record(raw) != _public_record(decision):
+                continue
+            origins.append(
+                {
+                    "schema": "closer-terminal-comment-origin/v1",
+                    "comment_id": match[1],
+                    "comment_sha256": hashlib.sha256(body.encode()).hexdigest(),
+                    "decision_sha256": verification_events.content_hash(raw),
+                    "source_url": url,
+                    "author": "github-actions[bot]",
+                    "actor_type": "Bot",
+                }
+            )
+        except (TypeError, ValueError, KeyError):
+            continue
+    return min(origins, key=lambda row: int(row["comment_id"])) if origins else None
+
+
 def unusable_observation(repo, number, head, merge):
     return {
         "schema": OBSERVATION_SCHEMA,

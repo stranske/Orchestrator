@@ -37,6 +37,7 @@ MUTATING_ACTIONS = frozenset(
     {
         "respond_review",
         "repair",
+        "correction_coding",
         "initiate_verify",
         "merge",
         "post_merge_verify",
@@ -543,7 +544,7 @@ def _budget_available(
 
 
 @contextlib.contextmanager
-def _callback_invocation(target, operation, now):
+def _callback_invocation(target, operation, now, *, state_path=None):
     """Private live callback identity; never serialized or restored on restart."""
     if getattr(_callback_threads, "invocation", None) is not None:
         raise QueueStateError("nested queue callback invocation refused")
@@ -553,6 +554,7 @@ def _callback_invocation(target, operation, now):
         "target": target,
         "operation": _json_copy(operation),
         "now": now,
+        "state_path": str(Path(state_path).resolve()) if state_path is not None else None,
     }
     try:
         yield
@@ -619,7 +621,7 @@ def verification_callback_not_invoked_proof(operation, target):
 
 
 def _invoke_before_cutoff(
-    execute, target, action, snapshot, operation, now, execution_context=None
+    execute, target, action, snapshot, operation, now, execution_context=None, state_path=None
 ):
     """A queued callback rechecks its original request and held resource context."""
     if getattr(_callback_threads, "invocation", None) is not None:
@@ -658,9 +660,9 @@ def _invoke_before_cutoff(
             remaining = closer_resources.finite_request_remaining()
             if remaining is None or remaining <= 0:
                 return None, None
-            with _callback_invocation(target, operation, now):
+            with _callback_invocation(target, operation, now, state_path=state_path):
                 return invoke(), invoked_at
-    with _callback_invocation(target, operation, now):
+    with _callback_invocation(target, operation, now, state_path=state_path):
         return invoke(), invoked_at
 
 
@@ -2408,6 +2410,7 @@ def run_round(
                         dict(op),
                         now,
                         execution_context,
+                        path,
                     )
                     launched.append((target, item, op, future, acquired, started))
 

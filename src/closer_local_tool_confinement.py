@@ -98,10 +98,36 @@ class Boundary:
     timeout_seconds: int
     max_output_bytes: int
     operation_id: str
+    read_only: bool
     identities: tuple[tuple[str, tuple[int, ...]], ...]
     source_hashes: tuple[tuple[str, str], ...]
     profile: str
     descriptor_sha256: str
+
+
+def _render_profile(root, private, runtime, writes):
+    """Pure deny-default rendering, shared by exact postimage check validation."""
+    rules = [
+        "(version 1)",
+        "(deny default)",
+        "(allow process-exec)",
+        "(allow process-fork)",
+        "(allow sysctl-read)",
+        "(allow file-read-metadata)",
+    ]
+    rules += [f"(allow file-read* (subpath {_quote(str(p))}))" for p in (root, private, *runtime)]
+    rules += [f"(allow file-read* (subpath {_quote(p)}))" for p in ("/usr/lib", "/System/Library")]
+    rules += [
+        '(allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))',
+        '(allow file-write-data (literal "/dev/null"))',
+    ]
+    rules += [f"(allow file-write-data (literal {_quote(str(p))}))" for p in writes]
+    rules += [
+        f"(allow file-write* (subpath {_quote(str(private))}))",
+        f"(deny file-read* file-write* (subpath {_quote(str(root / '.git'))}))",
+        "(deny network*)",
+    ]
+    return "\n".join(rules)
 
 
 def prepare_boundary(
@@ -114,6 +140,7 @@ def prepare_boundary(
     timeout_seconds: int,
     max_output_bytes: int,
     operation_id: str,
+    read_only: bool = False,
 ) -> Boundary:
     """Freeze trusted exact local inputs; does not execute or qualify a tool."""
     root = _canonical(workspace, directory=True)
@@ -144,7 +171,12 @@ def prepare_boundary(
         or any(ord(c) < 32 for c in operation_id)
     ):
         raise BoundaryRefused("original operation identity required")
-    if not 1 <= len(write_paths) <= 5 or len(set(map(str, write_paths))) != len(write_paths):
+    if type(read_only) is not bool:
+        raise BoundaryRefused("explicit boolean read-only mode required")
+    if read_only:
+        if write_paths:
+            raise BoundaryRefused("read-only mode forbids workspace write paths")
+    elif not 1 <= len(write_paths) <= 5 or len(set(map(str, write_paths))) != len(write_paths):
         raise BoundaryRefused("one to five unique existing write files required")
     writes = tuple(_canonical(p, directory=False) for p in write_paths)
     if any(
@@ -202,27 +234,7 @@ def prepare_boundary(
     if Path(SANDBOX_EXEC).is_file():
         sources += (_canonical(SANDBOX_EXEC, directory=False),)
     hashes = tuple((str(p), _hash(p)) for p in sources)
-    rules = [
-        "(version 1)",
-        "(deny default)",
-        "(allow process-exec)",
-        "(allow process-fork)",
-        "(allow sysctl-read)",
-        "(allow file-read-metadata)",
-    ]
-    rules += [f"(allow file-read* (subpath {_quote(str(p))}))" for p in (root, private, *runtime)]
-    rules += [f"(allow file-read* (subpath {_quote(p)}))" for p in ("/usr/lib", "/System/Library")]
-    rules += [
-        '(allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))',
-        '(allow file-write-data (literal "/dev/null"))',
-    ]
-    rules += [f"(allow file-write-data (literal {_quote(str(p))}))" for p in writes]
-    rules += [
-        f"(allow file-write* (subpath {_quote(str(private))}))",
-        f"(deny file-read* file-write* (subpath {_quote(str(root / '.git'))}))",
-        "(deny network*)",
-    ]
-    profile = "\n".join(rules)
+    profile = _render_profile(root, private, runtime, writes)
     fields = (
         str(root),
         tuple(map(str, writes)),
@@ -232,6 +244,7 @@ def prepare_boundary(
         timeout_seconds,
         max_output_bytes,
         operation_id,
+        read_only,
         identities,
         hashes,
         profile,
@@ -250,6 +263,11 @@ def run_confined_tool(
     def refused(reason):
         return {
             "schema": SCHEMA,
+            "mode": (
+                ("read_only" if boundary.read_only else "write")
+                if type(boundary) is Boundary
+                else "unknown"
+            ),
             "status": "refused",
             "reason": reason,
             "process_started": False,
@@ -274,6 +292,7 @@ def run_confined_tool(
             timeout_seconds=boundary.timeout_seconds,
             max_output_bytes=boundary.max_output_bytes,
             operation_id=boundary.operation_id,
+            read_only=boundary.read_only,
         )
         if current != boundary:
             raise BoundaryRefused("source/paths/binary/boundary changed before submission")
@@ -323,6 +342,7 @@ def run_confined_tool(
         return {
             "schema": SCHEMA,
             "status": "held",
+            "mode": "read_only" if boundary.read_only else "write",
             "process_started": bool(observed.get("pid")),
             "effect_outcome": "unknown",
             "error_type": type(error).__name__,
@@ -334,6 +354,7 @@ def run_confined_tool(
     return {
         "schema": SCHEMA,
         "status": "observed" if observed.get("cleanup_terminal") is True else "held",
+        "mode": "read_only" if boundary.read_only else "write",
         "process_started": True,
         "tool_started": "unverified_sandbox_wrapper_transport_only",
         "returncode": result.returncode,

@@ -86,7 +86,7 @@ def _qualification(proof, profile_id, *, now=None):
     return record
 
 
-def materialize_selected(
+def _materialize_selected(
     *,
     proof,
     run_id,
@@ -100,6 +100,7 @@ def materialize_selected(
     raw_findings,
     retained_packet_ref,
     now=None,
+    _persist=True,
 ):
     """Re-read physical original output and all exact task/prompt/source joins."""
     import closer_correction_producer as producer
@@ -149,7 +150,25 @@ def materialize_selected(
             retained_packet_ref=retained_packet_ref["path"],
             decision_evidence_ref=proof["provider_result_ref"]["path"],
         )
-        decision_ref = producer.retain(root, decision, "correction-decision.json")
+        if _persist:
+            decision_ref = producer.retain(root, decision, "correction-decision.json")
+        else:
+            # Reconciliation is read-only: missing original custody must hold,
+            # never create a new decision or repair an old response/proof.
+            import hashlib
+            import json
+
+            raw = json.dumps(
+                decision, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            ).encode("utf-8")
+            sha = hashlib.sha256(raw).hexdigest()
+            decision_ref = {
+                "path": str(root / "raw" / sha[:2] / (sha + ".correction-decision.json")),
+                "sha256": sha,
+                "bytes": len(raw),
+            }
+            if closer._read_controlled_receipt(decision_ref, root) != decision:
+                raise DecisionUnavailable("original materialized decision custody differs")
         return {
             "status": "materialized",
             "evidence_scope": "local_controlled_execution_only",
@@ -171,6 +190,78 @@ def materialize_selected(
         # invalid proof never becomes a discoverable accounting run by itself.
         held.update(proof=proof, run_id=run_id)
         return held
+
+
+def materialize_selected(
+    *,
+    proof,
+    run_id,
+    basis,
+    receipt_root,
+    profile_id,
+    request_ref,
+    original_request,
+    seed_bundle,
+    source_body,
+    raw_findings,
+    retained_packet_ref,
+    now=None,
+):
+    """Original publication path; a caller timestamp cannot renew old proof."""
+    if now is not None:
+        raise TypeError("internal materializer mode/time is not caller input")
+    return _materialize_selected(
+        proof=proof,
+        run_id=run_id,
+        basis=basis,
+        receipt_root=receipt_root,
+        profile_id=profile_id,
+        request_ref=request_ref,
+        original_request=original_request,
+        seed_bundle=seed_bundle,
+        source_body=source_body,
+        raw_findings=raw_findings,
+        retained_packet_ref=retained_packet_ref,
+        _persist=True,
+    )
+
+
+def read_materialized_selected(
+    *,
+    proof,
+    run_id,
+    basis,
+    receipt_root,
+    profile_id,
+    request_ref,
+    original_request,
+    seed_bundle,
+    source_body,
+    raw_findings,
+    retained_packet_ref,
+    now=None,
+):
+    """Authenticate already retained bytes in the actual read-only source frame."""
+    if now is not None:
+        raise TypeError("internal historical materializer mode/time is not caller input")
+    import closer_correction_source_record as source
+
+    original_time = source.retained_provider_time(proof)
+    return _materialize_selected(
+        proof=proof,
+        run_id=run_id,
+        basis=basis,
+        receipt_root=receipt_root,
+        profile_id=profile_id,
+        request_ref=request_ref,
+        original_request=original_request,
+        seed_bundle=seed_bundle,
+        source_body=source_body,
+        raw_findings=raw_findings,
+        retained_packet_ref=retained_packet_ref,
+        now=original_time,
+        _persist=False,
+    )
 
 
 def materialize(**kwargs):

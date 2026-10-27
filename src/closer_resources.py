@@ -1706,10 +1706,29 @@ def finite_pool_current_binding():
     return {"frontier_id": next(iter(frontiers)), "target": next(iter(targets))}
 
 
-def finite_pool_no_start(observation=None):
-    """Clear only current-thread reservations still in prelaunch state."""
+def finite_pool_no_start(observation=None, *, expected=None):
+    """Clear current-thread prelaunch slots; optional identity only SKIPS writes."""
+    if expected is not None:
+        text_fields = {"agent", "profile_id", "frontier_id", "target"}
+        no_pid_fields = {"process_group", "process_birth"}
+        if (
+            type(expected) is not dict
+            or not expected
+            or not set(expected) <= text_fields | no_pid_fields
+            or any(
+                type(value) is not str or not value
+                for key, value in expected.items()
+                if key in text_fields
+            )
+            or any(value is not None for key, value in expected.items() if key in no_pid_fields)
+        ):
+            raise ResourceBlocked("invalid restrictive pre-start identity")
     for item in _pool_slots():
         record = item["record"]
+        if expected is not None and any(
+            key not in record or record[key] != value for key, value in expected.items()
+        ):
+            continue
         if record.get("status") == "starting" and (
             (observation is None and record.get("run_id") is None)
             or (
@@ -2172,6 +2191,15 @@ def validate_stop(
             invalid = [f"{target}:{r}" for r in verdict.get("reasons", ["invalid"])]
             reasons.extend(invalid)
             admitted_reasons.extend(invalid)
+        if (
+            verdict.get("valid") is True
+            and admitted_row.get("status") == "held"
+            and admitted_row.get("deferred_reason") == "correction_enrollment_terminal"
+        ):
+            # The exact source reader proved only enrollment, not completion of
+            # corrective/domain work. C must preserve the global stop boundary.
+            reasons.append(f"correction_enrollment_requires_coding:{target}")
+            continuation = True
         if unresolved or verdict.get("run_id") != run_id or not verdict.get("valid"):
             # A later mutation of a formerly known result is not evidence that
             # this named terminal round contained its effects. Bind the exact

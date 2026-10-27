@@ -577,6 +577,38 @@ class _CoreHTTPTransport:
         return result.get("value")
 
 
+_FACTORY_ORIGIN_SEAL = object()
+
+
+class _ManifestFactoryOrigin:
+    """Private process provenance, not a serialized qualification receipt."""
+
+    __slots__ = ("binding", "bundle", "path", "sha256", "policy_sha256", "seal")
+    binding: RuntimeBinding
+    bundle: CoreBundle
+    path: str
+    sha256: str
+    policy_sha256: str
+    seal: object
+
+    def __init__(self, *args, **kwargs):
+        raise TypeError("manifest origin is issued by binding_from_manifest only")
+
+
+def _factory_manifest_origin(binding):
+    origin = getattr(binding, "_manifest_factory_origin", None)
+    if (
+        type(binding) is not RuntimeBinding
+        or type(origin) is not _ManifestFactoryOrigin
+        or origin.seal is not _FACTORY_ORIGIN_SEAL
+        or origin.binding is not binding
+        or origin.bundle is not binding.bundle
+        or origin.policy_sha256 != _digest(binding.policy)
+    ):
+        return None
+    return origin
+
+
 class RuntimeBinding:
     def __init__(
         self,
@@ -590,6 +622,7 @@ class RuntimeBinding:
         self.mechanism = mechanism
         self.transport = transport
         self.adapters: dict[str, Any] = {}
+        self._manifest_factory_origin: _ManifestFactoryOrigin | None = None
 
     def _adapter(self, repository):
         from closer_campaign import PinnedCoreAdapter
@@ -1086,11 +1119,29 @@ def binding_from_manifest(path: str | Path) -> RuntimeBinding | None:
             return None
         from closer_mechanisms import mechanism
 
-        return RuntimeBinding(
+        binding = RuntimeBinding(
             CoreBundle(manifest["portable"]),
             manifest.get("policy") or {},
             mechanism=mechanism(manifest),
         )
+        if "correction_controller_installation" in binding.policy:
+            # Optional capability only: a stricter physical-origin failure must
+            # not change the existing ordinary RuntimeBinding contract.
+            try:
+                from closer_source_installation import _physical_json
+
+                physical, raw = _physical_json(path, limit=16 * 1024 * 1024)
+                if physical == manifest:
+                    origin = object.__new__(_ManifestFactoryOrigin)
+                    origin.binding, origin.bundle = binding, binding.bundle
+                    origin.path = str(Path(path))
+                    origin.sha256 = hashlib.sha256(raw).hexdigest()
+                    origin.policy_sha256 = _digest(binding.policy)
+                    origin.seal = _FACTORY_ORIGIN_SEAL
+                    binding._manifest_factory_origin = origin
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        return binding
     except (OSError, ValueError, KeyError, TypeError, BindingError):
         return None  # caller requires binding and holds remote actions; local work continues
 
@@ -1171,7 +1222,10 @@ class PinnedNativeHooks:
                 ):
                     raise BindingError("native admission cfg differs from signed invocation")
                 admitted_assignment = Path(context["assignment"]["path"])
-                if "demand_assignment" in context:
+                if "coding_continuation" in context:
+                    # validate_admission binds these exact bytes to the protected selector.
+                    self.assignment_source = admitted_assignment
+                elif "demand_assignment" in context:
                     self.assignment_source = Path(context["demand_assignment"]["path"])
             canonical = {
                 "interpreter": self.interpreter_anchor.resolve(),
@@ -1228,6 +1282,10 @@ class PinnedNativeHooks:
                             and (
                                 b"CLOSER_BOUNDED_NO_RELAY_V1" not in data
                                 or (
+                                    cfg.get("coding_continuation") is not None
+                                    and b"CLOSER_CODING_TERMINAL_V1" not in data
+                                )
+                                or (
                                     cfg.get("native_admission") is not None
                                     and b"CLOSER_NAMED_ROUND_V1" not in data
                                 )
@@ -1254,6 +1312,8 @@ class PinnedNativeHooks:
             "CLOSER_ROUND_STATE": str(cfg["dispatch_state"]),
         }
         self.env.pop("CLOSER_POSTRUN_ROUND_ID", None)
+        self.env.pop("CLOSER_POSTRUN_CODING_DELIVERY", None)
+        self.env.pop("CLOSER_POSTRUN_CODING_DELIVERY_SHA256", None)
         self.env["CLOSER_POSTRUN_REQUIRE_NAMED_ROUND"] = (
             "1" if cfg.get("native_admission") is not None else "0"
         )
@@ -1442,6 +1502,10 @@ class PinnedNativeHooks:
         self.descendant_bundle_problem: str | None = None
         self.descendant_cfg: dict[str, Any] | None = None
         try:
+            if cfg.get("coding_continuation") is not None:
+                from closer_native_observer import bind_coding_terminal_receipt
+
+                return bind_coding_terminal_receipt(self, done, cfg)
             if done.returncode not in {0, 78}:
                 raise ValueError("ACTION B did not return a supported terminal receipt")
             raw = done.stdout
@@ -1625,11 +1689,63 @@ class PinnedNativeHooks:
             return None
 
 
-def scoped_continuation_proof(cfg, candidate):
+_SCOPED_PROOF_STAGES = frozenset(
+    {
+        "entry",
+        "assignment_pin",
+        "round_id",
+        "receipt_path",
+        "frontier",
+        "frontier_receipt",
+        "assignment_targets",
+        "stop_validation",
+        "receipt_hash",
+        "round_identity",
+        "domain_classification",
+        "run_ids",
+        "lane_clear",
+        "proof_complete",
+    }
+)
+
+
+def _note_scoped_proof(diagnostic, stage):
+    # Fixed diagnostic knowledge only; never changes a return value or guard.
+    if type(diagnostic) is dict and stage in _SCOPED_PROOF_STAGES:
+        diagnostic["stage"] = stage
+
+
+def _continuation_gate_diagnostic(cfg, hooks, token, terminal_b, outcome, receipt_bound):
+    c = getattr(hooks, "postrun_result", {})
+    c = c if isinstance(c, dict) else {}
+    stderr = c.get("stderr", "")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    code = c.get("code")
+    return {
+        "schema": "native-continuation-diagnostic/v1",
+        "native_mechanism": cfg.get("mechanism") == "native-handoff/v1",
+        "pinned_hooks": isinstance(hooks, PinnedNativeHooks),
+        "bounded_hooks": getattr(hooks, "bounded", None) is True,
+        "token_present": bool(token),
+        "b_terminal_eligible": terminal_b is not None and terminal_b.returncode in {0, 78},
+        "named_receipt_bound": receipt_bound is True,
+        "admission_requires_receipt": cfg.get("native_admission") is not None,
+        "not_denied": outcome != "denied",
+        "c_code": code if type(code) is int and -255 <= code <= 255 else "UNKNOWN",
+        "dependencies_valid": c.get("dependencies_valid") is True,
+        "normal_stop_stderr_match": isinstance(stderr, str)
+        and stderr.strip()
+        == "handoff-postrun: closer stop rejected; preserve ledger and resume actionable work",
+    }
+
+
+def scoped_continuation_proof(cfg, candidate, *, diagnostic=None):
     """Revalidate a terminal round's known/no-start/contained domain, never global stop."""
     import closer_resources
     from closer_dispatcher import targets_from_assignment
 
+    _note_scoped_proof(diagnostic, "entry")
     if cfg.get("mechanism") != "native-handoff/v1" or not isinstance(candidate, dict):
         return None
     if candidate.get("schema") == "native-descendant-continuation/v1":
@@ -1637,6 +1753,7 @@ def scoped_continuation_proof(cfg, candidate):
 
         return continuation_proof(cfg, candidate)
     try:
+        _note_scoped_proof(diagnostic, "assignment_pin")
         assignment = Path(cfg["assignment"])
         expected = cfg["native_hooks"]["postrun_dependencies"]["assignment"]
         if (
@@ -1645,22 +1762,29 @@ def scoped_continuation_proof(cfg, candidate):
             or _hash(assignment) != expected["sha256"]
         ):
             return None
+        _note_scoped_proof(diagnostic, "round_id")
         round_id = candidate["round_id"]
         if not isinstance(round_id, str) or not re.fullmatch(r"[0-9a-f]{16,64}", round_id):
             return None
+        _note_scoped_proof(diagnostic, "receipt_path")
         pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
         receipt = closer_resources.scoped_root(pipeline) / "rounds" / (round_id + ".json")
         if receipt.is_symlink() or candidate["receipt_path"] != str(receipt):
             return None
+        _note_scoped_proof(diagnostic, "frontier")
         frontier = cfg.get("finite_frontier")
         if candidate.get("finite_frontier") != frontier:
             return None
         if frontier is not None:
+            _note_scoped_proof(diagnostic, "frontier_receipt")
             actual_receipt, _digest = closer_resources.read_round_receipt(receipt)
             if actual_receipt.get("finite_frontier") != frontier:
                 return None
+        _note_scoped_proof(diagnostic, "assignment_targets")
         targets = targets_from_assignment(assignment)
+        _note_scoped_proof(diagnostic, "stop_validation")
         verdict = closer_resources.validate_stop(pipeline, round_id, targets)
+        _note_scoped_proof(diagnostic, "receipt_hash")
         receipt_hash = verdict.get("receipt_sha256")
         if (
             not isinstance(receipt_hash, str)
@@ -1668,8 +1792,10 @@ def scoped_continuation_proof(cfg, candidate):
             or candidate.get("receipt_sha256") != receipt_hash
         ):
             return None
+        _note_scoped_proof(diagnostic, "round_identity")
         if verdict.get("round_id") != round_id or verdict.get("global_stop_valid") is not False:
             return None
+        _note_scoped_proof(diagnostic, "domain_classification")
         if (
             verdict.get("admitted_domain_valid") is True
             and verdict.get("run_ids")
@@ -1686,8 +1812,10 @@ def scoped_continuation_proof(cfg, candidate):
             domain_outcome = "quarantined"
         else:
             return None
+        _note_scoped_proof(diagnostic, "run_ids")
         if candidate.get("run_ids") != verdict["run_ids"]:
             return None
+        _note_scoped_proof(diagnostic, "lane_clear")
         handoff = Path(
             cfg.get("handoff_dir")
             or os.environ.get("HANDOFF_DIR")
@@ -1712,6 +1840,7 @@ def scoped_continuation_proof(cfg, candidate):
             proof["finite_frontier"] = frontier
         if domain_outcome == "quarantined":
             proof["quarantined_admitted_items"] = verdict["quarantined_admitted_items"]
+        _note_scoped_proof(diagnostic, "proof_complete")
         return proof
     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return None
@@ -1770,6 +1899,168 @@ def _finite_dispatch_command(command, frontier, timeout):
             raise ValueError("finite dispatcher descriptor/timeout differs")
     except (IndexError, ValueError, TypeError) as exc:
         raise BindingError("native finite dispatcher binding differs") from exc
+
+
+def _validate_correction_b_command(command, manifest, hooks):
+    """Exact source dispatcher, distinct from the declared postrun mirror."""
+    base = Path(manifest["module_dir"])
+    script = base / "closer_dispatcher.py"
+    expected = manifest.get("modules", {}).get("closer_dispatcher.py")
+    dependency = hooks.dependencies.get("dispatcher")
+    if (
+        not isinstance(command, list)
+        or len(command) < 3
+        or command[2] != "run"
+        or Path(command[0]) != hooks.dependencies["interpreter"][0]
+        or not base.is_absolute()
+        or base.resolve(strict=True) != base
+        or script.resolve(strict=True) != script
+        or script.is_symlink()
+        or Path(command[1]) != script
+        or not isinstance(expected, str)
+        or len(expected) != 64
+        or not isinstance(dependency, tuple)
+        or len(dependency) != 2
+        or dependency[1] != expected
+        or _hash(script) != expected
+    ):
+        raise BindingError("native B is not the exact qualified source dispatcher/interpreter")
+
+
+def _observed_correction_b(command, cfg, hooks, timeout):
+    """Prospective opt-in only: actual direct B process, never injected data."""
+    import copy
+    import inspect
+    import subprocess
+
+    import closer_campaign as campaign
+    import closer_native_observer as native
+    import dispatcher
+
+    parent = inspect.currentframe().f_back
+    if parent.f_code is not run_native_round.__code__ or parent.f_globals is not globals():
+        raise BindingError("actual native round producer required")
+    if type(hooks) is not PinnedNativeHooks or not hooks.bounded or not hooks._dependencies_match():
+        raise BindingError("cleanup receipt requires exact direct source native B")
+    manifest = campaign.load_manifest(cfg["runtime_manifest"])
+    if (
+        _hash(Path(__file__)) != _BINDING_SOURCE_SHA256
+        or manifest.get("modules", {}).get("closer_runtime_binding.py") != _BINDING_SOURCE_SHA256
+        or campaign.verify_modules(manifest)
+    ):
+        raise BindingError("native lifecycle producer source closure changed")
+    _validate_correction_b_command(command, manifest, hooks)
+    directory, key, context, fields, worker_id, handoff_sha = native._lifecycle_authority(
+        manifest, cfg
+    )
+    witness = {"start": None, "finished": None, "observation": None}
+    observation = {
+        "run_id": "native-b:" + context["nonce"] + ":" + worker_id,
+        "agent": "local_controller",
+        "profile_id": "native-direct-dispatcher",
+    }
+
+    def retain(name, value):
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            campaign._atomic_write(
+                directory / name,
+                {"record": value, "signature": native.mechanisms._signature(value, key)},
+                create_only=True,
+                parent_fd=descriptor,
+            )
+        finally:
+            os.close(descriptor)
+        return native._read_lifecycle_record(directory, name, key)[1]
+
+    def observed_source_frame(value):
+        frame = inspect.currentframe().f_back.f_back
+        if (
+            frame.f_code is not dispatcher.run_observed_offload.__code__
+            or frame.f_globals is not dispatcher.__dict__
+            or frame.f_locals.get("observed") is not value
+            or type(frame.f_locals.get("child")) is not subprocess.Popen
+            or frame.f_locals["child"].pid != value.get("pid")
+        ):
+            raise BindingError("actual owned native B observer required")
+
+    def observed(value):
+        observed_source_frame(value)
+        if (
+            value.get("source") != "trusted-popen-transport/v1"
+            or value.get("transport_argv") != command
+            or type(value.get("pid")) is not int
+            or value["pid"] <= 1
+            or value.get("process_group") != value["pid"]
+            or not isinstance(value.get("os_started"), str)
+            or not value["os_started"]
+        ):
+            raise BindingError("native B physical observation incomplete")
+        record = {
+            "schema": "closer-native-correction-b-start/v1",
+            "binding": native.binding(manifest),
+            "admission": context,
+            "worker": fields,
+            "worker_id": worker_id,
+            "handoff_sha256": handoff_sha,
+            "worker_config_sha256": native.mechanisms.digest(cfg),
+            "supervising_worker_pid": os.getpid(),
+            "process": {k: value[k] for k in ("pid", "process_group", "os_started")},
+            "argv_sha256": native.mechanisms.digest(command),
+            "config_sha256": native.mechanisms.digest(
+                cfg["policy"]["correction_controller_installation"]["config"]
+            ),
+            "producer_sha256": _hash(Path(__file__)),
+            "domain_completed": False,
+            "acceptance_authorized": False,
+            "execution_authorized": False,
+            "source_closure_authorized": False,
+            "remote_execution_attested": False,
+        }
+        witness["observation"] = value
+        witness["start"] = retain("worker-b-start-" + worker_id + ".json", record)
+
+    def finished(value):
+        observed_source_frame(value)
+        if witness["observation"] is not value or value.get("cleanup_terminal") is not True:
+            raise BindingError("native B termination lacks original observation")
+        witness["finished"] = copy.deepcopy(value)
+
+    env = {**os.environ}
+    if cfg.get("capacity_report"):
+        env["CLOSER_CAPACITY_REPORT"] = str(cfg["capacity_report"])
+    done = dispatcher.run_observed_offload(
+        command,
+        callback=observed,
+        observation=observation,
+        cwd=None,
+        timeout=timeout,
+        stdin=None,
+        finished_callback=finished,
+        env=env,
+    )
+    if witness["finished"] is None:
+        raise BindingError("native B termination remains unknown")
+    # The prospective observed transport normalizes text. Count encoded bytes,
+    # never claim the record is the old subprocess.run raw-byte transcript.
+    if any(
+        not isinstance(v, str) or len(v.encode("utf-8")) > 32 * 1024 * 1024
+        for v in (done.stdout, done.stderr)
+    ):
+        raise BindingError("normalized native B output exceeds byte bound")
+    witness.update(
+        directory=directory,
+        key=key,
+        manifest=manifest,
+        context=context,
+        fields=fields,
+        worker_id=worker_id,
+        handoff_sha=handoff_sha,
+        retain=retain,
+    )
+    if cfg.get("coding_continuation") is not None:
+        witness["coding_delivery"] = native.record_coding_b_delivery(cfg, done, witness)
+    return done, witness
 
 
 def run_native_round(
@@ -1831,6 +2122,8 @@ def run_native_round(
         )
     token = None
     terminal_b = None
+    cleanup_witness = None
+    cleanup_receipt = None
     receipt_bound = False
     dispatcher_started = False
     pre_dispatch_refusal = False
@@ -1840,6 +2133,8 @@ def run_native_round(
         "B": {"started": False, "started_at": None, "finished_at": None},
         "C": {"attempted": False, "started_at": None, "finished_at": None},
     }
+
+    continuation_diagnostic = {}
 
     def execution_report():
         return {
@@ -1862,6 +2157,12 @@ def run_native_round(
         except (ValueError, TypeError):
             value = {"actual_detail": text}
         value["native_execution"] = execution_report()
+        value["native_continuation_diagnostic"] = {
+            **_continuation_gate_diagnostic(cfg, hooks, token, terminal_b, outcome, receipt_bound),
+            "proof_stage": continuation_diagnostic.get("stage", "not_attempted"),
+        }
+        if cleanup_receipt is not None:
+            value["native_terminal_cleanup"] = cleanup_receipt
         if isinstance(hooks, PinnedNativeHooks) and getattr(hooks, "descendant_bundle", None):
             value["descendant_bundle"] = hooks.descendant_bundle
         return json.dumps(value, sort_keys=True)
@@ -1923,24 +2224,34 @@ def run_native_round(
                     hooks.begin_terminal_receipt(cfg)
                 dispatcher_started = True
                 phases["B"].update(started=True, started_at=now())
-                done = runner(
-                    command,
-                    capture_output=True,
-                    check=False,
-                    # B is the finite frontier coordinator, not one I/O request.
-                    # Its adapters enforce each request's original finite window.
-                    timeout=None if finite else max(0.001, deadline - reserve - now()),
-                    **(
-                        {
-                            "env": {
-                                **os.environ,
-                                "CLOSER_CAPACITY_REPORT": str(cfg["capacity_report"]),
+                import closer_native_observer as native_source
+
+                if runner is subprocess.run and native_source.correction_cleanup_enabled(cfg):
+                    done, cleanup_witness = _observed_correction_b(
+                        command,
+                        cfg,
+                        hooks,
+                        None if finite else max(0.001, deadline - reserve - now()),
+                    )
+                else:
+                    done = runner(
+                        command,
+                        capture_output=True,
+                        check=False,
+                        # B is the finite frontier coordinator, not one I/O request.
+                        # Its adapters enforce each request's original finite window.
+                        timeout=None if finite else max(0.001, deadline - reserve - now()),
+                        **(
+                            {
+                                "env": {
+                                    **os.environ,
+                                    "CLOSER_CAPACITY_REPORT": str(cfg["capacity_report"]),
+                                }
                             }
-                        }
-                        if cfg.get("capacity_report")
-                        else {}
-                    ),
-                )
+                            if cfg.get("capacity_report")
+                            else {}
+                        ),
+                    )
                 terminal_b = done
                 phases["B"].update(exit_code=done.returncode, finished_at=now())
                 outcome = "ok" if done.returncode == 0 else "unknown"
@@ -1962,7 +2273,8 @@ def run_native_round(
                     if pre_dispatch_refusal
                     else (
                         "unknown",
-                        "dispatcher binding failure after submission; effect outcome unknown",
+                        "dispatcher binding failure after submission; effect outcome unknown: "
+                        + str(exc)[:256],
                     )
                 )
             except subprocess.TimeoutExpired:
@@ -2018,6 +2330,119 @@ def run_native_round(
             )
             if postrun.get("refusal") == "terminal_named_receipt_unavailable":
                 phases["C"]["refusal"] = postrun["refusal"]
+    if cfg.get("coding_continuation") is not None:
+        # A private coding worker has no pipeline/global-stop receipt. Its actual
+        # B delivery and named C cleanup must both authenticate independently.
+        try:
+            import closer_native_observer as native_source
+
+            completed = native_source.finalize_coding_native(
+                cfg, hooks, cleanup_witness, execution_report()
+            )
+            proof = completed["proof"]
+            return "scoped_continuation", reported(
+                json.dumps(
+                    {
+                        "proof": proof,
+                        "actual": completed["actual"],
+                        "actual_detail": detail,
+                        "action_b_exit": terminal_b.returncode,
+                        "action_c_exit": hooks.postrun_result["code"],
+                    },
+                    sort_keys=True,
+                )
+            )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+            return ("denied" if outcome == "denied" else "unknown"), reported(
+                json.dumps(
+                    {
+                        "actual_detail": "coding actual B/C terminal proof unavailable",
+                        "coding_terminal_diagnostic": native_source.coding_terminal_diagnostic(
+                            error
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+    if cleanup_witness is not None:
+        # Prospective lifecycle facts from THIS source-owned spawn and C only.
+        # UNKNOWN effects remain UNKNOWN; this never finalizes descendants.
+        try:
+            import closer_campaign as campaign_source
+            import closer_correction_source_record as correction_source
+            import closer_native_observer as native_source
+
+            if (
+                runner is not subprocess.run
+                or type(hooks) is not PinnedNativeHooks
+                or not hooks._dependencies_match()
+                or not postrun_completed
+                or terminal_b is None
+                or terminal_b.returncode not in {0, 78}
+                or cleanup_witness["finished"].get("cleanup_terminal") is not True
+            ):
+                raise BindingError("actual source B/C cleanup remains unknown")
+            execution = campaign_source._completion_cleanup(
+                cfg, {"native_execution": execution_report()}, "unknown"
+            )
+            manifest = cleanup_witness["manifest"]
+            if _hash(Path(__file__)) != _BINDING_SOURCE_SHA256 or campaign_source.verify_modules(
+                manifest
+            ):
+                raise BindingError("native cleanup producer source changed")
+            directory, key, context, fields, worker_id, handoff_sha = (
+                native_source._lifecycle_authority(manifest, cfg)
+            )
+            if key != cleanup_witness["key"]:
+                raise BindingError("native cleanup key changed during original invocation")
+            start, start_ref = native_source._read_lifecycle_record(
+                directory, "worker-b-start-" + worker_id + ".json", key
+            )
+            finished = cleanup_witness["finished"]
+            if (
+                start_ref != cleanup_witness["start"]
+                or start.get("process")
+                != {k: finished.get(k) for k in ("pid", "process_group", "os_started")}
+                or start.get("argv_sha256") != native_source.mechanisms.digest(command)
+                or start.get("admission") != context
+                or start.get("worker") != fields
+                or start.get("handoff_sha256") != handoff_sha
+                or start.get("worker_config_sha256") != native_source.mechanisms.digest(cfg)
+                or start.get("supervising_worker_pid") != os.getpid()
+            ):
+                raise BindingError("native cleanup does not continue original B start")
+            links = correction_source.terminal_operation_links(cfg, start_ref, start["process"])
+            if any(row.get("provider_history") is None for row in links):
+                raise BindingError("selected original provider history custody absent")
+            record = {
+                "schema": "closer-native-correction-terminal-cleanup/v1",
+                "binding": native_source.binding(manifest),
+                "admission": context,
+                "worker": fields,
+                "worker_id": worker_id,
+                "handoff_sha256": handoff_sha,
+                "native_b_start": start_ref,
+                "process": start["process"],
+                "argv_sha256": start["argv_sha256"],
+                "native_execution": execution,
+                "operations": links,
+                "producer_sha256": _BINDING_SOURCE_SHA256,
+                "output_provenance": "observed UTF-8 text normalized; encoded byte count bounded32MiB; not raw subprocess bytes",
+                "stdout_sha256": hashlib.sha256(terminal_b.stdout.encode("utf-8")).hexdigest(),
+                "coordinator_group_terminal": True,
+                "provider_completion_asserted": False,
+                "domain_completed": False,
+                "acceptance_authorized": False,
+                "execution_authorized": False,
+                "source_closure_authorized": False,
+                "remote_execution_attested": False,
+            }
+            cleanup_receipt = cleanup_witness["retain"](
+                "terminal-cleanup-" + worker_id + ".json", record
+            )
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as exc:
+            outcome = "unknown"
+            detail += "; native cleanup-only receipt unavailable: " + type(exc).__name__
     if (
         cfg.get("native_admission") is not None
         and isinstance(hooks, PinnedNativeHooks)
@@ -2104,7 +2529,7 @@ def run_native_round(
                 candidate = json.loads(raw)
             except (ValueError, TypeError):
                 candidate = None
-            proof = scoped_continuation_proof(cfg, candidate)
+            proof = scoped_continuation_proof(cfg, candidate, diagnostic=continuation_diagnostic)
             if proof:
                 return (
                     "unavailable"

@@ -41,12 +41,17 @@ from typing import Any, TypedDict
 
 import adapters
 import claims
+import closer_coding_delivery as _coding_delivery_source
+import closer_coding_session_runtime as _coding_session_runtime
 import credential_redaction
 import execution_profiles
 import feedback
 import provision
 import repo_knowledge
 import worktree_git
+
+# Loaded-source provenance marker, validated against physical signed closure.
+_LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 class _DataOnlyCommandOptions(TypedDict, total=False):
@@ -86,6 +91,7 @@ def _retain_provider_result(
     The explicit redaction opt-out keeps its existing return/log semantics, but
     does not authorize another copy of unmasked free text in this new receipt.
     """
+    _coding_session_runtime.bound_result(sys._getframe(), result)
     original = json.dumps(result, sort_keys=True).encode()
     disabled = credential_redaction.disabled()
     receipt = {
@@ -129,6 +135,7 @@ def _retain_provider_result(
             json.dumps(receipt["result"], sort_keys=True).encode()
         ).hexdigest()
     raw = json.dumps(receipt, sort_keys=True).encode()
+    _coding_session_runtime.check_serialized(sys._getframe(), raw)
     destination = log_file.with_suffix(f".provider-result-{attempt}.json")
     temporary = None
     try:
@@ -2633,6 +2640,9 @@ def _controlled_data_only_entry(function):
 
     @functools.wraps(function)
     def invoke(*args, **kwargs):
+        import closer_correction_maintenance
+
+        closer_correction_maintenance.assert_offload_allowed()
         bound = signature.bind(*args, **kwargs)
         values = bound.arguments
         if values.get("data_only") is not True:
@@ -2901,25 +2911,51 @@ def run_observed_offload(
     Its private process group permits bounded cleanup without signalling outsiders.
     """
     started = time.monotonic()
-    if starting_callback is not None:
-        starting_callback(observation)
+    # Keep the before-Popen snapshot in module custody, outside callback-writable
+    # frame locals. Even legacy launches have a registry entry, so a missing
+    # record can never disable the final check.
+    _coding_delivery_source._begin(sys._getframe())
     try:
-        child = subprocess.Popen(
-            command,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            stdin=stdin,
-            start_new_session=True,
-            **({"env": env} if env is not None else {}),
-        )
-    except BaseException:
         if starting_callback is not None:
-            import closer_resources
+            try:
+                starting_callback(observation)
+            except BaseException:
+                _coding_session_runtime.cancel_starting(sys._getframe())
+                raise
+        try:
+            _coding_delivery_source._verify(sys._getframe())
+            session_activation = _coding_session_runtime.activate(sys._getframe())
+            if session_activation is not None:
+                timeout, output_limit = session_activation
+                started = time.monotonic()
+            # Prelaunch guards spend the same original observation window.
+            # Refuse before creating a process when they exhaust it; a birth
+            # check after Popen is too late to prove that nothing started.
+            if (
+                starting_callback is not None
+                and timeout is not None
+                and time.monotonic() - started >= timeout
+            ):
+                raise subprocess.TimeoutExpired("source transport before spawn", timeout)
+            _coding_session_runtime.mark_submission(sys._getframe())
+            child = subprocess.Popen(
+                command,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                stdin=stdin,
+                start_new_session=True,
+                **({"env": env} if env is not None else {}),
+            )
+        except BaseException:
+            if starting_callback is not None:
+                import closer_resources
 
-            closer_resources.finite_pool_no_start(observation)
-        raise
+                closer_resources.finite_pool_no_start(observation)
+            raise
+    finally:
+        _coding_delivery_source._revoke(sys._getframe())
     observed = {
         **observation,
         "source": "trusted-popen-transport/v1",
@@ -2949,6 +2985,9 @@ def run_observed_offload(
     captured = {"stdout": bytearray(), "stderr": bytearray()}
 
     def bounded_communicate(timeout):
+        capture_bound = (
+            _coding_session_runtime.capture_limit(sys._getframe().f_back) or output_limit
+        )
         deadline = time.monotonic() + timeout
         count = 0
         with selectors.DefaultSelector() as selector:
@@ -2960,15 +2999,15 @@ def run_observed_offload(
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
                 for key, _ in selector.select(min(0.05, remaining)):
-                    chunk = os.read(key.fileobj.fileno(), min(8192, output_limit - count + 1))
+                    chunk = os.read(key.fileobj.fileno(), min(8192, capture_bound - count + 1))
                     if not chunk:
                         selector.unregister(key.fileobj)
                         continue
-                    room = output_limit - count
+                    room = capture_bound - count
                     captured[key.data].extend(chunk[:room])
                     count += len(chunk)
                     chunk = b""
-                    if count > output_limit:
+                    if count > capture_bound:
                         raise _ObservedOutputLimit("controlled native output exceeds bound")
         child.wait(timeout=max(0.001, deadline - time.monotonic()))
         return tuple(safe_output(bytes(captured[k])) for k in ("stdout", "stderr"))
@@ -2997,13 +3036,26 @@ def run_observed_offload(
             observed["cleanup_error"] = cleanup_error
         latest = ("", "")
         group_absent_proven = False
-        stop_deadline = time.monotonic() + (0.25 if cleanup_error else 2.0)
+        cleanup_bound = _coding_session_runtime.cleanup_seconds(sys._getframe().f_back)
+        stop_deadline = time.monotonic() + min(
+            0.25 if cleanup_error else 2.0,
+            cleanup_bound if cleanup_bound is not None else 2.0,
+        )
         while time.monotonic() < stop_deadline:
             try:
-                if output_limit is not None:
+                if (
+                    _coding_session_runtime.capture_limit(sys._getframe().f_back) is not None
+                    or output_limit is not None
+                ):
                     # Controlled output remains bounded even during failed cleanup.
                     # Never switch back to communicate()'s unbounded buffers.
-                    child.wait(timeout=min(0.2, max(0.01, stop_deadline - time.monotonic())))
+                    cleanup_remaining = max(0.0, stop_deadline - time.monotonic())
+                    if cleanup_bound is not None:
+                        if cleanup_remaining <= 0:
+                            break
+                        child.wait(timeout=min(0.2, cleanup_remaining))
+                    else:
+                        child.wait(timeout=min(0.2, max(0.01, cleanup_remaining)))
                     latest = tuple(safe_output(bytes(captured[k])) for k in ("stdout", "stderr"))
                 else:
                     latest = child.communicate(
@@ -3041,7 +3093,11 @@ def run_observed_offload(
                 }
                 observed["cleanup_error"] = cleanup_error
                 break
-            time.sleep(0.05)
+            time.sleep(
+                min(0.05, max(0.0, stop_deadline - time.monotonic()))
+                if cleanup_bound is not None
+                else 0.05
+            )
         if not group_absent_proven:
             try:
                 os.killpg(child.pid, 0)
@@ -3055,6 +3111,7 @@ def run_observed_offload(
 
     try:
         try:
+            _coding_session_runtime.mark_started(sys._getframe())
             birth_timeout = 5 if timeout is None else min(5, timeout - (time.monotonic() - started))
             if birth_timeout <= 0:
                 raise subprocess.TimeoutExpired(command, timeout)
@@ -3069,6 +3126,11 @@ def run_observed_offload(
             if not observed["os_started"]:
                 raise RuntimeError("transport birth identity unavailable")
             callback(observed)
+            if _coding_session_runtime.supervision(sys._getframe()) is not None:
+                if observed.get("invalid_utf8_output"):
+                    raise _coding_session_runtime.SessionHeld(
+                        "coding-session native output encoding invalid"
+                    )
         except BaseException as exc:
             stdout, stderr = stop_known_group()
             if observed.get("cleanup_terminal") is True and finished_callback is not None:
@@ -3089,9 +3151,15 @@ def run_observed_offload(
             ) from exc
         try:
             remaining = None if timeout is None else max(0, timeout - (time.monotonic() - started))
+            supervision = _coding_session_runtime.supervision(sys._getframe())
+            if supervision is not None:
+                remaining, output_limit = supervision
             stdout, stderr = (
                 bounded_communicate(remaining)
-                if output_limit is not None
+                if (
+                    _coding_session_runtime.capture_limit(sys._getframe()) is not None
+                    or output_limit is not None
+                )
                 else child.communicate(timeout=remaining)
             )
         except _ObservedOutputLimit as exc:
@@ -3152,6 +3220,12 @@ def run_observed_offload(
                     stdout,
                     stderr,
                 )
+        if _coding_session_runtime.capture_limit(sys._getframe()) is not None and observed.get(
+            "invalid_utf8_output"
+        ):
+            raise _coding_session_runtime.SessionHeld(
+                "coding-session native output encoding invalid"
+            )
         result = subprocess.CompletedProcess(
             command, child.returncode, safe_output(stdout), safe_output(stderr)
         )
@@ -3159,14 +3233,17 @@ def run_observed_offload(
             result.observation = observed
         return result
     finally:
-        token = ""
-        if env is not None:
-            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-        for buffer in captured.values():
-            buffer.clear()
-        for pipe in (child.stdout, child.stderr):
-            if pipe is not None:
-                pipe.close()
+        try:
+            _coding_session_runtime.mark_terminal(sys._getframe(), observed, captured)
+        finally:
+            token = ""
+            if env is not None:
+                env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+            for buffer in captured.values():
+                buffer.clear()
+            for pipe in (child.stdout, child.stderr):
+                if pipe is not None:
+                    pipe.close()
 
 
 @_controlled_data_only_entry
@@ -3241,6 +3318,9 @@ def offload(
     subject. A registered `research_round` supplies its own subject and wins. With neither, the run
     stays unkeyed and its subject falls back to `offload:<cwd>`, which pools every run from one
     directory; that is a statement that nothing named the work, never a guess at it."""
+    # Restriction only: typed v2 never consults personal session history, even
+    # when its source guard later refuses before issuing a runtime plan.
+    _coding_session_runtime.prepare_history_restriction(sys._getframe(), process_starting_callback)
     # This opt-in is checked before any workspace, log, telemetry or provider work.
     if type(data_only) is not bool:
         return {
@@ -3612,11 +3692,18 @@ def offload(
             argv = adapters.apply_write_boundary(agent, argv, *boundary)
         except Exception as exc:
             return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
-    auth_prelude = "" if controlled is not None else _auth_prelude(agent)
+    import closer_coding_route_v2
+
+    coding_route = closer_coding_route_v2.prepare(sys._getframe(), argv, str(proc_cwd), profile)
+    if coding_route is not None:
+        argv = list(coding_route.provider_argv)
+    auth_prelude = (
+        "" if controlled is not None or coding_route is not None else _auth_prelude(agent)
+    )
     try:
         agent_prelude = (
             ""
-            if controlled is not None
+            if controlled is not None or coding_route is not None
             else muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
         )
     except StorageBlocked as exc:
@@ -3635,10 +3722,25 @@ def offload(
         }
     wrapped = (
         ""
-        if controlled is not None
+        if controlled is not None or coding_route is not None
         else (
             f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
         )
+    )
+    if coding_route is not None:
+        wrapped = coding_route.transport_argv[-1]
+    # Immutable source preparation, before any attempt callback can run. Keep
+    # provider argv and wrapped shell transport together without parsing shell.
+    _coding_prepared = (
+        (
+            prepared_prompt.encode("utf-8"),
+            tuple(argv),
+            wrapped,
+            str(proc_cwd),
+            json.dumps(profile, sort_keys=True, separators=(",", ":")),
+        )
+        if agent == "codex" and effective_profile_id == "codex-6.1-sol-high" and not data_only
+        else None
     )
     stream_prompt = (
         prepared_prompt
@@ -3863,8 +3965,16 @@ def offload(
                 {"model": observed_model, "reason": None}
                 if observed_model
                 else (
-                    {"model": None, "reason": "controlled native model identity unavailable"}
+                    {
+                        "model": None,
+                        "reason": (
+                            "coding-session own capture model identity unavailable"
+                            if _coding_session_runtime.history_restricted(sys._getframe())
+                            else "controlled native model identity unavailable"
+                        ),
+                    }
                     if controlled is not None
+                    or _coding_session_runtime.history_restricted(sys._getframe())
                     else adapters.cli_reported_model(
                         agent, run_cwd, started_ts=started_ts, log_file=str(logf)
                     )
@@ -3947,6 +4057,7 @@ def offload(
         return errors
 
     def _retain_attempt_result(result: dict) -> None:
+        _coding_session_runtime.bound_result(sys._getframe(), result)
         if controlled is not None and not result.get("outcome_uncertain"):
             _controlled_cleanup_result(controlled, result)
         try:
@@ -4157,15 +4268,19 @@ def offload(
                 )
             else:
                 proc = run_observed_offload(
-                    [
-                        "bash",
-                        "-lc",
-                        (
-                            f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
-                            if stream_path is not None
-                            else attempt_wrapped
-                        ),
-                    ],
+                    (
+                        list(coding_route.transport_argv)
+                        if coding_route is not None
+                        else [
+                            "bash",
+                            "-lc",
+                            (
+                                f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                                if stream_path is not None
+                                else attempt_wrapped
+                            ),
+                        ]
+                    ),
                     callback=process_started_callback,
                     observation={
                         "run_id": run_id,
@@ -4186,6 +4301,7 @@ def offload(
                     stdin=subprocess.DEVNULL,
                     finished_callback=process_finished_callback,
                     starting_callback=process_starting_callback,
+                    env=dict(coding_route.environment) if coding_route is not None else None,
                 )
         except ObservedOffloadFailure as exc:
             return {
@@ -4218,9 +4334,18 @@ def offload(
         except subprocess.TimeoutExpired as timeout_error:
             # A 0-byte timeout is the env-induced-hang signature; surface the ambient network env so the
             # cause is legible (proxy is scrubbed by default — if one shows here, ORCH_KEEP_PROXY=1 is set).
-            suspicious = _suspicious_net_env()
+            suspicious = (
+                []
+                if _coding_session_runtime.capture_limit(sys._getframe()) is not None
+                else _suspicious_net_env()
+            )
             hint = f" | ambient net env at dispatch: {'; '.join(suspicious)}" if suspicious else ""
-            error = f"timed out after {timeout}s{hint}"
+            session_timeout = _coding_session_runtime.capture_limit(sys._getframe()) is not None
+            error = (
+                "coding-session owned supervision deadline elapsed"
+                if session_timeout
+                else f"timed out after {timeout}s{hint}"
+            )
             agent_log_tail = _agent_log_tail_from_argv(argv, proc_cwd) if agent == "gemini" else ""
             turn_uncertain = agent == "gemini" and _agy_reports_turn_in_progress(agent_log_tail)
             if agent_log_tail:
@@ -4228,7 +4353,11 @@ def offload(
             if turn_uncertain:
                 error = "agy timed out while its provider turn was still in progress; outcome is uncertain"
             with logf.open("a") as fh:
-                fh.write(f"[orchestrator] offload marked failed: timed out after {timeout}s\n")
+                fh.write(
+                    (f"[orchestrator] offload marked failed: {error}\n")
+                    if session_timeout
+                    else f"[orchestrator] offload marked failed: timed out after {timeout}s\n"
+                )
                 if suspicious:
                     fh.write(
                         "Suspect inherited env (proxy/CA/NODE_OPTIONS):\n  "
@@ -4353,6 +4482,7 @@ def offload(
             except _ProviderResultRetentionPending as pending:
                 # Cancellation remains cancellation even when result storage failed.
                 # Preserve the exact held receipt for caller reconciliation, never retry.
+                _coding_session_runtime.bound_result(sys._getframe(), pending.result)
                 setattr(interruption, "held_result", pending.result)
                 raise interruption from pending
             except Exception as completion_error:
@@ -4374,6 +4504,7 @@ def offload(
             proc = subprocess.CompletedProcess(
                 getattr(proc, "args", argv), proc.returncode, stdout, stderr
             )
+        _coding_session_runtime.check_text(sys._getframe(), proc.stdout or "", proc.stderr or "")
         attempt_stderr = proc.stderr or ""
         if controlled is not None:
             import closer_data_only_execution as execution
@@ -4594,6 +4725,7 @@ def offload(
                     stream["result_text"],
                     proc.stderr,
                 )
+        _coding_session_runtime.check_text(sys._getframe(), proc.stdout or "", proc.stderr or "")
         with logf.open("a") as fh:
             if proc.stdout:
                 fh.write(proc.stdout)
@@ -4638,6 +4770,9 @@ def offload(
             error = "agy stopped waiting while its provider turn was still in progress; outcome is uncertain"
             exit_code = 70
         if error:
+            _coding_session_runtime.check_text(
+                sys._getframe(), f"[orchestrator] offload marked failed: {error}\n", agent_log_tail
+            )
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
                 if agent_log_tail:
@@ -4659,6 +4794,13 @@ def offload(
             "run_id": run_id,
             "log": str(logf),
         }
+        if _coding_session_runtime.capture_limit(sys._getframe()) is not None and reported_usage:
+            # Preserve only this invocation's parser observations, unverified.
+            out["unverified_reported_usage"] = {
+                "status": "UNVERIFIED",
+                "scope": "this_owned_cli_stream_only",
+                "reported": dict(reported_usage),
+            }
         out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
         if agent_log_tail:
             out["agent_log_tail"] = agent_log_tail
@@ -4711,6 +4853,7 @@ def offload(
             _retain_attempt_result(out)
         except _ProviderResultRetentionPending as exc:
             # Provider effects already happened: no callback, enrichment or retry.
+            _coding_session_runtime.bound_result(sys._getframe(), exc.result)
             return exc.result
         attempt_ended = time.time()
         # Receipt consumers that reserve an external spend boundary must see
@@ -4788,6 +4931,7 @@ def offload(
             + credential_redaction.describe(redaction_counts)
         )
     if redaction_note:
+        _coding_session_runtime.check_text(sys._getframe(), redaction_note)
         with logf.open("a") as fh:
             fh.write(f"[orchestrator] {redaction_note}\n")
     if muse_prompt is not None:
@@ -4811,6 +4955,7 @@ def offload(
             **exc.completion,
         }
         raw = json.dumps({"result": out, "completion": pending}, sort_keys=True).encode()
+        _coding_session_runtime.check_serialized(sys._getframe(), raw)
         receipt_path = logf.with_suffix(".completion-pending.json")
         temporary = None
         try:
@@ -4899,6 +5044,7 @@ def offload(
             )
         except Exception as exc:
             print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
+    _coding_session_runtime.bound_result(sys._getframe(), out)
     return out
 
 
@@ -6923,6 +7069,18 @@ def main(argv: list[str]) -> int:
     out = run(load_decision(), dry_run=dry, heartbeat=not no_hb)
     print(json.dumps(out, indent=2, default=str))
     return 0
+
+
+# Preserve the actual loaded source code identities, including the nested attempt.
+# A similarly named caller, wrapper, or replayed observation cannot issue delivery.
+_CODING_DELIVERY_RUN_CODE = run_observed_offload.__code__
+_CODING_DELIVERY_OFFLOAD_CODE = offload.__wrapped__.__code__
+_CODING_DELIVERY_ATTEMPT_CODE = next(
+    code
+    for code in _CODING_DELIVERY_OFFLOAD_CODE.co_consts
+    if isinstance(code, type(_CODING_DELIVERY_OFFLOAD_CODE))
+    and code.co_name == "_run_offload_attempt"
+)
 
 
 if __name__ == "__main__":

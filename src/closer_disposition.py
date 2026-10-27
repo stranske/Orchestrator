@@ -6,6 +6,7 @@ identity, completeness, and cited raw proof; it never infers a PASS from a hash.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -560,6 +561,8 @@ def _ordinary_nonpass(
     snapshot: Mapping[str, Any],
     prep: Mapping[str, Any],
     packet_ref: Mapping[str, Any],
+    *,
+    mechanical_registration=None,
 ) -> dict:
     raw = [{"finding_id": _finding_id(f), "raw": f} for f in findings]
     resolutions = proposal.get("resolutions")
@@ -602,8 +605,14 @@ def _ordinary_nonpass(
             return _result("wait", "repeat_verification_evidence_missing", raw_findings=raw)
         if action == "repair":
             import closer_execution_contracts as contracts
+            import closer_mechanical_source as mechanical_source
 
             admitted = None
+            source_tests = None
+            if mechanical_source.registration_matches(
+                mechanical_registration, snapshot, packet_ref
+            ):
+                source_tests = mechanical_registration.registered_tests
             try:
                 admitted = contracts.validate_mechanical_plan_identity(
                     resolution.get("repair_plan"),
@@ -611,12 +620,29 @@ def _ordinary_nonpass(
                     packet=packet,
                     packet_ref=packet_ref,
                     retained_dir=root,
+                    registered_tests=source_tests,
                 )
+                capability = (
+                    mechanical_source.source_host_capability(
+                        mechanical_registration, snapshot, resolution["repair_plan"]
+                    )
+                    if source_tests is not None
+                    else None
+                )
+                if mechanical_source.capability_matches(
+                    capability, mechanical_registration, snapshot, resolution["repair_plan"]
+                ):
+                    repair_plan = copy.deepcopy(resolution["repair_plan"])
+                    continue
                 refusal = contracts.ContractError(
                     "bounded_mechanical_executor_unqualified", owner_required=True
                 )
             except contracts.ContractError as error:
                 refusal = error
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                refusal = contracts.ContractError(
+                    "source_host_qualification_UNMET", owner_required=True
+                )
             pending = contracts.deterministic_refusal(refusal, snapshot)
             pending["raw_findings"] = raw
             pending["pending_evidence"]["finding_id"] = resolution["finding_id"]
@@ -697,6 +723,8 @@ def integrate_ordinary(
     packet_ref: Mapping[str, Any],
     prep: Mapping[str, Any],
     interpretation: Mapping[str, Any],
+    *,
+    mechanical_registration=None,
 ) -> dict:
     """Return ``accepted`` with a guarded disposition, or ``wait``/``exception``.
 
@@ -818,7 +846,17 @@ def integrate_ordinary(
     if nonpass:
         if isinstance(verifier, dict):
             index = {**index, **_native_resolution_index(packet, root, verifier)}
-        return _ordinary_nonpass(proposal, nonpass, index, root, packet, snapshot, prep, packet_ref)
+        return _ordinary_nonpass(
+            proposal,
+            nonpass,
+            index,
+            root,
+            packet,
+            snapshot,
+            prep,
+            packet_ref,
+            mechanical_registration=mechanical_registration,
+        )
     expected = _expected(snapshot)
     decision = proposal.get("decision")
     rows = decision.get("criteria") if isinstance(decision, dict) else None

@@ -238,6 +238,15 @@ if [[ "${CLOSER_POSTRUN_DEPENDENCIES_VALID:-0}" != "1" ]]; then
   echo "handoff-postrun: physical dependency pins changed; cleanup only" >&2
   exit 65
 fi
+# CLOSER_CODING_TERMINAL_V1
+if [[ -n "${CLOSER_POSTRUN_CODING_DELIVERY:-}" ]]; then
+  if ! "${CLOSER_POSTRUN_PYTHON:?}" "${CLOSER_POSTRUN_DISPATCHER:?}" validate-coding-terminal --delivery "$CLOSER_POSTRUN_CODING_DELIVERY" --sha256 "${CLOSER_POSTRUN_CODING_DELIVERY_SHA256:?}"; then
+    echo "handoff-postrun: coding terminal knowledge unavailable; cleanup only" >&2
+    exit 65
+  fi
+  echo "handoff-postrun: closer stop rejected; preserve ledger and resume actionable work" >&2
+  exit 65
+fi
 # CLOSER_NAMED_ROUND_V1
 _closer_round_args=(--state "$CLOSER_ROUND_STATE" --assignment "${CLOSER_POSTRUN_ASSIGNMENT:?}")
 if [[ -n "${CLOSER_POSTRUN_ROUND_ID:-}" ]]; then

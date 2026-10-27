@@ -39,6 +39,7 @@ NATIVE_INPUT_COMPONENTS = frozenset(
         "verifier-context.md",
         "verifier-pr-diff.patch",
         "verifier-diff-summary.md",
+        "closer-correction-seeds.json",
     }
 )
 MAX_ARTIFACTS = 20
@@ -2105,6 +2106,7 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                     ("comparison-comment.md", "native-comparison-comment", None, False),
                     ("evaluation-comment.md", "native-evaluation-comment", None, False),
                     ("evaluation-execution.json", "native-evaluation-execution", None, False),
+                    ("closer-correction-seeds.json", "native-correction-seeds", None, False),
                     (
                         "verifier-diff-summary.md",
                         "native-verifier-diff-summary",
