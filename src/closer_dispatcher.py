@@ -872,8 +872,9 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
 
     Legacy assessment writes can invalidate its old accounting receipt. That is
     still a legacy barrier, not permission to extend its round or replay an
-    operation. The pipeline must prove its own prior continuation, and every
-    action still checks the original legacy operation dependency.
+    operation. An expired accounting window must not prevent a fresh pipeline
+    attempt; pipeline admission and every original operation dependency still
+    independently gate its actions.
     """
     legacy_bound = _deadline_with_legacy_round(requested_deadline, legacy_state, state_path)
     sampled_at = time.time()
@@ -896,11 +897,11 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
         ]
         if not candidates or len(candidates) != len(state["runs"]):
             return legacy_bound, "missing_or_malformed_pipeline_runs"
-        run_id, previous = max(candidates, key=lambda pair: pair[1]["created"])
-        if previous["deadline"] > sampled_at:
+        if any(run["deadline"] > sampled_at for _, run in candidates):
             # Another adopted round retains its original window. Do not use
             # this caller to renew it or preempt its owner.
             return legacy_bound, "prior_pipeline_window_active"
+        run_id, previous = max(candidates, key=lambda pair: pair[1]["created"])
         summary = previous.get("receipt_summary")
         if summary is not None and (
             not isinstance(summary, dict)
@@ -930,7 +931,10 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as exc:
         # Unverifiable adoption retains the old bound and a bounded diagnostic.
         return legacy_bound, f"pipeline_adoption_unverifiable:{type(exc).__name__}"
-    return legacy_bound, "no_pipeline_continuation_proof"
+    # This grants an execution window only. It neither authenticates the old
+    # stop nor releases reservations, uncertain operations, or target writers.
+    # run_pipeline must still admit/reconcile the prior run before doing work.
+    return requested_deadline, "legacy_window_expired_fresh_admission"
 
 
 def _confirmed_post_merge_label_event(target, operation, evidence):
@@ -10494,11 +10498,14 @@ def _main_admitted(args, p, assignment_rows, targets):
             deadline, admission_reason = _deadline_with_pipeline_round(
                 deadline, previous_state, args.state
             )
+            admission_sampled_at = time.time()
             budget_admission = {
                 "reason": admission_reason,
                 "scope": "pipeline",
                 "requested_deadline": requested_deadline,
                 "selected_deadline": deadline,
+                "selected_deadline_expired": deadline < admission_sampled_at,
+                "selected_deadline_age_seconds": max(0, admission_sampled_at - deadline),
                 "legacy_deadline": (previous_state.get("round") or {}).get("deadline"),
                 "legacy_state_digest": digest(previous_state),
                 "legacy_round_renewed": False,
