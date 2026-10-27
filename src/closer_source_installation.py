@@ -200,7 +200,7 @@ def _config(value, manifest, expected_state):
     return copy.deepcopy(value)
 
 
-def _qualified_policy(binding, *, _scope=None, _native_scope=None):
+def _qualified_policy(binding, *, _scope=None, _native_scope=None, _accepted_read=None):
     import closer_mechanisms as mechanisms
     import closer_runtime_binding as runtime
     from closer_campaign import load_manifest, qualify
@@ -212,7 +212,27 @@ def _qualified_policy(binding, *, _scope=None, _native_scope=None):
     )
     original, raw = _physical_json(origin.path, limit=16 * 1024 * 1024)
     _need(hashlib.sha256(raw).hexdigest() == origin.sha256, "factory manifest bytes changed")
-    if _scope is None:
+    if _accepted_read is not None:
+        import closer_native_observer as native
+
+        caller = inspect.currentframe().f_back
+        _need(
+            caller.f_code is native._accepted_frame_qualified_value.__code__
+            and caller.f_globals is native.__dict__
+            and caller.f_locals.get("read") is _accepted_read,
+            "actual native accepted read required",
+        )
+        _need(_scope is None and _native_scope is None, "accepted read cannot alias writer scope")
+        _accepted_read.check_inputs(binding, original)
+        from closer_campaign import _current_qualification_problems, validate_manifest
+
+        manifest = original
+        # Immutable code/Core bytes are held by the exact accepted-reader frame.
+        # Native active/UNKNOWN, signer evidence and every mutable predicate stay fresh.
+        problems = validate_manifest(manifest) + _current_qualification_problems(
+            manifest, Path(origin.path).parent
+        )
+    elif _scope is None:
         manifest = load_manifest(origin.path)
         problems = qualify(manifest, Path(origin.path).parent)
     else:
@@ -279,7 +299,10 @@ def _qualified_policy(binding, *, _scope=None, _native_scope=None):
         if path.suffix in {".py", ".pyc", ".pyo"}:
             actual.add(path.name)
     _need(actual == set(manifest["modules"]), "source executable inventory changed")
-    if _scope is None:
+    if _accepted_read is not None:
+        _accepted_read.check_inputs(binding, manifest)
+        closure = copy.deepcopy(_accepted_read.original_value["source_closure"])
+    elif _scope is None:
         closure = {}
         reserved = 0
         for name, expected in manifest["modules"].items():
@@ -551,6 +574,24 @@ def _snapshot_current(binding, *, report_path=None, _scope=None, _native_scope=N
     )
     if private is not None:
         return private
+    # Optional module exists only in a source-pinned publication installation.
+    # Absent mode retains the ordinary snapshot and its exact report semantics.
+    import sys
+
+    publication_io = sys.modules.get("closer_coding_publication_io")
+    if publication_io is not None and getattr(publication_io._CURRENT, "scope", None) is not None:
+        path = Path(publication_io.__file__)
+        pinned = value["source_closure"].get(path.name)
+        _need(
+            pinned == {"path": str(path), "sha256": publication_io._SOURCE_SHA256}
+            and hashlib.sha256(path.read_bytes()).hexdigest() == publication_io._SOURCE_SHA256,
+            "loaded publication IO source differs",
+        )
+        private = publication_io.installation_snapshot(
+            binding, value, manifest, native_scope=_native_scope
+        )
+        if private is not None:
+            return private
     selector = report_path if report_path is not None else os.environ.get("CLOSER_CAPACITY_REPORT")
     _need(isinstance(selector, str) and selector, "current native observation selector absent")
     report_file = Path(selector)
@@ -1058,3 +1099,112 @@ def _scoped_native_runtime_digests(token, manifest):
         "native digests differ from original physically pinned runtime",
     )
     return {name: scope.pins.hashes[name] for name in expected}
+
+
+class _AcceptedCodingRead:
+    def __init__(self, *args, **kwargs):
+        raise TypeError("accepted coding read is source-issued only")
+
+    def check_inputs(self, binding, manifest):
+        import closer_native_observer as native
+
+        _need(
+            type(self) is _AcceptedCodingRead
+            and self.seal is _SCOPE_SEAL
+            and self.active
+            and self.pid == os.getpid()
+            and self.thread == threading.get_ident()
+            and self.frame.f_code is native.accepted_coding_worker_purpose.__code__
+            and self.frame.f_globals is native.__dict__
+            and self.frame.f_locals.get("qualified_read") is self
+            and self.frame.f_locals.get("installation") is self.installation
+            and self.installation._binding is binding
+            and self.installation._value == self.original_value
+            and manifest == self.manifest,
+            "accepted coding read escaped or changed",
+        )
+        self.pins.check()
+
+
+def _pin_accepted_dependencies(read):
+    """Complete immutable dependency inventory, never mutable custody children."""
+    import closer_native_observer as native
+    import closer_runtime_binding as runtime
+
+    manifest = read.manifest
+    read.pins.pin(Path(read.origin.path), read.origin.sha256)
+    base = Path(manifest["module_dir"])
+    for name, expected in manifest["modules"].items():
+        _need(Path(name).name == name and name.endswith(".py"), "accepted module path differs")
+        read.pins.pin(base / name, expected)
+    read.pins.inventory(base, recursive=False)
+    public = manifest.get("public_runtime_descriptor")
+    if public:
+        _need(Path(public).name == public, "accepted public descriptor path differs")
+        read.pins.pin(base / public)
+    core = Path(manifest["portable"]["package_root"]).resolve(strict=True)
+    read.pins.pin(core / "closer-core-package.json")
+    descriptor, _ = _physical_json(core / "closer-core-package.json", limit=1048576)
+    _need(
+        set(descriptor.get("files", {})) == set(runtime.CORE_FILES),
+        "accepted Core inventory differs",
+    )
+    for name, expected in descriptor["files"].items():
+        read.pins.pin(core / name, expected)
+    read.pins.inventory(core, recursive=True)
+    value, wrapper, interpreter, native_root = native.contract(manifest)
+    read.pins.pin(wrapper, value["wrapper"]["sha256"])
+    read.pins.pin(interpreter, value["interpreter"]["sha256"])
+    read.pins.pin(native_root / "native-qualification.json")
+    signed, _ = _physical_json(native_root / "native-qualification.json", limit=4 * 1024 * 1024)
+    for row in signed["record"]["phases"].values():
+        _need(Path(row["file"]).name == row["file"], "accepted qualification phase path differs")
+        read.pins.pin(native_root / signed["record"]["nonce"] / row["file"], row["sha256"])
+    config = manifest["policy"]["correction_controller_installation"]["config"]
+    custody = Path(config["state_path"] + ".evidence") / (
+        "correction-index-" + str(config["repository_id"]) + "-" + config["epoch"]
+    )
+    read.pins.pin(custody / "namespace.json")
+    read.pins.pin(custody / "highwater-0000000000000000.json")
+
+
+@contextmanager
+def accepted_coding_validation_read(installation, frame):
+    """One exact accepted-reader lifetime; immutable work only, never authority."""
+    import closer_native_observer as native
+    import closer_runtime_binding as runtime
+
+    _need(
+        frame is not None
+        and frame.f_code is native.accepted_coding_worker_purpose.__code__
+        and frame.f_globals is native.__dict__
+        and frame.f_locals.get("installation") is installation
+        and type(installation) is SourceInstallation
+        and installation._seal is _SEAL,
+        "actual accepted coding reader required",
+    )
+    origin = runtime._factory_manifest_origin(installation._binding)
+    _need(origin is not None, "accepted factory origin unavailable")
+    manifest, raw = _physical_json(origin.path, limit=16 * 1024 * 1024)
+    _need(hashlib.sha256(raw).hexdigest() == origin.sha256, "accepted manifest changed")
+    read = object.__new__(_AcceptedCodingRead)
+    read.seal, read.active = _SCOPE_SEAL, False
+    read.frame, read.installation, read.origin = frame, installation, origin
+    read.pid, read.thread = os.getpid(), threading.get_ident()
+    read.manifest, read.pins = manifest, _PhysicalPackagePins()
+    try:
+        # Pin before qualification, including inputs without a separately declared
+        # digest; subsequent mutations cannot be mistaken for the qualified bytes.
+        _pin_accepted_dependencies(read)
+        _need(
+            validate_source_installation(installation),
+            "actual coding installation identity unavailable",
+        )
+        read.original_value = copy.deepcopy(installation._value)
+        read.pins.check()
+        read.active = True
+        yield read
+        read.check_inputs(installation._binding, manifest)
+    finally:
+        read.active, read.frame = False, None
+        read.pins.close()

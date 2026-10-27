@@ -3614,6 +3614,39 @@ def tick(
                     continue
                 pending = next_action(doc, capacity_ok=True)
                 if pending.get("kind") != "launch":
+                    configured_consumers = (
+                        manifest.get("policy", {})
+                        .get("correction_controller_installation", {})
+                        .get("config", {})
+                        .get("consumers", {})
+                    )
+                    if any(
+                        "publication_v1" in registration
+                        for registration in configured_consumers.values()
+                    ):
+                        from closer_coding_publication import PublicationHeld
+                        from closer_coding_publication import run_if_selected as publish_if_selected
+
+                        try:
+                            publication = publish_if_selected(
+                                campaign, doc, manifest, manifest_path, pending
+                            )
+                        except (
+                            PublicationHeld,
+                            OSError,
+                            ValueError,
+                            RuntimeError,
+                            KeyError,
+                            TypeError,
+                        ):
+                            publication = {
+                                "kind": "existing_pr_publication_held",
+                                "next_trigger": "reconcile owned publication before new effects",
+                                "authority": False,
+                            }
+                        if publication is not None:
+                            report.append({"campaign": path.name, **publication})
+                            continue
                     from closer_native_observer import run_coding_if_selected
 
                     coding = run_coding_if_selected(campaign, doc, manifest, manifest_path, pending)
@@ -3648,6 +3681,21 @@ def tick(
                         }
                     )
                     continue
+        if admission is not None and "codex_initial_consumer" in manifest.get("policy", {}):
+            import closer_codex_registration
+
+            try:
+                metadata_result = closer_codex_registration.run_from_native_admission(
+                    campaign, doc, manifest, manifest_path, admission
+                )
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                metadata_result = {
+                    "kind": "held",
+                    "reason": "source-selected Codex metadata qualification held",
+                    "error_type": type(exc).__name__,
+                }
+            report.append({"campaign": path.name, **metadata_result})
+            continue  # This source-selected metadata tick never launches a worker.
         capacity = (
             admission["report"]["path"]
             if admission is not None

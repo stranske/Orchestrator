@@ -1124,7 +1124,10 @@ def binding_from_manifest(path: str | Path) -> RuntimeBinding | None:
             manifest.get("policy") or {},
             mechanism=mechanism(manifest),
         )
-        if "correction_controller_installation" in binding.policy:
+        if {
+            "correction_controller_installation",
+            "codex_metadata_qualification",
+        } & binding.policy.keys():
             # Optional capability only: a stricter physical-origin failure must
             # not change the existing ordinary RuntimeBinding contract.
             try:

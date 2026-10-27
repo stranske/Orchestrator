@@ -74,6 +74,149 @@ def policy_problem(policy):
     return problem.replace("CLI configured", "native configured") if problem else None
 
 
+PRIVATE_TEST = {
+    "schema": "closer-private-native-test-wrapper/v1",
+    "purpose": "codex-account-metadata-only",
+}
+
+
+def private_test_wrapper_text(manifest_path, campaign_root, interpreter, launcher):
+    """Fixed no-fallback test wrapper using the existing native entry producer."""
+    return (
+        '#!/bin/bash\nset -euo pipefail\nLANE="${1:?}"\n'
+        'case "$LANE" in closer) ;; *) exit 78 ;; esac\n'
+        + wrapper_block(manifest_path, campaign_root, interpreter, launcher)
+        + "exit 78\n"
+    )
+
+
+def _private_test_wrapper(manifest, value):
+    """Prospective metadata-only test source, never an installed runner alias."""
+    selection = value.get("private_test")
+    if selection not in (PRIVATE_TEST, {**PRIVATE_TEST, "purpose": "codex-public-coding-test"}):
+        raise mechanisms.MechanismError("unsupported private native test purpose")
+    if selection["purpose"] == "codex-public-coding-test":
+        task = (manifest.get("policy") or {}).get("codex_public_coding_test")
+        if type(task) is not dict or task.get("schema") != "closer-public-coding-canary/v1":
+            raise mechanisms.MechanismError("private public coding task is not source selected")
+    policy = manifest.get("policy") or {}
+    if (
+        type(policy.get("codex_metadata_qualification")) is not dict
+        or type(policy.get("codex_initial_consumer")) is not dict
+        or any(
+            key in policy
+            for key in (
+                "correction_controller_installation",
+                "native_correction_cleanup",
+                "coding_continuation",
+            )
+        )
+    ):
+        raise mechanisms.MechanismError("private native test is metadata-only")
+    capacity = value.get("capacity_publication") or {}
+    if capacity.get("profile_ids") != [] or capacity.get("bounded_trial_agents") != []:
+        raise mechanisms.MechanismError("private native test cannot grant model capacity")
+    root = Path(value.get("observation_root", ""))
+    if (
+        not root.is_absolute()
+        or root.resolve() != root
+        or any(parent.is_symlink() for parent in (root, *root.parents))
+    ):
+        raise mechanisms.MechanismError("private native test root is not canonical")
+    meta = root.stat(follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(meta.st_mode)
+        or meta.st_uid != os.getuid()
+        or stat.S_IMODE(meta.st_mode) != 0o700
+    ):
+        raise mechanisms.MechanismError("private native test root is not owned/private")
+    path = root / "private-test-wrapper.sh"
+    pin = value.get("wrapper") or {}
+    if pin.get("path") != str(path) or path.resolve() != path or path.is_symlink():
+        raise mechanisms.MechanismError("private native test wrapper path differs")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or before.st_mode & 0o222
+            or not before.st_mode & 0o100
+            or not 0 < before.st_size <= 16384
+        ):
+            raise mechanisms.MechanismError("private native test wrapper mode differs")
+        raw = stream.read(16385)
+        after = os.fstat(stream.fileno())
+        fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        current = path.stat(follow_symlinks=False)
+        if (
+            len(raw) != before.st_size
+            or any(getattr(before, k) != getattr(after, k) for k in fields)
+            or any(getattr(after, k) != getattr(current, k) for k in fields)
+            or hashlib.sha256(raw).hexdigest() != pin.get("sha256")
+        ):
+            raise mechanisms.MechanismError("private native test wrapper changed")
+    command = manifest.get("command")
+    if (
+        type(command) is not list
+        or command.count("--manifest") != 1
+        or command.index("--manifest") + 1 >= len(command)
+    ):
+        raise mechanisms.MechanismError("private native test manifest path is unbound")
+    manifest_path = command[command.index("--manifest") + 1]
+    if type(manifest_path) is not str or str(Path(manifest_path).resolve()) != manifest_path:
+        raise mechanisms.MechanismError("private native test manifest path is not canonical")
+    expected = private_test_wrapper_text(
+        manifest_path,
+        value.get("campaign_root"),
+        value.get("interpreter", {}).get("path"),
+        manifest.get("launcher", {}).get("path"),
+    ).encode("utf-8")
+    if raw != expected:
+        raise mechanisms.MechanismError("private native test wrapper source differs")
+    return path
+
+
+def private_test_assignment_source(manifest):
+    """Only the fixed owned private TEST assignment; ordinary discovery unchanged."""
+    value = manifest.get("mechanism_contract") or {}
+    if "private_test" not in value:
+        if "private_test_assignment_sha256" in value:
+            raise mechanisms.MechanismError("private assignment requires explicit test purpose")
+        return (
+            Path.home()
+            / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
+        )
+    _private_test_wrapper(manifest, value)
+    root = Path(value["observation_root"])
+    path = root / "private-test-assignment.json"
+    raw = _bounded_bytes(path, 65536)
+    meta = path.stat(follow_symlinks=False)
+    if (
+        meta.st_uid != os.getuid()
+        or meta.st_nlink != 1
+        or stat.S_IMODE(meta.st_mode) != 0o600
+        or hashlib.sha256(raw).hexdigest() != value.get("private_test_assignment_sha256")
+    ):
+        raise mechanisms.MechanismError("private native test assignment pin/mode differs")
+    from closer_model_contracts import strict_response_json
+
+    doc = strict_response_json(raw.decode("utf-8"))
+    purpose = value["private_test"]["purpose"]
+    targets = [manifest["policy"]["codex_initial_consumer"]["target"]]
+    if purpose == "codex-public-coding-test":
+        targets.append(manifest["policy"]["codex_public_coding_test"]["target"])
+    expected = {
+        "schema": "closer-private-native-test-assignment/v1",
+        "purpose": purpose,
+        "targets": [{"target": target} for target in targets],
+    }
+    if doc != expected or len(set(targets)) != len(targets):
+        raise mechanisms.MechanismError("private native test assignment scope differs")
+    return path
+
+
 def contract(manifest, *, _scope=None):
     value = manifest.get("mechanism_contract") or {}
     if value.get("schema") != mechanisms.CONTRACT or value.get("mechanism") != mechanisms.NATIVE:
@@ -84,7 +227,11 @@ def contract(manifest, *, _scope=None):
 
         native_digests = source._scoped_native_runtime_digests(_scope, manifest)
     # Concrete supported wrapper. Other actors remain independent capabilities.
-    wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
+    wrapper = (
+        _private_test_wrapper(manifest, value)
+        if "private_test" in value
+        else Path.home() / ".codex/bin/cursor-lane.sh"
+    )
     pin = value.get("wrapper") or {}
     if value.get("actor") != "cursor" or pin.get("path") != str(wrapper):
         raise mechanisms.MechanismError("native wrapper/actor is not supported")
@@ -472,14 +619,18 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         context = invocation["context"]
         if context["campaign"] != _campaign_identity(state_path, doc):
             raise mechanisms.MechanismError("native invocation already bound to another campaign")
-        validate_admission(manifest, context, for_effects=True)
+        validate_admission(
+            manifest,
+            context,
+            for_effects=True,
+            for_test="private_test" in manifest["mechanism_contract"],
+        )
         return context
     directory = root / nonce
-    assignment_source = (
-        Path.home()
-        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-    )
+    assignment_source = private_test_assignment_source(manifest)
     demand = doc.get("demand_admission")
+    if "private_test" in manifest["mechanism_contract"] and demand is not None:
+        raise mechanisms.MechanismError("private native test cannot use production demand")
     demand_reference = None
     if demand is not None:
         from closer_demand_admission import RECORD_SCHEMA
@@ -668,9 +819,18 @@ def _campaign_identity(state_path, doc):
     }
 
 
-def validate_admission(manifest, context, *, for_effects, _scope=None):
+def validate_admission(manifest, context, *, for_effects, _scope=None, for_test=False):
     import closer_operational_capacity as scoped
 
+    private = "private_test" in (manifest.get("mechanism_contract") or {})
+    if private and for_effects and not for_test:
+        raise mechanisms.MechanismError(
+            "private native TEST admission cannot authorize business effects"
+        )
+    if for_test and not private:
+        raise mechanisms.MechanismError(
+            "test-only admission selection requires private TEST source"
+        )
     policy = capacity_contract(manifest, control_plane_only=True)
     root = contract(manifest, _scope=_scope)[3]
     if not policy or not isinstance(context, dict):
@@ -722,10 +882,7 @@ def validate_admission(manifest, context, *, for_effects, _scope=None):
         or "finite_frontier" in context
     ):
         raise mechanisms.MechanismError("native original admission deadline differs")
-    source = (
-        Path.home()
-        / ".codex/automations/reviewed-repo-automation-controller/closer-assignment.json"
-    )
+    source = private_test_assignment_source(manifest)
     for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
         pin = context[key]
         path = directory / name
@@ -744,6 +901,10 @@ def validate_admission(manifest, context, *, for_effects, _scope=None):
             or not Path(pin["source_path"]).is_absolute()
         ):
             raise mechanisms.MechanismError("native immutable workspace configuration differs")
+    if "private_test" in manifest["mechanism_contract"] and any(
+        key in context for key in ("coding_continuation", "demand_assignment")
+    ):
+        raise mechanisms.MechanismError("private native test cannot use production continuation")
     if "coding_continuation" in context:
         _value, _record, _document = _coding_record_from_context(manifest, context)
         selector = context["coding_continuation"]
@@ -1297,6 +1458,11 @@ def rearm_on_assignment_change(campaign, doc, manifest):
 
 def binding(manifest, *, _scope=None):
     value, _wrapper, _python, _root = contract(manifest, _scope=_scope)
+    return _binding_from_contract(manifest, value)
+
+
+def _binding_from_contract(manifest, value):
+    """Pure projection of an already validated local contract; no authority."""
     return {
         "mechanism": mechanisms.NATIVE,
         "mechanism_contract_digest": mechanisms.digest(value),
@@ -1916,26 +2082,34 @@ def accepted_coding_worker_purpose(binding_value):
         if (
             type(installation) is not installed.SourceInstallation
             or installation._binding is not binding_value
-            or not installed.validate_source_installation(installation)
         ):
             raise SourceRecordUnavailable("actual coding installation identity unavailable")
-        context = installation.admission
-        selector = context.get("coding_continuation")
-        if type(selector) is not dict:
-            raise SourceRecordUnavailable("accepted signed coding purpose unavailable")
-        manifest = load_manifest(installation.manifest_path)
-        validate_admission(manifest, context, for_effects=True)
-        start = source_b_start(installation)
-        if start is None or Path(start["path"]).stem != "worker-b-start-" + selector["worker_id"]:
-            raise SourceRecordUnavailable("accepted coding worker B-start differs")
-        return {
-            "schema": "closer-accepted-coding-worker-purpose/v1",
-            "continuation_reference": copy.deepcopy(selector["reference"]),
-            "purpose": copy.deepcopy(selector["purpose"]),
-            "worker_id": selector["worker_id"],
-            "admission_sha256": _hash(contract(manifest)[3] / context["nonce"] / "admission.json"),
-            "native_b_start": start,
-        }
+        with installed.accepted_coding_validation_read(
+            installation, inspect.currentframe()
+        ) as qualified_read:
+            qualified_read.check_inputs(binding_value, qualified_read.manifest)
+            context = installation.admission
+            selector = context.get("coding_continuation")
+            if type(selector) is not dict:
+                raise SourceRecordUnavailable("accepted signed coding purpose unavailable")
+            manifest = load_manifest(installation.manifest_path)
+            validate_admission(manifest, context, for_effects=True)
+            start = source_b_start(installation)
+            if (
+                start is None
+                or Path(start["path"]).stem != "worker-b-start-" + selector["worker_id"]
+            ):
+                raise SourceRecordUnavailable("accepted coding worker B-start differs")
+            return {
+                "schema": "closer-accepted-coding-worker-purpose/v1",
+                "continuation_reference": copy.deepcopy(selector["reference"]),
+                "purpose": copy.deepcopy(selector["purpose"]),
+                "worker_id": selector["worker_id"],
+                "admission_sha256": _hash(
+                    contract(manifest)[3] / context["nonce"] / "admission.json"
+                ),
+                "native_b_start": start,
+            }
     finally:
         del frame
 
@@ -1963,13 +2137,16 @@ def _coding_current_qualified_value(manifest, context):
             or validation.f_globals is not globals()
             or validation.f_locals.get("context") is not context
             or validation.f_locals.get("manifest") is not manifest
-            or snapshot is None
+        ):
+            return None
+        if (
+            snapshot is None
             or snapshot.f_code is not installed._snapshot_current.__code__
             or snapshot.f_globals is not installed.__dict__
             or snapshot.f_locals.get("context") is not context
             or snapshot.f_locals.get("manifest") is not manifest
         ):
-            return None
+            return _accepted_frame_qualified_value(manifest, context, validation)
         value = snapshot.f_locals.get("value")
         binding_value = snapshot.f_locals.get("binding")
         origin = runtime._factory_manifest_origin(binding_value)
@@ -1990,6 +2167,74 @@ def _coding_current_qualified_value(manifest, context):
         return value, manifest
     finally:
         del frame
+
+
+def _accepted_frame_qualified_value(manifest, context, validation):
+    """Only five fixed native paths may reuse immutable accepted-frame work."""
+    import closer_source_installation as installed
+
+    paths = (
+        (accepted_coding_worker_purpose,),
+        (source_b_start, accepted_coding_worker_purpose),
+        (_lifecycle_authority, source_b_start, accepted_coding_worker_purpose),
+        (result_admission_config, source_b_start, accepted_coding_worker_purpose),
+        (admission_config, result_admission_config, source_b_start, accepted_coding_worker_purpose),
+    )
+    matched = None
+    for path in paths:
+        current, chain = validation.f_back, []
+        for function in path:
+            if (
+                current is None
+                or current.f_code is not function.__code__
+                or current.f_globals is not globals()
+            ):
+                break
+            chain.append(current)
+            current = current.f_back
+        else:
+            matched = chain
+            break
+    if matched is None:
+        return None
+    accepted = matched[-1]
+    read = accepted.f_locals.get("qualified_read")
+    if read is None:
+        return None  # Initial full snapshot precedes the active batch local.
+    if type(read) is not installed._AcceptedCodingRead:
+        raise mechanisms.MechanismError("accepted read identity differs")
+    installation = accepted.f_locals.get("installation")
+    if installation is not read.installation:
+        raise mechanisms.MechanismError("accepted installation alias differs")
+    for frame in matched[:-1]:
+        if frame.f_code is source_b_start.__code__:
+            okay = (
+                frame.f_locals.get("installation") is installation
+                and frame.f_locals.get("context") is context
+                and frame.f_locals.get("manifest") == manifest
+            )
+        elif frame.f_code is _lifecycle_authority.__code__:
+            cfg = frame.f_locals.get("cfg")
+            okay = (
+                type(cfg) is dict
+                and cfg.get("native_admission") is context
+                and frame.f_locals.get("manifest") is manifest
+            )
+        else:
+            okay = (
+                frame.f_locals.get("context") is context
+                and frame.f_locals.get("manifest") is manifest
+            )
+        if not okay:
+            raise mechanisms.MechanismError("accepted native argument aliases differ")
+    if len(matched) == 4 and matched[0].f_locals.get("cfg") is not matched[1].f_locals.get("cfg"):
+        raise mechanisms.MechanismError("accepted configuration aliases differ")
+    if context != read.original_value["admission"]:
+        raise mechanisms.MechanismError("accepted admission copy differs")
+    read.check_inputs(installation._binding, manifest)
+    value, pinned = installed._qualified_policy(installation._binding, _accepted_read=read)
+    read.check_inputs(installation._binding, manifest)
+    return value, pinned
 
 
 def _coding_record_from_context(manifest, context):
@@ -2119,9 +2364,17 @@ def _coding_queue_terminal(cfg, candidate):
     original = _submitted_coding_operation(retained)
     result = retained.get("result")
     _coding_knowledge_barriers(row, retained, result)
+    if type(result) is dict and set(result) != {
+        "coding_terminal_reference",
+        "actual",
+        *worker._NO_AUTHORITY,
+    }:
+        import closer_coding_publication as publication
+
+        publication.validate_native_coding_result(cfg, original, result)
     if (
         type(result) is not dict
-        or set(result) != {"coding_terminal_reference", "actual", *worker._NO_AUTHORITY}
+        or not {"coding_terminal_reference", "actual", *worker._NO_AUTHORITY} <= set(result)
         or any(result[k] is not False for k in worker._NO_AUTHORITY)
         or original["finite_frontier"] != frontier
         or original["revision"] != frontier["bindings"][selector["coding_target"]]["revision"]
@@ -3422,7 +3675,7 @@ def coding_original_history(installation, reference):
         ):
             raise SourceRecordUnavailable("actual accepted worker historical reader required")
         root.check()
-        if root.continuation_reference != reference:
+        if json.loads(root.accepted_utf8)["continuation_reference"] != reference:
             raise SourceRecordUnavailable("accepted worker historical reference differs")
         doc = ctl.IndexController._physical_state(
             installation.config["state_path"], "coding campaign redirected"
@@ -3776,6 +4029,8 @@ def entry_active(manifest, *, _scope=None):
 
 
 def authorize_worker(manifest, argv):
+    if "private_test" in (manifest.get("mechanism_contract") or {}):
+        raise mechanisms.MechanismError("private metadata test cannot authorize a worker")
     from closer_correction_maintenance import assert_offload_allowed
 
     assert_offload_allowed()
@@ -4239,48 +4494,94 @@ def supervise_native(manifest, manifest_path, *, budget_seconds):
             raise
 
 
+def _qualification_source_identity(manifest):
+    """Same-call mutation sensitivity; never stores validation permission."""
+    value = manifest["mechanism_contract"]
+    names = [
+        value["wrapper"]["path"],
+        value["interpreter"]["path"],
+        *(manifest.get("policy", {}).get("toml_sha256") or {}),
+    ]
+    files = tuple(
+        (
+            name,
+            tuple(
+                getattr(info, key)
+                for key in (
+                    "st_dev",
+                    "st_ino",
+                    "st_mode",
+                    "st_nlink",
+                    "st_uid",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                )
+            ),
+        )
+        for name in names
+        for info in [os.lstat(name)]
+    )
+    parents = sorted({str(parent) for name in names for parent in Path(name).parents})
+    ancestry = tuple(
+        (name, info.st_dev, info.st_ino, info.st_mode, info.st_uid)
+        for name in parents
+        for info in [os.lstat(name)]
+    )
+    return files, ancestry
+
+
+def _qualified_receipt_root(manifest, *, _scope=None):
+    """One authenticated local contract plus fresh signer/lifecycle evidence."""
+    physical = _qualification_source_identity(manifest)
+    _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
+    signed = _read(root / "native-qualification.json")
+    record = signed["record"]
+    if not hmac.compare_digest(
+        signed["signature"], mechanisms._signature(record, mechanisms._key(root))
+    ):
+        raise mechanisms.MechanismError("native observer signature differs")
+    if (
+        record.get("schema") != OBSERVATION
+        or record.get("kind") != "native-wrapper-qualification"
+        or record.get("binding") != _binding_from_contract(manifest, _value)
+        or record.get("passed") is not True
+        or record.get("desktop_qualified") is not False
+        or record.get("source") != "owned-native-wrapper-process"
+        or record.get("actor") != "cursor"
+        or record.get("scheduler_origin") != "unobserved"
+    ):
+        raise mechanisms.MechanismError("native lifecycle belongs to another capability or pin")
+    directory = root / record["nonce"]
+    if directory.parent != root or directory.is_symlink():
+        raise mechanisms.MechanismError("native observation artifact path escaped")
+    expected = {
+        "startup": "startup.json",
+        "handoff": "child-journal.json",
+        "crash_restart": "crash.json",
+        "result_recording": "child-result.json",
+    }
+    for phase, name in expected.items():
+        ref = record["phases"][phase]
+        if ref != {"file": name, "sha256": _hash(directory / name)}:
+            raise mechanisms.MechanismError("native phase artifact changed: " + phase)
+    result = _read(directory / "child-result.json")
+    if (
+        result.get("binding") != record["binding"]
+        or result.get("nonce") != record["nonce"]
+        or result.get("no_effect") is not True
+        or _read(directory / "crash.json").get("exit") != -signal.SIGKILL
+    ):
+        raise mechanisms.MechanismError("native result belongs to another package or lifecycle")
+    if physical != _qualification_source_identity(manifest):
+        raise mechanisms.MechanismError("native qualification source changed during read")
+    return root, physical
+
+
 def qualification_receipt_problems(manifest, *, _scope=None):
     """Authenticate immutable package/lifecycle evidence; grants no ACT eligibility."""
     try:
-        _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
-        signed = _read(root / "native-qualification.json")
-        record = signed["record"]
-        if not hmac.compare_digest(
-            signed["signature"], mechanisms._signature(record, mechanisms._key(root))
-        ):
-            raise mechanisms.MechanismError("native observer signature differs")
-        if (
-            record.get("schema") != OBSERVATION
-            or record.get("kind") != "native-wrapper-qualification"
-            or record.get("binding") != binding(manifest, _scope=_scope)
-            or record.get("passed") is not True
-            or record.get("desktop_qualified") is not False
-            or record.get("source") != "owned-native-wrapper-process"
-            or record.get("actor") != "cursor"
-            or record.get("scheduler_origin") != "unobserved"
-        ):
-            raise mechanisms.MechanismError("native lifecycle belongs to another capability or pin")
-        directory = root / record["nonce"]
-        if directory.parent != root or directory.is_symlink():
-            raise mechanisms.MechanismError("native observation artifact path escaped")
-        expected = {
-            "startup": "startup.json",
-            "handoff": "child-journal.json",
-            "crash_restart": "crash.json",
-            "result_recording": "child-result.json",
-        }
-        for phase, name in expected.items():
-            ref = record["phases"][phase]
-            if ref != {"file": name, "sha256": _hash(directory / name)}:
-                raise mechanisms.MechanismError("native phase artifact changed: " + phase)
-        result = _read(directory / "child-result.json")
-        if (
-            result.get("binding") != record["binding"]
-            or result.get("nonce") != record["nonce"]
-            or result.get("no_effect") is not True
-            or _read(directory / "crash.json").get("exit") != -signal.SIGKILL
-        ):
-            raise mechanisms.MechanismError("native result belongs to another package or lifecycle")
+        _qualified_receipt_root(manifest, _scope=_scope)
         return []
     except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
         return [f"native handoff qualification held: {exc}"]
@@ -4288,16 +4589,15 @@ def qualification_receipt_problems(manifest, *, _scope=None):
 
 def qualification_problems(manifest, *, _scope=None):
     """ACT qualification retains the original current-entry/unknown barrier."""
-    problems = qualification_receipt_problems(manifest, _scope=_scope)
-    if problems:
-        return problems
     try:
-        _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
+        root, physical = _qualified_receipt_root(manifest, _scope=_scope)
         active = _read(root / "native-active.json")
         if active.get("status") != "terminal" and _CURRENT_ENTRY.get(str(root)) != active.get(
             "nonce"
         ):
             raise mechanisms.MechanismError("native submission remains unknown")
+        if physical != _qualification_source_identity(manifest):
+            raise mechanisms.MechanismError("native qualification source changed during read")
         return []
     except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
         return [f"native handoff qualification held: {exc}"]

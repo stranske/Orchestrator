@@ -3999,7 +3999,7 @@ class Closer:
                     "inputs[verification_predecessor]": repeat_request["predecessor_event_id"],
                 }
             )
-        return {
+        prepared = {
             "mutation_kind": "workflow_dispatch",
             "endpoint": f"repos/{repo}/actions/workflows/agents-verifier.yml/dispatches",
             "fields": inputs,
@@ -4009,6 +4009,22 @@ class Closer:
             ),
             "material_selectors": repeat_request["material"] if repeat_request else [],
         }
+
+        publication_context = getattr(self, "_publication_verification_context", None)
+        if publication_context is not None:
+            import closer_publication_verification
+
+            try:
+                return closer_publication_verification.bind_verifier_inputs(
+                    publication_context, self, target, snapshot, prepared
+                )
+            except closer_publication_verification.ContinuationHeld:
+                return _VerificationPrepostReadFailure(
+                    status="not_started",
+                    reason="canonical corrective evaluator input consumer unavailable",
+                    next_trigger="source-owned corrective requirements consumer and native input binding",
+                )
+        return prepared
 
     def submit_verify(self, target, snapshot, prepared):
         # Only this exact prepared POST follows the Core intent. Its acknowledgement
@@ -9331,6 +9347,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     raise closer_resources.ResourceBlocked(
                         "actual operation changed prepared head/resource bindings"
                     )
+                import closer_publication_verification
+
+                closer_publication_verification.attach_existing_root(
+                    current, name, observed, operation, context
+                )
                 if (context.get("prepare") or {}).get("native_effect_contract"):
                     if not _remote_only_effect(name, context):
                         raise closer_resources.ResourceBlocked(
@@ -9340,10 +9361,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 return current.execute(name, action, observed, operation)
 
             execute = execute_bound
+        import closer_publication_verification
+
         receipt = closer_queue.run_round(
             action_state,
             [target],
-            current.observe,
+            lambda name: closer_publication_verification.observe_existing_root(
+                current, name, context
+            ),
             execute,
             reconcile=current.reconcile,
             # The pipeline owns a five-minute receipt reserve. Preserve the

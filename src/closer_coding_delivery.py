@@ -68,7 +68,7 @@ def _capture(frame: FrameType) -> CodingDelivery | None:
         or state.get("stream_prompt") is not None
         or run.get("stream_path") is not None
         or run.get("stream_identity") is not None
-        or actual.get("stdin") != subprocess.DEVNULL
+        or actual.get("stdin") not in (subprocess.DEVNULL, subprocess.PIPE)
         or actual.get("starting_callback") is not state.get("process_starting_callback")
         or actual.get("callback") is not state.get("process_started_callback")
     ):
@@ -83,12 +83,19 @@ def _capture(frame: FrameType) -> CodingDelivery | None:
             return None
         transport = list(route.transport_argv)
         environment = route.environment
-        channel = closer_coding_route_v2.CHANNEL
+        import closer_codex_owned_stdio as owned_stdio
+
+        is_bootstrap = type(route) is owned_stdio.BootstrapRoute
+        channel = owned_stdio.CHANNEL if is_bootstrap else closer_coding_route_v2.CHANNEL
+        if actual.get("stdin") != (subprocess.PIPE if is_bootstrap else subprocess.DEVNULL):
+            return None
     else:
         if actual.get("env") is not None:
             return None
         transport = ["bash", "-lc", state.get("wrapped")]
         environment, channel = None, "codex-final-argv/v1"
+        if actual.get("stdin") != subprocess.DEVNULL:
+            return None
     profile = state.get("profile")
     if profile != execution_profiles.get_profile(SELECTED_PROFILE):
         return None
@@ -99,7 +106,7 @@ def _capture(frame: FrameType) -> CodingDelivery | None:
         or type(argv) is not list
         or not argv
         or any(type(part) is not str for part in argv)
-        or argv[-1] != prompt
+        or (channel != "codex-source-owned-appserver-stdio/v1" and argv[-1] != prompt)
         or state.get("command_prompt") != prompt
         or type(wrapped) is not str
         or run.get("attempt_wrapped") != wrapped
@@ -125,6 +132,7 @@ def _capture(frame: FrameType) -> CodingDelivery | None:
         json.dumps(profile, sort_keys=True, separators=(",", ":")),
         env=environment,
         channel=channel,
+        stdin=actual["stdin"],
     )
 
 

@@ -66,7 +66,11 @@ def material_selectors(value: Any) -> list[dict[str, Any]]:
     for row in value:
         if not isinstance(row, dict):
             raise ValueError("invalid verification material selector")
-        if row.get("kind") == "comment":
+        if row.get("kind") == "corrective_instruction":
+            import closer_corrective_verification_instruction
+
+            row = closer_corrective_verification_instruction.validate_selector(row)
+        elif row.get("kind") == "comment":
             if set(row) != {"kind", "url"} or not re.fullmatch(
                 r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:pull|issues)/[1-9][0-9]*#issuecomment-[1-9][0-9]*",
                 str(row.get("url")),

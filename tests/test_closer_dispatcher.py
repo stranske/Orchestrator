@@ -3657,16 +3657,14 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
     def guarded_queue_once(_path, selected, observe, execute, *, deadline, **_kwargs):
         target = selected[0]
         observed = observe(target)
-        executed = execute(
-            target,
-            observed["action"],
-            observed,
-            {
-                "deadline": deadline if deadline is not None else time.time() + 60,
-                "id": "fake-queue-operation",
-                "owner": "inert-test-queue",
-            },
-        )
+        operation = {
+            "deadline": deadline if deadline is not None else time.time() + 60,
+            "id": "fake-queue-operation",
+            "owner": "inert-test-queue",
+            "status": "submitted",
+        }
+        with closer_queue._callback_invocation(target, operation, time.time, state_path=_path):
+            executed = execute(target, observed["action"], observed, operation)
         return {
             "stop_valid": True,
             "accounting": [
@@ -4682,9 +4680,9 @@ def test_scoped_native_operation_seam_rechecks_prepared_head_and_aliases(
 
     def native_queue_stub(_path, targets, observe, execute, **kw):
         observed = observe(TARGET)
-        execute(
-            TARGET, observed["action"], observed, {"id": "offline", "deadline": time.time() + 20}
-        )
+        operation = {"id": "offline", "deadline": time.time() + 20, "status": "submitted"}
+        with closer_queue._callback_invocation(TARGET, operation, time.time, state_path=_path):
+            execute(TARGET, observed["action"], observed, operation)
         return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
 
     monkeypatch.setattr(closer_queue, "run_round", native_queue_stub)

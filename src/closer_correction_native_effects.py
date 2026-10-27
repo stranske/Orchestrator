@@ -29,6 +29,7 @@ _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 MAX_RESPONSE = 262144
 MAX_PAYLOAD = 131072
 PHASES = {"issue_creation", "instruction_publication"}
+_LEGACY_INSTRUCTION = object()
 _TYPED_WORKFLOW = ".github/workflows/agents-auto-pilot.yml"
 
 
@@ -192,7 +193,7 @@ def validate_creation(response, *, phase, payload, repository, config, parent=No
     }
 
 
-def _payload(request, phase, finding_text):
+def _payload(request, phase, finding_text, *, raw_findings=_LEGACY_INSTRUCTION):
     _need(
         type(finding_text) is str
         and _sha(finding_text.encode()) == request["finding"]["evidence"]["sha256"],
@@ -217,6 +218,12 @@ def _payload(request, phase, finding_text):
         + "\n"
     )
     if phase == "instruction_publication":
+        if raw_findings is not _LEGACY_INSTRUCTION:
+            import closer_corrective_verification_instruction as instruction
+
+            body = instruction.append(
+                body, request, finding_text, raw_findings, max_bytes=MAX_PAYLOAD
+            )
         payload = {"body": body}
     else:
         payload = {
@@ -840,6 +847,10 @@ def execute_effect(controller, *, operation, key, phase):
 
 def validate_index_effect_action(controller, custody, operation, entry, action):
     """Fixed canonical-reader hook: only a protected original issue POST201."""
+    if operation.get("action") == "correction_publish_existing_pr" and action.get("kind") == "bind":
+        import closer_coding_publication_io as publication_io
+
+        return publication_io.validate_index_bind(controller, custody, operation, entry, action)
     _need(
         action.get("kind") == "confirm" and action.get("phase") == "issue_creation",
         "native coding_PR_or_typed_autopilot_origin_producer_unavailable",
@@ -1155,14 +1166,19 @@ def publish_first_instruction_locked(controller, custody, operation, selection):
             del controller._writer_context.native_selection
             return reconcile_source_checkpoint_locked(controller, custody, operation, selection)
         controller.preflight_source_enrollment_locked(custody, operation)
-        raw = [r for r in facts["raw_findings"] if r["id"] == request["finding"]["id"]]
+        raw_findings = facts.get("raw_findings")
+        _need(
+            type(raw_findings) is list and bool(raw_findings),
+            "complete original raw findings required",
+        )
+        raw = [r for r in raw_findings if r["id"] == request["finding"]["id"]]
         _need(len(raw) == 1, "selected original source finding ambiguous")
         subject = {
             "kind": "issue",
             **{k: request["source_issue"][k] for k in ("number", "node_id")},
         }
         phase = "instruction_publication"
-        payload = _payload(request, phase, raw[0]["text"])
+        payload = _payload(request, phase, raw[0]["text"], raw_findings=raw_findings)
         source_before = _capture_source(controller, operation, request)
         _need(
             source_before["parent"] == facts.get("original_source_native"),
@@ -1437,6 +1453,12 @@ class NativeHTTPTransport:
                 r"|collaborators/[A-Za-z0-9_.%\[\]-]+/permission)",
                 suffix,
             )
+            if not allowed and operation.get("action") == "correction_publish_existing_pr":
+                import closer_coding_publication_io as publication_io
+
+                allowed = publication_io.allow_native_ref_read(
+                    controller, custody, operation, method, suffix, body
+                )
             _need(
                 method == "GET" and body is None and allowed,
                 "native transport unsupported read or mutation",
