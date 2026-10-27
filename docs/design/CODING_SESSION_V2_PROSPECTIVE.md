@@ -1,6 +1,6 @@
 # Prospective coding-session v2: data preparation only
 
-Historical scope: this document describes the independently reviewed `d569209c` pure-contract stage. Later inactive local supervisor integration is documented in `CODING_SESSION_V2_RUNTIME_LOCAL.md`; its existence does not supply a WORKER caller, authentic enrollment proof, account/confinement qualification, or activation.
+Historical scope: this document describes the independently reviewed `d569209c` pure-contract stage. Later inactive local supervisor integration is separately unpublished and outside this slice. It does not supply a WORKER caller, authentic enrollment proof, account/confinement qualification, or activation.
 
 This source adds a pure validator, minimum calculation, and immutable policy-snapshot draft helper. It does **not** install a reader, authenticate a session, enroll a policy, change any dispatcher/guard branch, or enable coding. The frozen v1 guards, admission records, public request format, and unsupported native output-token enforcement port remain unchanged.
 
