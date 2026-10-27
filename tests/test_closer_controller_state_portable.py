@@ -344,3 +344,28 @@ def test_nontext_native_repository_and_noncanonical_wire_spelling_refuse():
     assert not ctl.native_repository_name(123, "stranske/example")
     assert not ctl.native_repository_name("stranske/example", "Stranske/example")
     assert not ctl.native_repository_name("stranske/ex ample", "stranske/ex ample")
+
+
+@pytest.mark.parametrize("value", [[], {}])
+def test_subject_unhashable_kind_is_unknown(value):
+    with pytest.raises(ctl.ControllerUnknown, match="native subject identity missing"):
+        ctl.subject(dict(kind=value, number="7", node_id="I_7"))
+
+
+@pytest.mark.parametrize("field", ["phase", "state"])
+@pytest.mark.parametrize("value", [[], {}])
+def test_index_unhashable_stage_fields_are_unknown(config, admission, field, value):
+    data = enrolled(config, admission)
+    data = ctl.transition(data, prepare(data, admission), config)
+    data["entries"][0]["stages"][0][field] = value
+    with pytest.raises(ctl.ControllerUnknown, match="invalid stage"):
+        ctl.validate_index(data, config)
+
+
+@pytest.mark.parametrize("value", [[], {}])
+def test_action_unhashable_phase_is_unknown(config, admission, value):
+    data = enrolled(config, admission)
+    action = prepare(data, admission)
+    action["phase"] = value
+    with pytest.raises(ctl.ControllerUnknown, match="unsupported phase"):
+        ctl.transition(data, action, config)
