@@ -23,6 +23,8 @@ import os
 import re
 import stat
 import threading
+import types
+import weakref
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -125,7 +127,8 @@ def matches(pattern, value):
 def subject(value):
     exact(value, "kind number node_id")
     need(
-        value["kind"] in {"issue", "pull"}
+        type(value["kind"]) is str
+        and value["kind"] in {"issue", "pull"}
         and matches(r"[1-9][0-9]{0,15}", value["number"])
         and type(value["node_id"]) is str
         and 0 < len(value["node_id"]) <= 256,
@@ -363,9 +366,11 @@ def validate_index(data, config):
                 "phase state intent_sha256 intent_selector proof_sha256 result result_selector",
             )
             need(
-                stage["phase"] in PHASES
+                type(stage["phase"]) is str
+                and stage["phase"] in PHASES
                 and stage["phase"] not in phases
                 and matches(_SHA, stage["intent_sha256"])
+                and type(stage["state"]) is str
                 and stage["state"] in {"prepared", "outcome_unknown", "confirmed"},
                 "invalid stage",
             )
@@ -496,7 +501,7 @@ def transition(data, action, config):
             entry["bindings"].append(binding)
         else:
             phase = action.get("phase")
-            need(phase in PHASES, "unsupported phase")
+            need(type(phase) is str and phase in PHASES, "unsupported phase")
             stage = next((s for s in entry["stages"] if s["phase"] == phase), None)
             if kind == "prepare":
                 exact(action, "kind key phase intent_sha256 selector")
@@ -1882,6 +1887,65 @@ def held(reason, *, status="owned_unknown", write_attempted=False, **facts):
     }
 
 
+@dataclass(frozen=True)
+class _ReaderDefinition:
+    path: Path
+    sha256: str
+    method: types.FunctionType
+    code: types.CodeType
+
+
+_READER_DEFINITIONS: weakref.WeakKeyDictionary[type, _ReaderDefinition] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _pin_reader_definition(cls):
+    """Bind retained source to the actual loaded method, not a class hash claim."""
+    try:
+        path = Path(inspect.getsourcefile(cls) or "")
+        if path.is_symlink() or not path.is_file():
+            return
+        raw = path.read_bytes()
+        method = inspect.getattr_static(cls, "read_native_identity")
+        if not isinstance(method, types.FunctionType):
+            return
+        # This interface takes only self. Mutable caller closures/defaults cannot
+        # substitute an account observation for the source-defined reader.
+        if method.__closure__ or method.__defaults__ or method.__kwdefaults__:
+            return
+
+        def codes(code):
+            yield code
+            for child in code.co_consts:
+                if isinstance(child, types.CodeType):
+                    yield from codes(child)
+
+        compiled = compile(raw, str(path), "exec", dont_inherit=True)
+        # Class-definition hashing alone can approve new disk bytes while old
+        # module globals/code are running. Require the actual importing module
+        # frame to match those bytes; runtime/dynamic class claims stay held.
+        frame = inspect.currentframe()
+        try:
+            while frame is not None and not (
+                frame.f_code.co_name == "<module>" and frame.f_code.co_filename == str(path)
+            ):
+                frame = frame.f_back
+            if frame is None or frame.f_code != compiled:
+                return
+        finally:
+            del frame
+        expected = [code for code in codes(compiled) if code.co_qualname == method.__qualname__]
+        if len(expected) != 1 or method.__code__ != expected[0]:
+            return
+        _READER_DEFINITIONS[cls] = _ReaderDefinition(
+            path, hashlib.sha256(raw).hexdigest(), method, method.__code__
+        )
+    except (OSError, TypeError, ValueError, SyntaxError, AttributeError):
+        # Unsupported loaders or unavailable source remain unqualified.
+        return
+
+
 class NativeConsumerReader:
     """Installed source dependency, not a caller boolean or auth-presence upgrade.
 
@@ -1889,6 +1953,10 @@ class NativeConsumerReader:
     account read. No implementation, credentials or probing command is supplied.
     The controller pins that implementation's source before every read.
     """
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        _pin_reader_definition(cls)
 
     def read_native_identity(self):
         raise ControllerUnknown("installed managed native account reader unsupported")
@@ -1913,17 +1981,25 @@ class NativeConsumerReader:
         raise ControllerUnknown("installed final prompt estimator unsupported")
 
     def observe(self, registration):
-        entry = type(self).__module__ + "." + type(self).__qualname__
-        path = Path(inspect.getsourcefile(type(self)) or "")
+        cls = type(self)
+        definition = _READER_DEFINITIONS.get(cls)
+        entry = cls.__module__ + "." + cls.__qualname__
         need(
-            entry == registration["reader_entrypoint"]
-            and path.is_file()
-            and not path.is_symlink()
-            and hashlib.sha256(path.read_bytes()).hexdigest()
-            == registration["reader_source_sha256"],
+            definition is not None
+            and entry == registration["reader_entrypoint"]
+            and definition.sha256 == registration["reader_source_sha256"]
+            and definition.path.is_file()
+            and not definition.path.is_symlink()
+            and hashlib.sha256(definition.path.read_bytes()).hexdigest() == definition.sha256
+            and inspect.getattr_static(cls, "read_native_identity") is definition.method
+            and inspect.getattr_static(self, "read_native_identity") is definition.method
+            and definition.method.__code__ is definition.code
+            and not definition.method.__closure__
+            and not definition.method.__defaults__
+            and not definition.method.__kwdefaults__,
             "installed consumer reader source differs",
         )
-        identity = self.read_native_identity()
+        identity = definition.method(self)
         exact(identity, "account_id profile_id")
         need(
             type(identity["account_id"]) is str
@@ -1937,6 +2013,9 @@ class NativeConsumerReader:
                 "account_id": identity["account_id"],
             }
         )
+
+
+_pin_reader_definition(NativeConsumerReader)
 
 
 class _ProviderGuard:
