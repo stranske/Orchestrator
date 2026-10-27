@@ -103,8 +103,8 @@ preserves unrelated current router/dispatcher definitions and existing profile,
 role-enrollment, adapter and Verify defaults. The selection module and router
 bytes plus `config/closer_role_selection.json` hash are included in the controlled
 model contract. The ordinary verified flat-mirror builder, installer ownership
-and pre-sync source identity include that exact JSON. The shared `paths.REPO_ROOT`
-rule locates it in both checkout and flat-mirror layouts.
+and pre-sync source identity include that exact JSON. A fixed physical source-shape
+rule locates checkout config versus the adjacent flat native-image filename.
 
 Current bounded-classification call sites do not yet provide a trusted intended
 category. With the reviewed null default they hold before capacity or invocation.
@@ -113,11 +113,25 @@ finding subtype or a public example. A genuine Core call-site mapping and the
 null Terra runtime/profile binding remain separate work. Named proof defaults
 remain quality-filtered and still require existing runtime admission.
 
-The native installed controller's closed `module_dir` inventory presently admits
-flat Python module files and rejects directories. Its existing packaging source
-must explicitly place and bind this JSON alongside the consuming source before
-that native image can use the policy; the ordinary exec-mirror installation
-controls do not establish native-image enrollment. This source-only integration
-neither edits a live image/manifest nor fabricates a deployed callback receipt.
+Native images retain their closed flat layout: the existing Runtime exporter
+writes exactly `closer_role_selection.json` beside the consuming Python module,
+never a config directory inside `module_dir`. The source module embeds the exact
+expected policy SHA256, verifies regular physical nonalias bounded bytes, and
+refuses missing, changed or symlinked policy input. The existing controlled
+contract also retains the policy data hash. The ordinary mirror builder and
+installer ship the same flat filename; the source input remains the unchanged
+`config/closer_role_selection.json`. No new manifest schema or unsourced data
+field is introduced. Actual exporter-to-native-image consumer controls cover
+this placement and fail-closed data behavior.
+
+Current `closer_interpret` still builds the legacy global classification/planning
+response (`classification`, `substantive_needs`, `findings`, decision rows and
+collection/repair routing), not the typed-v2 semantic assessment used by the
+reviewed ordinary-static quality record. Its receiver parses that legacy shape
+and calls `integrate_ordinary`. A category literal cannot bridge those contracts.
+Core must add a narrowly reviewed typed semantic builder/projector into the
+existing deterministic integration and host routing before assigning that
+source-level category. Until then bounded classification holds. Neither
+correction classification nor protected authority is relabeled by this change.
 Muse and Cursor bindings remain null, and Cursor diagnostic receiving enforcement
-remains required before binding. Missing policy data fails closed.
+remains required before binding. Source preparation is not runtime enrollment.

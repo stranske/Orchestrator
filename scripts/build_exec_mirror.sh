@@ -93,13 +93,18 @@ for snapshot in \
   data/feedback-snapshot.json \
   config/coverage-baseline.json \
   config/test-shards.json \
-  config/closer_role_selection.json \
   config/model_epochs.json; do
   if [[ -f "$SRC/$snapshot" ]]; then
     cp "$SRC/$snapshot" "$MIRROR/$snapshot"
     extra=$((extra + 1))
   fi
 done
+# Fixed flat native policy data is bound by the consuming Python source SHA.
+rm -f "$MIRROR/closer_role_selection.json"
+if [[ -f "$SRC/config/closer_role_selection.json" ]]; then
+  cp "$SRC/config/closer_role_selection.json" "$MIRROR/closer_role_selection.json"
+  extra=$((extra + 1))
+fi
 # verify.py's collection floor travels with the code. Without it a mirror run reports "floor unset",
 # and a silent drop in tests collected reads exactly like tests passing. (2026-08-21)
 if [[ -f "$SRC/.verify-floor.json" ]]; then

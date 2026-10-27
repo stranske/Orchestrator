@@ -157,7 +157,7 @@ def test_the_mirror_is_flat_and_carries_the_committed_trees(source: Path, tmp_pa
         "ORCHESTRATOR.md",
         "config/coverage-baseline.json",
         "config/model_epochs.json",
-        "config/closer_role_selection.json",
+        "closer_role_selection.json",
         ".verify-floor.json",
     ):
         assert (mirror / shipped).is_file(), shipped
@@ -302,7 +302,11 @@ def test_every_working_tree_input_moves_the_source_identity(source: Path, tmp_pa
     for rel in moved:
         if rel == ".docs-shipped.txt":
             continue
-        origin = source / ("src/" + rel if rel.endswith(".py") and "/" not in rel else rel)
+        origin = source / (
+            "config/closer_role_selection.json"
+            if rel == "closer_role_selection.json"
+            else "src/" + rel if rel.endswith(".py") and "/" not in rel else rel
+        )
         assert origin.is_file(), (rel, origin)
         origin.write_bytes(originals[origin] + b"\n# moved\n")
         try:

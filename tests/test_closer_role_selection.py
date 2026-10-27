@@ -235,8 +235,8 @@ def test_controlled_contract_binds_installed_policy_and_consuming_sources(monkey
     assert "closer_role_selection.py" in before["sources"]
     assert "router.py" in before["sources"]
     policy.write_bytes(policy.read_bytes() + b"\n")
-    after = closer._controlled_model_contract("closer_exception")
-    assert before["contract_sha256"] != after["contract_sha256"]
+    with pytest.raises(ValueError, match="source-owned bytes"):
+        closer._controlled_model_contract("closer_exception")
 
 
 def test_policy_source_refuses_symlink_or_nonregular_bytes(tmp_path):
@@ -244,7 +244,7 @@ def test_policy_source_refuses_symlink_or_nonregular_bytes(tmp_path):
     actual.write_bytes(selection.POLICY_PATH.read_bytes())
     link = tmp_path / "link.json"
     link.symlink_to(actual)
-    with pytest.raises(OSError):
+    with pytest.raises(ValueError, match="source alias"):
         selection.load_policy(link)
     with pytest.raises(ValueError, match="physical source"):
         selection.load_policy(tmp_path)
@@ -277,7 +277,10 @@ def test_policy_loader_uses_actual_source_shape_without_host_fallback(tmp_path, 
     (root / "config").mkdir()
     for name in ("paths.py", "closer_role_selection.py"):
         (modules / name).write_bytes((paths.MODULE_DIR / name).read_bytes())
-    (root / "config" / "closer_role_selection.json").write_bytes(selection.POLICY_PATH.read_bytes())
+    policy = (
+        root / selection.POLICY_FILENAME if flat else root / "config" / selection.POLICY_FILENAME
+    )
+    policy.write_bytes(selection.POLICY_PATH.read_bytes())
     code = (
         "import sys,json;sys.path.insert(0,sys.argv[1]);"
         "import paths,closer_role_selection as s;"
@@ -292,6 +295,6 @@ def test_policy_loader_uses_actual_source_shape_without_host_fallback(tmp_path, 
     )
     assert json.loads(result.stdout) == [
         str(root.resolve()),
-        str((root / "config" / "closer_role_selection.json").resolve()),
+        str(policy.resolve()),
         selection.SCHEMA,
     ]

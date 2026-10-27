@@ -15,9 +15,21 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import paths
+POLICY_FILENAME = "closer_role_selection.json"
+EXPECTED_POLICY_SHA256 = "266263f0a44319b08400fb7f3c1a7e93004b338f0548ea2b70e859332777afbf"
 
-POLICY_PATH = paths.REPO_ROOT / "config" / "closer_role_selection.json"
+
+def policy_path(module_dir: Path) -> Path:
+    """Native images are flat; checkout data remains in the source config tree."""
+    module_dir = module_dir.resolve()
+    return (
+        module_dir.parent / "config" / POLICY_FILENAME
+        if module_dir.name == "src"
+        else module_dir / POLICY_FILENAME
+    )
+
+
+POLICY_PATH = policy_path(Path(__file__).resolve().parent)
 SCHEMA = "closer-role-selection/v1"
 
 
@@ -32,6 +44,10 @@ def _unique(items):
 
 def _policy_bytes(path: Path | None = None) -> bytes:
     source = path or POLICY_PATH
+    if source.resolve(strict=True) != source or any(
+        p.is_symlink() for p in (source, *source.parents)
+    ):
+        raise ValueError("selection policy source alias refused")
     fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
@@ -42,6 +58,8 @@ def _policy_bytes(path: Path | None = None) -> bytes:
         os.close(fd)
     if len(raw) != info.st_size:
         raise ValueError("selection policy changed during read")
+    if hashlib.sha256(raw).hexdigest() != EXPECTED_POLICY_SHA256:
+        raise ValueError("selection policy differs from source-owned bytes")
     return raw
 
 
