@@ -1587,7 +1587,12 @@ class IndexController:
                 )
                 draft = session_v2.prepare_admission_policy(self.config.consumers)
                 if draft.snapshot_utf8 is not None:
-                    record[session_v2.ADMISSION_FIELD] = json.loads(draft.snapshot_utf8)
+                    snapshot = json.loads(draft.snapshot_utf8)
+                    if "publication_v1" in snapshot:
+                        import closer_coding_publication as publication
+
+                        publication._require_source_pin(self.installation)
+                    record[session_v2.ADMISSION_FIELD] = snapshot
             record_key = digest(record)
             selected = {
                 "kind": "local_controller_record",

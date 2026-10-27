@@ -687,6 +687,16 @@ def _execute(root, controller, operation):
         record = guard.custody.read("admission-" + purpose["selected"]["record_sha256"] + ".json")
         with _history_scope(root, controller, guard.custody, operation, record):
             original = session.snapshot_from_admission(record)
+            publication_policy = None
+            publication_baseline_ref = None
+            publication_ref = None
+            publication_held = False
+            if "publication_v1" in consumer or "publication_v1" in original:
+                import closer_coding_publication as publication
+
+                publication_policy = publication.validate_consumer_mode(
+                    purpose["consumer_id"], consumer, original
+                )
             limits = session.minimum_budget(original["budget"], current, policy["budget"])
             _need(
                 record["request"]["incumbent"].get("kind") != "no_incumbent",
@@ -708,6 +718,10 @@ def _execute(root, controller, operation):
                 "Implement this exact source-owned correction and required tests.\n"
                 + ctl.canonical(payload).decode()
             )
+            if publication_policy is not None:
+                publication_baseline_ref = publication.retain_baseline(
+                    root, controller, guard.custody, operation
+                )
             timeout = request_seconds(
                 root.installation.request_timeout_seconds,
                 remaining=operation["deadline"] - time.time(),
@@ -737,10 +751,31 @@ def _execute(root, controller, operation):
             terminal_ref = retain_terminal(
                 root, controller, guard.custody, operation, guard, result
             )
+            if publication_policy is not None:
+                try:
+                    publication_ref = publication.retain_handoff(
+                        root,
+                        controller,
+                        guard.custody,
+                        operation,
+                        publication_baseline_ref,
+                        result,
+                        terminal_ref,
+                    )
+                except Exception:
+                    # Coding is already known. Delivery refusal cannot erase it,
+                    # rerun the provider or mutate its actual result.
+                    publication_held = True
         return {
             "status": "completed",
             "coding_terminal_reference": terminal_ref,
             "actual": result,
+            **(
+                {"publication_handoff_reference": publication_ref}
+                if publication_ref is not None
+                else {}
+            ),
+            **({"publication_handoff_held": True} if publication_held else {}),
             **{key: False for key in _NO_AUTHORITY},
         }
 
