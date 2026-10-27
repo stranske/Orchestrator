@@ -40,7 +40,8 @@
     "tests/test_non_claude_data_only_candidate.py",
     "tests/test_nonpackage_dependency_audit.py",
     "tests/test_vibe_isolated_types_proof.py",
-    "tests/test_vibe_observing_backend.py"
+    "tests/test_vibe_observing_backend.py",
+    "tests/test_closer_correction_retained_ref.py"
   ],
   "shards": [
     [
@@ -584,7 +585,8 @@
       "tests/test_ux_review_adversary.py",
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_context_builder_wiring.py",
-      "tests/test_verifier_incomplete_roots.py"
+      "tests/test_verifier_incomplete_roots.py",
+      "tests/test_closer_correction_retained_ref.py"
     ]
   ]
 }
