@@ -13,12 +13,22 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from closer_inert_dispatcher_support import LOW, SECOND, InertCaller
+from test_dispatcher_controlled_data_only import world as _controlled_world
 
 import claims
 import closer_dispatcher as adapter
 import closer_evidence
 import closer_pipeline
 import closer_queue
+
+controlled_world = _controlled_world
+
+
+@pytest.fixture
+def inert_caller(controlled_world, monkeypatch):
+    return InertCaller(controlled_world, monkeypatch)
+
 
 TARGET = "o/r#7"
 SOURCE = "o/r#2"
@@ -734,8 +744,10 @@ def assert_nonpass_accounting_prompt_contract(prompt):
         "preserve every raw NON_PASS verdict, and leave decision.criteria empty",
         "Accounting never grants PASS or acceptance authority",
         "Resolved duplicate/nonissue claims still require exact raw evidence/proofs",
-        "repair still requires the existing coordinator authorization",
-        "Security/high-risk findings require senior review with classification uncertain and nonempty substantive_needs",
+        "Generic model writing is unavailable",
+        "no bounded executor is currently qualified",
+        "Missing tests require collection",
+        "Security/high-risk or conflicting-authority findings require existing qualified owner review with classification uncertain and nonempty substantive_needs",
         "If any finding identity, meaning, ownership, security implication, or safe routing remains uncertain",
         "return classification uncertain with nonempty substantive_needs",
         "do not hide uncertainty to fit the accounting path",
@@ -744,8 +756,11 @@ def assert_nonpass_accounting_prompt_contract(prompt):
     assert "Otherwise return classification uncertain" not in prompt
 
 
-def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(tmp_path, monkeypatch):
+def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(
+    tmp_path, monkeypatch, inert_caller
+):
     current = snapshot(
+        base="c" * 40,
         state="MERGED",
         merge=MERGE,
         verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
@@ -757,7 +772,9 @@ def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(tmp_
 
     def offload(*args, **kwargs):
         calls.append((args, kwargs))
-        return {"exit": 0, "output": '{"ready":true,"verdict":"PASS","merge":true}'}
+        return inert_caller.response(
+            {"exit": 0, "output": '{"ready":true,"verdict":"PASS","merge":true}'}, *args, **kwargs
+        )
 
     backend = closer(
         tmp_path,
@@ -767,8 +784,9 @@ def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(tmp_
         workspaces={"o/r": str(tmp_path)},
         offload_fn=offload,
     )
+    inert_caller.bind_worker(backend)
     result = backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))
-    assert result["advisory_only"] and result["status"] == "completed"
+    assert result["advisory_only"] and result["status"] == "completed", result
     import execution_profiles
 
     assert calls[0][1]["profile_id"] in execution_profiles.PROFILE_REGISTRY
@@ -783,16 +801,23 @@ def test_worker_result_is_advisory_and_cannot_supply_completion_disposition(tmp_
 
 
 def test_selective_exception_prompt_accounts_for_nonpass_without_pass_authority(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, inert_caller
 ):
-    current, prompts = snapshot(), []
+    current, prompts = (
+        snapshot(
+            base="c" * 40,
+        ),
+        [],
+    )
     _seed_exception_capacity(adapter.os.environ["HANDOFF_DIR"])
     monkeypatch.setitem(sys.modules, "capacity", SimpleNamespace(shed_marker=lambda agent: None))
     monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace())
 
     def offload(_agent, prompt, **kwargs):
         prompts.append(prompt)
-        return {"exit": 0, "output": '{"classification":"uncertain"}'}
+        return inert_caller.response(
+            {"exit": 0, "output": '{"classification":"uncertain"}'}, _agent, prompt, **kwargs
+        )
 
     backend = closer(
         tmp_path,
@@ -802,6 +827,7 @@ def test_selective_exception_prompt_accounts_for_nonpass_without_pass_authority(
         workspaces={"o/r": str(tmp_path)},
         offload_fn=offload,
     )
+    inert_caller.bind_worker(backend)
     backend.worker(
         TARGET,
         "collect_evidence",
@@ -1641,7 +1667,15 @@ def _seed_exception_capacity(
 
 
 def _private_worker(
-    tmp_path, monkeypatch, *, decision=None, result=None, real_admission=False, current=None
+    tmp_path,
+    monkeypatch,
+    *,
+    decision=None,
+    result=None,
+    real_admission=False,
+    current=None,
+    inert=None,
+    post_transport=False,
 ):
     calls = []
     if real_admission:
@@ -1652,7 +1686,8 @@ def _private_worker(
 
     def offload(*args, **kwargs):
         calls.append((args, kwargs))
-        return result or {"exit": 0, "output": "private advisory result"}
+        planned = result or {"exit": 0, "output": "private advisory result"}
+        return inert.response(planned, *args, **kwargs) if inert and not post_transport else planned
 
     monkeypatch.setitem(sys.modules, "dispatcher", SimpleNamespace(offload=offload))
 
@@ -1666,13 +1701,23 @@ def _private_worker(
     monkeypatch.setattr(adapter.subprocess, "run", mapped_git)
     backend = closer(
         tmp_path,
-        current or snapshot(),
+        current or (snapshot(base="c" * 40) if inert else snapshot()),
         apply=True,
         workers=True,
         workspaces={"o/r": str(tmp_path)},
         dispositions={TARGET: decision or {}},
         offload_fn=None if real_admission else offload,
     )
+    if inert:
+        inert.activate()
+        monkeypatch.setitem(
+            sys.modules, "dispatcher", __import__("closer_inert_dispatcher_support").dispatcher
+        )
+        if real_admission:
+            monkeypatch.setattr(
+                __import__("closer_inert_dispatcher_support").dispatcher, "offload", offload
+            )
+        inert.bind_worker(backend)
     return backend, calls
 
 
@@ -1684,15 +1729,23 @@ def test_unsafe_or_nonspecific_repair_paths_never_admit_writing_worker(
 ):
     decision = {"repair": {"head": HEAD, "prompt": "Correct the diagnosed bug", "paths": paths}}
     backend, calls = _private_worker(tmp_path, monkeypatch, decision=decision)
+    monkeypatch.setattr(
+        adapter,
+        "_exception_route",
+        lambda **kw: pytest.fail("unbound repair must not allocate a writer"),
+    )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    assert result["status"] == "blocked"
+    assert result["status"] == "pending"
+    assert result["reason"] == "registered_required_test_missing"
+    assert result["next_guarded_action"] == "collect_evidence"
+    assert result["pending_evidence"]["target"] == TARGET
     assert calls == []
 
 
 @pytest.mark.parametrize(
-    "trusted_plan", [False, True], ids=["diagnose-only", "integrated-mechanical-plan"]
+    "trusted_plan", [False, True], ids=["diagnose-only", "legacy-mechanical-plan"]
 )
-def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
+def test_repair_uses_no_generic_writer_until_executor_and_test_are_qualified(
     tmp_path, monkeypatch, trusted_plan
 ):
     decision = (
@@ -1701,21 +1754,29 @@ def test_repair_uses_readonly_luna_until_scoped_plan_then_supported_terra(
         else {}
     )
     backend, calls = _private_worker(tmp_path, monkeypatch, decision=decision)
-    assert backend.worker(TARGET, "repair", snapshot(), operation("repair"))["advisory_only"]
-    kwargs = calls[0][1]
-    assert kwargs["profile_id"] == (
-        "codex-5.6-terra-medium" if trusted_plan else "codex-6-luna-low"
+    monkeypatch.setattr(
+        adapter,
+        "_exception_route",
+        lambda **kw: pytest.fail("unqualified repair writer must never allocate"),
     )
-    assert kwargs["isolate"] is True
-    assert kwargs["mode"] == ("mid" if trusted_plan else "assess")
+    result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
+    assert result["status"] == "pending"
+    assert result["reason"] == "registered_required_test_missing"
+    assert result["pending_kind"] == "external_event"
+    assert result["authority"] is False
+    assert result["pending_evidence"]["revision"] == snapshot()["revision"]
+    assert calls == []
     assert backend.dispositions.get(TARGET) == decision
 
 
 @pytest.mark.parametrize(
     "failure", ["quota exceeded", "unsupported model", "authentication failed"]
 )
-def test_generic_error_does_not_hide_provider_failure_in_output(tmp_path, monkeypatch, failure):
+def test_generic_error_does_not_hide_provider_failure_in_output(
+    tmp_path, monkeypatch, failure, inert_caller
+):
     current = snapshot(
+        base="c" * 40,
         state="MERGED",
         merge=MERGE,
         verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
@@ -1725,26 +1786,24 @@ def test_generic_error_does_not_hide_provider_failure_in_output(tmp_path, monkey
         monkeypatch,
         result={"exit": 1, "error": "worker failed", "output": failure},
         current=current,
+        inert=inert_caller,
     )
     assert (
         backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))["status"]
         == "failed"
     )
-    assert backend.workers_unavailable
-    action, _, eligible, _ = backend.select(
-        snapshot(
-            target="o/r#8",
-            state="MERGED",
-            merge=MERGE,
-            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
-        )
-    )
-    assert action == "collect_evidence" and not eligible
-    assert len(calls) == 1
+    actual = inert_caller.results[0]
+    assert actual["raw_exit"] == 1 and actual["outcome_uncertain"] is True
+    assert actual["retry_safe"] is False and actual["output"] == ""
+    assert failure in actual["stderr_tail"]
+    assert not backend.dispositions.get(TARGET) and not backend.gh.calls
+    assert len(calls) == len(inert_caller.results) == 1
 
 
 @pytest.mark.parametrize("admitted", [False, True])
-def test_existing_campaign_guard_is_reused_and_caps_worker_timeout(tmp_path, monkeypatch, admitted):
+def test_existing_campaign_guard_is_reused_and_caps_worker_timeout(
+    tmp_path, monkeypatch, admitted, inert_caller
+):
     fake_home = tmp_path / "home"
     guard = fake_home / ".codex/automations/model-allocation/assess.py"
     guard.parent.mkdir(parents=True)
@@ -1758,11 +1817,20 @@ def test_existing_campaign_guard_is_reused_and_caps_worker_timeout(tmp_path, mon
     )
     monkeypatch.setattr(adapter.Path, "home", lambda: fake_home)
     handoff = adapter.Path(adapter.os.environ["HANDOFF_DIR"])
-    _seed_exception_capacity(handoff)
+    _seed_exception_capacity(handoff, profile_ids=(LOW, SECOND))
     capacity = handoff / "capacity.json"
     before = capacity.read_bytes()
-    backend, calls = _private_worker(tmp_path, monkeypatch, real_admission=True)
-    result = backend.worker(TARGET, "collect_evidence", snapshot(), operation("collect_evidence"))
+    inert_caller.timeout_seconds = 7
+    inert_caller.activate()
+    backend, calls = _private_worker(tmp_path, monkeypatch, real_admission=True, inert=inert_caller)
+    result = backend.worker(
+        TARGET,
+        "collect_evidence",
+        snapshot(
+            base="c" * 40,
+        ),
+        operation("collect_evidence"),
+    )
     if admitted:
         assert result["status"] == "completed" and calls[0][1]["timeout"] == 7
     else:
@@ -1800,7 +1868,15 @@ def test_repair_workspace_must_be_clean_and_match_approved_head(tmp_path, monkey
         )
 
     monkeypatch.setattr(adapter.subprocess, "run", mismatched_git)
-    assert backend.worker(TARGET, "repair", snapshot(), operation("repair"))["status"] == "deferred"
+    monkeypatch.setattr(
+        adapter, "_exception_route", lambda **kw: pytest.fail("no qualified repair executor")
+    )
+    result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
+    # Missing test/executor authority stops before any workspace invocation;
+    # physical exact-head/alias tests exercise the pure plan admission separately.
+    assert result["status"] == "pending"
+    assert result["reason"] == "registered_required_test_missing"
+    assert result["next_guarded_action"] == "collect_evidence"
     assert calls == []
 
 
@@ -1835,9 +1911,13 @@ def test_compare_label_waits_only_for_attributed_active_run_and_collects_other_o
         assert backend.gh.calls == []
 
 
-def test_pending_advisory_survives_restart_without_another_luna_call(tmp_path, monkeypatch):
-    backend, calls = _private_worker(tmp_path, monkeypatch)
-    current = snapshot()
+def test_pending_advisory_survives_restart_without_another_luna_call(
+    tmp_path, monkeypatch, inert_caller
+):
+    backend, calls = _private_worker(tmp_path, monkeypatch, inert=inert_caller)
+    current = snapshot(
+        base="c" * 40,
+    )
     op = operation("collect_evidence")
     result = backend.worker(TARGET, "collect_evidence", current, op)
     assert len(calls) == 1 and backend.observe(TARGET)["requires_coordinator"]
@@ -1851,20 +1931,23 @@ def test_pending_advisory_survives_restart_without_another_luna_call(tmp_path, m
         }
     }
     backend.state_path.write_text(json.dumps(persisted))
-    restarted, new_calls = _private_worker(tmp_path, monkeypatch)
+    restarted, new_calls = _private_worker(tmp_path, monkeypatch, inert=inert_caller)
     observed = restarted.observe(TARGET)
     assert observed["requires_coordinator"]
     assert restarted.integration_pending(TARGET, current) == op["id"]
     assert new_calls == [] and len(calls) == 1
 
 
-def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(tmp_path, monkeypatch):
+def test_integration_ack_is_bound_but_never_supplies_acceptance_or_merge(
+    tmp_path, monkeypatch, inert_caller
+):
     current = snapshot(
+        base="c" * 40,
         state="MERGED",
         merge=MERGE,
         verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
     )
-    backend, calls = _private_worker(tmp_path, monkeypatch, current=current)
+    backend, calls = _private_worker(tmp_path, monkeypatch, current=current, inert=inert_caller)
     original_binding = backend.observe(TARGET)["operation_binding"]
     op = operation("collect_evidence")
     backend.worker(TARGET, "collect_evidence", current, op)
@@ -2259,6 +2342,10 @@ def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkey
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
     adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
     result = captured["result"]
+    if case == "malformed_worker":
+        assert result["status"] == "uncertain"
+        assert not backend.gh.calls
+        return
     assert result["status"] == "deferred"
     assert result["reason"] == "validated_inner_wait"
     assert result["queue_receipt"]["stop_valid"] is True
@@ -2267,7 +2354,7 @@ def test_staged_adapter_emits_only_durable_validated_inner_wait(tmp_path, monkey
 
 
 def ordinary_nonpass_wait_fixture(
-    tmp_path, monkeypatch, *, fresh_revision=False, linked_subject=False
+    tmp_path, monkeypatch, *, fresh_revision=False, linked_subject=False, inert
 ):
     # Reuse the native input/comparison corpus fixture; do not stub integration.
     import test_closer_disposition
@@ -2298,7 +2385,13 @@ def ordinary_nonpass_wait_fixture(
         }
         for row in closer_disposition.pending_nonpass_findings(current, packet)
     ]
-    interpreted["substantive_needs"] = []
+    interpreted = inert.interpretation(current, packet, ref, interpreted["proposal"])
+    snapshot_path = tmp_path / "original-act-snapshot.json"
+    snapshot_path.write_text(json.dumps(current, sort_keys=True, separators=(",", ":")))
+    prepared["snapshot_ref"] = {
+        "path": str(snapshot_path),
+        "sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
+    }
     if fresh_revision:
         current["revision"] = "fresh-same-head-revision"
     monkeypatch.setattr(adapter, "GitHub", lambda **kwargs: FakeGitHub(current))
@@ -2333,11 +2426,11 @@ def ordinary_nonpass_wait_fixture(
 
 @pytest.mark.parametrize("linked_subject", [False, True])
 def test_helper_accounted_native_nonpass_becomes_typed_wait_without_acceptance(
-    tmp_path, monkeypatch, linked_subject
+    tmp_path, monkeypatch, linked_subject, inert_caller
 ):
     native_pipeline = closer_pipeline.run_pipeline
     current, prep, interpreted, path, backend, captured = ordinary_nonpass_wait_fixture(
-        tmp_path, monkeypatch, linked_subject=linked_subject
+        tmp_path, monkeypatch, inert=inert_caller, linked_subject=linked_subject
     )
     result = captured["first"]
     assert result["status"] == "deferred" and result["reason"] == "validated_inner_wait"
@@ -2395,7 +2488,7 @@ def test_helper_accounted_native_nonpass_becomes_typed_wait_without_acceptance(
 
 
 def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition_duplicate(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, inert_caller
 ):
     import test_closer_disposition
 
@@ -2412,7 +2505,15 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
     current, packet, ref, prep, interpreted = test_closer_disposition.fixture(
         tmp_path, native=True, dispositions=prior
     )
-    current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
+    current.update(
+        state="MERGED",
+        labels=[],
+        draft=False,
+        active_threads=0,
+        mergeable="MERGEABLE",
+        head_branch="feature",
+        head_repository="owner/repo",
+    )
     target = current["target"]
     prepared_snapshot = tmp_path / "prepared-snapshot.json"
     prepared_snapshot.write_text(json.dumps(current))
@@ -2438,13 +2539,13 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
         for row in closer_disposition.pending_nonpass_findings(current, packet)
     ]
     original_proposal = copy.deepcopy(proposal)
-    actual = {"exit": 0, "run_id": "offline-completed-low", "profile_id": "offline-low"}
+    actual = {"exit": 0, "run_id": "offline-completed-low", "profile_id": LOW}
     monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: FakeGitHub(current))
     monkeypatch.setattr(
         adapter,
         "_pipeline_low_route",
         lambda **_kwargs: (
-            {"agent": "codex", "profile_id": "offline-low", "pools": []},
+            {"agent": "claude", "profile_id": LOW, "pools": ["claude-subscription"]},
             "available",
         ),
     )
@@ -2452,7 +2553,10 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
     monkeypatch.setattr(
         dispatcher,
         "offload",
-        lambda *_args, **_kwargs: calls.append(True) or {**actual, "output": json.dumps(proposal)},
+        lambda *_args, **_kwargs: (
+            calls.append(True)
+            or inert_caller.response({**actual, "output": json.dumps(proposal)}, *_args, **_kwargs)
+        ),
     )
     integrations = []
     real_integrate = closer_disposition.integrate_ordinary
@@ -2466,6 +2570,8 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
     backend = closer(tmp_path, current)
     backend.campaign_admission = lambda *_args: {"allowed": True}
     path = adapter._pipeline_state_path(tmp_path / "state.json")
+
+    captured = {}
 
     def pipeline_stub(_path, _targets, **callbacks):
         context = {
@@ -2490,7 +2596,11 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
             closer_pipeline._bounded(
                 {**value, "integration_disposition": integrations[0]["disposition"]}, limit=32768
             )
-        result = callbacks["act"](target, {**context, "interpret": value})
+        captured.update(context=context, value=value)
+        return {"targets": {target: {"status": "deferred"}}}
+
+    def legacy_act_stub(_path, _targets, **callbacks):
+        result = callbacks["act"](target, {**captured["context"], "interpret": captured["value"]})
         assert len(integrations) == 2  # Native action independently rechecks all original proof.
         assert integrations[1] == integrations[0]
         assert result["reason"] == "validated_inner_wait"
@@ -2505,13 +2615,17 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
 
     monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
+    inert_caller.staged(args, [target], backend, time.time() + 360)
+    monkeypatch.setattr(closer_pipeline, "run_pipeline", legacy_act_stub)
+    import closer_inert_dispatcher_support as support
+
+    support.REAL_STAGED(args, [target], backend, time.time() + 360)
     assert calls == [True] and backend.gh.calls == []
 
 
-def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeypatch):
+def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeypatch, inert_caller):
     current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
-        tmp_path, monkeypatch
+        tmp_path, monkeypatch, inert=inert_caller
     )
     first = captured["first"]
     proof = first["resource_evidence"]["inner_wait"]
@@ -2594,10 +2708,10 @@ def test_native_nonpass_wait_survives_real_interpreter_restart(tmp_path, monkeyp
     ],
 )
 def test_nonpass_wait_requires_exact_retained_disposition_and_current_native_proof(
-    tmp_path, monkeypatch, mutation
+    tmp_path, monkeypatch, mutation, inert_caller
 ):
     current, prep, _interpreted, path, _backend, captured = ordinary_nonpass_wait_fixture(
-        tmp_path, monkeypatch
+        tmp_path, monkeypatch, inert=inert_caller
     )
     result = captured["first"]
     proof = copy.deepcopy(result["resource_evidence"]["inner_wait"])
@@ -2651,9 +2765,11 @@ def test_nonpass_wait_requires_exact_retained_disposition_and_current_native_pro
     )
 
 
-def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(tmp_path, monkeypatch):
+def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(
+    tmp_path, monkeypatch, inert_caller
+):
     current, prep, _interpreted, _path, _backend, captured = ordinary_nonpass_wait_fixture(
-        tmp_path, monkeypatch, fresh_revision=True
+        tmp_path, monkeypatch, inert=inert_caller, fresh_revision=True
     )
     assert captured["first"]["status"] == "completed"
     assert captured["first"]["target_complete"] is False
@@ -2661,6 +2777,88 @@ def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(tmp_path
     context["revision"] = current["revision"]
     context["prepare"]["revision"] = current["revision"]
     context["prepare"]["snapshot"] = current
+    import closer_inert_dispatcher_support as support
+
+    old_ref = prep["packet_ref"]
+    old_packet = json.loads(Path(old_ref["path"]).read_bytes())
+    root = tmp_path / "fresh-native-evidence"
+    artifacts = (
+        old_packet["sections"]["ci_artifacts"]["content"]["artifacts"]
+        + old_packet["sections"]["native_merge_verifier"]["content"]["artifacts"]
+    )
+
+    def api(endpoint, **kwargs):
+        if "/actions/runs?" in endpoint:
+            return {"workflow_runs": [{"id": 7, "head_sha": current["head"]}]}
+        if endpoint.endswith("/runs/7"):
+            return {
+                "id": 7,
+                "run_attempt": 2,
+                "head_sha": current["head"],
+                "status": "completed",
+                "conclusion": "success",
+                "pull_requests": [{"number": 12}],
+            }
+        if endpoint.endswith("/runs/7/artifacts?per_page=100"):
+            return {
+                "artifacts": [{"id": 9, "name": "tests", "size_in_bytes": 100, "expired": False}]
+            }
+        if endpoint.endswith("/runs/34"):
+            return {
+                "id": 34,
+                "run_attempt": 1,
+                "event": "pull_request_target",
+                "path": ".github/workflows/agents-verifier.yml",
+                "status": "completed",
+                "conclusion": "success",
+                "repository": {"full_name": "owner/repo"},
+                "head_sha": current["head"],
+                "pull_requests": [],
+            }
+        if endpoint.endswith("/runs/34/artifacts?per_page=100"):
+            return {
+                "artifacts": [
+                    {"id": 35, "name": "native-input", "size_in_bytes": 100, "expired": False}
+                ]
+            }
+        return {}
+
+    refreshed = support.REAL_COLLECT(
+        current,
+        api,
+        root,
+        previous=old_packet,
+        refresh_sections=set(),
+        artifact_fetch=lambda artifact, **kwargs: Path(
+            next(row["archive"]["path"] for row in artifacts if row["id"] == artifact["id"])
+        ).read_bytes(),
+    )
+    manifest = root / "manifests" / (refreshed["manifest"]["packet_sha256"] + ".json")
+    ref = {"path": str(manifest), "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()}
+    snapshot_path = tmp_path / "fresh-native-snapshot.json"
+    snapshot_path.write_text(json.dumps(current, sort_keys=True, separators=(",", ":")))
+    context["prepare"].update(
+        packet_ref=ref,
+        snapshot_ref={
+            "path": str(snapshot_path),
+            "sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
+        },
+        producer_sha256=refreshed["producer_sha256"],
+        evidence_summary={"section_digests": refreshed["section_digests"]},
+    )
+    proposal = copy.deepcopy(context["interpret"]["proposal"])
+    import closer_disposition
+
+    proposal["resolutions"] = [
+        {
+            "finding_id": row["finding_id"],
+            "status": "unresolved_missing_evidence",
+            "next_guarded_action": "wait",
+            "reason": "Original acceptance proof remains missing; source-owned follow-up required",
+        }
+        for row in closer_disposition.pending_nonpass_findings(current, refreshed)
+    ]
+    context["interpret"] = inert_caller.interpretation(current, refreshed, ref, proposal)
     second = captured["act"](current["target"], context)
     assert second["status"] == "deferred" and second["reason"] == "validated_inner_wait"
 
@@ -2992,52 +3190,60 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
     assert adapter._pipeline_capacity()["low"] == 1
 
 
-def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path, monkeypatch):
-    stub_action_readiness_for_transport_test(monkeypatch)
+def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(
+    tmp_path, monkeypatch, inert_caller
+):
     import threading
     from concurrent.futures import ThreadPoolExecutor
+
+    from test_closer_batch_interpretation import bound_adjudication
+    from test_closer_disposition import fixture
 
     import closer_evidence
     import closer_pipeline
     import dispatcher
-    import execution_profiles
 
+    bound_snap, packet, bound_ref, _prep, interpretation = fixture(tmp_path / "bound-pool")
+    target = bound_snap["target"]
     current = snapshot(
+        **bound_snap,
         state="MERGED",
         merge=MERGE,
-        base="c" * 40,
         verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
     )
-    packet = {
-        "schema": "closer-evidence/v1",
-        "target": TARGET,
-        "head": HEAD,
-        "base": current["base"],
-        "producer_sha256": "d" * 64,
-        "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
-        "sections": {},
-        "manifest": {"packet_sha256": "f" * 64},
-    }
+    other = "owner/repo#13"
+    other_snapshot = snapshot(**{**current, "target": other})
+    other_packet, other_ref, other_proposal = inert_caller.packet(
+        other_snapshot, tmp_path / "other-pool"
+    )
+    proposal = bound_adjudication(other_proposal, disputed=True)
+    snapshots = {target: current, other: other_snapshot}
 
     class PreparedGitHub(FakeGitHub):
         def __init__(self, *, deadline):
             super().__init__(current)
             self.deadline = deadline
 
+        def snapshot(self, target):
+            return copy.deepcopy(snapshots[target])
+
     monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
-    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
-    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
+    monkeypatch.setattr(
+        closer_evidence,
+        "collect_evidence",
+        lambda snap, *a, **kw: packet if snap["target"] == target else other_packet,
+    )
     monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
     monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 1, "low": 1, "exception": 1})
 
     def reserve_low_route(**kwargs):
-        if "codex-low" in kwargs["unavailable_profiles"]:
+        if LOW in kwargs["unavailable_profiles"]:
             return (None, "exhausted")
         load = kwargs["load"]
-        load["codex"] = load.get("codex", 0) + 1
-        load["pool:codex-subscription"] = load.get("pool:codex-subscription", 0) + 1
+        load["claude"] = load.get("claude", 0) + 1
+        load["pool:claude-subscription"] = load.get("pool:claude-subscription", 0) + 1
         return (
-            {"agent": "codex", "profile_id": "codex-low", "pools": ["codex-subscription"]},
+            {"agent": "claude", "profile_id": LOW, "pools": ["claude-subscription"]},
             "available",
         )
 
@@ -3045,49 +3251,32 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
 
     def reserve_exception_route(**kwargs):
         load = kwargs["load"]
-        if load.get("pool:codex-subscription", 0):
+        if load.get("pool:claude-subscription", 0):
             return (None, "busy")
-        load["codex"] = load.get("codex", 0) + 1
-        load["pool:codex-subscription"] = load.get("pool:codex-subscription", 0) + 1
+        load["claude"] = load.get("claude", 0) + 1
+        load["pool:claude-subscription"] = load.get("pool:claude-subscription", 0) + 1
         return (
             {
-                "agent": "codex",
-                "profile_id": "codex-strong",
-                "pools": ["codex-subscription"],
+                "agent": "claude",
+                "profile_id": SECOND,
+                "pools": ["claude-subscription"],
                 "mode": "assess",
             },
             "available",
         )
 
     monkeypatch.setattr(adapter, "_exception_route", reserve_exception_route)
-    monkeypatch.setattr(execution_profiles, "default_codex_profile", lambda _task: "codex-strong")
-    monkeypatch.setattr(
-        execution_profiles,
-        "PROFILE_REGISTRY",
-        {"codex-strong": {"capacity_pool_ids": ["codex-subscription"]}},
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_fresh_capacity_report",
-        lambda: {
-            "profiles": {
-                "codex-strong": {
-                    "state": "ok",
-                    "capacity_pool_ids": ["codex-subscription"],
-                }
-            },
-            "pools": {"codex-subscription": {"state": "ok"}},
-        },
-    )
-    # Routing is stubbed in this semantic test; the execution-pool suite uses real profiles.
-    monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda *a, **kw: [])
     entered = threading.Event()
     release = threading.Event()
 
     def offload(*_args, **_kwargs):
         entered.set()
         assert release.wait(5)
-        return {"exit": 1, "run_id": "transport-failure", "error": "offline fixture"}
+        return inert_caller.response(
+            {"exit": 1, "run_id": "transport-failure", "error": "offline fixture"},
+            *_args,
+            **_kwargs,
+        )
 
     monkeypatch.setattr(dispatcher, "offload", offload)
     backend = closer(tmp_path, current, apply=True, workers=True)
@@ -3100,22 +3289,22 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
     captured = {}
 
     def pipeline_stub(_path, _targets, **callbacks):
-        prep = callbacks["prepare"](TARGET, {"deadline": time.time() + 60})
-        retained = tmp_path / "pool-evidence-packet.json"
-        retained.write_text(json.dumps(packet))
-        prep["packet_ref"] = {
-            "path": str(retained),
-            "sha256": adapter.hashlib.sha256(retained.read_bytes()).hexdigest(),
-        }
+        prep = callbacks["prepare"](target, {"deadline": time.time() + 60})
+        prep["packet_ref"] = bound_ref
+        other_prepared = callbacks["prepare"](other, {"deadline": time.time() + 60})
+        other_prepared["packet_ref"] = other_ref
         context = {"prepare": prep, "deadline": time.time() + 60}
         with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(callbacks["interpret"], TARGET, context)
+            future = pool.submit(callbacks["interpret"], target, context)
             assert entered.wait(5)
             result = callbacks["exception"](
-                TARGET,
+                other,
                 {
-                    "prepare": prep,
-                    "interpret": {"proposal": {}, "substantive_needs": []},
+                    "prepare": other_prepared,
+                    "interpret": {
+                        "proposal": proposal,
+                        "substantive_needs": ["named criterion dispute"],
+                    },
                     "deadline": context["deadline"],
                     "work_key": "exception-capacity-test",
                 },
@@ -3123,14 +3312,14 @@ def test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof(tmp_path,
             captured["result"] = result
             release.set()
             future.result(timeout=5)
-        return {"targets": {TARGET: {"status": "deferred"}}}
+        return {"targets": {target: {"status": "deferred"}}}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    inert_caller.staged(args, [target, other], backend, time.time() + 360)
 
     deferred = captured["result"]
-    assert deferred["reason"] == "worker_capacity"
+    assert deferred["reason"] == "worker_capacity", json.dumps(deferred, sort_keys=True)
     assert deferred["resource_evidence"]["capacity"]["active"] == 1
     assert closer_pipeline._valid_worker_capacity(deferred["resource_evidence"], time.time())
 
@@ -3309,12 +3498,10 @@ def test_low_proposal_accepts_only_one_complete_json_document():
 )
 @pytest.mark.parametrize("fenced", [False, True], ids=["plain-json", "single-json-fence"])
 def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
-    tmp_path, monkeypatch, fenced, premerge
+    tmp_path, monkeypatch, fenced, premerge, inert_caller
 ):
-    stub_action_readiness_for_transport_test(monkeypatch)
     from subprocess import CompletedProcess
 
-    import closer_disposition
     import closer_evidence
     import dispatcher
 
@@ -3331,54 +3518,10 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
     raw = tmp_path / "receipt.xml"
     raw.write_text("<testsuite tests='1'><testcase name='pass'/></testsuite>")
     ref = {"path": str(raw), "sha256": hashlib.sha256(raw.read_bytes()).hexdigest()}
-    decision = {
-        "reviewer": "pipeline:real-run-1",
-        "head": HEAD,
-        "source_digest": adapter.source_digest(current["sources"]),
-        "review_revision": current["review_revision"],
-        "criteria": [
-            {
-                "source": source["target"],
-                "criterion": criterion,
-                "result": "PASS",
-                "evidence": [ref],
-            }
-            for source in current["sources"]
-            for criterion in [source["body"], *adapter.requirements(source["body"])]
-        ],
-    }
-    packet = {
-        "schema": "closer-evidence/v1",
-        "producer_sha256": "d" * 64,
-        "target": TARGET,
-        "head": HEAD,
-        "base": current["base"],
-        "section_digests": {"source": "a", "ci_artifacts": "b"},
-        "sections": {
-            "source": {
-                "status": "complete",
-                "reason": None,
-                "content": [],
-                "provenance": {},
-                "truncated": False,
-            },
-            "ci_artifacts": {
-                "status": "partial",
-                "reason": None,
-                "content": {"payload": "x" * 30000},
-                "provenance": {},
-                "truncated": False,
-            },
-            "diff_files": {
-                "status": "complete",
-                "reason": None,
-                "content": {"patch": "y" * 30000},
-                "provenance": {},
-                "truncated": False,
-            },
-        },
-        "manifest": {"packet_sha256": "packet"},
-    }
+    packet, actual_packet_ref, response = inert_caller.packet(
+        current, tmp_path / "state.json.evidence"
+    )
+    ref = response["decision"]["criteria"][0]["evidence"][0]
 
     class PreparedGitHub(FakeGitHub):
         def __init__(self, *, deadline):
@@ -3387,22 +3530,15 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
 
     monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
 
-    def collect(_snap, _api, retained_dir, **_kwargs):
-        path = Path(retained_dir) / "manifests" / "packet.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(packet))
-        return packet
-
-    monkeypatch.setattr(closer_evidence, "collect_evidence", collect)
-    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
+    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_k: packet)
     monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
     monkeypatch.setattr(
         adapter,
         "_pipeline_low_route",
         lambda **kw: (
-            ({"agent": "gemini", "profile_id": "gemini-low", "pools": []}, "available")
+            ({"agent": "claude", "profile_id": LOW, "pools": ["claude-subscription"]}, "available")
             if kw.get("with_status")
-            else {"agent": "gemini", "profile_id": "gemini-low", "pools": []}
+            else {"agent": "claude", "profile_id": LOW, "pools": ["claude-subscription"]}
         ),
     )
     worker_calls = []
@@ -3410,36 +3546,21 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
 
     def low_worker(_agent, prompt, **_kwargs):
         prompts.append(prompt)
-        payload = json.dumps(
+        payload = json.dumps(response)
+        return inert_caller.response(
             {
-                "target": TARGET,
-                "head": HEAD,
-                "base": current["base"],
-                "classification": "relevant",
-                "substantive_needs": [],
-                "findings": [],
-                "decision": {"criteria": []},
-            }
+                "exit": 0,
+                "run_id": "real-run-1",
+                "model": "gemini-test",
+                "profile_id": LOW,
+                "output": f"```json\n{payload}\n```" if fenced else payload,
+            },
+            _agent,
+            prompt,
+            **_kwargs,
         )
-        return {
-            "exit": 0,
-            "run_id": "real-run-1",
-            "model": "gemini-test",
-            "profile_id": "gemini-low",
-            "output": f"```json\n{payload}\n```" if fenced else payload,
-        }
 
     monkeypatch.setattr(dispatcher, "offload", low_worker)
-    monkeypatch.setattr(
-        closer_disposition,
-        "integrate_ordinary",
-        lambda *_a, **_k: {
-            "status": "accepted",
-            "reason": "validated raw receipt",
-            "disposition": decision,
-            "raw_findings": [],
-        },
-    )
     guarded, closed = [], []
 
     def close_sources(current_backend, target, captured, **_kwargs):
@@ -3473,7 +3594,11 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
             target,
             observed["action"],
             observed,
-            {"deadline": deadline, "id": "fake-queue-operation", "owner": "inert-test-queue"},
+            {
+                "deadline": deadline if deadline is not None else time.time() + 60,
+                "id": "fake-queue-operation",
+                "owner": "inert-test-queue",
+            },
         )
         return {
             "stop_valid": True,
@@ -3500,7 +3625,7 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
             assert interpreted["classification"] == "deterministic_merge"
             assert "actual" not in interpreted
         else:
-            assert interpreted["actual"]["run_id"] == "real-run-1"
+            assert interpreted["actual"]["run_id"] == inert_caller.results[-1]["run_id"]
         action = kwargs["act"](
             TARGET,
             {
@@ -3516,7 +3641,7 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=fake_pipeline))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    result = adapter._run_staged_pipeline(args, [TARGET], backend, time.time() + 360)
+    result = inert_caller.staged(args, [TARGET], backend, time.time() + 360, deterministic=premerge)
     assert result["targets"][TARGET]["status"] in {"completed", "pending", "deferred"}
     if premerge:
         assert prompts == [] and closed == []
@@ -3530,7 +3655,7 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
         mandatory = prompts[0].split(
             "Bounded packet samples (optional; refs above are authoritative):", 1
         )[0]
-        prepared_ref = tmp_path / "state.json.evidence" / "manifests" / "packet.json"
+        prepared_ref = Path(actual_packet_ref["path"])
         assert prepared_ref.is_file() and str(prepared_ref) in mandatory
         assert adapter.evidence_file_ok(ref)
     assert not worker_calls
@@ -3809,16 +3934,24 @@ def test_deterministic_dispatcher_states_skip_low_provider_stage(tmp_path, monke
     ["transport", "refusal", "inspection", "malformed", "quota", "quota_normal_exit"],
 )
 def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
-    tmp_path, monkeypatch, failure_kind
+    tmp_path, monkeypatch, failure_kind, inert_caller
 ):
-    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_disposition
     import closer_evidence
     import dispatcher
 
     first, second = "o/r#31", "o/r#32"
     base = "c" * 40
-    snapshots = {target: snapshot(target=target, base=base) for target in (first, second)}
+    snapshots = {
+        target: snapshot(
+            target=target,
+            base=base,
+            state="MERGED",
+            merge=MERGE,
+            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+        )
+        for target in (first, second)
+    }
 
     class PreparedGitHub(FakeGitHub):
         def __init__(self, *, deadline):
@@ -3829,7 +3962,6 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
             return copy.deepcopy(snapshots[target])
 
     monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
-    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _p: True)
     monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_a, **_k: [])
     backend = closer(tmp_path, snapshots[first])
     monkeypatch.setattr(
@@ -3838,14 +3970,14 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     route_profiles = []
 
     def select_route(*, load, unavailable_profiles, with_status=False, data_only=False):
-        if "gemini-low" not in unavailable_profiles:
-            profile = "gemini-low"
-        elif "claude-low" not in unavailable_profiles:
-            profile = "claude-low"
+        if LOW not in unavailable_profiles:
+            profile = LOW
+        elif SECOND not in unavailable_profiles:
+            profile = SECOND
         else:
             return (None, "exhausted") if with_status else None
         route_profiles.append(profile)
-        route = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
+        route = {"agent": "claude", "profile_id": profile, "pools": ["claude-subscription"]}
         return (route, "available") if with_status else route
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", select_route)
@@ -3867,48 +3999,59 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         assert kwargs["data_only"] is True
         assert "Inspect only supplied inline content; do not open retained paths" in _prompt
         assert "read-only commands such as python3 -c" not in _prompt
-        if profile == "gemini-low" and kwargs["subject_id"] == first:
+        if profile == LOW and kwargs["subject_id"] == first:
             result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
-            if failure_kind in {"refusal", "inspection", "quota_normal_exit"}:
+            if failure_kind in {"refusal", "inspection"}:
+                reason = (
+                    "Qualifying evidence is missing and the operational check is future-dated."
+                    if failure_kind == "refusal"
+                    else "Read-only inspection cannot create a temporary file."
+                )
                 result.update(
-                    exit=70,
-                    raw_exit=0,
-                    error="agent reported OFFLOAD_INCOMPLETE",
-                    output=(
-                        "OFFLOAD_INCOMPLETE: Cannot truthfully provide required PASS rows: "
-                        "qualifying evidence is missing and the operational check is future-dated."
-                        if failure_kind == "refusal"
-                        else "OFFLOAD_INCOMPLETE: read-only inspection could not create a temporary file."
+                    exit=0,
+                    output=json.dumps(
+                        {
+                            "target": first,
+                            "head": HEAD,
+                            "base": base,
+                            "classification": "uncertain",
+                            "substantive_needs": [reason],
+                            "findings": [],
+                            "decision": {"criteria": []},
+                        }
                     ),
                 )
-            if failure_kind == "malformed":
-                result.update(exit=0, output='{"classification": "uncertain",')
-            if failure_kind in {"quota", "quota_normal_exit"}:
-                if failure_kind == "quota":
-                    result.update(exit=3, raw_exit=3)
-                result["rate_incident_evidence"] = {
-                    "category": "quota_exhausted",
-                    "is_authoritative": True,
-                    "evidence_hash": "f" * 64,
-                }
-            return result
-        return {
-            "exit": 0,
-            "run_id": "dispatch-success-32",
-            "model": "claude-test",
-            "profile_id": profile,
-            "output": json.dumps(
-                {
-                    "target": kwargs["subject_id"],
-                    "head": HEAD,
-                    "base": base,
-                    "classification": "relevant",
-                    "substantive_needs": [],
-                    "findings": [],
-                    "decision": {"criteria": []},
-                }
-            ),
-        }
+            elif failure_kind == "malformed":
+                result.update(exit=0, output='{"classification":"uncertain",')
+            elif failure_kind == "quota":
+                result.update(exit=3, error="quota exhausted")
+            elif failure_kind == "quota_normal_exit":
+                result.update(
+                    exit=0, output="{}", error="quota exhausted", _native_mode="native_error"
+                )
+            return inert_caller.response(result, _agent, _prompt, **kwargs)
+        return inert_caller.response(
+            {
+                "exit": 0,
+                "run_id": "dispatch-success-32",
+                "model": "claude-test",
+                "profile_id": profile,
+                "output": json.dumps(
+                    {
+                        "target": kwargs["subject_id"],
+                        "head": HEAD,
+                        "base": base,
+                        "classification": "relevant",
+                        "substantive_needs": [],
+                        "findings": [],
+                        "decision": {"criteria": []},
+                    }
+                ),
+            },
+            _agent,
+            _prompt,
+            **kwargs,
+        )
 
     monkeypatch.setattr(dispatcher, "offload", offload)
     integrations = []
@@ -3916,7 +4059,7 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
 
     def integrate(target, *_a, **_k):
         integrations.append(target)
-        return {"status": "wait", "reason": "evidence incomplete", "raw_findings": []}
+        return ordinary_validation(target, *_a, **_k)
 
     # Interpretation must not submit a refusal/malformed response for acceptance.
     monkeypatch.setattr(
@@ -3926,22 +4069,15 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     )
 
     def packet_for(target):
-        packet = {
-            "schema": "closer-evidence/v1",
-            "target": target,
-            "head": HEAD,
-            "base": base,
-            "producer_sha256": "d" * 64,
-            "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
-            "sections": {},
-            "manifest": {"packet_sha256": target.replace("/", "_").replace("#", "-")},
-        }
-        path = tmp_path / (target.replace("/", "_").replace("#", "-") + ".json")
-        path.write_text(json.dumps(packet))
+        packet, actual_ref, _proposal = inert_caller.packet(
+            snapshots[target], tmp_path / (target.replace("/", "_").replace("#", "-") + ".evidence")
+        )
+        path = Path(actual_ref["path"])
         snap = snapshots[target]
         snapshot_path = tmp_path / (target.replace("/", "_").replace("#", "-") + ".snapshot.json")
         snapshot_path.write_text(json.dumps(snap, sort_keys=True, separators=(",", ":")))
         return {
+            "proposal": {"action": backend.select(snap)[0]},
             "revision": snap["revision"],
             "identity": target,
             "producer_sha256": packet["producer_sha256"],
@@ -3961,7 +4097,11 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
                 "path": str(path),
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             },
-            "evidence_summary": {"drift_sample": [], "sections": {}},
+            "evidence_summary": {
+                "drift_sample": [],
+                "sections": {},
+                "section_digests": packet["section_digests"],
+            },
         }
 
     def pipeline_stub(_path, targets, **callbacks):
@@ -3970,101 +4110,61 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
             values[target] = callbacks["interpret"](
                 target, {"prepare": packet_for(target), "deadline": time.time() + 60}
             )
-        if failure_kind in {"refusal", "inspection", "malformed"}:
-            assert values[first]["actual"]["run_id"] == "dispatch-failed-31"
+        assert all(
+            "actual" in value or value.get("status") == "uncertain" for value in values.values()
+        ), json.dumps(values, sort_keys=True)
+        if failure_kind in {"transport", "quota", "quota_normal_exit"}:
+            assert values[first]["status"] == "uncertain", values[first]
+            actual = values[first]["provider_outcome"]["actual"]
+            assert actual["run_id"] == inert_caller.results[0]["run_id"]
+            assert actual["retry_safe"] is False
+            assert actual["raw_exit"] == (
+                {"transport": 1, "quota": 3, "quota_normal_exit": 0}[failure_kind]
+            )
+            assert inert_caller.results[0]["outcome_uncertain"] is True
+            assert inert_caller.results[0]["output"] == ""
+            assert not values[first].get("integration_disposition")
+        else:
+            assert values[first]["actual"]["run_id"] == inert_caller.results[0]["run_id"]
+            assert values[first]["actual"]["exit"] == 0
             assert values[first]["classification"] == "uncertain"
             assert values[first]["substantive_needs"]
-            assert values[first]["integration_status"] == "wait"
-            assert not values[first]["integration_disposition"]
+            assert values[first]["integration_status"] != "accepted"
+            assert not values[first].get("integration_disposition")
             assert not values[first]["prior_provider_failures"]
-            if failure_kind != "malformed":
-                assert values[first]["actual"]["exit"] == 70
-                assert values[first]["actual"]["raw_exit"] == 0
-                assert values[first]["substantive_needs"] == ["incomplete_low_assessment"]
-                assert "OFFLOAD_INCOMPLETE" in values[first]["proposal"]["raw_excerpt"]
-                # A later action may validate the original receipt again. It
-                # must still reject its actual exit70, regardless of raw_exit0.
-                guarded = ordinary_validation(first, snapshots[first], {}, {}, values[first])
-                assert guarded["status"] == "wait"
-                assert guarded["reason"] == "worker_execution_unverified"
-                assert not guarded.get("disposition")
-        else:
-            assert values[first]["actual"]["run_id"] == "dispatch-success-32"
-            assert values[first]["prior_provider_failures"][0]["run_id"] == "dispatch-failed-31"
-        assert values[second]["actual"]["run_id"] == "dispatch-success-32"
+        assert values[second]["actual"]["run_id"] == inert_caller.results[-1]["run_id"]
         return {"targets": values}
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [first, second], backend, time.time() + 360)
-    if failure_kind in {"refusal", "inspection", "malformed"}:
-        assert route_profiles == ["gemini-low", "gemini-low"]
-        assert integrations == [second]
-    else:
-        assert route_profiles == ["gemini-low", "claude-low", "claude-low"]
-        assert integrations == [first, second]
+    inert_caller.staged(args, [first, second], backend, time.time() + 360)
+    assert route_profiles == [LOW, LOW]
     assert provider_profiles == route_profiles
-
-    if failure_kind != "transport":
-        return
-
-    route_profiles.clear()
-    provider_profiles.clear()
-
-    def fail_all(_agent, _prompt, **kwargs):
-        profile = kwargs["profile_id"]
-        provider_profiles.append(profile)
-        return {
-            "exit": 1,
-            "run_id": f"dispatch-failed-{len(provider_profiles)}",
-            "error": "provider unavailable",
-        }
-
-    monkeypatch.setattr(dispatcher, "offload", fail_all)
-    backend = closer(tmp_path, snapshots[first])
-    monkeypatch.setattr(
-        backend, "campaign_admission", lambda *_a, **_k: {"allowed": True, "timeout": 60}
+    assert len(inert_caller.results) == 2
+    assert integrations == (
+        [second]
+        if failure_kind in {"transport", "quota", "quota_normal_exit", "malformed"}
+        else [first, second]
     )
-    last = {}
-
-    def all_failed_pipeline_stub(_path, _targets, **callbacks):
-        last.update(
-            callbacks["interpret"](
-                first, {"prepare": packet_for(first), "deadline": time.time() + 60}
-            )
-        )
-        return {"targets": {first: last}}
-
-    monkeypatch.setitem(
-        sys.modules,
-        "closer_pipeline",
-        SimpleNamespace(run_pipeline=all_failed_pipeline_stub),
-    )
-    adapter._run_staged_pipeline(args, [first], backend, time.time() + 360)
-    assert last["reason"] == "provider_failure"
-    assert [row["run_id"] for row in last["resource_evidence"]["provider_failure"]["attempts"]] == [
-        "dispatch-failed-1",
-        "dispatch-failed-2",
-    ]
-    assert all(
-        len(row["evidence_hash"]) == 64 and row["category"] == "transport_error"
-        for row in last["resource_evidence"]["provider_failure"]["attempts"]
-    )
-    assert route_profiles == ["gemini-low", "claude-low"]
-    assert provider_profiles == route_profiles
+    assert backend.dispositions == {} and backend.gh.calls == []
 
 
 @pytest.mark.parametrize("accounting_pending", [False, True])
 def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
-    tmp_path, monkeypatch, accounting_pending
+    tmp_path, monkeypatch, accounting_pending, inert_caller
 ):
-    stub_action_readiness_for_transport_test(monkeypatch)
     import closer_evidence
     import dispatcher
 
     target = "o/r#41"
     base = "c" * 40
-    current = snapshot(target=target, base=base)
+    current = snapshot(
+        target=target,
+        base=base,
+        state="MERGED",
+        merge=MERGE,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
 
     class PreparedGitHub(FakeGitHub):
         def __init__(self, *, deadline):
@@ -4075,7 +4175,6 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
             return copy.deepcopy(current)
 
     monkeypatch.setattr(adapter, "GitHub", PreparedGitHub)
-    monkeypatch.setattr(closer_evidence, "validate_packet", lambda _packet: True)
     monkeypatch.setattr(closer_evidence, "drift_sample", lambda *_args, **_kwargs: [])
     backend = closer(tmp_path, current)
     monkeypatch.setattr(
@@ -4084,9 +4183,9 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
     chosen = []
 
     def route(*, load, unavailable_profiles, with_status=False, data_only=False):
-        profile = "gemini-low" if "gemini-low" not in unavailable_profiles else "claude-low"
+        profile = LOW if LOW not in unavailable_profiles else SECOND
         chosen.append(profile)
-        value = {"agent": profile.split("-")[0], "profile_id": profile, "pools": []}
+        value = {"agent": "claude", "profile_id": profile, "pools": ["claude-subscription"]}
         return (value, "available") if with_status else value
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", route)
@@ -4113,28 +4212,21 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
                     "status": "pending",
                 },
             )
-        return result
+        return inert_caller.response(result, agent, _prompt, **kwargs)
 
     monkeypatch.setattr(dispatcher, "offload", offload)
     packets = {}
 
     def prepare(target_name):
-        packet = {
-            "schema": "closer-evidence/v1",
-            "target": target_name,
-            "head": HEAD,
-            "base": base,
-            "producer_sha256": "d" * 64,
-            "semantic_cache_key": "closer-evidence-semantic/v1:" + "e" * 64,
-            "sections": {},
-            "manifest": {"packet_sha256": "f" * 64},
-        }
-        packet_path = tmp_path / "uncertain-packet.json"
-        packet_path.write_text(json.dumps(packet))
+        packet, actual_ref, _proposal = inert_caller.packet(
+            current, tmp_path / "uncertain.evidence"
+        )
+        packet_path = Path(actual_ref["path"])
         snap = copy.deepcopy(current)
         snap_path = tmp_path / "uncertain-snapshot.json"
         snap_path.write_text(json.dumps(snap, sort_keys=True, separators=(",", ":")))
         prepared = {
+            "proposal": {"action": backend.select(snap)[0]},
             "revision": snap["revision"],
             "identity": target_name,
             "semantic_cache_key": packet["semantic_cache_key"],
@@ -4164,8 +4256,10 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
             target_name,
             {"prepare": prepare(target_name), "deadline": time.time() + 60},
         )
-        assert interpreted["status"] == "uncertain"
-        assert interpreted["provider_outcome"]["actual"]["run_id"] == ("agy-turn-still-running-41")
+        assert interpreted["status"] == "uncertain", interpreted
+        assert (
+            interpreted["provider_outcome"]["actual"]["run_id"] == inert_caller.results[0]["run_id"]
+        )
         if accounting_pending:
             actual = interpreted["provider_outcome"]["actual"]
             assert actual["provider_completed"] and actual["raw_exit"] == 0
@@ -4175,10 +4269,10 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
 
     monkeypatch.setitem(sys.modules, "closer_pipeline", SimpleNamespace(run_pipeline=pipeline_stub))
     args = SimpleNamespace(state=str(tmp_path / "pipeline-state.json"), max_workers=1, shadow=False)
-    adapter._run_staged_pipeline(args, [target], backend, time.time() + 360)
+    inert_caller.staged(args, [target], backend, time.time() + 360)
 
-    assert chosen == ["gemini-low"]
-    assert calls == [("gemini", "gemini-low")]
+    assert chosen == [LOW]
+    assert calls == [("claude", LOW)]
 
 
 def _adopted_pipeline(tmp_path, *, active=False):
@@ -5666,3 +5760,138 @@ def test_terminal_native_receipt_cannot_hide_other_provider_writer(monkeypatch, 
         resources.ResourceBlocked, match="implementation_.*(malformed|not_terminal)"
     ):
         resources._terminal_remote_observation(TARGET)
+
+
+def test_whole_classification_packet_over_bound_refuses_without_broker(
+    tmp_path, monkeypatch, inert_caller
+):
+    """Keep the original 30KiB+30KiB packet as an explicit regime refusal."""
+    import closer_model_contracts as model
+    import dispatcher
+
+    current = snapshot(base="c" * 40)
+    packet, ref, _proposal = inert_caller.packet(current, tmp_path / "oversized.evidence")
+    calls = []
+    monkeypatch.setattr(dispatcher, "offload", lambda *a, **kw: calls.append(1))
+    mandatory = {
+        "target": TARGET,
+        "head": HEAD,
+        "base": current["base"],
+        "packet_ref": ref,
+        "snapshot_revision": current["revision"],
+        "manifest": packet["manifest"],
+        "section_refs": packet["sections"],
+        "data_only_evidence": {
+            "ci_artifacts": {"payload": "x" * 30000},
+            "diff_files": {"patch": "y" * 30000},
+        },
+    }
+    with pytest.raises(model.ClassificationPromptError) as error:
+        model.render_classification_prompt(
+            mandatory,
+            source_rows=current["sources"],
+            diff_rows={},
+            review_rows=[],
+            artifact_rows={},
+            data_only=True,
+        )
+    assert error.value.reason == "classification_prompt_exceeds_bound"
+    assert not calls and not inert_caller.results
+    assert inert_caller.world.events["auth"] == 0
+
+
+@pytest.mark.parametrize(
+    "failure", ["quota exceeded", "unsupported model", "authentication failed"]
+)
+def test_legacy_post_transport_error_output_classifier(
+    tmp_path, monkeypatch, inert_caller, failure
+):
+    """Legacy definite-failure handler unit; no origin or provider qualification claim."""
+    current = snapshot(
+        base="c" * 40,
+        state="MERGED",
+        merge=MERGE,
+        verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+    )
+    backend, calls = _private_worker(
+        tmp_path,
+        monkeypatch,
+        current=current,
+        inert=inert_caller,
+        post_transport=True,
+        result={
+            "exit": 1,
+            "run_id": "legacy-definite-failure",
+            "error": "worker failed",
+            "output": failure,
+            "process_started": False,
+            "outcome_uncertain": False,
+        },
+    )
+    answer = backend.worker(TARGET, "collect_evidence", current, operation("collect_evidence"))
+    assert answer["status"] == "failed" and backend.workers_unavailable
+    assert failure in answer["worker"]["output"]
+    action, _, eligible, _ = backend.select(
+        snapshot(
+            target="o/r#8",
+            base="c" * 40,
+            state="MERGED",
+            merge=MERGE,
+            verifier={"verdict": "PASS", "run_id": "42", "evaluated_sha": MERGE},
+        )
+    )
+    assert action == "collect_evidence" and not eligible
+    assert len(calls) == 1 and not inert_caller.results
+    assert inert_caller.world.events["auth"] == 0 and not backend.gh.calls
+
+
+def test_legacy_exit70_raw0_never_supplies_acceptance(tmp_path):
+    """Pure semantic rejection of the old adapter envelope, not a runtime receipt."""
+    from test_closer_disposition import fixture
+
+    import closer_disposition
+
+    snap, _packet, ref, prep, value = fixture(tmp_path)
+    value["actual"].update(exit=70, raw_exit=0, error="agent reported OFFLOAD_INCOMPLETE")
+    answer = closer_disposition.integrate_ordinary(snap["target"], snap, ref, prep, value)
+    assert answer["status"] == "wait" and answer["reason"] == "worker_execution_unverified"
+    assert not answer.get("disposition")
+
+
+@pytest.mark.parametrize("native_mode", ["partial", "native_error"])
+def test_actual_incomplete_native_envelope_remains_owned(tmp_path, inert_caller, native_mode):
+    current = snapshot(base="c" * 40)
+    packet, ref, proposal = inert_caller.packet(current, tmp_path / "incomplete-native")
+    result = inert_caller.interpretation(current, packet, ref, proposal, native_mode=native_mode)
+    assert result["exit"] == 70 and result["raw_exit"] == 0
+    assert result["outcome_uncertain"] is True and result["retry_safe"] is False
+    assert result["output"] == "" and result["process_started"] is True
+    assert "_closer_controlled_proof" not in result
+    assert adapter._worker_proposal(result, agent="claude") == {}
+    assert len(inert_caller.results) == 1
+    assert inert_caller.world.events["auth"] == inert_caller.world.events["auth_closed"] == 1
+
+
+@pytest.mark.parametrize("damage", ["foreign-home", "symlink-home", "existing-guard"])
+def test_inert_cli_guard_refuses_unowned_paths_before_write(
+    tmp_path, monkeypatch, inert_caller, damage
+):
+    root = inert_caller.world.root
+    home = root / "private-home"
+    guard = home / ".codex/automations/model-allocation/assess.py"
+    if damage == "foreign-home":
+        monkeypatch.setenv("HOME", str(root / "other-home"))
+    elif damage == "symlink-home":
+        outside = root / "unowned-home"
+        outside.mkdir()
+        home.symlink_to(outside, target_is_directory=True)
+    else:
+        guard.parent.mkdir(parents=True)
+        guard.write_bytes(b"unowned fixture guard")
+    with pytest.raises((AssertionError, FileExistsError)):
+        inert_caller.temporary_campaign_guard()
+    if damage == "existing-guard":
+        assert guard.read_bytes() == b"unowned fixture guard"
+    else:
+        assert not guard.exists()
+    assert inert_caller.world.events["auth"] == 0

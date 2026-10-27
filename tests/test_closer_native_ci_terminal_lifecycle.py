@@ -202,7 +202,12 @@ def test_actual_signed_leaf_terminal_rearms_only_original_full_cohort(
     # synthetic case. It must create its fresh successor/PREPARE and stop at
     # that explicit role hold, without reusing the prior accepted ACT.
     monkeypatch.setattr(dispatcher, "_profile_exception_qualified", lambda *_a, **_k: False)
-    dispatcher.main(w.argv)
+    # Native publication used finite_host's separate HOME. The fresh ordinary
+    # caller must reuse its own physical admission guard before role selection.
+    with monkeypatch.context() as caller_home:
+        caller_home.setenv("HOME", str(w.inert_caller.world.root / "private-home"))
+        w.inert_caller.temporary_campaign_guard()
+        dispatcher.main(w.argv)
     followed = json.loads(capsys.readouterr().out)
     state = pipeline._load(source)
     links = state["stage_successors"]
@@ -218,7 +223,7 @@ def test_actual_signed_leaf_terminal_rearms_only_original_full_cohort(
     assert fresh["results"]["prepare"]["snapshot_ref"]
     assert fresh["status"] == "held" and fresh["stage"] == "interpret", fresh
     pending = fresh["results"]["interpret"]
-    assert pending["classification"] == "role_qualification_unavailable"
+    assert pending["classification"] == "role_qualification_unavailable", pending
     assert pending["pending_evidence"]["target"] == held["target"]
     assert pending["pending_evidence"]["revision"] == child["bindings"][held["target"]]["revision"]
     assert (

@@ -419,7 +419,8 @@ def public_ci_world(request, monkeypatch):
     # Reuse only existing synthetic external transports; all CLI registry,
     # resource admission, queues and stage callbacks remain production code.
     w = public_merge_world.__wrapped__(
-        native_world.__wrapped__(request.getfixturevalue("tmp_path"), monkeypatch), monkeypatch
+        native_world.__wrapped__(request.getfixturevalue("tmp_path"), monkeypatch, request),
+        monkeypatch,
     )
     w.snapshot.update(
         checks="PENDING", pending_check_run_ids=[123], pending_check_head=w.snapshot["head"]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from test_closer_evidence_recovery import LogGitHub, log_request, recovery_callbacks
-from test_closer_reasoning_boundary import native_world  # noqa: F401
+from test_closer_reasoning_boundary import controlled_world, native_world  # noqa: F401
 
 import closer_dispatcher as d
 import closer_evidence_recovery as recovery
@@ -18,22 +18,23 @@ def test_retained_assessment_is_not_invalidated_by_incomplete_producer_audit(tmp
         tmp_path, monkeypatch, recover=True, initial_missing=False
     )
     prep = context["prepare"]
-    prep.update(drift_audit_candidate=True, producer_sha256="producer")
+    prep.update(drift_audit_candidate=True)
     snap = prep["snapshot"]
     proposal = json.loads(
         (Path(__file__).parent / "fixtures/closer-assessment-audit-incomplete.json").read_text()
     )
     proposal.update(target=snap["target"], head=snap["head"], base=snap["base"])
+    caller = callbacks["_inert_caller"]
+    caller.world.args["data_only_limits"].update(max_final_bytes=48 * 1024)
+    caller.activate()
     feedback = []
     monkeypatch.setattr(closer_stage_feedback, "record_stage", lambda *a, **kw: feedback.append(kw))
     monkeypatch.setattr(
         transport,
         "offload",
-        lambda *a, **kw: {
-            "exit": 0,
-            "run_id": "retained-public-response",
-            "output": json.dumps(proposal),
-        },
+        lambda *a, **kw: callbacks["_inert_caller"].response(
+            {"exit": 0, "output": json.dumps(proposal)}, *a, **kw
+        ),
     )
     result = callbacks["interpret"](snap["target"], context)
     assert feedback[-1]["structurally_invalid"] is False
@@ -52,7 +53,7 @@ def test_incomplete_audit_preserves_existing_typed_recovery_route(tmp_path, monk
         tmp_path, monkeypatch, recover=True, initial_missing=False
     )
     prep = context["prepare"]
-    prep.update(drift_audit_candidate=True, producer_sha256="producer")
+    prep.update(drift_audit_candidate=True)
     snap = prep["snapshot"]
     gh = d.GitHub(deadline=context["deadline"])
     log_gh = LogGitHub(snap)
@@ -76,7 +77,9 @@ def test_incomplete_audit_preserves_existing_typed_recovery_route(tmp_path, monk
         )
         if len(prompts) == 1:
             response["evidence_requests"] = [log_request(snap)]
-        return {"exit": 0, "run_id": f"offline-{len(prompts)}", "output": json.dumps(response)}
+        return callbacks["_inert_caller"].response(
+            {"exit": 0, "output": json.dumps(response)}, _agent, prompt, **_kw
+        )
 
     monkeypatch.setattr(transport, "offload", offload)
     result = callbacks["interpret"](snap["target"], context)
@@ -115,7 +118,7 @@ def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkey
     callbacks, context, _, _ = recovery_callbacks(
         tmp_path, monkeypatch, recover=True, initial_missing=False
     )
-    context["prepare"].update(drift_audit_candidate=True, producer_sha256="producer")
+    context["prepare"].update(drift_audit_candidate=True)
     snap = context["prepare"]["snapshot"]
     response = {
         "target": snap["target"],
@@ -136,25 +139,35 @@ def test_audit_separation_preserves_binding_and_core_gap_guards(tmp_path, monkey
     elif boundary == "inline_summary":
         response.update(drift_review_complete=False, drift_summary=("\n" * 7000))
     elif boundary == "huge_summary":
-        response.update(drift_review_complete=False, drift_summary=('雪\n"' * 30000))
+        # Keep escaping/multibyte expansion large enough to bound the callback,
+        # while fitting the actual transport's immutable 64KiB native cap.
+        response.update(drift_review_complete=False, drift_summary=('雪\n"' * 3000))
     elif boundary == "bad_audit":
         response["drift_mismatches"] = {"malformed": True}
     elif boundary == "wrong_head":
         response["head"] = "different-head"
     elif boundary == "bad_envelope":
         response["findings"] = "not an array"
+    caller = callbacks["_inert_caller"]
+    caller.world.args["data_only_limits"].update(max_final_bytes=48 * 1024)
+    caller.activate()
     feedback = []
     monkeypatch.setattr(closer_stage_feedback, "record_stage", lambda *a, **kw: feedback.append(kw))
     monkeypatch.setattr(
         transport,
         "offload",
-        lambda *a, **kw: {"exit": 0, "run_id": "offline-guard", "output": json.dumps(response)},
+        lambda *a, **kw: callbacks["_inert_caller"].response(
+            {"exit": 0, "output": json.dumps(response)}, *a, **kw
+        ),
     )
     result = callbacks["interpret"](snap["target"], context)
     assert result["authority"] is False
     if boundary == "complete":
         assert result["producer_audit"]["status"] == "complete"
-        assert result["drift_review_at"] and result["producer_sha256"] == "producer"
+        assert (
+            result["drift_review_at"]
+            and result["producer_sha256"] == context["prepare"]["producer_sha256"]
+        )
     elif boundary in {"bad_summary", "huge_summary", "inline_summary"}:
         import closer_pipeline
 
