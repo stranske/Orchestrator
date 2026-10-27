@@ -1887,4 +1887,9 @@ def consume(
                 "authority": False,
             }
         )
+    # Local escalation delivery/ack checks do not grant native or ACT admission.
+    from closer_hold_escalation import service as service_escalations
+
+    doc, escalation_reports = service_escalations(campaign, manifest, manifest_path, now=current)
+    reports.extend(escalation_reports)
     return doc, reports

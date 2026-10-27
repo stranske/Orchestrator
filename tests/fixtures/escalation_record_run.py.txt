@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Atomically record one reviewed-repo stall-escalator terminal result."""
+
+import argparse
+import datetime as dt
+import json
+import os
+import sqlite3
+import tempfile
+from pathlib import Path
+
+AUTOMATION_ID = "reviewed-repo-stall-escalator"
+ROOT = Path("/Users/teacher/.codex/automations/reviewed-repo-stall-escalator")
+APP_DB = Path("/Users/teacher/.codex/sqlite/codex-dev.db")
+OUTCOMES = {"productive_recovery", "stall_but_blocked", "no_productive_action"}
+
+
+def current_run(app_db):
+    connection = sqlite3.connect(str(app_db))
+    connection.row_factory = sqlite3.Row
+    row = connection.execute(
+        "SELECT thread_id, created_at FROM automation_runs WHERE automation_id = ? ORDER BY created_at DESC LIMIT 1",
+        (AUTOMATION_ID,),
+    ).fetchone()
+    connection.close()
+    if not row or not row["thread_id"]:
+        raise SystemExit("no current automation run with a durable thread_id")
+    return row["thread_id"], int(row["created_at"])
+
+
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def reporting_fields(payload):
+    """Keep visible delivery separate from work outcome and human attention."""
+    fields = {
+        "substantive_work": bool(payload.get("substantive_work", False)),
+        "report_emitted": bool(payload.get("report_emitted", False)),
+        "notification_emitted": payload.get("notification_emitted"),
+        "visibility_status": payload.get("visibility_status", "unknown"),
+        "desktop_notification_observed": payload.get("desktop_notification_observed"),
+        "archive_confirmed": bool(payload.get("archive_confirmed", False)),
+    }
+    for name in ("notification_emitted", "desktop_notification_observed"):
+        if fields[name] is not None and not isinstance(fields[name], bool):
+            raise SystemExit(f"{name} must be true, false, or null")
+    if fields["report_emitted"] or fields["desktop_notification_observed"] is True:
+        fields["notification_emitted"] = True
+        fields["visibility_status"] = "visible"
+    elif fields["notification_emitted"] is False:
+        if not fields["archive_confirmed"]:
+            fields["notification_emitted"] = None
+            fields["visibility_status"] = "unknown"
+        else:
+            fields["visibility_status"] = "suppressed_by_archive"
+    if payload.get("quiet_branch") and (fields["substantive_work"] or fields["report_emitted"]):
+        raise SystemExit("quiet_branch cannot contain substantive work or a visible report")
+    return fields
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--payload-json", required=True)
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--app-db", type=Path, default=APP_DB)
+    parser.add_argument("--owner-followup", action="store_true")
+    args = parser.parse_args()
+    payload = json.loads(args.payload_json)
+    outcome = payload.get("outcome_class")
+    if outcome not in OUTCOMES:
+        raise SystemExit(f"invalid outcome_class: {outcome!r}")
+    if not payload.get("decision"):
+        raise SystemExit("decision is required")
+
+    thread_id, created_at_ms = current_run(args.app_db)
+    completed = dt.datetime.now(dt.timezone.utc)
+    completed_at = completed.isoformat().replace("+00:00", "Z")
+    elapsed_ms = max(0, round(completed.timestamp() * 1000) - created_at_ms)
+    quiet = bool(payload.get("quiet_branch"))
+    if quiet and outcome != "no_productive_action":
+        raise SystemExit("quiet_branch requires no_productive_action")
+    payload.update(reporting_fields(payload))
+
+    ledger = {
+        "thread_id": thread_id,
+        "automation_created_at_ms": created_at_ms,
+        "completed_at_utc": completed_at,
+        "outcome_class": outcome,
+        "decision": payload["decision"],
+        "selected_target": payload.get("selected_target"),
+        "quiet_branch": quiet,
+        "owner": payload.get("owner"),
+        "action": payload.get("action"),
+        "due": payload.get("due"),
+        "elapsed_wall_ms": elapsed_ms,
+        "deep_inspection_count": int(payload.get("deep_inspection_count", 0)),
+        "suite_enumeration_count": int(payload.get("suite_enumeration_count", 0)),
+        "checkout_count": int(payload.get("checkout_count", 0)),
+        "dispatch_count": int(payload.get("dispatch_count", 0)),
+        "mutation_count": int(payload.get("mutation_count", 0)),
+        **reporting_fields(payload),
+        "human_actionable": bool(payload.get("human_actionable", False)),
+        "execution_error": payload.get("execution_error"),
+    }
+    if args.owner_followup:
+        ledger["record_kind"] = "owner_followup"
+        ledger["corrects_prior_record"] = payload.get("corrects_prior_record")
+        ledger["inventory_evidence"] = payload.get("inventory_evidence")
+    memory = dict(payload)
+    # Preserve exact-target dispositions across runs; replacing the last result
+    # must not erase coverage and manufacture another cold start.
+    try:
+        previous = json.loads((args.root / "memory.md").read_text())
+    except (OSError, ValueError):
+        previous = {}
+    coverage = previous.get("coverage_json") or {}
+    if not isinstance(coverage, dict):
+        coverage = {}
+    coverage.update(payload.get("coverage_json") or {})
+    target = payload.get("selected_target")
+    selected = (payload.get("inventory_evidence") or {}).get("selected") or {}
+    if target:
+        coverage[target] = {
+            "head": selected.get("head_sha") or payload.get("head"),
+            "fingerprint": payload.get("fingerprint") or selected.get("fingerprint"),
+            "accountability_episode": payload.get("accountability_episode") or selected.get("accountability_episode"),
+            "completed_at_utc": completed_at,
+            "outcome_class": outcome,
+            "decision": payload.get("decision"),
+            "owner": payload.get("owner"),
+            "action": payload.get("action"),
+            "due": payload.get("due"),
+            "execution_error": payload.get("execution_error"),
+            "park_until_material_change": outcome in {"no_productive_action", "stall_but_blocked"} and not payload.get("execution_error"),
+        }
+    memory["coverage_json"] = coverage
+    memory.update(
+        thread_id=thread_id,
+        automation_created_at_ms=created_at_ms,
+        completed_at_utc=completed_at,
+        elapsed_ms=elapsed_ms,
+    )
+    memory.pop("outcome_class", None)
+
+    atomic_write(args.root / "memory.md", json.dumps(memory, indent=2, sort_keys=True) + "\n")
+    ledger_name = "owner-followups.jsonl" if args.owner_followup else "run-ledger.jsonl"
+    ledger_path = args.root / "metrics" / ledger_name
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a") as stream:
+        stream.write(json.dumps(ledger, separators=(",", ":")) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    print(json.dumps({"recorded": True, "thread_id": thread_id, "elapsed_wall_ms": elapsed_ms}))
+
+
+if __name__ == "__main__":
+    main()
