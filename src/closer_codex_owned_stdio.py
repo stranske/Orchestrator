@@ -577,6 +577,9 @@ class _OwnedSession:
             and self.pid == os.getpid()
             and _SESSIONS.get((self.thread, self.frame)) is self
             and self.guard.active
+            and self.reader is self.guard.reader
+            and type(self.route) is BootstrapRoute
+            and self.route.guard is self.guard
         )
         self.guard.controller._require_writer(self.guard.operation, self.guard.custody)
         self.guard.controller.live(self.guard.operation)

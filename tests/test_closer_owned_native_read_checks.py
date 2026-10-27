@@ -273,3 +273,25 @@ def test_confinement_still_refuses_changed_cached_projection(monkeypatch):
     with pytest.raises(owned.BootstrapHeld, match="confinement_confinement_session_changed"):
         invoke(reader, s, "confinement")
     assert c["writes"] == 2
+
+
+@pytest.mark.parametrize("phase", ["identity", "confinement"])
+@pytest.mark.parametrize("diverge", ["session_reader", "guard_reader", "route_guard"])
+def test_divergent_session_guard_route_reader_aliases_refuse_before_io(monkeypatch, phase, diverge):
+    c, root, reader, s, controller = world(monkeypatch)
+    foreign = object.__new__(owned.SourceReader)
+    foreign._controller, foreign._operation = controller, s.guard.operation
+    if diverge == "session_reader":
+        s.reader = foreign
+        caller_reader = foreign
+    elif diverge == "guard_reader":
+        s.guard.reader = foreign
+        caller_reader = reader
+    else:
+        from dataclasses import replace
+
+        s.route = replace(s.route, guard=SimpleNamespace(reader=reader, active=True))
+        caller_reader = reader
+    with pytest.raises(owned.BootstrapHeld):
+        invoke(caller_reader, s, phase)
+    assert c["writes"] == 0 and c["writer"] == 0 and c["live"] == 0
