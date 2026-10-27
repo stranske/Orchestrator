@@ -240,7 +240,19 @@ def main():
         d.GitHub = REAL_GITHUB
         patch.setattr(REAL_GITHUB, "snapshot", GitHub.snapshot)
 
-        def no_external_api(*_args, **_kwargs):
+        def no_external_api(args, **_kwargs):
+            if args == [
+                "api",
+                "--method",
+                "GET",
+                "repos/"
+                + target.split("#")[0]
+                + "/contents/.github/workflows/autofix-versions.env?ref="
+                + "a" * 40,
+            ]:
+                # This pool/transport fixture intentionally supplies no source
+                # mechanical tool policy. Its actual collector must hold UNMET.
+                return 0, {"message": "Not Found"}
             raise AssertionError("unexpected external GitHub transport")
 
         patch.setattr(d.gh_capacity, "gh_run", no_external_api)

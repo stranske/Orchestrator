@@ -13,11 +13,16 @@ from pathlib import Path
 
 import pytest
 
-assert os.environ.get("ORCH_REDACT_SECRET_FILES") == ""
-
 import closer_coding_worker as worker  # noqa: E402
 import closer_native_observer as native  # noqa: E402
 import closer_runtime_binding as runtime  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolated_redaction_environment(monkeypatch):
+    """Synthetic controls use no ambient credential-file redaction inputs."""
+    monkeypatch.setenv("ORCH_REDACT_SECRET_FILES", "")
+
 
 SECRET = "SYNTHETIC_USER_OR_CREDENTIAL_CONTENT"
 HELD_FRAME = {

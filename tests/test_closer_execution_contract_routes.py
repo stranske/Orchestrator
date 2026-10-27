@@ -464,17 +464,22 @@ def test_actual_worker_never_allocates_generic_repair_writer(context, tmp_path, 
         offload_fn=forbidden,
     )
     result = backend.worker(TARGET, "repair", context["snapshot"], {"deadline": time.time() + 60})
-    assert result["status"] == "pending", result
+    assert result["status"] == "uncertain", result
     assert result["authority"] is False
-    assert result["reason"] in {
+    assert result["reason"] == "original_live_repair_operation_UNMET"
+    assert result.get("operation_id") is None
+    # The direct worker call has no actual queue authority. Retain the separate
+    # fine-grained plan/test-identity oracle without manufacturing that authority.
+    pending = contracts.mechanical_execution_pending(plan, context["snapshot"])
+    assert pending["reason"] in {
         "mechanical_operation_not_allowlisted",
         "registered_required_test_missing",
         "bounded_mechanical_executor_unqualified",
     }
-    assert "operation_id" not in result
-    assert result["pending_evidence"]["finding_id"] == context["finding"]["finding_id"]
+    assert "operation_id" not in pending
+    assert pending["pending_evidence"]["finding_id"] == context["finding"]["finding_id"]
     if kind in {"valid_but_no_executor", "symlink", "hardlink"}:
-        assert result["pending_evidence"]["required_test_identity"] == context["test"]
+        assert pending["pending_evidence"]["required_test_identity"] == context["test"]
         assert "physical_confinement_verified" not in result
 
 
