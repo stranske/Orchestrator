@@ -117,6 +117,7 @@ def _controlled_model_contract(task_type):
         "dispatcher",
         "adapters",
         "closer_data_only_execution",
+        "closer_claude_role_admission",
         "transport_saved_result",
         "transport_qualification",
         "closer_model_contracts",
@@ -203,11 +204,7 @@ def _controlled_prompt_size(prompt, limits):
 
 def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier, target, prompt):
     """Use only reviewed role-record limits and the currently held original lease."""
-    import closer_claude_auth
-    import closer_data_only_execution as execution
-    import closer_resources
     import closer_role_qualification as roles
-    import dispatcher
     import execution_profiles
 
     profile = execution_profiles.get_profile(profile_id)
@@ -215,6 +212,40 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
     record = roles.qualified_record(profile, role)
     if record is None or not roles.is_runtime_qualified(profile, role):
         raise ControlledOriginUnavailable("reviewed runtime role qualification unavailable")
+    return _controlled_launch_inputs(
+        profile=profile,
+        record=record,
+        task_type=task_type,
+        operation_id=operation_id,
+        frontier=frontier,
+        target=target,
+        prompt=prompt,
+    )
+
+
+def _controlled_launch_inputs(
+    *, profile, record, task_type, operation_id, frontier, target, prompt, qualification=None
+):
+    """Share the existing physical launch inputs without opening role admission."""
+    import closer_claude_auth
+    import closer_claude_role_admission as admission
+    import closer_data_only_execution as execution
+    import closer_resources
+    import closer_role_qualification as roles
+    import dispatcher
+
+    if qualification is None:
+        caller = sys._getframe(1)
+        if (
+            caller.f_code is not _controlled_launch_options.__code__
+            or caller.f_globals is not globals()
+            or admission.is_qualification_operation(operation_id)
+        ):
+            raise ControlledOriginUnavailable("production launch admission caller differs")
+    else:
+        admission.require_launch_permit(qualification, operation_id, profile, record)
+    role = roles.TASK_ROLES.get(task_type)
+    profile_id = profile["profile_id"]
     descriptor = _controlled_model_contract(task_type)
     limits = execution.validate_limits(record.get("execution_limits"))
     if (
@@ -316,6 +347,8 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
         "qualification_id": record["qualification_id"],
         "qualification_record_sha256": _contract_digest(record),
     }
+    if qualification is not None:
+        expected["qualification_only"] = True
     return options, expected, observed
 
 
@@ -340,17 +373,27 @@ def _read_controlled_receipt(ref, root):
     return _strict_response_json(raw.decode())
 
 
-def _validate_controlled_result(result, expected, observed, *, receipt_root):
+def _validate_controlled_result(result, expected, observed, *, receipt_root, _qualification=None):
     """Authenticate local observed execution before existing semantic validators.
 
     A restarted caller must obtain expected/observed from its original sealed
     stage row. Caller declarations or this local proof do not authenticate a
     remote Workflows decision or grant acceptance authority.
     """
+    import closer_claude_role_admission as admission
     import closer_data_only_execution as execution
     import transport_qualification
     import transport_saved_result
 
+    qualification_only = (
+        expected.get("qualification_only") is True
+        or admission.is_qualification_operation(expected.get("operation_id"))
+        or admission.is_qualification_result(result)
+    )
+    if qualification_only:
+        admission.require_validation_permit(_qualification, expected)
+    elif _qualification is not None:
+        raise ControlledOriginUnavailable("qualification permit cannot validate production")
     try:
         origin = result["data_only_origin"]
         receipt = _read_controlled_receipt(result.get("provider_result_ref"), receipt_root)
