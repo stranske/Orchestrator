@@ -57,6 +57,9 @@
 #        VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG=1  pass --floor-may-lag to verify.py. CI sets it: a floor
 #                          lagging behind reality is the checkout job's business, and a collection
 #                          DROP still fails either way.
+#        VERIFY_BEFORE_SYNC_PYTEST_SHARD=i/N, VERIFY_BEFORE_SYNC_SHARD_OUTPUT=absolute-path
+#                          CI shard evidence only; no whole-tree VERIFIED verdict is issued.
+#        VERIFY_BEFORE_SYNC_AGGREGATE=absolute-path  CI aggregate, with the usual full verdict.
 #
 # No here-documents or here-strings: bash 5.3 feeds them through a pipe, and a pipe can block
 # forever once system pipe memory is exhausted (tests/test_orchestrate_no_heredoc.py).
@@ -108,6 +111,16 @@ expected_tree="${VERIFY_BEFORE_SYNC_TREE:-EXEC MIRROR}"
 # A scalar, not an array: an empty array under `set -u` is an unbound variable in bash 3.2.
 floor_flag=""
 [[ "${VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG:-0}" == "1" ]] && floor_flag="--floor-may-lag"
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" && -n "$snapshot_out" ]]; then
+  printf 'verify-before-sync: a pytest shard cannot publish a verified snapshot; run the aggregate\n' >&2
+  exit 2
+fi
+
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" &&
+      "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:-}" != /* ]]; then
+  printf 'verify-before-sync: VERIFY_BEFORE_SYNC_SHARD_OUTPUT must be an absolute path\n' >&2
+  exit 2
+fi
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'verify-before-sync: %s\n' "$*" >&2; }
@@ -191,6 +204,7 @@ for label, path in (
     ("mirror/experiments/repo_knowledge.json", src / "experiments/repo_knowledge.json"),
     ("mirror/data/feedback-snapshot.json", src / "data/feedback-snapshot.json"),
     ("mirror/config/coverage-baseline.json", src / "config/coverage-baseline.json"),
+    ("mirror/config/test-shards.json", src / "config/test-shards.json"),
     ("mirror/config/model_epochs.json", src / "config/model_epochs.json"),
     ("mirror/.verify-floor.json", src / ".verify-floor.json"),
     ("mirror/CLAUDE.md", src / "CLAUDE.md"),
@@ -413,7 +427,15 @@ say "== verify.py in the scratch mirror, on the state copy (HOME stays real for 
 if [[ -n "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
   "$python_bin" "$storage_helper" staged --state-dir "$storage_state" --job "$ORCH_STORAGE_RUN_ID" || exit 2
 fi
-(cd "$scratch/mirror" && in_state_copy "$python_bin" verify.py ${floor_flag:+"$floor_flag"}) 2>&1 | tee "$scratch/verify.log"
+verify_args=()
+[[ -n "$floor_flag" ]] && verify_args+=("$floor_flag")
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" ]]; then
+  verify_args+=(--pytest-shard "$VERIFY_BEFORE_SYNC_PYTEST_SHARD" --shard-output "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:?absolute evidence directory required}")
+fi
+if [[ -n "${VERIFY_BEFORE_SYNC_AGGREGATE:-}" ]]; then
+  verify_args+=(--aggregate "$VERIFY_BEFORE_SYNC_AGGREGATE")
+fi
+(cd "$scratch/mirror" && in_state_copy "$python_bin" verify.py ${verify_args[@]+"${verify_args[@]}"}) 2>&1 | tee "$scratch/verify.log"
 pipe_status=("${PIPESTATUS[@]}")
 rc=${pipe_status[0]}
 tee_rc=${pipe_status[1]}
@@ -449,6 +471,9 @@ fi
 
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   verdict="VERIFIED"
+  if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" ]]; then
+    verdict="SHARD COMPLETED ($VERIFY_BEFORE_SYNC_PYTEST_SHARD; full verdict awaits aggregate)"
+  fi
 elif [[ "$rc" == "0" ]]; then
   verdict="NOT VERIFIED (verify.py passed, but not in the $expected_tree shape)"
 else
