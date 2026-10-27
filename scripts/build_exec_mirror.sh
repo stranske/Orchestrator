@@ -84,6 +84,7 @@ rm -f \
   "$MIRROR/experiments/repo_knowledge.json" \
   "$MIRROR/data/feedback-snapshot.json" \
   "$MIRROR/config/coverage-baseline.json" \
+  "$MIRROR/config/closer_role_selection.json" \
   "$MIRROR/config/model_epochs.json"
 for snapshot in \
   experiments/hypotheses.json \
@@ -92,6 +93,7 @@ for snapshot in \
   data/feedback-snapshot.json \
   config/coverage-baseline.json \
   config/test-shards.json \
+  config/closer_role_selection.json \
   config/model_epochs.json; do
   if [[ -f "$SRC/$snapshot" ]]; then
     cp "$SRC/$snapshot" "$MIRROR/$snapshot"

@@ -120,6 +120,8 @@ def _controlled_model_contract(task_type):
         "transport_saved_result",
         "transport_qualification",
         "closer_model_contracts",
+        "closer_role_selection",
+        "router",
         "closer_execution_contracts",
         "closer_adjudication_policy",
         "closer_disposition",
@@ -140,7 +142,6 @@ def _controlled_model_contract(task_type):
             "closer_correction_ownership",
             "closer_campaign",
             "verifier_evidence",
-            "router",
         )
     for name in selected_sources:
         module = importlib.import_module(name)
@@ -154,7 +155,9 @@ def _controlled_model_contract(task_type):
             raise ControlledOriginUnavailable("controlled source changed during read")
         sources[name + ".py"] = hashlib.sha256(raw).hexdigest()
     import closer_execution_contracts as contracts
+    import closer_role_selection as selection
 
+    sources["config/closer_role_selection.json"] = selection.policy_sha256()
     descriptor = {
         "schema": "closer-production-model-contract/v1",
         "role": role,
@@ -4913,10 +4916,17 @@ def _profile_exception_qualified(
     )
 
 
-def _validated_pipeline_exception_route(profile_id: str):
+def _validated_pipeline_exception_route(profile_id: str, *, closer_category=None):
+    import closer_role_selection as selection
     import execution_profiles
 
     profile = execution_profiles.get_profile(profile_id)
+    try:
+        scope = selection.quality_scope(profile, "strong_criterion_adjudication", closer_category)
+        if scope is None:
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
     if not profile or not _profile_exception_qualified(
         _fresh_capacity_report(), profile, repair=False
     ):
@@ -4927,6 +4937,7 @@ def _validated_pipeline_exception_route(profile_id: str):
         "profile_id": profile_id,
         "pools": list(profile.get("capacity_pool_ids") or []),
         "mode": "assess",
+        "closer_selection": scope,
     }
 
 
@@ -4991,13 +5002,22 @@ def _pipeline_low_route(
     with_status=False,
     data_only=False,
     task_type="closer_interpret",
+    closer_category=None,
 ):
     """Choose a role-qualified classification profile through the existing router."""
     if task_type not in {"closer_interpret", "closer_correction_classification"}:
         raise ValueError("unsupported bounded classification task")
     load = load if load is not None else {}
-    import execution_profiles
+    import closer_role_selection as selection
     import router
+
+    try:
+        selection_policy = selection.load_policy()
+        role = _exception_role(False, False)
+        if selection.category_spec(role, closer_category, selection_policy) is None:
+            return (None, "qualification_unavailable") if with_status else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return (None, "qualification_unavailable") if with_status else None
 
     with _PIPELINE_ROUTE_LOCK:
         # Capacity can change while another worker reserves a shared pool. Refresh
@@ -5005,6 +5025,14 @@ def _pipeline_low_route(
         report = _fresh_capacity_report()
         if report is None:
             return (None, "unknown") if with_status else None
+        quality_profiles = {
+            agent: selection.candidates_for_agent(
+                agent, role, "offload", closer_category, policy=selection_policy
+            )
+            for agent in report["agents"]
+        }
+        if not any(quality_profiles.values()):
+            return (None, "qualification_unavailable") if with_status else None
         unavailable_profiles = set(unavailable_profiles or ())
         eligible = set()
         available_profiles = {}
@@ -5029,7 +5057,7 @@ def _pipeline_low_route(
                 unsupported_assessment |= assessment_problem is not None
             if row.get("state") not in {"ok", "warn"}:
                 continue
-            profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            profiles = quality_profiles.get(agent, [])
             capacity_candidate |= assessment_problem is None and any(
                 p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
                 for p in profiles
@@ -5073,7 +5101,7 @@ def _pipeline_low_route(
                 else (
                     "unsupported_assessment_tool_boundary"
                     if unsupported_assessment and not qualified_assessment
-                    else "qualification_unavailable" if capacity_candidate else "exhausted"
+                    else ("qualification_unavailable" if capacity_candidate else "exhausted")
                 )
             )
             return (None, status) if with_status else None
@@ -5086,6 +5114,7 @@ def _pipeline_low_route(
             load=load or {},
             per_agent_cap=1,
             learned=_closer_learned(task_type),
+            closer_category=closer_category,
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
@@ -5111,11 +5140,18 @@ def _pipeline_low_route(
 
 
 def _exception_route(
-    *, load=None, unavailable_profiles=None, repair=False, substantive=True, with_status=False
+    *,
+    load=None,
+    unavailable_profiles=None,
+    repair=False,
+    substantive=True,
+    with_status=False,
+    closer_category=None,
+    independent_of_provider=None,
 ):
     """Choose a currently usable exception/repair profile through the existing router."""
     load = load if load is not None else {}
-    import execution_profiles
+    import closer_role_selection as selection
     import router
 
     mode = "mid" if repair else "assess"
@@ -5123,10 +5159,31 @@ def _exception_route(
         "closer_repair" if repair else "closer_exception" if substantive else "closer_interpret"
     )
 
+    try:
+        selection_policy = selection.load_policy()
+        role = _exception_role(repair, substantive)
+        if selection.category_spec(role, closer_category, selection_policy) is None:
+            return (None, "qualification_unavailable") if with_status else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return (None, "qualification_unavailable") if with_status else None
+
     with _PIPELINE_ROUTE_LOCK:
         report = _fresh_capacity_report()
         if report is None:
             return (None, "unknown") if with_status else None
+        quality_profiles = {
+            agent: selection.candidates_for_agent(
+                agent,
+                role,
+                "offload",
+                closer_category,
+                policy=selection_policy,
+                independent_of_provider=independent_of_provider,
+            )
+            for agent in _EXCEPTION_ELIGIBLE_AGENTS
+        }
+        if not any(quality_profiles.values()):
+            return (None, "qualification_unavailable") if with_status else None
         unavailable_profiles = set(unavailable_profiles or ())
         eligible = set()
         available_profiles = {}
@@ -5137,7 +5194,7 @@ def _exception_route(
             row = report["agents"].get(agent, {})
             if row.get("state") not in {"ok", "warn"}:
                 continue
-            profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            profiles = quality_profiles.get(agent, [])
             capacity_candidate |= any(
                 p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
                 for p in profiles
@@ -5187,6 +5244,8 @@ def _exception_route(
             load=load or {},
             per_agent_cap=1,
             learned=_closer_learned(task_type),
+            closer_category=closer_category,
+            independent_of_provider=independent_of_provider,
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"

@@ -6,6 +6,9 @@ import random
 from types import SimpleNamespace
 
 import pytest
+
+# These are synthetic runtime/effort/cap causality tests, not production cohort evidence.
+from test_closer_neutral_routing import synthetic_quality_boundary  # noqa: F401
 from test_closer_role_qualification import NOW, record
 
 import adapters
