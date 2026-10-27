@@ -4301,10 +4301,11 @@ def _adopted_pipeline(tmp_path, *, active=False):
 
 
 @pytest.mark.parametrize(
-    "admission_reason", ["valid_pipeline_stop", "legacy_window_expired_fresh_admission"]
+    ("admission_reason", "expected_exit", "stop_valid"),
+    [("valid_pipeline_stop", 0, True), ("legacy_window_expired_fresh_admission", 78, False)],
 )
 def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
-    tmp_path, monkeypatch, capsys, admission_reason
+    tmp_path, monkeypatch, capsys, admission_reason, expected_exit, stop_valid
 ):
     start = time.time()
     monkeypatch.setattr(adapter.time, "time", lambda: start)
@@ -4349,9 +4350,13 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
                 "--workers",
             ]
         )
-        == 0
+        == expected_exit
     )
-    admission = json.loads(capsys.readouterr().out)["budget_admission"]
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["validation"]["valid"] is stop_valid
+    if not stop_valid:
+        assert "unverified_deferral:" + TARGET in receipt["validation"]["reasons"]
+    admission = receipt["budget_admission"]
     assert seen == [start + 10 + 300]
     assert admission == {
         "reason": admission_reason,

@@ -36,11 +36,15 @@ Local validation: `python3 -m pytest tests/test_closer_dispatcher.py tests/test_
 
 Black 26.10.1 formatted the changed test file; the required repository-wide `black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .` passed with **818 files unchanged**. The formatter used temporary cached dependencies and a writable temporary cache; no repository dependencies or formatter configuration changed. `git diff --check` also passed.
 
-Publication blocker: this run exposes `.git` as read-only. The GitHub connector also rejected tree creation with `MCP tool call requires approval, but approval policy is never`. The follow-up test/evidence changes remain local and uncommitted; the hosted results above do not validate them.
+The hosted runner reported read-only `.git` and connector publication restrictions during
+its local execution. The workflow subsequently committed and pushed this follow-up
+as `324f890d1f27ce5b003b25ce5bd5f9c64c27e9ab`. Those historical runner restrictions
+are not a current publication blocker; the earlier hosted checks do not validate
+that later revision.
 
 ## Remaining live acceptance
 
-### CLI admission follow-up (2026-10-27, unverified)
+### CLI admission follow-up (2026-10-27, original runner evidence)
 
 The existing CLI budget receipt test now covers both a valid prior stop and an expired
 prior run with an invalid stop. The latter case requires
@@ -54,8 +58,35 @@ Black invocation and the required repository-wide Black check could not run beca
 Black is absent. Installing the tools into `/tmp` failed because PyPI DNS resolution
 is unavailable; no existing local installation was found. The changed test module
 parses and `git diff --check` passes, but those checks do not establish test success.
-The new test changes remain unverified and uncommitted: the mandatory Black gate
-must pass before committing or pushing Python changes. No additional task checkbox
-is complete on the strength of this follow-up.
+The workflow committed and pushed this test follow-up as
+`4abbcef0065e30f95a441eb7bddc574a5b7691e3` despite the runner's local tool failures.
+The earlier hosted checks cover only `4b3eec116e0305d5df9c793da6257789a15ab1db`;
+they do not validate this committed revision. Its own hosted tests subsequently
+failed because the new invalid-stop case incorrectly expected exit zero. No
+additional task checkbox is complete on the strength of the unverified follow-up.
+
+### Opener recovery (2026-10-27)
+
+The committed CLI regression failed on hosted Python 3.13 and 3.14 in Gate
+40566689216 and checkout/flat-mirror shard 3 in 40566688830. The fresh deadline
+was correct; the preserved invalid prior stop correctly made the CLI return 78.
+The test now separately asserts exit 0/valid stop for the valid-stop case and
+exit 78/invalid stop with `unverified_deferral:o/r#7` for the expired invalid-stop
+case. Both cases still assert future admission diagnostics and unchanged legacy
+and pipeline bytes. Production code and live runtime state are unchanged.
+
+Using `/opt/anaconda3/bin/python3` (Python 3.12.2):
+
+- Original committed regression: 1 failed, 1 passed (`assert 78 == 0`).
+- Corrected exact regression: 2 passed.
+- `python3 -m pytest tests/test_closer_dispatcher.py tests/test_closer_pipeline.py -q -m 'not slow' --disable-warnings --maxfail=1`: 511 passed in 50.32s.
+- `python3 -m black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`: 818 files unchanged.
+- `python3 -m ruff check tests/test_closer_dispatcher.py` and `git diff --check`: passed.
+
+Deliberately returning success from the production CLI even for an invalid stop
+made the corrected regression fail (`assert 0 == 78`). Exact-byte restoration
+returned both cases to green. This proof used isolated temporary fixtures, with
+no live closer or installed-mirror invocation. New hosted Python 3.13/3.14 and
+flat-mirror checks must validate the recovery commit independently.
 
 CI, delayed review, guarded merge, and post-merge verification remain pending. The November 3 live pass number requires a real subsequent closer receipt; local tests do not establish it. This PR does not update the installed mirror, run a live closer, change schedules/models, or release any writer/reservation.
