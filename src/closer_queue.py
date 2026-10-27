@@ -1443,6 +1443,66 @@ def accepted_verifier_wait_proof(state_path, target, *, frontier, receipt, evide
         return None
 
 
+def _fixed_controller_refusal(error):
+    """Literal-only diagnostic; never authority or an exception-text exporter."""
+    import sys
+
+    controller = sys.modules.get("closer_correction_controller")
+    if controller is None or type(error) is not getattr(controller, "ControllerUnknown", None):
+        return None
+    if len(error.args) != 1 or type(error.args[0]) is not str:
+        return None
+    reason = error.args[0]
+    if not 0 < len(reason) <= 160 or any(ord(char) < 32 for char in reason):
+        return None
+    try:
+        codes = set()
+        for value in list(vars(controller).values()):
+            members = [value]
+            if isinstance(value, type) and value.__module__ == controller.__name__:
+                members.extend(vars(value).values())
+            for member in members:
+                if isinstance(member, (staticmethod, classmethod)):
+                    member = member.__func__
+                if (
+                    inspect.isfunction(member)
+                    and member.__globals__ is controller.__dict__
+                    and member.__code__.co_filename == controller.__file__
+                ):
+                    codes.add(member.__code__)
+        frames = []
+        trace = error.__traceback__
+        while trace is not None and len(frames) < 64:
+            frames.append((trace.tb_frame, trace.tb_lineno))
+            trace = trace.tb_next
+        if trace is not None or not frames:
+            return None
+        frame, line = frames[-1]
+        if frame.f_code is controller.need.__code__:
+            if len(frames) < 2:
+                return None
+            frame, line = frames[-2]
+        if (
+            frame.f_code not in codes
+            or frame.f_globals is not controller.__dict__
+            or reason not in frame.f_code.co_consts
+        ):
+            return None
+        return {
+            "schema": "closer-fixed-controller-refusal/v1",
+            "error_type": "ControllerUnknown",
+            "module": controller.__name__,
+            "stage": frame.f_code.co_qualname,
+            "line": line,
+            "fixed_reason": reason,
+            "authority": False,
+            "retry_authorized": False,
+        }
+    except Exception:
+        # Diagnostic availability must never replace the original UNKNOWN outcome.
+        return None
+
+
 def _failure_observation(target: str, error: Exception) -> dict[str, Any]:
     return {
         "target": target,
@@ -2736,8 +2796,13 @@ def run_round(
                         op["error_type"] = type(exc).__name__
                         _defer(item, "operation_uncertain", op["next_trigger"])
                         stalled.add(target)
+                        diagnostic = _fixed_controller_refusal(exc)
                         _event(
-                            round_state, target, "execute_uncertain", error_type=type(exc).__name__
+                            round_state,
+                            target,
+                            "execute_uncertain",
+                            error_type=type(exc).__name__,
+                            **({"fixed_refusal": diagnostic} if diagnostic is not None else {}),
                         )
                         if result_persist_failed:
                             # Durable control-plane failures are fatal, not provider
