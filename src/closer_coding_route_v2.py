@@ -14,6 +14,7 @@ import shlex
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 CHANNEL = "codex-source-route-final-argv/v2"
@@ -57,7 +58,7 @@ class _RouteSeal:
     thread: int
 
 
-_PREPARED = {}
+_PREPARED: dict[tuple[int, FrameType], _RouteSeal] = {}
 
 
 def _read_installed_route_facts(guard):

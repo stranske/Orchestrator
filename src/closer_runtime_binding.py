@@ -2134,7 +2134,7 @@ def run_native_round(
         "C": {"attempted": False, "started_at": None, "finished_at": None},
     }
 
-    continuation_diagnostic = {}
+    continuation_diagnostic: dict[str, str] = {}
 
     def execution_report():
         return {
@@ -2339,6 +2339,11 @@ def run_native_round(
             completed = native_source.finalize_coding_native(
                 cfg, hooks, cleanup_witness, execution_report()
             )
+            # The original completion validator already requires exact pinned
+            # hooks and a known B result. Keep that concrete interface explicit
+            # before reading its postrun fields; generic hooks cannot supply it.
+            if terminal_b is None or type(hooks) is not PinnedNativeHooks:
+                raise BindingError("actual coding completion lacks pinned B/C results")
             proof = completed["proof"]
             return "scoped_continuation", reported(
                 json.dumps(

@@ -10,8 +10,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
+from typing import TYPE_CHECKING
 
 import closer_coding_session_v2 as contract
+
+if TYPE_CHECKING:
+    from closer_coding_delivery import CodingDelivery
+    from closer_correction_controller import _ProviderGuard
 
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 _VALIDATOR_SOURCE_SHA256 = contract._LOADED_SOURCE_SHA256
@@ -24,21 +29,21 @@ class SessionHeld(RuntimeError):
 
 @dataclass(frozen=True)
 class _Plan:
-    guard: object
-    origin: object
-    run: object
+    guard: _ProviderGuard
+    origin: FrameType
+    run: FrameType
     budget_utf8: bytes
-    delivery: object
+    delivery: CodingDelivery
     started_mono: float
     deadline_mono: float
     thread: int
 
 
-_OFFLOADS = {}
-_RUNS = {}
-_APPLIED = {}
-_FACTS = {}
-_HISTORY_RESTRICTIONS = {}
+_OFFLOADS: dict[tuple[int, FrameType], _Plan] = {}
+_RUNS: dict[tuple[int, FrameType], _Plan] = {}
+_APPLIED: dict[tuple[int, FrameType], float] = {}
+_FACTS: dict[tuple[int, FrameType], dict[str, int | bool]] = {}
+_HISTORY_RESTRICTIONS: dict[tuple[int, FrameType], _ProviderGuard] = {}
 
 
 def prepare_history_restriction(frame, callback):

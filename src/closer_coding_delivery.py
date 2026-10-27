@@ -134,7 +134,10 @@ _ACTIVE: dict[tuple[int, FrameType], CodingDelivery | None] = {}
 
 
 def _begin(frame: FrameType) -> None:
-    if inspect.currentframe().f_back is not frame:
+    current = inspect.currentframe()
+    caller = current.f_back if current is not None else None
+    del current  # Do not retain an inspection frame's reference to itself.
+    if caller is None or caller is not frame:
         raise ValueError("original coding transport frame required")
     key = (threading.get_ident(), frame)
     if key in _ACTIVE:
@@ -143,7 +146,10 @@ def _begin(frame: FrameType) -> None:
 
 
 def _verify(frame: FrameType) -> None:
-    if inspect.currentframe().f_back is not frame:
+    current = inspect.currentframe()
+    caller = current.f_back if current is not None else None
+    del current  # Do not retain an inspection frame's reference to itself.
+    if caller is None or caller is not frame:
         raise ValueError("original coding transport frame required")
     key = (threading.get_ident(), frame)
     if key not in _ACTIVE:
@@ -154,7 +160,10 @@ def _verify(frame: FrameType) -> None:
 
 
 def _revoke(frame: FrameType) -> None:
-    if inspect.currentframe().f_back is not frame:
+    current = inspect.currentframe()
+    caller = current.f_back if current is not None else None
+    del current  # Do not retain an inspection frame's reference to itself.
+    if caller is None or caller is not frame:
         raise ValueError("original coding transport frame required")
     _ACTIVE.pop((threading.get_ident(), frame), None)
 
@@ -166,7 +175,9 @@ def require_coding_delivery(frame: FrameType) -> CodingDelivery:
     Consumers must retain the callback frame and call this again after their own
     final checks. The dispatcher also rechecks immediately before Popen.
     """
-    caller = inspect.currentframe().f_back
+    current = inspect.currentframe()
+    caller = current.f_back if current is not None else None
+    del current  # Do not retain an inspection frame's reference to itself.
     if caller is None or caller.f_back is not frame:
         raise ValueError("live original before-Popen coding callback required")
     held = _ACTIVE.get((threading.get_ident(), frame))
