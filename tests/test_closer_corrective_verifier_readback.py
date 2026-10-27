@@ -346,6 +346,27 @@ def test_missing_deployed_support_refuses_before_any_native_read(retained, monke
     assert retained.calls == []
 
 
+@pytest.mark.parametrize(
+    "path",
+    [".github/scripts/verifier_gzip_assets.js", "scripts/langchain/pr_verifier.py"],
+)
+def test_changed_corrective_selector_or_validator_source_cannot_reuse_support_pin(retained, path):
+    # Authenticated Git content is valid but not the reviewed deployed source.
+    # Neither the native checkout SHA nor a successful terminal can substitute
+    # for these normative parser/validator bytes.
+    assert path in readback.SOURCE_FILES
+    document = retained.docs[f"repos/{readback.CENTRAL}/contents/{path}?ref=" + "b" * 40]
+    raw = b"different valid native source bytes"
+    document.update(
+        content=base64.b64encode(raw).decode(),
+        size=len(raw),
+        sha=hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest(),
+    )
+    with pytest.raises(readback.ReadbackHeld, match="source is unsupported"):
+        readback.read(retained.backend, retained.record, retained.snapshot)
+    assert all("POST" not in call for call in retained.calls)
+
+
 def test_duplicate_fixed_archive_member_is_not_selected_by_order():
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:

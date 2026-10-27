@@ -32,8 +32,10 @@ CENTRAL = "stranske/Workflows"
 DEPLOYED_SOURCE_PINS: tuple[dict, ...] = ()
 SOURCE_FILES = (
     CALLEE,
+    ".github/scripts/verifier_gzip_assets.js",
     ".github/scripts/verification_event.js",
     ".github/scripts/agents_verifier_context.js",
+    "scripts/langchain/pr_verifier.py",
     "tools/verifier_corpus_evidence.py",
 )
 MODES = {
