@@ -148,3 +148,35 @@ def test_disk_changed_before_class_definition_cannot_pin_old_module_globals(tmp_
         assert module.CALLS == []
     finally:
         sys.modules.pop(name, None)
+
+
+@pytest.mark.parametrize("error", [PermissionError, OSError])
+def test_source_reread_error_refuses_before_identity(loaded_reader, monkeypatch, error):
+    module, path, registration = loaded_reader
+    original = Path.read_bytes
+
+    def unreadable(candidate):
+        if candidate == path:
+            raise error("synthetic source reread failure")
+        return original(candidate)
+
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    with pytest.raises(ctl.ControllerUnknown, match="installed consumer reader source differs"):
+        module.SyntheticReader().observe(registration)
+    assert module.CALLS == []
+
+
+def test_source_disappearing_after_file_check_refuses_before_identity(loaded_reader, monkeypatch):
+    module, path, registration = loaded_reader
+    original = Path.is_file
+
+    def disappearing(candidate):
+        present = original(candidate)
+        if candidate == path and present:
+            path.unlink()
+        return present
+
+    monkeypatch.setattr(Path, "is_file", disappearing)
+    with pytest.raises(ctl.ControllerUnknown, match="installed consumer reader source differs"):
+        module.SyntheticReader().observe(registration)
+    assert module.CALLS == []
