@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from test_closer_native_observer import host as host
 
-import python_standard_audit as audit
 import closer_mechanisms
+import python_standard_audit as audit
 import switch_review
 
 
