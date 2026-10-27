@@ -731,7 +731,7 @@ def _execute(root, controller, operation):
                     task_type=ACTION,
                     mode="full",
                     data_only=False,
-                    isolate=True,
+                    isolate=publication_baseline_ref is None,
                     timeout=timeout,
                     max_network_retries=0,
                     subject_id=purpose["target"],

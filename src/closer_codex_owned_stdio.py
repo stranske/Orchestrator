@@ -246,6 +246,9 @@ def prepare(frame, guard, argv, cwd, profile):
         and runtime._HISTORY_RESTRICTIONS.get((threading.get_ident(), frame)) is guard
     )
     _reader_live(guard.reader)
+    import closer_coding_publication as publication
+
+    publication.validate_coding_workspace(frame, cwd)
     reg = guard.controller.config.consumers[guard.consumer_id]
     import closer_coding_session_v2 as session_contract
     import execution_profiles

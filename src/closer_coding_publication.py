@@ -728,6 +728,42 @@ def retain_baseline(root, controller, custody, operation):
         raise
 
 
+def validate_coding_workspace(origin, cwd):
+    """Bind the actual owned native route to its authenticated publication worktree."""
+    import closer_coding_worker as worker
+    import dispatcher
+
+    caller = origin.f_back
+    _need(
+        origin.f_code is dispatcher._CODING_DELIVERY_OFFLOAD_CODE
+        and origin.f_globals is dispatcher.__dict__
+        and caller is not None
+        and caller.f_code is worker._execute.__code__
+        and caller.f_globals is worker.__dict__,
+        "actual coding workspace source unavailable",
+    )
+    baseline = caller.f_locals.get("publication_baseline_ref")
+    policy = caller.f_locals.get("publication_policy")
+    if baseline is None and policy is None:
+        return
+    _need(
+        type(baseline) is _BaselineLease and policy is not None,
+        "actual source baseline lease required",
+    )
+    baseline.check()
+    observed = baseline.observed
+    _need(
+        observed.caller is caller
+        and observed.root is caller.f_locals.get("root")
+        and observed.controller is caller.f_locals.get("controller")
+        and observed.operation is caller.f_locals.get("operation")
+        and observed.custody is caller.f_locals.get("guard").custody
+        and baseline.host.observed is observed
+        and Path(cwd) == baseline.host.workspace == Path(caller.f_locals["workspace"]),
+        "native coding cwd differs from authenticated publication worktree",
+    )
+
+
 def retain_handoff(root, controller, custody, operation, baseline_ref, result, terminal_ref):
     caller = inspect.currentframe().f_back
     _live_worker_custody(root, controller, custody, operation, caller)
