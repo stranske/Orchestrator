@@ -60,6 +60,7 @@ from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import capabilities
 import paths
@@ -2159,7 +2160,7 @@ def cursor_closer_native_entry_snapshot(
     wrapper = Path(
         wrapper_path or os.environ.get("ORCH_CURSOR_LANE_WRAPPER", "") or CURSOR_LANE_WRAPPER
     )
-    report = {
+    report: dict[str, Any] = {
         "log_path": str(log),
         "launcher_results": None,
         "refused": None,
