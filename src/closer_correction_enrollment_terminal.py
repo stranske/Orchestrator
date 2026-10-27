@@ -412,25 +412,14 @@ def retain_locked(controller, custody, operation, selection, *, published, enrol
         "original issuance cutoff differs",
     )
     proofs = _issuance_proofs(context, admission, issued_at_ms)
+    import closer_correction_producer as producer
     import closer_dispatcher as closer
 
     _prep, _snapshot, _packet, root = source._prepared(context)
     original_record = closer._read_controlled_receipt(facts["source_record_ref"], root)
     # This already-current materialized decision is retained by the source
     # publisher. Derive its immutable reference, never create another decision.
-    decision_raw = json.dumps(
-        facts["decision"],
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode()
-    decision_sha = hashlib.sha256(decision_raw).hexdigest()
-    decision_ref = {
-        "path": str(root / "raw" / decision_sha[:2] / (decision_sha + ".correction-decision.json")),
-        "sha256": decision_sha,
-        "bytes": len(decision_raw),
-    }
+    decision_ref = producer.retained_ref(root, facts["decision"], "correction-decision.json")
     _need(
         closer._read_controlled_receipt(decision_ref, root) == facts["decision"],
         "original retained materialized decision differs",
