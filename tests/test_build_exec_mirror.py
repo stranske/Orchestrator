@@ -99,6 +99,7 @@ def source(tmp_path: Path) -> Path:
     _write(src / "IMPROVEMENT_BACKLOG.md", "pointer\n")
     _write(src / ".verify-floor.json", '{"collected": 1}\n')
     _write(src / "config" / "coverage-baseline.json", "{}\n")
+    _write(src / "config" / "test-shards.json", '{"shards": [["tests/test_a.py"]]}\n')
     _write(src / "config" / "model_epochs.json", '{"epochs": {}}\n')
     _git(src, "add", "-A")
     _git(src, "commit", "-q", "-m", "init")
@@ -139,6 +140,9 @@ def test_the_mirror_is_flat_and_carries_the_committed_trees(source: Path, tmp_pa
     assert not (mirror / "tests" / "test_untracked.py").exists()
     assert (mirror / "tests" / "fixtures" / "f.txt").read_text() == "fixture\n"
     assert (mirror / "tools" / "make_test_shards.py").is_file()
+    assert (mirror / "config" / "test-shards.json").read_text() == (
+        '{"shards": [["tests/test_a.py"]]}\n'
+    )
     assert "uncommitted test edits are NOT shipped" in proc.stdout
     for executable in ("orchestrate.sh", "scripts/check_checks_reported.py"):
         assert os.access(mirror / executable, os.X_OK), executable

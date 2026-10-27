@@ -45,6 +45,28 @@ def test_shard_lists_partition_every_collected_test_exactly_once():
     assert len(modules) == len(set(modules))
 
 
+def test_shard_plan_rejects_duplicate_modules(tmp_path, monkeypatch):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "test-shards.json").write_text(
+        json.dumps({"shards": [["tests/test_a.py"], ["tests/test_a.py"]]})
+    )
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="invalid or duplicate modules"):
+        verify.shard_plan()
+
+
+def test_shard_plan_rejects_parent_path_components(tmp_path, monkeypatch):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "test-shards.json").write_text(
+        json.dumps({"shards": [["tests/../test_a.py"]]})
+    )
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="invalid or duplicate modules"):
+        verify.shard_plan()
+
+
 @pytest.fixture
 def summaries(tmp_path, monkeypatch):
     monkeypatch.setattr(verify, "shard_plan", lambda: [["a.py"], ["b.py"], ["c.py"]])
