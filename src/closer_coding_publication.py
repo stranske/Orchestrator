@@ -23,6 +23,7 @@ import closer_queue as queue
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 POLICY_SCHEMA = "closer-owned-pr-publication-policy/v1"
+ANCHOR_POLICY_SCHEMA = "closer-owned-pr-publication-policy/v2"
 INTENT_SCHEMA = "closer-owned-pr-publication-contract-intent/v1"
 EVENT_SCHEMA = "closer-owned-pr-publication-contract-event/v1"
 _SHA = re.compile(r"[a-f0-9]{64}\Z")
@@ -111,6 +112,7 @@ def _path(value):
 
 def validate_policy(value):
     """Closed, explicit necessary policy shape only. Never an authority producer."""
+    anchor_mode = type(value) is dict and value.get("schema") == ANCHOR_POLICY_SCHEMA
     _exact(
         value,
         {
@@ -121,10 +123,12 @@ def validate_policy(value):
             "allowed_path_prefixes",
             "trusted_context_sha256",
             *_BOUNDS,
+            *({"baseline_limits"} if anchor_mode else set()),
         },
     )
     _need(
-        value["schema"] == POLICY_SCHEMA and value["mode"] == "owned_existing_pr",
+        value["schema"] in {POLICY_SCHEMA, ANCHOR_POLICY_SCHEMA}
+        and value["mode"] == "owned_existing_pr",
         "publication mode unsupported",
     )
     _need(type(value["consumer_id"]) is str and bool(value["consumer_id"]), "consumer missing")
@@ -159,6 +163,8 @@ def validate_policy(value):
         and value["max_push_submissions"] == 1,
         "publication numeric bounds invalid",
     )
+    if anchor_mode:
+        _baseline_limits(value["baseline_limits"])
     return _copy(value)
 
 
@@ -1105,6 +1111,59 @@ def validate_baseline_data(value, policy):
         # Comparison only: keep original Git bytes and refuse filesystem aliases.
         return unicodedata.normalize("NFC", unicodedata.normalize("NFC", path).casefold())
 
+    if type(policy) is dict and policy.get("schema") == ANCHOR_POLICY_SCHEMA:
+        import unicodedata
+
+        policy = validate_policy(policy)
+        bound = _inventory_policy(policy)
+        _exact(value, {"schema", "base_oid", "head_oid", "tree_oid", "files"})
+        _need(
+            value["schema"] == "closer-publication-baseline-data/v2"
+            and all(_oid(value[k]) for k in ("base_oid", "head_oid", "tree_oid")),
+            "baseline Git anchor differs",
+        )
+        rows, total, seen, prefixes = value["files"], 0, set(), {}
+        _need(
+            type(rows) is list and len(rows) <= bound["max_files"], "baseline inventory count bound"
+        )
+        for row in rows:
+            _exact(row, {"path", "blob"})
+            path = _inventory_path(row["path"], policy)
+            key = unicodedata.normalize("NFC", path).casefold()
+            _need(key not in seen, "baseline path alias")
+            seen.add(key)
+            parts = path.split("/")
+            for end in range(1, len(parts) + 1):
+                part = "/".join(parts[:end])
+                normalized = unicodedata.normalize("NFC", part).casefold()
+                _need(prefixes.setdefault(normalized, part) == part, "baseline directory alias")
+            blob = row["blob"]
+            _exact(blob, {"mode", "git_oid", "sha256", "size"})
+            _need(
+                type(blob["mode"]) is int
+                and blob["mode"] in {100644, 100755}
+                and _oid(blob["git_oid"])
+                and _sha(blob["sha256"])
+                and type(blob["size"]) is int
+                and 0 <= blob["size"] <= bound["max_file_bytes"],
+                "baseline blob metadata differs",
+            )
+            total += blob["size"]
+        _need(
+            total <= bound["max_total_bytes"]
+            and [r["path"] for r in rows] == sorted(r["path"] for r in rows)
+            and not any(
+                "/".join(k.split("/")[:end]) in seen
+                for k in seen
+                for end in range(1, len(k.split("/")))
+            ),
+            "baseline bytes/order/prefix bound",
+        )
+        _need(
+            _tree_oid(rows) == value["tree_oid"] and len(_bytes(value)) <= bound["max_ack_bytes"],
+            "complete baseline tree/envelope differs",
+        )
+        return _copy(value)
     policy = validate_policy(policy)
     _exact(value, {"schema", "base_oid", "head_oid", "tree_oid", "files"})
     _need(
@@ -1161,14 +1220,21 @@ def validate_candidate_against_baseline(baseline, candidate, policy):
         changed.add(path)
         before = old.get(path)
         expected = (
-            None if before is None else {k: v for k, v in before.items() if k != "bytes_base64"}
+            None
+            if before is None
+            else {k: v for k, v in before.items() if k not in {"bytes_base64", "size"}}
         )
         _need(_bytes(expected) == _bytes(row["before"]), "candidate before bytes differ")
         _need(_bytes(before) != _bytes(row["after"]), "empty candidate change")
         if row["after"] is None:
             updated.pop(path, None)
         else:
-            updated[path] = row["after"]
+            updated[path] = (
+                {k: row["after"][k] for k in ("mode", "git_oid", "sha256")}
+                | {"size": len(_raw_blob(row["after"], policy))}
+                if policy["schema"] == ANCHOR_POLICY_SCHEMA
+                else row["after"]
+            )
     unchanged = [{"path": p, "blob": old[p]} for p in sorted(old) if p not in changed]
     _need(digest(unchanged) == candidate["unchanged_tree_sha256"], "unchanged inventory differs")
     after = {
@@ -1177,6 +1243,7 @@ def validate_candidate_against_baseline(baseline, candidate, policy):
         "files": [{"path": p, "blob": updated[p]} for p in sorted(updated)],
     }
     validate_baseline_data(after, policy)
+    _need(len(_bytes(candidate)) <= 1048576, "complete candidate exceeds custody bound")
     return candidate
 
 
@@ -1365,22 +1432,32 @@ def staging_payload_data(baseline, candidate, policy):
 _ORIGINAL_UNSUPPLIED = object()
 
 
+def publication_key(value):
+    _need(type(value) is dict, "publication registration/snapshot must be an object")
+    keys = set(value) & {"publication_v1", "publication_v2"}
+    _need(len(keys) <= 1, "mixed publication policy versions unsupported")
+    return next(iter(keys), None)
+
+
 def validate_consumer_mode(consumer_id, registration, original=_ORIGINAL_UNSUPPLIED):
-    """Validate prospective policy DATA; a snapshot does not issue Git custody."""
-    _need(type(registration) is dict, "exact source consumer registration required")
+    """Closed prospective migration; never upgrade an original source admission."""
+    key = publication_key(registration)
     current = None
-    if "publication_v1" in registration:
-        current = validate_policy(registration["publication_v1"])
+    if key is not None:
+        current = validate_policy(registration[key])
         _need(current["consumer_id"] == consumer_id, "publication consumer differs")
-    if original is not _ORIGINAL_UNSUPPLIED:
-        _need(type(original) is dict, "original source snapshot required")
-        admitted = original.get("publication_v1")
         _need(
-            ("publication_v1" in original) == ("publication_v1" in registration),
-            "publication mode cannot be added or removed after admission",
+            current["schema"]
+            == (POLICY_SCHEMA if key == "publication_v1" else ANCHOR_POLICY_SCHEMA),
+            "publication policy version/key differs",
+        )
+    if original is not _ORIGINAL_UNSUPPLIED:
+        _need(
+            publication_key(original) == key,
+            "publication mode cannot be added, removed or migrated after admission",
         )
         if current is not None:
-            admitted = validate_policy(admitted)
+            admitted = validate_policy(original[key])
             _need(_bytes(admitted) == _bytes(current), "original publication policy differs")
     return current
 
@@ -1730,6 +1807,7 @@ def _read_command(kind, pr=None):
         "global_paths": ["var", "GIT_CONFIG_GLOBAL"],
         "helper_shell": ["var", "GIT_SHELL_PATH"],
         "helpers": ["config", "--null", "--get-all", "credential.helper"],
+        "object_inventory": ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
         "github_helpers": ["config", "--null", "--get-all", "credential.https://github.com.helper"],
         "head": ["rev-parse", "--verify", "HEAD^{commit}"],
         "branch": ["symbolic-ref", "HEAD"],
@@ -1742,7 +1820,7 @@ def _read_command(kind, pr=None):
     return fixed[kind]
 
 
-def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=()):
+def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=(), object_input=None):
     import dispatcher
 
     command = [
@@ -1760,11 +1838,45 @@ def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=())
         ),
         "inherited Git/runtime override unsupported",
     )
+    if observed.policy["schema"] == ANCHOR_POLICY_SCHEMA:
+        source_env.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1")
+    _need(
+        (kind == "object_inventory") == (object_input is not None),
+        "fixed object inventory input differs",
+    )
+    if object_input is not None:
+        _need(
+            type(object_input) is bytes
+            and len(object_input) <= _inventory_policy(observed.policy)["max_ack_bytes"]
+            and re.fullmatch(rb"(?:[a-f0-9]{40}\n)+", object_input) is not None,
+            "bounded closed object IDs required",
+        )
     ownership = []
 
     def starting(_):
         observed.check()
-        _need(dict(os.environ) == source_env, "publication observation environment changed")
+        _need(
+            {
+                k: v
+                for k, v in source_env.items()
+                if k not in {"GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS"}
+            }
+            == dict(os.environ),
+            "publication observation environment changed",
+        )
+        if object_input is not None:
+            import stat
+
+            meta = os.fstat(private_input.fileno())
+            _need(
+                stat.S_ISREG(meta.st_mode)
+                and meta.st_uid == os.getuid()
+                and meta.st_nlink == 0
+                and not meta.st_mode & 0o077
+                and meta.st_size == len(object_input)
+                and os.pread(private_input.fileno(), len(object_input) + 1, 0) == object_input,
+                "fixed native object stdin changed",
+            )
         for item in files:
             item.check()
         _need(
@@ -1782,18 +1894,30 @@ def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=())
         _transport_observation(command, actual)
         _need(actual.get("cleanup_terminal") is True, "Git observation cleanup unknown")
 
+    private_input = None
     try:
+        if object_input is not None:
+            import tempfile
+
+            private_input = tempfile.TemporaryFile(mode="w+b", dir=observed.custody.path)
+            private_input.write(object_input)
+            private_input.flush()
+            private_input.seek(0)
         result = dispatcher.run_observed_offload(
             command,
             callback=started,
             observation={},
             cwd=str(workspace),
             timeout=_remaining_transport_seconds(observed.operation, observed.policy, time.time()),
-            stdin=None,
+            stdin=private_input,
             starting_callback=starting,
             finished_callback=finished,
             env=source_env,
-            output_limit=observed.policy["max_ack_bytes"],
+            output_limit=(
+                _inventory_policy(observed.policy)["max_ack_bytes"]
+                if kind in {"tree", "index", "index_flags", "object_inventory"}
+                else observed.policy["max_ack_bytes"]
+            ),
         )
         _need(len(ownership) == 1, "Git observation unavailable")
         finished(ownership[0])
@@ -1803,11 +1927,22 @@ def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=())
         )
         _need(not ownership[0].get("invalid_utf8_output"), "non-UTF8 Git observation unsupported")
         raw = result.stdout.encode("utf-8")
-        _need(len(raw) <= observed.policy["max_ack_bytes"], "Git observation output bound")
+        _need(
+            len(raw)
+            <= (
+                _inventory_policy(observed.policy)["max_ack_bytes"]
+                if kind in {"tree", "index", "index_flags", "object_inventory"}
+                else observed.policy["max_ack_bytes"]
+            ),
+            "Git observation output bound",
+        )
         return raw
     except Exception:
         # Never expose native argv/config output or subprocess error bodies.
         raise PublicationHeld("fixed Git observation unavailable") from None
+    finally:
+        if private_input is not None:
+            private_input.close()
 
 
 def _fixed_helper_route(helper_values, gh_path, environment):
@@ -2082,10 +2217,13 @@ class _HostGitLease:
         self.held, self.summary, self.missing = held, _copy(summary), tuple(missing)
         self.environment = dict(environment)
         self.closed = False
+        self.object_anchor = None
 
     def check(self):
         _need(not self.closed, "HostGit lease closed")
         self.observed.check()
+        if self.object_anchor is not None:
+            self.object_anchor.check()
         _need(dict(os.environ) == self.environment, "publication native route environment changed")
         for item in self.held:
             item.check()
@@ -2093,6 +2231,22 @@ class _HostGitLease:
             not any(Path(p).exists() or Path(p).is_symlink() for p in self.missing),
             "previously absent Git configuration appeared",
         )
+
+    def read_lifetime(self):
+        """Read-only loop uses the existing writer context, not effect authority.
+
+        Full source/config/native checks bracket the complete inventory and
+        still run at every native phase. Per-file reads retain their own
+        descriptor/ancestor checks and this original queue/writer lifetime.
+        """
+        import closer_source_installation as installed
+
+        _need(not self.closed, "HostGit lifetime ended")
+        scope = getattr(self.observed.controller._writer_context, "validation_scope", None)
+        _need(
+            type(scope) is installed._OriginalWriterScope, "original source writer scope required"
+        )
+        scope.check_context(self.observed.controller.installation._binding)
 
     def read(self, kind):
         self.check()
@@ -2104,6 +2258,8 @@ class _HostGitLease:
         if not self.closed:
             self.closed = True
             errors = []
+            if self.object_anchor is not None:
+                self.object_anchor.close()
             for item in reversed(self.held):
                 try:
                     item.close()
@@ -2112,7 +2268,74 @@ class _HostGitLease:
             _need(not errors, "publication descriptor cleanup unknown")
 
 
+_BASELINE_CAPS = {
+    "max_files": 4096,
+    "max_file_bytes": 80 * 1048576,
+    "max_total_bytes": 128 * 1048576,
+    "max_inventory_bytes": 1048576,
+}
+
+
+def _baseline_limits(value):
+    _exact(value, {"schema", *_BASELINE_CAPS})
+    _need(
+        value["schema"] == "closer-publication-baseline-limits/v1"
+        and all(
+            type(value[k]) is int and 0 < value[k] <= maximum
+            for k, maximum in _BASELINE_CAPS.items()
+        )
+        and value["max_file_bytes"] <= value["max_total_bytes"],
+        "baseline inventory limits differ",
+    )
+    return _copy(value)
+
+
+def _inventory_policy(policy):
+    if policy.get("schema") == ANCHOR_POLICY_SCHEMA:
+        limits = policy["baseline_limits"]
+        return {
+            **policy,
+            **{k: limits[k] for k in ("max_files", "max_file_bytes", "max_total_bytes")},
+            "max_ack_bytes": limits["max_inventory_bytes"],
+        }
+    return policy
+
+
+def _inventory_path(path, policy):
+    if policy.get("schema") == ANCHOR_POLICY_SCHEMA and path.split("/")[-1] == ".gitattributes":
+        _path(path + ".immutable-inventory")
+        return path
+    return _path(path)
+
+
+def _inventory_blob(path, policy):
+    """One bounded physical read; no unchanged contents retained anywhere."""
+    item = _PhysicalFile(path, policy["max_file_bytes"], metadata_only=True)
+    try:
+        size = os.fstat(item.fd).st_size
+        sha, git, count = hashlib.sha256(), hashlib.sha1(b"blob " + str(size).encode() + b"\0"), 0
+        while True:
+            chunk = os.read(item.fd, 65536)
+            if not chunk:
+                break
+            count += len(chunk)
+            _need(count <= size, "baseline file grew")
+            sha.update(chunk)
+            git.update(chunk)
+        item.check()
+        _need(count == size, "baseline file changed size")
+        return {
+            "mode": 100755 if os.fstat(item.fd).st_mode & 0o111 else 100644,
+            "git_oid": git.hexdigest(),
+            "sha256": sha.hexdigest(),
+            "size": size,
+        }
+    finally:
+        item.close()
+
+
 def _tree_records(raw, policy):
+    policy = _inventory_policy(policy)
     _need(
         type(raw) is bytes
         and len(raw) <= policy["max_ack_bytes"]
@@ -2131,13 +2354,14 @@ def _tree_records(raw, policy):
             mode in {"100644", "100755"} and kind == "blob" and _oid(oid),
             "regular Git tree required",
         )
-        path = _path(path)
+        path = _inventory_path(path, policy)
         _need(path not in result and len(result) < policy["max_files"], "Git tree inventory bound")
         result[path] = (int(mode), oid)
     return result
 
 
 def _index_records(raw, policy):
+    policy = _inventory_policy(policy)
     _need(
         type(raw) is bytes
         and len(raw) <= policy["max_ack_bytes"]
@@ -2156,8 +2380,11 @@ def _index_records(raw, policy):
     return _tree_records(bytes(projected), policy)
 
 
-def _physical_inventory(workspace, policy, check, *, original_paths, allow_new):
+def _physical_inventory(workspace, policy, check, *, original_paths, allow_new, full_check=None):
+    policy = _inventory_policy(policy)
     rows, total, entries = [], 0, 0
+    if full_check is not None:
+        full_check()
     root = Path(workspace)
     _need(root.resolve(strict=True) == root and not root.is_symlink(), "workspace redirected")
 
@@ -2176,8 +2403,17 @@ def _physical_inventory(workspace, policy, check, *, original_paths, allow_new):
                 else:
                     _need(entry.is_file(follow_symlinks=False), "nonregular candidate path")
                     path = Path(directory) / entry.name
-                    relative = _path(path.relative_to(root).as_posix())
+                    relative = _inventory_path(path.relative_to(root).as_posix(), policy)
                     _physical_path_scope(relative, original_paths, policy, allow_new)
+                    if policy.get("schema") == ANCHOR_POLICY_SCHEMA:
+                        blob = _inventory_blob(path, policy)
+                        total += blob["size"]
+                        _need(
+                            total <= policy["max_total_bytes"] and len(rows) < policy["max_files"],
+                            "physical inventory bound",
+                        )
+                        rows.append({"path": relative, "blob": blob})
+                        continue
                     item = _PhysicalFile(path, policy["max_file_bytes"])
                     try:
                         raw = item.raw()
@@ -2202,8 +2438,10 @@ def _physical_inventory(workspace, policy, check, *, original_paths, allow_new):
                     finally:
                         item.close()
 
-    visit(root)
-    check()
+    try:
+        visit(root)
+    finally:
+        (full_check or check)()
     return sorted(rows, key=lambda row: row["path"])
 
 
@@ -2226,21 +2464,33 @@ def _capture_baseline(host):
         "original index differs from native tree",
     )
     rows = _physical_inventory(
-        host.workspace, policy, host.check, original_paths=set(tree), allow_new=False
+        host.workspace,
+        policy,
+        host.read_lifetime if policy["schema"] == ANCHOR_POLICY_SCHEMA else host.check,
+        full_check=host.check if policy["schema"] == ANCHOR_POLICY_SCHEMA else None,
+        original_paths=set(tree),
+        allow_new=False,
     )
     _need(
         {r["path"]: (r["blob"]["mode"], r["blob"]["git_oid"]) for r in rows} == tree,
         "workspace bytes are not clean native head",
     )
     baseline = {
-        "schema": "closer-publication-baseline-data/v1",
+        "schema": (
+            "closer-publication-baseline-data/v2"
+            if policy["schema"] == ANCHOR_POLICY_SCHEMA
+            else "closer-publication-baseline-data/v1"
+        ),
         "base_oid": host.pr["base_oid"],
         "head_oid": host.pr["head_oid"],
         "tree_oid": _tree_oid(rows),
         "files": rows,
     }
     _need(baseline["tree_oid"] == committed_tree, "native commit tree and captured bytes differ")
-    return validate_baseline_data(baseline, policy)
+    baseline = validate_baseline_data(baseline, policy)
+    if policy["schema"] == ANCHOR_POLICY_SCHEMA:
+        host.object_anchor = _borrow_existing_objects(host, baseline)
+    return baseline
 
 
 def _original_slot(observed):
@@ -2266,7 +2516,11 @@ class _BaselineLease:
         self.closed = False
         self.staging = None
         record = {
-            "schema": "closer-publication-source-baseline/v1",
+            "schema": (
+                "closer-publication-source-baseline/v2"
+                if observed.policy["schema"] == ANCHOR_POLICY_SCHEMA
+                else "closer-publication-source-baseline/v1"
+            ),
             "baseline": self.baseline,
             "native_pr": host.pr,
             "host_git": host.summary,
@@ -2276,6 +2530,12 @@ class _BaselineLease:
             "stable_slot": stable_slot(_original_slot(observed)),
             **{k: False for k in _AUTHORITY},
         }
+        if observed.policy["schema"] == ANCHOR_POLICY_SCHEMA:
+            record["existing_objects"] = host.object_anchor.summary()
+        _need(
+            len(_bytes(record)) <= 1048576,
+            "complete source baseline envelope exceeds custody bound",
+        )
         name = "publication-source-baseline-" + digest(record) + ".json"
         observed.check()
         _need(observed.custody.create(name, record), "source baseline already owned")
@@ -2332,23 +2592,63 @@ def _capture_candidate(host, baseline):
     rows = _physical_inventory(
         host.workspace,
         host.observed.policy,
-        host.check,
+        (
+            host.read_lifetime
+            if host.observed.policy["schema"] == ANCHOR_POLICY_SCHEMA
+            else host.check
+        ),
+        full_check=host.check if host.observed.policy["schema"] == ANCHOR_POLICY_SCHEMA else None,
         original_paths={r["path"] for r in baseline["files"]},
         allow_new=True,
     )
     old = {r["path"]: r["blob"] for r in baseline["files"]}
     new = {r["path"]: r["blob"] for r in rows}
     paths = sorted(p for p in old.keys() | new.keys() if _bytes(old.get(p)) != _bytes(new.get(p)))
-    changed = [
-        {
-            "path": p,
-            "before": (
-                None if p not in old else {k: v for k, v in old[p].items() if k != "bytes_base64"}
-            ),
-            "after": new.get(p),
-        }
-        for p in paths
-    ]
+    if host.observed.policy["schema"] == ANCHOR_POLICY_SCHEMA:
+        changed = []
+        for path in paths:
+            _path(path)
+            after = None
+            if path in new:
+                item = _PhysicalFile(host.workspace / path, host.observed.policy["max_file_bytes"])
+                try:
+                    raw = item.raw()
+                    item.check()
+                    _need(
+                        len(raw) == new[path]["size"]
+                        and blob_oid(raw) == new[path]["git_oid"]
+                        and hashlib.sha256(raw).hexdigest() == new[path]["sha256"],
+                        "changed bytes differ",
+                    )
+                    after = {k: new[path][k] for k in ("mode", "git_oid", "sha256")} | {
+                        "bytes_base64": base64.b64encode(raw).decode("ascii")
+                    }
+                finally:
+                    item.close()
+            changed.append(
+                {
+                    "path": path,
+                    "before": (
+                        None
+                        if path not in old
+                        else {k: old[path][k] for k in ("mode", "git_oid", "sha256")}
+                    ),
+                    "after": after,
+                }
+            )
+    else:
+        changed = [
+            {
+                "path": p,
+                "before": (
+                    None
+                    if p not in old
+                    else {k: v for k, v in old[p].items() if k != "bytes_base64"}
+                ),
+                "after": new.get(p),
+            }
+            for p in paths
+        ]
     candidate = {
         "base_oid": baseline["base_oid"],
         "old_head_oid": baseline["head_oid"],
@@ -2503,6 +2803,7 @@ def _commit_tree(raw, head, policy):
 
 
 def _index_flags(raw, policy):
+    policy = _inventory_policy(policy)
     _need(
         type(raw) is bytes
         and len(raw) <= policy["max_ack_bytes"]
@@ -2522,6 +2823,8 @@ def _index_flags(raw, policy):
 
 
 def _physical_path_scope(relative, original_paths, policy, allow_new):
+    if relative not in original_paths:
+        _path(relative)
     _need(
         relative in original_paths
         or (
@@ -3019,12 +3322,242 @@ def _seed_snapshot_data(baseline, commit_raw, policy):
     return _validate_seed_data(objects, baseline["head_oid"], policy)
 
 
+class _ExistingObjects:
+    """Read-only ownership of selected existing Git objects, never a publisher."""
+
+    def __init__(self, path, baseline, commit_raw, policy):
+        baseline = validate_baseline_data(baseline, policy)
+        self.path, self.baseline, self.closed = Path(path), _copy(baseline), False
+        self.directory = _PhysicalDirectory(self.path)
+        self.held, self.absent, self.identities, self.prefixes, self.loose_prefixes = (
+            [],
+            [],
+            {},
+            {},
+            {},
+        )
+        try:
+            trees = {}
+            _need(
+                _tree_oid(baseline["files"], objects=trees) == baseline["tree_oid"]
+                and _commit_tree(commit_raw, baseline["head_oid"], policy) == baseline["tree_oid"],
+                "existing object anchor differs",
+            )
+            self.expected = {
+                r["blob"]["git_oid"]: ("blob", r["blob"]["size"]) for r in baseline["files"]
+            }
+            self.expected.update(
+                {oid: ("tree", len(raw.split(b"\0", 1)[1])) for oid, raw in trees.items()}
+            )
+            self.expected[baseline["head_oid"]] = ("commit", len(commit_raw))
+            _need(
+                len(self.expected_output()) <= policy["baseline_limits"]["max_inventory_bytes"],
+                "closed native object metadata byte bound",
+            )
+            self.pack = _PhysicalDirectory(self.path / "pack")
+            self.pack_names = self._pack_inventory()
+            for name in self.pack_names:
+                meta = os.stat(name, dir_fd=self.pack.fd, follow_symlinks=False)
+                self.identities["pack/" + name] = self._regular_identity(meta)
+            for oid in self.expected:
+                prefix, name = oid[:2], oid[2:]
+                fd = self._prefix(prefix)
+                try:
+                    try:
+                        meta = (
+                            os.stat(name, dir_fd=fd, follow_symlinks=False)
+                            if fd is not None
+                            else None
+                        )
+                    except FileNotFoundError:
+                        meta = None
+                    if meta is not None:
+                        self.identities[prefix + "/" + name] = self._regular_identity(meta)
+                        self.loose_prefixes[prefix] = self.prefixes[prefix]
+                    else:
+                        self.absent.append(self.path / prefix / name)
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+            info_fd = self._prefix("info")
+            try:
+                for name in ("alternates", "http-alternates"):
+                    if info_fd is not None:
+                        try:
+                            os.stat(name, dir_fd=info_fd, follow_symlinks=False)
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            raise PublicationHeld("external object sources unsupported")
+                    self.absent.append(self.path / "info" / name)
+            finally:
+                if info_fd is not None:
+                    os.close(info_fd)
+            self.physical_sha256 = digest(
+                {
+                    "odb": self.directory.identity,
+                    "pack": self.pack.identity,
+                    "pack_names": self.pack_names,
+                    "files": self.identities,
+                    "loose_prefixes": self.loose_prefixes,
+                }
+            )
+            self.check()
+        except BaseException:
+            self.close()
+            raise
+
+    def _pack_inventory(self):
+        names = []
+        with os.scandir(self.pack.fd) as stream:
+            for entry in stream:
+                _need(
+                    len(names) < 256
+                    and re.fullmatch(
+                        r"pack-[a-f0-9]{40}\.(?:pack|idx|rev|bitmap|mtimes|keep)", entry.name
+                    ),
+                    "unsupported existing pack inventory",
+                )
+                names.append(entry.name)
+        return tuple(sorted(names))
+
+    @staticmethod
+    def _regular_identity(meta):
+        import stat
+
+        _need(
+            stat.S_ISREG(meta.st_mode)
+            and meta.st_uid in {0, os.getuid()}
+            and meta.st_nlink == 1
+            and not meta.st_mode & 0o022,
+            "existing object file ownership/type differs",
+        )
+        return _PhysicalFile._identity(meta)
+
+    def _prefix(self, prefix):
+        import stat
+
+        try:
+            fd = os.open(
+                prefix, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.directory.fd
+            )
+        except FileNotFoundError:
+            _need(prefix not in self.prefixes, "existing object prefix missing")
+            return None
+        meta = os.fstat(fd)
+        identity = (meta.st_dev, meta.st_ino, meta.st_uid, meta.st_mode)
+        try:
+            _need(
+                stat.S_ISDIR(meta.st_mode)
+                and meta.st_uid in {0, os.getuid()}
+                and not meta.st_mode & 0o022
+                and self.prefixes.setdefault(prefix, identity) == identity,
+                "existing object prefix changed",
+            )
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def check(self):
+        _need(not self.closed, "existing object anchor closed")
+        self.directory.check()
+        self.pack.check()
+        _need(
+            self._pack_inventory() == self.pack_names,
+            "selected existing pack inventory changed",
+        )
+        for relative, expected in self.identities.items():
+            prefix, name = relative.split("/", 1)
+            fd = os.dup(self.pack.fd) if prefix == "pack" else self._prefix(prefix)
+            try:
+                _need(
+                    fd is not None
+                    and self._regular_identity(os.stat(name, dir_fd=fd, follow_symlinks=False))
+                    == expected,
+                    "selected existing object file changed",
+                )
+            finally:
+                if fd is not None:
+                    os.close(fd)
+        for path in self.absent:
+            fd = self._prefix(path.parent.name)
+            try:
+                if fd is not None:
+                    try:
+                        os.stat(path.name, dir_fd=fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise PublicationHeld("existing object source topology changed")
+            finally:
+                if fd is not None:
+                    os.close(fd)
+
+    def expected_output(self):
+        return b"".join(
+            (oid + " " + kind + " " + str(size) + "\n").encode()
+            for oid, (kind, size) in sorted(self.expected.items())
+        )
+
+    def summary(self):
+        self.check()
+        return {
+            "schema": "closer-existing-git-object-anchor/v1",
+            "path": str(self.path),
+            "head_oid": self.baseline["head_oid"],
+            "tree_oid": self.baseline["tree_oid"],
+            "baseline_sha256": digest(self.baseline),
+            "physical_sha256": self.physical_sha256,
+        }
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            for item in reversed(
+                [self.directory, *([self.pack] if hasattr(self, "pack") else []), *self.held]
+            ):
+                item.close()
+
+
+def _borrow_existing_objects(host, baseline):
+    _need(type(host) is _HostGitLease, "actual authenticated HostGit required")
+    host.check()
+    anchor = _ExistingObjects(
+        Path(host.summary["topology"][1]) / "objects",
+        baseline,
+        host.read("commit"),
+        host.observed.policy,
+    )
+    try:
+        raw = _fixed_git_read(
+            host.observed,
+            host.workspace,
+            "object_inventory",
+            files=[*host.held, anchor],
+            missing=host.missing,
+            object_input=b"".join((oid + "\n").encode() for oid in sorted(anchor.expected)),
+        )
+        _need(raw == anchor.expected_output(), "native existing object closure missing or changed")
+        host.check()
+        return anchor
+    except BaseException:
+        anchor.close()
+        raise
+
+
 def _source_snapshot_seed(host, baseline):
     """Read fixed native H under the live HostGit lease; no history or writes."""
     _need(type(host) is _HostGitLease, "source HostGit seed required")
     host.check()
     _need(baseline["head_oid"] == host.pr["head_oid"], "source seed head changed")
-    objects = _seed_snapshot_data(baseline, host.read("commit"), host.observed.policy)
+    if host.observed.policy["schema"] == ANCHOR_POLICY_SCHEMA:
+        if host.object_anchor is None:
+            host.object_anchor = _borrow_existing_objects(host, baseline)
+        _need(host.object_anchor.baseline == baseline, "original existing object anchor differs")
+        objects = host.object_anchor
+    else:
+        objects = _seed_snapshot_data(baseline, host.read("commit"), host.observed.policy)
     host.check()
     return objects
 
@@ -3083,8 +3616,115 @@ def _private_helper_suffix():
     return ("\n[credential]\n\thelper =\n\thelper = " + helper + "\n").encode()
 
 
+def _build_existing_object_staging(
+    custody, key, baseline, candidate, pr, policy, anchor, config, hooks
+):
+    _need(
+        type(custody) is ctl._Custody and _sha(key) and type(anchor) is _ExistingObjects,
+        "existing source object staging required",
+    )
+    baseline = validate_baseline_data(baseline, policy)
+    candidate = validate_candidate_against_baseline(baseline, candidate, policy)
+    pr = validate_owned_pr(pr)
+    _need(
+        anchor.baseline == baseline
+        and pr["head_oid"] == baseline["head_oid"]
+        and pr["base_oid"] == baseline["base_oid"],
+        "existing staging source anchor differs",
+    )
+    _path(pr["head_ref"])
+    _need(
+        all(not p.endswith(".lock") for p in pr["head_ref"].split("/")),
+        "private ref path unsupported",
+    )
+    _need(
+        type(config) is bytes
+        and 0 < len(config) <= policy["max_file_bytes"]
+        and b"\0" not in config,
+        "bounded source config required",
+    )
+    _need(
+        type(hooks) is dict
+        and len(hooks) <= policy["max_files"]
+        and all(
+            re.fullmatch(r"[A-Za-z0-9_.-]+\.sample", k)
+            and type(v) is bytes
+            and len(v) <= policy["max_file_bytes"]
+            for k, v in hooks.items()
+        ),
+        "sample-only hooks required",
+    )
+    original_config_sha = hashlib.sha256(config).hexdigest()
+    config += b"\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n" + _private_helper_suffix()
+    _need(
+        len(config) + sum(map(len, hooks.values())) <= policy["max_total_bytes"],
+        "private control metadata bound",
+    )
+    marker = {
+        "schema": "closer-publication-staging-intent-data/v3",
+        "slot_key": key,
+        "baseline_sha256": digest(baseline),
+        "candidate_sha256": digest(candidate),
+        "head_oid": pr["head_oid"],
+        "config_sha256": hashlib.sha256(config).hexdigest(),
+        "original_config_sha256": original_config_sha,
+        "hooks": {k: hashlib.sha256(v).hexdigest() for k, v in hooks.items()},
+        "objects": {},
+        "existing_objects": anchor.summary(),
+        **{k: False for k in _AUTHORITY},
+    }
+    _need(len(_bytes(marker)) <= 1048576, "complete private staging envelope exceeds bound")
+    _need(
+        custody.create("publication-staging-intent-" + key + ".json", marker),
+        "private staging already owned; never recreate",
+    )
+    custody.check()
+    name = "publication-staging-" + key
+    os.mkdir(name, 0o700, dir_fd=custody.fd)
+    root_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=custody.fd)
+    try:
+        for relative in (
+            "repo.git",
+            "worktree",
+            "native-tmp",
+            "repo.git/objects",
+            "repo.git/hooks",
+        ):
+            parent, _, leaf = relative.rpartition("/")
+            fd = (
+                os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+                if parent
+                else os.dup(root_fd)
+            )
+            try:
+                os.mkdir(leaf, 0o700, dir_fd=fd)
+            finally:
+                os.close(fd)
+        _stage_write_data(root_fd, "repo.git/config", config)
+        _stage_write_data(
+            root_fd, "repo.git/HEAD", ("ref: refs/heads/" + pr["head_ref"] + "\n").encode()
+        )
+        _stage_write_data(
+            root_fd, "repo.git/refs/heads/" + pr["head_ref"], (pr["head_oid"] + "\n").encode()
+        )
+        for name, raw in hooks.items():
+            _stage_write_data(root_fd, "repo.git/hooks/" + name, raw)
+        os.fsync(root_fd)
+        anchor.check()
+        result = _StagingData(custody.path / ("publication-staging-" + key), marker)
+        result.object_anchor = anchor
+        result.check()
+        return result
+    finally:
+        os.close(root_fd)
+
+
 def _build_staging_data(custody, key, baseline, candidate, pr, policy, objects, config, hooks):
     """Physical private staging DATA only; its reference grants no execution."""
+    if policy.get("schema") == ANCHOR_POLICY_SCHEMA:
+        return _build_existing_object_staging(
+            custody, key, baseline, candidate, pr, policy, objects, config, hooks
+        )
     import zlib
 
     _need(type(custody) is ctl._Custody and _sha(key), "actual private staging custody required")
@@ -3218,11 +3858,16 @@ class _StagingData:
     def __init__(self, path, marker):
         _need(
             type(marker) is dict
-            and marker.get("schema") == "closer-publication-staging-intent-data/v2"
+            and marker.get("schema")
+            in {
+                "closer-publication-staging-intent-data/v2",
+                "closer-publication-staging-intent-data/v3",
+            }
             and _sha(marker.get("original_config_sha256")),
             "private staging lacks source-selected helper policy",
         )
         self.path, self.marker, self.closed = Path(path), _copy(marker), False
+        self.object_anchor = None
         self.directory = _PhysicalDirectory(self.path)
         self.controls = []
         self.directories = []
@@ -3237,9 +3882,15 @@ class _StagingData:
                 self.directories.append(_PhysicalDirectory(self.path / name))
             expected = {
                 "repo.git/config": marker["config_sha256"],
-                "repo.git/shallow": hashlib.sha256(
-                    (marker["head_oid"] + "\n").encode()
-                ).hexdigest(),
+                **(
+                    {
+                        "repo.git/shallow": hashlib.sha256(
+                            (marker["head_oid"] + "\n").encode()
+                        ).hexdigest()
+                    }
+                    if marker["schema"] == "closer-publication-staging-intent-data/v2"
+                    else {}
+                ),
                 **{"repo.git/hooks/" + k: v for k, v in marker["hooks"].items()},
             }
             for path, value in expected.items():
@@ -3259,6 +3910,12 @@ class _StagingData:
     def check(self):
         _need(not self.closed, "private staging closed")
         self.directory.check()
+        if self.object_anchor is not None:
+            self.object_anchor.check()
+            _need(
+                self.object_anchor.summary() == self.marker["existing_objects"],
+                "private ODB binding differs",
+            )
         for item in self.directories:
             item.check()
         for item in self.controls:
@@ -3702,7 +4359,8 @@ def validate_handoff_result_data(result, operation, terminal_reference, handoff,
         and handoff["operation_sha256"] == digest(operation)
         and handoff["result_sha256"] == digest(result["actual"])
         and handoff["baseline_reference"]["sha256"] == digest(baseline)
-        and baseline["schema"] == "closer-publication-source-baseline/v1"
+        and baseline["schema"]
+        in {"closer-publication-source-baseline/v1", "closer-publication-source-baseline/v2"}
         and baseline["operation_sha256"] == handoff["operation_sha256"]
         and baseline["stable_slot"] == handoff["stable_slot"]
         and all(row[k] is False for row in (handoff, baseline) for k in _AUTHORITY),

@@ -3621,7 +3621,7 @@ def tick(
                         .get("consumers", {})
                     )
                     if any(
-                        "publication_v1" in registration
+                        bool(__import__("closer_coding_publication").publication_key(registration))
                         for registration in configured_consumers.values()
                     ):
                         from closer_coding_publication import PublicationHeld

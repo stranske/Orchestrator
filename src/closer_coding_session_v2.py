@@ -128,7 +128,7 @@ def validate_policy(value):
 
 def validate_admission_snapshot(value):
     """Check snapshot data integrity; its digest is NOT source authentication."""
-    optional = {"publication_v1"} if type(value) is dict and "publication_v1" in value else set()
+    optional = set(value) & {"publication_v1", "publication_v2"} if type(value) is dict else set()
     _exact(
         value, _POLICY_FIELDS | {"policy_sha256"} | optional, "exact v2 admission snapshot required"
     )
@@ -148,9 +148,10 @@ def validate_admission_snapshot(value):
     if optional:
         import closer_coding_publication as publication
 
-        selected = publication.validate_policy(value["publication_v1"])
+        key = publication.publication_key(value)
+        selected = publication.validate_consumer_mode(policy["consumer_id"], value)
         _need(selected["consumer_id"] == policy["consumer_id"], "publication consumer differs")
-        result["publication_v1"] = selected
+        result[key] = selected
     return result
 
 
@@ -224,12 +225,11 @@ def prepare_admission_policy(consumers):
             "schema": ADMISSION_SCHEMA,
             "policy_sha256": hashlib.sha256(_canonical(policy)).hexdigest(),
         }
-        if "publication_v1" in registration:
+        if {"publication_v1", "publication_v2"} & set(registration):
             import closer_coding_publication as publication
 
-            snapshot["publication_v1"] = publication.validate_consumer_mode(
-                consumer_id, registration
-            )
+            key = publication.publication_key(registration)
+            snapshot[key] = publication.validate_consumer_mode(consumer_id, registration)
         validate_admission_snapshot(snapshot)
     except (TypeError, ValueError):
         return AdmissionPolicyDraft(None, "v2_source_policy_invalid")

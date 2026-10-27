@@ -684,7 +684,7 @@ def _execute(root, controller, operation):
             publication_baseline_ref = None
             publication_ref = None
             publication_held = False
-            if "publication_v1" in consumer or "publication_v1" in original:
+            if {"publication_v1", "publication_v2"} & (set(consumer) | set(original)):
                 import closer_coding_publication as publication
 
                 publication_policy = publication.validate_consumer_mode(

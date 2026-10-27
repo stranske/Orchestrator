@@ -761,7 +761,7 @@ def run_if_selected(campaign, document, manifest, manifest_path, pending):
         .get("config", {})
         .get("consumers", {})
     )
-    if not any("publication_v1" in row for row in consumers.values()):
+    if not any(publication.publication_key(row) for row in consumers.values()):
         return None
     if pending.get("kind") != "reconcile":
         return None
@@ -932,6 +932,16 @@ def host_git_context(selection):
             == publication._bytes(scope.history["baseline"]["host_git"]),
             "original protected Git/helper context changed",
         )
+        if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+            _need(
+                scope.history["baseline"]["schema"] == "closer-publication-source-baseline/v2",
+                "original no-copy baseline version differs",
+            )
+            anchor = publication._source_snapshot_seed(host, scope.history["baseline"]["baseline"])
+            _need(
+                anchor.summary() == scope.history["baseline"]["existing_objects"],
+                "original existing object fingerprint changed before reentry",
+            )
         scope.host = host
         return host
     except BaseException:
@@ -1003,6 +1013,10 @@ def _reopen_or_prepare_staging(scope, custody, host):
         marker = custody.read(marker_name)
         data = publication._StagingData(custody.path / stage_name, marker)
         try:
+            if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+                data.object_anchor = publication._source_snapshot_seed(
+                    host, scope.history["baseline"]["baseline"]
+                )
             _need(
                 publication._bytes(data.check()) == publication._bytes(stage["private_files"]),
                 "retained staging physical binding changed",
@@ -1156,6 +1170,19 @@ def selected_transport(controller, custody, operation, selection, host):
             "GIT_OBJECT_DIRECTORY": str(data.path / "repo.git/objects"),
         }
     )
+    if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+        _need(
+            type(data.object_anchor) is publication._ExistingObjects
+            and data.object_anchor is host.object_anchor,
+            "source-held original object directory unavailable",
+        )
+        data.object_anchor.check()
+        environment.update(
+            GIT_OBJECT_DIRECTORY=str(data.object_anchor.path),
+            GIT_NO_LAZY_FETCH="1",
+            GIT_NO_REPLACE_OBJECTS="1",
+            TMPDIR=str(data.path / "native-tmp"),
+        )
     return {
         "policy": scope.policy,
         "argv": phase.f_locals["command"],

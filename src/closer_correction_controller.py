@@ -1601,7 +1601,7 @@ class IndexController:
                 draft = session_v2.prepare_admission_policy(self.config.consumers)
                 if draft.snapshot_utf8 is not None:
                     snapshot = json.loads(draft.snapshot_utf8)
-                    if "publication_v1" in snapshot:
+                    if {"publication_v1", "publication_v2"} & set(snapshot):
                         import closer_coding_publication as publication
 
                         publication._require_source_pin(self.installation)
