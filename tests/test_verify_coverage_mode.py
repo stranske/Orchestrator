@@ -204,7 +204,7 @@ def test_coverage_never_changes_the_exit_code():
         f"coverage is being passed into verify() ({call_args.strip()!r}). The verdict may not "
         "depend on a measurement — that is the threshold nobody agreed to."
     )
-    report_at = main_src.find("coverage_combine_and_report()")
+    report_at = main_src.find("coverage_combine_and_report(")
     return_at = main_src.find("return code")
     assert report_at != -1 and return_at != -1 and report_at < return_at, (
         "coverage_combine_and_report must run after the verdict is computed and must not alter "

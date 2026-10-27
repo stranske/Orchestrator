@@ -50,7 +50,9 @@ OWNED_FILES = (
     "experiments/repo_knowledge.json",
     "data/feedback-snapshot.json",
     "config/coverage-baseline.json",
+    "config/test-shards.json",
     "config/model_epochs.json",
+    "tools/make_test_shards.py",
 )
 GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", "htmlcov"}
 
