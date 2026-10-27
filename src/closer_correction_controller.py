@@ -1946,6 +1946,13 @@ def _pin_reader_definition(cls):
         return
 
 
+def _reader_source_sha256(path):
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
 class NativeConsumerReader:
     """Installed source dependency, not a caller boolean or auth-presence upgrade.
 
@@ -1990,7 +1997,7 @@ class NativeConsumerReader:
             and definition.sha256 == registration["reader_source_sha256"]
             and definition.path.is_file()
             and not definition.path.is_symlink()
-            and hashlib.sha256(definition.path.read_bytes()).hexdigest() == definition.sha256
+            and _reader_source_sha256(definition.path) == definition.sha256
             and inspect.getattr_static(cls, "read_native_identity") is definition.method
             and inspect.getattr_static(self, "read_native_identity") is definition.method
             and definition.method.__code__ is definition.code
