@@ -24,6 +24,7 @@
     "tests/test_closer_coding_b_diagnostic_custody.py",
     "tests/test_closer_coding_private_inline_queue.py",
     "tests/test_closer_coding_publication.py",
+    "tests/test_closer_coding_root_validation_dedup.py",
     "tests/test_closer_coding_session_v2.py",
     "tests/test_closer_coding_source_closure_digest.py",
     "tests/test_closer_coding_typing_boundaries.py",
@@ -638,7 +639,8 @@
       "tests/test_ux_review_adversary.py",
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_context_builder_wiring.py",
-      "tests/test_verifier_incomplete_roots.py"
+      "tests/test_verifier_incomplete_roots.py",
+      "tests/test_closer_coding_root_validation_dedup.py"
     ]
   ]
 }
