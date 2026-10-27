@@ -459,6 +459,7 @@ def _run_queue(root, args):
             finite_frontier=frontier,
             frontier_target=target,
             request_timeout_seconds=timeout,
+            _inline_source=root,
         )
 
 

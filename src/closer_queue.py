@@ -1570,6 +1570,49 @@ def reconcile_only(
         }
 
 
+def _coding_inline_selection(
+    value, targets, observe, execute, frontier, max_workers, max_passes, max_retries
+):
+    """Private scheduling selection, never a serialized execution permission."""
+    if value is None:
+        return False
+    import inspect
+
+    import closer_coding_worker as worker
+
+    frame = inspect.currentframe().f_back.f_back
+    try:
+        if not (
+            type(value) is worker._Root
+            and frame is not None
+            and frame.f_code is worker._run_queue.__code__
+            and frame.f_globals is worker.__dict__
+            and frame.f_locals.get("root") is value
+            and frame.f_locals.get("observe") is observe
+            and frame.f_locals.get("execute") is execute
+            and frame.f_locals.get("frontier") is frontier
+            and targets == [frame.f_locals.get("target")]
+            and max_workers == 1
+            and max_passes == 1
+            and max_retries == 0
+        ):
+            raise QueueStateError("actual single coding source queue required")
+        value.check()
+        return True
+    finally:
+        del frame
+
+
+def _inline_before_cutoff(*args):
+    """Same callback wrapper and normal Future result/error path, on this thread."""
+    future = Future()
+    try:
+        future.set_result(_invoke_before_cutoff(*args))
+    except BaseException as error:
+        future.set_exception(error)
+    return future
+
+
 def run_round(
     state_path: str | Path,
     assignment_targets: Iterable[str],
@@ -1593,6 +1636,7 @@ def run_round(
     frontier_target: str | None = None,
     finite_readmission: Mapping[str, Any] | None = None,
     request_timeout_seconds: float = 120.0,
+    _inline_source=None,
 ) -> dict[str, Any]:
     """Run a fair, durable, deadline-bounded action round.
 
@@ -1604,6 +1648,16 @@ def run_round(
     """
     path = Path(state_path)
     targets = _assignment_list(assignment_targets)
+    inline = _coding_inline_selection(
+        _inline_source,
+        targets,
+        observe,
+        execute,
+        finite_frontier,
+        max_workers,
+        max_passes,
+        max_operation_retries,
+    )
     frontier = None
     if finite_frontier is not None:
         from closer_frontier_policy import request_window, validate_frontier
@@ -2401,17 +2455,29 @@ def run_round(
                     persist_state()
                     started = monotonic()
                     callback_snapshot = _execution_snapshot(fresh)
-                    future = executor.submit(
-                        _invoke_before_cutoff,
-                        execute,
-                        target,
-                        action,
-                        callback_snapshot,
-                        dict(op),
-                        now,
-                        execution_context,
-                        path,
-                    )
+                    if inline:
+                        future = _inline_before_cutoff(
+                            execute,
+                            target,
+                            action,
+                            callback_snapshot,
+                            dict(op),
+                            now,
+                            execution_context,
+                            path,
+                        )
+                    else:
+                        future = executor.submit(
+                            _invoke_before_cutoff,
+                            execute,
+                            target,
+                            action,
+                            callback_snapshot,
+                            dict(op),
+                            now,
+                            execution_context,
+                            path,
+                        )
                     launched.append((target, item, op, future, acquired, started))
 
                 # Wait for every action launched this pass before deciding whether to
