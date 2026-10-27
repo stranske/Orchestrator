@@ -1,0 +1,11 @@
+"""Inert source-pin fixture. This supplies synthetic data, never account proof."""
+
+import closer_correction_controller as ctl
+
+CALLS = []
+
+
+class SyntheticReader(ctl.NativeConsumerReader):
+    def read_native_identity(self):
+        CALLS.append("synthetic-read")
+        return {"account_id": "synthetic-account", "profile_id": "synthetic-profile"}
