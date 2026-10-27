@@ -48,7 +48,6 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import hmac
 import json
 import math
 import os
@@ -2166,7 +2165,6 @@ def _cursor_closer_native_successes(manifest: dict) -> tuple[int, int | None]:
         "policy_digest": closer_mechanisms.digest(manifest["policy"]),
         **{key: manifest.get(key) for key in closer_mechanisms.PIN_KEYS},
     }
-    key = closer_mechanisms._key(root)
     successes = []
     for terminal in root.glob("*/terminal.json"):
         if (
@@ -2177,9 +2175,7 @@ def _cursor_closer_native_successes(manifest: dict) -> tuple[int, int | None]:
         ):
             raise ValueError("native terminal receipt path is invalid")
         signed = json.loads(terminal.read_text(encoding="utf-8"))
-        record = signed["record"]
-        if not hmac.compare_digest(signed["signature"], closer_mechanisms._signature(record, key)):
-            raise ValueError("native terminal receipt signature differs")
+        record = closer_mechanisms.verify_signed_record(root, signed)
         if record.get("binding") != expected_binding:
             continue
         if (
@@ -2207,6 +2203,8 @@ def cursor_closer_native_entry_snapshot(
     host. The manifest defaults to the one pinned by the live wrapper; this keeps the sweep aligned
     after a guarded roll-forward rather than freezing another package path here.
     """
+    import closer_mechanisms
+
     log = Path(log_path or os.environ.get("ORCH_CURSOR_CLOSER_LOG", "") or CURSOR_CLOSER_LOG)
     wrapper = Path(
         wrapper_path or os.environ.get("ORCH_CURSOR_LANE_WRAPPER", "") or CURSOR_LANE_WRAPPER
@@ -2249,6 +2247,7 @@ def cursor_closer_native_entry_snapshot(
     except OSError as exc:
         report["log_error"] = type(exc).__name__
 
+    payload = None
     try:
         manifest_override = (
             manifest_path or os.environ.get("ORCH_CURSOR_CLOSER_MANIFEST", "") or None
@@ -2258,31 +2257,43 @@ def cursor_closer_native_entry_snapshot(
         )
         report["manifest_path"] = str(manifest)
         payload = json.loads(manifest.read_text(encoding="utf-8"))
-        pins = payload["policy"]["toml_sha256"]
-        if not isinstance(pins, dict) or not pins:
-            raise ValueError("manifest policy.toml_sha256 is empty")
-        named_pins = {f"{Path(name).parent.name}/{Path(name).name}" for name in pins}
-        if len(pins) != 2 or named_pins != _CURSOR_POLICY_PINS:
-            report["pin_set_error"] = {
-                "missing": sorted(_CURSOR_POLICY_PINS - named_pins),
-                "unexpected": sorted(named_pins - _CURSOR_POLICY_PINS),
-            }
-        else:
-            mismatches = []
-            for filename, pinned in sorted(pins.items()):
-                current = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
-                if current != pinned:
-                    path = Path(filename)
-                    mismatches.append(f"{path.parent.name}/{path.name}")
-            report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        report["hash_error"] = type(exc).__name__
+
+    if payload is not None:
         try:
             successes, latest = _cursor_closer_native_successes(payload)
             report.update(successes_seen=successes, last_success_mtime_ns=latest)
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            json.JSONDecodeError,
+            closer_mechanisms.MechanismError,
+        ) as exc:
             report["success_error"] = type(exc).__name__
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        report["hash_error"] = type(exc).__name__
-        report["success_error"] = type(exc).__name__
+
+        try:
+            pins = payload["policy"]["toml_sha256"]
+            if not isinstance(pins, dict) or not pins:
+                raise ValueError("manifest policy.toml_sha256 is empty")
+            named_pins = {f"{Path(name).parent.name}/{Path(name).name}" for name in pins}
+            if len(pins) != 2 or named_pins != _CURSOR_POLICY_PINS:
+                report["pin_set_error"] = {
+                    "missing": sorted(_CURSOR_POLICY_PINS - named_pins),
+                    "unexpected": sorted(named_pins - _CURSOR_POLICY_PINS),
+                }
+            else:
+                mismatches = []
+                for filename, pinned in sorted(pins.items()):
+                    current = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
+                    if current != pinned:
+                        path = Path(filename)
+                        mismatches.append(f"{path.parent.name}/{path.name}")
+                report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            report["hash_error"] = type(exc).__name__
 
     if (
         report.get("last_success_mtime_ns") is not None
@@ -2298,24 +2309,24 @@ def cursor_closer_native_entry_snapshot(
 
 def format_cursor_closer_native_entry(report: dict) -> str:
     prefix = "Cursor closer native entry: "
-    pins_match = (
-        not report.get("hash_error")
-        and not report.get("pin_set_error")
-        and report.get("hash_mismatch_count") == 0
-    )
     if report.get("log_error"):
         launcher = f"cannot read launcher log ({report['log_error']})"
     elif report.get("results_since_success"):
-        launcher = ("drained: " if pins_match else "") + (
+        authenticated_drain = (
+            not report.get("success_error")
+            and report.get("successes_seen", 0) > 0
+            and not report.get("hash_error")
+            and not report.get("pin_set_error")
+            and report.get("hash_mismatch_count") == 0
+        )
+        launcher = ("drained: " if authenticated_drain else "") + (
             f"since last retained success: refused {report['refused_since_success']}/"
             f"{report['results_since_success']}"
         )
     elif report.get("launcher_results") == 0:
         launcher = "unmeasured — no launcher results"
     elif report.get("refused") == 0:
-        launcher = ("drained: " if pins_match else "") + (
-            f"refused 0/{report['launcher_results']} launcher results"
-        )
+        launcher = f"refused 0/{report['launcher_results']} launcher results"
     elif report.get("launcher_results") is None or report.get("refused") is None:
         launcher = "cannot read launcher log (no snapshot)"
     else:
