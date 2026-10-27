@@ -367,6 +367,10 @@ def pipe_native_data(monkeypatch, *, feature_output=b"plugins  stable  false\n")
                                     "accountId": "synthetic-native",
                                     "ordinaryUsageAllowed": False,
                                 }
+                                # The fake PID has no OS process. Publish its
+                                # terminal state before the last pipe response
+                                # can cause the reader to enter cleanup.
+                                self.returncode = 0
                             os.write(
                                 out_write,
                                 (json.dumps({"id": msg["id"], "result": result}) + "\n").encode(),

@@ -84,7 +84,7 @@ def _remote_disabled(value):
 class BootstrapProtocol:
     """Non-authorizing codec/state machine. No I/O and no source/turn capability."""
 
-    _steps = _STEPS
+    _steps: tuple[str, ...] = _STEPS
 
     def __init__(
         self,

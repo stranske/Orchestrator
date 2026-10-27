@@ -1712,9 +1712,12 @@ def run_round(
     )
     publication_inline = None
     if _publication_inline_source is not None:
+        current_frame = inspect.currentframe()
+        if current_frame is None:
+            raise QueueStateError("publication queue caller frame unavailable")
         publication_inline = _publication_inline_selection(
             _publication_inline_source,
-            inspect.currentframe().f_back,
+            current_frame.f_back,
             targets=targets,
             observe=observe,
             execute=execute,

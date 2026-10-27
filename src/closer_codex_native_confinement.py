@@ -168,9 +168,13 @@ _PLATFORM_PUBLIC_READ_ROOTS = (
     "/usr/local/lib",
     "/dev",
 )
-_WITNESSES = weakref.WeakKeyDictionary()
-_ATTEMPTS = weakref.WeakKeyDictionary()
-_PREPARED = weakref.WeakValueDictionary()
+_WITNESSES: weakref.WeakKeyDictionary[object, tuple[ConfinementProfile, dict, int]] = (
+    weakref.WeakKeyDictionary()
+)
+_ATTEMPTS: weakref.WeakKeyDictionary[object, tuple[ConfinementProfile, str]] = (
+    weakref.WeakKeyDictionary()
+)
+_PREPARED: weakref.WeakValueDictionary[int, ConfinementProfile] = weakref.WeakValueDictionary()
 _LOADED_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 

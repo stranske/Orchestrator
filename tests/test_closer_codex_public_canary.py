@@ -103,6 +103,7 @@ def test_copied_operation_cannot_launch_public_trial(tmp_path):
 def test_distinct_real_queue_and_finite_reservation_precede_mocked_native_child(
     tmp_path, monkeypatch
 ):
+    import adapters
     import closer_codex_metadata_admission as admitted
     import closer_resources as resources
     import dispatcher
@@ -141,10 +142,18 @@ def test_distinct_real_queue_and_finite_reservation_precede_mocked_native_child(
     monkeypatch.setattr(admitted, "qualify_admitted_callback", lambda _: reference)
     monkeypatch.setattr(admitted, "read_admitted_account", lambda s, r: object())
     monkeypatch.setattr(canary, "_previous_account", lambda _: account)
+    # The transport below is synthetic; command construction must not require
+    # a developer machine's installed native CLI (absent on Linux CI).
+    monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN", tmp_path / "absent-native-cli")
+    monkeypatch.setattr(adapters, "CODEX_PROFILE_BIN_EXPLICIT", True)
+    with pytest.raises(RuntimeError, match="refusing an unresolved binary"):
+        adapters.profile_codex_binary()
+    monkeypatch.setattr(adapters, "profile_codex_binary", lambda: scope.spec["binary_path"])
 
     # There is no real Codex child: invoke the actual source starting callback
     # while its real durable finite pool reservation and queue are held.
     def transport(command, **kwargs):
+        assert command[0] == scope.spec["binary_path"]
         assert resources.finite_pool_has_active_reservations()
         kwargs["starting_callback"](kwargs["observation"])
         assert resources.finite_pool_current_binding() == {

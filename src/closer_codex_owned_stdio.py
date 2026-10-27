@@ -24,9 +24,9 @@ from closer_codex_appserver_bootstrap import BootstrapProtocol, ProtocolHeld
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 CHANNEL = "codex-source-owned-appserver-stdio/v1"
 ENTRYPOINT = __name__ + ".SourceReader"
-_READERS = {}
-_ROUTES = {}
-_SESSIONS = {}
+_READERS: dict[int, tuple] = {}
+_ROUTES: dict[tuple[int, object], BootstrapRoute] = {}
+_SESSIONS: dict[tuple[int, object], _OwnedSession] = {}
 _REMOTE_DISABLE = "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED"
 _FIXED_OVERRIDES = (
     'model_provider="openai"',

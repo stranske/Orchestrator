@@ -220,7 +220,7 @@ def test_slow_transport_birth_probe_uses_remaining_original_timeout(tmp_path, mo
 
     class Child:
         pid = 12345
-        stdout = stderr = None
+        stdin = stdout = stderr = None
         returncode = -9
 
         def communicate(self, *, timeout):
@@ -267,7 +267,7 @@ def test_expired_before_birth_does_not_persist_prompt_in_error(tmp_path, monkeyp
 
     class Child:
         pid = 12345
-        stdout = stderr = None
+        stdin = stdout = stderr = None
         returncode = -9
 
         def communicate(self, *, timeout):

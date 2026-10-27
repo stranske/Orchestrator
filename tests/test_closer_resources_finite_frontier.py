@@ -987,11 +987,13 @@ def remote_act_world(native_world, monkeypatch):
         operation = {
             "id": "inert-owned-merge",
             "owner": "inert-queue",
+            "status": "submitted",
             "deadline": time.time() + 30,
             "finite_frontier": w.frontier,
         }
         w.queue_execute_calls += 1
-        result = execute(TARGET, action, observed, operation)
+        with closer_queue._callback_invocation(TARGET, operation, time.time):
+            result = execute(TARGET, action, observed, operation)
         assert result["status"] == "completed", result
         return {"stop_valid": True, "accounting": [{"target": TARGET, "status": "complete"}]}
 
