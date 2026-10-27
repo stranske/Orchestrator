@@ -106,11 +106,14 @@ model contract. The ordinary verified flat-mirror builder, installer ownership
 and pre-sync source identity include that exact JSON. A fixed physical source-shape
 rule locates checkout config versus the adjacent flat native-image filename.
 
-Current bounded-classification call sites do not yet provide a trusted intended
-category. With the reviewed null default they hold before capacity or invocation.
-This integration does not infer `ordinary_static` from model output, issue text,
-finding subtype or a public example. A genuine Core call-site mapping and the
-null Terra runtime/profile binding remain separate work. Named proof defaults
+The actual typed ordinary evidence-advice branch now declares `ordinary_static`
+from source after deterministic no-model and host collection returns, a physical
+catalog rebuild, and existing owner/security/authority/residual checks. This is
+an intended readonly assessment use, not a claim that each natural-language
+criterion is static or satisfied. An explicitly required execution artifact
+still needs real bound proof, otherwise UNKNOWN/collection/hold remains. Neither
+prompt text nor model subtype can assign the category. Missing categories and
+known-NONPASS/correction/protected branches remain held here. Named proof defaults
 remain quality-filtered and still require existing runtime admission.
 
 Native images retain their closed flat layout: the existing Runtime exporter
@@ -124,14 +127,16 @@ installer ship the same flat filename; the source input remains the unchanged
 field is introduced. Actual exporter-to-native-image consumer controls cover
 this placement and fail-closed data behavior.
 
-Current `closer_interpret` still builds the legacy global classification/planning
-response (`classification`, `substantive_needs`, `findings`, decision rows and
-collection/repair routing), not the typed-v2 semantic assessment used by the
-reviewed ordinary-static quality record. Its receiver parses that legacy shape
-and calls `integrate_ordinary`. A category literal cannot bridge those contracts.
-Core must add a narrowly reviewed typed semantic builder/projector into the
-existing deterministic integration and host routing before assigning that
-source-level category. Until then bounded classification holds. Neither
-correction classification nor protected authority is relabeled by this change.
-Muse and Cursor bindings remain null, and Cursor diagnostic receiving enforcement
-remains required before binding. Source preparation is not runtime enrollment.
+The current receiver composes the reviewed `87c7218d` semantic v2 catalog,
+renderer and protected response projector onto the published native controller.
+It retains occurrence inventory, complete original BODY/Tasks/AC, exact catalog
+digest in the sealed controlled basis, original retained-response replay, both
+host OTHER holds and selected-only STRONG reconciliation before ordinary
+integration and again before ACT. Necessary collection is chosen by the existing
+source-owned collector rail rather than a model plan. The protected original
+native retained-packet guard and unrelated publication/zero-model code remain
+unchanged. Old model observations/packets are not rebound or regraded.
+
+Terra, Muse and Cursor bindings remain null; runtime role records stay empty,
+and Cursor diagnostic receiving enforcement remains required before binding.
+Source preparation and a quality-scope category are not runtime enrollment.

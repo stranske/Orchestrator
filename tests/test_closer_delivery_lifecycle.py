@@ -245,23 +245,10 @@ class OfflineDelivery:
         ]
 
     def offload(self, agent, prompt, **kw):
+        from closer_typed_semantic_broker_fixture import emit_assessment
+
         assert agent == ("claude" if self.native else "gemini")
         self.provider_calls.append(prompt)
-        proposal = copy.deepcopy(self.proposal)
-        mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
-            "mandatory"
-        ]
-        packet = json.loads(Path(mandatory["packet_ref"]["path"]).read_text())
-        raw = packet["sections"]["ci_artifacts"]["content"]["artifacts"][0]["receipts"][0]["raw"]
-        for row in proposal["decision"]["criteria"]:
-            row["evidence"] = [raw]
-        proposal.update(
-            drift_review_complete=True,
-            drift_mismatches=[],
-            drift_summary="Offline raw fixture examined",
-        )
-        if self.invalid_proof:
-            proposal["decision"]["criteria"][0]["proofs"][0]["run_attempt"] = 999
         if self.transport_uncertain:
             result = {
                 "exit": 1,
@@ -271,10 +258,35 @@ class OfflineDelivery:
                 "retry_safe": False,
             }
         else:
+            # self.proposal is declared synthetic source-case gold, never an
+            # actual provider answer. Emit NEW typed data before caller.response
+            # seals it. The host owns all identity/proof metadata after parsing.
+            gold = copy.deepcopy(self.proposal["decision"]["criteria"])
+            length = getattr(self, "semantic_text_length", 0)
+            if length:
+                for row in gold:
+                    for proof in row["proofs"]:
+                        proof["relevance"] = (
+                            proof["relevance"] + " Synthetic declared case evidence." * 80
+                        )[:length]
+            assessment = emit_assessment(
+                prompt,
+                gold,
+                unknown_slots=getattr(self, "semantic_unknown_slots", ()),
+                global_explanations=self.proposal.get("substantive_needs", []),
+                finding_gold=self.proposal.get("resolutions", ()),
+                explanation=(
+                    ("Synthetic declared source-case assessment. " * 80)[:length]
+                    if length
+                    else None
+                ),
+            )
+            if self.invalid_proof:
+                assessment["obligations"][0]["citations"][0]["ref"] = 999999
             result = {
                 "exit": 0,
                 "run_id": f"offline:low:{len(self.provider_calls)}",
-                "output": json.dumps(proposal),
+                "output": json.dumps(assessment),
                 "profile_id": "offline-low",
             }
         if self.native:
@@ -601,7 +613,9 @@ def test_positive_lifecycle_keeps_observed_evidence_barriers(tmp_path, monkeypat
     state = delivery.state()
     serialized = json.dumps(state)
     if barrier == "wrong_attempt":
-        assert "criterion_proof_unbound_or_unrelated" in serialized
+        # Typed citation admission rejects the wrong-attempt proof before the
+        # older ordinary proof projector; no proof or closure is synthesized.
+        assert "semantic_assessment_invalid:citation_ref_invalid" in serialized
     elif barrier == "provider_uncertain":
         assert delivery.last_actual["run_id"] in serialized
         assert delivery.last_actual["outcome_uncertain"] is True

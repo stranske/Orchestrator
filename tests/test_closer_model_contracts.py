@@ -20,7 +20,7 @@ import closer_pipeline
 
 strong_context = _strong_context
 
-# Prospective source-renderer fixtures for closer-classification-prompt/v3 at
+# Historical source-renderer fixtures for closer-classification-prompt/v3 at
 # 98f25636 (required codepatch kind). Keys are the flags
 # run_drift/data_only/recovery_enabled/collection_mode in that order. The large
 # Unicode optional payload exercises the unchanged 9,000-character projection.
@@ -163,23 +163,56 @@ _GOLDEN = {
 
 
 def render_inputs():
-    return {**copy.deepcopy(_INPUTS), "collection_instructions": recovery.COLLECTION_INSTRUCTIONS}
+    parameters = {
+        **copy.deepcopy(_INPUTS),
+        "collection_instructions": recovery.COLLECTION_INSTRUCTIONS,
+    }
+    expected = disposition._expected({"sources": parameters["source_rows"]})
+    assert expected is not None
+    # Synthetic renderer input only, with no retained proof or semantic answer.
+    parameters["semantic_inventory"] = {
+        "mode": "ordinary_acceptance",
+        "host_residual_holds": [],
+        "required_obligation_slots": list(range(1, len(expected) + 1)),
+        "required_finding_slots": [],
+        "obligations": [
+            {"slot": n, "source": source, "text": text}
+            for n, (source, text) in enumerate(expected, 1)
+        ],
+        "findings": [],
+        "catalog": [],
+    }
+    return parameters
 
 
 @pytest.mark.parametrize("flags", list(_GOLDEN))
-def test_all_prospective_v3_prompt_branches_match_golden(flags):
-    assert contracts.CLASSIFICATION_PROMPT_VERSION == "closer-classification-prompt/v3"
-    run_drift, data_only, recovery_enabled, collection_mode = map(lambda value: value == "1", flags)
-    prompt = contracts.render_classification_prompt(
-        **render_inputs(),
-        run_drift=run_drift,
-        data_only=data_only,
-        recovery_enabled=recovery_enabled,
-        collection_mode=collection_mode,
+def test_prospective_v2_renderer_branches_preserve_v3_golden_lineage(flags):
+    assert contracts.CLASSIFICATION_PROMPT_VERSION == "closer-semantic-assessment-prompt/v2"
+    records = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/semantic_api_reference/prospective_v2_renderer_golden.json"
+        ).read_text()
     )
-    assert hashlib.sha256(prompt.encode()).hexdigest() == _GOLDEN[flags]["sha256"]
-    assert len(prompt.encode()) == _GOLDEN[flags]["bytes"]
-    assert contracts.NONPASS_ACCOUNTING_CONTRACT in prompt
+    record = records[flags]
+    assert record["historical_v3"] == _GOLDEN[flags]
+    run_drift, data_only, recovery_enabled, collection_mode = map(lambda value: value == "1", flags)
+    parameters = {
+        **render_inputs(),
+        "run_drift": run_drift,
+        "data_only": data_only,
+        "recovery_enabled": recovery_enabled,
+        "collection_mode": collection_mode,
+    }
+    if collection_mode:
+        with pytest.raises(contracts.ClassificationPromptError, match=record["refusal"]):
+            contracts.render_classification_prompt(**parameters)
+    else:
+        prompt = contracts.render_classification_prompt(**parameters)
+        assert hashlib.sha256(prompt.encode()).hexdigest() == record["sha256"]
+        assert len(prompt.encode()) == record["bytes"]
+        assert "closer-semantic-assessment/v2" in prompt
+        assert "Your advice grants no ACT" in prompt
 
 
 @pytest.mark.parametrize(
@@ -335,11 +368,12 @@ def test_descriptor_binds_actual_source_pin_and_separates_syntax_from_semantics(
     source_sha = hashlib.sha256(Path(contracts.__file__).read_bytes()).hexdigest()
     descriptor = contracts.classification_contract_descriptor(source_sha256=source_sha)
     assert descriptor["source_sha256"] == source_sha
-    assert descriptor["prompt_version"] == "closer-classification-prompt/v3"
+    assert descriptor["prompt_version"] == "closer-semantic-assessment-prompt/v2"
     assert descriptor["max_prompt_bytes"] == 65536
     assert descriptor["response_syntax"]["identity_or_evidence_validation"] is False
     assert descriptor["semantic_validator"]["retained_io_required"] is True
-    assert "decision.criteria" in descriptor["response_fields"]
+    assert descriptor["response_fields"]["schema"] == "closer-semantic-assessment/v2"
+    assert {"obligations", "findings", "global_concerns"} <= set(descriptor["response_fields"])
     assert (
         contracts.STRONG_CONTRACT_ENTRYPOINTS["response_validator"]
         == "closer_execution_contracts.validate_adjudication_response"

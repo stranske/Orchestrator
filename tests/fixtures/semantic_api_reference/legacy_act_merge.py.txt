@@ -1,0 +1,1 @@
+merged = contracts.merge_selected_response(low_proposal, named_request, scoped_answer)

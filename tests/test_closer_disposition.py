@@ -24,6 +24,8 @@ def fixture(
     native=False,
     native_report=True,
     native_manifest_pr=12,
+    native_reported_verdict="FAIL",
+    native_ci_failed=True,
     pr_target=ABSENT,
 ):
     snap = {
@@ -56,8 +58,8 @@ def fixture(
             "evaluated_sha": snap["merge"],
             "run_id": 34,
             "run_attempt": 1,
-            "provider_verdicts": ["FAIL"],
-            "ci_failed": True,
+            "provider_verdicts": [native_reported_verdict],
+            "ci_failed": native_ci_failed,
         }
         native_manifest = {
             "schema": "workflows-verifier-input-snapshot/v1",

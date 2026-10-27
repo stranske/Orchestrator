@@ -121,6 +121,7 @@ def _controlled_model_contract(task_type):
         "transport_qualification",
         "closer_model_contracts",
         "closer_role_selection",
+        "closer_semantic_assessment",
         "router",
         "closer_execution_contracts",
         "closer_adjudication_policy",
@@ -4995,6 +4996,27 @@ def _correction_profile_qualified(profile, *, task_type="closer_correction_class
         return False
 
 
+def _typed_ordinary_static_category(snapshot, inventory, *, collection_mode):
+    """Host intended-use allocation for authenticated typed evidence advice only.
+
+    The caller rebuilt inventory from the original physical packet. This names
+    a readonly advisory use, never a judgment that every criterion is static or
+    satisfied. Required execution proof still belongs to the materializer.
+    """
+    import closer_execution_contracts as contracts
+
+    if (
+        collection_mode
+        or type(inventory) is not dict
+        or inventory.get("mode") != "ordinary_acceptance"
+        or inventory.get("host_residual_holds") != []
+        or type(inventory.get("findings")) is not list
+        or contracts.owner_review_required([snapshot, inventory["findings"]])
+    ):
+        return None
+    return "ordinary_static"
+
+
 def _pipeline_low_route(
     *,
     load=None,
@@ -5357,6 +5379,7 @@ def _execute_profile_route(
     frontier_target=None,
     data_only=False,
     task_type="closer_interpret",
+    closer_category=None,
 ):
     """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
 
@@ -5480,6 +5503,7 @@ def _execute_profile_route(
             load=load,
             unavailable_profiles=excluded,
             with_status=True,
+            **({"closer_category": closer_category} if closer_category is not None else {}),
             **({"repair": repair} if lane != "low" else {"data_only": True} if data_only else {}),
             **(
                 {"task_type": task_type}
@@ -6798,6 +6822,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             import dispatcher
 
             try:
+                import closer_semantic_assessment
+
+                original_snapshot, original_packet = full_snapshot(prep)
+                original_catalog_sha = closer_semantic_assessment.catalog_digest(
+                    closer_semantic_assessment.catalog_input(
+                        original_snapshot,
+                        original_packet,
+                        prep.get("packet_ref", {}),
+                        packet_evidence_root(prep),
+                    )
+                )
                 proved = _revalidate_controlled_proof(
                     actual.get("_closer_controlled_proof"),
                     run_id=actual.get("run_id"),
@@ -6807,15 +6842,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         "head": (prep.get("snapshot") or {}).get("head"),
                         "base": (prep.get("snapshot") or {}).get("base"),
                         "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                        "semantic_catalog_sha256": original_catalog_sha,
                     },
                     receipt_root=dispatcher.DISPATCH_LOG_DIR,
                 )
                 # Semantic integration reads the physically retained provider
                 # response, never a substituted inline proposal or summary.
-                value = {
-                    **value,
-                    "proposal": _worker_proposal(proved, agent=value.get("requested_agent")),
-                }
+                assessment = _worker_proposal(proved, agent=value.get("requested_agent"))
+                canonical, followup = closer_semantic_assessment.adjudication_candidate(
+                    assessment,
+                    snapshot=original_snapshot,
+                    packet=original_packet,
+                    packet_ref=prep.get("packet_ref", {}),
+                    retained_dir=packet_evidence_root(prep),
+                    expected_catalog_sha256=original_catalog_sha,
+                )
+                canonical["semantic_followup"] = followup
+                value = {**value, "proposal": canonical}
             except (OSError, ValueError, TypeError, KeyError) as error:
                 raise CompletedResponseReadError(
                     error,
@@ -7797,10 +7840,66 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         attempt,
                         retained_plan.get("plan_actual") or {},
                     )
+        # Existing source-owned necessary rails do not require a model planner.
+        # The old validator/Store/collector still bound every read and retry.
+        if collection_mode:
+            import closer_semantic_assessment
+
+            try:
+                host_plan = closer_semantic_assessment.host_collection_plan(
+                    admitted_snapshot,
+                    raw_packet,
+                    readiness,
+                    existing_requests=prep.get("recovery_requests", []),
+                )
+            except (ValueError, TypeError, KeyError) as error:
+                pending = evidence_pending(target, prep, readiness)
+                pending["reason"] = "host_collection_selector_unavailable:" + str(error)[:160]
+                return pending
+            if host_plan["evidence_requests"]:
+                attempt = recovery_store.begin(admitted_snapshot, raw_packet, readiness)
+                if attempt is not None:
+                    return collect_or_defer(
+                        target,
+                        context,
+                        prep,
+                        admitted_snapshot,
+                        raw_packet,
+                        readiness,
+                        host_plan,
+                        attempt,
+                        {},
+                    )
+            pending = evidence_pending(target, prep, readiness)
+            pending["reason"] = "existing_necessary_collection_selector_or_new_progress_required"
+            pending["next_trigger"] = (
+                "an exact source-admitted collector selector or genuine new retained observation changes this requirement; unchanged no-progress input stays blocked"
+            )
+            return pending
+        import closer_semantic_assessment
+
+        try:
+            semantic_inventory = closer_semantic_assessment.catalog_input(
+                admitted_snapshot,
+                raw_packet,
+                prep.get("packet_ref", {}),
+                packet_evidence_root(prep),
+            )
+            semantic_catalog_sha = closer_semantic_assessment.catalog_digest(semantic_inventory)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            pending = evidence_pending(target, prep, readiness or {"ready": False, "gaps": []})
+            pending["reason"] = "semantic_catalog_unavailable:" + str(error)[:200]
+            return pending
+        # Only this authenticated typed ordinary evidence-advice branch chooses
+        # the source category. No prompt text/model subtype can allocate it.
+        closer_category = _typed_ordinary_static_category(
+            admitted_snapshot, semantic_inventory, collection_mode=collection_mode
+        )
         route, route_status = _pipeline_low_route(
             load=route_load,
             unavailable_profiles=failed_low_profiles,
             with_status=True,
+            closer_category=closer_category,
             **({"data_only": True} if data_only else {}),
         )
         while route is None and route_status == "busy":
@@ -7815,6 +7914,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 load=route_load,
                 unavailable_profiles=failed_low_profiles,
                 with_status=True,
+                closer_category=closer_category,
                 **({"data_only": True} if data_only else {}),
             )
         if not route:
@@ -8012,6 +8112,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     collection_mode=collection_mode,
                     readiness=readiness,
                     collection_instructions=recovery.COLLECTION_INSTRUCTIONS,
+                    semantic_inventory=semantic_inventory,
                 )
                 break
             except closer_model_contracts.ClassificationPromptError as exc:
@@ -8077,6 +8178,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "head": snap.get("head"),
                     "base": snap.get("base"),
                     "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                    "semantic_catalog_sha256": semantic_catalog_sha,
                 },
                 mode="assess",
             )
@@ -8097,6 +8199,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 load=route_load,
                 deadline=context["deadline"],
                 unavailable_profiles=failed_low_profiles,
+                closer_category=closer_category,
                 finite_frontier=finite_frontier,
                 frontier_target=target,
                 **({"data_only": True} if data_only else {}),
@@ -8322,7 +8425,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
-        proposal = _worker_proposal(result, agent=route["agent"])
+        assessment = _worker_proposal(result, agent=route["agent"])
+        semantic_error = None
+        try:
+            proposal, followup = closer_semantic_assessment.adjudication_candidate(
+                assessment,
+                snapshot=admitted_snapshot,
+                packet=raw_packet,
+                packet_ref=prep.get("packet_ref", {}),
+                retained_dir=packet_evidence_root(prep),
+                expected_catalog_sha256=semantic_catalog_sha,
+            )
+            proposal["semantic_followup"] = followup
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            proposal = {}
+            semantic_error = "semantic_assessment_invalid:" + str(error)[:200]
         valid = (
             result.get("exit") == 0
             and isinstance(result.get("run_id"), str)
@@ -8346,7 +8463,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 (
                     "incomplete_low_assessment"
                     if incomplete_assessment
-                    else "unparseable_or_ambiguous_cheap_result"
+                    else semantic_error or "unparseable_or_ambiguous_cheap_result"
                 )
             ]
         )
@@ -8650,6 +8767,42 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         import closer_execution_contracts as contracts
 
         low_proposal = interpreted.get("proposal")
+        low_catalog_sha = None
+        if isinstance(low_proposal, dict) and low_proposal.get("semantic_assessment") is not None:
+            low_proof = (interpreted.get("actual") or {}).get("_closer_controlled_proof") or {}
+            low_catalog_sha = (low_proof.get("expected", {}).get("basis") or {}).get(
+                "semantic_catalog_sha256"
+            )
+            followup = low_proposal.get("semantic_followup") or {}
+            if not isinstance(low_catalog_sha, str) or followup.get("status") != "candidate":
+                known_unmet = (low_proposal.get("semantic_summary") or {}).get(
+                    "known_unmet"
+                ) is True
+                reason = (
+                    "protected_low_catalog_view_required"
+                    if not isinstance(low_catalog_sha, str)
+                    else (
+                        "known_unmet_requires_independently_admitted_source_route"
+                        if known_unmet
+                        else followup.get("reason", "semantic_dispute_not_admitted")
+                    )
+                )
+                refusal = contracts.deterministic_refusal(
+                    contracts.ContractError(
+                        reason,
+                        owner_required=known_unmet or reason == "qualified_source_owner_required",
+                    ),
+                    exception_snapshot,
+                )
+                refusal["pending_evidence"]["semantic_followup"] = followup
+                refusal["pending_evidence"]["event_id"] = "semantic-followup:" + digest(
+                    [target, prep.get("revision"), prep.get("packet_ref"), followup]
+                )
+                if reason == "semantic_gap_requires_existing_collection_selector":
+                    refusal["next_trigger"] = (
+                        "an existing source-admitted collector rail or exact original-proof locator resolves this bound slot; unchanged input does not spend another model turn"
+                    )
+                return refusal
         named_request = None
         owner_required = contracts.owner_review_required(
             [
@@ -8836,9 +8989,24 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         packet_ref=prep.get("packet_ref"),
                         retained_dir=packet_evidence_root(prep),
                     )
-                    merged = contracts.merge_selected_response(
-                        low_proposal, named_request, scoped_answer
-                    )
+                    if isinstance(low_proposal.get("semantic_assessment"), dict):
+                        import closer_semantic_assessment
+
+                        merged = closer_semantic_assessment.reconcile_selected(
+                            low_proposal["semantic_assessment"],
+                            named_request,
+                            scoped_answer,
+                            snapshot=exception_snapshot,
+                            packet=_packet,
+                            packet_ref=prep.get("packet_ref", {}),
+                            retained_dir=packet_evidence_root(prep),
+                            strong_actual=_worker_actual(worker_row),
+                            expected_catalog_sha256=low_catalog_sha,
+                        )
+                    else:
+                        merged = contracts.merge_selected_response(
+                            low_proposal, named_request, scoped_answer
+                        )
                     validated = closer_disposition.integrate_ordinary(
                         target,
                         exception_snapshot,
@@ -9257,9 +9425,30 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         packet_ref=prep.get("packet_ref"),
                         retained_dir=packet_evidence_root(prep),
                     )
-                    merged = contracts.merge_selected_response(
-                        low_proposal, named_request, scoped_answer
-                    )
+                    if isinstance(low_proposal.get("semantic_assessment"), dict):
+                        import closer_semantic_assessment
+
+                        low_proof = (interpreted.get("actual") or {}).get(
+                            "_closer_controlled_proof"
+                        ) or {}
+                        low_catalog_sha = (low_proof.get("expected", {}).get("basis") or {}).get(
+                            "semantic_catalog_sha256"
+                        )
+                        merged = closer_semantic_assessment.reconcile_selected(
+                            low_proposal["semantic_assessment"],
+                            named_request,
+                            scoped_answer,
+                            snapshot=snap,
+                            packet=_packet,
+                            packet_ref=prep.get("packet_ref", {}),
+                            retained_dir=packet_evidence_root(prep),
+                            strong_actual=strong.get("actual"),
+                            expected_catalog_sha256=low_catalog_sha,
+                        )
+                    else:
+                        merged = contracts.merge_selected_response(
+                            low_proposal, named_request, scoped_answer
+                        )
                     integration = closer_disposition.integrate_ordinary(
                         target,
                         snap,

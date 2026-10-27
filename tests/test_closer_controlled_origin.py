@@ -535,6 +535,8 @@ def test_actual_inert_supervisor_caller_receipt_semantics_and_restart(
             "collect_evidence",
             retained_dir=Path(packet_ref["path"]).parent.parent,
         )
+        import closer_semantic_assessment as semantic
+
         prompt = model.render_classification_prompt(
             {
                 "target": TARGET,
@@ -554,6 +556,9 @@ def test_actual_inert_supervisor_caller_receipt_semantics_and_restart(
             artifact_rows={},
             data_only=True,
             readiness=readiness,
+            semantic_inventory=semantic.catalog_input(
+                snapshot, packet, packet_ref, Path(packet_ref["path"]).parent.parent
+            ),
         )
         response = proposal
     else:

@@ -73,7 +73,26 @@
     "tests/test_ci_storage_diagnostics.py",
     "tests/test_closer_native_local_validation_dedup.py",
     "tests/test_closer_correction_retained_ref.py",
-    "tests/test_closer_role_selection.py"
+    "tests/test_closer_role_selection.py",
+    "tests/test_closer_semantic_assessment.py",
+    "tests/test_closer_semantic_audit_portability.py",
+    "tests/test_closer_semantic_catalog_replay.py",
+    "tests/test_closer_semantic_catalog_visibility.py",
+    "tests/test_closer_semantic_composition_parity.py",
+    "tests/test_closer_semantic_dispatcher_glue.py",
+    "tests/test_closer_semantic_fixture_portability.py",
+    "tests/test_closer_semantic_gap_eligibility.py",
+    "tests/test_closer_semantic_host_collection.py",
+    "tests/test_closer_semantic_host_glue.py",
+    "tests/test_closer_semantic_host_residuals.py",
+    "tests/test_closer_semantic_native_dispute.py",
+    "tests/test_closer_semantic_native_integration.py",
+    "tests/test_closer_semantic_optional_accounting_scope.py",
+    "tests/test_closer_semantic_proof_union.py",
+    "tests/test_closer_semantic_required_followup_scope.py",
+    "tests/test_closer_semantic_role_receiving.py",
+    "tests/test_closer_semantic_strong_role_view.py",
+    "tests/test_closer_typed_semantic_broker_fixture.py"
   ],
   "shards": [
     [
@@ -650,7 +669,26 @@
       "tests/test_ci_storage_diagnostics.py",
       "tests/test_closer_native_local_validation_dedup.py",
       "tests/test_closer_correction_retained_ref.py",
-      "tests/test_closer_role_selection.py"
+      "tests/test_closer_role_selection.py",
+      "tests/test_closer_semantic_assessment.py",
+      "tests/test_closer_semantic_audit_portability.py",
+      "tests/test_closer_semantic_catalog_replay.py",
+      "tests/test_closer_semantic_catalog_visibility.py",
+      "tests/test_closer_semantic_composition_parity.py",
+      "tests/test_closer_semantic_dispatcher_glue.py",
+      "tests/test_closer_semantic_fixture_portability.py",
+      "tests/test_closer_semantic_gap_eligibility.py",
+      "tests/test_closer_semantic_host_collection.py",
+      "tests/test_closer_semantic_host_glue.py",
+      "tests/test_closer_semantic_host_residuals.py",
+      "tests/test_closer_semantic_native_dispute.py",
+      "tests/test_closer_semantic_native_integration.py",
+      "tests/test_closer_semantic_optional_accounting_scope.py",
+      "tests/test_closer_semantic_proof_union.py",
+      "tests/test_closer_semantic_required_followup_scope.py",
+      "tests/test_closer_semantic_role_receiving.py",
+      "tests/test_closer_semantic_strong_role_view.py",
+      "tests/test_closer_typed_semantic_broker_fixture.py"
     ]
   ]
 }
