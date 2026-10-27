@@ -731,7 +731,7 @@ def test_actual_registered_pipeline_missing_contract_stops_before_broker(
     closer.main(world.argv)
     row = json.loads(capsys.readouterr().out)["targets"][world.snapshot["target"]]
     interpreted = row["results"]["interpret"]
-    assert interpreted["classification"] == "assessment_transport_unavailable", row
+    assert interpreted["classification"] == "role_qualification_unavailable", row
     assert interpreted["pending_kind"] == "external_event"
     assert interpreted["pending_evidence"]["target"] == world.snapshot["target"]
     assert interpreted["pending_evidence"]["revision"] == world.snapshot["revision"]

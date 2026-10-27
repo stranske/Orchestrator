@@ -8,6 +8,13 @@ never changes schedules, model policy, budgets, or another writer's claim.
 
 from __future__ import annotations
 
+# Native readers require the canonical class and callback namespace. Delegate
+# before defining a second set of classes or process-local state as __main__.
+if __name__ == "__main__":
+    from closer_dispatcher import main as _canonical_main
+
+    raise SystemExit(_canonical_main())
+
 import argparse
 import contextlib
 import hashlib
@@ -114,14 +121,26 @@ def _controlled_model_contract(task_type):
         "transport_qualification",
         "closer_model_contracts",
         "closer_execution_contracts",
+        "closer_adjudication_policy",
         "closer_disposition",
         "closer_evidence",
+        "closer_mechanical_source",
+        "closer_mechanical_catalog",
+        "closer_mechanical_executor",
+        "closer_local_tool_confinement",
     )
     if task_type == "closer_correction_classification":
         selected_sources += (
             "closer_correction_classification",
             "closer_correction_producer",
             "closer_correction_decision",
+            "closer_correction_bridge",
+            "closer_correction_source_record",
+            "closer_correction_owner",
+            "closer_correction_ownership",
+            "closer_campaign",
+            "verifier_evidence",
+            "router",
         )
     for name in selected_sources:
         module = importlib.import_module(name)
@@ -153,6 +172,10 @@ def _controlled_model_contract(task_type):
                 else {
                     **closer_model_contracts.STRONG_CONTRACT_ENTRYPOINTS,
                     "evidence_policy": contracts.ADJUDICATION_EVIDENCE_VERSION,
+                    "prompt_version": contracts.ADJUDICATION_PROMPT_VERSION,
+                    "controller_action_policy": importlib.import_module(
+                        "closer_adjudication_policy"
+                    ).SCHEMA,
                 }
             )
         ),
@@ -1803,7 +1826,13 @@ def _request_source(target, obj, *, kind="issue", via):
         "updated_at": updated,
         "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
     }
+    node_id = obj.get("node_id")
+    graphql_id = obj.get("id") if isinstance(obj.get("id"), str) else None
+    if node_id is not None and graphql_id is not None and node_id != graphql_id:
+        raise CoreInformationError("source_node_identity_mismatch", target)
+    node_id = node_id or graphql_id
     return {
+        **({"node_id": node_id} if isinstance(node_id, str) and node_id else {}),
         "target": target,
         "body": body,
         "state": obj["state"].lower(),
@@ -1979,7 +2008,7 @@ class GitHub:
           number title body state isDraft headRefOid headRefName headRepository{nameWithOwner} baseRefOid mergeCommit{oid} mergedAt updatedAt mergeable mergeStateStatus
           labels(first:100){nodes{name} pageInfo{hasNextPage}}
           timelineItems(itemTypes:[LABELED_EVENT],last:100){nodes{... on LabeledEvent{id createdAt label{name}}} pageInfo{hasPreviousPage}}
-          closingIssuesReferences(first:100){nodes{number title body state updatedAt labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
+          closingIssuesReferences(first:100){nodes{id number title body state updatedAt labels(first:100){nodes{name} pageInfo{hasNextPage}} repository{nameWithOwner}}
             pageInfo{hasNextPage}}
           reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){nodes{body updatedAt}}}
             pageInfo{hasNextPage}}
@@ -1987,7 +2016,7 @@ class GitHub:
             ... on CheckRun{databaseId status conclusion}
             ... on StatusContext{context state}
           } pageInfo{hasNextPage}}}}}}
-          comments(last:100){nodes{body url author{login}} pageInfo{hasPreviousPage}}
+          comments(last:100){nodes{body url author{login __typename}} pageInfo{hasPreviousPage}}
         }}}"""
         # Int input through --raw-field is not typed; variables are encoded in a JSON input below.
         # Interpolation is safe after strict target validation and integer-only PR number.
@@ -2144,6 +2173,7 @@ class GitHub:
             "label_events": label_events,
             "label_events_complete": label_events_complete,
             "verifier": marker,
+            "verifier_origin": verifier_evidence.terminal_origin_from_pr(repo, pr, marker),
             "verifier_lifecycle": lifecycle,
             "verifier_history_complete": not pr["comments"]["pageInfo"].get("hasPreviousPage"),
         }
@@ -2243,7 +2273,7 @@ class Closer:
         return {**cached, "_local_cached": True}
 
     def operation_binding(self, target, s):
-        return {
+        binding = {
             "head": s.get("head"),
             "merge": s.get("merge"),
             "pr_target": s.get("pr_target", target),
@@ -2284,6 +2314,52 @@ class Closer:
                 )
             ),
         }
+        if self.runtime_binding is not None:
+            try:
+                import closer_runtime_binding
+                import closer_source_installation
+
+                project = closer_source_installation.controller_policy_projection
+                origin = closer_runtime_binding._factory_manifest_origin(self.runtime_binding)
+                identity = (
+                    self.runtime_binding,
+                    getattr(self.runtime_binding, "bundle", None),
+                    getattr(self.runtime_binding, "mechanism", None),
+                    origin,
+                    getattr(origin, "path", None),
+                    getattr(origin, "sha256", None),
+                    digest(getattr(self.runtime_binding, "policy", None)),
+                    closer_source_installation._SOURCE_SHA256,
+                    project,
+                    getattr(project, "__code__", None),
+                )
+                # Freeze only an unavailable correlation for this exact source
+                # identity. Never cache positive qualification or effects data.
+                if getattr(self, "_missing_correction_projection", None) == identity:
+                    projection = None
+                else:
+                    projection = project(self.runtime_binding)
+                    self._missing_correction_projection = identity if projection is None else None
+                if (
+                    isinstance(projection, dict)
+                    and projection.get("schema")
+                    == "closer-correction-controller-policy-projection/v1"
+                    and projection.get("repository") == target.split("#", 1)[0]
+                    and projection.get("purpose") == "frontier-correlation-only"
+                    and all(
+                        isinstance(projection.get(key), str)
+                        and re.fullmatch(r"[0-9a-f]{64}", projection[key])
+                        for key in ("controller_sha256", "installation_sha256")
+                    )
+                ):
+                    # A prospective correlation guard, never an effects token.
+                    # It is present before the source controller freezes a
+                    # frontier; later native effects require signed admission.
+                    binding["correction_controller_sha256"] = projection["controller_sha256"]
+                    binding["correction_installation_sha256"] = projection["installation_sha256"]
+            except (ImportError, OSError, ValueError, KeyError, TypeError, RuntimeError):
+                pass  # Old/missing optional installation leaves ordinary binding unchanged.
+        return binding
 
     def observe(self, target):
         try:
@@ -3247,6 +3323,14 @@ class Closer:
             return prewrite({"status": "blocked", "reason": reason, "next_trigger": trigger})
         pr_target = fresh.get("pr_target", target)
         if action in {"collect_evidence", "review", "disposition", "repair"}:
+            candidate = getattr(self, "_correction_source_candidate", None)
+            if action == "disposition" and candidate is not None:
+                import closer_correction_source_record
+
+                # This is the original submitted queue callback. The source
+                # helper independently validates its live invocation and never
+                # launches a model or falls back to the generic worker.
+                return closer_correction_source_record.execute_candidate(candidate, operation)
             return self.worker(target, action, fresh, operation)
 
         if self.require_runtime_binding and self.runtime_binding is None:
@@ -4087,8 +4171,12 @@ class Closer:
         import closer_execution_contracts as contracts
 
         if action == "repair":
+            import closer_mechanical_source
+
             plan = self.dispositions.get(target, {}).get("repair")
-            return contracts.mechanical_execution_pending(plan, snapshot)
+            return closer_mechanical_source.repair_from_source(
+                self, target, snapshot, operation, plan
+            )
         scoped_request = None
         scoped_prompt = None
         rebuilt = None
@@ -4856,10 +4944,41 @@ def _qualified_capacity(report, available_profiles):
     }
 
 
+def _correction_profile_qualified(profile, *, task_type="closer_correction_classification"):
+    """A bounded role record qualifies only its exact production task contract."""
+    import closer_data_only_execution as execution
+    import closer_role_qualification as roles
+
+    try:
+        task = task_type
+        if task not in {"closer_interpret", "closer_correction_classification"}:
+            return False
+        record = roles.qualified_record(profile, roles.TASK_ROLES[task])
+        if record is None or not roles.is_runtime_qualified(profile, roles.TASK_ROLES[task]):
+            return False
+        descriptor = _controlled_model_contract(task)
+        limits = execution.validate_limits(record.get("execution_limits"))
+        return (
+            (task != "closer_correction_classification" or profile.get("agent") == "claude")
+            and record.get("production_model_contract") == descriptor
+            and limits["model_contract_sha256"] == descriptor["contract_sha256"]
+            and limits["role"] == roles.TASK_ROLES[task]
+        )
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def _pipeline_low_route(
-    *, load=None, unavailable_profiles=None, with_status=False, data_only=False
+    *,
+    load=None,
+    unavailable_profiles=None,
+    with_status=False,
+    data_only=False,
+    task_type="closer_interpret",
 ):
     """Choose a role-qualified classification profile through the existing router."""
+    if task_type not in {"closer_interpret", "closer_correction_classification"}:
+        raise ValueError("unsupported bounded classification task")
     load = load if load is not None else {}
     import execution_profiles
     import router
@@ -4905,6 +5024,7 @@ def _pipeline_low_route(
                 if str(p.get("agent", "")).casefold() != "aider"
                 and p["profile_id"] not in unavailable_profiles
                 and _profile_exception_qualified(report, p, repair=False, substantive=False)
+                and (not data_only or _correction_profile_qualified(p, task_type=task_type))
                 and report.get("profiles", {}).get(p["profile_id"], {}).get("state")
                 in {"ok", "warn"}
                 and bool(p.get("capacity_pool_ids"))
@@ -4942,14 +5062,14 @@ def _pipeline_low_route(
             )
             return (None, status) if with_status else None
         pick = router.select_agent(
-            "closer_interpret",
+            task_type,
             _qualified_capacity(report, available_profiles),
             only=eligible,
             allow_warn=True,
             profile_transport="offload",
             load=load or {},
             per_agent_cap=1,
-            learned=_closer_learned("closer_interpret"),
+            learned=_closer_learned(task_type),
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
@@ -5161,6 +5281,7 @@ def _execute_profile_route(
     finite_frontier=None,
     frontier_target=None,
     data_only=False,
+    task_type="closer_interpret",
 ):
     """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
 
@@ -5170,6 +5291,11 @@ def _execute_profile_route(
     """
     import closer_resources
     import execution_profiles
+
+    if task_type not in {"closer_interpret", "closer_correction_classification"}:
+        raise ValueError("unsupported bounded execution task")
+    if task_type == "closer_correction_classification" and (lane != "low" or data_only is not True):
+        raise ValueError("correction task requires its bounded data-only route")
 
     root = (
         Path(os.environ.get("HANDOFF_DIR", Path.home() / ".codex/handoff"))
@@ -5231,6 +5357,10 @@ def _execute_profile_route(
                     if finite_frontier is not None:
                         closer_resources.finite_pool_no_start()
                     raise
+                if task_type == "closer_correction_classification":
+                    qualified = (
+                        qualified and lane == "low" and _correction_profile_qualified(profile)
+                    )
                 if not qualified:
                     if finite_frontier is not None:
                         closer_resources.finite_pool_no_start()
@@ -5276,6 +5406,11 @@ def _execute_profile_route(
             unavailable_profiles=excluded,
             with_status=True,
             **({"repair": repair} if lane != "low" else {"data_only": True} if data_only else {}),
+            **(
+                {"task_type": task_type}
+                if lane == "low" and task_type != "closer_interpret"
+                else {}
+            ),
         )
         if (
             route is None
@@ -7279,7 +7414,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         return pending
 
     def collect_or_defer(
-        target, context, prep, snap, packet, screen, proposal, attempt_key, actual
+        target,
+        context,
+        prep,
+        snap,
+        packet,
+        screen,
+        proposal,
+        attempt_key,
+        actual,
+        *,
+        collection_only=False,
     ):
         try:
             result = finish_collection(
@@ -7324,7 +7469,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             )
             return pending
         # Assessment failure must not overwrite an already committed recovery.
-        if "_reenter_recovered" in result:
+        if "_reenter_recovered" in result and not collection_only:
             refreshed = result["_reenter_recovered"]
             answer = interpret(target, {**context, "prepare": refreshed, "_recovery_done": True})
             return {
@@ -7640,6 +7785,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             or time.time() - float(latest_drift.get("drift_review_at", 0) or 0) >= 24 * 3600
         )
         run_drift = False
+        drift_deferred_for_budget = False
         with drift_lock:
             nonlocal drift_claimed
             if drift_due and not drift_claimed and not collection_mode:
@@ -7667,7 +7813,37 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                             )
                             > 1800,
                         }
+        import copy
+
+        import closer_mechanical_source
+
+        # Use the same per-target original frontier/GitHub scoping as ACT;
+        # registration remains read-only and must not mutate another IO worker.
+        mechanical_backend = copy.copy(backend)
+        mechanical_backend.gh = GitHub(deadline=float(context["deadline"]))
+        if finite_frontier is not None:
+            mechanical_backend.finite_frontier = finite_frontier
+        # Source facts are acquired before LOW sees a mechanical hint. Keep the
+        # issued Python object local: model JSON cannot register tests or mint a
+        # source-host capability, and the current installed qualifier is absent.
+        mechanical_registration = closer_mechanical_source.collect_source_registration(
+            mechanical_backend,
+            target,
+            admitted_snapshot,
+            {
+                "snapshot_ref": prep.get("snapshot_ref"),
+                "packet": raw_packet,
+                "packet_ref": prep.get("packet_ref"),
+                "retained_dir": packet_evidence_root(prep),
+            },
+            context,
+        )
         prompt_mandatory = {
+            "mechanical_source": {
+                "model_hints": mechanical_registration.model_hints,
+                "missing": list(mechanical_registration.missing),
+                "tool_execution_qualified": mechanical_registration.qualified,
+            },
             "target": target,
             "head": snap.get("head"),
             "base": (raw_packet or {}).get("base"),
@@ -7747,37 +7923,57 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "producer_sha256": producer_sha,
                 "instruction": "Compare actual bounded raw samples to their section schemas/provenance and expected_assertions. Mark complete only if every sampled case and referenced section was inspected; return exact mismatching case/section IDs.",
             }
-        try:
-            prompt = closer_model_contracts.render_classification_prompt(
-                prompt_mandatory,
-                source_rows=source_rows,
-                diff_rows=diff_rows,
-                review_rows=review_rows,
-                artifact_rows=artifact_rows,
-                run_drift=run_drift,
-                data_only=data_only,
-                recovery_enabled=recovery_enabled,
-                collection_mode=collection_mode,
-                readiness=readiness,
-                collection_instructions=recovery.COLLECTION_INSTRUCTIONS,
-            )
-        except closer_model_contracts.ClassificationPromptError as exc:
-            _release_route_load(route, route_load)
-            pending = evidence_pending(
-                target,
-                prep,
-                {
-                    **(readiness or {}),
-                    "ready": False,
-                    "evaluation_ready": False,
-                    "gaps": list(dict.fromkeys([*(readiness or {}).get("gaps", []), exc.reason])),
-                },
-            )
-            pending["reason"] = exc.reason
-            pending["next_trigger"] = (
-                "bounded retained evidence or original source owner resolves the complete classification prompt size"
-            )
-            return pending
+        for prompt_attempt in range(2):
+            try:
+                prompt = closer_model_contracts.render_classification_prompt(
+                    prompt_mandatory,
+                    source_rows=source_rows,
+                    diff_rows=diff_rows,
+                    review_rows=review_rows,
+                    artifact_rows=artifact_rows,
+                    run_drift=run_drift,
+                    data_only=data_only,
+                    recovery_enabled=recovery_enabled,
+                    collection_mode=collection_mode,
+                    readiness=readiness,
+                    collection_instructions=recovery.COLLECTION_INSTRUCTIONS,
+                )
+                break
+            except closer_model_contracts.ClassificationPromptError as exc:
+                if (
+                    prompt_attempt == 0
+                    and run_drift
+                    and exc.reason == "classification_prompt_exceeds_bound"
+                ):
+                    # Optional producer sampling must not consume the budget
+                    # required for the complete current-PR assessment. Retain
+                    # every mandatory byte and keep the audit due, with no
+                    # review timestamp or completion credit.
+                    prompt_mandatory = dict(prompt_mandatory)
+                    prompt_mandatory.pop("drift_audit", None)
+                    run_drift = False
+                    drift_deferred_for_budget = True
+                    with drift_lock:
+                        drift_claimed = False
+                    continue
+                _release_route_load(route, route_load)
+                pending = evidence_pending(
+                    target,
+                    prep,
+                    {
+                        **(readiness or {}),
+                        "ready": False,
+                        "evaluation_ready": False,
+                        "gaps": list(
+                            dict.fromkeys([*(readiness or {}).get("gaps", []), exc.reason])
+                        ),
+                    },
+                )
+                pending["reason"] = exc.reason
+                pending["next_trigger"] = (
+                    "bounded retained evidence or original source owner resolves the complete classification prompt size"
+                )
+                return pending
         started = time.monotonic()
         import closer_resources
 
@@ -8096,7 +8292,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         # or typed requests before the existing recovery and action guards.
         producer_audit = {
             "status": (
-                ("complete" if valid and drift_complete else "pending") if run_drift else "not_due"
+                ("complete" if valid and drift_complete else "pending")
+                if run_drift
+                else ("deferred_prompt_budget" if drift_deferred_for_budget else "not_due")
             ),
             "producer_sha256": producer_sha,
             "summary": None,
@@ -8217,7 +8415,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             }
             full_snap, _packet = full_snapshot(prep)
             integration = closer_disposition.integrate_ordinary(
-                target, full_snap, prep.get("packet_ref", {}), prep, stage_result
+                target,
+                full_snap,
+                prep.get("packet_ref", {}),
+                prep,
+                stage_result,
+                mechanical_registration=mechanical_registration,
             )
             if integration.get("status") == "exception":
                 needs = list(needs) + [
@@ -8329,6 +8532,16 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             producer_audit["summary"] = summary[:lo]
             producer_audit["summary_truncated"] = lo < len(summary)
             interpreted_result["drift_review"] = summary[:lo]
+        if integration.get("status") == "ordinary_nonpass":
+            import closer_correction_bridge
+
+            # This is the original source-owned callback, not a second action or
+            # a caller-supplied correction envelope. Missing future owner facts
+            # remain UNKNOWN and cannot spend the LOW permit again.
+            correction_snapshot, correction_packet = full_snapshot(prep)
+            interpreted_result["correction"] = closer_correction_bridge.collect_substage(
+                correction_snapshot, correction_packet, prep.get("packet_ref", {})
+            )
         return interpreted_result
 
     def exception(target, context):
@@ -8407,6 +8620,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             if error.bound_request is None and named_request is not None:
                 error.bound_request = named_request
             return contracts.deterministic_refusal(error, exception_snapshot)
+        policy_context = None
+        if set(named_request.get("basis", {})) == {"finding_id"}:
+            import closer_adjudication_policy as action_policy
+
+            try:
+                # Source-owned live callback/lease; neither model fields nor a
+                # supplied dataclass can manufacture this operation identity.
+                policy_context = action_policy.current_callback(
+                    context, prep, exception_snapshot, named_request, now=time.time()
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                return contracts.deterministic_refusal(
+                    contracts.ContractError("original_exception_followup_context_unavailable"),
+                    exception_snapshot,
+                )
         proposal = {
             "interpretation": interpreted.get("proposal"),
             "adjudication_request": named_request,
@@ -8620,6 +8848,8 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "output_ref": output_ref,
                 "metadata_ref": metadata_ref,
             }
+        policy_scoped_answer = validated.get("scoped_adjudication") or {}
+        policy_integration_status = validated.get("status")
         validated_ref = None
         validation_bytes = json.dumps(validated, ensure_ascii=False, separators=(",", ":")).encode()
         if len(validation_bytes) > 8 * 1024:
@@ -8632,7 +8862,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     worker_row, target, prep, context, error, route_agent, route_profile
                 )
             validated = {key: validated.get(key) for key in ("status", "reason")}
-        return {
+        exception_result = {
             **({"validated_ref": validated_ref} if validated_ref else {}),
             **(
                 {
@@ -8655,6 +8885,50 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "authority": False,
             "validated": validated,
         }
+        if (
+            policy_context is not None
+            and policy_integration_status == "ordinary_nonpass"
+            and policy_scoped_answer.get("outcome")
+            in {"unresolved_missing_evidence", "unresolved_mechanical"}
+        ):
+            # Preserve raw advice and full integration as history. Only this
+            # source adapter chooses collection; future correction is not an
+            # available log, and no model action enum can schedule a retry.
+            exception_result.update(
+                action_policy.finish_advice(
+                    policy_context,
+                    context=context,
+                    preparation=prep,
+                    snapshot=exception_snapshot,
+                    packet=_packet,
+                    screen=readiness,
+                    proposal=low_proposal,
+                    recovery_enabled=recovery_enabled,
+                    store=recovery_store,
+                    github_factory=GitHub,
+                    collect=collect_or_defer,
+                    actual=exception_result["actual"],
+                    now=time.time(),
+                )
+            )
+        if isinstance(named_request, dict) and set(named_request.get("basis", {})) == {
+            "source",
+            "criterion_sha256",
+        }:
+            import closer_correction_bridge
+
+            # Still the original EXCEPTION callback, after terminal STRONG
+            # cleanup. The helper re-reads actual UNSAT/owner proofs; an
+            # unresolved/relevant JSON label cannot request another model.
+            exception_result["correction"] = closer_correction_bridge.run_controlled_correction(
+                context=context,
+                preparation=prep,
+                stage_result=exception_result,
+                github=GitHub(deadline=float(context["deadline"])),
+                retained_dir=retained_dir,
+                route_load=route_load,
+            )
+        return exception_result
 
     def action_backend(target, context):
         action_state = Path(context["action_state_path"])
@@ -8682,6 +8956,36 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         current.verifier_archive_root = backend.verifier_archive_root
         if finite_frontier is not None:
             current.finite_frontier = finite_frontier
+        source_ref = (context.get("exception", {}).get("correction") or {}).get(
+            "source_decision_ref"
+        )
+        if source_ref is not None:
+            import closer_correction_source_record
+
+            try:
+                from closer_source_installation import source_installation_for
+
+                installation = source_installation_for(current.runtime_binding)
+                candidate = closer_correction_source_record.candidate_for_original_act(
+                    context=context, installation=installation
+                )
+                native_action, _reason, native_eligible, _trigger = current.select(snap)
+                if native_action != "disposition" or native_eligible is not True:
+                    raise closer_correction_source_record.SourceRecordUnavailable(
+                        "fresh native route is not the original disposition action"
+                    )
+                current._correction_source_candidate = candidate
+                return current
+            except (ImportError, OSError, ValueError, KeyError, TypeError, RuntimeError):
+                # An actual correction result remains owned if its optional
+                # source-controller installation or current proof is missing.
+                # It cannot silently return to the model worker in ACT.
+                current.advisory[target] = context.get("revision")
+                current.advisory_reasons[target] = {
+                    "reason": "correction source decision awaits authenticated native controller",
+                    "next_trigger": "source owner restores the exact installed controller proof",
+                }
+                return current
         interpreted = full_interpretation(context.get("interpret", {}), target, prep)
         if (
             isinstance(interpreted, dict)
@@ -9054,6 +9358,53 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return {"status": "completed", "target_complete": True, "queue_receipt": receipt}
         next_trigger = row.get("next_trigger") or "resume_target_from_current_evidence"
         reason = row.get("reason") or "queue_requires_continuation"
+        if finite_frontier is not None:
+            # Source enrollment has its own protected knowledge boundary.
+            # Generic queue stop and acceptance flags remain unchanged.
+            inner = queue_item_readback(action_state, target)
+            candidates = [inner.get("operation"), *inner.get("operation_history", [])]
+            originals = [
+                op
+                for op in candidates
+                if isinstance(op, dict)
+                and op.get("id") == row.get("operation_id")
+                and op.get("status") == "completed"
+                and isinstance(op.get("result"), dict)
+                and op["result"].get("correction_enrollment_terminal") is not None
+            ]
+            if len(originals) == 1:
+                import closer_correction_enrollment_terminal as enrollment_terminal
+
+                terminal_ref = originals[0]["result"]["correction_enrollment_terminal"]
+                stage = {
+                    "pipeline_state_path": context["state_path"],
+                    "pipeline_run_id": context["pipeline_run_id"],
+                    "work_key": context["work_key"],
+                    "identity": context["identity"],
+                    "revision": context["revision"],
+                    "action_state_path": str(action_state),
+                }
+                boundary = enrollment_terminal.validate_queue_boundary(
+                    manifest_path=args.runtime_manifest,
+                    state_path=str(action_state),
+                    target=target,
+                    finite_frontier=finite_frontier,
+                    proof_ref=terminal_ref,
+                    expected_operation_id=originals[0]["id"],
+                    expected_stage=stage,
+                )
+                if boundary is not None:
+                    return {
+                        "status": "pending",
+                        "pending_kind": "source_correction_enrollment",
+                        "reason": "correction_enrollment_terminal",
+                        "next_trigger": "source_authenticated_coding_continuation",
+                        "target_complete": False,
+                        "pending_evidence": boundary,
+                        "correction_enrollment_terminal": terminal_ref,
+                        "enrollment_manifest_path": args.runtime_manifest,
+                        "queue_receipt": receipt,
+                    }
         if not receipt.get("stop_valid"):
             # Do not convert an unresolved inner coordinator/operation state into
             # an invented external event. The outer ledger records this as uncertain
@@ -9750,6 +10101,11 @@ def main(argv=None):
     run.add_argument("--apply", action="store_true")
     run.add_argument("--workers", action="store_true")
     run.add_argument(
+        "--coding-worker",
+        action="store_true",
+        help="select exact pinned prospective correction WORKER purpose",
+    )
+    run.add_argument(
         "--evidence-retry-token",
         help="explicit new observation/event authorizing one targeted recovery retry",
     )
@@ -9774,6 +10130,9 @@ def main(argv=None):
     run.add_argument("--dispositions")
     run.add_argument("--workspaces", help="pinned prospective/historical workspace bindings JSON")
     run.add_argument("--workspaces-sha256", help="exact workspace config bytes admitted by caller")
+    coding_validate = sub.add_parser("validate-coding-terminal")
+    coding_validate.add_argument("--delivery", required=True)
+    coding_validate.add_argument("--sha256", required=True)
     validate = sub.add_parser("validate-stop")
     validate.add_argument("--state", required=True)
     validate.add_argument("--assignment")
@@ -9798,6 +10157,32 @@ def main(argv=None):
     args = p.parse_args(argv)
     import closer_queue
 
+    if args.command == "validate-coding-terminal":
+        import closer_native_observer as native
+
+        try:
+            native.read_coding_delivery({"path": args.delivery, "sha256": args.sha256})
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
+            print(
+                json.dumps(
+                    {
+                        "local_coding_terminal_known": False,
+                        "global_stop_valid": False,
+                        "acceptance_authorized": False,
+                    }
+                )
+            )
+            return 78
+        print(
+            json.dumps(
+                {
+                    "local_coding_terminal_known": True,
+                    "global_stop_valid": False,
+                    "acceptance_authorized": False,
+                }
+            )
+        )
+        return 0
     if args.command == "finite-reentry":
         import closer_finite_reentry
 
@@ -10588,6 +10973,18 @@ def _main_admitted(args, p, assignment_rows, targets):
     )
     if args.pipeline and args.shadow:
         p.error("choose --pipeline or --shadow")
+    if getattr(args, "coding_worker", False):
+        import closer_coding_worker
+
+        try:
+            result = closer_coding_worker.run_from_root(args, backend, targets)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            from closer_native_observer import coding_worker_held
+
+            result = coding_worker_held(error)
+        print(json.dumps(result, sort_keys=True))
+        # A coding queue is not a pipeline terminal receipt or acceptance.
+        return 78
     if args.pipeline or args.shadow:
         if args.pipeline and not (args.apply and args.workers):
             p.error("--pipeline requires --apply --workers; use --shadow for read-only preview")
@@ -10915,7 +11312,3 @@ def _scoped_budget_admission(state_path, requested_deadline):
         "legacy_stop_authority": False,
         "snapshot": snapshot,
     }
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

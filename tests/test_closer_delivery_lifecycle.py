@@ -170,6 +170,14 @@ class OfflineDelivery:
 
     def api(self, endpoint, *, method="GET", fields=None, **kw):
         self.api_calls.append((endpoint, method, fields))
+        if (
+            endpoint
+            == "repos/owner/repo/contents/.github/workflows/autofix-versions.env?ref=" + HEAD
+            and method == "GET"
+        ):
+            # This acceptance fixture has no mechanical tool-policy source.
+            # The actual collector must retain UNMET, never invent a rail.
+            return {"message": "Not Found"}
         if endpoint == "repos/owner/repo" and method == "GET":
             return {"default_branch": "main"}
         if endpoint == "repos/owner/repo/actions/workflows/agents-verifier.yml/dispatches":

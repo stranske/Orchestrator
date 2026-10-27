@@ -43,6 +43,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
+# The physical CLI file and native source-frame checks share one module object.
+# Refuse a prior named import rather than execute two independently loaded copies.
+if __name__ == "__main__":
+    _entry_module = sys.modules.get("__main__")
+    if _entry_module is None or _entry_module.__dict__ is not globals():
+        raise RuntimeError("campaign entry module identity unavailable")
+    _canonical_module = sys.modules.get("closer_campaign")
+    if _canonical_module is not None and _canonical_module is not _entry_module:
+        raise RuntimeError("conflicting canonical campaign module")
+    sys.modules["closer_campaign"] = _entry_module
+
 # Published packages remain immutable, including their Python import artifacts.
 if (Path(__file__).resolve().parent / "closer-runtime-package.json").is_file():
     sys.dont_write_bytecode = True
@@ -101,9 +112,25 @@ class Campaign:
 
     def _locked(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        stream = self.lock_path.open("a+b")
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        return stream
+        descriptor = os.open(
+            self.lock_path,
+            os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+        )
+        stream = os.fdopen(descriptor, "a+b")
+        try:
+            metadata = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+            ):
+                raise CampaignError("campaign lock is not an owned regular file")
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            return stream
+        except BaseException:
+            stream.close()
+            raise
 
     def _read_unlocked(self) -> dict[str, Any] | None:
         try:
@@ -1330,8 +1357,19 @@ def _next_cohort_config(doc, targets, request):
 
     cfg = copy.deepcopy(doc["worker_config"])
     deadline = _now() + 30
+    runtime_binding = None
+    if cfg.get("runtime_manifest"):
+        from closer_runtime_binding import binding_from_manifest
+
+        try:
+            runtime_binding = binding_from_manifest(cfg["runtime_manifest"])
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+            # This optional prospective guard is not launch/effect admission.
+            # The existing campaign independently qualifies its runtime later.
+            runtime_binding = None
     backend = dispatcher.Closer(
         dispatcher.GitHub(deadline=deadline),
+        runtime_binding=runtime_binding,
         state_path=cfg["dispatch_state"],
         apply=False,
         workers=False,
@@ -1871,7 +1909,67 @@ def submit_effect(
     return outcome
 
 
-def _atomic_write(path: Path, doc: dict[str, Any], *, create_only: bool = False) -> None:
+def _atomic_write(
+    path: Path, doc: dict[str, Any], *, create_only: bool = False, parent_fd: int | None = None
+) -> None:
+    if parent_fd is not None:
+        # Opt-in only: an owned directory handle pins custody across path races.
+        # Defaults below retain the existing campaign writer's exact behavior.
+        if type(parent_fd) is not int or create_only is not True:
+            raise CampaignError("owned directory write requires exclusive-create mode")
+        if any(
+            function not in os.supports_dir_fd
+            for function in (os.open, os.stat, os.link, os.unlink)
+        ):
+            raise CampaignError("descriptor-relative custody writes are unsupported")
+        path = Path(path)
+        held = os.fstat(parent_fd)
+        if (
+            not path.is_absolute()
+            or path.parent.resolve() != path.parent
+            or path.name in {"", ".", ".."}
+            or not stat.S_ISDIR(held.st_mode)
+            or held.st_uid != os.getuid()
+            or held.st_mode & 0o022
+        ):
+            raise CampaignError("owned custody directory differs")
+
+        def unchanged_parent():
+            named = os.stat(path.parent, follow_symlinks=False)
+            if not stat.S_ISDIR(named.st_mode) or (named.st_dev, named.st_ino) != (
+                held.st_dev,
+                held.st_ino,
+            ):
+                raise CampaignError("owned custody parent moved")
+
+        unchanged_parent()
+        payload = (
+            json.dumps(doc, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+        ).encode()
+        if not 0 < len(payload) <= 512 * 1024:
+            raise CampaignError("owned custody document outside bounds")
+        temporary = "." + path.name + "." + uuid.uuid4().hex
+        descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            unchanged_parent()
+            os.link(
+                temporary,
+                path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            os.fsync(parent_fd)
+            unchanged_parent()
+        finally:
+            os.unlink(temporary, dir_fd=parent_fd)
+        return
     payload = (json.dumps(doc, sort_keys=True, separators=(",", ":")) + "\n").encode()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -2107,6 +2205,18 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
 
     That command is a whole-round owner (its mandatory ACTION A/C run once, under the state
     file's original lease); parallelism comes from its own `--max-workers`, not from us."""
+    purpose = (cfg.get("policy") or {}).get("correction_coding_worker")
+    if purpose is not None:
+        import closer_coding_continuation
+
+        closer_coding_continuation.validate_capability(purpose)
+        if cfg.get("mechanism") != "native-handoff/v1" or cfg.get("finite_frontier") is None:
+            raise CampaignError("coding WORKER requires ordinary finite native admission")
+    continuation = cfg.get("coding_continuation")
+    if continuation is not None:
+        from closer_native_observer import coding_dispatch_selected
+
+        coding_dispatch_selected(cfg)
     command = [
         python,
         str(module_dir / "closer_dispatcher.py"),
@@ -2118,6 +2228,8 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         "--max-workers",
         str(min(MAX_WORKERS_CAP, max(1, int(cfg.get("dispatch_workers", 1))))),
     ]
+    if continuation is not None:
+        command.append("--coding-worker")
     finite_frontier = cfg.get("finite_frontier")
     if finite_frontier is not None:
         from closer_frontier_policy import request_window, validate_frontier
@@ -2399,6 +2511,7 @@ def run_worker(
             outcome in {"ok", "scoped_continuation"}
             and result_mechanism == "native-handoff/v1"
             and worker_admission is not None
+            and worker_admission.get("coding_continuation") is None
         ):
             payload = None
             try:
@@ -2439,7 +2552,37 @@ def run_worker(
     except CampaignError as exc:  # includes IncompatibleState: refuse before writing anything
         return finish("unavailable", f"fenced before effects: {exc}")
     mine = next((w for w in (doc or {}).get("workers", []) if w["worker_id"] == worker_id), None)
-    claim_holder = holder(f"{doc['campaign_id']}:{target}") if doc else None
+    private_coding = None
+    if (
+        mine is None
+        and doc is not None
+        and runtime_manifest
+        and any(
+            (row.get("worker") or {}).get("worker_id") == worker_id
+            for row in (doc.get("coding_continuations") or {}).values()
+        )
+    ):
+        from closer_native_observer import coding_worker_registration
+
+        try:
+            private_coding = coding_worker_registration(
+                doc,
+                state=state,
+                result=result,
+                target=target,
+                owner=owner,
+                generation=generation,
+                manifest_path=runtime_manifest,
+            )
+            mine = private_coding
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            return finish("unavailable", "private coding worker source registration held")
+    claim_target = (
+        private_coding["claim_target"]
+        if private_coding
+        else (f"{doc['campaign_id']}:{target}" if doc else None)
+    )
+    claim_holder = holder(claim_target) if claim_target else None
     if (
         doc is None
         or mine is None
@@ -3221,19 +3364,15 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     return manifest
 
 
-def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
-    """Why this pinned version may NOT take effects yet; empty means qualified.
-
-    Needs (1) valid manifest + verified modules, (2) `<root>/promotion.json`
-    (`{"runners": [...], "receipts": [...]}`) that `check_promotion` accepts, i.e. real
-    desktop-runner receipts for exactly this package and state versions, (3) a runner that
-    understands the recorded state schema, and (4) the pinned Core loadable as an adapter.
-    Any failure holds; nothing falls back to another action path."""
-    problems = validate_manifest(manifest) + verify_modules(manifest)
+def _current_qualification_problems(
+    manifest: dict[str, Any], root: str | Path, *, _scope=None
+) -> list[str]:
+    """Fresh state predicates only; empty is NOT complete package qualification."""
+    problems: list[str] = []
     from closer_mechanisms import CLI, DESKTOP, MechanismError, mechanism, qualification_problems
 
     try:
-        selected = mechanism(manifest)
+        selected = mechanism(manifest) if _scope is None else mechanism(manifest, _scope=_scope)
     except MechanismError as exc:
         return problems + [f"execution mechanism remains held: {exc}"]
     if selected == CLI:
@@ -3241,7 +3380,11 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     elif selected == "native-handoff/v1":
         from closer_native_observer import qualification_problems as native_qualification_problems
 
-        problems += native_qualification_problems(manifest)
+        problems += (
+            native_qualification_problems(manifest)
+            if _scope is None
+            else native_qualification_problems(manifest, _scope=_scope)
+        )
     elif selected != DESKTOP:
         problems.append("unknown execution mechanism remains held")
     else:
@@ -3258,11 +3401,29 @@ def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
     recorded = (manifest.get("state_versions") or {}).get("campaign")
     if not isinstance(recorded, int) or recorded != STATE_SCHEMA:
         problems.append(f"state version {recorded!r} is not the runner's schema {STATE_SCHEMA}")
-    pin = manifest.get("portable") or {}
     try:
-        from closer_runtime_binding import CoreBundle, dependency_problems
+        from closer_runtime_binding import dependency_problems
 
         problems.extend(dependency_problems())
+    except (KeyError, TypeError, OSError, CampaignError, AttributeError) as exc:
+        problems.append(f"pinned core unusable: {exc}")
+    return problems
+
+
+def qualify(manifest: dict[str, Any], root: str | Path) -> list[str]:
+    """Why this pinned version may NOT take effects yet; empty means qualified.
+
+    Needs (1) valid manifest + verified modules, (2) `<root>/promotion.json`
+    (`{"runners": [...], "receipts": [...]}`) that `check_promotion` accepts, i.e. real
+    desktop-runner receipts for exactly this package and state versions, (3) a runner that
+    understands the recorded state schema, and (4) the pinned Core loadable as an adapter.
+    Any failure holds; nothing falls back to another action path."""
+    problems = validate_manifest(manifest) + verify_modules(manifest)
+    problems.extend(_current_qualification_problems(manifest, root))
+    pin = manifest.get("portable") or {}
+    try:
+        from closer_runtime_binding import CoreBundle
+
         CoreBundle(pin)
     except (KeyError, TypeError, OSError, CampaignError, AttributeError) as exc:
         problems.append(f"pinned core unusable: {exc}")
@@ -3453,7 +3614,24 @@ def tick(
                     continue
                 pending = next_action(doc, capacity_ok=True)
                 if pending.get("kind") != "launch":
-                    report.append({"campaign": path.name, **pending})
+                    from closer_native_observer import run_coding_if_selected
+
+                    coding = run_coding_if_selected(campaign, doc, manifest, manifest_path, pending)
+                    if coding is not None:
+                        report.append({"campaign": path.name, **coding})
+                        continue
+                    maintenance = None
+                    from closer_native_observer import correction_cleanup_enabled
+
+                    if correction_cleanup_enabled(doc.get("worker_config") or {}):
+                        from closer_correction_maintenance import run_if_selected
+
+                        maintenance = run_if_selected(
+                            campaign, doc, manifest, manifest_path, pending
+                        )
+                    report.append(
+                        {"campaign": path.name, **(pending if maintenance is None else maintenance)}
+                    )
                     continue
                 try:
                     if capacity_json is not None:

@@ -19,6 +19,7 @@ from test_dispatcher_controlled_data_only import world as _controlled_world
 import claims
 import closer_dispatcher as adapter
 import closer_evidence
+import closer_execution_contracts as contracts
 import closer_pipeline
 import closer_queue
 
@@ -1735,9 +1736,12 @@ def test_unsafe_or_nonspecific_repair_paths_never_admit_writing_worker(
         lambda **kw: pytest.fail("unbound repair must not allocate a writer"),
     )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    assert result["status"] == "pending"
-    assert result["reason"] == "registered_required_test_missing"
-    assert result["next_guarded_action"] == "collect_evidence"
+    assert result["status"] == "uncertain"
+    assert result["reason"] == "original_live_repair_operation_UNMET"
+    assert result["authority"] is False
+    pending = contracts.mechanical_execution_pending(decision["repair"], snapshot())
+    assert pending["reason"] == "registered_required_test_missing"
+    assert pending["next_guarded_action"] == "collect_evidence"
     assert result["pending_evidence"]["target"] == TARGET
     assert calls == []
 
@@ -1760,8 +1764,13 @@ def test_repair_uses_no_generic_writer_until_executor_and_test_are_qualified(
         lambda **kw: pytest.fail("unqualified repair writer must never allocate"),
     )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    assert result["status"] == "pending"
-    assert result["reason"] == "registered_required_test_missing"
+    assert result["status"] == "uncertain"
+    assert result["reason"] in {
+        "original_live_repair_operation_UNMET",
+        "original_mechanical_plan_UNMET",
+    }
+    pending = contracts.mechanical_execution_pending(decision.get("repair"), snapshot())
+    assert pending["reason"] == "registered_required_test_missing"
     assert result["pending_kind"] == "external_event"
     assert result["authority"] is False
     assert result["pending_evidence"]["revision"] == snapshot()["revision"]
@@ -1854,30 +1863,88 @@ def test_stale_capacity_never_calls_provider_or_scans_sessions(tmp_path, monkeyp
     assert calls == []
 
 
-@pytest.mark.parametrize("dirty", [False, True], ids=["wrong-head", "dirty-checkout"])
-def test_repair_workspace_must_be_clean_and_match_approved_head(tmp_path, monkeypatch, dirty):
+def test_repair_without_original_operation_stays_uncertain(tmp_path, monkeypatch):
     decision = {
         "repair": {"head": HEAD, "prompt": "Apply reviewed correction", "paths": ["fix.py"]}
     }
     backend, calls = _private_worker(tmp_path, monkeypatch, decision=decision)
 
-    def mismatched_git(command, **kwargs):
-        return SimpleNamespace(
-            returncode=0,
-            stdout=(HEAD if dirty else "c" * 40) if "rev-parse" in command else " M fix.py",
-        )
-
-    monkeypatch.setattr(adapter.subprocess, "run", mismatched_git)
+    monkeypatch.setattr(
+        adapter.subprocess, "run", lambda *_a, **_kw: pytest.fail("no original repair operation")
+    )
     monkeypatch.setattr(
         adapter, "_exception_route", lambda **kw: pytest.fail("no qualified repair executor")
     )
     result = backend.worker(TARGET, "repair", snapshot(), operation("repair"))
-    # Missing test/executor authority stops before any workspace invocation;
-    # physical exact-head/alias tests exercise the pure plan admission separately.
-    assert result["status"] == "pending"
-    assert result["reason"] == "registered_required_test_missing"
-    assert result["next_guarded_action"] == "collect_evidence"
+    # Original-operation admission precedes source registration and physical input checks.
+    assert result["status"] == "uncertain"
+    assert result["reason"] == "original_live_repair_operation_UNMET"
+    pending = contracts.mechanical_execution_pending(decision["repair"], snapshot())
+    assert pending["reason"] == "registered_required_test_missing"
+    assert pending["next_guarded_action"] == "collect_evidence"
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "changed", [None, "fix.py", "ruff.toml"], ids=["exact", "target", "config"]
+)
+def test_mechanical_source_inventory_matches_selected_head_bytes(tmp_path, monkeypatch, changed):
+    import base64
+    from urllib.parse import quote
+
+    import closer_mechanical_source as mechanical
+
+    workspace = tmp_path / "source-workspace"
+    workspace.mkdir()
+    # This byte-inventory unit needs no repository configuration or installed tool.
+    # The flat exec mirror deliberately has no .github source tree.
+    monkeypatch.setattr(mechanical, "SOURCE_ROOT", tmp_path / "absent-repository-source")
+    original = {
+        "fix.py": b"value = 1\n",
+        **{
+            name: f"# retained source fixture: {name}\n".encode()
+            for name in mechanical.catalog.SOURCE_FILES
+        },
+    }
+    for name, raw in original.items():
+        path = workspace / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    # The source-owned rail consumes only explicit target/config bytes, not unrelated files.
+    (workspace / "unrelated-dirty.txt").write_text("not a formatter input\n")
+    if changed:
+        with (workspace / changed).open("ab") as stream:
+            stream.write(b"# unapproved local change\n")
+    endpoints = {
+        f"repos/o/r/contents/{quote(name, safe='/')}?ref={HEAD}": name for name in original
+    }
+    calls = []
+
+    class NativeSource:
+        def api(self, endpoint, *, method):
+            assert method == "GET" and endpoint in endpoints
+            calls.append(endpoint)
+            raw = original[endpoints[endpoint]]
+            return {
+                "type": "file",
+                "encoding": "base64",
+                "content": base64.b64encode(raw).decode("ascii"),
+                "size": len(raw),
+                "sha": hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest(),
+            }
+
+    backend = SimpleNamespace(gh=NativeSource())
+    arguments = (backend, snapshot(), set(original), str(workspace), tmp_path / "retained")
+    if changed:
+        with pytest.raises(
+            mechanical.SourceUnavailable, match="original_head_workspace_bytes_UNMET"
+        ):
+            mechanical._tracked_at_head(*arguments)
+    else:
+        assert mechanical._tracked_at_head(*arguments) == {
+            name: hashlib.sha256(raw).hexdigest() for name, raw in original.items()
+        }
+        assert set(calls) == set(endpoints)
 
 
 def test_compare_label_waits_only_for_attributed_active_run_and_collects_other_outcomes(tmp_path):

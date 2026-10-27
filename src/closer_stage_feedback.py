@@ -522,6 +522,11 @@ def summarize_efficiency(
                 continue
             nested = result.get("result", {})
             candidates = [result.get("actual"), result.get("worker")]
+            correction = (
+                result.get("correction") if stage_name in {"interpret", "exception"} else None
+            )
+            if isinstance(correction, Mapping):
+                candidates.append(correction.get("actual"))
             if isinstance(nested, Mapping):
                 candidates.append(nested.get("worker"))
             for actual in candidates:

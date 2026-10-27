@@ -533,6 +533,54 @@ def _semantic_cache_token(prepare: Any) -> str | None:
     return value
 
 
+def _correction_enrollment_boundary(path, target, item, frontier, run_id, result=None):
+    """Re-read protected source issuance; a pending status is insufficient."""
+    result = item.get("results", {}).get("act") if result is None else result
+    for value in (item, result, item.get("results", {}).get("act")):
+        if isinstance(value, Mapping) and (
+            value.get("recovery_barrier") is not None
+            or any(
+                value.get(flag) is not None and value.get(flag) is not False
+                for flag in ("outcome_uncertain", "provider_outcome_uncertain")
+            )
+        ):
+            return None
+    if not (
+        isinstance(result, Mapping)
+        and result.get("status") == "pending"
+        and result.get("pending_kind") == "source_correction_enrollment"
+        and result.get("reason") == "correction_enrollment_terminal"
+        and result.get("target_complete") is False
+        and item.get("recovery_barrier") is None
+        and item.get("provider_outcome_uncertain") in (None, False)
+    ):
+        return None
+    try:
+        import closer_correction_enrollment_terminal as enrollment_terminal
+
+        path = Path(path)
+        action_path = path.parent / f"{path.stem}.actions" / f"{_digest(target)}.json"
+        expected_stage = {
+            "pipeline_state_path": str(path),
+            "pipeline_run_id": run_id,
+            "work_key": item["work_key"],
+            "identity": item["identity"],
+            "revision": item["revision"],
+            "action_state_path": str(action_path),
+        }
+        proof = enrollment_terminal.validate_queue_boundary(
+            manifest_path=result["enrollment_manifest_path"],
+            state_path=str(action_path),
+            target=target,
+            finite_frontier=frontier,
+            proof_ref=result["correction_enrollment_terminal"],
+            expected_stage=expected_stage,
+        )
+        return proof if proof is not None and proof == result.get("pending_evidence") else None
+    except (ImportError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
 def _valid_worker_capacity(resource: Any, now_value: float) -> bool:
     if not isinstance(resource, Mapping):
         return False
@@ -4638,7 +4686,29 @@ def _run_pipeline_finite(
                             current.update(status="pending", stage="act")
                     elif stage == "act":
                         status = result.get("status")
-                        if status == "completed" and result.get("target_complete") is True:
+                        if (
+                            status == "pending"
+                            and result.get("pending_kind") == "source_correction_enrollment"
+                        ):
+                            boundary = _correction_enrollment_boundary(
+                                path, target, current, frontier, run_id, result
+                            )
+                            if boundary is None:
+                                current.update(
+                                    status="unknown",
+                                    stage_status="unknown",
+                                    error="source enrollment boundary unavailable",
+                                )
+                            else:
+                                current.update(
+                                    status="held",
+                                    stage_status="completed",
+                                    deferred_reason="correction_enrollment_terminal",
+                                    deferred_next_trigger="source_authenticated_coding_continuation",
+                                    resource_evidence={"correction_enrollment": boundary},
+                                    queue_receipt=result.get("queue_receipt"),
+                                )
+                        elif status == "completed" and result.get("target_complete") is True:
                             current.update(status="completed", stage_status="completed")
                         elif status == "completed" and result.get("target_complete") is False:
                             # A finite target may make one verified queue transition
@@ -5523,6 +5593,20 @@ def _validate_stop_finite(
         unknown = status == "unknown"
         valid = terminal and not unknown
         unverified_inner_wait = False
+        enrollment_held = (
+            status == "held" and item.get("deferred_reason") == "correction_enrollment_terminal"
+        )
+        if valid and enrollment_held:
+            proof = _correction_enrollment_boundary(
+                Path(state_path), frontier_target, item, frontier, entry["run_id"]
+            )
+            resource = item.get("resource_evidence")
+            valid = (
+                proof is not None
+                and isinstance(resource, Mapping)
+                and resource.get("correction_enrollment") == proof
+            )
+            unverified_inner_wait = not valid
         if (
             valid
             and status == "held"
@@ -5579,7 +5663,7 @@ def _validate_stop_finite(
             "assignment": [frontier_target],
             "targets": {frontier_target: dict(item)},
             "finite_frontier": frontier,
-            "continuation_required": not valid,
+            "continuation_required": not valid or enrollment_held,
             "reasons": (
                 []
                 if valid

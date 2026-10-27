@@ -12,9 +12,15 @@
     "tests/test_category46_closed_complete_metrics_join.py",
     "tests/test_closer_acceptance_metrics_composition.py",
     "tests/test_closer_campaign_demand_integration.py",
+    "tests/test_closer_campaign_entry_identity_portable.py",
     "tests/test_closer_ci_followup.py",
     "tests/test_closer_cleanup_refusal_diagnostics.py",
+    "tests/test_closer_coding_assignment_source.py",
+    "tests/test_closer_coding_b_diagnostic_custody.py",
+    "tests/test_closer_coding_private_inline_queue.py",
     "tests/test_closer_coding_session_v2.py",
+    "tests/test_closer_coding_source_closure_digest.py",
+    "tests/test_closer_coding_typing_boundaries.py",
     "tests/test_closer_completed_cohort_reuse.py",
     "tests/test_closer_controller_canonical_portable.py",
     "tests/test_closer_controller_reader_portable.py",
@@ -27,13 +33,15 @@
     "tests/test_closer_native_complete.py",
     "tests/test_closer_native_descendants.py",
     "tests/test_closer_native_pending_ci_wait.py",
+    "tests/test_closer_native_review_regressions.py",
     "tests/test_closer_review_major_regressions.py",
     "tests/test_closer_review_repair_regressions.py",
     "tests/test_non_claude_candidate_adapter.py",
     "tests/test_non_claude_data_only_candidate.py",
     "tests/test_nonpackage_dependency_audit.py",
     "tests/test_vibe_isolated_types_proof.py",
-    "tests/test_vibe_observing_backend.py"
+    "tests/test_vibe_observing_backend.py",
+    "tests/test_closer_correction_retained_ref.py"
   ],
   "shards": [
     [
@@ -55,6 +63,7 @@
       "tests/test_closer_batch_interpretation.py",
       "tests/test_closer_campaign_demand_integration.py",
       "tests/test_closer_campaign_hook_loader.py",
+      "tests/test_closer_coding_source_closure_digest.py",
       "tests/test_closer_completed_github_capacity.py",
       "tests/test_closer_correction_decision.py",
       "tests/test_closer_execution_contracts.py",
@@ -137,6 +146,7 @@
       "tests/test_closer_batch_actions.py",
       "tests/test_closer_campaign_exec.py",
       "tests/test_closer_campaign_integration.py",
+      "tests/test_closer_coding_typing_boundaries.py",
       "tests/test_closer_correction_classification.py",
       "tests/test_closer_correction_producer.py",
       "tests/test_closer_data_only_context.py",
@@ -229,6 +239,7 @@
       "tests/test_closer_batch_continuation.py",
       "tests/test_closer_campaign_hook_acceptance.py",
       "tests/test_closer_cleanup_refusal_diagnostics.py",
+      "tests/test_closer_coding_private_inline_queue.py",
       "tests/test_closer_core_loader_concurrency.py",
       "tests/test_closer_correction_handoff.py",
       "tests/test_closer_correction_stage_accounting.py",
@@ -324,6 +335,7 @@
       "tests/test_closer_bounded_native_hooks.py",
       "tests/test_closer_ci_followup.py",
       "tests/test_closer_cleanup_receipt.py",
+      "tests/test_closer_coding_b_diagnostic_custody.py",
       "tests/test_closer_controlled_origin.py",
       "tests/test_closer_dispatcher_scoped_integration.py",
       "tests/test_closer_efficiency_controller.py",
@@ -403,6 +415,7 @@
       "tests/test_closer_assessment_audit.py",
       "tests/test_closer_change_feed.py",
       "tests/test_closer_claude_auth.py",
+      "tests/test_closer_coding_assignment_source.py",
       "tests/test_closer_coding_session_v2.py",
       "tests/test_closer_dispatcher_finite_frontier.py",
       "tests/test_closer_efficiency_contracts.py",
@@ -494,6 +507,7 @@
       "tests/test_claude_identity_filesystem.py",
       "tests/test_closer_accepted_request_wait.py",
       "tests/test_closer_campaign.py",
+      "tests/test_closer_campaign_entry_identity_portable.py",
       "tests/test_closer_candidate_profiles.py",
       "tests/test_closer_completed_cohort_reuse.py",
       "tests/test_closer_controller_canonical_portable.py",
@@ -509,6 +523,7 @@
       "tests/test_closer_native_named_round.py",
       "tests/test_closer_native_observer.py",
       "tests/test_closer_native_production_composition.py",
+      "tests/test_closer_native_review_regressions.py",
       "tests/test_closer_observed_identity_admission.py",
       "tests/test_closer_pre_model_readiness.py",
       "tests/test_closer_process_observation.py",
@@ -570,7 +585,8 @@
       "tests/test_ux_review_adversary.py",
       "tests/test_venv_fixture_portability.py",
       "tests/test_verifier_context_builder_wiring.py",
-      "tests/test_verifier_incomplete_roots.py"
+      "tests/test_verifier_incomplete_roots.py",
+      "tests/test_closer_correction_retained_ref.py"
     ]
   ]
 }

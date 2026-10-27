@@ -783,42 +783,69 @@ def validate_mechanical_plan_identity(
     test = tests.get(selected.get("test_id"))
     if test is None:
         raise ContractError("registered_required_test_missing")
-    if (
-        not isinstance(test, Mapping)
-        or set(test)
-        != {
-            "schema",
-            "test_id",
-            "target",
-            "head",
-            "finding_id",
-            "kind",
-            "path",
-            "selector",
-            "file_sha256",
-        }
-        or test.get("schema") != TEST_SCHEMA
-        or test.get("kind") != "pytest"
-        or test.get("test_id") != selected.get("test_id")
-        or selected.get("identity_sha256") != _digest(test)
-        or any(test.get(key) != plan.get(key) for key in ("target", "head", "finding_id"))
-    ):
-        raise ContractError("required_test_identity_changed_or_unrelated", owner_required=True)
-    selector = test.get("selector")
-    if (
-        not isinstance(selector, str)
-        or not selector
-        or not all(_SYMBOL.fullmatch(part) for part in selector.split("::"))
-    ):
-        raise ContractError("required_test_selector_invalid", owner_required=True)
-    test_path = test.get("path")
-    if (
-        not isinstance(test_path, str)
-        or not test_path.endswith(".py")
-        or not isinstance(test.get("file_sha256"), str)
-        or not _SHA256.fullmatch(test["file_sha256"])
-    ):
-        raise ContractError("required_test_file_not_current_tracked_identity", owner_required=True)
+    if isinstance(test, Mapping) and test.get("kind") == "tool_check":
+        import closer_mechanical_catalog as catalog
+
+        try:
+            catalog.validate_tool_check_identity(test, plan)
+            proofs = plan.get("proofs")
+            if (
+                not isinstance(proofs, list)
+                or not proofs
+                or any(
+                    not isinstance(proof, Mapping) or proof.get("kind") != "codepatch"
+                    for proof in proofs
+                )
+                or {proof.get("filename") for proof in proofs} != set(paths)
+            ):
+                raise ValueError("current_codepatch_proof_required_for_tool_check")
+            if test.get("test_id") != selected.get("test_id") or selected[
+                "identity_sha256"
+            ] != _digest(test):
+                raise ValueError("required_tool_check_identity_changed")
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ContractError(
+                "required_tool_check_identity_changed_or_unrelated", owner_required=True
+            ) from exc
+    else:
+        if (
+            not isinstance(test, Mapping)
+            or set(test)
+            != {
+                "schema",
+                "test_id",
+                "target",
+                "head",
+                "finding_id",
+                "kind",
+                "path",
+                "selector",
+                "file_sha256",
+            }
+            or test.get("schema") != TEST_SCHEMA
+            or test.get("kind") != "pytest"
+            or test.get("test_id") != selected.get("test_id")
+            or selected.get("identity_sha256") != _digest(test)
+            or any(test.get(key) != plan.get(key) for key in ("target", "head", "finding_id"))
+        ):
+            raise ContractError("required_test_identity_changed_or_unrelated", owner_required=True)
+        selector = test.get("selector")
+        if (
+            not isinstance(selector, str)
+            or not selector
+            or not all(_SYMBOL.fullmatch(part) for part in selector.split("::"))
+        ):
+            raise ContractError("required_test_selector_invalid", owner_required=True)
+        test_path = test.get("path")
+        if (
+            not isinstance(test_path, str)
+            or not test_path.endswith(".py")
+            or not isinstance(test.get("file_sha256"), str)
+            or not _SHA256.fullmatch(test["file_sha256"])
+        ):
+            raise ContractError(
+                "required_test_file_not_current_tracked_identity", owner_required=True
+            )
     if not disposition._proofs_valid(plan.get("evidence"), plan.get("proofs"), index, root):
         raise ContractError("mechanical_failure_proof_unbound", owner_required=True)
     content = {key: value for key, value in plan.items() if key != "plan_id"}
@@ -871,9 +898,28 @@ def validate_mechanical_plan(
     for path in plan["paths"]:
         _tracked_file(physical, path, tracked_paths)
     test = admitted["required_test_identity"]
-    if test["file_sha256"] != tracked_paths.get(test["path"]):
-        raise ContractError("required_test_file_not_current_tracked_identity", owner_required=True)
-    _tracked_file(physical, test["path"], tracked_paths)
+    if test.get("kind") == "tool_check":
+        import closer_mechanical_catalog as catalog
+
+        try:
+            policy = catalog.validate_tool_check_identity(test, plan)
+            compiled, _ = catalog.compile_catalog(physical)
+            if policy not in compiled:
+                raise ValueError("source_class_policy_changed")
+            for path, digest in policy.source_refs:
+                if path in plan["paths"] or tracked_paths.get(path) != digest:
+                    raise ValueError("source_tool_policy_tracking_changed")
+                _tracked_file(physical, path, tracked_paths)
+        except (ValueError, TypeError, KeyError, OSError) as exc:
+            raise ContractError(
+                "required_tool_check_source_policy_changed", owner_required=True
+            ) from exc
+    else:
+        if test["file_sha256"] != tracked_paths.get(test["path"]):
+            raise ContractError(
+                "required_test_file_not_current_tracked_identity", owner_required=True
+            )
+        _tracked_file(physical, test["path"], tracked_paths)
     return {**admitted, "physical_confinement_verified": True}
 
 

@@ -7,9 +7,11 @@ No provider, queue or scheduler-control API is used by qualification.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import hmac
+import inspect
 import json
 import math
 import os
@@ -72,22 +74,33 @@ def policy_problem(policy):
     return problem.replace("CLI configured", "native configured") if problem else None
 
 
-def contract(manifest):
+def contract(manifest, *, _scope=None):
     value = manifest.get("mechanism_contract") or {}
     if value.get("schema") != mechanisms.CONTRACT or value.get("mechanism") != mechanisms.NATIVE:
         raise mechanisms.MechanismError("native mechanism contract missing")
+    native_digests = None
+    if _scope is not None:
+        import closer_source_installation as source
+
+        native_digests = source._scoped_native_runtime_digests(_scope, manifest)
     # Concrete supported wrapper. Other actors remain independent capabilities.
     wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
     pin = value.get("wrapper") or {}
     if value.get("actor") != "cursor" or pin.get("path") != str(wrapper):
         raise mechanisms.MechanismError("native wrapper/actor is not supported")
-    if wrapper.is_symlink() or wrapper.resolve() != wrapper or _hash(wrapper) != pin.get("sha256"):
+    if (
+        wrapper.is_symlink()
+        or wrapper.resolve() != wrapper
+        or (_hash(wrapper) if native_digests is None else native_digests[str(wrapper)])
+        != pin.get("sha256")
+    ):
         raise mechanisms.MechanismError("native wrapper pin changed or aliased")
     interpreter = Path(value.get("interpreter", {}).get("path", ""))
     if (
         interpreter.resolve() != interpreter
         or not interpreter.is_file()
-        or _hash(interpreter) != value.get("interpreter", {}).get("sha256")
+        or (_hash(interpreter) if native_digests is None else native_digests[str(interpreter)])
+        != value.get("interpreter", {}).get("sha256")
         or Path(manifest["runtime"]["python"]).resolve() != interpreter
     ):
         raise mechanisms.MechanismError("native physical interpreter pin differs")
@@ -655,11 +668,11 @@ def _campaign_identity(state_path, doc):
     }
 
 
-def validate_admission(manifest, context, *, for_effects):
+def validate_admission(manifest, context, *, for_effects, _scope=None):
     import closer_operational_capacity as scoped
 
     policy = capacity_contract(manifest, control_plane_only=True)
-    root = contract(manifest)[3]
+    root = contract(manifest, _scope=_scope)[3]
     if not policy or not isinstance(context, dict):
         raise mechanisms.MechanismError("native signed admission missing")
     nonce = context.get("nonce", "")
@@ -670,7 +683,7 @@ def validate_admission(manifest, context, *, for_effects):
         raise mechanisms.MechanismError("native admission path escaped")
     signed = _read(directory / "admission.json")
     if (
-        signed.get("record") != {"binding": binding(manifest), "context": context}
+        signed.get("record") != {"binding": binding(manifest, _scope=_scope), "context": context}
         or not hmac.compare_digest(
             signed["signature"], mechanisms._signature(signed["record"], mechanisms._key(root))
         )
@@ -731,7 +744,28 @@ def validate_admission(manifest, context, *, for_effects):
             or not Path(pin["source_path"]).is_absolute()
         ):
             raise mechanisms.MechanismError("native immutable workspace configuration differs")
-    if "demand_assignment" in context:
+    if "coding_continuation" in context:
+        _value, _record, _document = _coding_record_from_context(manifest, context)
+        selector = context["coding_continuation"]
+        expected_assignment = json.dumps(
+            {
+                "schema": "closer-coding-assignment/v1",
+                "reference": selector["reference"],
+                "source_target": selector["source_target"],
+                "parent_target": selector["target"],
+                "targets": [{"target": selector["coding_target"]}],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+        if (
+            context["assignment"].get("source_path") != context["assignment"]["path"]
+            or _bounded_bytes(Path(context["assignment"]["path"]), 1024 * 1024)
+            != expected_assignment
+        ):
+            raise mechanisms.MechanismError("native coding assignment source differs")
+    elif "demand_assignment" in context:
         demand_source, demand_raw = _demand_assignment_bytes(
             manifest,
             context["demand_assignment"],
@@ -769,6 +803,15 @@ def admission_config(manifest, cfg, context, *, for_effects=True):
 
     validate_admission(manifest, context, for_effects=for_effects)
     result = copy.deepcopy(cfg)
+    if "coding_continuation" in context:
+        selector = context["coding_continuation"]
+        result["finite_frontier"] = copy.deepcopy(selector["finite_frontier"])
+        result["request_timeout_seconds"] = selector["request_timeout_seconds"]
+        result["dispatch_state"] = selector["queue_state"]
+        result["coding_continuation"] = copy.deepcopy(selector["reference"])
+        # Continue the original ordinary field validation against this actual
+        # signed private-worker configuration, never a modified campaign doc.
+        cfg = result
     workspace = context.get("workspace_config")
     source_pin = (
         {"path": workspace["source_path"], "sha256": workspace["sha256"]}
@@ -1252,8 +1295,8 @@ def rearm_on_assignment_change(campaign, doc, manifest):
     return campaign.update(mutate)
 
 
-def binding(manifest):
-    value, _wrapper, _python, _root = contract(manifest)
+def binding(manifest, *, _scope=None):
+    value, _wrapper, _python, _root = contract(manifest, _scope=_scope)
     return {
         "mechanism": mechanisms.NATIVE,
         "mechanism_contract_digest": mechanisms.digest(value),
@@ -1340,6 +1383,2207 @@ def _signed(path, value, root):
     _write(
         path, {"record": value, "signature": mechanisms._signature(value, mechanisms._key(root))}
     )
+
+
+_CLEANUP_POLICY = {"schema": "closer-native-correction-cleanup/v1"}
+
+
+def correction_cleanup_enabled(cfg):
+    policy = cfg.get("policy")
+    return (
+        type(policy) is dict
+        and policy.get("native_correction_cleanup") == _CLEANUP_POLICY
+        and type(policy.get("correction_controller_installation")) is dict
+    )
+
+
+def _existing_lifecycle_key(root):
+    """Read existing native custody key only; never create a signer identity."""
+    path = Path(root) / "supervisor.key"
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size != 32
+        ):
+            raise mechanisms.MechanismError("existing native lifecycle key unsafe")
+        key = os.read(descriptor, 33)
+        after = os.fstat(descriptor)
+        named = path.stat(follow_symlinks=False)
+        fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+            "st_mode",
+            "st_uid",
+            "st_nlink",
+        )
+        if len(key) != 32 or any(
+            getattr(before, name) != getattr(other, name)
+            for other in (after, named)
+            for name in fields
+        ):
+            raise mechanisms.MechanismError("existing native lifecycle key changed")
+        return key
+    finally:
+        os.close(descriptor)
+
+
+def _lifecycle_authority(manifest, cfg):
+    """Original signed worker handoff, not a current-entry or cleanup exemption."""
+    if not correction_cleanup_enabled(cfg) or cfg.get("policy") != manifest.get("policy"):
+        raise mechanisms.MechanismError("source-selected correction cleanup policy absent")
+    context = validate_admission(manifest, cfg["native_admission"], for_effects=False)
+    if context.get("schema") != "native-invocation-admission/v2":
+        raise mechanisms.MechanismError("correction cleanup requires original finite admission")
+    fields = cfg["native_worker"]
+    worker_id = Path(fields["result"]).stem
+    if not re.fullmatch(r"[a-f0-9]{12}", worker_id):
+        raise mechanisms.MechanismError("original native cleanup worker malformed")
+    root = contract(manifest)[3]
+    directory = root / context["nonce"]
+    if directory.resolve() != directory or directory.parent != root:
+        raise mechanisms.MechanismError("original native cleanup custody redirected")
+    key = _existing_lifecycle_key(root)
+    path = directory / ("worker-" + worker_id + ".json")
+    raw = _bounded_bytes(path, 1048576)
+    signed = json.loads(raw)
+    record = signed["record"]
+    if (
+        record.get("schema") != "native-worker-handoff/v1"
+        or record.get("binding") != binding(manifest)
+        or record.get("nonce") != context["nonce"]
+        or record.get("admission") != context
+        or record.get("fields") != fields
+        or not hmac.compare_digest(
+            str(signed.get("signature", "")), mechanisms._signature(record, key)
+        )
+    ):
+        raise mechanisms.MechanismError("original native cleanup handoff differs")
+    return directory, key, context, fields, worker_id, hashlib.sha256(raw).hexdigest()
+
+
+def _read_lifecycle_record(directory, name, key):
+    raw = _bounded_bytes(directory / name, 1048576)
+    signed = json.loads(raw)
+    record = signed["record"]
+    if not hmac.compare_digest(
+        str(signed.get("signature", "")), mechanisms._signature(record, key)
+    ):
+        raise mechanisms.MechanismError("native lifecycle signature differs")
+    return record, {"path": str(directory / name), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def source_b_start(installation):
+    """Authenticate this actual source child's original parent-owned B start."""
+    from closer_campaign import load_manifest
+
+    manifest = load_manifest(installation.manifest_path)
+    context = installation.admission
+    policy = manifest.get("policy") or {}
+    if policy.get("native_correction_cleanup") != _CLEANUP_POLICY:
+        return None
+    validate_admission(manifest, context, for_effects=True)
+    root = contract(manifest)[3]
+    directory = root / context["nonce"]
+    if directory.resolve() != directory or directory.parent != root or not directory.is_dir():
+        raise mechanisms.MechanismError("native B start custody redirected")
+    key = _existing_lifecycle_key(root)
+    names = sorted(p.name for p in directory.iterdir() if p.name.startswith("worker-b-start-"))
+    if len(names) > 16:
+        raise mechanisms.MechanismError("native B start inventory saturated")
+    matched = []
+    for name in names:
+        if not re.fullmatch(r"worker-b-start-[a-f0-9]{12}\.json", name):
+            raise mechanisms.MechanismError("native B start name malformed")
+        record, ref = _read_lifecycle_record(directory, name, key)
+        if record.get("process", {}).get("pid") != os.getpid():
+            continue
+        worker_id = name[len("worker-b-start-") : -len(".json")]
+        fields = record.get("worker")
+        if type(fields) is not dict:
+            raise mechanisms.MechanismError("native B start worker unavailable")
+        _directory, _key, _context, _fields, _id, handoff_sha = _lifecycle_authority(
+            manifest, {"policy": policy, "native_admission": context, "native_worker": fields}
+        )
+        import closer_correction_controller as controller_source
+
+        doc = controller_source.IndexController._physical_state(
+            installation.config["state_path"], "original worker configuration redirected"
+        )
+        if "coding_continuation" in context:
+            import closer_coding_continuation as continuation
+
+            selector = context["coding_continuation"]
+            registry = continuation.validate_registry(doc.get(continuation.REGISTRY_FIELD))
+            row = registry.get(selector["reference"]["stable_key"])
+            workers = (
+                [row["worker"]]
+                if row is not None
+                and continuation._canonical(row["worker"]) == continuation._canonical(selector)
+                and row["state"] in {"launch_intent", "submitted", "active"}
+                and selector["worker_id"] == worker_id
+                else []
+            )
+        else:
+            workers = [
+                worker for worker in doc.get("workers", []) if worker.get("worker_id") == worker_id
+            ]
+        if len(workers) != 1:
+            raise mechanisms.MechanismError("original source worker identity unavailable")
+        original_cfg = result_admission_config(
+            doc["worker_config"], context, Path(installation.config["state_path"]), doc, workers[0]
+        )
+        if (
+            record.get("schema") != "closer-native-correction-b-start/v1"
+            or record.get("binding") != binding(manifest)
+            or record.get("admission") != context
+            or record.get("worker_id") != worker_id
+            or _id != worker_id
+            or record.get("handoff_sha256") != handoff_sha
+            or record.get("config_sha256") != mechanisms.digest(installation.config)
+            or record.get("worker_config_sha256") != mechanisms.digest(original_cfg)
+            or record.get("producer_sha256") != manifest["modules"]["closer_runtime_binding.py"]
+            or record.get("process", {}).get("process_group") != os.getpid()
+            or not isinstance(record.get("process", {}).get("os_started"), str)
+        ):
+            raise mechanisms.MechanismError("native B start differs from original source child")
+        matched.append(ref)
+    if len(matched) != 1:
+        raise mechanisms.MechanismError("source awaits exact native B startup receipt")
+    return matched[0]
+
+
+def retained_correction_cleanup(manifest, campaign_doc, plan):
+    """Authenticate prospective old B/C custody only, never current authority."""
+    import closer_campaign as campaign_source
+    import closer_correction_controller as ctl
+
+    origin = plan["native_lifecycle"]
+    ref = origin["native_b_start"]
+    root = contract(manifest)[3]
+    path = Path(ref["path"])
+    if (
+        path.resolve() != path
+        or path.parent.parent != root
+        or not re.fullmatch(r"[a-f0-9]{32}", path.parent.name)
+        or not re.fullmatch(r"worker-b-start-[a-f0-9]{12}\.json", path.name)
+    ):
+        raise mechanisms.MechanismError("retained cleanup selector escaped original native custody")
+    key = _existing_lifecycle_key(root)
+    start, exact_ref = _read_lifecycle_record(path.parent, path.name, key)
+    if ref != exact_ref or start.get("admission", {}).get("nonce") != path.parent.name:
+        raise mechanisms.MechanismError("retained cleanup B-start bytes differ")
+    context, fields = start["admission"], start["worker"]
+    worker_id = start["worker_id"]
+    workers = [row for row in campaign_doc.get("workers", []) if row.get("worker_id") == worker_id]
+    if len(workers) != 1 or workers[0].get("state") != "terminal":
+        raise mechanisms.MechanismError("retained source worker is not independently terminal")
+    original_cfg = result_admission_config(
+        campaign_doc["worker_config"],
+        context,
+        Path(context["campaign"]["state"]),
+        campaign_doc,
+        workers[0],
+    )
+    directory, original_key, _context, expected_fields, expected_id, handoff_sha = (
+        _lifecycle_authority(manifest, original_cfg)
+    )
+    if (
+        directory != path.parent
+        or original_key != key
+        or expected_fields != fields
+        or expected_id != worker_id
+        or start.get("handoff_sha256") != handoff_sha
+        or start.get("binding") != binding(manifest)
+        or start.get("schema") != "closer-native-correction-b-start/v1"
+        or start.get("worker_config_sha256") != mechanisms.digest(original_cfg)
+        or start.get("producer_sha256") != manifest["modules"]["closer_runtime_binding.py"]
+        or start.get("process", {}).get("pid") != plan["owner"].get("process_id")
+    ):
+        raise mechanisms.MechanismError("retained B/source/worker configuration differs")
+    terminal, terminal_ref = _read_lifecycle_record(
+        directory, "terminal-cleanup-" + worker_id + ".json", key
+    )
+    if (
+        terminal.get("schema") != "closer-native-correction-terminal-cleanup/v1"
+        or terminal.get("binding") != binding(manifest)
+        or terminal.get("admission") != context
+        or terminal.get("worker") != fields
+        or terminal.get("worker_id") != worker_id
+        or terminal.get("handoff_sha256") != handoff_sha
+        or terminal.get("native_b_start") != ref
+        or terminal.get("process") != start["process"]
+        or terminal.get("argv_sha256") != start.get("argv_sha256")
+        or terminal.get("producer_sha256") != manifest["modules"]["closer_runtime_binding.py"]
+        or terminal.get("coordinator_group_terminal") is not True
+        or any(
+            terminal.get(name) is not False
+            for name in (
+                "provider_completion_asserted",
+                "domain_completed",
+                "acceptance_authorized",
+                "execution_authorized",
+                "source_closure_authorized",
+                "remote_execution_attested",
+            )
+        )
+    ):
+        raise mechanisms.MechanismError("retained source terminal-only cleanup differs")
+    campaign_source._completion_cleanup(original_cfg, terminal, "unknown")
+    result = ctl.IndexController._physical_state(
+        fields["result"], "original native worker result redirected"
+    )
+    detail = json.loads(result["detail"])
+    if (
+        result.get("worker_id") != worker_id
+        or result.get("target") != fields["target"]
+        or result.get("mechanism") != mechanisms.NATIVE
+        or result.get("native_admission") != context
+        or result.get("outcome") not in {"unknown", "ok", "scoped_continuation"}
+        or workers[0].get("outcome") != result.get("outcome")
+        or detail.get("native_terminal_cleanup") != terminal_ref
+        or detail.get("native_execution") != terminal.get("native_execution")
+    ):
+        raise mechanisms.MechanismError("original native worker result/cleanup join differs")
+    links = terminal.get("operations")
+    if type(links) is not list or len(links) > 128:
+        raise mechanisms.MechanismError("retained cleanup operation inventory unavailable")
+    matched = [
+        row for row in links if row.get("plan_name") == "native-plan-" + plan["phase_key"] + ".json"
+    ]
+    if len(matched) != 1:
+        raise mechanisms.MechanismError("retained cleanup did not observe this original operation")
+    link = matched[0]
+    if (
+        link.get("plan_sha256") != ctl.digest(plan)
+        or link.get("origin_sha256") != ctl.digest(origin)
+        or link.get("operation_id") != plan["owner"].get("operation_id")
+        or link.get("operation_sha256") != plan["owner"].get("operation_sha256")
+        or link.get("provider_completion_asserted") is not False
+    ):
+        raise mechanisms.MechanismError("retained cleanup original operation join differs")
+    return {
+        "start": start,
+        "terminal": terminal,
+        "terminal_ref": terminal_ref,
+        "original_config": original_cfg,
+        "operation_link": link,
+    }
+
+
+def _require_original_coding_issuance(retained, reference):
+    """A partial constructor WAL/row is never a returned source continuation."""
+    result = retained.get("result") if type(retained) is dict else None
+    issued = result.get("coding_continuation") if type(result) is dict else None
+    if (
+        retained.get("status") != "completed"
+        or type(issued) is not dict
+        or set(issued) != {"status", "reference", "execution_authorized", "retry_authorized"}
+        or issued.get("status") != "awaiting_original_terminal"
+        or issued.get("reference") != reference
+        or issued.get("execution_authorized") is not False
+        or issued.get("retry_authorized") is not False
+    ):
+        raise mechanisms.MechanismError("original coding reference was not completely issued")
+
+
+def _coding_original_history_knowledge(manifest, campaign_doc, config, reference):
+    """Shared original custody reader; caller supplies only source-authenticated context."""
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+    import closer_correction_enrollment_terminal as enrollment
+    import closer_queue as queue
+
+    ref = continuation.validate_reference(reference)
+    with contextlib.closing(ctl._Custody(config)) as custody:
+        record = continuation._read_protected(custody, ref)
+        marker_ref = record["enrollment_terminal_ref"]
+        marker = custody.read(marker_ref["name"])
+        if (
+            enrollment._ref(marker) != marker_ref
+            or marker["admission_sha256"] != record["admission_sha256"]
+            or marker["native_b_start"] != record["native_b_start"]
+            or marker["operation_json"] != record["operation_json"]
+            or marker["operation_sha256"] != record["operation_sha256"]
+            or marker["controller_config"] != config.source_binding()
+        ):
+            raise mechanisms.MechanismError("original continuation/enrollment identity differs")
+        context = json.loads(marker["context_identity_json"])
+        pipeline = ctl.IndexController._physical_state(
+            context["state_path"], "original coding pipeline redirected"
+        )
+        bucket = pipeline["frontiers"][marker["finite_frontier"]["frontier_id"]]
+        row = bucket["items"][marker["target"]]
+        expected_stage = {
+            "pipeline_state_path": context["state_path"],
+            "pipeline_run_id": bucket["run_id"],
+            "work_key": row["work_key"],
+            "identity": row["identity"],
+            "revision": row["revision"],
+            "action_state_path": str(
+                Path(context["state_path"]).parent
+                / (Path(context["state_path"]).stem + ".actions")
+                / (queue._digest(marker["target"]) + ".json")
+            ),
+        }
+        operation = json.loads(record["operation_json"])
+        boundary = enrollment.validate_queue_boundary(
+            manifest_path=record["manifest_path"],
+            state_path=marker["queue_path"],
+            target=marker["target"],
+            finite_frontier=marker["finite_frontier"],
+            proof_ref=marker_ref,
+            expected_stage=expected_stage,
+            expected_operation_id=operation["id"],
+        )
+        if boundary is None:
+            raise mechanisms.MechanismError("original enrollment knowledge no longer authentic")
+        admission = custody.read("admission-" + record["admission_sha256"] + ".json")
+        intent = custody.read(
+            "native-intent-" + admission["own_instruction"]["phase_key"] + ".json"
+        )
+        if (
+            ctl.digest(admission) != record["admission_sha256"]
+            or intent["phase"] != "instruction_publication"
+            or ctl.digest(intent) != marker["instruction_effect"]["intent_sha256"]
+            or intent["owner"]["operation_sha256"] != record["operation_sha256"]
+        ):
+            raise mechanisms.MechanismError("original instruction intent/admission differs")
+        history = _retained_enrollment_cleanup(manifest, campaign_doc, marker, marker_ref)
+        link = history["operation_link"]
+        old_queue = ctl.IndexController._physical_state(
+            marker["queue_path"], "original coding queue redirected"
+        )
+        retained = old_queue["frontiers"][marker["finite_frontier"]["frontier_id"]]["items"][
+            marker["target"]
+        ]["operation"]
+        _require_original_coding_issuance(retained, ref)
+        if (
+            hashlib.sha256(queue._canonical_bytes(retained)).hexdigest()
+            != link["retained_operation_sha256"]
+            or hashlib.sha256(queue._canonical_bytes(row)).hexdigest()
+            != link["provider_history"]["row_sha256"]
+            or link["provider_history"]["source_record_ref"] != marker["source_record_ref"]
+        ):
+            raise mechanisms.MechanismError("original signed queue/provider history changed")
+        return {
+            "schema": "closer-coding-original-history/v1",
+            "continuation_reference": ref,
+            **history,
+            "enrollment_boundary": boundary,
+            "instruction_intent": intent,
+            "admission_sha256": record["admission_sha256"],
+        }
+
+
+_CODING_SELECTOR_SCHEMA = "closer-native-coding-worker-registration/v1"
+_CODING_SELECTOR_FIELDS = frozenset(
+    {
+        "schema",
+        "worker_id",
+        "target",
+        "claim_target",
+        "nonce",
+        "reference",
+        "source_target",
+        "coding_target",
+        "queue_state",
+        "finite_frontier",
+        "request_timeout_seconds",
+        "purpose",
+    }
+)
+
+
+def _coding_purpose_projection(config, record):
+    """Derived original subject only; this data is never execution admission."""
+    import closer_coding_continuation as continuation
+    import closer_coding_worker as worker
+
+    continuation.validate_record(record)
+    request = json.loads(record["request_json"])
+    incumbent = request["incumbent"]
+    if incumbent.get("kind") == "no_incumbent":
+        raise mechanisms.MechanismError("coding requires original assigned native incumbent")
+    return worker.validate_purpose(
+        {
+            "schema": worker.PURPOSE_SCHEMA,
+            "consumer_id": record["consumer_id"],
+            "target": config.repository + "#" + incumbent["issue"]["number"],
+            "which": {
+                "kind": "issue",
+                **{key: incumbent["issue"][key] for key in ("number", "node_id")},
+            },
+            "selected": record["admitted_selector"],
+            "expected": {"key": record["effect_key"], "request_sha256": record["request_sha256"]},
+        }
+    )
+
+
+def _coding_dispatch_binding(config, projection, purpose, reference):
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+
+    ref = continuation.validate_reference(reference)
+    return {
+        "pr_target": purpose["target"],
+        "source_targets": [],
+        "correction_controller_sha256": ctl.digest(config.source_binding()),
+        "correction_installation_sha256": projection["installation_sha256"],
+        "coding_worker_purpose_sha256": ctl.digest(purpose),
+        "coding_continuation_sha256": ref["sha256"],
+    }
+
+
+def _validate_coding_selector(value, campaign_doc, config, record, projection):
+    """Exact protected-source correspondence, not a caller JSON permit."""
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+    import closer_frontier_policy as frontier
+    from closer_campaign import ROUND_UNIT
+
+    if type(value) is not dict or set(value) != _CODING_SELECTOR_FIELDS:
+        raise mechanisms.MechanismError("exact coding worker registration required")
+    ref = continuation._reference(record)
+    purpose = _coding_purpose_projection(config, record)
+    if (
+        value["schema"] != _CODING_SELECTOR_SCHEMA
+        or type(value["worker_id"]) is not str
+        or not re.fullmatch(r"[a-f0-9]{12}", value["worker_id"])
+        or type(value["nonce"]) is not str
+        or not re.fullmatch(r"[a-f0-9]{32}", value["nonce"])
+        or continuation._canonical(value["reference"]) != continuation._canonical(ref)
+        or continuation._canonical(value["purpose"]) != continuation._canonical(purpose)
+        or value["target"] != ROUND_UNIT
+        or value["claim_target"] != campaign_doc["campaign_id"] + ":coding:" + ref["stable_key"]
+        or value["coding_target"] != purpose["target"]
+        or value["queue_state"]
+        != str(Path(config.state_path + ".coding") / (ref["stable_key"] + ".json"))
+        or type(value["source_target"]) is not str
+        or value["source_target"]
+        not in json.loads(record["operation_json"])["finite_frontier"]["targets"]
+        or type(value["request_timeout_seconds"]) not in (int, float)
+        or not 0 < value["request_timeout_seconds"] <= 120
+    ):
+        raise mechanisms.MechanismError("coding worker original source mapping differs")
+    descriptor = frontier.validate_frontier(value["finite_frontier"], targets=[purpose["target"]])
+    revision = ctl.digest(
+        {"reference": ref, "worker_id": value["worker_id"], "nonce": value["nonce"]}
+    )
+    binding_value = _coding_dispatch_binding(config, projection, purpose, ref)
+    if (
+        descriptor["owner"] != campaign_doc["owner"]
+        or descriptor["frontier_id"] != "coding-" + value["worker_id"]
+        or descriptor["bindings"][purpose["target"]]
+        != {
+            "revision": revision,
+            "action_id": frontier.action_identity(
+                purpose["target"], revision, "correction_coding", binding_value
+            ),
+        }
+    ):
+        raise mechanisms.MechanismError("coding worker frozen action identity differs")
+    return value
+
+
+def accepted_coding_worker_purpose(binding_value):
+    """Existing actual WORKER root only; no manifest JSON selects this authority."""
+    import copy
+
+    import closer_coding_worker as worker
+    import closer_source_installation as installed
+    from closer_campaign import load_manifest
+    from closer_correction_source_record import SourceRecordUnavailable
+
+    frame = inspect.currentframe().f_back
+    try:
+        if frame.f_globals is not worker.__dict__:
+            raise SourceRecordUnavailable("actual coding WORKER purpose reader required")
+        if frame.f_code is worker._issue_root.__code__:
+            installation = frame.f_locals.get("installation")
+        elif frame.f_code is worker._Root.check.__code__:
+            root = frame.f_locals.get("self")
+            installation = root.installation if type(root) is worker._Root else None
+        else:
+            raise SourceRecordUnavailable("actual coding WORKER purpose reader required")
+        if (
+            type(installation) is not installed.SourceInstallation
+            or installation._binding is not binding_value
+            or not installed.validate_source_installation(installation)
+        ):
+            raise SourceRecordUnavailable("actual coding installation identity unavailable")
+        context = installation.admission
+        selector = context.get("coding_continuation")
+        if type(selector) is not dict:
+            raise SourceRecordUnavailable("accepted signed coding purpose unavailable")
+        manifest = load_manifest(installation.manifest_path)
+        validate_admission(manifest, context, for_effects=True)
+        start = source_b_start(installation)
+        if start is None or Path(start["path"]).stem != "worker-b-start-" + selector["worker_id"]:
+            raise SourceRecordUnavailable("accepted coding worker B-start differs")
+        return {
+            "schema": "closer-accepted-coding-worker-purpose/v1",
+            "continuation_reference": copy.deepcopy(selector["reference"]),
+            "purpose": copy.deepcopy(selector["purpose"]),
+            "worker_id": selector["worker_id"],
+            "admission_sha256": _hash(contract(manifest)[3] / context["nonce"] / "admission.json"),
+            "native_b_start": start,
+        }
+    finally:
+        del frame
+
+
+def _coding_current_qualified_value(manifest, context):
+    """Borrow only the freshly qualified value in this exact source snapshot call."""
+    import closer_runtime_binding as runtime
+    import closer_source_installation as installed
+
+    frame = inspect.currentframe().f_back
+    try:
+        # Fixed chain only, never walk arbitrary frames or retain cached truth:
+        # this helper <- coding record <- native validation <- source snapshot.
+        if (
+            frame is None
+            or frame.f_code is not _coding_record_from_context.__code__
+            or frame.f_globals is not globals()
+        ):
+            return None
+        validation = frame.f_back
+        snapshot = validation.f_back if validation is not None else None
+        if (
+            validation is None
+            or validation.f_code is not validate_admission.__code__
+            or validation.f_globals is not globals()
+            or validation.f_locals.get("context") is not context
+            or validation.f_locals.get("manifest") is not manifest
+            or snapshot is None
+            or snapshot.f_code is not installed._snapshot_current.__code__
+            or snapshot.f_globals is not installed.__dict__
+            or snapshot.f_locals.get("context") is not context
+            or snapshot.f_locals.get("manifest") is not manifest
+        ):
+            return None
+        value = snapshot.f_locals.get("value")
+        binding_value = snapshot.f_locals.get("binding")
+        origin = runtime._factory_manifest_origin(binding_value)
+        if (
+            type(value) is not dict
+            or origin is None
+            or value.get("manifest_path") != origin.path
+            or value.get("manifest_sha256") != origin.sha256
+            or origin.path != context["runtime_manifest"]
+            or origin.sha256 != context["runtime_manifest_sha256"]
+        ):
+            raise mechanisms.MechanismError("current coding qualified snapshot identity differs")
+        token = snapshot.f_locals.get("_native_scope")
+        if token is not None:
+            if type(token) is not installed._NativeRuntimeRead:
+                raise mechanisms.MechanismError("current coding snapshot token differs")
+            token.check(manifest)
+        return value, manifest
+    finally:
+        del frame
+
+
+def _coding_record_from_context(manifest, context):
+    """Read a signed purpose's protected original record under unchanged config."""
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+    import closer_runtime_binding as runtime
+    import closer_source_installation as installed
+
+    selector = context.get("coding_continuation")
+    if type(selector) is not dict:
+        raise mechanisms.MechanismError("source coding purpose unavailable")
+    current = _coding_current_qualified_value(manifest, context)
+    if current is None:
+        # Control-only callers outside a source snapshot retain full qualification.
+        binding_value = runtime.binding_from_manifest(context["runtime_manifest"])
+        if binding_value is None:
+            raise mechanisms.MechanismError("coding purpose factory qualification unavailable")
+        value, pinned = installed._qualified_policy(binding_value)
+    else:
+        value, pinned = current
+    if pinned != manifest or value["manifest_sha256"] != context["runtime_manifest_sha256"]:
+        raise mechanisms.MechanismError("coding purpose current source binding differs")
+    config = ctl.ControllerConfig(**value["config"])
+    with contextlib.closing(ctl._Custody(config)) as custody:
+        record = continuation._read_protected(custody, selector["reference"])
+    document = ctl.IndexController._physical_state(config.state_path, "coding campaign redirected")
+    registry = continuation.validate_registry(document.get(continuation.REGISTRY_FIELD))
+    row = registry.get(record["stable_key"])
+    if (
+        row is None
+        or row["reference"] != selector["reference"]
+        or continuation._canonical(row["worker"]) != continuation._canonical(selector)
+        or row["state"] not in {"admitted", "launch_intent", "submitted", "active", "terminal"}
+        or context["campaign"] != _campaign_identity(Path(config.state_path), document)
+        or context["nonce"] != selector["nonce"]
+        or context["finite_frontier"] != selector["finite_frontier"]
+        or context["request_timeout_seconds"] != selector["request_timeout_seconds"]
+        or (document.get("worker_config") or {}).get("policy") != manifest.get("policy")
+    ):
+        raise mechanisms.MechanismError("coding admission registry/worker identity differs")
+    if (
+        record["controller_config_sha256"] != ctl.digest(config.source_binding())
+        or record["manifest_path"] != value["manifest_path"]
+        or record["manifest_sha256"] != value["manifest_sha256"]
+        or record["source_closure_sha256"] != ctl.digest(value["source_closure"])
+    ):
+        raise mechanisms.MechanismError("coding protected original source binding differs")
+    _validate_coding_selector(selector, document, config, record, value["policy_projection"])
+    return value, record, document
+
+
+def _submitted_coding_operation(retained):
+    """Closed completion-only projection in the existing queue JSON domain."""
+    if type(retained) is not dict or retained.get("status") != "completed":
+        raise mechanisms.MechanismError("coding callback has no known completed operation")
+    removed = {"result", "elapsed_seconds", "next_trigger", "completed_at", "invoked_at"}
+    original = {k: v for k, v in retained.items() if k not in removed}
+    original["status"] = "submitted"
+    clocks = [
+        retained.get(k)
+        for k in ("submitted_at", "request_started_at", "invoked_at", "completed_at", "deadline")
+    ]
+    if (
+        retained.get("action") != "correction_coding"
+        or type(retained.get("attempts")) is not int
+        or retained["attempts"] != 1
+        or any(type(v) not in {int, float} or not math.isfinite(v) for v in clocks)
+        or not clocks[0] <= clocks[1] <= clocks[2] <= clocks[3] < clocks[4]
+        or any(
+            retained.get(k) is not None and retained.get(k) is not False
+            for k in ("provider_outcome_uncertain", "outcome_uncertain")
+        )
+        or retained.get("recovery_barrier") is not None
+    ):
+        raise mechanisms.MechanismError(
+            "coding callback original finite window or uncertainty differs"
+        )
+    return original
+
+
+def _coding_knowledge_barriers(*values):
+    """Identity-strict uncertainty barriers over every selected queue envelope."""
+    for value in values:
+        if (
+            type(value) is not dict
+            or value.get("status") in {"unknown", "uncertain", "owned_unknown"}
+            or value.get("recovery_barrier") is not None
+            or any(
+                value.get(k) is not None and value.get(k) is not False
+                for k in ("provider_outcome_uncertain", "outcome_uncertain")
+            )
+        ):
+            raise mechanisms.MechanismError("coding queue uncertainty barrier remains owned")
+
+
+def _coding_queue_terminal(cfg, candidate):
+    import closer_coding_worker as worker
+    import closer_correction_controller as ctl
+    import closer_queue as queue
+
+    context = cfg["native_admission"]
+    selector = context["coding_continuation"]
+    frontier = selector["finite_frontier"]
+    state = ctl.IndexController._physical_state(
+        selector["queue_state"], "coding terminal queue redirected"
+    )
+    if set(state.get("frontiers", {})) != {frontier["frontier_id"]}:
+        raise mechanisms.MechanismError("coding queue contains foreign frontier history")
+    if state.get("items") not in (None, {}) or state.get("round") not in (None, {}):
+        raise mechanisms.MechanismError("coding private queue legacy namespace not empty")
+    bucket = state["frontiers"][frontier["frontier_id"]]
+    _coding_knowledge_barriers(state, bucket, bucket.get("round"), candidate)
+    if (
+        bucket.get("policy") != frontier
+        or bucket.get("round", {}).get("finite_frontier") != frontier
+        or bucket.get("round", {}).get("status") != "finished"
+        or queue._canonical_bytes(bucket["round"].get("receipt"))
+        != queue._canonical_bytes(candidate)
+        or set(bucket.get("items", {})) != {selector["coding_target"]}
+    ):
+        raise mechanisms.MechanismError("coding returned receipt differs from physical queue")
+    row = bucket["items"][selector["coding_target"]]
+    if row.get("operation_history") not in (None, []) or row.get("recovery_barrier") is not None:
+        raise mechanisms.MechanismError("coding previous queue history remains owned")
+    retained = row["operation"]
+    original = _submitted_coding_operation(retained)
+    result = retained.get("result")
+    _coding_knowledge_barriers(row, retained, result)
+    if (
+        type(result) is not dict
+        or set(result) != {"coding_terminal_reference", "actual", *worker._NO_AUTHORITY}
+        or any(result[k] is not False for k in worker._NO_AUTHORITY)
+        or original["finite_frontier"] != frontier
+        or original["revision"] != frontier["bindings"][selector["coding_target"]]["revision"]
+        or row.get("provider_outcome_uncertain") not in (None, False)
+        or row.get("outcome_uncertain") not in (None, False)
+    ):
+        raise mechanisms.MechanismError("coding queue terminal result not source known")
+    ref = worker.validate_terminal_reference(result["coding_terminal_reference"])
+    return (
+        original,
+        ref,
+        result["actual"],
+        hashlib.sha256(queue._canonical_bytes(state)).hexdigest(),
+    )
+
+
+_CODING_HELD_STAGES = frozenset(
+    {"worker_entry", "issue_root", "root_check", "preflight_original", "run_queue", "execute"}
+)
+_CODING_HELD_MESSAGES = {
+    "actual admitted dispatcher WORKER root required": "admitted_root_required",
+    "source coding backend required": "source_backend_required",
+    "current native source installation unavailable": "source_installation_unavailable",
+    "accepted coding consumer differs from static capability": "consumer_capability_changed",
+    "source coding assignment/frontier differs": "assignment_frontier_changed",
+    "actual accepted native worker start unavailable": "native_start_unavailable",
+    "source worker root unavailable": "root_lifetime_unavailable",
+    "original source worker root ended": "root_lifetime_ended",
+    "current worker source installation changed": "source_installation_changed",
+    "actual accepted native worker changed": "native_worker_changed",
+    "accepted coding purpose changed": "accepted_purpose_changed",
+    "source coding consumer unavailable": "consumer_unavailable",
+    "coding consumer policy differs": "consumer_policy_changed",
+    "coding profile capacity pools unavailable": "profile_pools_unavailable",
+    "original protected coding admission changed": "original_admission_changed",
+    "original coding consumer differs": "original_consumer_changed",
+    "original coding correction identity differs": "original_identity_changed",
+}
+_CODING_HELD_CODES = frozenset(
+    {*_CODING_HELD_MESSAGES.values(), "source_refusal", "os_error", "invalid_source_data"}
+)
+
+
+def coding_worker_held(error):
+    """Project actual traceback code identities and fixed codes, never error text."""
+    import closer_coding_worker as worker
+
+    stages = (
+        (worker._issue_root.__code__, "issue_root"),
+        (worker._Root.check.__code__, "root_check"),
+        (worker._preflight_original.__code__, "preflight_original"),
+        (worker._run_queue.__code__, "run_queue"),
+        (worker._execute.__code__, "execute"),
+    )
+    stage = "worker_entry"
+    trace = error.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        if frame.f_globals is worker.__dict__:
+            for code_object, name in stages:
+                if frame.f_code is code_object:
+                    stage = name
+        trace = trace.tb_next
+    code = (
+        "os_error"
+        if isinstance(error, OSError)
+        else (
+            "invalid_source_data"
+            if isinstance(error, (ValueError, TypeError, KeyError))
+            else "source_refusal"
+        )
+    )
+    if type(error) is worker.WorkerHeld:
+        code = "source_refusal"
+        if stage != "worker_entry" and len(error.args) == 1 and type(error.args[0]) is str:
+            code = _CODING_HELD_MESSAGES.get(error.args[0], code)
+    return {
+        "schema": "closer-coding-worker-held/v1",
+        "status": "held",
+        "reason": "coding_worker_source_refused",
+        "diagnostic": {"stage": stage, "code": code},
+        "execution_authorized": False,
+        "retry_authorized": False,
+    }
+
+
+def _coding_held_diagnostic(stdout):
+    """Accept only the complete small typed source frame, not arbitrary child JSON."""
+    fallback = {"stage": "coding_b_output", "code": "no_typed_held_frame"}
+    if type(stdout) is not str or len(stdout.encode("utf-8")) > 4096:
+        return fallback
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic field")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(stdout, object_pairs_hook=unique)
+        if (
+            type(value) is not dict
+            or set(value)
+            != {
+                "schema",
+                "status",
+                "reason",
+                "diagnostic",
+                "execution_authorized",
+                "retry_authorized",
+            }
+            or value["schema"] != "closer-coding-worker-held/v1"
+            or value["status"] != "held"
+            or value["reason"] != "coding_worker_source_refused"
+            or value["execution_authorized"] is not False
+            or value["retry_authorized"] is not False
+            or type(value["diagnostic"]) is not dict
+            or set(value["diagnostic"]) != {"stage", "code"}
+            or value["diagnostic"]["stage"] not in _CODING_HELD_STAGES
+            or value["diagnostic"]["code"] not in _CODING_HELD_CODES
+        ):
+            return fallback
+        return dict(value["diagnostic"])
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return fallback
+
+
+def coding_b_error_diagnostic(error, *, stage):
+    """Fixed secondary categories; no paths, exception messages or user output."""
+    if stage not in {"coding_b_observation", "coding_b_delivery"}:
+        raise mechanisms.MechanismError("unsupported coding diagnostic stage")
+    code = (
+        "permission_denied"
+        if isinstance(error, PermissionError)
+        else (
+            "file_missing"
+            if isinstance(error, FileNotFoundError)
+            else (
+                "invalid_data"
+                if isinstance(error, (ValueError, TypeError, KeyError))
+                else "source_refusal"
+            )
+        )
+    )
+    return {"stage": stage, "code": code}
+
+
+def coding_b_observation_summary(done, witness):
+    """Necessary bounded projection; only the source producer below signs custody."""
+    if (
+        type(done.returncode) is not int
+        or not -128 <= done.returncode <= 255
+        or any(
+            type(value) is not str or len(value.encode("utf-8")) > 32 * 1024 * 1024
+            for value in (done.stdout, done.stderr)
+        )
+    ):
+        raise mechanisms.MechanismError("bounded coding B observation required")
+    return {
+        "exit_code": done.returncode,
+        "cleanup_terminal": witness.get("finished", {}).get("cleanup_terminal") is True,
+        "diagnostic": _coding_held_diagnostic(done.stdout),
+        "execution_authorized": False,
+        "acceptance_authorized": False,
+    }
+
+
+def record_coding_b_observation(cfg, done, witness):
+    """Separate signed transport diagnostic; never delivery, terminal or C authority."""
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime._observed_correction_b.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("cfg") is not cfg
+        or caller.f_locals.get("done") is not done
+        or caller.f_locals.get("witness") is not witness
+        or witness.get("finished", {}).get("cleanup_terminal") is not True
+    ):
+        raise mechanisms.MechanismError("actual source coding B observation required")
+    summary = coding_b_observation_summary(done, witness)
+    record = {
+        "schema": "closer-native-coding-b-observation/v1",
+        "worker_id": witness["worker_id"],
+        "native_b_start": witness["start"],
+        "worker_config_sha256": mechanisms.digest(cfg),
+        "process": {
+            key: witness["finished"][key] for key in ("pid", "process_group", "os_started")
+        },
+        **summary,
+        "stdout_bytes": len(done.stdout.encode("utf-8")),
+        "stderr_bytes": len(done.stderr.encode("utf-8")),
+        "stdout_sha256": hashlib.sha256(done.stdout.encode("utf-8")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(done.stderr.encode("utf-8")).hexdigest(),
+        "domain_completed": False,
+        "global_stop_valid": False,
+        "provider_completion_asserted": False,
+    }
+    reference = witness["retain"]("coding-b-observation-" + witness["worker_id"] + ".json", record)
+    return {**summary, "reference": reference}
+
+
+def record_coding_b_delivery(cfg, done, witness):
+    """Retain actual original supervised B output before C, granting no execution."""
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime._observed_correction_b.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("cfg") is not cfg
+        or caller.f_locals.get("done") is not done
+        or caller.f_locals.get("witness") is not witness
+        or witness.get("finished", {}).get("cleanup_terminal") is not True
+        or done.returncode not in {0, 78}
+    ):
+        raise mechanisms.MechanismError("actual source supervised coding B delivery required")
+    manifest = witness["manifest"]
+    context = validate_admission(manifest, cfg["native_admission"], for_effects=False)
+    selector = context["coding_continuation"]
+    candidate = json.loads(done.stdout)
+    operation, terminal_ref, actual, queue_sha = _coding_queue_terminal(cfg, candidate)
+    import closer_queue as queue
+
+    record = {
+        "schema": "closer-native-coding-b-delivery/v1",
+        "binding": binding(manifest),
+        "admission": context,
+        "worker": witness["fields"],
+        "worker_id": witness["worker_id"],
+        "handoff_sha256": witness["handoff_sha"],
+        "native_b_start": witness["start"],
+        "process": {k: witness["finished"][k] for k in ("pid", "process_group", "os_started")},
+        "worker_config_json": json.dumps(
+            cfg, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ),
+        "worker_config_sha256": mechanisms.digest(cfg),
+        "terminal_reference": terminal_ref,
+        "queue_sha256": queue_sha,
+        "operation_sha256": hashlib.sha256(queue._canonical_bytes(operation)).hexdigest(),
+        "actual_sha256": hashlib.sha256(queue._canonical_bytes(actual)).hexdigest(),
+        "stdout_sha256": hashlib.sha256(done.stdout.encode("utf-8")).hexdigest(),
+        "candidate": candidate,
+        "coordinator_group_terminal": True,
+        "domain_completed": False,
+        "acceptance_authorized": False,
+        "execution_authorized": False,
+        "global_stop_valid": False,
+        "provider_completion_asserted": False,
+    }
+    if selector["worker_id"] != witness["worker_id"]:
+        raise mechanisms.MechanismError("coding delivery worker differs from actual B")
+    return witness["retain"]("coding-b-delivery-" + selector["worker_id"] + ".json", record)
+
+
+def _coding_delivery_knowledge(manifest, campaign_document, cfg, reference):
+    """Read source-signed pre-C delivery; this is never a new WORKER installation."""
+    import closer_correction_controller as ctl
+    import closer_queue as queue
+
+    directory, key, context, fields, worker_id, handoff_sha = _lifecycle_authority(manifest, cfg)
+    selector = context["coding_continuation"]
+    value, _protected, current = _coding_record_from_context(manifest, context)
+    if mechanisms.digest(current) != mechanisms.digest(campaign_document):
+        raise mechanisms.MechanismError("coding C campaign current selector differs")
+    delivery, delivery_ref = _read_lifecycle_record(
+        directory, "coding-b-delivery-" + worker_id + ".json", key
+    )
+    start, start_ref = _read_lifecycle_record(
+        directory, "worker-b-start-" + worker_id + ".json", key
+    )
+    config = ctl.ControllerConfig(**value["config"])
+    original, terminal_ref, actual, queue_sha = _coding_queue_terminal(
+        cfg, delivery.get("candidate")
+    )
+    if (
+        delivery.get("schema") != "closer-native-coding-b-delivery/v1"
+        or delivery.get("binding") != binding(manifest)
+        or delivery.get("admission") != context
+        or delivery.get("worker") != fields
+        or delivery.get("worker_id") != worker_id
+        or delivery.get("handoff_sha256") != handoff_sha
+        or delivery.get("native_b_start") != start_ref
+        or delivery.get("process") != start.get("process")
+        or delivery.get("worker_config_sha256") != mechanisms.digest(cfg)
+        or json.loads(delivery.get("worker_config_json", "null")) != cfg
+        or delivery.get("terminal_reference") != reference
+        or terminal_ref != reference
+        or delivery.get("queue_sha256") != queue_sha
+        or delivery.get("operation_sha256")
+        != hashlib.sha256(queue._canonical_bytes(original)).hexdigest()
+        or delivery.get("actual_sha256")
+        != hashlib.sha256(queue._canonical_bytes(actual)).hexdigest()
+        or delivery.get("coordinator_group_terminal") is not True
+        or any(
+            delivery.get(k) is not False
+            for k in (
+                "domain_completed",
+                "acceptance_authorized",
+                "execution_authorized",
+                "global_stop_valid",
+                "provider_completion_asserted",
+            )
+        )
+        or start.get("admission") != context
+        or start.get("worker") != fields
+        or start.get("worker_id") != worker_id
+        or start.get("handoff_sha256") != handoff_sha
+        or start.get("worker_config_sha256") != mechanisms.digest(cfg)
+        or start.get("producer_sha256") != manifest["modules"]["closer_runtime_binding.py"]
+        or _hash(Path(cfg["runtime_manifest"])) != context["runtime_manifest_sha256"]
+    ):
+        raise mechanisms.MechanismError("coding source B delivery and original queue differ")
+    history = _coding_original_history_knowledge(manifest, current, config, selector["reference"])
+    accepted = {
+        "schema": "closer-accepted-coding-worker-purpose/v1",
+        "continuation_reference": selector["reference"],
+        "purpose": selector["purpose"],
+        "worker_id": worker_id,
+        "admission_sha256": _hash(directory / "admission.json"),
+        "native_b_start": start_ref,
+    }
+    if (
+        ctl.IndexController._physical_state(config.state_path, "coding C campaign redirected")
+        != current
+        or _coding_queue_terminal(cfg, delivery["candidate"])[3] != queue_sha
+        or _read_lifecycle_record(directory, "coding-b-delivery-" + worker_id + ".json", key)[1]
+        != delivery_ref
+    ):
+        raise mechanisms.MechanismError("coding C source knowledge changed during read")
+    return {
+        "schema": "closer-coding-terminal-reader-context/v1",
+        "config": value["config"],
+        "accepted_purpose": accepted,
+        "original_history": history,
+        "operation": original,
+        "manifest_sha256": value["manifest_sha256"],
+        "worker_config_sha256": mechanisms.digest(cfg),
+    }
+
+
+def coding_terminal_reader_context(manifest, campaign_document, cfg, reference):
+    import closer_coding_worker as worker
+    from closer_correction_source_record import SourceRecordUnavailable
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not worker.read_terminal_for_native_c.__code__
+        or caller.f_globals is not worker.__dict__
+    ):
+        raise SourceRecordUnavailable("actual source coding C knowledge reader required")
+    return _coding_delivery_knowledge(manifest, campaign_document, cfg, reference)
+
+
+def coding_terminal_proof(manifest, campaign_document, cfg, reference):
+    """Protected local coding result knowledge only; C cleanup is separate."""
+    import closer_coding_worker as worker
+
+    record = worker.read_terminal_for_native_c(manifest, campaign_document, cfg, reference)
+    directory, key, _context, _fields, worker_id, _handoff = _lifecycle_authority(manifest, cfg)
+    delivery = _read_lifecycle_record(directory, "coding-b-delivery-" + worker_id + ".json", key)[0]
+    _operation, terminal_ref, actual, _queue_sha = _coding_queue_terminal(
+        cfg, delivery["candidate"]
+    )
+    import closer_queue as queue
+
+    if (
+        terminal_ref != reference
+        or record["result_sha256"] != hashlib.sha256(queue._canonical_bytes(actual)).hexdigest()
+    ):
+        raise mechanisms.MechanismError(
+            "coding terminal actual result differs from protected receipt"
+        )
+    return record
+
+
+def coding_terminal_diagnostic(error):
+    """Fixed source codes only; never retain arbitrary exception text or types."""
+    codes = {
+        "actual source coding B/C completion producer required": "actual_b_c_lifetime_unavailable",
+        "coding C did not reach known nonaccepting boundary": "actual_c_gate_unavailable",
+        "coding B/C worker config changed": "worker_config_changed",
+        "coding terminal actual result differs from protected receipt": "actual_result_changed",
+        "coding source B delivery and original queue differ": "delivery_queue_join_changed",
+        "coding returned receipt differs from physical queue": "queue_receipt_changed",
+        "coding callback original finite window or uncertainty differs": "callback_window_or_uncertainty",
+        "coding queue uncertainty barrier remains owned": "queue_uncertainty",
+        "coding C source knowledge changed during read": "knowledge_changed_during_read",
+        "cohort lacks exact actual A/B0/C0 cleanup": "exact_c_cleanup_unavailable",
+    }
+    return {
+        "stage": "coding_terminal",
+        "code": codes.get(str(error), "unclassified_source_refusal"),
+    }
+
+
+def read_coding_delivery(reference):
+    """Separate C process reads only source-signed original B knowledge."""
+    import closer_campaign as campaign_source
+    import closer_correction_controller as ctl
+
+    if type(reference) is not dict or set(reference) != {"path", "sha256"}:
+        raise mechanisms.MechanismError("exact coding B delivery reference required")
+    path = Path(reference["path"])
+    raw = _bounded_bytes(path, 1024 * 1024)
+    if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+        raise mechanisms.MechanismError("coding B delivery physical bytes changed")
+    # These fields only locate a manifest. No knowledge is accepted before its
+    # native signature, exact source closure and lifecycle are checked below.
+    untrusted = json.loads(raw)["record"]
+    cfg = json.loads(untrusted["worker_config_json"])
+    manifest = campaign_source.load_manifest(cfg["runtime_manifest"])
+    directory, key, _context, _fields, worker_id, _handoff = _lifecycle_authority(manifest, cfg)
+    signed, actual_ref = _read_lifecycle_record(
+        directory, "coding-b-delivery-" + worker_id + ".json", key
+    )
+    if actual_ref != reference or signed != untrusted:
+        raise mechanisms.MechanismError("coding C delivery belongs to another native worker")
+    document = ctl.IndexController._physical_state(
+        cfg["native_admission"]["campaign"]["state"], "coding C campaign redirected"
+    )
+    terminal = coding_terminal_proof(manifest, document, cfg, signed["terminal_reference"])
+    return manifest, document, cfg, terminal
+
+
+def bind_coding_terminal_receipt(hooks, done, cfg):
+    """Actual pinned B-receipt adapter selects private C knowledge, never a round."""
+    import closer_campaign as campaign_source
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime.PinnedNativeHooks.set_terminal_receipt.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("self") is not hooks
+        or caller.f_locals.get("done") is not done
+        or caller.f_locals.get("cfg") is not cfg
+        or type(hooks) is not runtime.PinnedNativeHooks
+        or not hooks.bounded
+        or not hooks._dependencies_match()
+    ):
+        raise mechanisms.MechanismError("actual pinned coding B receipt adapter required")
+    manifest = campaign_source.load_manifest(cfg["runtime_manifest"])
+    directory, key, _context, _fields, worker_id, _handoff = _lifecycle_authority(manifest, cfg)
+    delivery, ref = _read_lifecycle_record(
+        directory, "coding-b-delivery-" + worker_id + ".json", key
+    )
+    if (
+        done.returncode not in {0, 78}
+        or delivery["stdout_sha256"] != hashlib.sha256(done.stdout.encode("utf-8")).hexdigest()
+    ):
+        raise mechanisms.MechanismError("coding B output differs from actual source delivery")
+    read_coding_delivery(ref)
+    hooks.env["CLOSER_POSTRUN_CODING_DELIVERY"] = ref["path"]
+    hooks.env["CLOSER_POSTRUN_CODING_DELIVERY_SHA256"] = ref["sha256"]
+    return True
+
+
+def finalize_coding_native(cfg, hooks, witness, execution):
+    """Actual C cleanup closes this local coding worker; never a PR/global stop."""
+    import closer_campaign as campaign_source
+    import closer_coding_worker as worker
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime.run_native_round.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("cfg") is not cfg
+        or caller.f_locals.get("hooks") is not hooks
+        or caller.f_locals.get("cleanup_witness") is not witness
+        or caller.f_locals.get("postrun_completed") is not True
+        or caller.f_locals.get("outcome") == "denied"
+        or caller.f_locals.get("receipt_bound") is not True
+        or caller.f_locals.get("runner") is not subprocess.run
+        or type(hooks) is not runtime.PinnedNativeHooks
+        or not hooks._dependencies_match()
+        or witness.get("finished", {}).get("cleanup_terminal") is not True
+        or caller.f_locals["execution_report"]() != execution
+    ):
+        raise mechanisms.MechanismError("actual source coding B/C completion producer required")
+    c = hooks.postrun_result
+    stderr = c.get("stderr", "")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    if (
+        c.get("code") != 65
+        or c.get("dependencies_valid") is not True
+        or stderr.strip()
+        != "handoff-postrun: closer stop rejected; preserve ledger and resume actionable work"
+    ):
+        raise mechanisms.MechanismError("coding C did not reach known nonaccepting boundary")
+    campaign_source._completion_cleanup(cfg, {"native_execution": execution}, "scoped_continuation")
+    manifest, document, original_cfg, terminal = read_coding_delivery(witness["coding_delivery"])
+    if original_cfg != cfg:
+        raise mechanisms.MechanismError("coding B/C worker config changed")
+    record = {
+        "schema": "closer-native-coding-terminal-cleanup/v1",
+        "binding": binding(manifest),
+        "admission": cfg["native_admission"],
+        "worker": cfg["native_worker"],
+        "native_b_start": witness["start"],
+        "delivery": witness["coding_delivery"],
+        "terminal_reference": _coding_queue_terminal(
+            cfg, json.loads(caller.f_locals["terminal_b"].stdout)
+        )[1],
+        "native_execution": execution,
+        "coordinator_group_terminal": True,
+        **{k: False for k in worker._NO_AUTHORITY},
+        "execution_authorized": False,
+        "provider_completion_asserted": False,
+    }
+    ref = witness["retain"]("coding-terminal-cleanup-" + witness["worker_id"] + ".json", record)
+    proof = {
+        "schema": "closer-native-coding-continuation/v1",
+        "domain_outcome": "known",
+        "coding_terminal_reference": record["terminal_reference"],
+        "coding_terminal_cleanup": ref,
+        "continuation_reference": cfg["coding_continuation"],
+        "local_coding_result_sha256": terminal["result_sha256"],
+        **{k: False for k in worker._NO_AUTHORITY},
+        "execution_authorized": False,
+        "provider_completion_asserted": False,
+    }
+    actual = _coding_queue_terminal(cfg, json.loads(caller.f_locals["terminal_b"].stdout))[2]
+    return {"proof": proof, "actual": actual}
+
+
+def _coding_stage_record(manifest, selector, name):
+    root = contract(manifest)[3]
+    directory = root / selector["nonce"]
+    if directory.resolve() != directory or directory.parent != root:
+        raise mechanisms.MechanismError("coding source stage custody redirected")
+    return _read_lifecycle_record(directory, name, _existing_lifecycle_key(root))[0]
+
+
+def _coding_launch_argv(launch):
+    """JSON handoff and OS byte-argv hashes have distinct existing domains."""
+    argv = launch.get("argv") if type(launch) is dict else None
+    if (
+        type(argv) is not list
+        or not argv
+        or any(type(arg) is not str or "\0" in arg for arg in argv)
+        or launch.get("argv_sha256") != mechanisms.digest(argv)
+        or launch.get("os_argv_sha256") != mechanisms._argv_digest(argv)
+    ):
+        raise mechanisms.MechanismError("coding launch exact argv digest domains differ")
+    return argv
+
+
+def coding_terminal_for_tick(scope, reference):
+    """Actual tick only; ordinary reads cannot bypass a registry transition."""
+    import closer_coding_continuation as continuation
+
+    if type(scope) is not continuation._CodingScope:
+        raise mechanisms.MechanismError("actual coding tick scope required for terminal read")
+    scope.check()
+    continuation.read_tick_selected(scope, reference)
+    result = _coding_terminal_knowledge(scope.manifest, scope.document, reference)
+    scope.check()
+    return result
+
+
+def _require_coding_sidecar_exact(result, detail, cfg, cleanup):
+    """Native finite-float JSON identity, never Python numeric alias equality."""
+    if mechanisms.digest(result.get("native_admission")) != mechanisms.digest(
+        cfg["native_admission"]
+    ) or mechanisms.digest(detail.get("native_execution")) != mechanisms.digest(
+        cleanup["native_execution"]
+    ):
+        raise mechanisms.MechanismError("coding returned admission or execution bytes differ")
+
+
+def _coding_terminal_knowledge(manifest, campaign_document, reference):
+    """Knowledge reader valid inside exact mandatory post-CAS source proof too."""
+    import closer_campaign as campaign_source
+    import closer_coding_continuation as continuation
+    import closer_coding_worker as worker
+    import closer_correction_controller as ctl
+    import closer_queue as queue
+
+    ref = continuation.validate_reference(reference)
+    row = continuation.validate_registry(campaign_document[continuation.REGISTRY_FIELD])[
+        ref["stable_key"]
+    ]
+    selector = row["worker"]
+    if row["state"] not in {"submitted", "active", "terminal"} or selector is None:
+        raise mechanisms.MechanismError("coding original launch remains unobserved")
+    root = contract(manifest)[3]
+    directory = root / selector["nonce"]
+    key = _existing_lifecycle_key(root)
+    signed_delivery, delivery_ref = _read_lifecycle_record(
+        directory, "coding-b-delivery-" + selector["worker_id"] + ".json", key
+    )
+    retained_manifest, document, cfg, terminal = read_coding_delivery(delivery_ref)
+    if (
+        retained_manifest != manifest
+        or document != campaign_document
+        or cfg["coding_continuation"] != ref
+    ):
+        raise mechanisms.MechanismError("coding terminal belongs to another current source tick")
+    cleanup, cleanup_ref = _read_lifecycle_record(
+        directory, "coding-terminal-cleanup-" + selector["worker_id"] + ".json", key
+    )
+    if (
+        cleanup.get("schema") != "closer-native-coding-terminal-cleanup/v1"
+        or cleanup.get("binding") != binding(manifest)
+        or cleanup.get("admission") != cfg["native_admission"]
+        or cleanup.get("worker") != cfg["native_worker"]
+        or cleanup.get("native_b_start") != signed_delivery["native_b_start"]
+        or cleanup.get("delivery") != delivery_ref
+        or cleanup.get("terminal_reference") != signed_delivery["terminal_reference"]
+        or cleanup.get("coordinator_group_terminal") is not True
+        or any(
+            cleanup.get(k) is not False
+            for k in (*worker._NO_AUTHORITY, "execution_authorized", "provider_completion_asserted")
+        )
+    ):
+        raise mechanisms.MechanismError("coding terminal actual cleanup record differs")
+    campaign_source._completion_cleanup(cfg, cleanup, "scoped_continuation")
+    result = ctl.IndexController._physical_state(
+        cfg["native_worker"]["result"], "coding worker result redirected"
+    )
+    detail = json.loads(result["detail"])
+    proof = detail.get("proof")
+    _require_coding_sidecar_exact(result, detail, cfg, cleanup)
+    if (
+        result.get("worker_id") != selector["worker_id"]
+        or result.get("target") != selector["target"]
+        or result.get("mechanism") != mechanisms.NATIVE
+        or result.get("outcome") != "scoped_continuation"
+        or type(proof) is not dict
+        or proof.get("schema") != "closer-native-coding-continuation/v1"
+        or proof.get("domain_outcome") != "known"
+        or proof.get("coding_terminal_cleanup") != cleanup_ref
+        or proof.get("coding_terminal_reference") != signed_delivery["terminal_reference"]
+        or proof.get("continuation_reference") != ref
+        or proof.get("local_coding_result_sha256") != terminal["result_sha256"]
+        or any(
+            proof.get(k) is not False
+            for k in (*worker._NO_AUTHORITY, "execution_authorized", "provider_completion_asserted")
+        )
+        or hashlib.sha256(queue._canonical_bytes(detail.get("actual"))).hexdigest()
+        != terminal["result_sha256"]
+    ):
+        raise mechanisms.MechanismError("coding terminal sidecar does not bind actual known B/C")
+    if (
+        mechanisms.digest(
+            ctl.IndexController._physical_state(
+                cfg["native_worker"]["result"], "coding result changed"
+            )
+        )
+        != mechanisms.digest(result)
+        or _read_lifecycle_record(
+            directory, "coding-terminal-cleanup-" + selector["worker_id"] + ".json", key
+        )[1]
+        != cleanup_ref
+    ):
+        raise mechanisms.MechanismError("coding terminal changed during current source read")
+    return {"worker": selector, "terminal": cleanup_ref, "proof": proof}
+
+
+def validate_coding_registry_transition(scope, old_document, new_document):
+    """Authenticate source artifacts for one existing-row CAS; no status is proof."""
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+
+    # This exact read is mandatory before the helper may adopt new expected
+    # bytes. It validates actual fixed frame/TLS/locks and post-CAS disk identity.
+    observed = continuation._transition_snapshot(scope)
+    ref = observed["reference"]
+    continuation._registry_delta(old_document, new_document, ref)
+    before = old_document[continuation.REGISTRY_FIELD][ref["stable_key"]]
+    after = new_document[continuation.REGISTRY_FIELD][ref["stable_key"]]
+    selector = after["worker"]
+    root = contract(scope.manifest)[3]
+    path = root / selector["nonce"] / "admission.json"
+    signed = _read(path)
+    context = signed["record"]["context"]
+    if (
+        signed["record"].get("binding") != binding(scope.manifest)
+        or not hmac.compare_digest(
+            signed["signature"],
+            mechanisms._signature(signed["record"], _existing_lifecycle_key(root)),
+        )
+        or context.get("coding_continuation") != selector
+    ):
+        raise mechanisms.MechanismError("coding transition lacks exact signed native admission")
+    validate_admission(scope.manifest, context, for_effects=after["state"] not in {"terminal"})
+    config = ctl.ControllerConfig(
+        **scope.manifest["policy"]["correction_controller_installation"]["config"]
+    )
+    with contextlib.closing(ctl._Custody(config)) as custody:
+        intent = custody.read("coding-admission-intent-" + ref["stable_key"] + ".json")
+        if (
+            set(intent) != {"schema", "reference", "worker_json", "manifest_sha256"}
+            or intent["schema"] != "closer-coding-admission-intent/v1"
+            or intent["reference"] != ref
+            or intent["manifest_sha256"] != scope.manifest_sha256
+            or json.dumps(selector, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            != intent["worker_json"]
+        ):
+            raise mechanisms.MechanismError("coding source admission intent differs")
+    if after["state"] == "admitted":
+        if before["state"] != "awaiting_original_terminal":
+            raise mechanisms.MechanismError("coding admission cannot renew existing worker")
+        _coding_original_history_knowledge(scope.manifest, new_document, config, ref)
+    elif after["state"] == "launch_intent":
+        launch = _coding_stage_record(
+            scope.manifest, selector, "coding-launch-intent-" + selector["worker_id"] + ".json"
+        )
+        _coding_launch_argv(launch)
+        if (
+            launch.get("schema") != "closer-native-coding-launch-intent/v1"
+            or launch.get("worker") != selector
+            or launch.get("reference") != ref
+            or launch.get("admission_sha256") != _hash(path)
+        ):
+            raise mechanisms.MechanismError("coding launch lacks source create-only intent")
+        handoff = _coding_stage_record(
+            scope.manifest, selector, "worker-" + selector["worker_id"] + ".json"
+        )
+        if handoff.get("admission") != context or handoff.get("argv_sha256") != launch.get(
+            "argv_sha256"
+        ):
+            raise mechanisms.MechanismError("coding launch handoff differs from original intent")
+    elif after["state"] in {"submitted", "active"}:
+        launch = _coding_stage_record(
+            scope.manifest, selector, "coding-launch-intent-" + selector["worker_id"] + ".json"
+        )
+        actual = _coding_stage_record(
+            scope.manifest, selector, "coding-launch-observation-" + selector["worker_id"] + ".json"
+        )
+        _coding_launch_argv(launch)
+        if (
+            actual.get("schema") != "closer-native-coding-launch-observation/v1"
+            or actual.get("worker") != selector
+            or actual.get("reference") != ref
+            or actual.get("intent_sha256") != mechanisms.digest(launch)
+            or type(actual.get("process", {}).get("pid")) is not int
+            or actual["process"]["pid"] <= 1
+            or actual["process"].get("argv_sha256") != launch.get("os_argv_sha256")
+            or type(actual["process"].get("started")) is not str
+            or not actual["process"]["started"]
+            or actual["process"].get("source") != "os-byte-argv"
+        ):
+            raise mechanisms.MechanismError(
+                "coding submission actual process observation unavailable"
+            )
+    elif after["state"] == "terminal":
+        # Mandatory transition snapshot above owns post-CAS provenance; this
+        # reader never checks a normal scope or adopts replacement expected data.
+        _coding_terminal_knowledge(scope.manifest, new_document, ref)
+    else:
+        raise mechanisms.MechanismError("unsupported coding source transition")
+    if (
+        continuation._canonical(scope.campaign._read_unlocked())
+        != continuation._canonical(new_document)
+        or observed["new_document_sha256"]
+        != hashlib.sha256(continuation._canonical(new_document)).hexdigest()
+    ):
+        raise mechanisms.MechanismError("coding transition source state changed during proof")
+
+
+def _coding_tick_selector(scope, reference, expected_state):
+    """Resolve only a protected row under the actual finite tick lock lifetime."""
+    import closer_coding_continuation as continuation
+
+    if type(scope) is not continuation._CodingScope:
+        raise mechanisms.MechanismError("actual coding tick scope required before launch")
+    scope.check()
+    ref = continuation.validate_reference(reference)
+    continuation.read_tick_selected(scope, ref)
+    row = continuation.validate_registry(scope.document[continuation.REGISTRY_FIELD])[
+        ref["stable_key"]
+    ]
+    if row["reference"] != ref or row["state"] != expected_state:
+        raise mechanisms.MechanismError("coding launch phase already owned; no resubmission")
+    root = contract(scope.manifest)[3]
+    context = _CURRENT_ADMISSION.get(str(root), {}).get("context")
+    if (
+        type(context) is not dict
+        or context.get("coding_continuation") != row["worker"]
+        or context.get("nonce") != scope.nonce
+    ):
+        raise mechanisms.MechanismError("current source coding admission differs")
+    validate_admission(scope.manifest, context, for_effects=True)
+    scope.check()
+    return ref, row["worker"], context
+
+
+def _advance_coding_registry(scope, reference, state, *, worker=None):
+    """Single source CAS; native artifact validator adopts its exact readback."""
+    import closer_coding_continuation as continuation
+
+    if type(scope) is not continuation._CodingScope:
+        raise mechanisms.MechanismError("actual coding tick scope required before CAS")
+    scope.check()
+    ref = continuation.validate_reference(reference)
+    old = scope.document
+    updated = json.loads(continuation._canonical(old))
+    row = updated[continuation.REGISTRY_FIELD][ref["stable_key"]]
+    row["state"] = state
+    row["revision"] += 1
+    if worker is not None:
+        row["worker"] = worker
+    updated["revision"] += 1
+    # Reject resets, changed workers and ordinary target/worker mutations BEFORE
+    # writing; the context authenticates signed native proofs again after CAS.
+    continuation._registry_delta(old, updated, ref)
+    with continuation.registry_transition(scope, ref):
+        scope.campaign_lock.readback(old)
+        scope.campaign._write_unlocked(updated)
+        scope.campaign_lock.readback(updated)
+    return scope.document
+
+
+def prepare_coding_launch(scope, reference):
+    """Publish exact source argv and handoff once, then seal launch intent by CAS.
+
+    No process is started here. A crash after either create owns this intent;
+    subsequent ticks refuse rather than rebuilding admission or argv.
+    """
+    import closer_campaign as campaign_source
+
+    ref, selector, context = _coding_tick_selector(scope, reference, "admitted")
+    manifest, document = scope.manifest, scope.document
+    root = contract(manifest)[3]
+    directory = root / selector["nonce"]
+    path = directory / ("coding-launch-intent-" + selector["worker_id"] + ".json")
+    handoff = directory / ("worker-" + selector["worker_id"] + ".json")
+    if path.exists() or path.is_symlink() or handoff.exists() or handoff.is_symlink():
+        raise mechanisms.MechanismError("coding launch intent already owned; never repeat")
+    argv = [
+        str(contract(manifest)[2]),
+        manifest["module_path"],
+        "worker",
+        "--state",
+        str(scope.campaign.path),
+        "--target",
+        selector["target"],
+        "--owner",
+        document["owner"],
+        "--generation",
+        str(document.get("generation", 1)),
+        "--runtime-manifest",
+        scope.manifest_path,
+        "--mechanism",
+        mechanisms.NATIVE,
+        "--result",
+        str(campaign_source.result_path(scope.campaign.path, selector["worker_id"])),
+    ]
+    launch = {
+        "schema": "closer-native-coding-launch-intent/v1",
+        "worker": selector,
+        "reference": ref,
+        "admission_sha256": _hash(directory / "admission.json"),
+        "argv": argv,
+        "argv_sha256": mechanisms.digest(argv),
+        "os_argv_sha256": mechanisms._argv_digest(argv),
+    }
+    _coding_launch_argv(launch)
+    scope.check()
+    validate_admission(manifest, context, for_effects=True)
+    _immutable(
+        path,
+        json.dumps(
+            {
+                "record": launch,
+                "signature": mechanisms._signature(launch, _existing_lifecycle_key(root)),
+            },
+            sort_keys=True,
+            allow_nan=False,
+        ).encode(),
+    )
+    authorize_worker(manifest, argv)
+    _advance_coding_registry(scope, ref, "launch_intent")
+    return launch
+
+
+def launch_coding_worker(scope, reference):
+    """One actual existing worker launch; uncertain observation never resubmits."""
+    import claims
+    import closer_campaign as campaign_source
+
+    ref, selector, context = _coding_tick_selector(scope, reference, "launch_intent")
+    root = contract(scope.manifest)[3]
+    directory = root / selector["nonce"]
+    launch = _coding_stage_record(
+        scope.manifest, selector, "coding-launch-intent-" + selector["worker_id"] + ".json"
+    )
+    argv = _coding_launch_argv(launch)
+    output = directory / ("coding-launch-observation-" + selector["worker_id"] + ".json")
+    if output.exists() or output.is_symlink():
+        raise mechanisms.MechanismError("coding launch observation already owned; never repeat")
+    # The only caller is the source selector immediately after its own fresh
+    # prepare/CAS. A later tick observing launch_intent cannot invoke Popen.
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not run_coding_if_selected.__code__
+        or caller.f_globals is not globals()
+        or caller.f_locals.get("scope") is not scope
+        or caller.f_locals.get("_prepared") is not True
+        or scope.tick.f_locals.get("launcher") is not campaign_source.default_launcher
+    ):
+        raise mechanisms.MechanismError("fresh source coding launch producer required")
+    claim = claims.holder(selector["claim_target"])
+    if not claim or claim.get("agent") != campaign_source.AGENT:
+        raise mechanisms.MechanismError("coding launch exact claim unavailable")
+    scope.check()
+    validate_admission(scope.manifest, context, for_effects=True)
+    pid = campaign_source.default_launcher(
+        argv,
+        scope.campaign.path.with_name(
+            scope.campaign.path.name + "." + selector["worker_id"] + ".log"
+        ),
+    )
+    # Existing OS-byte-argv observer uses its existing bounded metadata calls;
+    # no queue request has started and no admission/request clock is renewed.
+    process = mechanisms._identity(pid, argv)
+    scope.check()
+    actual = {
+        "schema": "closer-native-coding-launch-observation/v1",
+        "worker": selector,
+        "reference": ref,
+        "intent_sha256": mechanisms.digest(launch),
+        "process": process,
+    }
+    _immutable(
+        output,
+        json.dumps(
+            {
+                "record": actual,
+                "signature": mechanisms._signature(actual, _existing_lifecycle_key(root)),
+            },
+            sort_keys=True,
+            allow_nan=False,
+        ).encode(),
+    )
+    _advance_coding_registry(scope, ref, "submitted")
+    claims.update_metadata(selector["claim_target"], campaign_source.AGENT, pid=pid)
+    return {
+        "kind": "coding_launched",
+        "worker_id": selector["worker_id"],
+        "pid": pid,
+        "execution_authorized": False,
+        "retry_authorized": False,
+    }
+
+
+def run_coding_if_selected(campaign, document, manifest, manifest_path, pending):
+    """Existing native tick alternative; ordinary closed history precedes coding."""
+    import claims
+    import closer_campaign as campaign_source
+    import closer_coding_continuation as continuation
+
+    capability = (manifest.get("policy") or {}).get(continuation.POLICY_FIELD)
+    if capability is None:
+        return None
+    continuation.validate_capability(capability)
+    registry = continuation.validate_registry(document.get(continuation.REGISTRY_FIELD, {}))
+    if not registry:
+        return None
+    if pending.get("kind") != "reconcile":
+        return None  # Never intercept ordinary launch, hold, retirement or release.
+    selected = [row for row in registry.values() if row["state"] != "terminal"]
+    if len(selected) != 1:
+        return {
+            "kind": "held",
+            "reason": "coding_selection_not_unique",
+            "execution_authorized": False,
+            "retry_authorized": False,
+        }
+    row = selected[0]
+    if row["state"] != "awaiting_original_terminal":
+        if row["state"] in {"submitted", "active"}:
+            try:
+                with continuation._coding_scope(
+                    campaign, document, manifest, manifest_path
+                ) as scope:
+                    coding_terminal_for_tick(scope, row["reference"])
+                    _advance_coding_registry(scope, row["reference"], "terminal")
+                    return {
+                        "kind": "coding_local_terminal",
+                        "global_stop_valid": False,
+                        "acceptance_authorized": False,
+                        "execution_authorized": False,
+                        "retry_authorized": False,
+                    }
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                pass  # Actual live/unknown/missing C remains owned; never retry.
+        return {
+            "kind": "held",
+            "reason": "coding_worker_already_owned",
+            "execution_authorized": False,
+            "retry_authorized": False,
+        }
+    stage = "original_terminal"
+    try:
+        with continuation._coding_scope(campaign, document, manifest, manifest_path) as scope:
+            reference = row["reference"]
+            # No claim/admission/publication until all original workers and their
+            # actual signed known C/history/returned issuance are authenticated.
+            coding_original_terminal_for_tick(scope, reference)
+            if any(
+                w.get("state") != "terminal"
+                or w.get("outcome") not in {"ok", "unavailable", "scoped_continuation"}
+                for w in document.get("workers", [])
+            ):
+                raise mechanisms.MechanismError("original workers not lawfully terminal")
+            stage = "admission"
+            context = publish_coding_admission(scope, reference)
+            selector = context["coding_continuation"]
+            _advance_coding_registry(scope, reference, "admitted", worker=selector)
+            stage = "claim"
+            if claims.holder(selector["claim_target"]) is not None or not claims.claim(
+                selector["claim_target"], campaign_source.AGENT
+            ):
+                raise mechanisms.MechanismError("coding claim already owned")
+            stage = "launch_intent"
+            prepare_coding_launch(scope, reference)
+            _prepared = True
+            stage = "launch_observation"
+            return launch_coding_worker(scope, reference)
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+        # Preserve every durable admission/intent/claim/unknown. Never release or
+        # recycle partial publication based on an exception/expired clock.
+        return {
+            "kind": "held",
+            "reason": "coding_" + stage + "_held",
+            "execution_authorized": False,
+            "retry_authorized": False,
+        }
+
+
+def publish_coding_admission(scope, reference):
+    """One protected fresh coding admission under the existing native tick lifetime."""
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+    import closer_frontier_policy as frontier
+    import closer_operational_capacity as capacity
+    import closer_source_installation as installed
+    from closer_campaign import ROUND_UNIT
+
+    if type(scope) is not continuation._CodingScope:
+        from closer_correction_source_record import SourceRecordUnavailable
+
+        raise SourceRecordUnavailable("actual coding tick source scope required")
+    scope.check()
+    ref = continuation.validate_reference(reference)
+    record = continuation.read_tick_selected(scope, ref)
+    document, manifest = scope.document, scope.manifest
+    registry = continuation.validate_registry(document[continuation.REGISTRY_FIELD])
+    selected = registry[ref["stable_key"]]
+    if (
+        selected["state"] != "awaiting_original_terminal"
+        or any(
+            row["state"] not in {"awaiting_original_terminal", "terminal"}
+            for key, row in registry.items()
+            if key != ref["stable_key"]
+        )
+        or document.get("phase") != "work"
+        or document.get("hold")
+        or document.get("targets") != {ROUND_UNIT: "reconcile"}
+        or any(
+            w.get("state") != "terminal"
+            or w.get("outcome") not in {"ok", "unavailable", "scoped_continuation"}
+            for w in document.get("workers", [])
+        )
+    ):
+        raise mechanisms.MechanismError("fresh coding admission requires closed original workers")
+    history = coding_original_terminal_for_tick(scope, ref)
+    value, pinned = installed._qualified_policy(scope.binding)
+    if pinned != manifest or value["manifest_sha256"] != scope.manifest_sha256:
+        raise mechanisms.MechanismError("coding publisher source knowledge changed")
+    config = ctl.ControllerConfig(**value["config"])
+    purpose = _coding_purpose_projection(config, record)
+    import closer_coding_session_runtime as coding_runtime
+    import closer_coding_session_v2 as coding_session
+    import execution_profiles
+
+    consumer = config.consumers[record["consumer_id"]]
+    coding_policy = coding_session.validate_policy(consumer[coding_session.POLICY_FIELD])
+    coding_session.minimum_budget(
+        record["original_snapshot"]["budget"],
+        coding_session.validate_budget(consumer[coding_runtime.CURRENT_FIELD]),
+        coding_policy["budget"],
+    )
+    profile = execution_profiles.get_profile(coding_session.PROFILE)
+    if (
+        consumer.get("profile_id") != coding_session.PROFILE
+        or consumer.get("agent") != "codex"
+        or consumer.get("owner_login") != record["owner_login"]
+        or consumer.get("profile_sha256") != ctl.source_digest(profile)
+        or profile.get("lifecycle_status") != "active"
+        or "offload" not in profile.get("transport_support", [])
+    ):
+        raise mechanisms.MechanismError("source coding profile/current owner policy differs")
+    policy = capacity_contract(manifest, control_plane_only=True)
+    if policy is None or policy["schema"] != "native-scoped-capacity/v2":
+        raise mechanisms.MechanismError("explicit bounded native coding policy unavailable")
+    root = contract(manifest)[3]
+    nonce = _CURRENT_ENTRY.get(str(root))
+    invocation = _CURRENT_ADMISSION.get(str(root))
+    if (
+        not entry_active(manifest)
+        or nonce != scope.nonce
+        or not invocation
+        or invocation.get("nonce") != nonce
+        or invocation.get("context") is not None
+    ):
+        raise mechanisms.MechanismError("fresh source native coding invocation unavailable")
+    cfg = document["worker_config"]
+    workspace = cfg.get("workspaces")
+    if type(workspace) is not dict or set(workspace) != {"path", "sha256"}:
+        raise mechanisms.MechanismError("coding requires original authorized workspace pin")
+    workspace_path = Path(workspace["path"])
+    workspace_raw = _bounded_bytes(workspace_path, 1024 * 1024)
+    if hashlib.sha256(workspace_raw).hexdigest() != workspace["sha256"]:
+        raise mechanisms.MechanismError("coding authorized workspace changed")
+    from closer_dispatcher import load_workspace_config
+
+    load_workspace_config(
+        workspace_path,
+        workspace["sha256"],
+        require_pin=True,
+        targets=[purpose["target"]],
+        validate_execution=False,
+    )
+    worker_id = secrets.token_hex(6)
+    revision = ctl.digest({"reference": ref, "worker_id": worker_id, "nonce": nonce})
+    binding_value = _coding_dispatch_binding(config, value["policy_projection"], purpose, ref)
+    descriptor = frontier.make_frontier(
+        [purpose["target"]],
+        owner=document["owner"],
+        frontier_id="coding-" + worker_id,
+        bindings={
+            purpose["target"]: {
+                "revision": revision,
+                "action_id": frontier.action_identity(
+                    purpose["target"], revision, "correction_coding", binding_value
+                ),
+            }
+        },
+    )
+    selector = {
+        "schema": _CODING_SELECTOR_SCHEMA,
+        "worker_id": worker_id,
+        "target": ROUND_UNIT,
+        "claim_target": document["campaign_id"] + ":coding:" + ref["stable_key"],
+        "nonce": nonce,
+        "reference": ref,
+        "source_target": history["enrollment_boundary"]["target"],
+        "coding_target": purpose["target"],
+        "queue_state": str(Path(config.state_path + ".coding") / (ref["stable_key"] + ".json")),
+        "finite_frontier": descriptor,
+        "request_timeout_seconds": policy["request_timeout_seconds"],
+        "purpose": purpose,
+    }
+    _validate_coding_selector(selector, document, config, record, value["policy_projection"])
+    if Path(selector["queue_state"]).exists() or Path(selector["queue_state"]).is_symlink():
+        raise mechanisms.MechanismError("coding queue already exists; no repeat or renewal")
+    directory = root / nonce
+    report_path = directory / "scoped-capacity.json"
+    # Control evidence grants NO closer classification/adjudication/model role.
+    # Existing coding pools and installed consumer/profile/account/budget/final
+    # before-Popen guard remain mandatory at the actual fresh worker callback.
+    report = capacity.publish(
+        {
+            "schema": capacity.SCHEMA,
+            "owner": policy["owner"],
+            "profile_ids": [],
+            "bounded_trial_agents": [],
+            "control_plane_only": True,
+            "original_deadline": time.time() + policy["freshness_seconds"],
+            "runtime_manifest": scope.manifest_path,
+            "runtime_manifest_sha256": scope.manifest_sha256,
+        },
+        report_path,
+        expected_sha256=None,
+    )
+    if not capacity.validate_report(report, now=time.time()):
+        raise mechanisms.MechanismError("fresh coding control-plane evidence unavailable")
+    assignment = directory / "assignment.json"
+    raw = json.dumps(
+        {
+            "schema": "closer-coding-assignment/v1",
+            "reference": ref,
+            "source_target": selector["source_target"],
+            "parent_target": ROUND_UNIT,
+            "targets": [{"target": purpose["target"]}],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    scope.check()
+    with contextlib.closing(ctl._Custody(config)) as custody:
+        intent_name = "coding-admission-intent-" + ref["stable_key"] + ".json"
+        try:
+            custody.read(intent_name)
+        except FileNotFoundError:
+            pass
+        else:
+            raise mechanisms.MechanismError("coding admission intent already owned; never renew")
+        custody.create(
+            intent_name,
+            {
+                "schema": "closer-coding-admission-intent/v1",
+                "reference": ref,
+                "worker_json": json.dumps(
+                    selector, sort_keys=True, separators=(",", ":"), allow_nan=False
+                ),
+                "manifest_sha256": scope.manifest_sha256,
+            },
+        )
+        _immutable(assignment, raw)
+        _immutable(directory / "workspaces.json", workspace_raw)
+        context = {
+            "schema": "native-invocation-admission/v2",
+            "nonce": nonce,
+            "started_at": invocation["started_at"],
+            "campaign": _campaign_identity(Path(config.state_path), document),
+            "assignment": {
+                "path": str(assignment),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "source_path": str(assignment),
+            },
+            "report": {"path": str(report_path), "sha256": _hash(report_path)},
+            "runtime_manifest": scope.manifest_path,
+            "runtime_manifest_sha256": scope.manifest_sha256,
+            "workspace_config": {
+                "path": str(directory / "workspaces.json"),
+                "sha256": workspace["sha256"],
+                "source_path": str(workspace_path),
+            },
+            "finite_frontier": descriptor,
+            "request_timeout_seconds": policy["request_timeout_seconds"],
+            "coding_continuation": selector,
+        }
+        admission_path = directory / "admission.json"
+        if admission_path.exists() or admission_path.is_symlink():
+            raise mechanisms.MechanismError("native coding admission already exists")
+        signed_record = {"binding": binding(manifest), "context": context}
+        _immutable(
+            admission_path,
+            json.dumps(
+                {
+                    "record": signed_record,
+                    "signature": mechanisms._signature(
+                        signed_record, _existing_lifecycle_key(root)
+                    ),
+                },
+                sort_keys=True,
+            ).encode(),
+        )
+        invocation["context"] = context
+    scope.check()
+    return context
+
+
+def coding_original_terminal_for_tick(scope, reference):
+    """Original known-scoped prerequisite; never a worker execution installation."""
+    import closer_coding_continuation as continuation
+    import closer_correction_controller as ctl
+
+    if type(scope) is not continuation._CodingScope:
+        from closer_correction_source_record import SourceRecordUnavailable
+
+        raise SourceRecordUnavailable("actual coding tick source scope required")
+    scope.check()
+    continuation.read_tick_selected(scope, reference)
+    config = ctl.ControllerConfig(
+        **scope.manifest["policy"]["correction_controller_installation"]["config"]
+    )
+    history = _coding_original_history_knowledge(scope.manifest, scope.document, config, reference)
+    scope.check()
+    return history
+
+
+def coding_original_history(installation, reference):
+    """Actual accepted coding WORKER only; current and original identities stay distinct."""
+    import closer_coding_worker as worker
+    import closer_correction_controller as ctl
+    from closer_correction_source_record import SourceRecordUnavailable
+
+    frame = inspect.currentframe().f_back
+    try:
+        root = frame.f_locals.get("root")
+        if (
+            frame.f_code is not worker._original_history.__code__
+            or frame.f_globals is not worker.__dict__
+            or type(root) is not worker._Root
+            or root.installation is not installation
+        ):
+            raise SourceRecordUnavailable("actual accepted worker historical reader required")
+        root.check()
+        if root.continuation_reference != reference:
+            raise SourceRecordUnavailable("accepted worker historical reference differs")
+        doc = ctl.IndexController._physical_state(
+            installation.config["state_path"], "coding campaign redirected"
+        )
+        history = _coding_original_history_knowledge(
+            root.manifest, doc, ctl.ControllerConfig(**installation.config), reference
+        )
+        root.check()
+        return history
+    finally:
+        del frame
+
+
+def _retained_enrollment_cleanup(manifest, campaign_doc, marker, marker_ref):
+    """Historical enrollment correlation only; no synthetic instruction plan."""
+    import closer_campaign as campaign_source
+    import closer_correction_controller as ctl
+
+    ref = marker["native_b_start"]
+    root = contract(manifest)[3]
+    path = Path(ref["path"])
+    if (
+        path.resolve() != path
+        or path.parent.parent != root
+        or not re.fullmatch(r"[a-f0-9]{32}", path.parent.name)
+        or not re.fullmatch(r"worker-b-start-[a-f0-9]{12}\.json", path.name)
+    ):
+        raise mechanisms.MechanismError("retained cleanup selector escaped original native custody")
+    key = _existing_lifecycle_key(root)
+    start, exact_ref = _read_lifecycle_record(path.parent, path.name, key)
+    if ref != exact_ref or start.get("admission", {}).get("nonce") != path.parent.name:
+        raise mechanisms.MechanismError("retained cleanup B-start bytes differ")
+    context, fields = start["admission"], start["worker"]
+    worker_id = start["worker_id"]
+    workers = [row for row in campaign_doc.get("workers", []) if row.get("worker_id") == worker_id]
+    if len(workers) != 1 or workers[0].get("state") != "terminal":
+        raise mechanisms.MechanismError("retained source worker is not independently terminal")
+    original_cfg = result_admission_config(
+        campaign_doc["worker_config"],
+        context,
+        Path(context["campaign"]["state"]),
+        campaign_doc,
+        workers[0],
+    )
+    directory, original_key, _context, expected_fields, expected_id, handoff_sha = (
+        _lifecycle_authority(manifest, original_cfg)
+    )
+    if (
+        directory != path.parent
+        or original_key != key
+        or expected_fields != fields
+        or expected_id != worker_id
+        or start.get("handoff_sha256") != handoff_sha
+        or start.get("binding") != binding(manifest)
+        or start.get("schema") != "closer-native-correction-b-start/v1"
+        or start.get("worker_config_sha256") != mechanisms.digest(original_cfg)
+        or start.get("producer_sha256") != manifest["modules"]["closer_runtime_binding.py"]
+        or start.get("process", {}).get("pid")
+        != marker["instruction_effect"]["owner"].get("process_id")
+    ):
+        raise mechanisms.MechanismError("retained B/source/worker configuration differs")
+    terminal, terminal_ref = _read_lifecycle_record(
+        directory, "terminal-cleanup-" + worker_id + ".json", key
+    )
+    if (
+        terminal.get("schema") != "closer-native-correction-terminal-cleanup/v1"
+        or terminal.get("binding") != binding(manifest)
+        or terminal.get("admission") != context
+        or terminal.get("worker") != fields
+        or terminal.get("worker_id") != worker_id
+        or terminal.get("handoff_sha256") != handoff_sha
+        or terminal.get("native_b_start") != ref
+        or terminal.get("process") != start["process"]
+        or terminal.get("argv_sha256") != start.get("argv_sha256")
+        or terminal.get("producer_sha256") != manifest["modules"]["closer_runtime_binding.py"]
+        or terminal.get("coordinator_group_terminal") is not True
+        or any(
+            terminal.get(name) is not False
+            for name in (
+                "provider_completion_asserted",
+                "domain_completed",
+                "acceptance_authorized",
+                "execution_authorized",
+                "source_closure_authorized",
+                "remote_execution_attested",
+            )
+        )
+    ):
+        raise mechanisms.MechanismError("retained source terminal-only cleanup differs")
+    campaign_source._completion_cleanup(original_cfg, terminal, "unknown")
+    result = ctl.IndexController._physical_state(
+        fields["result"], "original native worker result redirected"
+    )
+    detail = json.loads(result["detail"])
+    if (
+        result.get("worker_id") != worker_id
+        or result.get("target") != fields["target"]
+        or result.get("mechanism") != mechanisms.NATIVE
+        or result.get("native_admission") != context
+        or result.get("outcome") not in {"unknown", "ok", "scoped_continuation"}
+        or workers[0].get("outcome") != result.get("outcome")
+        or detail.get("native_terminal_cleanup") != terminal_ref
+        or detail.get("native_execution") != terminal.get("native_execution")
+    ):
+        raise mechanisms.MechanismError("original native worker result/cleanup join differs")
+    links = terminal.get("operations")
+    if type(links) is not list or len(links) > 128:
+        raise mechanisms.MechanismError("retained cleanup operation inventory unavailable")
+    matched = [
+        row
+        for row in links
+        if row.get("schema") == "closer-native-enrollment-operation-link/v1"
+        and row.get("enrollment_terminal_ref") == marker_ref
+    ]
+    if len(matched) != 1:
+        raise mechanisms.MechanismError("retained cleanup lacks exact original enrollment link")
+    link = matched[0]
+    operation = json.loads(marker["operation_json"])
+    if (
+        workers[0].get("outcome") != "scoped_continuation"
+        or result.get("outcome") != "scoped_continuation"
+        or link.get("operation_id") != operation.get("id")
+        or link.get("operation_sha256") != marker["operation_sha256"]
+        or link.get("native_b_start") != ref
+        or link.get("instruction_intent_sha256") != marker["instruction_effect"]["intent_sha256"]
+        or link.get("retained_status") != "completed"
+        or link.get("provider_completion_asserted") is not False
+    ):
+        raise mechanisms.MechanismError("retained enrollment original known terminal differs")
+    proof = detail.get("proof")
+    if (
+        type(proof) is not dict
+        or proof.get("schema") != "native-scoped-continuation/v1"
+        or proof.get("domain_outcome") != "known"
+        or proof.get("accepted") is not False
+        or proof.get("global_stop_valid") is not False
+        or proof.get("finite_frontier") != marker["finite_frontier"]
+    ):
+        raise mechanisms.MechanismError("original enrollment lacks exact known scoped outcome")
+    import closer_resources
+    from closer_dispatcher import targets_from_assignment
+
+    targets = targets_from_assignment(Path(original_cfg["assignment"]))
+    verdict = closer_resources.validate_stop(
+        Path(str(original_cfg["dispatch_state"]) + ".pipeline.json"), proof["round_id"], targets
+    )
+    if (
+        verdict.get("admitted_domain_valid") is not True
+        or verdict.get("admitted_domain_reasons")
+        or verdict.get("global_stop_valid") is not False
+        or verdict.get("run_ids") != proof.get("run_ids")
+        or verdict.get("receipt_sha256") != proof.get("receipt_sha256")
+    ):
+        raise mechanisms.MechanismError("original known enrollment scoped receipt changed")
+    return {
+        "start": start,
+        "terminal": terminal,
+        "terminal_ref": terminal_ref,
+        "original_config": original_cfg,
+        "operation_link": link,
+    }
 
 
 def _process_public(value):
@@ -1520,18 +3764,21 @@ def _own_identity(pid, argv, deadline):
     }
 
 
-def entry_active(manifest):
+def entry_active(manifest, *, _scope=None):
     """Only the observed, lock-held entry in this process may schedule work."""
-    _value, _wrapper, _python, root = contract(manifest)
+    _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
     active = _read(root / "native-active.json")
     return (
-        active.get("binding") == binding(manifest)
+        active.get("binding") == binding(manifest, _scope=_scope)
         and active.get("status") == "submitted"
         and _CURRENT_ENTRY.get(str(root)) == active.get("nonce")
     )
 
 
 def authorize_worker(manifest, argv):
+    from closer_correction_maintenance import assert_offload_allowed
+
+    assert_offload_allowed()
     if not entry_active(manifest):
         raise mechanisms.MechanismError("native worker handoff requires observed entry")
     if not argv or argv[0] != str(contract(manifest)[2]):
@@ -1576,6 +3823,110 @@ def authorize_worker(manifest, argv):
         },
         root,
     )
+
+
+def coding_worker_registration(
+    document, *, state, result, target, owner, generation, manifest_path
+):
+    """Private registry membership joins signed launch and this actual OS worker."""
+    import closer_campaign as campaign_source
+    import closer_coding_continuation as continuation
+
+    frame = inspect.currentframe().f_back
+    if (
+        frame.f_code is not campaign_source.run_worker.__code__
+        or frame.f_globals is not campaign_source.__dict__
+        or frame.f_locals.get("doc") is not document
+        or frame.f_locals.get("state") != state
+        or frame.f_locals.get("result") != result
+        or frame.f_locals.get("runtime_manifest") != manifest_path
+    ):
+        raise mechanisms.MechanismError("actual registered coding worker entry required")
+    manifest = campaign_source.load_manifest(manifest_path)
+    registry = continuation.validate_registry(document.get(continuation.REGISTRY_FIELD, {}))
+    matches = [
+        row
+        for row in registry.values()
+        if (row.get("worker") or {}).get("worker_id") == Path(result).stem
+    ]
+    if len(matches) != 1:
+        raise mechanisms.MechanismError("unique source registered coding worker required")
+    (row,) = matches
+    selector = row["worker"]
+    if (
+        row["state"] not in {"submitted", "active"}
+        or target != selector["target"]
+        or document.get("owner") != owner
+        or document.get("generation", 1) != generation
+        or document.get("phase") != "work"
+        or document.get("hold")
+        or any(
+            w.get("state") != "terminal"
+            or w.get("outcome") not in {"ok", "unavailable", "scoped_continuation"}
+            for w in document.get("workers", [])
+        )
+    ):
+        raise mechanisms.MechanismError("coding worker original/registration fence remains held")
+    context = accept_worker(
+        manifest,
+        state=state,
+        result=result,
+        target=target,
+        owner=owner,
+        generation=generation,
+        manifest_path=manifest_path,
+        campaign_id=document["campaign_id"],
+    )
+    if context.get("coding_continuation") != selector:
+        raise mechanisms.MechanismError("accepted coding worker selector differs")
+    launch = _coding_stage_record(
+        manifest, selector, "coding-launch-intent-" + selector["worker_id"] + ".json"
+    )
+    observed = _coding_stage_record(
+        manifest, selector, "coding-launch-observation-" + selector["worker_id"] + ".json"
+    )
+    argv = _coding_launch_argv(launch)
+    identity = _own_identity(os.getpid(), argv, None)
+    if (
+        observed.get("schema") != "closer-native-coding-launch-observation/v1"
+        or observed.get("worker") != selector
+        or observed.get("reference") != row["reference"]
+        or observed.get("intent_sha256") != mechanisms.digest(launch)
+        or {k: observed.get("process", {}).get(k) for k in identity} != identity
+    ):
+        raise mechanisms.MechanismError("coding worker actual signed process birth differs")
+    return {**selector, "state": row["state"]}
+
+
+def coding_dispatch_selected(cfg):
+    """Only the existing run_worker may select its accepted private dispatcher."""
+    import closer_campaign as campaign_source
+
+    dispatch = inspect.currentframe().f_back
+    worker = dispatch.f_back
+    if (
+        dispatch.f_code is not campaign_source.dispatch_command.__code__
+        or dispatch.f_globals is not campaign_source.__dict__
+        or dispatch.f_locals.get("cfg") is not cfg
+        or worker.f_code is not campaign_source.run_worker.__code__
+        or worker.f_globals is not campaign_source.__dict__
+        or worker.f_locals.get("cfg") is not cfg
+    ):
+        raise mechanisms.MechanismError("actual accepted coding worker dispatch required")
+    manifest = worker.f_locals.get("pinned_worker")
+    context = worker.f_locals.get("worker_admission")
+    validate_admission(manifest, context, for_effects=True)
+    selector = context.get("coding_continuation")
+    if (
+        type(selector) is not dict
+        or cfg.get("coding_continuation") != selector["reference"]
+        or cfg.get("native_admission") != context
+        or cfg.get("dispatch_state") != selector["queue_state"]
+        or cfg.get("finite_frontier") != selector["finite_frontier"]
+        or cfg.get("request_timeout_seconds") != selector["request_timeout_seconds"]
+    ):
+        raise mechanisms.MechanismError("coding dispatcher differs from fresh signed admission")
+    return True
 
 
 def accept_worker(
@@ -1888,10 +4239,10 @@ def supervise_native(manifest, manifest_path, *, budget_seconds):
             raise
 
 
-def qualification_receipt_problems(manifest):
+def qualification_receipt_problems(manifest, *, _scope=None):
     """Authenticate immutable package/lifecycle evidence; grants no ACT eligibility."""
     try:
-        _value, _wrapper, _python, root = contract(manifest)
+        _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
         signed = _read(root / "native-qualification.json")
         record = signed["record"]
         if not hmac.compare_digest(
@@ -1901,7 +4252,7 @@ def qualification_receipt_problems(manifest):
         if (
             record.get("schema") != OBSERVATION
             or record.get("kind") != "native-wrapper-qualification"
-            or record.get("binding") != binding(manifest)
+            or record.get("binding") != binding(manifest, _scope=_scope)
             or record.get("passed") is not True
             or record.get("desktop_qualified") is not False
             or record.get("source") != "owned-native-wrapper-process"
@@ -1935,13 +4286,13 @@ def qualification_receipt_problems(manifest):
         return [f"native handoff qualification held: {exc}"]
 
 
-def qualification_problems(manifest):
+def qualification_problems(manifest, *, _scope=None):
     """ACT qualification retains the original current-entry/unknown barrier."""
-    problems = qualification_receipt_problems(manifest)
+    problems = qualification_receipt_problems(manifest, _scope=_scope)
     if problems:
         return problems
     try:
-        _value, _wrapper, _python, root = contract(manifest)
+        _value, _wrapper, _python, root = contract(manifest, _scope=_scope)
         active = _read(root / "native-active.json")
         if active.get("status") != "terminal" and _CURRENT_ENTRY.get(str(root)) != active.get(
             "nonce"

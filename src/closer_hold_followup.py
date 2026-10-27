@@ -181,6 +181,36 @@ def _source_row(record: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, An
     return entry, row
 
 
+def _adjudication_policy(row):
+    import closer_adjudication_policy as policy
+
+    current = (row.get("results") or {}).get("exception") or {}
+    value = current.get("controller_policy")
+    if not policy.validate(value):
+        return None
+    callback = value["callback"]
+    actual = current.get("actual") or {}
+    if not (
+        row.get("stage") == "exception"
+        and row.get("stage_status") == "completed"
+        and row.get("provider_outcome_uncertain") in (None, False)
+        and row.get("recovery_barrier") is None
+        and not (row.get("results") or {}).get("act")
+        and current.get("status") == "pending"
+        and current.get("pending_kind") == "adjudication_evidence"
+        and actual.get("exit") == 0
+        and _text(actual.get("run_id"))
+        and actual.get("outcome_uncertain") not in (True,)
+        and row.get("scope_lease") == callback["lease"]
+        and row.get("work_key") == callback["operation_id"]
+        and row.get("stage_started_at") == callback["started_at"]
+        and row.get("stage_deadline") == callback["deadline"]
+        and row.get("revision") == value["revision"]
+    ):
+        return None
+    return value
+
+
 def _boundary(row: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
     results = row.get("results") or {}
     if not isinstance(results, Mapping):
@@ -197,6 +227,11 @@ def _boundary(row: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
         return "action_outcome_unknown", {"kind": "operation_terminal"}
     current = results.get(row.get("stage"), {})
     if not isinstance(current, Mapping):
+        return None
+    if current.get("pending_kind") == "adjudication_evidence":
+        value = _adjudication_policy(row)
+        if value is not None:
+            return "confirmed_not_started", {"kind": "adjudication_source_event", "policy": value}
         return None
     if current.get("classification") == "role_qualification_unavailable":
         return "confirmed_not_started", {
@@ -507,6 +542,25 @@ def _capture(campaign: Any, doc: dict[str, Any], current: float) -> dict[str, An
             }
         )
 
+        if release["kind"] == "adjudication_source_event":
+            value = release["policy"]
+            callback = value["callback"]
+            if not (
+                callback["state_path"] == str(path.resolve())
+                and callback["run_id"] == run_id
+                and callback["frontier"] == frontier
+                and frontier["owner"] == doc["owner"]
+                and value["target"] == target
+                and current >= callback["started_at"]
+            ):
+                raise ValueError("adjudication follow-up differs from original callback scope")
+            candidates[-1].update(
+                created_at=callback["started_at"],
+                next_check_at=min(current, callback["deadline"]),
+                deadline=callback["deadline"],
+                attempt_budget=value["attempt_budget"],
+            )
+
     frontier = root_frontier
     # A crashed native wrapper may never have reached a pipeline row. It still
     # receives a bounded, owned follow-up for its ACTUAL durable worker identity.
@@ -667,6 +721,50 @@ def _probe(
     if record["execution_state"] == "action_outcome_unknown":
         return _probe_action(record, manifest_path, doc)
     kind = record["release_proof"]["kind"]
+    if kind == "adjudication_source_event":
+        import closer_dispatcher as dispatcher
+
+        value = _adjudication_policy(row)
+        if value != record["release_proof"].get("policy"):
+            raise ValueError("adjudication source policy changed")
+        callback = value["callback"]
+        if not (
+            callback["state_path"] == record["source"]["state_path"]
+            and callback["operation_id"] == record["source"]["callback_id"]
+            and callback["run_id"] == record["run_id"]
+            and callback["frontier"] == record["frontier"]
+            and value["target"] == record["target"]
+            and value["revision"] == record["revision"]
+            and callback["deadline"] == record["deadline"]
+        ):
+            raise ValueError("adjudication watch lost original operation")
+        if time.time() >= record["deadline"]:
+            return {
+                "status": "escalated",
+                "escalation_reason": "original_exception_cutoff",
+                "authority": False,
+            }
+        # Read source only. No select/prepare/rearm/execute/model route is called.
+        observed = dispatcher.GitHub(deadline=record["deadline"]).snapshot(record["target"])
+        if observed.get("target") != value["target"] or not _text(observed.get("revision")):
+            return {
+                "status": "waiting",
+                "reason": "source event identity unavailable",
+                "authority": False,
+            }
+        if observed["revision"] != value["revision"]:
+            return {
+                "status": "escalated",
+                "escalation_reason": "source_changed_requires_fresh_owner_admission",
+                "authority": False,
+            }
+        if observed.get("head") != value["head"] or observed.get("base") != value["base"]:
+            return {"status": "waiting", "reason": "source identity ambiguous", "authority": False}
+        return {
+            "status": "waiting",
+            "reason": "original source evidence unchanged",
+            "authority": False,
+        }
     if kind in {"role_qualified", "capacity_available"}:
         return _apply_no_start(record, manifest, manifest_path, doc, campaign)
     if kind in {"accepted_verifier_terminal", "ci_terminal"}:

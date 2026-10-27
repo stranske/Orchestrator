@@ -53,6 +53,22 @@ def setup(monkeypatch, profile_id, role=None):
     monkeypatch.setattr(dispatcher, "_fresh_capacity_report", lambda: capacity)
     if role:
         proof = record(profile, role)
+        if role == roles.BOUNDED_CLASSIFICATION:
+            descriptor = dispatcher._controlled_model_contract("closer_interpret")
+            proof.update(
+                production_model_contract=descriptor,
+                execution_limits={
+                    "schema": "closer-data-only-limits/v1",
+                    "role": role,
+                    "model_contract_sha256": descriptor["contract_sha256"],
+                    "max_prompt_bytes": 65536,
+                    "max_final_bytes": 8192,
+                    "max_native_result_bytes": 65536,
+                    "max_output_tokens": 2048,
+                    "max_turns": 1,
+                    "timeout_seconds": 45,
+                },
+            )
         monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {proof["qualification_id"]: proof})
     return profile, capacity
 

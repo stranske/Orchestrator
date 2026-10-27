@@ -88,7 +88,7 @@ def _write(path: Path, value: dict) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def mechanism(manifest: dict, requested: str | None = None) -> str:
+def mechanism(manifest: dict, requested: str | None = None, *, _scope=None) -> str:
     contract = manifest.get("mechanism_contract")
     if contract is not None and not isinstance(contract, dict):
         raise MechanismError("invalid execution mechanism contract")
@@ -121,7 +121,7 @@ def mechanism(manifest: dict, requested: str | None = None) -> str:
     elif selected == NATIVE:
         from closer_native_observer import contract as native_contract
 
-        native_contract(manifest)
+        native_contract(manifest, _scope=_scope)
     elif policy.get("schema") == POLICY:
         raise MechanismError("CLI policy cannot authorize another execution mechanism")
     return selected
