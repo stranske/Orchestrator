@@ -413,3 +413,372 @@ def create_successor(
                     != fresh["bindings"][target],
                     "acceptance_authority": False,
                 }
+
+
+def retain_receipt(state_path, root_path, *, target, frontier, native):
+    """Journal an exact produced receipt reference; this grants no native authority."""
+    import closer_resources as resources
+
+    descriptor = policy.validate_frontier(frontier, targets=[target])
+    round_id = native.get("round_id")
+    receipt_path = native.get("receipt_path")
+    if receipt_path is None:
+        # Unit callers may omit external receipts. Native authentication never
+        # accepts this absence as descendant coverage.
+        return None
+    expected = resources.scoped_root(Path(root_path)) / "rounds" / f"{round_id}.json"
+    if Path(receipt_path) != expected or not isinstance(round_id, str):
+        raise ValueError("stage receipt path is not its exact owned round")
+    receipt, sha = resources.read_round_receipt(expected)
+    if not (
+        receipt.get("round_id") == round_id
+        and receipt.get("finite_frontier") == descriptor
+        and receipt.get("assignment") == [target]
+        and set(receipt.get("run_ids") or {}) == {target}
+        and native.get("receipt_sha256") == sha
+    ):
+        raise ValueError("stage receipt exact target/frontier binding changed")
+    ref = {
+        "target": target,
+        "receipt_path": str(expected),
+        "receipt_sha256": sha,
+        "round_id": round_id,
+        "run_ids": copy.deepcopy(receipt["run_ids"]),
+        "finite_frontier": descriptor,
+    }
+    path = Path(state_path)
+    with pipeline._locked(path, timeout_seconds=1):
+        state = pipeline._load(path)
+        record = (state.get("stage_successors") or {}).get(descriptor["frontier_id"])
+        if not isinstance(record, dict) or record.get("finite_frontier") != descriptor:
+            raise ValueError("stage receipt has no exact journaled child")
+        refs = record.setdefault("receipt_refs", [])
+        if not isinstance(refs, list) or len(refs) >= 32:
+            raise ValueError("stage receipt retention bound exceeded")
+        prior = [value for value in refs if value.get("round_id") == round_id]
+        if prior and prior != [ref]:
+            raise ValueError("stage round receipt identity conflicts")
+        if not prior:
+            refs.append(ref)
+            pipeline._save(path, state)
+    return ref
+
+
+def linked_chain(state, root, target, *, max_depth=8):
+    """Bounded immutable ancestry only; this is never readiness/effect authority."""
+    original = policy.validate_frontier(root)
+    current = original
+    seen = {current["frontier_id"]}
+    chain = []
+    for _ in range(max_depth):
+        entry = (state.get("frontiers") or {}).get(current["frontier_id"])
+        if not isinstance(entry, Mapping) or entry.get("finite_frontier") != current:
+            if chain:
+                return chain, current, None
+            raise ValueError("stage root frontier is missing or changed")
+        row = (entry.get("items") or {}).get(target)
+        if not isinstance(row, Mapping):
+            raise ValueError("stage root target is missing")
+        if (
+            row.get("status") == "unknown"
+            or row.get("stage_status") in {"running", "unknown"}
+            or row.get("provider_outcome_uncertain") not in (None, False)
+            or row.get("recovery_barrier") is not None
+        ):
+            return chain, current, entry
+        matches = [
+            value
+            for value in (state.get("stage_successors") or {}).values()
+            if isinstance(value, Mapping)
+            and (value.get("stage_predecessor") or {}).get("predecessor_frontier_id")
+            == current["frontier_id"]
+            and (value.get("stage_predecessor") or {}).get("target") == target
+        ]
+        if not matches:
+            return chain, current, entry
+        if len(matches) != 1:
+            raise ValueError("stage predecessor has conflicting child owners")
+        record = matches[0]
+        lineage = record.get("stage_predecessor") or {}
+        child = policy.validate_frontier(record["finite_frontier"])
+        frozen = {
+            key: current[key] for key in ("targets", "targets_sha256", "owner", "bindings_sha256")
+        }
+        if not (
+            record.get("schema") == "closer-stage-successor/v1"
+            and child["targets"] == [target]
+            and target in original["targets"]
+            and child["owner"] == original["owner"]
+            and lineage.get("predecessor_frontier_sha256") == _digest(current)
+            and lineage.get("predecessor_row_sha256") == _digest(row)
+            and lineage.get("frozen_cohort") == frozen
+        ):
+            raise ValueError("stage lineage original cohort or source identity changed")
+        keys = (
+            (
+                "kind",
+                "predecessor_frontier_id",
+                "check_run_id",
+                "pending_head",
+                "target",
+                "original_wait",
+                "fresh_binding",
+            )
+            if lineage.get("kind") == "ci_no_effect_wait"
+            else (
+                "predecessor_frontier_id",
+                "operation_id",
+                "progress_key",
+                "target",
+                "fresh_binding",
+            )
+        )
+        causal = {key: lineage[key] for key in keys}
+        if lineage.get("kind") != "ci_no_effect_wait" and "accepted_request" in lineage:
+            causal["accepted_request"] = lineage["accepted_request"]
+            causal["accepted_terminal"] = lineage["accepted_terminal"]
+        expected = policy.make_frontier(
+            [target],
+            owner=original["owner"],
+            frontier_id="stage-successor-" + _digest(causal),
+            bindings={target: causal["fresh_binding"]},
+        )
+        if child != expected or child["frontier_id"] in seen:
+            raise ValueError("stage child descriptor changed or ancestry cycles")
+        chain.append({"record": record, "parent": current, "item": row})
+        seen.add(child["frontier_id"])
+        current = child
+    raise ValueError("stage ancestry exceeds bounded traversal")
+
+
+def active_leaf(state_path, action_path, root, target):
+    """Select only exact already-published descendants after real source readback."""
+    import closer_ci_followup as ci
+
+    state = pipeline._load(state_path)
+    chain, current, entry = linked_chain(state, root, target)
+    for hop in chain:
+        lineage, old, row = hop["record"]["stage_predecessor"], hop["parent"], hop["item"]
+        if lineage.get("kind") == "ci_no_effect_wait":
+            wait = ci.original_wait_proof(state_path, action_path, target, old, row)
+            terminal = lineage.get("ci_terminal") or {}
+            check = terminal.get("terminal_check") or {}
+            original = ci.source_snapshot(row)
+            if not (
+                terminal.get("schema") == ci.SCHEMA
+                and terminal.get("original_wait") == wait
+                and check.get("id") == wait["check_run_id"]
+                and check.get("head_sha") == wait["head"]
+                and check.get("status") == "completed"
+                and check.get("conclusion") == "success"
+                and terminal.get("source_requirements")
+                == ci.verifier_followup.source_requirements(original)
+            ):
+                raise ValueError("stage CI ancestry lacks exact retained no-effect terminal proof")
+            continue
+        action = row["results"]["act"]
+        checked = queue.validate_stop(
+            action_path, [target], receipt=action["queue_receipt"], frontier_id=old["frontier_id"]
+        )
+        if not (checked.get("valid") is True and checked.get("stop_valid") is True):
+            raise ValueError("stage ancestry queue receipt is not authoritative")
+        document = queue._read_state(action_path)
+        accepted = lineage.get("accepted_request")
+        if accepted is not None:
+            actual = queue.accepted_verifier_wait_proof(
+                action_path,
+                target,
+                frontier=old,
+                receipt=action["queue_receipt"],
+                evidence=action.get("pending_evidence"),
+            )
+            if actual != accepted or (lineage.get("accepted_terminal") or {}).get(
+                "request_basis"
+            ) != accepted.get("event_id"):
+                raise ValueError("stage accepted-request ancestry changed")
+        namespace = accepted["operation_frontier"] if accepted is not None else old["frontier_id"]
+        bucket = document["frontiers"][namespace]
+        op_policy = policy.validate_frontier(bucket["policy"])
+        item = bucket["items"][target]
+        operations = [item.get("operation"), *(item.get("operation_history") or [])]
+        matched = [
+            op
+            for op in operations
+            if isinstance(op, Mapping) and op.get("id") == lineage["operation_id"]
+        ]
+        if len(matched) != 1:
+            raise ValueError("stage original operation identity changed")
+        operation = matched[0]
+        binding, result = operation.get("binding"), operation.get("result") or {}
+        if not (
+            operation.get("status") == "completed"
+            and operation.get("action") in {"merge", "post_merge_verify"}
+            and isinstance(binding, Mapping)
+            and operation.get("finite_frontier") == op_policy
+            and operation.get("revision") == op_policy["bindings"][target]["revision"]
+            and policy.action_identity(target, operation["revision"], operation["action"], binding)
+            == op_policy["bindings"][target]["action_id"]
+            and all(
+                record.get(key) is None or record.get(key) is False
+                for record in (operation, result)
+                for key in ("outcome_uncertain", "no_effect", "advisory_only")
+            )
+        ):
+            raise ValueError("stage ancestry effect is not conclusively completed")
+    return {
+        "finite_frontier": current,
+        "entry": entry,
+        "chain": chain,
+        "pending_child": chain[-1]["record"] if chain and entry is None else None,
+    }
+
+
+def create_ci_successor(
+    state_path,
+    action_state_path,
+    *,
+    predecessor,
+    target,
+    terminal_read,
+    canonical_path,
+    canonical_row,
+    admission,
+    now=time.time,
+):
+    """Publish one CI no-effect successor in the existing stage journal only."""
+    import closer_ci_followup as ci
+    import closer_evidence
+    import closer_finite_reentry as reentry
+
+    path, action_path, assignment = (
+        reentry._physical(state_path),
+        reentry._physical(action_state_path),
+        reentry._physical(canonical_path),
+    )
+    old = policy.validate_frontier(predecessor)
+    if target not in old["targets"] or path.name != "state.json":
+        raise ValueError("CI successor cannot expand its original cohort")
+    observation = terminal_read.get("observation")
+    if terminal_read.get("status") != "ready" or not isinstance(observation, Mapping):
+        raise ValueError("CI successor requires actual terminal read")
+    stamp = observation.get("observed_at")
+    if type(stamp) not in {int, float} or not math.isfinite(stamp) or not 0 <= now() - stamp <= 120:
+        raise ValueError("CI successor observation is stale")
+    fresh = policy.make_frontier_from_observations(
+        {target: observation}, owner=old["owner"], frontier_id="candidate"
+    )
+    _admitted(admission)
+    canonical_sha = _canonical(assignment, target, canonical_row)
+    with path.with_name(path.name + ".runlock").open("a+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("CI predecessor pipeline owner is still live") from exc
+        with pipeline._locked(path, timeout_seconds=1):
+            state = pipeline._load(path)
+            entry = state["frontiers"].get(old["frontier_id"])
+            if not isinstance(entry, Mapping) or entry.get("finite_frontier") != old:
+                raise ValueError("CI immutable predecessor changed")
+            row = entry["items"][target]
+            ci.pending_evidence(row)
+            with queue._ledger_lock(action_path, cutoff=now() + 1, now=now) as locked:
+                if not locked:
+                    raise ValueError("CI original queue remains owned")
+                wait = ci.original_wait_proof(path, action_path, target, old, row)
+                proof = ci.terminal_proof(
+                    action_path,
+                    target,
+                    old,
+                    row,
+                    observation,
+                    terminal_read["proof"]["terminal_check"],
+                    now=now(),
+                    wait_proof=wait,
+                )
+                if proof != terminal_read.get("proof"):
+                    raise ValueError("CI terminal read changed before publication")
+                links = [
+                    value
+                    for value in state.setdefault("stage_successors", {}).values()
+                    if isinstance(value, Mapping)
+                    and (value.get("stage_predecessor") or {}).get("predecessor_frontier_id")
+                    == old["frontier_id"]
+                    and (value.get("stage_predecessor") or {}).get("target") == target
+                ]
+                if len(links) > 1:
+                    raise ValueError("CI predecessor has multiple linked successors")
+                existing = links[0] if links else None
+                causal = {
+                    "kind": "ci_no_effect_wait",
+                    "predecessor_frontier_id": old["frontier_id"],
+                    "check_run_id": wait["check_run_id"],
+                    "pending_head": wait["head"],
+                    "target": target,
+                    "original_wait": wait,
+                    "fresh_binding": fresh["bindings"][target],
+                }
+                child = policy.make_frontier(
+                    [target],
+                    owner=old["owner"],
+                    frontier_id="stage-successor-" + _digest(causal),
+                    bindings={target: causal["fresh_binding"]},
+                )
+                if existing is not None:
+                    lineage = existing["stage_predecessor"]
+                    if any(
+                        lineage.get(key) != value
+                        for key, value in causal.items()
+                        if key != "fresh_binding"
+                    ):
+                        raise ValueError("CI existing successor identity conflicts")
+                    recorded = {key: lineage[key] for key in causal}
+                    expected = policy.make_frontier(
+                        [target],
+                        owner=old["owner"],
+                        frontier_id="stage-successor-" + _digest(recorded),
+                        bindings={target: recorded["fresh_binding"]},
+                    )
+                    if existing.get("finite_frontier") != expected:
+                        raise ValueError("CI recorded successor descriptor changed")
+                    child = expected
+                _admitted(admission)
+                if _canonical(assignment, target, canonical_row) != canonical_sha:
+                    raise ValueError("CI canonical assignment changed before publication")
+                if existing is None:
+                    raw = action_path.read_bytes()
+                    if hashlib.sha256(raw).hexdigest() != wait["queue_sha256"]:
+                        raise ValueError("CI no-effect queue changed before retention")
+                    archive = closer_evidence._retain_bytes(
+                        path.parent.parent.parent / "stage-successor-proofs", raw, "json"
+                    )
+                    if child["frontier_id"] in state["frontiers"]:
+                        raise ValueError("CI unlinked runnable child already exists")
+                    lineage = {
+                        **causal,
+                        "ci_terminal": proof,
+                        "original_queue": {key: archive[key] for key in ("path", "sha256")},
+                        "predecessor_row_sha256": pipeline._digest(row),
+                        "predecessor_frontier_sha256": pipeline._digest(old),
+                        "frozen_cohort": {
+                            key: old[key]
+                            for key in ("targets", "targets_sha256", "owner", "bindings_sha256")
+                        },
+                    }
+                    state["stage_successors"][child["frontier_id"]] = {
+                        "schema": "closer-stage-successor/v1",
+                        "finite_frontier": child,
+                        "created_at": now(),
+                        "stage_predecessor": lineage,
+                    }
+                    pipeline._save(path, state)
+                return {
+                    "finite_frontier": child,
+                    "execution_targets": [target],
+                    "frontier_target": target,
+                    "predecessor": copy.deepcopy(
+                        existing["stage_predecessor"] if existing is not None else lineage
+                    ),
+                    "reused": existing is not None,
+                    "acceptance_authority": False,
+                    "fresh_binding_drift": child["bindings"][target] != fresh["bindings"][target],
+                }

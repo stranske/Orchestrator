@@ -1,0 +1,50 @@
+{
+  "actual": {
+    "observed_branches": {
+      "denominator": 1,
+      "deterministic_zero_reasoning": 1,
+      "excluded_waits": 2,
+      "with_retained_model_runs": 0
+    },
+    "retained_authenticated_receipts": 3
+  },
+  "authority": false,
+  "base": "234d097bae302fe41c7c1e302d6871c8cf43a77e",
+  "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -xq tests/test_closer_hold_descendant_boundary.py -k metrics_count",
+  "expected": {
+    "independent_outcomes.false_acceptance_rate": null,
+    "model_runs.count": 0,
+    "observed_branches": {
+      "denominator": 2,
+      "deterministic_zero_reasoning": 2,
+      "excluded_waits": 1,
+      "with_retained_model_runs": 0
+    }
+  },
+  "fixture_contract": "Actual signed native admission/handoff/watermark/finalized bundle/known worker result; actual public CI root wait -> guarded merge -> accepted verification POST; synthetic external GitHub/guard; no provider calls. captured(world) calls real holds.capture and load_manifest. Test reads real holds.validated_receipts (root+2children), then pure summarize_efficiency.",
+  "fixture_dependencies": [
+    "test_closer_native_descendants.native_descendant_world",
+    "test_closer_native_capacity.capacity_host",
+    "test_closer_native_observer.host",
+    "test_closer_ci_followup.public_ci_world"
+  ],
+  "fixture_wrapper": "def captured(world):\n    _w, cfg, _ref, obj, *_ = world\n    doc = holds.capture(obj)\n    rows = list(doc[\"hold_followups\"].values())\n    assert len(rows) == 1 and rows[0][\"source\"].get(\"descendant_coverage\")\n    manifest = campaign.load_manifest(cfg[\"runtime_manifest\"])\n    return obj, doc, rows[0], manifest\n\n",
+  "patch": {
+    "path": "/tmp/closer-descendant-metrics-regression.patch",
+    "sha256": "3ece56f1f09d807c9ea91dfd47af3c37fd54c498ad6da5e958d32ab788fc5dab"
+  },
+  "reason": "Root CI wait is no-effect and excluded. Child merge and child actually completed POST each represent a Closer branch. New typed accepted-result pending state must not hide completed POST; count only actual exact completed-request receipt/proof/events, never arbitrary pending metadata. Downstream verifier work/cost stays outside observed Closer model claims.",
+  "schema": "closer-descendant-metrics-regression/v1",
+  "source_sha256": {
+    "src/closer_hold_followup.py": "ececc4fc8c4739bd7e962c06e168435b3da02ca5695df9f54dc9a7c10ff03495",
+    "src/closer_native_descendants.py": "a32b1ad264dc15a73b214e39c99211375d02f603e7fab08bad6f3b58e9049782",
+    "src/closer_stage_feedback.py": "b36fa9b7dd5ee8add8fdbabf74b9ddd69ddde250f66827ca5d1fa63274e764bc",
+    "tests/test_closer_ci_followup.py": "71991058c97dfa8b71b046cff21984961cb6268a1fd74fdda90865909d872f20",
+    "tests/test_closer_hold_descendant_boundary.py": "03a96ff60a558c1b946538f7971a96141f4eaac22d22bcaa48c832da0db3cf44",
+    "tests/test_closer_native_ci_terminal_lifecycle.py": "7ff05cab933c35c96c5a8501c86e022b2b5203f6707c95c8620932e7bdf3359b",
+    "tests/test_closer_native_descendants.py": "1bf0bff7fd10228be5f788dfee37b92c03cadb290110221a87b2c2a12cf88bcb"
+  },
+  "test": "tests/test_closer_hold_descendant_boundary.py::test_actual_authenticated_descendant_metrics_count_completed_request_branch",
+  "test_source": "\ndef test_actual_authenticated_descendant_metrics_count_completed_request_branch(\n    native_descendant_world,\n):\n    import time\n\n    from closer_stage_feedback import summarize_efficiency\n\n    obj, doc, _row, manifest = captured(native_descendant_world)\n    receipts = holds.validated_receipts(obj, doc, manifest)\n    assert len(receipts) == 3\n    result = summarize_efficiency(receipts, holds=doc[\"hold_followups\"].values(), now=time.time())\n    assert result[\"observed_branches\"][\"denominator\"] == 2, result[\"observed_branches\"]\n    assert result[\"observed_branches\"][\"deterministic_zero_reasoning\"] == 2\n    assert result[\"model_runs\"][\"count\"] == 0\n    assert result[\"independent_outcomes\"][\"false_acceptance_rate\"] is None\n",
+  "worktree": "/private/tmp/orchestrator-closer-ci-holds-20261025"
+}

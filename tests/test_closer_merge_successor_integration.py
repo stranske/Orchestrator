@@ -675,13 +675,17 @@ def test_public_cli_continues_accepted_request_after_result_without_replaying_po
         == original_queue_bucket
     )
     assert all(path.read_bytes() == original for path, original in w.originals.items())
+    child_id = following["lineage"]["finite_frontier"]["frontier_id"]
+    before_restart = pipeline._load(shard)
     dispatcher.main(w.argv)
     restarted = json.loads(capsys.readouterr().out)
     assert len(w.merges) == len(w.verifies) == 1
-    assert (
-        restarted["merge_verification_successors"][target]["lineage"]["finite_frontier"]
-        == following["lineage"]["finite_frontier"]
-    )
+    after_restart = pipeline._load(shard)
+    assert after_restart["stage_successors"] == before_restart["stage_successors"]
+    assert after_restart["frontiers"][child_id] == before_restart["frontiers"][child_id]
+    # A held active descendant can stop ordinary root admission before the
+    # continuation callback. Its exact existing child still owns the work.
+    assert restarted["validation"]["global_stop_valid"] is False
 
 
 @pytest.mark.parametrize("guard_mode", ["blocked", "uncertain"])

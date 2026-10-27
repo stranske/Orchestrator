@@ -1,0 +1,102 @@
+{
+  "evidence_kind": "synthetic_external_boundaries_actual_authenticated_local_producers",
+  "provider_calls": 0,
+  "deployment": false,
+  "summary": {
+    "schema": "closer-efficiency-summary/v1",
+    "freshness": "historical_freshness_unverified",
+    "observed_branches": {
+      "denominator": 2,
+      "deterministic_zero_reasoning": 2,
+      "with_retained_model_runs": 0,
+      "excluded_waits": 1
+    },
+    "model_runs": {
+      "ids": [],
+      "count": 0,
+      "bindings": {},
+      "stage_event_coverage": null
+    },
+    "observed_latency_seconds": {
+      "total_or_null": null,
+      "measured_runs": 0,
+      "total_runs": 0,
+      "coverage": null,
+      "status": "unknown"
+    },
+    "observed_cost_usd": {
+      "total_or_null": null,
+      "measured_runs": 0,
+      "total_runs": 0,
+      "coverage": null,
+      "status": "unknown"
+    },
+    "branch_stage_latency_seconds": {
+      "deterministic_merge": {
+        "total_or_null": 0.15220141410827637,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_post_merge_verify": {
+        "total_or_null": 0.1652388572692871,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      },
+      "deterministic_wait": {
+        "total_or_null": 0.1281437873840332,
+        "measured_runs": 1,
+        "total_runs": 1,
+        "coverage": 1.0,
+        "status": "complete"
+      }
+    },
+    "independent_outcomes": {
+      "measured_runs": 0,
+      "false_acceptance_measured_runs": 0,
+      "false_acceptance_count": null,
+      "false_acceptance_rate": null,
+      "rework_measured_runs": 0,
+      "rework_count": null,
+      "rework_rate": null
+    },
+    "holds": {
+      "active": 1,
+      "due": 1,
+      "escalated": 0,
+      "unowned": 0,
+      "aged": 0,
+      "oldest_age_seconds": 0.9678161144256592
+    },
+    "rejected": {},
+    "counterfactual_savings_usd": null,
+    "authority": false
+  },
+  "negative_join_cases": 27,
+  "producer_accounting": {
+    "action": "collect_evidence",
+    "eligible": false,
+    "next_trigger": "new authenticated verifier attempt or request reconciliation",
+    "observation_freshness": "fresh",
+    "operation_id": "1ee11ecd724001a869fca271a1f49965",
+    "operation_status": "completed",
+    "reason": "collect terminal or unattributed verifier evidence; do not rerun",
+    "requires_coordinator": false,
+    "revision": "verify-requested",
+    "status": "deferred",
+    "target": "owner/repo#12"
+  },
+  "supported_join_shapes": [
+    "original eligible pass_limit progress",
+    "ineligible exact accepted-request reason",
+    "ineligible exact collect-terminal do-not-rerun reason"
+  ],
+  "source_hashes": {
+    "src/closer_stage_feedback.py": "20ee23de70a0d207dddeac727bfd31ff6ec3e517b38ac1142fb8c46ff4284b6f",
+    "/private/tmp/orchestrator-category46-result-wait/tests/test_closer_acceptance_metrics_composition.py": "ec02e6140da10356caecc88b230edf61f3c8cb197cf575478dc9e7cd86e7c54c"
+  },
+  "scope": "CI wait excluded; completed merge and POST counted; verifier outcome unmeasured"
+}
