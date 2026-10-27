@@ -253,15 +253,6 @@ def _completed_worker(world):
 def test_completed_demand_can_admit_next_cohort(completed_native_world, monkeypatch):
     world = completed_native_world
     obj, result = _completed_worker(world)
-    import shutil
-
-    retained = Path("/tmp/completed-cohort-actual-evidence")
-    retained.mkdir(exist_ok=True)
-    shutil.copy2(
-        campaign.result_path(obj.path, result["worker_id"]), retained / "worker-result.json"
-    )
-    completed = json.loads(result["detail"])["completed_round"]
-    shutil.copy2(completed["receipt_path"], retained / "round-receipt.json")
     assert json.loads(result["detail"]).get("cohort_completion"), json.loads(result["detail"]).get(
         "cohort_completion_unavailable"
     )

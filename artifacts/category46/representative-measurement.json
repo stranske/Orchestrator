@@ -135,9 +135,9 @@
     "authority": false
   },
   "measurement_plumbing": {
-    "wall_seconds": 0.0006108329980634153,
-    "cpu_seconds": 0.0006099999999999994,
-    "process_peak_rss_platform_units": 18087936,
+    "wall_seconds": 0.0005518329853657633,
+    "cpu_seconds": 0.0005509999999999959,
+    "process_peak_rss_platform_units": 21577728,
     "scope": "local summary computation only; RSS is process peak, not provider cost"
   },
   "baseline": {
@@ -149,7 +149,7 @@
   "remaining_measurements": {
     "repeat_classification": "needs evidence-identity/semantic dispatch ledger join",
     "missed_wake": "needs scheduled-due versus actual consumer invocation receipts; due is not missed",
-    "escalation_acknowledgment": "unmet: no durable recipient delivery/ack-window consumer",
+    "escalation_acknowledgment": "requires installed delivery/ack-window receipts joined to the exact hold",
     "provider_quota_pressure": "requires measured provider/account records"
   },
   "authority": false

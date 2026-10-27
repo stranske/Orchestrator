@@ -647,6 +647,12 @@ def preserve_assignment(manifest_path: str, controller_root: str, assignment: di
     rows = doc.get("hold_escalations", {})
     if not isinstance(rows, dict) or any(not isinstance(row, dict) for row in rows.values()):
         raise ValueError("malformed escalation journal")
+    for key, row in rows.items():
+        if not isinstance(row.get("request"), dict) or row.get("status") not in {
+            "confirmed_not_started", "outcome_unknown", "delivered", "acknowledged", "ack_overdue"
+        }:
+            raise ValueError("malformed escalation journal")
+        _row(key, row)
     if not any(row.get("status") in {"delivered", "outcome_unknown"} for row in rows.values()):
         return copy.deepcopy(assignment)
     policy = route(doc, manifest, manifest_path)

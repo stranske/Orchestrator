@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -34,6 +35,18 @@ def _wait_actual_exit(pid: int, *, seconds: float = 15) -> None:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 return
+            except PermissionError:
+                pass
+            try:
+                state = subprocess.run(
+                    ["ps", "-o", "stat=", "-p", str(pid)],
+                    capture_output=True, text=True, check=False, timeout=1,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            else:
+                if state.returncode == 0 and state.stdout.strip().startswith("Z"):
+                    return
         else:
             if reaped == pid:
                 return

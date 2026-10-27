@@ -70,7 +70,7 @@ proof, while source requirements, checks, holds and unresolved review facts do.
 
 A pending CI callback can advance only after the exact retained check run reports
 success on the original head, all fresh checks/readiness pass, and the original
-full authored snapshot still matches. The initial queue proof is checked under
+source requirements still match. The initial queue proof is checked under
 its ledger lock and must show no operation, effect history, or uncertainty. It is
 retained with immutable queue bytes and the causal successor link. Missing proof
 never establishes no-start. Failed checks retain their exact check/test reference
