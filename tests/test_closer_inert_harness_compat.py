@@ -270,7 +270,13 @@ def test_actual_inert_callback_under_ci_account_home(tmp_path, monkeypatch, layo
     callbacks, context = native_callbacks_for(delivery, monkeypatch)
     context["deadline"] = time.time() + 60
     low = callbacks["interpret"](TARGET, context)
-    assert low["integration_status"] == "accepted"
+    # native_delivery deliberately declares one UNKNOWN named criterion for
+    # Strong dispatch tests. Correct private-home custody must not turn that
+    # unresolved test gold into acceptance.
+    assert low["integration_status"] == "exception"
+    assert low["proposal"]["semantic_followup"]["status"] == "candidate"
+    assert low["proposal"]["semantic_assessment"]["obligations"][1]["status"] == "unknown"
+    assert low["proposal"]["semantic_readiness"] == "knowledge_incomplete"
     assert low["actual"]["run_id"] == delivery.caller.results[0]["run_id"]
     assert len(delivery.caller.results) == 1
     guard = root / "private-home/.codex/automations/model-allocation/assess.py"

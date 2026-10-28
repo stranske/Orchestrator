@@ -1,9 +1,9 @@
 """Portable synthetic data helpers for semantic mechanism tests.
 
 Only physical_product invokes fixed local Git against its new test directory.
-No native provider/account call or source validator is replaced. The helper
-functions retain their reviewed executable AST; unused external test fixtures
-are deliberately not imported.
+No native provider/account call or source validator is replaced. The original fixture algorithms retain reviewed AST after only the explicit
+checkout/flat input-root substitution; unused external test fixtures are
+deliberately not imported.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 
 from closer_inert_dispatcher_support import REAL_RUN
@@ -27,6 +28,16 @@ def blob(raw):
         "size": len(raw),
         "sha": hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest(),
     }
+
+
+def product_source_root():
+    """Locate inert files already shipped beside checkout/flat test modules.
+
+    SOURCE_ROOT is not a production reader; it is an unused checkout constant.
+    These fixture inputs belong to the existing exec-mirror copy contract.
+    """
+    modules = Path(source.__file__).resolve(strict=True).parent
+    return modules.parent if modules.name == "src" else modules
 
 
 def physical_product(root):
@@ -58,7 +69,7 @@ def physical_product(root):
     for name in (*catalog.SOURCE_FILES, source.WORKFLOW_PATH):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((source.SOURCE_ROOT / name).read_bytes())
+        path.write_bytes((product_source_root() / name).read_bytes())
     git("add", "--", *catalog.SOURCE_FILES, source.WORKFLOW_PATH)
     git(
         "-c",
