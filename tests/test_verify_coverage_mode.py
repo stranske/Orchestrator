@@ -285,6 +285,7 @@ def _instrumented(root):
     )
 
 
+@pytest.mark.needs_coverage_module
 def test_the_combined_run_also_writes_the_machine_readable_report(tmp_path):
     """The whole point of the change: a ranker cannot read a table meant for a person.
 
@@ -303,6 +304,7 @@ def test_the_combined_run_also_writes_the_machine_readable_report(tmp_path):
     assert "run.py" in payload["files"], sorted(payload["files"])
 
 
+@pytest.mark.needs_coverage_module
 def test_a_json_that_could_not_be_written_is_named_and_not_silent(tmp_path, monkeypatch):
     """An absent report that reads as 'nothing uncovered' is this repo's founding defect.
 
