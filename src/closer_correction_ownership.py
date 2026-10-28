@@ -223,86 +223,166 @@ def _related(rows, repository):
     return related
 
 
-def _owned_delivery_neighbor(reads, repo, candidate, owner, permission, neighbors):
-    """Authenticate one existing delivery PR, never ignore arbitrary PR neighbors."""
+def _owned_delivery_neighbor(reads, repo, candidate, owner, permission, neighbors, source):
+    """Join one delivery and at most one owned, completely nonclosing reference."""
     from types import SimpleNamespace
 
     import closer_coding_publication as publication
 
-    _need(len(neighbors) == 1, "additional related PR unresolved")
-    number, (node_id, is_pr) = next(iter(neighbors.items()))
-    _need(is_pr, "additional related PR unresolved")
+    _need(1 <= len(neighbors) <= 2, "additional related PR unresolved")
     login, name = repo.split("/")
-    # Both complete relation directions are native, not inferred from body text.
-    query = (
-        "query {repository(owner:"
-        + json.dumps(login)
-        + ",name:"
-        + json.dumps(name)
-        + "){databaseId nameWithOwner issue(number:"
-        + str(candidate["number"])
-        + "){id number closedByPullRequestsReferences(first:2){nodes{id number "
-        + "repository{nameWithOwner}} pageInfo{hasNextPage}}} pullRequest(number:"
-        + number
-        + "){id number state isDraft merged headRefOid baseRefOid headRefName "
-        + "headRepository{nameWithOwner} body closingIssuesReferences(first:2){nodes{id "
-        + "number repository{nameWithOwner}} pageInfo{hasNextPage}}}}}"
-    )
-    fields = {"query": query}
-    document = reads.get("graphql", fields=fields)
-    repository = document["data"]["repository"]
-    issue, pr = repository["issue"], repository["pullRequest"]
-    closes, deliveries = pr["closingIssuesReferences"], issue["closedByPullRequestsReferences"]
-    _need(
-        repository["nameWithOwner"].lower() == repo
-        and issue["id"] == candidate["node_id"]
-        and issue["number"] == candidate["number"]
-        and pr["id"] == node_id
-        and str(pr["number"]) == number
-        and closes["pageInfo"]["hasNextPage"] is False
-        and deliveries["pageInfo"]["hasNextPage"] is False
-        and closes["nodes"]
-        == [
-            {
-                "id": candidate["node_id"],
-                "number": candidate["number"],
-                "repository": {"nameWithOwner": repository["nameWithOwner"]},
-            }
-        ]
-        and deliveries["nodes"]
-        == [
-            {
-                "id": node_id,
-                "number": int(number),
-                "repository": {"nameWithOwner": repository["nameWithOwner"]},
-            }
-        ],
-        "unique reciprocal owned delivery unavailable",
-    )
-    pull_path = f"repos/{repo}/pulls/{number}"
-    pull = reads.get(pull_path)
-    snapshot = {
-        "pr_target": repo + "#" + number,
-        "head": pr["headRefOid"],
-        "base": pr["baseRefOid"],
-        "head_branch": pr["headRefName"],
-        "head_repository": pr["headRepository"]["nameWithOwner"],
-        "body": pr["body"],
-        "state": pr["state"],
-        "draft": pr["isDraft"],
-    }
-    _need(pr["merged"] is False, "owned delivery already merged")
-    config = SimpleNamespace(
-        repository=repo,
-        repository_id=repository["databaseId"],
-        writer_login=owner,
-        writer_id=permission["user"]["id"],
-    )
-    publication._owned_pr_projection(pull, snapshot, candidate["node_id"], config)
-    _need(
-        reads.get(pull_path) == pull and reads.get("graphql", fields=fields) == document,
-        "owned delivery changed during observation",
-    )
+    delivery_count = 0
+    for number, (node_id, is_pr) in neighbors.items():
+        _need(is_pr, "additional related PR unresolved")
+        # Both complete relation directions are native, not inferred from body text.
+        query = (
+            "query {repository(owner:"
+            + json.dumps(login)
+            + ",name:"
+            + json.dumps(name)
+            + "){databaseId nameWithOwner issue(number:"
+            + str(candidate["number"])
+            + "){id number closedByPullRequestsReferences(first:2){nodes{id number "
+            + "repository{nameWithOwner}} pageInfo{hasNextPage}}} pullRequest(number:"
+            + number
+            + "){id number state isDraft merged headRefOid baseRefOid headRefName "
+            + "headRepository{nameWithOwner} body closingIssuesReferences(first:2){nodes{id "
+            + "number repository{nameWithOwner}} pageInfo{hasNextPage}}}}}"
+        )
+        if len(neighbors) == 2:
+            original = (
+                " original:issue(number:"
+                + str(source["number"])
+                + "){id number closedByPullRequestsReferences(first:2){nodes{id number "
+                + "repository{nameWithOwner}} pageInfo{hasNextPage}}}"
+            )
+            query = query[:-2] + original + query[-2:]
+        fields = {"query": query}
+        document = reads.get("graphql", fields=fields)
+        repository = document["data"]["repository"]
+        issue, pr = repository["issue"], repository["pullRequest"]
+        closes, deliveries = pr["closingIssuesReferences"], issue["closedByPullRequestsReferences"]
+        if len(neighbors) == 2:
+            original = repository.get("original")
+            _need(isinstance(original, dict), "original source closing relation unresolved")
+            _need(
+                original["id"] == source["node_id"]
+                and str(original["number"]) == source["number"]
+                and original["closedByPullRequestsReferences"]["pageInfo"]["hasNextPage"] is False
+                and original["closedByPullRequestsReferences"]["nodes"] == [],
+                "original source closing relation unresolved",
+            )
+        _need(
+            repository["nameWithOwner"].lower() == repo
+            and issue["id"] == candidate["node_id"]
+            and issue["number"] == candidate["number"]
+            and pr["id"] == node_id
+            and str(pr["number"]) == number
+            and closes["pageInfo"]["hasNextPage"] is False
+            and deliveries["pageInfo"]["hasNextPage"] is False
+            and len(deliveries["nodes"]) == 1
+            and any(
+                deliveries["nodes"]
+                == [
+                    {
+                        "id": known_node,
+                        "number": int(known_number),
+                        "repository": {"nameWithOwner": repository["nameWithOwner"]},
+                    }
+                ]
+                for known_number, (known_node, _) in neighbors.items()
+            ),
+            "unique reciprocal owned delivery unavailable",
+        )
+        pull_path = f"repos/{repo}/pulls/{number}"
+        pull = reads.get(pull_path)
+        snapshot = {
+            "pr_target": repo + "#" + number,
+            "head": pr["headRefOid"],
+            "base": pr["baseRefOid"],
+            "head_branch": pr["headRefName"],
+            "head_repository": pr["headRepository"]["nameWithOwner"],
+            "body": pr["body"],
+            "state": pr["state"],
+            "draft": pr["isDraft"],
+        }
+        config = SimpleNamespace(
+            repository=repo,
+            repository_id=repository["databaseId"],
+            writer_login=owner,
+            writer_id=permission["user"]["id"],
+        )
+        if deliveries["nodes"][0]["id"] == node_id:
+            _need(pr["merged"] is False, "owned delivery already merged")
+            _need(
+                closes["nodes"]
+                == [
+                    {
+                        "id": candidate["node_id"],
+                        "number": candidate["number"],
+                        "repository": {"nameWithOwner": repository["nameWithOwner"]},
+                    }
+                ],
+                "unique reciprocal owned delivery unavailable",
+            )
+            publication._owned_pr_projection(pull, snapshot, candidate["node_id"], config)
+            delivery_count += 1
+        else:
+            head, base, author = (
+                pull.get("head") or {},
+                pull.get("base") or {},
+                pull.get("user") or {},
+            )
+            _need(
+                closes["nodes"] == []
+                and pull.get("node_id") == node_id
+                and str(pull.get("number")) == number
+                and author.get("login") == owner
+                and author.get("id") == config.writer_id
+                and type(config.writer_id) is int
+                and config.writer_id > 0
+                and type(config.repository_id) is int
+                and config.repository_id > 0
+                and head.get("ref") not in {base.get("ref"), publication.ctl.BRANCH}
+                and isinstance(head.get("ref"), str)
+                and bool(head["ref"])
+                and (head.get("repo") or {}).get("id") == config.repository_id
+                and (base.get("repo") or {}).get("id") == config.repository_id
+                and (head.get("repo") or {}).get("full_name", "").lower() == repo
+                and (base.get("repo") or {}).get("full_name", "").lower() == repo
+                and head.get("sha") == pr["headRefOid"]
+                and base.get("sha") == pr["baseRefOid"]
+                and all(
+                    re.fullmatch(r"[a-f0-9]{40}", str(oid))
+                    for oid in (head.get("sha"), base.get("sha"))
+                )
+                and head.get("ref") == pr["headRefName"]
+                and pr["headRepository"]["nameWithOwner"].lower() == repo
+                and pull.get("body") == pr["body"]
+                and (
+                    (
+                        pull.get("state") == "open"
+                        and pr["state"] == "OPEN"
+                        and pull.get("merged") is False
+                        and pr["merged"] is False
+                    )
+                    or (
+                        pull.get("state") == "closed"
+                        and pr["state"] == "MERGED"
+                        and pull.get("merged") is True
+                        and pr["merged"] is True
+                    )
+                )
+                and pull.get("draft") is False
+                and pr["isDraft"] is False,
+                "informational PR native ownership or empty closing relation unresolved",
+            )
+        _need(
+            reads.get(pull_path) == pull and reads.get("graphql", fields=fields) == document,
+            "owned delivery changed during observation",
+        )
+
+    _need(delivery_count == 1, "unique reciprocal owned delivery unavailable")
 
 
 def collect_ownership(*, github, seed, deadline, now=None):
@@ -396,7 +476,9 @@ def collect_ownership(*, github, seed, deadline, now=None):
             "incumbent write ownership unknown",
         )
         if delivery_neighbors:
-            _owned_delivery_neighbor(reads, repo, candidate, owner, permission, delivery_neighbors)
+            _owned_delivery_neighbor(
+                reads, repo, candidate, owner, permission, delivery_neighbors, seed["source_issue"]
+            )
         incumbent = {
             "issue": identity,
             "owner": owner,
