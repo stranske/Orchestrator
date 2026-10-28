@@ -1914,6 +1914,8 @@ def private_git_environment_data(policy, original=None, *, held=None):
             held.extend(own)
             own = []
         return result
+    except OSError:
+        raise PublicationHeld("private Git environment unavailable") from None
     finally:
         _close_physical_controls(own)
 

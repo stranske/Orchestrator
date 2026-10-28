@@ -1,6 +1,7 @@
 """Actual local Git causal controls; no API/helper/account/provider operations."""
 
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -177,8 +178,17 @@ def test_actual_create_only_named_worktree_and_inspection_have_no_native_authori
         )
 
 
-@pytest.mark.parametrize("fault", ["branch", "head", "target"])
-def test_absent_owned_provision_never_resets_or_adopts_existing_branch(context, fault):
+@pytest.mark.parametrize(
+    "fault,error_type,reason",
+    [
+        ("branch", RuntimeError, "^owned local branch must be absent; never reset or adopt$"),
+        ("head", subprocess.CalledProcessError, None),
+        ("target", ValueError, "^exact lowercase owned PR target/head required$"),
+    ],
+)
+def test_absent_owned_provision_never_resets_or_adopts_existing_branch(
+    context, fault, error_type, reason
+):
     git, repo, env = context["git"], context["repo"], context["env"]
     target, head, branch = "acme/repo#989", context["head"], "codex/synthetic-existing-pr"
     if fault == "branch":
@@ -188,8 +198,12 @@ def test_absent_owned_provision_never_resets_or_adopts_existing_branch(context, 
     else:
         target = "acme/repo"  # A repository-only request cannot invent an owned PR.
     before = subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env)
-    with pytest.raises((RuntimeError, ValueError, subprocess.CalledProcessError)):
+    with pytest.raises(error_type, match=reason) as held:
         provision.provision_absent_owned_head(target, head, branch, git_policy=context["policy"])
+    assert held.value.__cause__ is None
+    if fault == "head":
+        assert held.value.returncode == 128
+        assert held.value.cmd == [str(git), "-C", str(repo), "cat-file", "-e", head + "^{commit}"]
     assert subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env) == before
     assert not provision.worktree_path("acme/repo#989", "closer").exists()
 
@@ -215,8 +229,22 @@ def test_unknown_config_and_hooks_remain_refused(context):
         pub.inspect_git_context_data(prepared["worktree"], "acme/repo", context["policy"])
 
 
-@pytest.mark.parametrize("fault", ["hook", "executable_config"])
-def test_create_only_provision_refuses_controls_before_checkout(context, fault):
+@pytest.mark.parametrize(
+    "fault,error_type,reason",
+    [
+        (
+            "hook",
+            RuntimeError,
+            "^active canonical hooks require source closure before local provisioning$",
+        ),
+        (
+            "executable_config",
+            pub.PublicationHeld,
+            "^unsupported config provenance or executable setting$",
+        ),
+    ],
+)
+def test_create_only_provision_refuses_controls_before_checkout(context, fault, error_type, reason):
     repo, git, env = context["repo"], context["git"], context["env"]
     if fault == "hook":
         hook = repo / ".git/hooks/post-checkout"
@@ -230,13 +258,14 @@ def test_create_only_provision_refuses_controls_before_checkout(context, fault):
         ).hexdigest()
         env = pub.private_git_environment_data(context["policy"])
     before = subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env)
-    with pytest.raises((pub.PublicationHeld, RuntimeError)):
+    with pytest.raises(error_type, match=reason) as held:
         provision.provision_absent_owned_head(
             "acme/repo#989",
             context["head"],
             "codex/synthetic-existing-pr",
             git_policy=context["policy"],
         )
+    assert held.value.__cause__ is None
     assert subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env) == before
     assert not provision.worktree_path("acme/repo#989", "closer").exists()
 
@@ -317,3 +346,31 @@ def test_runtime_git_reads_use_the_same_pinned_system_and_global_context(context
     for kind in ("system_paths", "global_paths"):
         raw = pub._fixed_git_read(observed, context["repo"], kind)
         assert raw.decode().strip() == str(context["config"])
+
+
+@pytest.mark.parametrize("fault", ["missing_home", "unreadable_config"])
+def test_private_filesystem_errors_are_controlled_holds_with_cleanup(context, monkeypatch, fault):
+    opened = set()
+    actual_open = os.open
+
+    def observe_open(path, flags, *args, **kwargs):
+        if fault == "unreadable_config" and Path(path) == context["config"]:
+            raise PermissionError("synthetic sensitive path must not appear in hold")
+        fd = actual_open(path, flags, *args, **kwargs)
+        opened.add(fd)
+        return fd
+
+    if fault == "missing_home":
+        context["private"].rename(context["private"].with_name("moved-private-git-home"))
+    monkeypatch.setattr(pub.os, "open", observe_open)
+    caller_held = []
+    with pytest.raises(pub.PublicationHeld, match="^private Git environment unavailable$") as held:
+        pub.private_git_environment_data(context["policy"], held=caller_held)
+    assert held.value.__cause__ is None and held.value.__suppress_context__ is True
+    assert str(context["private"]) not in str(held.value)
+    assert "synthetic sensitive" not in str(held.value)
+    assert caller_held == []
+    for fd in opened:
+        with pytest.raises(OSError) as closed:
+            os.fstat(fd)
+        assert closed.value.errno == errno.EBADF
