@@ -7331,11 +7331,9 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 packet_ref=packet_ref,
                 expected_watermarks=(cached or {}).get("watermarks") if cached else None,
             )
-        drift = (
-            closer_evidence.drift_sample(packet, recurring=True)
-            if closer_evidence.validate_packet(packet)
-            else []
-        )
+        # Current typed-v2 cannot run producer audits. Keep the due marker and
+        # complete immutable packet/ref; do not inline an unused advisory plan
+        # into the bounded callback result.
         semantic_cache_key = packet.get("semantic_cache_key")
         # The current typed-v2 contract cannot carry the optional producer audit.
         # Keep its due marker for honest deferral, but never invalidate an otherwise
@@ -7405,7 +7403,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "base": packet.get("base"),
                 "section_digests": packet.get("section_digests"),
                 "packet_ref": packet_ref,
-                "drift_sample": drift,
                 "sections": compact_sections,
                 "collection_result": collection_result,
             },

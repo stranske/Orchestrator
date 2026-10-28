@@ -105,12 +105,28 @@ class PostMergeBreakTests(unittest.TestCase):
     def recheck(self, *, delivered, hollow=False):
         spec, head = self.merged_spec(delivered=delivered, hollow=hollow)
         original = json.dumps(spec, sort_keys=True)
-        result = gate.recheck_merged(spec, self.checkout)
+        # The display tail is intentionally bounded; inspect the actual executed
+        # structured proof before truncation while preserving production grading.
+        completed_proofs = []
+        completed_result = runtime_ac._completed_result
+
+        def retain_completed(check, completed, duration):
+            if check.get("type") == "deliberate_break":
+                completed_proofs.append(completed.stdout)
+            return completed_result(check, completed, duration)
+
+        with patch.object(runtime_ac, "_completed_result", side_effect=retain_completed):
+            result = gate.recheck_merged(spec, self.checkout)
         self.assertEqual(json.dumps(spec, sort_keys=True), original)
         self.assertEqual(self.git("rev-parse", "HEAD"), head)
         run = json.loads(result["transcript"])
         self.assertEqual(len(run["check_results"]), 1)
-        proof = json.loads(run["check_results"][0]["stdout_tail"])
+        self.assertEqual(len(completed_proofs), 1)
+        proof = json.loads(completed_proofs[0])
+        self.assertEqual(
+            run["check_results"][0]["stdout_tail"], runtime_ac._tail(completed_proofs[0])
+        )
+        self.assertLessEqual(len(run["check_results"][0]["stdout_tail"]), runtime_ac.TAIL_CHARS)
         self.assertEqual(proof["base_ref"], "HEAD^")
         self.assertEqual(Path(proof["worktree"]).resolve(), self.checkout.resolve())
         self.assertEqual(shlex.split(proof["green"]["cmd"])[0], result["interpreter"])
