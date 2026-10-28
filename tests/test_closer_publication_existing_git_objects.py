@@ -412,7 +412,7 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(
     commit_raw = git("cat-file", "commit", head)
     # Other pytest/runtime descriptors may close during collection or GC. Only
     # this anchor's own descriptors establish its ownership and release contract.
-    unrelated = [os.open(os.devnull, os.O_RDONLY) for _ in range(4)]
+    unrelated, anchor = [], None
     original_close, original_open, original_dup = os.close, os.open, os.dup
     owner_thread = threading.get_ident()
     created = {}
@@ -438,12 +438,14 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(
 
     # Include transient native opens, so an unregistered descriptor leak also
     # fails. Observe only this test thread, never pytest/background ownership.
-    monkeypatch.setattr(os, "open", lambda *a, **k: capture(original_open, *a, **k))
-    monkeypatch.setattr(os, "dup", lambda *a, **k: capture(original_dup, *a, **k))
-    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit_raw, policy)
-    owned = _owned_object_descriptors(anchor)
-    leak_fd = owned[0][1]
     try:
+        for _ in range(4):
+            unrelated.append(original_open(os.devnull, os.O_RDONLY))
+        monkeypatch.setattr(os, "open", lambda *a, **k: capture(original_open, *a, **k))
+        monkeypatch.setattr(os, "dup", lambda *a, **k: capture(original_dup, *a, **k))
+        anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit_raw, policy)
+        owned = _owned_object_descriptors(anchor)
+        leak_fd = owned[0][1]
         assert len(anchor.identities) >= 1000
         assert 0 < len(owned) < 40
         assert live_created() == {fd for _, fd, _ in owned}
@@ -472,9 +474,12 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(
         _assert_owned_object_descriptors_closed(owned)
         assert live_created() == set()
     finally:
-        anchor.close()
-        for fd in unrelated:
-            original_close(fd)
+        try:
+            if anchor is not None:
+                anchor.close()
+        finally:
+            for fd in unrelated:
+                original_close(fd)
 
 
 def test_fixed_object_reader_uses_native_regular_stdin_without_copy(custody, tmp_path, monkeypatch):
