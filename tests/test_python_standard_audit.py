@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import plistlib
@@ -10,9 +12,479 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_closer_native_observer import host as host
 
+import closer_mechanisms
 import python_standard_audit as audit
 import switch_review
+
+
+def _observation_root(manifest):
+    root = Path(manifest["mechanism_contract"]["observation_root"])
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = root / "supervisor.key"
+    if not key.exists():
+        key.write_bytes(b"k" * 32)
+        key.chmod(0o600)
+    return root
+
+
+def _add_native_success(manifest, nonce="a" * 32):
+    root = _observation_root(manifest)
+    binding = {
+        "mechanism": closer_mechanisms.NATIVE,
+        "mechanism_contract_digest": closer_mechanisms.digest(manifest["mechanism_contract"]),
+        "policy_digest": closer_mechanisms.digest(manifest["policy"]),
+        **{key: manifest.get(key) for key in closer_mechanisms.PIN_KEYS},
+    }
+    record = {
+        "schema": "native-wrapper-lifecycle/v1",
+        "binding": binding,
+        "nonce": nonce,
+        "kind": "native-wrapper-invocation",
+        "passed": True,
+        "entry": {"started": "Thu Oct 22 20:15:06 2026"},
+    }
+    directory = root / nonce
+    directory.mkdir()
+    terminal = directory / "terminal.json"
+    terminal.write_text(
+        json.dumps(
+            {
+                "record": record,
+                "signature": hmac.new(
+                    (root / "supervisor.key").read_bytes(),
+                    json.dumps(record, sort_keys=True).encode(),
+                    hashlib.sha256,
+                ).hexdigest(),
+            }
+        )
+    )
+    return terminal
+
+
+@pytest.fixture
+def cursor_automations(tmp_path, monkeypatch):
+    monkeypatch.setattr(closer_mechanisms, "AUTOMATIONS", tmp_path)
+    return tmp_path
+
+
+def test_cursor_closer_native_entry_not_refused_line(tmp_path, cursor_automations):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    controller = tmp_path / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir()
+    controller.parent.mkdir()
+    closer.write_text('model = "gpt-6.1-sol"\n')
+    controller.write_text('model = "gpt-6-luna"\n')
+    manifest = tmp_path / "host-manifest.json"
+    manifest_payload = {
+        "policy": {
+            "toml_sha256": {
+                str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+            }
+        },
+        "mechanism_contract": {"observation_root": str(tmp_path / "native-observations")},
+    }
+    _observation_root(manifest_payload)
+    manifest.write_text(json.dumps(manifest_payload))
+    log = tmp_path / "cursor-closer.out"
+    log.write_text(
+        "\n".join(
+            [
+                "unrelated output",
+                '{"launcher": "refused"}',
+                '{"launcher": "refused"}',
+                '{"launcher": "refused"}',
+            ]
+        )
+        + "\n"
+    )
+
+    refused = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    assert switch_review.format_cursor_closer_native_entry(refused) == (
+        "Cursor closer native entry: refused 3/3 launcher results; "
+        "successes seen 0; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    original_closer = closer.read_bytes()
+    original_controller = controller.read_bytes()
+
+    # Synthetic launcher output is not retained authenticated success evidence and cannot drain.
+    refused_log = log.read_text()
+    clean_log = '{"launcher": "completed"}\n' * 3
+    log.write_text('unrelated output\nnull\n[]\n{"other": "refused"}\n' + clean_log)
+    clean = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    assert switch_review.format_cursor_closer_native_entry(clean) == (
+        "Cursor closer native entry: refused 0/3 launcher results; "
+        "successes seen 0; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    assert "drained" not in switch_review.format_cursor_closer_native_entry(clean)
+    log.write_text("unrelated output\n")
+    empty_line = switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    )
+    assert "unmeasured — no launcher results" in empty_line
+    assert "drained" not in empty_line
+    log.write_text(refused_log)
+
+    closer.write_text('model = "changed-closer"\n')
+    controller.write_text('model = "changed-controller"\n')
+    mismatched = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    mismatch_line = switch_review.format_cursor_closer_native_entry(mismatched)
+    assert "refused 3/3 launcher results" in mismatch_line
+    assert "hash mismatches 2" in mismatch_line
+    assert "imi-merge-verify-closer/automation.toml" in mismatch_line
+    assert "reviewed-repo-automation-controller/automation.toml" in mismatch_line
+    log.write_text(clean_log)
+    zero_refusals_with_drift = switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    )
+    assert "refused 0/3 launcher results" in zero_refusals_with_drift
+    assert "hash mismatches 2" in zero_refusals_with_drift
+    assert "drained" not in zero_refusals_with_drift
+    log.write_text(refused_log)
+    rendered = switch_review.format_report(
+        {
+            "review_days": 7,
+            "raise_count": 0,
+            "held_off": [],
+            "on_but_idle": [],
+            "unconditioned": [],
+            "mirror_drift": {"status": "ok"},
+            "python_standard": {},
+            "cursor_closer_native_entry": mismatched,
+        }
+    )
+    assert rendered.count("Cursor closer native entry:") == 1
+    assert rendered.index("Python standard:") < rendered.index("Cursor closer native entry:")
+    assert mismatch_line in rendered
+
+    # A real native entry is silent in this log. Its authenticated terminal receipt is the retained
+    # success boundary: these refusal lines are older, so the result is 0/1 rather than 0/0.
+    os.utime(log, ns=(1, 1))
+    _add_native_success(manifest_payload)
+    still_mismatched = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    mismatch_line = switch_review.format_cursor_closer_native_entry(still_mismatched)
+    assert "since last retained success: refused 0/1" in mismatch_line
+    assert "successes seen 1" in mismatch_line
+    assert "hash mismatches 2" in mismatch_line
+    assert "drained" not in mismatch_line
+
+    closer.write_bytes(original_closer)
+    controller.write_bytes(original_controller)
+    drained = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    drained_line = switch_review.format_cursor_closer_native_entry(drained)
+    assert drained_line == (
+        "Cursor closer native entry: drained: since last retained success: refused 0/1; "
+        "successes seen 1; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    assert "0/0" not in drained_line
+    assert "unmeasured" not in drained_line
+    assert "cannot read" not in drained_line
+
+    closer.unlink()
+    hash_unreadable = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    assert hash_unreadable["successes_seen"] == 1
+    assert hash_unreadable["success_error"] is None
+    assert hash_unreadable["hash_error"] == "FileNotFoundError"
+    hash_unreadable_line = switch_review.format_cursor_closer_native_entry(hash_unreadable)
+    assert "successes seen 1" in hash_unreadable_line
+    assert "drained" not in hash_unreadable_line
+    closer.write_bytes(original_closer)
+
+    log.unlink()
+    unreadable = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    unreadable_line = switch_review.format_cursor_closer_native_entry(unreadable)
+    assert unreadable_line == (
+        "Cursor closer native entry: cannot read launcher log (FileNotFoundError); "
+        "successes seen 1; "
+        "pinned-vs-current automation.toml hash mismatches 0 (none)"
+    )
+    assert "refused 0/" not in unreadable_line
+
+
+@pytest.mark.parametrize(
+    ("manifest_contents", "success_error"),
+    [(None, None), ("invalid json", None), ("[]", "TypeError"), ("{}", "KeyError")],
+)
+def test_cursor_closer_cannot_drain_without_readable_policy_pins(
+    tmp_path, manifest_contents, success_error
+):
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+    manifest = tmp_path / "host-manifest.json"
+    if manifest_contents is not None:
+        manifest.write_text(manifest_contents)
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+    assert "refused 0/1 launcher results" in line
+    assert "hashes cannot read" in line
+    assert "drained" not in line
+    assert snapshot["success_error"] == success_error
+
+
+@pytest.mark.parametrize(
+    ("mutation", "successes_seen", "success_error"),
+    [
+        ("tampered_signature", None, "MechanismError"),
+        ("tampered_started", None, "MechanismError"),
+        ("different_mechanism_contract_digest", 0, None),
+        ("foreign_receipt", 0, None),
+        ("failed_receipt", 0, None),
+        ("missing_started", None, "ValueError"),
+    ],
+)
+def test_cursor_closer_rejects_unauthenticated_or_foreign_success_receipts(
+    tmp_path, cursor_automations, mutation, successes_seen, success_error
+):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    controller = tmp_path / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir()
+    controller.parent.mkdir()
+    closer.write_text('status = "ACTIVE"\n')
+    controller.write_text('status = "ACTIVE"\n')
+    payload = {
+        "policy": {
+            "toml_sha256": {
+                str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+            }
+        },
+        "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(payload))
+    terminal = _add_native_success(payload)
+    signed = json.loads(terminal.read_text())
+    if mutation == "tampered_signature":
+        signed["signature"] = "0" * 64
+    elif mutation == "tampered_started":
+        signed["record"]["entry"]["started"] = "Fri Oct 23 20:15:06 2026"
+    elif mutation == "different_mechanism_contract_digest":
+        signed["record"]["binding"]["mechanism_contract_digest"] = "0" * 64
+    elif mutation == "foreign_receipt":
+        signed["record"]["binding"]["mechanism"] = closer_mechanisms.CLI
+    elif mutation == "failed_receipt":
+        signed["record"]["passed"] = False
+    else:
+        del signed["record"]["entry"]["started"]
+    if mutation not in {"tampered_signature", "tampered_started"}:
+        signed["signature"] = hmac.new(
+            (terminal.parents[1] / "supervisor.key").read_bytes(),
+            json.dumps(signed["record"], sort_keys=True).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+    terminal.write_text(json.dumps(signed))
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+
+    assert snapshot["successes_seen"] == successes_seen
+    assert snapshot["success_error"] == success_error
+    assert "drained" not in line
+
+
+def test_cursor_closer_unsafe_supervisor_key_is_unreadable_success(tmp_path, cursor_automations):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    controller = tmp_path / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir()
+    controller.parent.mkdir()
+    closer.write_text('status = "ACTIVE"\n')
+    controller.write_text('status = "ACTIVE"\n')
+    payload = {
+        "policy": {
+            "toml_sha256": {
+                str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+            }
+        },
+        "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(payload))
+    terminal = _add_native_success(payload)
+    (terminal.parents[1] / "supervisor.key").chmod(0o644)
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+
+    assert snapshot["successes_seen"] is None
+    assert snapshot["success_error"] == "MechanismError"
+    assert "successes seen cannot read (MechanismError)" in line
+    assert "drained" not in line
+
+
+def test_cursor_closer_snapshot_uses_manifest_named_by_wrapper(tmp_path, cursor_automations):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    controller = tmp_path / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir()
+    controller.parent.mkdir()
+    closer.write_text('status = "ACTIVE"\n')
+    controller.write_text('status = "ACTIVE"\n')
+    manifest = tmp_path / "named-by-wrapper.json"
+    payload = {
+        "policy": {
+            "toml_sha256": {
+                str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+            }
+        },
+        "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
+    }
+    _observation_root(payload)
+    manifest.write_text(json.dumps(payload))
+    wrapper = tmp_path / "cursor-lane.sh"
+    wrapper.write_text(f"launcher native-entry --manifest '{manifest}' --root /fixture\n")
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "refused"}\n')
+
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, wrapper_path=wrapper)
+
+    assert snapshot["manifest_path"] == str(manifest)
+    assert snapshot["hash_mismatch_count"] == 0
+
+
+def test_cursor_closer_incomplete_pin_set_is_not_clean(tmp_path, cursor_automations):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    closer.parent.mkdir()
+    closer.write_text('status = "ACTIVE"\n')
+    payload = {
+        "policy": {"toml_sha256": {str(closer): hashlib.sha256(closer.read_bytes()).hexdigest()}},
+        "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
+    }
+    _observation_root(payload)
+    manifest = tmp_path / "host-manifest.json"
+    manifest.write_text(json.dumps(payload))
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "refused"}\n')
+
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+
+    assert snapshot["hash_mismatch_count"] is None
+    assert "incomplete pin set" in line
+    assert "reviewed-repo-automation-controller/automation.toml" in line
+    assert "hash mismatches 0" not in line
+
+
+def test_cursor_closer_lookalike_policy_paths_cannot_drain(tmp_path, cursor_automations):
+    lookalike = tmp_path / "lookalike"
+    closer = lookalike / "imi-merge-verify-closer" / "automation.toml"
+    controller = lookalike / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir(parents=True)
+    controller.parent.mkdir(parents=True)
+    closer.write_text('status = "ACTIVE"\n')
+    controller.write_text('status = "ACTIVE"\n')
+    payload = {
+        "policy": {
+            "toml_sha256": {
+                str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+            }
+        },
+        "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(payload))
+    _add_native_success(payload)
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+    os.utime(log, ns=(1, 1))
+
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+
+    assert snapshot["pin_set_error"] is not None
+    assert str(closer) in snapshot["pin_set_error"]["unexpected"]
+    assert "drained" not in line
+
+
+def test_cursor_closer_symlinked_canonical_policy_cannot_drain(tmp_path, cursor_automations):
+    closer = tmp_path / "imi-merge-verify-closer" / "automation.toml"
+    controller = tmp_path / "reviewed-repo-automation-controller" / "automation.toml"
+    closer.parent.mkdir()
+    controller.parent.mkdir()
+    target = tmp_path / "closer-target.toml"
+    target.write_text('status = "ACTIVE"\n')
+    closer.symlink_to(target)
+    controller.write_text('status = "ACTIVE"\n')
+    payload = {
+        "policy": {
+            "toml_sha256": {
+                str(closer): hashlib.sha256(closer.read_bytes()).hexdigest(),
+                str(controller): hashlib.sha256(controller.read_bytes()).hexdigest(),
+            }
+        },
+        "mechanism_contract": {"observation_root": str(tmp_path / "observations")},
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(payload))
+    _add_native_success(payload)
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "completed"}\n')
+    os.utime(log, ns=(1, 1))
+
+    snapshot = switch_review.cursor_closer_native_entry_snapshot(log, manifest)
+    line = switch_review.format_cursor_closer_native_entry(snapshot)
+
+    assert snapshot["hash_error"] == "ValueError"
+    assert "drained" not in line
+
+
+def test_cursor_closer_native_status_refuses_changed_pin_then_recovers(host, tmp_path):
+    manifest, manifest_path, _ = host
+    original = manifest_path.read_bytes()
+    log = tmp_path / "cursor-closer.out"
+    log.write_text('{"launcher": "refused"}\n')
+    os.utime(log, ns=(1, 1))
+    _add_native_success(manifest)
+    command = [
+        manifest["runtime"]["python"],
+        manifest["launcher"]["path"],
+        "native-status",
+        "--manifest",
+        str(manifest_path),
+    ]
+
+    healthy = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+    assert json.loads(healthy.stdout).get("launcher") != "refused"
+    assert "drained" in switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest_path)
+    )
+
+    pinned_path = next(path for path in manifest["policy"]["toml_sha256"] if "imi-merge" in path)
+    try:
+        manifest["policy"]["toml_sha256"][pinned_path] = "0" * 64
+        manifest_path.write_text(json.dumps(manifest))
+        broken = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        assert broken.returncode == 78, broken.stdout + broken.stderr
+        result = json.loads(broken.stdout)
+        assert result["launcher"] == "refused"
+        assert "configured policy changed since host pin" in str(result["problems"])
+        line = switch_review.format_cursor_closer_native_entry(
+            switch_review.cursor_closer_native_entry_snapshot(log, manifest_path)
+        )
+        assert "hash mismatches 1 (imi-merge-verify-closer/automation.toml)" in line
+        assert "drained" not in line
+    finally:
+        manifest_path.write_bytes(original)
+
+    restored = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert restored.returncode == 0, restored.stdout + restored.stderr
+    assert json.loads(restored.stdout).get("launcher") != "refused"
+    line = switch_review.format_cursor_closer_native_entry(
+        switch_review.cursor_closer_native_entry_snapshot(log, manifest_path)
+    )
+    assert "drained: since last retained success: refused 0/1" in line
+    assert "hash mismatches 0 (none)" in line
 
 
 @pytest.fixture
