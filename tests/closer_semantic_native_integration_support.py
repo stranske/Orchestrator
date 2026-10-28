@@ -86,6 +86,15 @@ def integrated_reference(base):
         dispatcher["unreserved_pipeline_ast_sha256"] = deferred[
             "after_unreserved_pipeline_ast_sha256"
         ]
+        # Separate pinned prospective omission of an unsupported advisory plan;
+        # retain every historical fixture and all other AST families unchanged.
+        omission = advisory_plan_omission_reference()["dispatcher"]
+        assert dispatcher["nested_pipeline_ast"]["prepare"] == omission["before_prepare_ast_sha256"]
+        assert (
+            dispatcher["unreserved_pipeline_ast_sha256"] == omission["before_unreserved_ast_sha256"]
+        )
+        dispatcher["nested_pipeline_ast"]["prepare"] = omission["after_prepare_ast_sha256"]
+        dispatcher["unreserved_pipeline_ast_sha256"] = omission["after_unreserved_ast_sha256"]
         # Overlay only separately reviewed current-source AST families.
         # Historical source maps remain byte-identical and every other family
         # still compares against the prior receiver and optional-audit pins.
@@ -135,10 +144,34 @@ def assert_reviewed_role_registry_successor(source=None):
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
     tree = ast.parse(raw)
-    if hashlib.sha256(raw).hexdigest() != change["after_file_sha256"]:
+    actual_sha = hashlib.sha256(raw).hexdigest()
+    update = advisory_plan_omission_reference()["role_source"]
+    if actual_sha == update["after_file_sha256"]:
+        # TEST-ONLY historical comparison after exact whole-module pin. Restore
+        # solely this reviewed data literal in the AST, never production data.
+        node = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "_CLOSED_SONNET_SOURCE_ADMISSION"
+                for t in n.targets
+            )
+        )
+        assert fingerprint(node) == update["after_constant_ast_sha256"]
+        value = next(
+            v
+            for k, v in zip(node.value.keys, node.value.values)
+            if isinstance(k, ast.Constant) and k.value == "execution_contract_sha256"
+        )
+        assert value.value == update["after_execution_contract"]
+        value.value = update["before_execution_contract"]
+        assert fingerprint(node) == update["before_constant_ast_sha256"]
+        actual_sha = update["before_file_sha256"]
+    if actual_sha != change["after_file_sha256"]:
         successor = source_admission_reference()["role_module"]
         assert successor["before_file_sha256"] == change["after_file_sha256"]
-        assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+        assert actual_sha == successor["after_file_sha256"]
         added = successor["added_ast"]
         selected = []
         for node in tree.body:
@@ -183,3 +216,15 @@ def source_admission_reference():
         "execution_record_matches",
     }
     return value
+
+
+ADVISORY_PLAN_OMISSION_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_advisory_plan_omission_v1.json"
+)
+ADVISORY_PLAN_OMISSION_SHA256 = "45de03d3c3e99e7cce48a63896d4b41c7999ef8eafbf3244f29537e4dff9147d"
+
+
+def advisory_plan_omission_reference():
+    raw = ADVISORY_PLAN_OMISSION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == ADVISORY_PLAN_OMISSION_SHA256
+    return json.loads(raw)

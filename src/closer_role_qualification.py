@@ -420,7 +420,7 @@ _CLOSED_SONNET_SOURCE_ADMISSION = {
     "qualification_id": "sonnet-current-role-qualification:3e7ba0521480a5d44d6a081e5a43b8895aeded9eba9080dbe8b8ebdca98fb009",
     "qualification_record_sha256": "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482",
     "historical_contract_sha256": "1cb727375e9fa27344d89e02a7dbcd1881b613d2045a14fab5e02a30530ee293",
-    "execution_contract_sha256": "ff2dd414d0eb1d37e639be4a326d0161ae106611b6b5be7906c86a1aedd1572a",
+    "execution_contract_sha256": "19fe98d3f1a7cd6d032536f36ee383e5e606f4efae0ead19652a09de3a7c0cee",
     "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
     "task_type": "closer_exception",
     "role": STRONG_CRITERION_ADJUDICATION,

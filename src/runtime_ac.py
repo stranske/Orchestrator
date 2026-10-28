@@ -1071,6 +1071,39 @@ def _hollow_carry_condition(payload: dict[str, Any]) -> bool:
     )
 
 
+def bounded_deliberate_break_result(payload: Any) -> dict[str, Any] | None:
+    """Only downstream grading evidence, not the full path-heavy verifier JSON."""
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("verdict"), str)
+        or payload.get("verdict")
+        not in {
+            "PASS",
+            "FAIL_BROKEN",
+            "FAIL_HOLLOW",
+            "ERROR",
+        }
+    ):
+        return None
+    error = payload.get("error")
+    green = payload.get("green", {})
+    if error is not None and not isinstance(error, str):
+        return None
+    if not isinstance(green, dict):
+        return None
+    code = green.get("returncode")
+    if code is not None and type(code) is not int:
+        return None
+    streams = {key: green.get(key, "") for key in ("stdout_tail", "stderr_tail")}
+    if not all(isinstance(value, str) for value in streams.values()):
+        return None
+    return {
+        "verdict": payload["verdict"],
+        "error": _tail(error) if error is not None else None,
+        "green": {"returncode": code, **{key: _tail(value) for key, value in streams.items()}},
+    }
+
+
 def _completed_result(
     check: dict[str, Any], completed: subprocess.CompletedProcess[str], duration_s: float
 ) -> dict[str, Any]:
@@ -1079,6 +1112,7 @@ def _completed_result(
     combined = stdout + "\n" + stderr
     status = "PASS" if completed.returncode == 0 else "FAIL"
     reason = None
+    verifier_result = None
 
     if check.get("type") == "frontend":
         try:
@@ -1101,8 +1135,18 @@ def _completed_result(
         except Exception:
             parsed = None
         payload = parsed if isinstance(parsed, dict) else {}
+        verifier_result = bounded_deliberate_break_result(payload)
         verdict = payload.get("verdict")
-        status = "PASS" if verdict == "PASS" else "FAIL"
+        status = (
+            "PASS"
+            if verdict == "PASS"
+            and type(completed.returncode) is int
+            and completed.returncode == 0
+            and verifier_result is not None
+            and not verifier_result["error"]
+            and verifier_result["green"]["returncode"] in (None, 0)
+            else "FAIL"
+        )
         if status == "PASS":
             # A PASS HERE IS NOT ALWAYS SILENT, and dropping the reason threw away the one thing
             # this check exists to establish. local_verify's rolled-up `verdict` grades the whole
@@ -1160,6 +1204,11 @@ def _completed_result(
         "duration_s": round(duration_s, 3),
         "stdout_tail": _tail(stdout),
         "stderr_tail": _tail(stderr),
+        **(
+            {"deliberate_break_result": verifier_result}
+            if check.get("type") == "deliberate_break"
+            else {}
+        ),
     }
 
 

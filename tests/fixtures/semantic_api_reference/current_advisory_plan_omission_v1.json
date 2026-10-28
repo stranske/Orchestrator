@@ -1,0 +1,24 @@
+{
+  "base": "d1d40c5e6515300fcaa23f34702af24a7138d447",
+  "dispatcher": {
+    "after_file_sha256": "12f1f0331b6da85c365fdd9cdf3c2027c930cb34398d723ebe4ae3f4aa5bef12",
+    "after_prepare_ast_sha256": "bcc55688772d492caac9f536297f685d31ac85447c60875e59126c966d2b6524",
+    "after_unreserved_ast_sha256": "22a1746e18c941b8b307a98c8145de77c0202116004fdadf790bf07de735a490",
+    "before_file_sha256": "f1372e17ced583aa55f10d5be37551c69ed7fca36b389b2e698510eb8169f5ae",
+    "before_prepare_ast_sha256": "b1784257fa27d0b229f8d830e371cfa20495aa5cc2d795d4704cc4304f4a0e2b",
+    "before_unreserved_ast_sha256": "9fe9149817326695be311db1a88fa642336d19cd0028d5d288e5f39920a17030"
+  },
+  "role_source": {
+    "after_constant_ast_sha256": "8cdac00f5e7a892dbaddf5732794cafd34e34cd0ea83e8a94291af1a61691a87",
+    "after_execution_contract": "19fe98d3f1a7cd6d032536f36ee383e5e606f4efae0ead19652a09de3a7c0cee",
+    "after_file_sha256": "d5b0a72cb58b318824345e59d083588f40c1f64720aafcb7bbd7ec08ac259389",
+    "before_constant_ast_sha256": "f4beba3ef0d2d15497cb98fc3c8ed39fb38cbb714779f0be0ef051daa5fbc974",
+    "before_execution_contract": "ff2dd414d0eb1d37e639be4a326d0161ae106611b6b5be7906c86a1aedd1572a",
+    "before_file_sha256": "3443e7a8cb95bcdab61b8d3fb12a1b3a225f29afc011b36b393070bdd5a0887e",
+    "historical_contract": "1cb727375e9fa27344d89e02a7dbcd1881b613d2045a14fab5e02a30530ee293",
+    "physical_qualification_performed": false,
+    "qualification_record_sha256": "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
+  },
+  "schema": "current-advisory-plan-omission-static-audit/v1",
+  "scope": "Prospective exact source-only successor; historical fixture/physical qualification unchanged."
+}

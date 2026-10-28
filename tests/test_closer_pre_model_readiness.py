@@ -1000,6 +1000,8 @@ def test_maximum_delivery_inventory_stays_retained_while_callbacks_fit_cap_and_r
                 else callbacks["prepare"](source, {"deadline": time.time() + 60})
             )
             closer_pipeline._bounded(prep, limit=32768)
+            assert "drift_sample" not in prep["evidence_summary"]
+            assert "drift_audit_candidate" in prep
             (tmp_path / "retained-prepare.json").write_text(json.dumps(prep))
             packet_raw = Path(prep["packet_ref"]["path"]).read_bytes()
             assert hashlib.sha256(packet_raw).hexdigest() == prep["packet_ref"]["sha256"]

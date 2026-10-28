@@ -105,12 +105,28 @@ class PostMergeBreakTests(unittest.TestCase):
     def recheck(self, *, delivered, hollow=False):
         spec, head = self.merged_spec(delivered=delivered, hollow=hollow)
         original = json.dumps(spec, sort_keys=True)
-        result = gate.recheck_merged(spec, self.checkout)
+        # The display tail is intentionally bounded; inspect the actual executed
+        # structured proof before truncation while preserving production grading.
+        completed_proofs = []
+        completed_result = runtime_ac._completed_result
+
+        def retain_completed(check, completed, duration):
+            if check.get("type") == "deliberate_break":
+                completed_proofs.append(completed.stdout)
+            return completed_result(check, completed, duration)
+
+        with patch.object(runtime_ac, "_completed_result", side_effect=retain_completed):
+            result = gate.recheck_merged(spec, self.checkout)
         self.assertEqual(json.dumps(spec, sort_keys=True), original)
         self.assertEqual(self.git("rev-parse", "HEAD"), head)
         run = json.loads(result["transcript"])
         self.assertEqual(len(run["check_results"]), 1)
-        proof = json.loads(run["check_results"][0]["stdout_tail"])
+        self.assertEqual(len(completed_proofs), 1)
+        proof = json.loads(completed_proofs[0])
+        self.assertEqual(
+            run["check_results"][0]["stdout_tail"], runtime_ac._tail(completed_proofs[0])
+        )
+        self.assertLessEqual(len(run["check_results"][0]["stdout_tail"]), runtime_ac.TAIL_CHARS)
         self.assertEqual(proof["base_ref"], "HEAD^")
         self.assertEqual(Path(proof["worktree"]).resolve(), self.checkout.resolve())
         self.assertEqual(shlex.split(proof["green"]["cmd"])[0], result["interpreter"])
@@ -427,13 +443,23 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(self.post_merge_payloads(), final)
         self.assertEqual([call for call in calls if "POST" in call or "PATCH" in call], writes)
 
+    def deepen_checkout(self):
+        # The real storage-owned TMPDIR can be deep. Keep the real Git fixture
+        # and executed commands; do not make the production display tail larger.
+        deep = self.root / ("nested-source-" + "a" * 80) / ("nested-proof-" + "b" * 80) / "checkout"
+        deep.parent.mkdir(parents=True)
+        self.checkout.rename(deep)
+        self.checkout = deep
+
     def test_broken_merge_is_fail_from_real_deliberate_break(self):
+        self.deepen_checkout()
         result, proof = self.recheck(delivered=False)
         self.assertEqual(proof["verdict"], "FAIL_BROKEN")
         self.assertIn("AssertionError", proof["green"]["stderr_tail"])
         self.assertEqual(result["result"], "FAIL")
 
     def test_delivered_merge_passes_real_parent_comparison(self):
+        self.deepen_checkout()
         result, proof = self.recheck(delivered=True)
         self.assertEqual(proof["verdict"], "PASS")
         self.assertEqual(proof["green"]["returncode"], 0)
@@ -441,11 +467,16 @@ class PostMergeBreakTests(unittest.TestCase):
         self.assertEqual(result["result"], "PASS")
 
     def test_hollow_break_stays_unrunnable(self):
+        self.deepen_checkout()
         result, proof = self.recheck(delivered=True, hollow=True)
         self.assertEqual(proof["verdict"], "FAIL_HOLLOW")
         self.assertEqual(proof["green"]["returncode"], 0)
         self.assertEqual(proof["red"]["returncode"], 0)
         self.assertEqual(result["result"], "UNRUNNABLE")
+        self.assertEqual(result["reason"], "hollow_break")
+        row = json.loads(result["transcript"])["check_results"][0]
+        self.assertEqual(row["deliberate_break_result"]["verdict"], "FAIL_HOLLOW")
+        self.assertLessEqual(len(row["stdout_tail"]), runtime_ac.TAIL_CHARS)
 
     def test_break_tool_failures_never_count_as_assertion_failures(self):
         spec = runtime_ac.author_issue_spec(
@@ -482,6 +513,170 @@ class PostMergeBreakTests(unittest.TestCase):
                 ):
                     result = gate.recheck_merged(spec, self.checkout)
                 self.assertEqual(result["result"], "UNRUNNABLE")
+
+        # A malformed full native output can end in valid-looking display JSON.
+        # The new source carrier must be PRESENT+invalid and cannot fall back.
+        legacy_proof = {
+            "verdict": "FAIL_BROKEN",
+            "error": None,
+            "green": {
+                "returncode": 1,
+                "stdout_tail": "1 failed\nAssertionError: wrong behavior",
+                "stderr_tail": "",
+            },
+        }
+        deceptive = "not JSON" + " " * runtime_ac.TAIL_CHARS + json.dumps(legacy_proof)
+        row = runtime_ac._completed_result(
+            {"id": "native-proof", "type": "deliberate_break"},
+            subprocess.CompletedProcess([], 1, deceptive, ""),
+            0,
+        )
+        self.assertIn("deliberate_break_result", row)
+        self.assertIsNone(row["deliberate_break_result"])
+        self.assertEqual(json.loads(row["stdout_tail"]), legacy_proof)
+        malformed = [
+            None,
+            {},
+            {"verdict": []},
+            {"verdict": "unknown"},
+            {**legacy_proof, "green": {**legacy_proof["green"], "returncode": True}},
+            {**legacy_proof, "extra": "unbound"},
+        ]
+        for receipt in malformed:
+            with self.subTest(receipt=receipt):
+                bad = {**row, "deliberate_break_result": receipt}
+                with (
+                    patch.object(
+                        runtime_ac,
+                        "run_verification",
+                        return_value={"gate": {"verdict": "FAIL"}, "check_results": [bad]},
+                    ),
+                    patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+                ):
+                    held = gate.recheck_merged(spec, self.checkout)
+                self.assertEqual(held["result"], "UNRUNNABLE")
+                # A new native row with invalid proof cannot clear merely from
+                # a PASS status; the legacy absence-only path stays separate.
+                with (
+                    patch.object(
+                        runtime_ac,
+                        "run_verification",
+                        return_value={
+                            "gate": {"verdict": "PASS"},
+                            "check_results": [{**bad, "status": "PASS"}],
+                        },
+                    ),
+                    patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+                ):
+                    held = gate.recheck_merged(spec, self.checkout)
+                self.assertEqual(held["result"], "UNRUNNABLE")
+        # Actual emitter consistency: a malformed success, explicit tool error
+        # or known failing green code cannot mint a positive row/carrier.
+        for payload in (
+            {"verdict": "PASS", "green": True},
+            {"verdict": "PASS", "green": {"returncode": 1}},
+            {"verdict": "PASS", "error": "tool error", "green": {"returncode": 0}},
+        ):
+            emitted = runtime_ac._completed_result(
+                {"id": "contradictory-proof", "type": "deliberate_break"},
+                subprocess.CompletedProcess([], 0, json.dumps(payload), ""),
+                0,
+            )
+            self.assertEqual(emitted["status"], "FAIL")
+            self.assertEqual(emitted["returncode"], 0)
+            with (
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={"gate": {"verdict": "FAIL"}, "check_results": [emitted]},
+                ),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                held = gate.recheck_merged(spec, self.checkout)
+            self.assertEqual(held["result"], "UNRUNNABLE")
+        for payload in (
+            {"verdict": "PASS"},
+            {
+                "verdict": "PASS",
+                "error": None,
+                "green": {"returncode": 0},
+                "node_verdict": "INCONCLUSIVE",
+                "reason": "per-node warning",
+            },
+        ):
+            emitted = runtime_ac._completed_result(
+                {"id": "valid-proof", "type": "deliberate_break"},
+                subprocess.CompletedProcess([], 0, json.dumps(payload), ""),
+                0,
+            )
+            self.assertEqual(emitted["status"], "PASS")
+            with (
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={"gate": {"verdict": "PASS"}, "check_results": [emitted]},
+                ),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                accepted = gate.recheck_merged(spec, self.checkout)
+            self.assertEqual(accepted["result"], "PASS")
+        for code in (1, -9):
+            emitted = runtime_ac._completed_result(
+                {"id": "nonzero-proof", "type": "deliberate_break"},
+                subprocess.CompletedProcess(
+                    [],
+                    code,
+                    json.dumps({"verdict": "PASS", "error": None, "green": {"returncode": 0}}),
+                    "",
+                ),
+                0,
+            )
+            self.assertEqual(emitted["status"], "FAIL")
+            self.assertEqual(emitted["returncode"], code)
+        for text in ("", "not JSON", " " * runtime_ac.TAIL_CHARS, "x" * 5000):
+            legacy = {"type": "deliberate_break", "status": "PASS", "stdout_tail": text}
+            with (
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={"gate": {"verdict": "PASS"}, "check_results": [legacy]},
+                ),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                held = gate.recheck_merged(spec, self.checkout)
+            self.assertEqual(held["result"], "UNRUNNABLE")
+        legacy = {
+            "type": "deliberate_break",
+            "status": "PASS",
+            "stdout_tail": json.dumps(
+                {"verdict": "PASS", "error": None, "green": {"returncode": 0}}
+            ),
+        }
+        with (
+            patch.object(
+                runtime_ac,
+                "run_verification",
+                return_value={"gate": {"verdict": "PASS"}, "check_results": [legacy]},
+            ),
+            patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+        ):
+            accepted = gate.recheck_merged(spec, self.checkout)
+        self.assertEqual(accepted["result"], "PASS")
+        # Each retained stream/error uses the existing bound; path-heavy extras
+        # and red output are not copied into the native summary carrier.
+        bounded = runtime_ac.bounded_deliberate_break_result(
+            {
+                **legacy_proof,
+                "error": "e" * 9000,
+                "green": {"returncode": 1, "stdout_tail": "a" * 9000, "stderr_tail": "b" * 9000},
+                "copied_test_paths": ["p" * 9000],
+            }
+        )
+        self.assertEqual(set(bounded), {"verdict", "error", "green"})
+        self.assertEqual(set(bounded["green"]), {"returncode", "stdout_tail", "stderr_tail"})
+        self.assertEqual(len(bounded["error"]), runtime_ac.TAIL_CHARS)
+        self.assertEqual(len(bounded["green"]["stdout_tail"]), runtime_ac.TAIL_CHARS)
+        self.assertEqual(len(bounded["green"]["stderr_tail"]), runtime_ac.TAIL_CHARS)
 
     def test_spawned_interpreter_failure_is_not_a_delivery_fail(self):
         spec = runtime_ac.author_issue_spec(
@@ -994,10 +1189,24 @@ class PostMergeBreakTests(unittest.TestCase):
             "stderr_tail": "2 failed\nsubprocess.run([sys.executable, '-c', ...])\nModuleNotFoundError: missing dependency",
         }
         direct_import = {**environment, "stderr_tail": "2 failed\nModuleNotFoundError: product bug"}
+        # A full source result can exceed the display tail even when its small
+        # green evidence is sufficient to classify the existing environment hold.
+        full = json.dumps(
+            {"verdict": "FAIL_BROKEN", "error": None, "padding": "x" * 5000, "green": environment}
+        )
+        native_environment = runtime_ac._completed_result(
+            {"id": "environment-proof", "type": "deliberate_break"},
+            subprocess.CompletedProcess([], 1, full, ""),
+            0,
+        )
+        self.assertGreater(len(full), runtime_ac.TAIL_CHARS)
+        self.assertEqual(native_environment["deliberate_break_result"]["verdict"], "FAIL_BROKEN")
         for rows, green, expected in (
             ([environment], False, "FAIL"),
             ([environment, assertion], True, "FAIL"),
             ([deliberate], True, "UNRUNNABLE"),
+            ([native_environment], True, "UNRUNNABLE"),
+            ([native_environment, assertion], True, "FAIL"),
             ([child_import], True, "UNRUNNABLE"),
             ([direct_import], True, "FAIL"),
         ):
