@@ -83,6 +83,11 @@ def summaries(tmp_path, monkeypatch):
                     "shape": shape,
                     "output": f"fixture says 999 passed\n{summary}\n",
                     "returncode": 0,
+                    "test_inventory": [
+                        [f"shard{index}", f"test_{n}"] for n in range({1: 5, 2: 4, 3: 2}[index])
+                    ],
+                    "collection_skip_records": [],
+                    "inventory_error": None,
                     "verdicts": {f"gate{index}": {"check": {"outcome": "passed", "message": ""}}},
                     "skip_records": (
                         [{"outcome": "skipped", "message": "widget absent"}] if index == 1 else []
@@ -112,6 +117,41 @@ def test_aggregate_sums_counts_and_keeps_the_collected_equality(summaries):
     assert result["counts"]["xfailed"] == 1
     assert len(result["verdicts"]) == 3
     assert len(result["skip_records"]) == 1
+    # Native shard records carry the exact testcase identities even when their
+    # printed summary includes a collection-level skip.
+    path = summaries / "shard-1.json"
+    record = json.loads(path.read_text())
+    record.update(
+        test_inventory=[["a", f"test_{i}"] for i in range(4)],
+        collection_skip_records=[
+            {"outcome": "skipped", "message": "collection skipped", "name": "tests.collection"}
+        ],
+        skip_records=[],
+        inventory_error=None,
+    )
+    path.write_text(json.dumps(record))
+    native = verify.aggregate_pytest(summaries)
+    assert native["collected"] == 10 and native["skipped"] == 0
+    assert len(native["collection_skip_records"]) == 1
+    record["inventory_error"] = "malformed XML"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="testcase inventory"):
+        verify.aggregate_pytest(summaries)
+    record.pop("test_inventory")
+    record["inventory_error"] = None
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="testcase inventory"):
+        verify.aggregate_pytest(summaries)
+    record["test_inventory"] = []
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="testcase inventory"):
+        verify.aggregate_pytest(summaries)
+    record["test_inventory"] = [["shard1", f"test_{n}"] for n in range(5)]
+    record["collection_skip_records"] = []
+    record["inventory_error"] = None
+    record["skip_records"] = [{"outcome": "skipped", "message": "widget absent"}]
+    path.write_text(json.dumps(record))
+
     assert not verify._floor_problems({"collected": 11, "passed": 10}, result)
     assert verify._floor_problems({"collected": 10, "passed": 10}, result)
     assert verify._floor_problems({"collected": 12, "passed": 10}, result)
@@ -171,11 +211,85 @@ def test_aggregate_uses_the_normal_verifier_and_ceilings(summaries, monkeypatch)
     assert "11 collected; floor 11" in text
 
 
-def test_only_final_printed_summary_supplies_counts():
+def test_only_final_printed_summary_supplies_counts(tmp_path, monkeypatch):
     result = verify.parse_pytest_output(
         "1 passed in 1s\nfixture: 999 failed\n2 passed, 1 skipped in 2s\n"
     )
     assert (result["passed"], result["skipped"], result["failed"]) == (2, 1, 0)
+    # Item inventory is independent from the outcome summary: subtest/teardown
+    # failures remain failures, and collection skips are diagnostics, not items.
+    cases = [
+        (
+            "3 failed in 1s",
+            '<testcase classname="m" name="test_parent"><failure/><failure/><failure/></testcase>',
+            1,
+            3,
+            0,
+            0,
+        ),
+        (
+            "1 passed, 1 skipped in 1s",
+            '<testcase classname="" name="tests.module"><skipped message="collection skipped"/></testcase><testcase classname="m" name="test_ok"/>',
+            1,
+            0,
+            0,
+            1,
+        ),
+        (
+            "1 skipped, 1 xfailed in 1s",
+            '<testcase classname="m" name="test_skip"><skipped message="real runtime skip"/></testcase><testcase classname="m" name="test_xfail"><skipped type="pytest.xfail"/></testcase>',
+            2,
+            0,
+            1,
+            0,
+        ),
+        (
+            "2 passed in 1s",
+            '<testcase classname="a.C" name="test_same"/><testcase classname="b.C" name="test_same"/>',
+            2,
+            0,
+            0,
+            0,
+        ),
+        (
+            "1 passed, 1 error in 1s",
+            '<testcase classname="m" name="test_teardown"/><testcase classname="m" name="test_teardown"><error/></testcase>',
+            1,
+            1,
+            0,
+            0,
+        ),
+    ]
+    xml = tmp_path / "items.xml"
+    for summary, body, collected, failed, skipped, collection_skips in cases:
+        xml.write_text('<testsuite tests="999999" failures="0">' + body + "</testsuite>")
+        parsed = verify.parse_pytest_output(summary, returncode=int(bool(failed)), junit=xml)
+        assert (
+            parsed["collected"],
+            parsed["failed"],
+            parsed["skipped"],
+            len(parsed["collection_skip_records"]),
+        ) == (collected, failed, skipped, collection_skips)
+        assert parsed["returncode"] == int(bool(failed)) and parsed["inventory_error"] is None
+        assert len(parsed["skip_records"]) == skipped
+    for broken in (
+        "<garbage/>",
+        "<testsuites/>",
+        "<testsuite",
+        '<testsuite><testcase classname="" name="unknown"><skipped message="not a collection marker"/></testcase></testsuite>',
+    ):
+        xml.write_text(broken)
+        parsed = verify.parse_pytest_output("1 passed in 1s", junit=xml)
+        assert parsed["collected"] == 0 and parsed["inventory_error"]
+    xml.unlink()
+    assert verify.parse_pytest_output("1 passed in 1s", junit=xml)["inventory_error"]
+    missing = verify.parse_pytest_output("1 passed in 1s", junit=xml)
+    monkeypatch.setattr(verify, "shard_plan", lambda: [["inert.py"]])
+    monkeypatch.setattr(verify, "run_pytest", lambda **kwargs: missing)
+    monkeypatch.setattr(verify, "private_state", lambda: contextlib.nullcontext({}))
+    monkeypatch.setattr(verify, "COVERAGE", False)
+    code, _ = verify.run_pytest_shard("1/1", tmp_path / "shard")
+    assert code == 1  # Green summary never clears missing expected identity evidence.
 
 
 @pytest.mark.needs_coverage_module
