@@ -1,6 +1,7 @@
 """Real local Git mechanics; no network, provider, original branch/index write."""
 
 import copy
+import errno
 import hashlib
 import os
 import subprocess
@@ -351,7 +352,35 @@ def test_inventory_full_checks_bracket_readonly_loop_and_failure(tmp_path):
     assert calls[0] == calls[-1] == "full"
 
 
-def test_loose_heavy_existing_head_has_constant_held_descriptor_count(tmp_path):
+def _owned_object_descriptors(anchor):
+    holders = [anchor.directory, anchor.pack, *anchor.held]
+    result = []
+    for holder in holders:
+        if holder.fd is not None:
+            meta = os.fstat(holder.fd)
+            result.append((holder, holder.fd, (meta.st_dev, meta.st_ino, meta.st_mode)))
+    return result
+
+
+def _assert_owned_object_descriptors_closed(owned):
+    for holder, fd, identity in owned:
+        assert holder.fd is None
+        try:
+            meta = os.fstat(fd)
+        except OSError as error:
+            assert error.errno == errno.EBADF
+        else:
+            assert (
+                meta.st_dev,
+                meta.st_ino,
+                meta.st_mode,
+            ) != identity, "owned Git-object descriptor remains open"
+
+
+@pytest.mark.parametrize("lifecycle", ["ordinary", "unrelated_cleanup", "deliberate_leak"])
+def test_loose_heavy_existing_head_has_constant_held_descriptor_count(
+    tmp_path, monkeypatch, lifecycle
+):
     repo, git, _env, _baseline, _candidate, _pr, _commit, policy = fixture(tmp_path, packed=False)
     for index in range(1000):
         (repo / "src" / ("file-" + str(index))).write_text("unique loose object " + str(index))
@@ -373,18 +402,44 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(tmp_path):
         "tree_oid": pub._tree_oid(rows),
         "files": rows,
     }
-    before = len(os.listdir("/dev/fd"))
+    # Other pytest/runtime descriptors may close during collection or GC. Only
+    # this anchor's own descriptors establish its ownership and release contract.
+    unrelated = [os.open(os.devnull, os.O_RDONLY) for _ in range(4)]
+    original_close = os.close
     anchor = pub._ExistingObjects(
         repo / ".git/objects", baseline, git("cat-file", "commit", head), policy
     )
+    owned = _owned_object_descriptors(anchor)
+    leak_fd = owned[0][1]
     try:
         assert len(anchor.identities) >= 1000
-        assert len(os.listdir("/dev/fd")) - before < 40
+        assert 0 < len(owned) < 40
         anchor.check()
-        assert len(os.listdir("/dev/fd")) - before < 40
+        assert _owned_object_descriptors(anchor) == owned
+        if lifecycle == "unrelated_cleanup":
+            for fd in unrelated:
+                original_close(fd)
+            unrelated.clear()
+        if lifecycle == "deliberate_leak":
+            with monkeypatch.context() as context:
+                context.setattr(
+                    os, "close", lambda fd: None if fd == leak_fd else original_close(fd)
+                )
+                anchor.close()
+            try:
+                with pytest.raises(
+                    AssertionError, match="owned Git-object descriptor remains open"
+                ):
+                    _assert_owned_object_descriptors_closed(owned)
+            finally:
+                original_close(leak_fd)
+        else:
+            anchor.close()
+        _assert_owned_object_descriptors_closed(owned)
     finally:
         anchor.close()
-    assert len(os.listdir("/dev/fd")) == before
+        for fd in unrelated:
+            original_close(fd)
 
 
 def test_fixed_object_reader_uses_native_regular_stdin_without_copy(custody, tmp_path, monkeypatch):
