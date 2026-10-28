@@ -506,6 +506,7 @@
       "tests/test_closer_nonfinite_data_only.py",
       "tests/test_closer_operational_capacity.py",
       "tests/test_closer_pipeline.py",
+      "tests/test_closer_pipeline_callback_budget.py",
       "tests/test_closer_pipeline_frontier.py",
       "tests/test_closer_quarantine.py",
       "tests/test_closer_quarantine_integration.py",

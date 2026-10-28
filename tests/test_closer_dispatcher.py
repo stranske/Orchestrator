@@ -2679,12 +2679,15 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
         assert value["proposal"]["semantic_assessment"]["schema"] == "closer-semantic-assessment/v2"
         assert value["raw_findings"] == integrations[0]["raw_findings"]
         assert len(value["raw_findings"]) == len(proposal["resolutions"]) == 10
-        assert closer_pipeline.CALLBACK_RESULT_BYTES == 32768
-        assert closer_pipeline._bounded(value, limit=32768) == value
-        with pytest.raises(ValueError, match="pipeline JSON exceeds 32768 bytes"):
-            closer_pipeline._bounded(
-                {**value, "integration_disposition": integrations[0]["disposition"]}, limit=32768
-            )
+        assert closer_pipeline.CALLBACK_RESULT_BYTES >= 1024 * 1024
+        assert closer_pipeline._bounded(value, limit=closer_pipeline.CALLBACK_RESULT_BYTES) == value
+        # The redundant view is still omitted from this typed result, but it is
+        # ordinary-sized data, not an anomaly for the application JSON budget.
+        duplicate = {**value, "integration_disposition": integrations[0]["disposition"]}
+        assert (
+            closer_pipeline._bounded(duplicate, limit=closer_pipeline.CALLBACK_RESULT_BYTES)
+            == duplicate
+        )
         captured.update(context=context, value=value)
         return {"targets": {target: {"status": "deferred"}}}
 

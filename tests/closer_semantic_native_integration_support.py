@@ -95,6 +95,13 @@ def integrated_reference(base):
         )
         dispatcher["nested_pipeline_ast"]["prepare"] = omission["after_prepare_ast_sha256"]
         dispatcher["unreserved_pipeline_ast_sha256"] = omission["after_unreserved_ast_sha256"]
+        bounded = finite_prepare_reference()["dispatcher"]
+        assert dispatcher["nested_pipeline_ast"]["prepare"] == bounded["before_prepare_ast_sha256"]
+        assert (
+            dispatcher["unreserved_pipeline_ast_sha256"] == bounded["before_unreserved_ast_sha256"]
+        )
+        dispatcher["nested_pipeline_ast"]["prepare"] = bounded["after_prepare_ast_sha256"]
+        dispatcher["unreserved_pipeline_ast_sha256"] = bounded["after_unreserved_ast_sha256"]
         # Overlay only separately reviewed current-source AST families.
         # Historical source maps remain byte-identical and every other family
         # still compares against the prior receiver and optional-audit pins.
@@ -143,6 +150,15 @@ def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    bounded = finite_prepare_reference()["role_source"]
+    if hashlib.sha256(raw).hexdigest() == bounded["after_file_sha256"]:
+        # Test-only comparison of one exact separately reviewed source relation.
+        raw = raw.replace(
+            bounded["after_execution_contract"].encode(),
+            bounded["before_execution_contract"].encode(),
+            1,
+        )
+        assert hashlib.sha256(raw).hexdigest() == bounded["before_file_sha256"]
     tree = ast.parse(raw)
     actual_sha = hashlib.sha256(raw).hexdigest()
     update = advisory_plan_omission_reference()["role_source"]
@@ -228,3 +244,26 @@ def advisory_plan_omission_reference():
     raw = ADVISORY_PLAN_OMISSION_MANIFEST.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == ADVISORY_PLAN_OMISSION_SHA256
     return json.loads(raw)
+
+
+FINITE_PREPARE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_finite_prepare_reference_v1.json"
+)
+FINITE_PREPARE_SHA256 = "b99b0674af9cd27a1a2bd5ff74175b63e55c180d5215cbb6d8a1bcc6e3f34494"
+
+
+def finite_prepare_reference():
+    raw = FINITE_PREPARE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == FINITE_PREPARE_SHA256
+    return json.loads(raw)
+
+
+def before_finite_prepare_source(source):
+    """Restore only an exact whole-file-pinned prospective delta for old audits."""
+    pin = finite_prepare_reference()["dispatcher"]
+    assert hashlib.sha256(source.encode()).hexdigest() == pin["after_file_sha256"]
+    assert source.count(pin["after_fragment"]) == 1
+    restored = source.replace(pin["after_fragment"], pin["before_fragment"], 1)
+    assert hashlib.sha256(restored.encode()).hexdigest() == pin["before_file_sha256"]
+    return restored
