@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from test_muse_backend import _native_muse_events
 
-import adapters
+import closer_muse_terminal_parser as terminal_parser
 
 
 def stream():
@@ -32,12 +32,12 @@ def test_captured_typed_usage_is_metadata_before_one_original_terminal():
     events, usage = stream()
     before = copy.deepcopy(usage)
     assert (
-        adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1]]))
+        terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1]]))
         == events[-1]["payload"]["text"]
     )
     assert usage == before
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage])) == ""
-    assert adapters.muse_terminal_text(encode(events)) == events[-1]["payload"]["text"]
+    assert terminal_parser.muse_terminal_text(encode(events[:-1] + [usage])) == ""
+    assert terminal_parser.muse_terminal_text(encode(events)) == events[-1]["payload"]["text"]
 
 
 @pytest.mark.parametrize(
@@ -77,7 +77,7 @@ def test_usage_requires_exact_binding_status_and_field_types(path, value):
     for key in path[:-1]:
         selected = selected[key]
     selected[path[-1]] = value
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
+    assert terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
 
 
 @pytest.mark.parametrize(
@@ -98,7 +98,7 @@ def test_usage_requires_exact_binding_status_and_field_types(path, value):
 def test_usage_missing_required_payload_field_is_not_ignored(field):
     events, usage = stream()
     del usage["payload"][field]
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
+    assert terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
 
 
 @pytest.mark.parametrize("where", ["payload", "model"])
@@ -106,24 +106,27 @@ def test_unknown_usage_body_fields_fail_closed(where):
     events, usage = stream()
     selected = usage["payload"] if where == "payload" else usage["payload"]["models"][0]
     selected["invented"] = True
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
+    assert terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
 
 
 @pytest.mark.parametrize("position", [0, 1, 2, 4])
 def test_usage_requires_already_started_run_and_cannot_follow_terminal(position):
     events, usage = stream()
     events.insert(position, usage)
-    assert adapters.muse_terminal_text(encode(events)) == ""
+    assert terminal_parser.muse_terminal_text(encode(events)) == ""
 
 
 def test_usage_never_repairs_conflicting_or_duplicate_terminal():
     events, usage = stream()
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1], events[-1]])) == ""
+    assert (
+        terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1], events[-1]]))
+        == ""
+    )
     events[-1]["payload"]["terminal"] = "failed"
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
+    assert terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
 
 
 def test_usage_models_have_the_reviewed_finite_projection_bound():
     events, usage = stream()
     usage["payload"]["models"] *= 129
-    assert adapters.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""
+    assert terminal_parser.muse_terminal_text(encode(events[:-1] + [usage, events[-1]])) == ""

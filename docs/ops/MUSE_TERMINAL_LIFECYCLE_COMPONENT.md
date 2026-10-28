@@ -6,7 +6,7 @@ record, install a native issuer, change dispatch/activation, or invoke a model.
 A concrete reviewed original host admission is still required by the capture
 interface. No production Closer route calls this new component on this base.
 
-The existing adapter can now recognize closed, joined `run.usage` metadata,
+The dedicated component parser recognizes closed, joined `run.usage` metadata,
 including typed non-null allowance data. These fields never establish quota,
 account, subscription, billing or execution authority. The original run terminal
 and its command/session joins remain mandatory; usage is never the answer.
@@ -25,7 +25,7 @@ The larger optional native-issuer composition remains a separate local source
 proposal and is intentionally not included here. Current main's dispatcher,
 profiles, role qualification data and activation logic remain byte-identical.
 
-The shared adapter's whole-file fingerprint changes even though all other ASTs,
-including Claude launch behavior, remain exact. No historical native observation
-or role record is rewritten or automatically retargeted; any later installation
-still requires the owner's normal current-source admission checks.
+The qualified production `adapters.py` is byte-identical to the base source.
+The dark runtime imports its dedicated parser and pins that complete module's
+source, preserving the existing Sonnet model/source qualification contract.
+No historical observation, record, source witness or guard is retargeted.

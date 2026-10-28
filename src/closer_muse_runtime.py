@@ -9,7 +9,6 @@ new runner. Shared role/profile routing deliberately remains unchanged.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import math
 import os
@@ -103,7 +102,7 @@ def prepare(
     role: str = ROLE,
 ) -> MusePlan:
     """Pure source-bound argv preparation; no auth, subprocess or enrollment."""
-    import adapters
+    import closer_muse_terminal_parser as terminal_parser
     import transport_qualification_launcher as launcher
 
     if profile_id != PROFILE or role != ROLE:
@@ -176,14 +175,14 @@ def prepare(
         ),
         NATIVE_SHA256,
         _sha(Path(__file__)),
-        hashlib.sha256(inspect.getsource(adapters.muse_terminal_text).encode()).hexdigest(),
+        _sha(Path(terminal_parser.__file__)),
         _sha(Path(launcher.__file__)),
         basis_sha256,
     )
 
 
 def _check(plan: MusePlan) -> None:
-    import adapters
+    import closer_muse_terminal_parser as terminal_parser
     import transport_qualification_launcher as launcher
 
     if (
@@ -196,8 +195,7 @@ def _check(plan: MusePlan) -> None:
         or _sha(Path(plan.argv[0])) != plan.binary_sha256
         or _sha(Path(__file__)) != plan.source_sha256
         or _sha(Path(launcher.__file__)) != plan.capture_sha256
-        or hashlib.sha256(inspect.getsource(adapters.muse_terminal_text).encode()).hexdigest()
-        != plan.parser_sha256
+        or _sha(Path(terminal_parser.__file__)) != plan.parser_sha256
     ):
         raise ValueError("Muse runtime closure changed")
     # Rebuild before any connection action; mutated argv cannot gain tools or aliases.
@@ -347,7 +345,7 @@ def _model_response_lifecycle(events):
 
 
 def _final(raw: bytes) -> str:
-    import adapters
+    import closer_muse_terminal_parser as terminal_parser
 
     def pairs(items):
         result = {}
@@ -369,7 +367,7 @@ def _final(raw: bytes) -> str:
             raise ValueError("native event object required")
         events.append(event)
     _model_response_lifecycle(events)
-    text = adapters.muse_terminal_text(raw.decode("utf8"))
+    text = terminal_parser.muse_terminal_text(raw.decode("utf8"))
     if not text or len(text.encode()) > MAX_FINAL:
         raise ValueError("bounded bound native terminal required")
     return text

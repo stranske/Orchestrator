@@ -336,3 +336,20 @@ def test_malformed_accepted_session_does_not_escape_closed_parser():
     rows[0]["stream"] = "malformed"
     with pytest.raises(ValueError):
         muse._final(("\n".join(json.dumps(r) for r in rows) + "\n").encode())
+
+
+def test_runtime_does_not_use_or_modify_qualified_main_adapter(monkeypatch):
+    import adapters
+
+    monkeypatch.setattr(
+        adapters, "muse_terminal_text", lambda *_: pytest.fail("qualified main adapter reached")
+    )
+    assert muse._final(model_response_native()) == "answer"
+
+
+def test_runtime_plan_pins_complete_dedicated_parser_source(plan):
+    from pathlib import Path
+
+    import closer_muse_terminal_parser as terminal_parser
+
+    assert plan.parser_sha256 == muse._sha(Path(terminal_parser.__file__))
