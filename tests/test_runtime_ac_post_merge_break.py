@@ -555,6 +555,113 @@ class PostMergeBreakTests(unittest.TestCase):
                 ):
                     held = gate.recheck_merged(spec, self.checkout)
                 self.assertEqual(held["result"], "UNRUNNABLE")
+                # A new native row with invalid proof cannot clear merely from
+                # a PASS status; the legacy absence-only path stays separate.
+                with (
+                    patch.object(
+                        runtime_ac,
+                        "run_verification",
+                        return_value={
+                            "gate": {"verdict": "PASS"},
+                            "check_results": [{**bad, "status": "PASS"}],
+                        },
+                    ),
+                    patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+                ):
+                    held = gate.recheck_merged(spec, self.checkout)
+                self.assertEqual(held["result"], "UNRUNNABLE")
+        # Actual emitter consistency: a malformed success, explicit tool error
+        # or known failing green code cannot mint a positive row/carrier.
+        for payload in (
+            {"verdict": "PASS", "green": True},
+            {"verdict": "PASS", "green": {"returncode": 1}},
+            {"verdict": "PASS", "error": "tool error", "green": {"returncode": 0}},
+        ):
+            emitted = runtime_ac._completed_result(
+                {"id": "contradictory-proof", "type": "deliberate_break"},
+                subprocess.CompletedProcess([], 0, json.dumps(payload), ""),
+                0,
+            )
+            self.assertEqual(emitted["status"], "FAIL")
+            self.assertEqual(emitted["returncode"], 0)
+            with (
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={"gate": {"verdict": "FAIL"}, "check_results": [emitted]},
+                ),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                held = gate.recheck_merged(spec, self.checkout)
+            self.assertEqual(held["result"], "UNRUNNABLE")
+        for payload in (
+            {"verdict": "PASS"},
+            {
+                "verdict": "PASS",
+                "error": None,
+                "green": {"returncode": 0},
+                "node_verdict": "INCONCLUSIVE",
+                "reason": "per-node warning",
+            },
+        ):
+            emitted = runtime_ac._completed_result(
+                {"id": "valid-proof", "type": "deliberate_break"},
+                subprocess.CompletedProcess([], 0, json.dumps(payload), ""),
+                0,
+            )
+            self.assertEqual(emitted["status"], "PASS")
+            with (
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={"gate": {"verdict": "PASS"}, "check_results": [emitted]},
+                ),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                accepted = gate.recheck_merged(spec, self.checkout)
+            self.assertEqual(accepted["result"], "PASS")
+        for code in (1, -9):
+            emitted = runtime_ac._completed_result(
+                {"id": "nonzero-proof", "type": "deliberate_break"},
+                subprocess.CompletedProcess(
+                    [],
+                    code,
+                    json.dumps({"verdict": "PASS", "error": None, "green": {"returncode": 0}}),
+                    "",
+                ),
+                0,
+            )
+            self.assertEqual(emitted["status"], "FAIL")
+            self.assertEqual(emitted["returncode"], code)
+        for text in ("", "not JSON", " " * runtime_ac.TAIL_CHARS, "x" * 5000):
+            legacy = {"type": "deliberate_break", "status": "PASS", "stdout_tail": text}
+            with (
+                patch.object(
+                    runtime_ac,
+                    "run_verification",
+                    return_value={"gate": {"verdict": "PASS"}, "check_results": [legacy]},
+                ),
+                patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+            ):
+                held = gate.recheck_merged(spec, self.checkout)
+            self.assertEqual(held["result"], "UNRUNNABLE")
+        legacy = {
+            "type": "deliberate_break",
+            "status": "PASS",
+            "stdout_tail": json.dumps(
+                {"verdict": "PASS", "error": None, "green": {"returncode": 0}}
+            ),
+        }
+        with (
+            patch.object(
+                runtime_ac,
+                "run_verification",
+                return_value={"gate": {"verdict": "PASS"}, "check_results": [legacy]},
+            ),
+            patch.object(gate, "_worktree_interpreter", return_value=sys.executable),
+        ):
+            accepted = gate.recheck_merged(spec, self.checkout)
+        self.assertEqual(accepted["result"], "PASS")
         # Each retained stream/error uses the existing bound; path-heavy extras
         # and red output are not copied into the native summary carrier.
         bounded = runtime_ac.bounded_deliberate_break_result(

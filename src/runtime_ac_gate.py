@@ -582,7 +582,19 @@ def recheck_merged(
             result = "FAIL"
         elif (
             executable
-            and all(r.get("status") == "PASS" for r in executable)
+            and all(
+                r.get("status") == "PASS"
+                and (
+                    r.get("type") != "deliberate_break"
+                    or (
+                        (proof := _deliberate_break_proof(r)) is not None
+                        and proof["verdict"] == "PASS"
+                        and not proof["error"]
+                        and proof["green"]["returncode"] in (None, 0)
+                    )
+                )
+                for r in executable
+            )
             # Manual criteria cannot be supplied to a machine recheck, so the gate's own verdict
             # reads NEEDS_REVIEW for every spec that mixes named tests with manual items: all
             # three rechecks of 2026-10-16 ran their named tests green and were still

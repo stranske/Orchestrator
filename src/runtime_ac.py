@@ -1137,7 +1137,16 @@ def _completed_result(
         payload = parsed if isinstance(parsed, dict) else {}
         verifier_result = bounded_deliberate_break_result(payload)
         verdict = payload.get("verdict")
-        status = "PASS" if verdict == "PASS" else "FAIL"
+        status = (
+            "PASS"
+            if verdict == "PASS"
+            and type(completed.returncode) is int
+            and completed.returncode == 0
+            and verifier_result is not None
+            and not verifier_result["error"]
+            and verifier_result["green"]["returncode"] in (None, 0)
+            else "FAIL"
+        )
         if status == "PASS":
             # A PASS HERE IS NOT ALWAYS SILENT, and dropping the reason threw away the one thing
             # this check exists to establish. local_verify's rolled-up `verdict` grades the whole
