@@ -70,7 +70,7 @@ def audit_deferral_reference():
 PUBLICATION_ADMISSION_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_publication_admission_v1.json"
 )
-PUBLICATION_ADMISSION_SHA256 = "990854306667d809d1a604fe8eb3b0537ed2a10b9923f9a38b06038009231da8"
+PUBLICATION_ADMISSION_SHA256 = "695eec7282d482e43ebbefc70f3439313cd98d328796901bb565736cf4978deb"
 
 
 def publication_admission_reference():

@@ -333,12 +333,12 @@
       "source_leaf": "c61c53f4ae6e48f921dcf4c17cdeb16d7f977a2a"
     },
     "role_registry": {
-      "after_file_sha256": "22c548797584abac3a32ebbccf047c8bdaf44be8d62b528f03400aa85e4a3234",
-      "after_registry_ast_sha256": "842c21686f26aada85f03997ffc57b320fc166375adb68d4f895618affbce799",
+      "after_file_sha256": "c08e70a12269aca514f5ba46c0fdb923be97b34d8d8bdfc016b9cd2272c220a0",
+      "after_registry_ast_sha256": "1f25c2c48cbbf35017fc3b247fb48ff5559d674387917347331600c7095b0ae8",
       "before_file_sha256": "777d487936453695a513ea6fd217c7a7499fd5975f4053710af5e3f683d02617",
       "before_registry_ast_sha256": "1b641a02bee68eb27faa8bae93f708bdd39fc44ddbc2ba8a92378fd2d912c330",
       "outside_registry_ast_sha256": "32bd5aae9a059c92c44472c9502a169d42ecb2784381f5495fc35fb1bbcaa447",
-      "scope": "Only reviewed actual e033 descriptor Sonnet role record successor; validator and other module AST unchanged."
+      "scope": "Only independently reviewed actual1cb descriptor Sonnet24h role record successor; previousc91/e033 observations stay historical, validator and every outside-registry AST unchanged."
     }
   },
   "reviewed_source_leaves": [

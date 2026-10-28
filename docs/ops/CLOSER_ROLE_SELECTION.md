@@ -140,7 +140,7 @@ unchanged. Old model observations/packets are not rebound or regraded.
 Terra, Muse and Cursor bindings remain null, and Cursor diagnostic receiving
 requires its separate enforcement before binding. The registry contains one
 reviewed Sonnet High V2 named-criterion record, expiring on 2026-10-29 at
-02:40:20 UTC, from its new current-source observation. The earlier c91 source
+04:17:12 UTC, from its new current-source observation. The earlier c91/e033 source
 observation remains historical; it was not rebound or refreshed. It makes only that exact profile/role eligible for guarded routing
 while the current descriptor, confinement, capacity and launch checks match.
 It grants neither action authority nor another profile or role qualification.
