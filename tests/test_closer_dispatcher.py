@@ -4453,10 +4453,13 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
             ({"selected_deadline": None}, "unmeasured"),
             ({"selected_deadline": True}, "unmeasured"),
             ({"selected_deadline": float("nan")}, "unmeasured"),
+            ({"selected_deadline": 10**1000}, "unmeasured"),
+            ({"selected_deadline": -(10**1000)}, "unmeasured"),
             ({"selected_deadline_expired": None}, "unmeasured"),
             ({"selected_deadline_age_seconds": None}, "unmeasured"),
             ({"selected_deadline_age_seconds": True}, "unmeasured"),
             ({"selected_deadline_age_seconds": float("inf")}, "unmeasured"),
+            ({"selected_deadline_age_seconds": 10**1000}, "unmeasured"),
             ({"selected_deadline_age_seconds": -1}, "unmeasured"),
         ]:
             candidate = copy.deepcopy(receipt)

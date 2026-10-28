@@ -243,3 +243,26 @@ label and blocker comment because approval is required and this run's policy is
 Staging this follow-up failed: `.git/index.lock` cannot be created on the read-only
 filesystem. The source, test, and evidence changes remain uncommitted and require
 publication by an authorized runner, followed by CI and review for that revision.
+
+### Oversized receipt diagnostics (2026-10-28)
+
+The CLI receipt regression now supplies oversized positive/negative selected
+deadlines and an oversized deadline age. It reproduced `OverflowError` in the
+receipt-condition grader before the fix. Reusing `_finite_number` makes these
+diagnostics return `unmeasured` instead. Dispatcher/pipeline validation with
+`-m 'not slow'` passed: **511 tests** in 23.78 seconds. No admission barrier changed.
+
+Live acceptance remains unchecked: this runner is dated October 28, PR #982 is
+unmerged, and no `/tmp/closer-*-coord.log` is present. Source #978 is open and
+PR #982 is open and ready for review. The GitHub connector rejected both the
+`needs-human` label and blocker comment because approval is required and this
+run's policy is `never`. The runtime owner must retain the first real post-merge
+receipt for the November 3 check and keep/reopen #978 until that evidence exists.
+
+Black formatted both edited Python files without changes. After sequential
+file checks populated Black's cache to avoid sandbox-blocked multiprocessing,
+the required repository-wide Black command passed: **818 files unchanged**.
+
+The commit attempt failed at `git add`: `.git/index.lock` is on a read-only
+filesystem. This source, test, and evidence follow-up remains uncommitted and
+needs publication by an authorized runner, followed by checks for that revision.

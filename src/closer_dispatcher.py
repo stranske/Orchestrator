@@ -10791,13 +10791,9 @@ def pipeline_admission_pass_number(receipt, *, now=None):
         or not reason.strip()
         or not _finite_number(sampled_at)
         or not 0 <= sampled_at <= stamp
-        or not isinstance(selected, (int, float))
-        or isinstance(selected, bool)
-        or not math.isfinite(selected)
+        or not _finite_number(selected)
         or not isinstance(admission.get("selected_deadline_expired"), bool)
-        or not isinstance(age, (int, float))
-        or isinstance(age, bool)
-        or not math.isfinite(age)
+        or not _finite_number(age)
         or age < 0
     ):
         result.update(status="unmeasured", reason="pipeline deadline diagnostics unread")
