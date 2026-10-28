@@ -3123,7 +3123,10 @@ class _AncestorFDs:
 
         self.held = []
         try:
-            for ancestor in reversed(Path(path).parents):
+            ancestors = tuple(reversed(Path(path).parents))
+            if Path(path) == Path("/"):
+                ancestors = (Path("/"),)  # Root has no parent; own its real fd explicitly.
+            for ancestor in ancestors:
                 fd = os.open(ancestor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                 try:
                     meta = os.fstat(fd)

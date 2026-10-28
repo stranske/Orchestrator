@@ -435,3 +435,100 @@ def test_native_shell_route_pins_canonical_file_and_every_alias(tmp_path, tamper
                 item.check()
     finally:
         pub._close_physical_controls(held)
+
+
+def test_root_directory_owns_real_ancestor_descriptor_and_close_still_refuses():
+    item = pub._PhysicalDirectory(Path("/"))
+    owned = [item.fd, *[fd for _path, fd, _identity in item.ancestors.held]]
+    try:
+        assert [path for path, _fd, _identity in item.ancestors.held] == [Path("/")]
+        for fd in owned:
+            assert os.fstat(fd).st_ino == Path("/").stat().st_ino
+        item.check()
+    finally:
+        item.close()
+    for fd in owned:
+        with pytest.raises(OSError) as closed:
+            os.fstat(fd)
+        assert closed.value.errno == errno.EBADF
+    with pytest.raises(pub.PublicationHeld, match="^publication ancestor descriptors closed$"):
+        item.ancestors.check()
+    with pytest.raises(pub.PublicationHeld, match="^publication ancestor descriptors closed$"):
+        item.check()
+
+
+def test_actual_root_level_alias_retains_live_root_parent_and_close_refuses():
+    alias_path = next(
+        Path(value)
+        for value in ("/bin", "/var", "/tmp", "/etc", "/sbin", "/lib")
+        if Path(value).is_symlink() and Path(value).resolve(strict=True).is_dir()
+    )
+    item = pub._PhysicalShellAlias(alias_path)
+    try:
+        assert item.parent.path == Path("/")
+        assert item.parent.ancestors.held[0][0] == Path("/")
+        assert os.fstat(item.parent.ancestors.held[0][1]).st_ino == Path("/").stat().st_ino
+        assert item.check()["path"] == str(alias_path)
+    finally:
+        item.close()
+    with pytest.raises(pub.PublicationHeld, match="^publication ancestor descriptors closed$"):
+        item.check()
+
+
+def test_production_collector_pins_root_parent_of_native_shell_alias(context, tmp_path):
+    prepared = provision.provision_absent_owned_head(
+        "acme/repo#989",
+        context["head"],
+        "codex/synthetic-existing-pr",
+        git_policy=context["policy"],
+    )
+    # Mac's real root /var alias can express this exact private shell fixture;
+    # Linux uses its actual Git-native /bin/sh fact through the same collector.
+    alias = next(
+        (
+            Path(value)
+            for value in ("/var", "/tmp")
+            if Path(value).is_symlink()
+            and tmp_path.resolve().is_relative_to(Path(value).resolve(strict=True))
+        ),
+        None,
+    )
+    selected_shell = None
+    if alias is not None:
+        physical = tmp_path.resolve() / "native-shell-root-entry"
+        physical.mkdir()
+        (physical / "dash").write_bytes(b"synthetic native shell payload")
+        (physical / "sh").symlink_to("dash")
+        selected_shell = alias / (physical / "sh").relative_to(alias.resolve(strict=True))
+    environment = pub.private_git_environment_data(context["policy"])
+
+    def read(kind, *, files=(), missing=()):
+        for item in files:
+            item.check()
+        assert not any(Path(path).exists() for path in missing)
+        if kind == "helper_shell" and selected_shell is not None:
+            return (str(selected_shell) + "\n").encode()
+        return subprocess.check_output(
+            [str(context["git"]), "-C", prepared["worktree"], *pub._read_command(kind)],
+            env=environment,
+            timeout=15,
+        )
+
+    facts, held, _missing, _route, _gh = pub._collect_git_context_data(
+        prepared["worktree"], "acme/repo", context["policy"], read, dict(os.environ)
+    )
+    try:
+        root_aliases = [
+            item
+            for item in held
+            if isinstance(item, pub._PhysicalShellAlias) and item.path.parent == Path("/")
+        ]
+        assert root_aliases, "The exact production collector must exercise a real root-level alias"
+        for item in root_aliases:
+            assert item.parent.path == Path("/")
+            assert item.parent.ancestors.held[0][0] == Path("/")
+            item.check()
+        assert facts["helper_shell_route"]["aliases"]
+        assert facts["helper_shell"]["sha256"]
+    finally:
+        pub._close_physical_controls(held)
