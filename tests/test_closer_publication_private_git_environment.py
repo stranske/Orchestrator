@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -128,7 +129,9 @@ def test_private_environment_ignores_executable_global_but_retains_original_auth
     assert context["original"].joinpath(".gitconfig").read_text().startswith('[filter "lfs"]')
 
 
-@pytest.mark.parametrize("fault", ["hash", "extra", "redirect", "environment"])
+@pytest.mark.parametrize(
+    "fault", ["hash", "extra", "redirect", "environment", "system_environment"]
+)
 def test_private_context_tamper_refuses_before_child(context, monkeypatch, fault):
     policy = copy.deepcopy(context["policy"])
     if fault == "hash":
@@ -137,8 +140,10 @@ def test_private_context_tamper_refuses_before_child(context, monkeypatch, fault
         (context["private"] / "extra").write_text("unexpected")
     elif fault == "redirect":
         policy["git_environment_v1"]["home"] = str(context["private"]) + "/.."
-    else:
+    elif fault == "environment":
         monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/malicious")
+    else:
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/malicious")
     with pytest.raises(pub.PublicationHeld):
         pub.private_git_environment_data(policy)
 
@@ -252,3 +257,63 @@ def test_cleanup_failure_does_not_leave_other_original_files_open(tmp_path, monk
     with pytest.raises(pub.PublicationHeld, match="cleanup unknown"):
         pub._close_physical_controls(files)
     assert all(item.fd is None for item in files)
+
+
+def test_system_lfs_configuration_is_causally_excluded_not_allowlisted(
+    context, tmp_path, record_property
+):
+    """Use this platform's actual Git (hosted runner2.55, localMac2.49)."""
+    git = str(context["git"])
+    version = subprocess.check_output([git, "--version"]).decode().strip()
+    record_property("actual_git_version", version)
+    before = dict(os.environ)
+    system = tmp_path / "synthetic-system-gitconfig"
+    system.write_text(
+        '[filter "lfs"]\n\tclean = /must-not-execute\n\tsmudge = /must-not-execute\n\tprocess = /must-not-execute\n\trequired = true\n'
+    )
+    child = pub.private_git_environment_data(context["policy"])
+    inherited_system = {**child, "GIT_CONFIG_SYSTEM": str(system)}
+    command = [git, "-C", str(context["repo"]), *pub._read_command("config_names")]
+    raw = subprocess.check_output(command, env=inherited_system)
+    parts = raw.rstrip(b"\0").decode().split("\0")
+    system_rows = [tuple(parts[i : i + 3]) for i in range(0, len(parts), 3) if parts[i] == "system"]
+    assert any(
+        row == ("system", "file:" + str(system), "filter.lfs.process") for row in system_rows
+    )
+    record_property("controlled_raw_system_name_inventory", json.dumps(system_rows))
+    with pytest.raises(pub.PublicationHeld, match="unsupported config provenance"):
+        pub._configuration_names(raw, 65536)
+    repaired_raw = subprocess.check_output(command, env=child)
+    repaired = pub._configuration_names(repaired_raw, 65536)
+    assert not any(key.startswith("filter.") for _, _, key in repaired)
+    assert child["GIT_CONFIG_SYSTEM"] == child["GIT_CONFIG_GLOBAL"] == str(context["config"])
+    assert dict(os.environ) == before
+    # Safe diagnostic for actual CI: finite known names only, never values or
+    # arbitrary unknown section/key strings that could contain private data.
+    ambient = subprocess.run(
+        [git, "config", "--system", "--null", "--name-only", "--list"],
+        env=before,
+        capture_output=True,
+        timeout=10,
+    )
+    keys = ambient.stdout.rstrip(b"\0").decode().split("\0") if ambient.returncode == 0 else []
+    known = {"filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.process", "filter.lfs.required"}
+    record_property(
+        "actual_ambient_system_lfs_names", json.dumps([key for key in keys if key in known])
+    )
+    record_property(
+        "actual_ambient_system_other_names_count", sum(key not in known for key in keys)
+    )
+
+
+def test_runtime_git_reads_use_the_same_pinned_system_and_global_context(context):
+    import time
+    from types import SimpleNamespace
+
+    observed = SimpleNamespace(
+        policy=context["policy"], operation={"deadline": time.time() + 15}, check=lambda: None
+    )
+    # DATA transport exercise only, never an original Root/operation permit.
+    for kind in ("system_paths", "global_paths"):
+        raw = pub._fixed_git_read(observed, context["repo"], kind)
+        assert raw.decode().strip() == str(context["config"])

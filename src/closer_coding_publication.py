@@ -1905,6 +1905,10 @@ def private_git_environment_data(policy, original=None, *, held=None):
             "HOME": str(home),
             "XDG_CONFIG_HOME": str(home / ".config"),
             "GH_CONFIG_DIR": route["config_directory"],
+            # Override only inside this source-owned Git child. HOME alone
+            # leaves executable system configuration active on hosted runners.
+            "GIT_CONFIG_SYSTEM": str(home / ".gitconfig"),
+            "GIT_CONFIG_GLOBAL": str(home / ".gitconfig"),
         }
         if held is not None:
             held.extend(own)

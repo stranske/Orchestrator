@@ -52,3 +52,11 @@ descriptor. Root's full source/runtime closure and ordinary before-effect guards
 still bind them. No additional model-quality callback or qualification claim is
 made by this host-only correction. Existing first-PR, no-copy, queue/WAL, UNKNOWN,
 lease, selected-proof, action, and required-test guards remain unchanged.
+
+Private HOME alone isolates global configuration but does not isolate Git's
+compiled system configuration. The source-owned Git child therefore sets both
+`GIT_CONFIG_SYSTEM` and `GIT_CONFIG_GLOBAL` to the same existing regular owned
+configuration file whose exact hash is already pinned. Both paths are observed
+by the canonical inventory. No `/dev/null`, caller-selected system override or
+ambient Git environment is accepted. Root and user system/global files remain
+unchanged; only Git children receive these internal environment fields.
