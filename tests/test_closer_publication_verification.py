@@ -598,7 +598,8 @@ def test_fixed_protected_instruction_body_tamper_refuses_before_selection(world)
 
 
 @pytest.mark.parametrize(
-    "mode", ["valid", "unrelated", "absent", "json", "changed_scope", "edited_instruction"]
+    "mode",
+    ["valid", "unrelated", "absent", "json", "changed_scope", "edited_instruction", "unhinted_v2"],
 )
 def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world, monkeypatch, mode):
     world.remote.current.update(checks="SUCCESS", revision="new-root-current-head")
@@ -610,6 +611,24 @@ def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world,
             "corrective_publication_hint": join.selection_hint(continuation(world)),
         }
     }, []
+    if mode == "unhinted_v2":
+        from test_closer_publication_existing_git_objects import anchor_policy
+
+        from closer_runtime_binding import RuntimeBinding
+
+        context = {"prepare": {}}
+        policy = {**anchor_policy(), "consumer_id": "codex"}
+        assert publication.validate_policy(policy) == policy
+        world.backend.runtime_binding = RuntimeBinding(
+            None,
+            {
+                "correction_controller_installation": {
+                    "config": {"consumers": {"codex": {"publication_v2": policy}}}
+                }
+            },
+        )
+        # Configuration selects a read only. This is not an installed binding
+        # and cannot grant source/ACT authority; the same DATA reader follows.
     admission = next(v for k, v in world.records.items() if k.startswith("admission-"))
     own = admission["own_instruction"]
     projection = dict(
@@ -637,15 +656,23 @@ def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world,
     def source_reader(backend, target, snapshot, operation, pipeline_context):
         assert backend is world.backend and target == world.target and pipeline_context is context
         assert join.queue._currently_invoking(target, operation)
+        if mode == "unhinted_v2":
+            captures.append("source_reader_called")
         return None if mode == "unrelated" else (projection if mode == "json" else SyntheticView())
 
-    if mode != "absent":
+    if mode == "unhinted_v2":
+        import closer_coding_publication_io as publication_io
+
+        # Keep the actual publication source-reader entrypoint. Only its
+        # source-issued projection boundary supplies synthetic DATA here.
+        monkeypatch.setattr(publication_io, "read_for_existing_root", source_reader)
+    elif mode != "absent":
         monkeypatch.setattr(publication, "read_for_existing_root", source_reader, raising=False)
     else:
         monkeypatch.delattr(publication, "read_for_existing_root", raising=False)
 
     def execute(target, action, snapshot, operation):
-        if mode in {"valid", "unrelated"}:
+        if mode in {"valid", "unrelated", "unhinted_v2"}:
             cap = join.attach_existing_root(world.backend, target, snapshot, operation, context)
             assert (cap is None) == (mode == "unrelated")
             if cap is not None:
@@ -660,7 +687,11 @@ def test_new_root_uses_its_actual_queue_frame_and_source_owned_projection(world,
         return {"status": "blocked", "reason": "pure synthetic callback ends without native actor"}
 
     _run(world.backend.state_path, [world.target], world.backend.observe, execute, max_passes=1)
-    assert captures == [mode if mode in {"valid", "unrelated"} else "held"]
+    assert captures == (
+        ["source_reader_called", "unhinted_v2"]
+        if mode == "unhinted_v2"
+        else [mode if mode in {"valid", "unrelated"} else "held"]
+    )
     assert world.remote.posts == []
 
 

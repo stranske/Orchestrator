@@ -2,6 +2,7 @@
 
 import ast
 import inspect
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -61,23 +62,31 @@ def test_real_local_child_file_reaches_only_its_actual_cwd_and_candidate(
     (workspace / "src").mkdir()
     (workspace / "src/a.py").write_bytes(b"partial\n")
     git = "/usr/bin/git"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", HOME=str(tmp_path))
 
     def run(*args):
         return subprocess.check_output(
-            [git, "-C", str(workspace), *args], stderr=subprocess.DEVNULL
+            [git, "-C", str(workspace), *args], stderr=subprocess.DEVNULL, env=env, timeout=10
         )
 
-    run("init", "--initial-branch=correction/owned")
-    run("add", "src/a.py")
-    run(
-        "-c",
-        "user.name=Inert test",
-        "-c",
-        "user.email=inert@example.invalid",
-        "commit",
-        "-m",
-        "partial",
-    )
+    # Repository-location variables from an outer Git hook must never redirect
+    # setup into that repository. Poison only this local setup scope.
+    with monkeypatch.context() as inherited:
+        inherited.setenv("GIT_DIR", str(tmp_path / "not-the-owned-git-dir"))
+        inherited.setenv("GIT_WORK_TREE", str(tmp_path / "not-the-owned-worktree"))
+        inherited.setenv("GIT_INDEX_FILE", str(tmp_path / "not-the-owned-index"))
+        run("init", "--initial-branch=correction/owned")
+        run("add", "src/a.py")
+        run(
+            "-c",
+            "user.name=Inert test",
+            "-c",
+            "user.email=inert@example.invalid",
+            "commit",
+            "-m",
+            "partial",
+        )
     head = run("rev-parse", "HEAD").decode().strip()
     commands = {
         "head": ["rev-parse", "HEAD"],
@@ -105,6 +114,8 @@ def test_real_local_child_file_reaches_only_its_actual_cwd_and_candidate(
             "from pathlib import Path; Path('src/a.py').write_bytes(b'fixed\\n'); print(Path.cwd())",
         ],
         cwd=cwd,
+        env=env,
+        timeout=10,
     )
     assert Path(child.decode().strip()) == cwd.resolve()
     if old_isolation:

@@ -35,10 +35,10 @@ ROLES = frozenset(TASK_ROLES.values())
 MECHANICAL_OPERATIONS = frozenset({"format", "lint_fix", "docstring_fix"})
 # One independently reviewed native observation; expiry is not auto-refreshed.
 ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
-    "sonnet-current-role-qualification:98cf04ae2c3b7c89fba34b5e68eecc7d8781ecdaabda872894d24dc30dace7b6": {
+    "sonnet-current-role-qualification:8a55f26de5ef1d9165c3f1423508bc312323cbb240336c9db5ed5955469aa207": {
         "schema": "closer-role-qualification/v1",
         "status": "qualified",
-        "qualification_id": "sonnet-current-role-qualification:98cf04ae2c3b7c89fba34b5e68eecc7d8781ecdaabda872894d24dc30dace7b6",
+        "qualification_id": "sonnet-current-role-qualification:8a55f26de5ef1d9165c3f1423508bc312323cbb240336c9db5ed5955469aa207",
         "role": "strong_criterion_adjudication",
         "profile_identity": {
             "profile_id": "claude-sonnet-5-5-high-v2",
@@ -55,8 +55,8 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
             "requires_explicit_selection": True,
         },
         "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
-        "qualified_at": 1793146888.844447,
-        "expires_at": 1793233288.844447,
+        "qualified_at": 1793155220.7341619,
+        "expires_at": 1793241620.7341619,
         "transport": "offload",
         "named_criterion_only": True,
         "confinement": {
@@ -70,7 +70,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
         "execution_limits": {
             "schema": "closer-data-only-limits/v1",
             "role": "strong_criterion_adjudication",
-            "model_contract_sha256": "c91e3ae08ff554d95dcc87734996234b17afd217bae3ecd21e13bff5aed77f8a",
+            "model_contract_sha256": "e033fe61bd4e093c0b12f6ecb8996650d2d122ae389017a2a747cd4bd05637d0",
             "max_prompt_bytes": 65536,
             "max_final_bytes": 16384,
             "max_native_result_bytes": 65536,
@@ -83,16 +83,16 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
             "role": "strong_criterion_adjudication",
             "sources": {
                 "closer_dispatcher.py": "81635a53d3005a6e578f7128b9ed1dae219b872dc6e946f5b4ec1047038b7ead",
-                "dispatcher.py": "ebe1434897ea1bab3cf5da69c0e7f39456f3b0d857e8d5a3ec51c74ec1d7f413",
+                "dispatcher.py": "220f34ca499e83db81405245d1cf56b21f3bb7b16ca0c8bf55ba66bd8bbd4854",
                 "adapters.py": "4156636c6251e480d2f7bd22dced52fd344028f65e4931b5018127b75f77fbeb",
                 "closer_data_only_execution.py": "68c9dbac68bcf6ee98b403130b3b008f4412c9f8c8eccf8c2b85021038ad14f2",
-                "closer_claude_role_admission.py": "f7dd1ca2616e6f9c6f0bd809b17c29763f0cc76e345756c3891ca0c74011dadf",
+                "closer_claude_role_admission.py": "7aaccbdb1a42b8fdec775b27a11199fc572093af80f8c860a909ed56fe1897ae",
                 "transport_saved_result.py": "468697f68fb973c5a37ea7dcbd1226508664935ad997662a90718fbc5087996d",
                 "transport_qualification.py": "b54e9e8d529647615650b9d999eec6a943cb53416fd30f73fce13ad7ad6aedc1",
                 "closer_model_contracts.py": "d0e95012d1cb48e8d275bf1ba3221ed9d931ede48da2321cb1a36bd769a66d62",
                 "closer_role_selection.py": "ee7b429db1e0f48afccfc50ebc2de4e9eb05ada2b64e9bea3998df6dd84ce651",
                 "closer_semantic_assessment.py": "922b5a684a4cb6e2c5f051a8ecde8ae779fc9a07962dcb926e501d45ebef870d",
-                "router.py": "d7b9d4ed8d4d18be040c4e016b80a188f09cbaa8c319b6cd5147e99b298f2069",
+                "router.py": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
                 "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",
                 "closer_adjudication_policy.py": "9ecc5df250160104104c561b6bcfbbb35921891e0cbec6cf0f098a924feb15e1",
                 "closer_disposition.py": "a726f59d1376dacb9b78117bbc7071bd67f7c1c3412e885c9fd9c721c309ca9c",
@@ -117,12 +117,12 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
                 "controller_action_policy": "closer-adjudication-action-policy/v1",
             },
             "authority": False,
-            "contract_sha256": "c91e3ae08ff554d95dcc87734996234b17afd217bae3ecd21e13bff5aed77f8a",
+            "contract_sha256": "e033fe61bd4e093c0b12f6ecb8996650d2d122ae389017a2a747cd4bd05637d0",
         },
         "evidence_refs": [
             {
-                "reference": "retained-native-evidence:sha256:86659d4edc706a268bd1cefcfba745e373275d5e08bf1118b24be264d09f67ad",
-                "sha256": "86659d4edc706a268bd1cefcfba745e373275d5e08bf1118b24be264d09f67ad",
+                "reference": "retained-native-evidence:sha256:b4a64af41995c51c58b3598f14788c97a470ff0da84021711a65acb7e1d5bea7",
+                "sha256": "b4a64af41995c51c58b3598f14788c97a470ff0da84021711a65acb7e1d5bea7",
             },
             {
                 "reference": "reviewed-model-quality:sha256:7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",

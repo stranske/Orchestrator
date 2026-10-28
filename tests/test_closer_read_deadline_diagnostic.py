@@ -105,8 +105,8 @@ def failing_round(
         except closer.RoundDeadlineExhausted:
             if corrupt:
                 value = queue._read_timing()
-                if value is not None:
-                    corrupt(value.failure)
+                assert value is not None and value.failure is not None
+                corrupt(value.failure)
             if wrapped:
                 raise ValueError("different wrapper text " + SECRET) from None
             raise
@@ -262,3 +262,25 @@ def test_successful_api_totals_precede_exact_failure_without_retaining_payload(m
         diag = queue._validated_read_payload(queue._read_timing().failure)
         assert diag["api_calls"] == 3 and diag["completed_api_seconds"] >= 0
         assert SECRET not in json.dumps(diag)
+
+
+@pytest.mark.parametrize("action", ["correction_coding", "collect_evidence"])
+def test_capture_failure_retains_only_type_and_does_not_replace_unknown(
+    tmp_path, monkeypatch, action
+):
+    def broken_capture(_frame):
+        raise RuntimeError(SECRET)
+
+    monkeypatch.setattr(queue, "_read_api_caller", broken_capture)
+    event, operation = failing_round(tmp_path, monkeypatch, action=action)
+    assert operation["status"] == "uncertain"
+    assert "read_only_deadline_diagnostic" not in event
+    if action == "correction_coding":
+        assert event["read_timing_capture_error"] == {
+            "error_type": "RuntimeError",
+            "authority": False,
+            "retry_authorized": False,
+        }
+    else:
+        assert "read_timing_capture_error" not in event
+    assert SECRET not in json.dumps(event)

@@ -418,6 +418,7 @@ def run_current_source_public_qualification(proposal, *, quality_ref, deadline):
         "capability_pass": False,
     }
     permit = None
+    failure_phase = "pool_acquisition"
     try:
         with resources.pool_slot(
             pool_root,
@@ -434,6 +435,7 @@ def run_current_source_public_qualification(proposal, *, quality_ref, deadline):
                 "target": request["target"],
             }
             try:
+                failure_phase = "guarded_launch_setup"
                 permit = _issue_permit("launch", operation_id, pending, deadline)
                 options, expected, observed = closer._controlled_launch_inputs(
                     profile=profile,
@@ -451,6 +453,7 @@ def run_current_source_public_qualification(proposal, *, quality_ref, deadline):
                 }
                 remaining = deadline - time.time()
                 _need(remaining > 0, "qualification deadline exhausted before native submission")
+                failure_phase = "native_invocation"
                 result = dispatcher.offload(
                     "claude",
                     prompt,
@@ -466,6 +469,7 @@ def run_current_source_public_qualification(proposal, *, quality_ref, deadline):
                 )
                 report["result"] = result
                 if isinstance(result, dict) and result.get("exit") == 0:
+                    failure_phase = "native_proof_validation"
                     proof = closer._validate_controlled_result(
                         result,
                         expected,
@@ -473,6 +477,7 @@ def run_current_source_public_qualification(proposal, *, quality_ref, deadline):
                         receipt_root=dispatcher.DISPATCH_LOG_DIR,
                         _qualification=permit,
                     )
+                    failure_phase = "named_answer_validation"
                     answer = contracts.validate_adjudication_response(
                         request,
                         closer._worker_proposal(result, agent="claude"),
@@ -494,6 +499,8 @@ def run_current_source_public_qualification(proposal, *, quality_ref, deadline):
                 raise
     except Exception as error:
         report["failure_type"] = type(error).__name__
+        # Source-owned fixed phase; raw exception text can contain credentials.
+        report["failure_phase"] = failure_phase
     finally:
         if permit is not None:
             _close(permit)

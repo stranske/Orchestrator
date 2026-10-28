@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import random
 import sys
@@ -698,7 +699,16 @@ def select_agent(
                 is None
             ):
                 return None
-        except (OSError, ValueError, TypeError, KeyError):
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            # Policy contents, paths and exception messages are not diagnostic data.
+            failure_kind = next(
+                kind.__name__
+                for kind in (OSError, ValueError, TypeError, KeyError)
+                if isinstance(error, kind)
+            )
+            logging.getLogger(__name__).warning(
+                "closer selection policy unavailable (%s)", failure_kind
+            )
             return None
     if neutral and learned is None:
         learned = {

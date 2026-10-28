@@ -20,6 +20,7 @@ import inspect
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -597,7 +598,7 @@ class _ReadTiming:
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.started = time.monotonic()
         self.calls, self.seconds, self.points = 0, 0.0, []
-        self.failure, self.error = None, None
+        self.failure, self.error, self.capture_error = None, None, None
 
 
 def _read_timing():
@@ -613,6 +614,19 @@ def _read_timing():
     ):
         return value
     return None
+
+
+def _note_read_capture_failure(error):
+    """Retain only a bounded class name on the private live callback record."""
+    try:
+        value = _read_timing()
+        name = type(error).__name__
+        if value is not None and value.capture_error is None:
+            value.capture_error = (
+                name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) else "Exception"
+            )
+    except Exception:
+        pass
 
 
 def _read_api_caller(frame):
@@ -639,7 +653,8 @@ def _read_timing_start(method, endpoint):
             return None
         value.calls = min(10000, value.calls + 1)
         return (value, time.monotonic(), _safe_read_endpoint(method, endpoint))
-    except Exception:
+    except Exception as error:
+        _note_read_capture_failure(error)
         return None
 
 
@@ -655,8 +670,8 @@ def _read_timing_finish(call):
         elapsed = time.monotonic() - started
         if value is _read_timing() and 0 <= elapsed <= 3600:
             value.seconds = min(3600.0, value.seconds + elapsed)
-    except Exception:
-        pass
+    except Exception as error:
+        _note_read_capture_failure(error)
 
 
 def _coding_timing_point(stage):
@@ -686,8 +701,8 @@ def _coding_timing_point(stage):
                     "api_seconds": round(value.seconds, 6),
                 }
             )
-    except Exception:
-        pass
+    except Exception as error:
+        _note_read_capture_failure(error)
 
 
 def _read_deadline_failure(call, error, remaining, phase):
@@ -746,8 +761,8 @@ def _read_deadline_failure(call, error, remaining, phase):
             "completed_api_seconds": round(value.seconds, 6),
             "coding_waypoints": _json_copy(value.points),
         }
-    except Exception:
-        pass
+    except Exception as error:
+        _note_read_capture_failure(error)
 
 
 def _validated_read_payload(payload):
@@ -840,10 +855,11 @@ def _validated_read_payload(payload):
 
 
 class _ReadFailureEnvelope:
-    def __init__(self, error, operation, payload):
+    def __init__(self, error, operation, payload, capture_error=None):
         self.seal, self.error = _READ_DIAGNOSTIC_SEAL, error
         self.operation = tuple(operation.get(k) for k in ("id", "request_started_at", "deadline"))
         self.payload = _json_copy(payload)
+        self.capture_error = capture_error
 
 
 def _attach_read_failure(error):
@@ -855,15 +871,15 @@ def _attach_read_failure(error):
             caller.f_code is not _callback_invocation.__wrapped__.__code__
             or caller.f_globals is not globals()
             or value is None
-            or value.failure is None
         ):
             return
         payload = _validated_read_payload(value.failure)
-        if payload is None:
+        if payload is None and value.capture_error is None:
             return
-        payload["same_exception_as_callback"] = value.error is error
+        if payload is not None:
+            payload["same_exception_as_callback"] = value.error is error
         error._closer_read_failure = _ReadFailureEnvelope(
-            error, value.current["operation"], payload
+            error, value.current["operation"], payload, value.capture_error
         )
     except Exception:
         pass
@@ -906,6 +922,31 @@ def _queued_read_failure(error, operation):
             == tuple(operation.get(k) for k in ("id", "request_started_at", "deadline"))
         ):
             return _validated_read_payload(value.payload)
+    except Exception:
+        pass
+    return None
+
+
+def _queued_read_capture_error(error, operation):
+    try:
+        caller = inspect.currentframe().f_back
+        value = getattr(error, "_closer_read_failure", None)
+        if (
+            caller.f_code is run_round.__code__
+            and caller.f_globals is globals()
+            and type(value) is _ReadFailureEnvelope
+            and value.seal is _READ_DIAGNOSTIC_SEAL
+            and value.error is error
+            and value.operation
+            == tuple(operation.get(k) for k in ("id", "request_started_at", "deadline"))
+            and type(value.capture_error) is str
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", value.capture_error)
+        ):
+            return {
+                "error_type": value.capture_error,
+                "authority": False,
+                "retry_authorized": False,
+            }
     except Exception:
         pass
     return None
@@ -3183,6 +3224,12 @@ def run_round(
                             **(
                                 {"read_only_deadline_diagnostic": read_diagnostic}
                                 if (read_diagnostic := _queued_read_failure(exc, op)) is not None
+                                else {}
+                            ),
+                            **(
+                                {"read_timing_capture_error": capture_error}
+                                if (capture_error := _queued_read_capture_error(exc, op))
+                                is not None
                                 else {}
                             ),
                         )

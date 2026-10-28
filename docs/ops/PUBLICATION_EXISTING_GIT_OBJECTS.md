@@ -86,3 +86,21 @@ provider execution, publication or activation. The receipt is
 raw-copy snapshot experiment remains diagnostic history and is excluded from this
 source path. Runtime admission, native account, actual coding and publication
 must still use their genuine source-controlled issuers.
+
+## Timestamp-only Git freshening
+
+Native Git can refresh an existing loose object or pack timestamp while writing
+an already present object. An unchanged timestamp remains a metadata-only check.
+A changed timestamp requires bounded content verification before the new times
+are cached: loose payloads must match the original SHA256 and native object ID;
+packs must match their native Git container ID and trailer; index and sidecar
+bytes must match the original SHA256. Device, inode, owner, mode, link count and
+size remain fixed. Same-inode content changes remain held.
+
+The protected anchor retains the original fingerprints, encoded as exact decimal
+strings for custody compatibility. Cold reentry supplies those original values;
+it cannot adopt the current timestamps as a new baseline. Source-owned streaming
+reads use the existing writer lifetime/deadline context and fixed byte bounds.
+No unchanged object body is copied or retained, and unchanged barriers do not
+rehash packs. Partial/promisor object stores and unknown pack inventory remain
+unsupported; this fix does not turn missing objects into fetch permission.

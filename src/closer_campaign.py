@@ -3620,33 +3620,40 @@ def tick(
                         .get("config", {})
                         .get("consumers", {})
                     )
-                    if any(
-                        bool(__import__("closer_coding_publication").publication_key(registration))
-                        for registration in configured_consumers.values()
-                    ):
-                        from closer_coding_publication import PublicationHeld
-                        from closer_coding_publication import run_if_selected as publish_if_selected
+                    from closer_coding_publication import PublicationHeld
+                    from closer_coding_publication import run_if_selected as publish_if_selected
 
-                        try:
+                    try:
+                        publication = None
+                        if any(
+                            (
+                                bool(
+                                    __import__("closer_coding_publication").publication_key(
+                                        registration
+                                    )
+                                )
+                                for registration in configured_consumers.values()
+                            )
+                        ):
                             publication = publish_if_selected(
                                 campaign, doc, manifest, manifest_path, pending
                             )
-                        except (
-                            PublicationHeld,
-                            OSError,
-                            ValueError,
-                            RuntimeError,
-                            KeyError,
-                            TypeError,
-                        ):
-                            publication = {
-                                "kind": "existing_pr_publication_held",
-                                "next_trigger": "reconcile owned publication before new effects",
-                                "authority": False,
-                            }
-                        if publication is not None:
-                            report.append({"campaign": path.name, **publication})
-                            continue
+                    except (
+                        PublicationHeld,
+                        OSError,
+                        ValueError,
+                        RuntimeError,
+                        KeyError,
+                        TypeError,
+                    ):
+                        publication = {
+                            "kind": "existing_pr_publication_held",
+                            "next_trigger": "reconcile owned publication before new effects",
+                            "authority": False,
+                        }
+                    if publication is not None:
+                        report.append({"campaign": path.name, **publication})
+                        continue
                     from closer_native_observer import run_coding_if_selected
 
                     coding = run_coding_if_selected(campaign, doc, manifest, manifest_path, pending)

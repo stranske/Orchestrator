@@ -137,9 +137,14 @@ source-owned collector rail rather than a model plan. The protected original
 native retained-packet guard and unrelated publication/zero-model code remain
 unchanged. Old model observations/packets are not rebound or regraded.
 
-Terra, Muse and Cursor bindings remain null; runtime role records stay empty,
-and Cursor diagnostic receiving enforcement remains required before binding.
-Source preparation and a quality-scope category are not runtime enrollment.
+Terra, Muse and Cursor bindings remain null, and Cursor diagnostic receiving
+requires its separate enforcement before binding. The registry contains one
+reviewed Sonnet High V2 named-criterion record, expiring on 2026-10-29 at
+02:40:20 UTC, from its new current-source observation. The earlier c91 source
+observation remains historical; it was not rebound or refreshed. It makes only that exact profile/role eligible for guarded routing
+while the current descriptor, confinement, capacity and launch checks match.
+It grants neither action authority nor another profile or role qualification.
+Source preparation and a quality-scope category alone are not runtime enrollment.
 
 The exact typed-v2 assessment has no optional producer-drift-audit carrier.
 The controller reports `audit_unavailable_current_contract`, preserves ordinary

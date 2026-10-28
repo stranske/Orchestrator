@@ -13,8 +13,8 @@ def _record():
 
 def test_reviewed_record_has_original_finite_observation():
     r = _record()
-    assert r["qualified_at"] == 1793146888.844447
-    assert r["expires_at"] == 1793233288.844447
+    assert r["qualified_at"] == 1793155220.7341619
+    assert r["expires_at"] == 1793241620.7341619
     assert r["expires_at"] - r["qualified_at"] == 86400
     p = execution_profiles.get_profile(r["profile_identity"]["profile_id"])
     assert q.is_qualified(p, q.STRONG_CRITERION_ADJUDICATION, now=r["qualified_at"] + 1)

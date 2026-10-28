@@ -49,6 +49,35 @@ READ_BARRIER_TRIGGER = "reconcile_retained_read_before_retry"
 _FINITE_DISPATCHER_CALLBACKS: weakref.WeakSet = weakref.WeakSet()
 
 
+def _source_native_intake(target, context, callback, *, _scope_callback):
+    """Run only inside the original scope/lane gates; no caller opt-in."""
+    import inspect
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller is None
+        or caller.f_globals is not closer_resources.__dict__
+        or caller.f_code is not getattr(_scope_callback, "__code__", None)
+        or closer_resources._NATIVE_INTAKE_SCOPE_CALLBACKS.get(_scope_callback) is not callback
+        or caller.f_locals.get("fn") is not callback
+        or caller.f_locals.get("stage") != "interpret"
+        or callback not in _FINITE_DISPATCHER_CALLBACKS
+    ):
+        return None
+    import closer_conservative_intake
+
+    return closer_conservative_intake.try_from_pipeline(target, context, callback)
+
+
+def _source_native_intake_ready(target, preparation, callback):
+    """Read-only lane hint, never an intake proof or authority."""
+    if callback not in _FINITE_DISPATCHER_CALLBACKS:
+        return False
+    import closer_conservative_intake
+
+    return closer_conservative_intake.ready(target, preparation)
+
+
 def _register_dispatcher_finite_callbacks(callbacks: Mapping[str, Any]) -> None:
     """Register actual dispatcher-created callbacks; never a public opt-in flag."""
     import inspect
@@ -4364,6 +4393,8 @@ def _run_pipeline_finite(
                         try:
                             remote = closer_dispatcher.native_stage_remote_only(
                                 target, item.get("results", {}), stage, original
+                            ) or _source_native_intake_ready(
+                                target, item.get("results", {}).get("prepare"), original
                             )
                         except (
                             OSError,

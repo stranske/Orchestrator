@@ -101,7 +101,11 @@
     "tests/test_closer_read_deadline_diagnostic.py",
     "tests/test_closer_sonnet_role_admission.py",
     "tests/test_closer_plain_tasks_heading.py",
-    "tests/test_closer_sonnet_reviewed_record.py"
+    "tests/test_closer_sonnet_reviewed_record.py",
+    "tests/test_closer_conservative_intake.py",
+    "tests/test_closer_conservative_invitation.py",
+    "tests/test_closer_review_diagnostic_contracts.py",
+    "tests/test_verifier_native_bot_origin.py"
   ],
   "shards": [
     [
@@ -706,7 +710,11 @@
       "tests/test_closer_read_deadline_diagnostic.py",
       "tests/test_closer_sonnet_role_admission.py",
       "tests/test_closer_plain_tasks_heading.py",
-      "tests/test_closer_sonnet_reviewed_record.py"
+      "tests/test_closer_sonnet_reviewed_record.py",
+      "tests/test_closer_conservative_intake.py",
+      "tests/test_closer_conservative_invitation.py",
+      "tests/test_closer_review_diagnostic_contracts.py",
+      "tests/test_verifier_native_bot_origin.py"
     ]
   ]
 }

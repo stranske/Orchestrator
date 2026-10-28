@@ -937,7 +937,11 @@ def host_git_context(selection):
                 scope.history["baseline"]["schema"] == "closer-publication-source-baseline/v2",
                 "original no-copy baseline version differs",
             )
-            anchor = publication._source_snapshot_seed(host, scope.history["baseline"]["baseline"])
+            anchor = publication._source_snapshot_seed(
+                host,
+                scope.history["baseline"]["baseline"],
+                prior=scope.history["baseline"]["existing_objects"],
+            )
             _need(
                 anchor.summary() == scope.history["baseline"]["existing_objects"],
                 "original existing object fingerprint changed before reentry",

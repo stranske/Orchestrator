@@ -2814,7 +2814,7 @@ def _index_flags(raw, policy):
     for entry in raw[:-1].split(b"\0") if raw else []:
         _need(entry.startswith(b"H "), "assume-unchanged or skip-worktree index unsupported")
         try:
-            path = _path(entry[2:].decode("utf-8"))
+            path = _inventory_path(entry[2:].decode("utf-8"), policy)
         except UnicodeError:
             raise PublicationHeld("Git index path encoding unsupported") from None
         _need(path not in paths and len(paths) < policy["max_files"], "Git index flag bound")
@@ -3325,9 +3325,18 @@ def _seed_snapshot_data(baseline, commit_raw, policy):
 class _ExistingObjects:
     """Read-only ownership of selected existing Git objects, never a publisher."""
 
-    def __init__(self, path, baseline, commit_raw, policy):
+    def __init__(
+        self, path, baseline, commit_raw, policy, *, prior=None, read_context=None, deadline=None
+    ):
         baseline = validate_baseline_data(baseline, policy)
         self.path, self.baseline, self.closed = Path(path), _copy(baseline), False
+        self.content_bound = policy["baseline_limits"]["max_total_bytes"]
+        self.read_context = read_context
+        _need(
+            deadline is None or (type(deadline) in (int, float) and 0 < deadline < float("inf")),
+            "original object read deadline invalid",
+        )
+        self.deadline = deadline
         self.directory = _PhysicalDirectory(self.path)
         self.held, self.absent, self.identities, self.prefixes, self.loose_prefixes = (
             [],
@@ -3350,6 +3359,16 @@ class _ExistingObjects:
                 {oid: ("tree", len(raw.split(b"\0", 1)[1])) for oid, raw in trees.items()}
             )
             self.expected[baseline["head_oid"]] = ("commit", len(commit_raw))
+            self.payload_sha256 = {
+                r["blob"]["git_oid"]: r["blob"]["sha256"] for r in baseline["files"]
+            }
+            self.payload_sha256.update(
+                {
+                    oid: hashlib.sha256(raw.split(b"\0", 1)[1]).hexdigest()
+                    for oid, raw in trees.items()
+                }
+            )
+            self.payload_sha256[baseline["head_oid"]] = hashlib.sha256(commit_raw).hexdigest()
             _need(
                 len(self.expected_output()) <= policy["baseline_limits"]["max_inventory_bytes"],
                 "closed native object metadata byte bound",
@@ -3393,19 +3412,208 @@ class _ExistingObjects:
             finally:
                 if info_fd is not None:
                     os.close(info_fd)
+            current = dict(self.identities)
+            metadata_names = {
+                name for name in current if name.startswith("pack/") and not name.endswith(".pack")
+            }
+            if prior is not None:
+                _exact(
+                    prior,
+                    {
+                        "schema",
+                        "path",
+                        "head_oid",
+                        "tree_oid",
+                        "baseline_sha256",
+                        "physical_sha256",
+                        "physical_files",
+                        "metadata_sha256",
+                    },
+                )
+                _need(
+                    prior["schema"] == "closer-existing-git-object-anchor/v2"
+                    and prior["path"] == str(self.path)
+                    and prior["head_oid"] == baseline["head_oid"]
+                    and prior["tree_oid"] == baseline["tree_oid"]
+                    and prior["baseline_sha256"] == digest(baseline),
+                    "original object fingerprint binding differs",
+                )
+                original, metadata = prior["physical_files"], prior["metadata_sha256"]
+                _need(
+                    type(original) is dict
+                    and set(original) == set(current)
+                    and all(
+                        type(row) is list
+                        and len(row) == 8
+                        and all(type(v) is str and re.fullmatch(r"-?[0-9]{1,24}", v) for v in row)
+                        for row in original.values()
+                    )
+                    and all(
+                        tuple(int(v) for v in original[name][:6]) == row[:6]
+                        for name, row in current.items()
+                    )
+                    and type(metadata) is dict
+                    and set(metadata) == metadata_names
+                    and all(_sha(v) for v in metadata.values()),
+                    "original object physical fingerprint differs",
+                )
+                self.identities = {
+                    name: tuple(int(v) for v in row) for name, row in original.items()
+                }
+                self.metadata_sha256 = dict(metadata)
+            else:
+                self.metadata_sha256 = {}
+                for name in metadata_names:
+                    self.metadata_sha256[name] = self._file_content(
+                        name, current[name], metadata_only=True
+                    )
+            # Preserve the ORIGINAL fingerprints through live and cold reentry.
+            # Only this in-memory cache advances after verified Git freshening.
+            self.checked_identities = dict(self.identities)
             self.physical_sha256 = digest(
                 {
                     "odb": self.directory.identity,
                     "pack": self.pack.identity,
                     "pack_names": self.pack_names,
                     "files": self.identities,
+                    "metadata_sha256": self.metadata_sha256,
                     "loose_prefixes": self.loose_prefixes,
                 }
             )
+            if prior is not None:
+                _need(
+                    self.physical_sha256 == prior["physical_sha256"],
+                    "original object fingerprint digest differs",
+                )
             self.check()
         except BaseException:
             self.close()
             raise
+
+    def _file_content(self, relative, expected, *, metadata_only=False):
+        """Bounded rare-change verification, never an unchanged body snapshot.
+
+        Loose payloads bind the original SHA256 and native OID. Pack content
+        binds its native Git container OID; index/sidecar bytes bind an original
+        SHA256. Normal unchanged barriers perform metadata checks only.
+        """
+        import zlib
+
+        if self.read_context is not None:
+            self.read_context()
+
+        def read_clock():
+            _need(
+                self.deadline is None or time.time() < self.deadline,
+                "original object read deadline exhausted",
+            )
+
+        read_clock()
+        prefix, name = relative.split("/", 1)
+        directory = os.dup(self.pack.fd) if prefix == "pack" else self._prefix(prefix)
+        fd = None
+        try:
+            _need(directory is not None, "original object directory unavailable")
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            _need(
+                self._regular_identity(os.fstat(fd)) == expected
+                and expected[5] <= self.content_bound,
+                "bounded original object bytes unavailable",
+            )
+            count = 0
+
+            def bounded_chunk():
+                nonlocal count
+                read_clock()
+                raw = os.read(fd, min(65536, expected[5] - count + 1))
+                count += len(raw)
+                _need(count <= expected[5], "original object byte bound changed")
+                return raw
+
+            if metadata_only:
+                sha = hashlib.sha256()
+                while chunk := bounded_chunk():
+                    sha.update(chunk)
+                result = sha.hexdigest()
+            elif prefix == "pack":
+                _need(
+                    name.endswith(".pack") and expected[5] >= 32, "original native pack malformed"
+                )
+                remaining = expected[5] - 20
+                sha = hashlib.sha1(usedforsecurity=False)
+                first = True
+                while remaining:
+                    read_clock()
+                    chunk = os.read(fd, min(65536, remaining))
+                    _need(bool(chunk), "original native pack truncated")
+                    if first:
+                        _need(
+                            chunk.startswith(b"PACK")
+                            and int.from_bytes(chunk[4:8], "big") in {2, 3},
+                            "original native pack header differs",
+                        )
+                        first = False
+                    sha.update(chunk)
+                    remaining -= len(chunk)
+                trailer = os.read(fd, 21)
+                _need(
+                    len(trailer) == 20 and trailer.hex() == name[5:45] == sha.hexdigest(),
+                    "original native pack content differs",
+                )
+                result = sha.hexdigest()
+            else:
+                oid = prefix + name
+                kind, size = self.expected[oid]
+                decoder, header, payload_bytes = zlib.decompressobj(), bytearray(), 0
+                git_sha, payload_sha = hashlib.sha1(usedforsecurity=False), hashlib.sha256()
+                opened = False
+                while chunk := bounded_chunk():
+                    pending = chunk
+                    while pending:
+                        raw = decoder.decompress(pending, 65536)
+                        pending = decoder.unconsumed_tail
+                        git_sha.update(raw)
+                        if not opened:
+                            stop = raw.find(b"\0")
+                            header.extend(raw if stop < 0 else raw[:stop])
+                            _need(len(header) <= 128, "original loose object header bound")
+                            if stop < 0:
+                                continue
+                            _need(
+                                bytes(header) == (kind + " " + str(size)).encode(),
+                                "original loose object header differs",
+                            )
+                            opened, raw = True, raw[stop + 1 :]
+                        payload_bytes += len(raw)
+                        _need(payload_bytes <= size, "original loose object payload bound")
+                        payload_sha.update(raw)
+                _need(
+                    opened
+                    and decoder.eof
+                    and not decoder.unused_data
+                    and not decoder.unconsumed_tail
+                    and payload_bytes == size
+                    and git_sha.hexdigest() == oid
+                    and payload_sha.hexdigest() == self.payload_sha256[oid],
+                    "original loose object content differs",
+                )
+                result = payload_sha.hexdigest()
+            _need(
+                self._regular_identity(os.fstat(fd)) == expected
+                and self._regular_identity(os.stat(name, dir_fd=directory, follow_symlinks=False))
+                == expected,
+                "original object changed during content verification",
+            )
+            return result
+        except zlib.error:
+            raise PublicationHeld("original loose object content differs") from None
+        finally:
+            if fd is not None:
+                os.close(fd)
+            if directory is not None:
+                os.close(directory)
+            if self.read_context is not None:
+                self.read_context()
 
     def _pack_inventory(self):
         names = []
@@ -3471,12 +3679,19 @@ class _ExistingObjects:
             prefix, name = relative.split("/", 1)
             fd = os.dup(self.pack.fd) if prefix == "pack" else self._prefix(prefix)
             try:
-                _need(
-                    fd is not None
-                    and self._regular_identity(os.stat(name, dir_fd=fd, follow_symlinks=False))
-                    == expected,
-                    "selected existing object file changed",
-                )
+                _need(fd is not None, "selected existing object directory changed")
+                current = self._regular_identity(os.stat(name, dir_fd=fd, follow_symlinks=False))
+                _need(current[:6] == expected[:6], "selected existing object file changed")
+                if current != self.checked_identities[relative]:
+                    content = self._file_content(
+                        relative, current, metadata_only=relative in self.metadata_sha256
+                    )
+                    if relative in self.metadata_sha256:
+                        _need(
+                            content == self.metadata_sha256[relative],
+                            "original object sidecar content differs",
+                        )
+                    self.checked_identities[relative] = current
             finally:
                 if fd is not None:
                     os.close(fd)
@@ -3503,12 +3718,16 @@ class _ExistingObjects:
     def summary(self):
         self.check()
         return {
-            "schema": "closer-existing-git-object-anchor/v1",
+            "schema": "closer-existing-git-object-anchor/v2",
             "path": str(self.path),
             "head_oid": self.baseline["head_oid"],
             "tree_oid": self.baseline["tree_oid"],
             "baseline_sha256": digest(self.baseline),
             "physical_sha256": self.physical_sha256,
+            "physical_files": {
+                name: [str(v) for v in row] for name, row in self.identities.items()
+            },
+            "metadata_sha256": dict(self.metadata_sha256),
         }
 
     def close(self):
@@ -3520,7 +3739,7 @@ class _ExistingObjects:
                 item.close()
 
 
-def _borrow_existing_objects(host, baseline):
+def _borrow_existing_objects(host, baseline, *, prior=None):
     _need(type(host) is _HostGitLease, "actual authenticated HostGit required")
     host.check()
     anchor = _ExistingObjects(
@@ -3528,6 +3747,9 @@ def _borrow_existing_objects(host, baseline):
         baseline,
         host.read("commit"),
         host.observed.policy,
+        prior=prior,
+        read_context=host.read_lifetime,
+        deadline=host.observed.operation["deadline"],
     )
     try:
         raw = _fixed_git_read(
@@ -3546,14 +3768,14 @@ def _borrow_existing_objects(host, baseline):
         raise
 
 
-def _source_snapshot_seed(host, baseline):
+def _source_snapshot_seed(host, baseline, *, prior=None):
     """Read fixed native H under the live HostGit lease; no history or writes."""
     _need(type(host) is _HostGitLease, "source HostGit seed required")
     host.check()
     _need(baseline["head_oid"] == host.pr["head_oid"], "source seed head changed")
     if host.observed.policy["schema"] == ANCHOR_POLICY_SCHEMA:
         if host.object_anchor is None:
-            host.object_anchor = _borrow_existing_objects(host, baseline)
+            host.object_anchor = _borrow_existing_objects(host, baseline, prior=prior)
         _need(host.object_anchor.baseline == baseline, "original existing object anchor differs")
         objects = host.object_anchor
     else:

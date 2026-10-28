@@ -367,7 +367,7 @@ def declared_unknown_assessment(prompt, reason="Original criteria still require 
     return emit_assessment(prompt, gold, global_explanations=[reason])
 
 
-def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, causes=None):
+def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True):
     import time
 
     import test_closer_dispatcher as runtime
@@ -445,33 +445,7 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
 
     def offload(_agent, prompt, **_kw):
         calls.append(prompt)
-        if "gap-directed second-pass" in prompt:
-            screen = evidence.action_evidence_readiness(
-                snap, packet, "collect_evidence", retained_dir=root
-            )
-            response = {
-                "target": snap["target"],
-                "head": snap["head"],
-                "base": snap["base"],
-                "classification": "relevant",
-                "substantive_needs": [],
-                "findings": [],
-                "evidence_requests": [
-                    {
-                        "requirement_id": r["id"],
-                        "necessity": "necessary",
-                        "reason": "Fetch the exact missing section",
-                    }
-                    for r in recovery.required(screen)
-                ],
-                "collection_causes": (
-                    causes
-                    if causes is not None
-                    else [{"kind": "transient_api_failure", "section": "diff_files"}]
-                ),
-            }
-        else:
-            response = declared_unknown_assessment(prompt)
+        response = declared_unknown_assessment(prompt)
         return caller.response({"exit": 0, "output": json.dumps(response)}, _agent, prompt, **_kw)
 
     monkeypatch.setattr(transport, "offload", offload)
@@ -1255,25 +1229,14 @@ def test_deadline_raised_after_provider_invocation_remains_held(tmp_path, monkey
     assert result["status"] == "pending" and len(started) == 1
 
 
-RETAINED_COLLECTION_CASES = json.loads(
-    (Path(__file__).parent / "fixtures" / "collection-cause-retained-four.json").read_text()
-)
-
-
-@pytest.mark.parametrize("case", RETAINED_COLLECTION_CASES, ids=lambda case: case["target"])
-def test_retained_auxiliary_causes_do_not_block_targeted_read_and_reentry(
-    tmp_path, monkeypatch, case
-):
-    callbacks, context, calls, refreshes = recovery_callbacks(
-        tmp_path, monkeypatch, recover=True, causes=case["collection_causes"]
-    )
+def test_source_owned_targeted_read_and_reentry_without_model_cause_carrier(tmp_path, monkeypatch):
+    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
     result = callbacks["interpret"](context["prepare"]["snapshot"]["target"], context)
     assert result["evidence_recovery"]["outcome"] == "recovered"
     assert refreshes == [{"diff_files"}]
     assert len(calls) == 1  # source host plan, then one ordinary assessment
     assert "gap-directed second-pass" not in calls[0]
     assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
-    assert recovery.causes_from({"collection_causes": case["collection_causes"]})
     assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
     assert result["authority"] is False and not result.get("accepted")
 

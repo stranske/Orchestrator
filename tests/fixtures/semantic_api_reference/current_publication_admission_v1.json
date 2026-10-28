@@ -1,5 +1,5 @@
 {
-  "after_source": "8bc8d24f0e063b284777de8be3309582a59ccff8",
+  "after_source": "d3f4c02b4aefef6a7a05c45f6b626fe4eedb9793",
   "before_source": "afda3355c2a15b3ba855740a23bd01486f1adb76",
   "dispatcher_top_level_delta": {
     "GitHub": {
@@ -31,7 +31,7 @@
   "protected_native_modules": {
     "closer_campaign.py": {
       "added_top_level_ast": {},
-      "after_file_sha256": "36a673e746c257e2823ca940c7fa8eb875afb364ac114e2c3a3555074fd4d388",
+      "after_file_sha256": "39f8108abffdecb43b50e8e62649aea2467485674ed12cfa257ea6e1177d4496",
       "before_file_sha256": "5a966feb08f20cd3fba2fe3bd3ed26702aaf166fb90a9d90a313f58268edad98",
       "before_top_level_ast": {
         "ActionSpec": "7d5213704d8b42f43d748755a850a7f374f19dffabd75f166c09e7de3c3c1dd3",
@@ -128,7 +128,7 @@
       },
       "changed_top_level_ast": {
         "tick": {
-          "after": "415571dde7937684fb0ceb1155a9d0aa241d75695a311ddaf2ed684a7af3c6ed",
+          "after": "0b8f3ae1442a364eaeb3da9299ba889416a5c40ae4712deebea9e16ad438ed46",
           "before": "3cf7230f6cf7f7c65fc5a582cc3fab606645c2160f0ffbdfdb6238fd5e8974da"
         }
       },
@@ -307,6 +307,22 @@
       },
       "unmodified_top_level_families": 46
     }
+  },
+  "reviewed_followup": {
+    "after": {
+      "source_sha256": "39f8108abffdecb43b50e8e62649aea2467485674ed12cfa257ea6e1177d4496",
+      "tick_ast_sha256": "0b8f3ae1442a364eaeb3da9299ba889416a5c40ae4712deebea9e16ad438ed46"
+    },
+    "before": {
+      "source_sha256": "36a673e746c257e2823ca940c7fa8eb875afb364ac114e2c3a3555074fd4d388",
+      "tick_ast_sha256": "415571dde7937684fb0ceb1155a9d0aa241d75695a311ddaf2ed684a7af3c6ed"
+    },
+    "changed_family": "tick",
+    "finding_thread": "PRRT_kwDOUAH6nM6w8jxf",
+    "module": "closer_campaign.py",
+    "scope": "Move publication-key detection inside existing per-campaign hold boundary; other native AST families and historical fixtures unchanged.",
+    "source_commit": "d3f4c02b4aefef6a7a05c45f6b626fe4eedb9793",
+    "source_commit_prefix": "d3f4c02b"
   },
   "reviewed_source_leaves": [
     "e5bc72a9",

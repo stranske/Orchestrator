@@ -4472,9 +4472,13 @@ def offload(
                 out["agent_log_tail"] = agent_log_tail
             return out
         except OSError as exc:
-            import closer_queue
+            try:
+                import closer_queue
 
-            read_diagnostic = closer_queue._native_read_failure(exc)
+                read_diagnostic = closer_queue._native_read_failure(exc)
+            except Exception:
+                # Optional diagnostics must never replace the original failure.
+                read_diagnostic = None
             return {
                 "agent": agent,
                 "exit": 126,

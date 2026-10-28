@@ -453,3 +453,269 @@ def test_new_unrelated_git_objects_do_not_change_original_anchor(tmp_path):
             fresh.close()
     finally:
         original.close()
+
+
+def test_complete_capture_baseline_reads_tracked_attributes_but_candidate_cannot_edit_it(
+    tmp_path, monkeypatch
+):
+    from types import SimpleNamespace
+
+    repo, git, _env, _before, _candidate, _pr, _commit, policy = fixture(tmp_path)
+    (repo / "src/fix.py").write_bytes(b"before\n")
+    head = git("rev-parse", "HEAD").strip().decode()
+    branch = git("symbolic-ref", "HEAD").strip().decode().removeprefix("refs/heads/")
+    host = SimpleNamespace(
+        workspace=repo,
+        observed=SimpleNamespace(policy=policy),
+        pr={"head_oid": head, "base_oid": head, "head_ref": branch},
+        check=lambda: None,
+        read_lifetime=lambda: None,
+        object_anchor=None,
+    )
+    reads = []
+
+    def read(kind):
+        reads.append(kind)
+        return git(*pub._read_command(kind, host.pr))
+
+    host.read = read
+
+    def data_borrow(actual, baseline):
+        assert actual is host
+        # DATA only: full capture branch/flags/index/inventory remains actual.
+        # A source Root/HostGit admission is not manufactured by this test.
+        return pub._ExistingObjects(repo / ".git/objects", baseline, read("commit"), policy)
+
+    monkeypatch.setattr(pub, "_borrow_existing_objects", data_borrow)
+    baseline = pub._capture_baseline(host)
+    try:
+        assert reads[:6] == ["head", "branch", "commit", "tree", "index_flags", "index"]
+        assert any(row["path"] == ".gitattributes" for row in baseline["files"])
+        (repo / "src/fix.py").write_bytes(b"after\n")
+        candidate = pub._capture_candidate(host, baseline)
+        assert [row["path"] for row in candidate["files"]] == ["src/fix.py"]
+        original = (repo / ".gitattributes").read_bytes()
+        (repo / ".gitattributes").write_bytes(original + b"*.py text\n")
+        with pytest.raises(pub.PublicationHeld, match="protected control data"):
+            pub._capture_candidate(host, baseline)
+    finally:
+        host.object_anchor.close()
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_native_git_freshening_keeps_original_fingerprint_and_detects_same_inode_tamper(
+    tmp_path, packed, monkeypatch
+):
+    import time
+
+    repo, git, _env, baseline, _candidate, _pr, commit, policy = fixture(tmp_path, packed=packed)
+    oid = next(row["blob"]["git_oid"] for row in baseline["files"] if row["path"] == "src/fix.py")
+    obj = (
+        next((repo / ".git/objects/pack").glob("*.pack"))
+        if packed
+        else repo / ".git/objects" / oid[:2] / oid[2:]
+    )
+    os.utime(obj, (time.time() - 3600, time.time() - 3600))
+    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy)
+    calls = []
+    actual = anchor._file_content
+
+    def read(*args, **kwargs):
+        calls.append(args[0])
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(anchor, "_file_content", read)
+    try:
+        original = anchor.summary()
+        for _ in range(3):
+            anchor.check()
+        assert calls == []  # No content hashing at unchanged barriers.
+        old = obj.stat()
+        assert git("hash-object", "-w", "--stdin", raw=b"before\n").strip().decode() == oid
+        assert (obj.stat().st_mtime_ns, obj.stat().st_ctime_ns) != (
+            old.st_mtime_ns,
+            old.st_ctime_ns,
+        )
+        anchor.check()
+        assert len(calls) == 1
+        assert anchor.summary() == original
+        assert len(calls) == 1  # Accepted times cached; original proof unchanged.
+        cold = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy, prior=original)
+        try:
+            assert cold.summary() == original
+        finally:
+            cold.close()
+        metadata = obj.stat()
+        mode = metadata.st_mode & 0o777
+        obj.chmod(0o600)
+        with obj.open("r+b") as stream:
+            stream.seek(10)
+            byte = stream.read(1)
+            stream.seek(10)
+            stream.write(bytes([byte[0] ^ 1]))
+        obj.chmod(mode)
+        assert (obj.stat().st_ino, obj.stat().st_size, obj.stat().st_mode & 0o777) == (
+            metadata.st_ino,
+            metadata.st_size,
+            mode,
+        )
+        with pytest.raises(pub.PublicationHeld, match="content differs"):
+            anchor.check()
+        with pytest.raises(pub.PublicationHeld, match="content differs"):
+            pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy, prior=original)
+    finally:
+        anchor.close()
+
+
+def test_changed_index_sidecar_is_not_timestamp_freshening(tmp_path):
+    repo, _git, _env, baseline, _candidate, _pr, commit, policy = fixture(tmp_path)
+    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy)
+    original = anchor.summary()
+    path = next((repo / ".git/objects/pack").glob("*.idx"))
+    mode = path.stat().st_mode & 0o777
+    try:
+        path.chmod(0o600)
+        with path.open("r+b") as stream:
+            stream.seek(10)
+            value = stream.read(1)
+            stream.seek(10)
+            stream.write(bytes([value[0] ^ 1]))
+        path.chmod(mode)
+        with pytest.raises(pub.PublicationHeld, match="sidecar content differs"):
+            anchor.check()
+        with pytest.raises(pub.PublicationHeld, match="sidecar content differs"):
+            pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy, prior=original)
+    finally:
+        anchor.close()
+
+
+@pytest.mark.parametrize("bad", [None, {"publication_v1": {}, "publication_v2": {}}])
+def test_malformed_publication_is_held_per_campaign_and_next_campaign_continues(bad):
+    import ast
+    import copy
+    import inspect
+    from types import SimpleNamespace
+
+    import closer_campaign as campaign
+
+    tree = ast.parse(inspect.getsource(campaign.tick))
+    pending = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "pending.get('kind') != 'launch'"
+    )
+    boundary = next(
+        node
+        for node in pending.body
+        if isinstance(node, ast.Try) and "publication_key" in ast.unparse(node)
+    )
+    follow = next(
+        node
+        for node in pending.body
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "publication is not None"
+    )
+    calls, report = [], []
+    # The exact source try and held/continue block execute twice. No tick
+    # qualification/Root/authority is manufactured by this control.
+    body = [
+        ast.Assign(
+            targets=[ast.Name(id="configured_consumers", ctx=ast.Store())],
+            value=ast.Subscript(
+                value=ast.Name(id="cases", ctx=ast.Load()),
+                slice=ast.Name(id="label", ctx=ast.Load()),
+                ctx=ast.Load(),
+            ),
+        ),
+        copy.deepcopy(boundary),
+        copy.deepcopy(follow),
+        ast.Expr(
+            value=ast.Call(
+                func=ast.Attribute(
+                    value=ast.Name(id="calls", ctx=ast.Load()), attr="append", ctx=ast.Load()
+                ),
+                args=[ast.Name(id="label", ctx=ast.Load())],
+                keywords=[],
+            )
+        ),
+    ]
+    loop = ast.For(
+        target=ast.Name(id="label", ctx=ast.Store()),
+        iter=ast.List(elts=[ast.Constant("bad"), ast.Constant("next")], ctx=ast.Load()),
+        body=body,
+        orelse=[],
+    )
+    env = dict(
+        cases={"bad": {"one": bad}, "next": {}},
+        calls=calls,
+        report=report,
+        PublicationHeld=pub.PublicationHeld,
+        campaign=None,
+        doc={},
+        manifest={},
+        manifest_path="/no-live-manifest",
+        pending={"kind": "reconcile"},
+        path=SimpleNamespace(name="bad.campaign.json"),
+        publish_if_selected=lambda *_: pytest.fail(
+            "malformed configuration must not reach publisher"
+        ),
+    )
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=[loop], type_ignores=[])),
+            "actual-per-campaign-publication-boundary",
+            "exec",
+        ),
+        env,
+    )
+    assert calls == ["next"]
+    assert len(report) == 1 and report[0]["kind"] == "existing_pr_publication_held"
+    assert report[0]["authority"] is False
+
+
+@pytest.mark.parametrize("expire_mid_read", [False, True])
+def test_stream_verification_scopes_once_per_file_and_keeps_original_deadline(
+    tmp_path, monkeypatch, expire_mid_read
+):
+    import time
+
+    repo, _git, _env, baseline, _candidate, _pr, commit, policy = fixture(tmp_path)
+    keep = next((repo / ".git/objects/pack").glob("*.pack")).with_suffix(".keep")
+    keep.write_bytes(b"bounded metadata" * 20000)
+    checks, reads = [], []
+    original_clock = time.time()
+    deadline = original_clock + 60
+    anchor = pub._ExistingObjects(
+        repo / ".git/objects",
+        baseline,
+        commit,
+        policy,
+        read_context=lambda: checks.append("scope"),
+        deadline=deadline,
+    )
+    checks.clear()
+    original_read = os.read
+    clock = [original_clock]
+
+    def read(fd, bound):
+        raw = original_read(fd, bound)
+        reads.append(len(raw))
+        if expire_mid_read and raw:
+            clock[0] = deadline + 1
+        return raw
+
+    os.utime(keep, ns=(keep.stat().st_atime_ns, keep.stat().st_mtime_ns + 1000000))
+    monkeypatch.setattr(pub.time, "time", lambda: clock[0])
+    monkeypatch.setattr(pub.os, "read", read)
+    try:
+        if expire_mid_read:
+            with pytest.raises(
+                pub.PublicationHeld, match="original object read deadline exhausted"
+            ):
+                anchor.check()
+            assert len(reads) == 1
+        else:
+            anchor.check()
+            assert len(reads) > 3
+        assert checks == ["scope", "scope"]
+    finally:
+        anchor.close()

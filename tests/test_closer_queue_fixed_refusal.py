@@ -158,11 +158,10 @@ def test_missing_controller_registry_omits_diagnostic(monkeypatch):
     import sys
     from types import SimpleNamespace
 
-    try:
+    with pytest.raises(ctl.ControllerUnknown) as caught:
         inactive_guard()
-    except ctl.ControllerUnknown as error:
-        monkeypatch.setitem(sys.modules, "closer_correction_controller", SimpleNamespace())
-        assert queue._fixed_controller_refusal(error) is None
+    monkeypatch.setitem(sys.modules, "closer_correction_controller", SimpleNamespace())
+    assert queue._fixed_controller_refusal(caught.value) is None
 
 
 @pytest.mark.parametrize(

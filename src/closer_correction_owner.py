@@ -120,13 +120,23 @@ def _current(context, preparation, *, now):
     return row, identity, fence
 
 
-def _stage(stage, *, task, basis, operation_id, now):
+def _stage(stage, *, task, basis, operation_id, now, host_context=None):
     import closer_dispatcher as closer
     import closer_role_qualification as roles
     import dispatcher
     import execution_profiles
 
     actual = stage.get("actual") or {}
+    if actual.get("kind") == "source_native_conservative_inventory":
+        import closer_conservative_intake as intake
+
+        _need(
+            task == "closer_interpret" and host_context is not None,
+            "host inventory is not a model or another role",
+        )
+        return intake.revalidate(
+            stage, context=host_context, basis=basis, operation_id=operation_id
+        )
     proof = actual.get("_closer_controlled_proof")
     _need(isinstance(proof, dict), "owner original native stage proof missing")
     expected = proof.get("expected", {})
@@ -234,7 +244,24 @@ def _selected_defect(
         and merged.get("resolutions") == resolutions,
         "owner original unresolved native inventory differs",
     )
-    matches = [r for r in inputs["raw_findings"] if criterion in r["text"]]
+    pairing = low.get("source_intake_selection")
+    if pairing is not None:
+        # This is reviewed source question intent plus a real named criterion
+        # proof, NOT an assertion that a native claim quoted/proved that clause.
+        import closer_conservative_intake as intake
+
+        _low, selected = intake._inventory(snapshot, packet, packet_ref, root, inputs)
+        _need(
+            low == _low
+            and pairing.get("semantic_relationship_asserted") is False
+            and pairing.get("criterion_sha256")
+            == selected["criterion_sha256"]
+            == hashlib.sha256(criterion.encode()).hexdigest(),
+            "owner source intake selection changed",
+        )
+        matches = [r for r in inputs["raw_findings"] if r["evidence"] == pairing["native_claim"]]
+    else:
+        matches = [r for r in inputs["raw_findings"] if criterion in r["text"]]
     _need(len(matches) == 1, "owner native criterion/finding quote ambiguous or missing")
     raw = matches[0]
     mapping = [m for m in inputs["native_seed_mapping"] if m["seed_finding_id"] == raw["id"]]
@@ -323,11 +350,18 @@ def build_owner_request(
             "packet_sha256": preparation["packet_ref"]["sha256"],
         }
         low_stage = context["interpret"]
+        host_intake = (low_stage.get("actual") or {}).get("kind") == (
+            "source_native_conservative_inventory"
+        )
         low_basis = (
-            (low_stage.get("actual") or {})
-            .get("_closer_controlled_proof", {})
-            .get("expected", {})
-            .get("basis")
+            basis
+            if host_intake
+            else (
+                (low_stage.get("actual") or {})
+                .get("_closer_controlled_proof", {})
+                .get("expected", {})
+                .get("basis")
+            )
         )
         _need(low_basis == basis, "owner original LOW basis differs")
         low, low_proof = _stage(
@@ -336,6 +370,7 @@ def build_owner_request(
             basis=basis,
             operation_id=row["stage_results"]["interpret"]["work_key"],
             now=clock,
+            host_context=context,
         )
         proof = ((stage_result or {}).get("actual") or {}).get("_closer_controlled_proof", {})
         strong_basis = proof.get("expected", {}).get("basis", {})
@@ -419,6 +454,11 @@ def build_owner_request(
                     "finite_frontier_id": context["finite_frontier"]["frontier_id"],
                 },
                 "low_proof_sha256": contract.digest(low_proof),
+                "low_proof_kind": (
+                    "source_native_conservative_inventory"
+                    if host_intake
+                    else "controlled_provider_execution"
+                ),
                 "strong_proof_sha256": contract.digest(strong_proof),
                 "named_request_sha256": contract.digest(named),
                 "native_ownership_sha256": contract.digest(observed),
