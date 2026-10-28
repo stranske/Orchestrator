@@ -295,6 +295,24 @@ def test_system_lfs_configuration_is_causally_excluded_not_allowlisted(
     git = str(context["git"])
     version = subprocess.check_output([git, "--version"]).decode().strip()
     record_property("actual_git_version", version)
+    native_shell = subprocess.check_output([git, "var", "GIT_SHELL_PATH"]).decode().strip()
+    known_shells = {
+        "/bin/sh",
+        "/usr/bin/sh",
+        "/bin/bash",
+        "/usr/bin/bash",
+        "/bin/dash",
+        "/usr/bin/dash",
+    }
+    record_property(
+        "actual_git_native_shell_path",
+        native_shell if native_shell in known_shells else "unclassified",
+    )
+    canonical_shell = str(Path(native_shell).resolve(strict=True))
+    record_property(
+        "actual_git_canonical_shell_path",
+        canonical_shell if canonical_shell in known_shells else "unclassified",
+    )
     before = dict(os.environ)
     system = tmp_path / "synthetic-system-gitconfig"
     system.write_text(
@@ -374,3 +392,46 @@ def test_private_filesystem_errors_are_controlled_holds_with_cleanup(context, mo
         with pytest.raises(OSError) as closed:
             os.fstat(fd)
         assert closed.value.errno == errno.EBADF
+
+
+@pytest.mark.parametrize("tamper", [None, "file_alias", "parent_alias", "foreign_target"])
+def test_native_shell_route_pins_canonical_file_and_every_alias(tmp_path, tamper):
+    root = tmp_path.resolve()
+    actual = root / "usr/bin"
+    actual.mkdir(parents=True)
+    (actual / "dash").write_bytes(b"synthetic native shell payload")
+    (actual / "other").write_bytes(b"foreign payload")
+    parent = root / "bin"
+    parent.symlink_to("usr/bin", target_is_directory=True)
+    shell = parent / "sh"
+    shell.symlink_to("other" if tamper == "foreign_target" else "dash")
+    held = []
+    try:
+        if tamper == "foreign_target":
+            with pytest.raises(
+                pub.PublicationHeld, match="^native shell alias target unsupported$"
+            ):
+                pub._pin_native_git_shell(shell, held)
+            return
+        physical, aliases = pub._pin_native_git_shell(shell, held)
+        assert physical.path == actual / "dash"
+        assert physical.sha256 == hashlib.sha256(b"synthetic native shell payload").hexdigest()
+        assert [row["path"] for row in aliases] == [str(parent), str(shell)]
+        if tamper == "file_alias":
+            shell.unlink()
+            shell.symlink_to("other")
+        elif tamper == "parent_alias":
+            replacement = root / "replacement"
+            replacement.mkdir()
+            (replacement / "sh").symlink_to(actual / "dash")
+            parent.unlink()
+            parent.symlink_to(replacement, target_is_directory=True)
+        if tamper:
+            with pytest.raises(pub.PublicationHeld, match="^native shell alias changed$"):
+                for item in held:
+                    item.check()
+        else:
+            for item in held:
+                item.check()
+    finally:
+        pub._close_physical_controls(held)

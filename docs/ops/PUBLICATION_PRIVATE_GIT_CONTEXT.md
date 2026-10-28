@@ -60,3 +60,13 @@ configuration file whose exact hash is already pinned. Both paths are observed
 by the canonical inventory. No `/dev/null`, caller-selected system override or
 ambient Git environment is accepted. Root and user system/global files remain
 unchanged; only Git children receive these internal environment fields.
+
+The Git-reported native POSIX shell may have a protected lexical alias route
+(on merged-/usr Linux, for example). Source observation now pins each parent
+symlink and the direct sh-to-dash/bash alias through original directory file
+descriptors, lstat identities and readlink values, plus the canonical shell
+file and hash. Only supported POSIX basename/direct same-directory shell routes
+are added; arbitrary file symlinks/foreign targets still hold. The alias route
+is part of the approved context and is checked before effects. Regular physical
+Mac shell paths retain their original representation. Missing/unreadable private
+Git paths return a fixed PublicationHeld after cleanup, without raw path export.

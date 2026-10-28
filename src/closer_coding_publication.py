@@ -2118,6 +2118,90 @@ def _fixed_helper_route(helper_values, gh_path, environment):
     }
 
 
+class _PhysicalShellAlias:
+    """One pinned native shell alias; no generic symlink file admission."""
+
+    def __init__(self, path):
+        import stat
+
+        self.path = Path(path)
+        self.parent = _PhysicalDirectory(self.path.parent.resolve(strict=True))
+        try:
+            meta = os.stat(self.path.name, dir_fd=self.parent.fd, follow_symlinks=False)
+            _need(
+                stat.S_ISLNK(meta.st_mode)
+                and meta.st_uid in {0, os.getuid()}
+                and meta.st_nlink == 1,
+                "native shell alias ownership differs",
+            )
+            self.identity = _PhysicalFile._identity(meta)
+            self.target = os.readlink(self.path.name, dir_fd=self.parent.fd)
+            self.check()
+        except BaseException:
+            self.parent.close()
+            raise
+
+    def check(self):
+        self.parent.check()
+        _need(
+            self.path.parent.resolve(strict=True) == self.parent.path
+            and _PhysicalFile._identity(
+                os.stat(self.path.name, dir_fd=self.parent.fd, follow_symlinks=False)
+            )
+            == self.identity
+            and os.readlink(self.path.name, dir_fd=self.parent.fd) == self.target,
+            "native shell alias changed",
+        )
+        return {
+            "path": str(self.path),
+            "identity": [str(v) for v in self.identity],
+            "target": self.target,
+        }
+
+    def close(self):
+        self.parent.close()
+
+
+def _pin_native_git_shell(path, held):
+    """Pin native Git's POSIX shell and its exact protected alias route.
+
+    A sh alias may directly name dash/bash in the same canonical directory.
+    Other alias shapes still hold. Each lexical parent alias is pinned too, so
+    resolving once cannot hide a later /bin or sh redirect before an effect.
+    """
+    path = Path(path)
+    _need(path.is_absolute() and ".." not in path.parts, "native shell path unsupported")
+    try:
+        canonical = path.resolve(strict=True)
+        aliases = []
+        if canonical != path:
+            _need(path.name in {"sh", "bash", "dash"}, "native shell alias unsupported")
+            for parent in reversed(path.parents):
+                if parent.is_symlink():
+                    alias = _PhysicalShellAlias(parent)
+                    held.append(alias)
+                    aliases.append(alias.check())
+            if path.is_symlink():
+                alias = _PhysicalShellAlias(path)
+                held.append(alias)
+                aliases.append(alias.check())
+                _need(
+                    canonical.name in {"dash", "bash"}
+                    and canonical.parent == path.parent.resolve(strict=True)
+                    and alias.target
+                    in {canonical.name, str(canonical), str(path.parent / canonical.name)}
+                    and not (path.parent / canonical.name).is_symlink(),
+                    "native shell alias target unsupported",
+                )
+        physical = _PhysicalFile(canonical, 256 * 1048576)
+        held.append(physical)
+        for item in held:
+            item.check()
+        return physical, aliases
+    except OSError:
+        raise PublicationHeld("native shell physical route unavailable") from None
+
+
 def _collect_git_context_data(workspace, repository, policy, read, environment):
     """Same canonical physical/parser inventory for runtime and preparatory DATA.
 
@@ -2237,9 +2321,13 @@ def _collect_git_context_data(workspace, repository, policy, read, environment):
             shell_path = Path(raw_shell.decode("utf-8").strip())
         except UnicodeError:
             raise PublicationHeld("native helper shell encoding unsupported") from None
-        shell_file = _PhysicalFile(shell_path, 256 * 1048576)
-        held.append(shell_file)
+        shell_file, shell_aliases = _pin_native_git_shell(shell_path, held)
         source["helper_shell"] = shell_file.check()
+        if shell_aliases:
+            source["helper_shell_route"] = {
+                "native_path": str(shell_path),
+                "aliases": shell_aliases,
+            }
         gh = shutil.which("gh", path=environment.get("PATH"))
         _need(type(gh) is str, "native Git helper executable unavailable")
         gh_file = _PhysicalFile(Path(gh).resolve(strict=True), 256 * 1048576)
