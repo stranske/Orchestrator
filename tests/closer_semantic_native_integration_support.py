@@ -27,7 +27,47 @@ CURRENT_MANIFEST_SHA256 = "32d0a361e2e942fc262ef5847583c53d954d74a2bbdfe6a665c3a
 def current_receiver_reference():
     raw = CURRENT_MANIFEST.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == CURRENT_MANIFEST_SHA256
-    return json.loads(raw)
+    current = json.loads(raw)
+    reviewed = main982_admission_reference()
+    for name, change in reviewed["function_delta"].items():
+        assert current["top_level_ast"].get(name) == change["before"]
+        current["top_level_ast"][name] = change["after"]
+        # Preserve every original native entry and bind only this reviewed successor.
+        if name in current["native_top_level_ast"]:
+            assert current["native_top_level_ast"][name] == change["before"]
+        current["native_top_level_ast"][name] = change["after"]
+    return current
+
+
+MAIN982_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_main982_admission_v1.json"
+)
+MAIN982_SHA256 = "2a12c158b5ce3cf7e90153e2e2e2c0eff668e30a7ac39e558bc124cf69624580"
+
+
+def main982_admission_reference():
+    raw = MAIN982_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == MAIN982_SHA256
+    reviewed = json.loads(raw)
+    assert set(reviewed["function_delta"]) == {
+        "_deadline_with_pipeline_round",
+        "_main_admitted",
+        "pipeline_admission_pass_number",
+    }
+    assert set(reviewed["added_constant_ast"]) == {
+        "PIPELINE_ADMISSION_PASS_CHECK_TS",
+        "PIPELINE_ADMISSION_PASS_CHECK_LABEL",
+    }
+    tree = ast.parse(source_path("closer_dispatcher.py").read_bytes())
+    for name, expected in reviewed["added_constant_ast"].items():
+        assignments = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ]
+        assert len(assignments) == 1 and fingerprint(assignments[0]) == expected
+    return reviewed
 
 
 def integrated_reference(base):

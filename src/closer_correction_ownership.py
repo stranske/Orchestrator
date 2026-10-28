@@ -90,10 +90,13 @@ class _Reads:
         self.bytes = 0
         self.refs = []
 
-    def get(self, endpoint):
+    def get(self, endpoint, *, fields=None):
         _need(self.calls < MAX_CALLS, "native ownership call budget exhausted")
         self.calls += 1
-        value = self.github.api(endpoint)
+        value = self.github.api(
+            endpoint,
+            **({"method": "POST", "fields": fields, "resource": "graphql"} if fields else {}),
+        )
         raw = _raw(value)
         self.bytes += len(raw)
         _need(
@@ -218,6 +221,88 @@ def _related(rows, repository):
     return related
 
 
+def _owned_delivery_neighbor(reads, repo, candidate, owner, permission, neighbors):
+    """Authenticate one existing delivery PR, never ignore arbitrary PR neighbors."""
+    from types import SimpleNamespace
+
+    import closer_coding_publication as publication
+
+    _need(len(neighbors) == 1, "additional related PR unresolved")
+    number, (node_id, is_pr) = next(iter(neighbors.items()))
+    _need(is_pr, "additional related PR unresolved")
+    login, name = repo.split("/")
+    # Both complete relation directions are native, not inferred from body text.
+    query = (
+        "query {repository(owner:"
+        + json.dumps(login)
+        + ",name:"
+        + json.dumps(name)
+        + "){databaseId nameWithOwner issue(number:"
+        + str(candidate["number"])
+        + "){id number closedByPullRequestsReferences(first:2){nodes{id number "
+        + "repository{nameWithOwner}} pageInfo{hasNextPage}}} pullRequest(number:"
+        + number
+        + "){id number state isDraft merged headRefOid baseRefOid headRefName "
+        + "headRepository{nameWithOwner} body closingIssuesReferences(first:2){nodes{id "
+        + "number repository{nameWithOwner}} pageInfo{hasNextPage}}}}}"
+    )
+    fields = {"query": query}
+    document = reads.get("graphql", fields=fields)
+    repository = document["data"]["repository"]
+    issue, pr = repository["issue"], repository["pullRequest"]
+    closes, deliveries = pr["closingIssuesReferences"], issue["closedByPullRequestsReferences"]
+    _need(
+        repository["nameWithOwner"].lower() == repo
+        and issue["id"] == candidate["node_id"]
+        and issue["number"] == candidate["number"]
+        and pr["id"] == node_id
+        and str(pr["number"]) == number
+        and closes["pageInfo"]["hasNextPage"] is False
+        and deliveries["pageInfo"]["hasNextPage"] is False
+        and closes["nodes"]
+        == [
+            {
+                "id": candidate["node_id"],
+                "number": candidate["number"],
+                "repository": {"nameWithOwner": repository["nameWithOwner"]},
+            }
+        ]
+        and deliveries["nodes"]
+        == [
+            {
+                "id": node_id,
+                "number": int(number),
+                "repository": {"nameWithOwner": repository["nameWithOwner"]},
+            }
+        ],
+        "unique reciprocal owned delivery unavailable",
+    )
+    pull_path = f"repos/{repo}/pulls/{number}"
+    pull = reads.get(pull_path)
+    snapshot = {
+        "pr_target": repo + "#" + number,
+        "head": pr["headRefOid"],
+        "base": pr["baseRefOid"],
+        "head_branch": pr["headRefName"],
+        "head_repository": pr["headRepository"]["nameWithOwner"],
+        "body": pr["body"],
+        "state": pr["state"],
+        "draft": pr["isDraft"],
+    }
+    _need(pr["merged"] is False, "owned delivery already merged")
+    config = SimpleNamespace(
+        repository=repo,
+        repository_id=repository["databaseId"],
+        writer_login=owner,
+        writer_id=permission["user"]["id"],
+    )
+    publication._owned_pr_projection(pull, snapshot, candidate["node_id"], config)
+    _need(
+        reads.get(pull_path) == pull and reads.get("graphql", fields=fields) == document,
+        "owned delivery changed during observation",
+    )
+
+
 def collect_ownership(*, github, seed, deadline, now=None):
     """Read complete bounded known-subject timelines and re-read them for races.
 
@@ -248,8 +333,10 @@ def collect_ownership(*, github, seed, deadline, now=None):
         source_link is None or source_link == (seed["source_issue"]["node_id"], False),
         "native linked source node differs",
     )
-    _need(not any(is_pr for _, is_pr in neighbors.values()), "additional related PR unresolved")
+    delivery_neighbors = {key: value for key, value in neighbors.items() if value[1]}
+    neighbors = {key: value for key, value in neighbors.items() if not value[1]}
     _need(len(neighbors) <= 1, "multiple incumbent candidates")
+    _need(not delivery_neighbors or len(neighbors) == 1, "additional related PR unresolved")
     # An assignment on the original source cannot be silently relabeled absence.
     _need(
         not any(
@@ -306,6 +393,8 @@ def collect_ownership(*, github, seed, deadline, now=None):
             and (permission.get("user") or {}).get("login", "").lower() == owner.lower(),
             "incumbent write ownership unknown",
         )
+        if delivery_neighbors:
+            _owned_delivery_neighbor(reads, repo, candidate, owner, permission, delivery_neighbors)
         incumbent = {
             "issue": identity,
             "owner": owner,

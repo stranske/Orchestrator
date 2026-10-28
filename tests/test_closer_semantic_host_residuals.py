@@ -149,7 +149,12 @@ def collected(
         if endpoint.endswith("/runs/34/artifacts?per_page=100"):
             return {
                 "artifacts": [
-                    {"id": 35, "name": "native-input", "size_in_bytes": 100, "expired": False}
+                    {
+                        "id": 35,
+                        "name": "comparison-results-34",
+                        "size_in_bytes": 100,
+                        "expired": False,
+                    }
                 ]
                 + (
                     [{"id": 9, "name": "tests", "size_in_bytes": 100, "expired": False}]
