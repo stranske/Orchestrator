@@ -108,7 +108,9 @@
     "tests/test_verifier_native_bot_origin.py",
     "tests/test_corrective_verifier_deployed_pins.py",
     "tests/test_closer_native_canonical_capture.py",
-    "tests/test_closer_owned_delivery_lineage.py"
+    "tests/test_closer_owned_delivery_lineage.py",
+    "tests/test_closer_closed_source_admission.py",
+    "tests/test_closer_ownership_pagination.py"
   ],
   "shards": [
     [
@@ -720,7 +722,9 @@
       "tests/test_verifier_native_bot_origin.py",
       "tests/test_corrective_verifier_deployed_pins.py",
       "tests/test_closer_native_canonical_capture.py",
-      "tests/test_closer_owned_delivery_lineage.py"
+      "tests/test_closer_owned_delivery_lineage.py",
+      "tests/test_closer_closed_source_admission.py",
+      "tests/test_closer_ownership_pagination.py"
     ]
   ]
 }

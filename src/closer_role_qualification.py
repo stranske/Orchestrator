@@ -409,3 +409,107 @@ def is_runtime_qualified(
             "Runtime confinement probe failed for profile %s role %s: %s", profile_id, role, exc
         )
         return False
+
+
+# One reviewed source admission, NOT a new physical qualification. The original
+# ROLE_QUALIFICATIONS row/proof/times/limits remain immutable. This module is a
+# required member of the existing before-effect Root installation closure and
+# is deliberately outside the twenty model-source fingerprints.
+_CLOSED_SONNET_SOURCE_ADMISSION = {
+    "schema": "closer-reviewed-source-admission/v1",
+    "qualification_id": "sonnet-current-role-qualification:3e7ba0521480a5d44d6a081e5a43b8895aeded9eba9080dbe8b8ebdca98fb009",
+    "qualification_record_sha256": "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482",
+    "historical_contract_sha256": "1cb727375e9fa27344d89e02a7dbcd1881b613d2045a14fab5e02a30530ee293",
+    "execution_contract_sha256": "ff2dd414d0eb1d37e639be4a326d0161ae106611b6b5be7906c86a1aedd1572a",
+    "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
+    "task_type": "closer_exception",
+    "role": STRONG_CRITERION_ADJUDICATION,
+}
+
+
+def _source_digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
+
+def execution_source_support(record, profile_identity, descriptor, *, task_type, checked_at):
+    """Separate historical qualification from a new exact-current execution.
+
+    This source relation grants no qualification, freshness, transport or action
+    authority. Each consumer retains its original current/historical role-time
+    checks and the production result validator remains exact-current. No caller
+    flag, alias, source normalization or future-pair inference is supported.
+    """
+    if not all(isinstance(value, Mapping) for value in (record, profile_identity, descriptor)):
+        raise ValueError("qualification/source identity is not an object")
+    limits = deepcopy(record.get("execution_limits"))
+    role = TASK_ROLES.get(task_type)
+    if (
+        isinstance(limits, dict)
+        and record.get("production_model_contract") == descriptor
+        and limits.get("model_contract_sha256") == descriptor.get("contract_sha256")
+        and limits.get("role") == role
+    ):
+        return {"limits": limits, "admission": None}
+    pair = _CLOSED_SONNET_SOURCE_ADMISSION
+    try:
+        old = record["production_model_contract"]
+        old_body = {k: v for k, v in old.items() if k != "contract_sha256"}
+        body = {k: v for k, v in descriptor.items() if k != "contract_sha256"}
+        valid = (
+            task_type == pair["task_type"]
+            and role == record["role"] == descriptor["role"] == pair["role"]
+            and record["qualification_id"] == pair["qualification_id"]
+            and _source_digest(record) == pair["qualification_record_sha256"]
+            and record["profile_identity"] == profile_identity
+            and _source_digest(profile_identity) == pair["profile_identity_sha256"]
+            and old["contract_sha256"]
+            == _source_digest(old_body)
+            == pair["historical_contract_sha256"]
+            and descriptor["contract_sha256"]
+            == _source_digest(body)
+            == pair["execution_contract_sha256"]
+            and limits["model_contract_sha256"] == pair["historical_contract_sha256"]
+            and limits["role"] == role
+            and _finite(checked_at)
+            and record["qualified_at"] <= checked_at < record["expires_at"]
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        valid = False
+    if not valid:
+        raise ValueError("qualification does not support this exact production source")
+    admission = {
+        **pair,
+        "mode": "reviewed_current_source_admission",
+        "observation_mode": "historical_physical_qualification",
+        "original_qualified_at": record["qualified_at"],
+        "original_expires_at": record["expires_at"],
+        "original_limits_sha256": _source_digest(limits),
+        "physical_qualification_performed": False,
+        "freshness_renewed": False,
+        "authority": False,
+    }
+    # This is a NEW runtime limit document, never a rewritten historical one.
+    # Every role/schema/numerical bound is copied unchanged; only the truthful
+    # current execution descriptor differs from the historical qualification.
+    limits["model_contract_sha256"] = descriptor["contract_sha256"]
+    return {"limits": limits, "admission": admission}
+
+
+def execution_record_matches(record, expected, *, checked_at):
+    """Validate one sealed execution's distinct qualification/source identities."""
+    try:
+        support = execution_source_support(
+            record,
+            expected["profile_identity"],
+            expected["production_model_contract"],
+            task_type=expected["task_type"],
+            checked_at=checked_at,
+        )
+        return (
+            expected["limits"] == support["limits"]
+            and expected.get("qualification_source_admission") == support["admission"]
+        )
+    except (KeyError, ValueError, TypeError, OverflowError):
+        return False

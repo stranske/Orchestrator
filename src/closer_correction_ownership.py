@@ -15,7 +15,9 @@ from datetime import datetime, timezone
 
 import closer_correction_classification as contract
 
-MAX_PAGES = 4
+PAGE_SIZE = 25
+MAX_ITEMS = 400
+MAX_PAGES = MAX_ITEMS // PAGE_SIZE
 MAX_CALLS = 32
 MAX_REPLY_BYTES = 131072
 MAX_TOTAL_BYTES = 1048576
@@ -109,8 +111,8 @@ class _Reads:
     def pages(self, endpoint):
         found, identities = [], set()
         for page in range(1, MAX_PAGES + 1):
-            rows = self.get(endpoint + f"?per_page=100&page={page}")
-            _need(isinstance(rows, list) and len(rows) <= 100, "native page malformed")
+            rows = self.get(endpoint + f"?per_page={PAGE_SIZE}&page={page}")
+            _need(isinstance(rows, list) and len(rows) <= PAGE_SIZE, "native page malformed")
             for row in rows:
                 _need(isinstance(row, dict), "native event malformed")
                 # A cross-reference lacks a numeric event ID in the REST shape.
@@ -158,7 +160,7 @@ class _Reads:
                 )
                 identities.add(identity)
                 found.append(row)
-            if len(rows) < 100:
+            if len(rows) < PAGE_SIZE:
                 return found
         raise OwnershipUnavailable("native pagination incomplete")
 

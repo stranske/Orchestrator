@@ -92,6 +92,9 @@ def integrated_reference(base):
         for name, change in publication_admission_reference()["dispatcher_top_level_delta"].items():
             assert dispatcher["top_level_ast"].get(name) == change["before"]
             dispatcher["top_level_ast"][name] = change["after"]
+        for name, change in source_admission_reference()["dispatcher_function_delta"].items():
+            assert dispatcher["top_level_ast"].get(name) == change["before"]
+            dispatcher["top_level_ast"][name] = change["after"]
     return original
 
 
@@ -131,8 +134,23 @@ def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
-    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(raw)
+    if hashlib.sha256(raw).hexdigest() != change["after_file_sha256"]:
+        successor = source_admission_reference()["role_module"]
+        assert successor["before_file_sha256"] == change["after_file_sha256"]
+        assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+        added = successor["added_ast"]
+        selected = []
+        for node in tree.body:
+            name = getattr(node, "name", None)
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                name = getattr(node.targets[0], "id", None)
+            if name in added:
+                assert fingerprint(node) == added[name]
+                selected.append(node)
+        assert len(selected) == len(added)
+        tree.body = [node for node in tree.body if node not in selected]
+        assert fingerprint(tree) == successor["before_complete_ast_sha256"]
     registry = [
         node
         for node in tree.body
@@ -144,3 +162,24 @@ def assert_reviewed_role_registry_successor(source=None):
     tree.body.remove(registry[0])
     assert fingerprint(tree) == change["outside_registry_ast_sha256"]
     assert fingerprint(registry[0]) == change["after_registry_ast_sha256"]
+
+
+SOURCE_ADMISSION_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/closed_current_source_admission_v1.json"
+)
+SOURCE_ADMISSION_SHA256 = "858bb6a931eb93a53c6fe9849fc579f7eed2bda4cb69fc6ece50a02e2ecfafae"
+
+
+def source_admission_reference():
+    raw = SOURCE_ADMISSION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == SOURCE_ADMISSION_SHA256
+    value = json.loads(raw)
+    assert set(value["dispatcher_function_delta"]) == {"_controlled_launch_inputs"}
+    assert set(value["role_module"]["added_ast"]) == {
+        "_CLOSED_SONNET_SOURCE_ADMISSION",
+        "_source_digest",
+        "execution_source_support",
+        "execution_record_matches",
+    }
+    return value

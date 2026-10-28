@@ -42,6 +42,7 @@ def http_seam(tmp_path, monkeypatch):
     (seam / "sitecustomize.py").write_text("""
 import io,json,os,time,urllib.request,urllib.error
 from http.client import HTTPMessage
+time.sleep(float(os.environ.get("CORE_HTTP_BOOT_DELAY","0")))
 
 def opener(request, *, timeout):
     with open(os.environ["CORE_HTTP_AUDIT"],"a") as stream:
@@ -84,17 +85,41 @@ def test_http_status_headers_retained_without_body(bundle, http_seam, monkeypatc
     assert len(http_seam.read_text().splitlines()) == 1
 
 
-def test_hung_response_killed_once_by_original_request_window(bundle, http_seam, monkeypatch):
+@pytest.mark.parametrize("bootstrap_delay", [0, 2])
+def test_hung_response_killed_once_by_original_request_window(
+    bundle, http_seam, monkeypatch, bootstrap_delay
+):
+    monkeypatch.setenv("CORE_HTTP_BOOT_DELAY", str(bootstrap_delay))
     monkeypatch.setenv("CORE_HTTP_DELAY", "5")
+    spawned = []
+    original_popen = dispatcher.subprocess.Popen
+
+    def record_spawn(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        spawned.append(child.pid)
+        return child
+
+    monkeypatch.setattr(dispatcher.subprocess, "Popen", record_spawn)
     started = time.monotonic()
     with resources.inventory_request(time.time() + 1.2):
         with pytest.raises(subprocess.TimeoutExpired):
             rb._CoreHTTPTransport(bundle)("GET", "/repos/owner/repo", None)
     assert time.monotonic() - started < 3.5
-    rows = [json.loads(line) for line in http_seam.read_text().splitlines()]
-    assert len(rows) == 1
+    # The original window also covers interpreter/Core bootstrap. A child killed
+    # there has made zero HTTP attempts; it must still be reaped without retry.
+    rows = (
+        [json.loads(line) for line in http_seam.read_text().splitlines()]
+        if http_seam.exists()
+        else []
+    )
+    assert len(spawned) == 1
+    assert len(rows) <= 1
+    if bootstrap_delay:
+        assert rows == []
+    if rows:
+        assert rows[0]["pid"] == spawned[0]
     with pytest.raises(ProcessLookupError):
-        os.kill(rows[0]["pid"], 0)
+        os.kill(spawned[0], 0)
 
 
 def test_expired_request_refuses_before_spawn(bundle, http_seam):

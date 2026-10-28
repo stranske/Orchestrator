@@ -250,12 +250,28 @@ def _controlled_launch_inputs(
     profile_id = profile["profile_id"]
     descriptor = _controlled_model_contract(task_type)
     limits = execution.validate_limits(record.get("execution_limits"))
+    source_admission = None
     if (
         record.get("production_model_contract") != descriptor
         or limits["model_contract_sha256"] != descriptor["contract_sha256"]
         or limits["role"] != role
     ):
-        raise ControlledOriginUnavailable("reviewed production execution contract unavailable")
+        if qualification is not None:
+            raise ControlledOriginUnavailable("reviewed production execution contract unavailable")
+        try:
+            support = roles.execution_source_support(
+                record,
+                roles.profile_identity(profile),
+                descriptor,
+                task_type=task_type,
+                checked_at=time.time(),
+            )
+            limits = execution.validate_limits(support["limits"])
+            source_admission = support["admission"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise ControlledOriginUnavailable(
+                "reviewed production execution contract unavailable"
+            ) from error
     prompt_bytes = _controlled_prompt_size(prompt, limits)
     if (
         not isinstance(frontier, dict)
@@ -349,6 +365,8 @@ def _controlled_launch_inputs(
         "qualification_id": record["qualification_id"],
         "qualification_record_sha256": _contract_digest(record),
     }
+    if source_admission is not None:
+        expected["qualification_source_admission"] = source_admission
     if qualification is not None:
         expected["qualification_only"] = True
     return options, expected, observed

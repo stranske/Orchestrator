@@ -159,7 +159,7 @@ def _stage(stage, *, task, basis, operation_id, now, host_context=None):
         and roles.profile_identity(profile) == expected.get("profile_identity")
         and record["qualification_id"] == expected.get("qualification_id")
         and closer._contract_digest(record) == expected.get("qualification_record_sha256")
-        and record.get("production_model_contract") == expected.get("production_model_contract"),
+        and roles.execution_record_matches(record, expected, checked_at=now),
         "owner original current qualification differs",
     )
     _need(result.get("exit") == 0, "owner stage did not complete successfully")

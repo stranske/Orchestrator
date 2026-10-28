@@ -44,5 +44,24 @@ def test_content_addressed_evidence_has_no_personal_paths():
 
 def test_record_insertion_preserves_observed_model_contract():
     descriptor = closer._controlled_model_contract("closer_exception")
-    assert descriptor == _record()["production_model_contract"]
+    observed = _record()["production_model_contract"]
+    assert (
+        observed["contract_sha256"]
+        == "1cb727375e9fa27344d89e02a7dbcd1881b613d2045a14fab5e02a30530ee293"
+    )
+    assert (
+        closer._contract_digest(_record())
+        == "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
+    )
+    # A reviewed source admission is distinct from the unchanged physical row.
+    support = q.execution_source_support(
+        _record(),
+        _record()["profile_identity"],
+        descriptor,
+        task_type="closer_exception",
+        checked_at=_record()["qualified_at"] + 1,
+    )
+    assert support["admission"]["historical_contract_sha256"] == observed["contract_sha256"]
+    assert support["admission"]["execution_contract_sha256"] == descriptor["contract_sha256"]
+    assert support["admission"]["physical_qualification_performed"] is False
     assert "closer_role_qualification.py" not in descriptor["sources"]

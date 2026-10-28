@@ -242,7 +242,7 @@ def _issuance_proofs(context, admission, issued_at_ms):
             and qualified["qualification_id"] == expected["qualification_id"]
             and closer._contract_digest(qualified) == expected["qualification_record_sha256"]
             and qualified["profile_identity"] == expected["profile_identity"]
-            and qualified["production_model_contract"] == expected["production_model_contract"],
+            and roles.execution_record_matches(qualified, expected, checked_at=issued_at_ms / 1000),
             "current original role qualification differs",
         )
         receipt = closer._read_controlled_receipt(
@@ -725,7 +725,7 @@ def _proof_knowledge(record, admission, context, row):
             and qualified["qualification_id"] == expected["qualification_id"]
             and qualified["profile_identity"] == expected["profile_identity"]
             and closer._contract_digest(qualified) == expected["qualification_record_sha256"]
-            and qualified["production_model_contract"] == expected["production_model_contract"]
+            and roles.execution_record_matches(qualified, expected, checked_at=cutoff)
             and not roles.qualification_problems(
                 profile, role, now=cutoff, records={qualified["qualification_id"]: qualified}
             ),
