@@ -215,3 +215,31 @@ required and this run's approval policy is `never`.
 No `/tmp/closer-*-coord.log` is available. Both November 3 acceptance checks remain
 unchecked; source #978 is open and PR #982 is open and ready for review. The runtime
 owner must retain the first real post-merge closer receipt to establish acceptance.
+
+### Admission-time evidence validation (2026-10-28)
+
+The receipt-condition grader previously accepted a selected deadline of zero when
+the expiry fields claimed false/zero. The CLI now retains `budget_admission.sampled_at`,
+and grading requires a finite, nonnegative admission sample no later than grading
+time and a selected deadline strictly after that sample. Historical grading uses
+admission time, so a retained receipt does not fail merely because its deadline
+expired before November 3. Receipts missing the sample remain unmeasured.
+
+The added regression failed against the preceding grader (`pass` instead of `fail`)
+and passed after the fix. It covers expired/equal deadlines, malformed/missing/future
+samples, and later grading of a valid receipt without changing collected test counts.
+Dispatcher/pipeline validation with `-m 'not slow'`: **511 passed** in 41.97 seconds.
+Black formatted the edited Python files. After sequential Black checks populated
+its normal cache, the required repository-wide command
+`black --check --line-length 100 --exclude '(\.workflows-lib|node_modules)' .`
+passed with **818 files unchanged**. `git diff --check` passed.
+
+Live acceptance remains unchecked: today is October 28, PR #982 is unmerged, and
+this runner has no `/tmp/closer-*-coord.log`. Source #978 is open and PR #982 is
+open and ready for review. The GitHub connector rejected the requested `needs-human`
+label and blocker comment because approval is required and this run's policy is
+`never`. No live runtime action was performed.
+
+Staging this follow-up failed: `.git/index.lock` cannot be created on the read-only
+filesystem. The source, test, and evidence changes remain uncommitted and require
+publication by an authorized runner, followed by CI and review for that revision.

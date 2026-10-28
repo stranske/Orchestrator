@@ -4396,6 +4396,7 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     assert admission == {
         "reason": admission_reason,
         "scope": "pipeline",
+        "sampled_at": start,
         "requested_deadline": start + 310,
         "selected_deadline": start + 310,
         "selected_deadline_expired": False,
@@ -4424,6 +4425,17 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
         fresh_grade = adapter.pipeline_admission_pass_number(fresh, now=check_at)
         assert fresh_grade["status"] == "pass"
         assert fresh_grade["advanced_targets"] == [TARGET]
+        assert (
+            adapter.pipeline_admission_pass_number(fresh, now=check_at + 86400)["status"] == "pass"
+        )
+        # Grading a retained receipt uses its admission sample, not the later
+        # check date. An expired deadline cannot pass through false/zero flags.
+        for selected in [0, start - 1, start]:
+            candidate = copy.deepcopy(fresh)
+            candidate["budget_admission"]["selected_deadline"] = selected
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"] == "fail"
+            )
         for changes, expected in [
             ({"reason": "no_pipeline_continuation_proof"}, "fail"),
             ({"selected_deadline_expired": True, "selected_deadline_age_seconds": 1}, "fail"),
@@ -4431,6 +4443,13 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
             ({"reason": ""}, "unmeasured"),
             ({"reason": None}, "unmeasured"),
             ({"scope": "resource_scoped"}, "unmeasured"),
+            ({"sampled_at": None}, "unmeasured"),
+            ({"sampled_at": True}, "unmeasured"),
+            ({"sampled_at": "today"}, "unmeasured"),
+            ({"sampled_at": float("nan")}, "unmeasured"),
+            ({"sampled_at": float("inf")}, "unmeasured"),
+            ({"sampled_at": -1}, "unmeasured"),
+            ({"sampled_at": check_at + 1}, "unmeasured"),
             ({"selected_deadline": None}, "unmeasured"),
             ({"selected_deadline": True}, "unmeasured"),
             ({"selected_deadline": float("nan")}, "unmeasured"),
@@ -4468,6 +4487,12 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
                 adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
                 == "unmeasured"
             )
+        candidate = copy.deepcopy(receipt)
+        del candidate["budget_admission"]["sampled_at"]
+        assert (
+            adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
+            == "unmeasured"
+        )
         assert receipt == receipt_before
     assert state_path.read_bytes() == before
     assert (

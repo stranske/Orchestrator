@@ -10504,6 +10504,7 @@ def _main_admitted(args, p, assignment_rows, targets):
             budget_admission = {
                 "reason": admission_reason,
                 "scope": "pipeline",
+                "sampled_at": admission_sampled_at,
                 "requested_deadline": requested_deadline,
                 "selected_deadline": deadline,
                 "selected_deadline_expired": deadline < admission_sampled_at,
@@ -10772,6 +10773,7 @@ def pipeline_admission_pass_number(receipt, *, now=None):
     )
     reason = admission.get("reason")
     selected = admission.get("selected_deadline")
+    sampled_at = admission.get("sampled_at")
     age = admission.get("selected_deadline_age_seconds")
     result = {
         "check_date": PIPELINE_ADMISSION_PASS_CHECK_LABEL,
@@ -10787,6 +10789,8 @@ def pipeline_admission_pass_number(receipt, *, now=None):
         admission.get("scope") != "pipeline"
         or not isinstance(reason, str)
         or not reason.strip()
+        or not _finite_number(sampled_at)
+        or not 0 <= sampled_at <= stamp
         or not isinstance(selected, (int, float))
         or isinstance(selected, bool)
         or not math.isfinite(selected)
@@ -10801,6 +10805,8 @@ def pipeline_admission_pass_number(receipt, *, now=None):
         result.update(status="fail", reason="expired legacy admission fallback retained")
     elif admission["selected_deadline_expired"] or age > 0:
         result.update(status="fail", reason="selected deadline already expired at admission")
+    elif selected <= sampled_at:
+        result.update(status="fail", reason="selected deadline is not after admission sample")
     elif not advanced:
         result.update(status="fail", reason="no target has a non-deferred status")
     else:
