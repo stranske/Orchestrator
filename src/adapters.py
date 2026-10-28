@@ -2627,6 +2627,7 @@ def muse_terminal_text(jsonl: str) -> str:
             "session.run.linked",
             "run.lifecycle.started",
             "run.terminal.completed",
+            "run.usage",
         }:
             return ""
         if kind == "runtime.command.accepted":
@@ -2647,6 +2648,91 @@ def muse_terminal_text(jsonl: str) -> str:
                 return ""
         if command is None:
             return ""
+        if kind == "run.usage":
+            # Installed exec emits this distinct, ephemeral metadata stream.
+            # It is not a run terminal, budget proof or authorization assertion.
+            counters = {"calls", "completed_calls", "failed_calls", "cancelled_calls"}
+            model_counters = {
+                "input_tokens",
+                "cached_tokens",
+                "output_tokens",
+                "reasoning_tokens",
+                "calls",
+            }
+
+            def counter(value):
+                return type(value) is int and 0 <= value <= 2**64 - 1
+
+            def allowance(value):
+                # Native RunUsageAllowance is typed metadata only. Neither a
+                # remaining percentage nor a reset timestamp grants account,
+                # billing, execution or subscription authority here.
+                if value is None:
+                    return True
+                if type(value) is not dict or set(value) != {
+                    "tier",
+                    "window",
+                    "weekly",
+                    "as_of_ms",
+                    "source",
+                }:
+                    return False
+                tier = value["tier"]
+                if not (tier is None or type(tier) is str and 0 < len(tier.strip()) <= 128):
+                    return False
+                if (
+                    type(value["as_of_ms"]) is not int
+                    or not 0 <= value["as_of_ms"] <= 2**63 - 1
+                    or type(value["source"]) is not str
+                    or value["source"] not in {"stream", "mint"}
+                ):
+                    return False
+                for period in (value["window"], value["weekly"]):
+                    if period is None:
+                        continue
+                    if (
+                        type(period) is not dict
+                        or set(period) != {"used_percent", "resets_at_ms"}
+                        or type(period["used_percent"]) is not int
+                        or not 0 <= period["used_percent"] <= 100
+                    ):
+                        return False
+                    reset = period["resets_at_ms"]
+                    if reset is not None and (
+                        type(reset) is not int or not 0 <= reset <= 2**63 - 1
+                    ):
+                        return False
+                return True
+
+            models = payload.get("models")
+            if (
+                not started
+                or stream != {"kind": "exec.usage", "id": session}
+                or event.get("causation_id") != command
+                or event.get("record_type") != "status"
+                or event.get("durability") != "ephemeral"
+                or set(payload)
+                != counters
+                | {"kind", "command_id", "run_stream", "models", "children_included", "allowance"}
+                or payload.get("kind") != "run_usage"
+                or payload.get("command_id") != command
+                or payload.get("run_stream") != {"kind": "run", "id": command}
+                or type(payload.get("children_included")) is not bool
+                or not allowance(payload.get("allowance"))
+                or not all(counter(payload[key]) for key in counters)
+                or type(models) is not list
+                or len(models) > 128
+            ):
+                return ""
+            for model in models:
+                if (
+                    type(model) is not dict
+                    or set(model) != model_counters | {"model"}
+                    or not (model["model"] is None or type(model["model"]) is str)
+                    or not all(counter(model[key]) for key in model_counters)
+                ):
+                    return ""
+            continue
         if (
             stream != {"kind": "session", "id": session}
             or event.get("causation_id") != command

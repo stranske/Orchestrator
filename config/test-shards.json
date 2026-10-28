@@ -114,7 +114,10 @@
     "tests/test_closer_informational_pr_lineage.py",
     "tests/test_corrective_verifier_current_source_pins.py",
     "tests/test_closer_publication_private_git_environment.py",
-    "tests/test_closer_publication_io_retained_odb.py"
+    "tests/test_closer_publication_io_retained_odb.py",
+    "tests/test_closer_muse_runtime.py",
+    "tests/test_muse_usage_parser.py",
+    "tests/test_muse_usage_allowance_parser.py"
   ],
   "shards": [
     [
@@ -733,7 +736,10 @@
       "tests/test_closer_informational_pr_lineage.py",
       "tests/test_corrective_verifier_current_source_pins.py",
       "tests/test_closer_publication_private_git_environment.py",
-      "tests/test_closer_publication_io_retained_odb.py"
+      "tests/test_closer_publication_io_retained_odb.py",
+      "tests/test_closer_muse_runtime.py",
+      "tests/test_muse_usage_parser.py",
+      "tests/test_muse_usage_allowance_parser.py"
     ]
   ]
 }
