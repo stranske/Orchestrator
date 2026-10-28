@@ -654,3 +654,116 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
+
+
+def provision_absent_owned_head(target: str, head: str, branch: str, *, git_policy: dict) -> dict:
+    """Prepare one absent local named worktree, never reset/reclaim/fetch/push.
+
+    The caller supplies a freshly native-observed owned PR tuple. This local
+    DATA receipt is not native ownership or controller admission. The existing
+    canonical clone must already contain H; Root may populate a fresh namespace
+    separately. No existing branch/worktree/index is adopted or modified.
+    """
+    import closer_coding_publication as publication
+    import worktree_git
+
+    repo, number = parse_target(target)
+    if number is None or repo != repo.lower() or not re.fullmatch(r"[a-f0-9]{40}", head):
+        raise ValueError("exact lowercase owned PR target/head required")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", branch):
+        raise ValueError("bounded existing owned branch required")
+    canon = canonical_path(repo).resolve(strict=True)
+    wt = worktree_path(target, "closer")
+    if wt.exists() or wt.is_symlink():
+        raise RuntimeError("owned canary worktree must be absent; never reclaim")
+    if not (canon / ".git").is_dir() or (canon / ".git").is_symlink():
+        raise RuntimeError("existing canonical local Git repository required")
+    # Validate genuine configured namespaces rather than forging is_provisioned.
+    if canon.parent != REPOS_DIR.resolve(strict=True) or wt.parent != WORKTREES_DIR.resolve(
+        strict=True
+    ):
+        raise RuntimeError("canonical repository/worktree namespace differs")
+    original = dict(os.environ)
+    environment = publication.private_git_environment_data(git_policy, original)
+    executable = publication._PhysicalFile(git_policy["git_executable"]["path"], 256 * 1048576)
+    controls: list[publication._PhysicalFile | publication._PhysicalDirectory] = []
+    try:
+        if executable.sha256 != git_policy["git_executable"]["sha256"]:
+            raise RuntimeError("source-pinned local Git executable differs")
+
+        def run(args, *, check=True):
+            if dict(os.environ) != original:
+                raise RuntimeError("local provision environment changed")
+            executable.check()
+            for item in controls:
+                item.check()
+            if environment != publication.private_git_environment_data(git_policy, original):
+                raise RuntimeError("private local Git environment changed")
+            return subprocess.run(
+                [str(executable.path), "-C", str(canon), *args],
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=check,
+                timeout=30,
+            )
+
+        names = publication._configuration_names(
+            run(
+                ["config", "--null", "--show-scope", "--show-origin", "--name-only", "--list"]
+            ).stdout.encode(),
+            git_policy["max_ack_bytes"],
+        )
+        for name in sorted({str((canon / origin).resolve()) for _scope, origin, _key in names}):
+            controls.append(publication._PhysicalFile(name, git_policy["max_ack_bytes"]))
+        hooks = canon / ".git/hooks"
+        controls.append(publication._PhysicalDirectory(hooks, closed_entries=True))
+        if any(
+            p.is_symlink() or not p.is_file() or not p.name.endswith(".sample")
+            for p in hooks.iterdir()
+        ):
+            raise RuntimeError(
+                "active canonical hooks require source closure before local provisioning"
+            )
+        run(["check-ref-format", "--branch", branch])
+        absent = run(["show-ref", "--verify", "--quiet", "refs/heads/" + branch], check=False)
+        if absent.returncode != 1:
+            raise RuntimeError("owned local branch must be absent; never reset or adopt")
+        run(["cat-file", "-e", head + "^{commit}"])
+        # -b is Git's own create-only branch lock. Existing holder/name races
+        # refuse without -B/--force/prune/remove or retrying an uncertain result.
+        run(["worktree", "add", "--checkout", "-b", branch, str(wt), head])
+        pins = worktree_git.expected_pins(wt, repo)
+        if not worktree_git.is_provisioned(wt) or not isinstance(pins, tuple):
+            raise RuntimeError("actual linked worktree metadata refused; preserve for inspection")
+        observed = subprocess.run(
+            [str(executable.path), "-C", str(wt), "rev-parse", "HEAD"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        ).stdout.strip()
+        named = subprocess.run(
+            [str(executable.path), "-C", str(wt), "symbolic-ref", "HEAD"],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=15,
+        ).stdout.strip()
+        if observed != head or named != "refs/heads/" + branch:
+            raise RuntimeError("prepared owned worktree changed; preserve without retry")
+        return {
+            "schema": "closer-owned-existing-worktree-preparation-data/v1",
+            "target": target,
+            "head": head,
+            "branch": branch,
+            "worktree": str(wt),
+            "topology": [str(p) for p in pins],
+            "managed_metadata_verified": True,
+            "native_ownership_proven": False,
+            "runtime_admission": False,
+        }
+    finally:
+        publication._close_physical_controls([executable, *controls])

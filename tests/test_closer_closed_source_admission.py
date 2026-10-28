@@ -20,6 +20,8 @@ import dispatcher
 controlled_world = controlled_fixture.world
 ORIGINAL = copy.deepcopy(next(iter(roles.ROLE_QUALIFICATIONS.values())))
 ORIGINAL_SHA = "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
+INSIDE = ORIGINAL["qualified_at"] + 60
+assert ORIGINAL["qualified_at"] < INSIDE < ORIGINAL["expires_at"]
 
 
 def support(
@@ -31,7 +33,7 @@ def support(
         record["profile_identity"] if identity is None else identity,
         closer._controlled_model_contract(task) if descriptor is None else descriptor,
         task_type=task,
-        checked_at=time.time() if checked_at is None else checked_at,
+        checked_at=INSIDE if checked_at is None else checked_at,
     )
 
 
@@ -79,7 +81,7 @@ def test_unreviewed_source_profile_or_lifetime_never_gets_admission(change):
     record = copy.deepcopy(ORIGINAL)
     descriptor = closer._controlled_model_contract("closer_exception")
     identity = copy.deepcopy(record["profile_identity"])
-    checked_at, task = time.time(), "closer_exception"
+    checked_at, task = INSIDE, "closer_exception"
     if change == "record":
         record["qualification_id"] = "unknown"
     elif change == "model":
@@ -134,7 +136,7 @@ def test_mode_or_source_witness_forgery_is_rejected():
         "limits": result["limits"],
         "qualification_source_admission": result["admission"],
     }
-    assert roles.execution_record_matches(ORIGINAL, expected, checked_at=time.time())
+    assert roles.execution_record_matches(ORIGINAL, expected, checked_at=INSIDE)
     for change in ("missing", "new_observation", "renewed", "contract", "limits"):
         forged = copy.deepcopy(expected)
         if change == "missing":
@@ -147,7 +149,7 @@ def test_mode_or_source_witness_forgery_is_rejected():
             forged["qualification_source_admission"]["execution_contract_sha256"] = "0" * 64
         else:
             forged["limits"]["max_output_tokens"] += 1
-        assert not roles.execution_record_matches(ORIGINAL, forged, checked_at=time.time())
+        assert not roles.execution_record_matches(ORIGINAL, forged, checked_at=INSIDE)
 
 
 def test_existing_root_closure_requires_and_pins_role_policy_bytes(tmp_path):
@@ -180,6 +182,25 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
     callbacks, native receipt/proof validation, owner and cold enrollment code
     executes. There is no live provider, enrollment or native issue effect.
     """
+    # Only qualification clock inputs are fixed. The actual policy validators
+    # still execute; native invocation, invitation, deadline and timeout clocks
+    # retain their real module clock and the original record is never renewed.
+    live_time = time.time
+    original_problems = roles.qualification_problems
+    original_support = roles.execution_source_support
+    qualification_clock_calls = []
+
+    def problems_at_observation(profile, role, *, now=None, records=None):
+        qualification_clock_calls.append("qualification")
+        return original_problems(profile, role, now=INSIDE, records=records)
+
+    def support_at_observation(*args, **kwargs):
+        qualification_clock_calls.append("source_admission")
+        return original_support(*args, **{**kwargs, "checked_at": INSIDE})
+
+    monkeypatch.setattr(roles, "qualification_problems", problems_at_observation)
+    monkeypatch.setattr(roles, "execution_source_support", support_at_observation)
+    assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     original_factory = invitation.InertCaller
     captured, callers = [], []
 
@@ -211,6 +232,8 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
         world, controlled_world, monkeypatch, tmp_path, include_packet_length=False
     )
     assert len(captured) == len(callers) == len(callers[0].results) == 1
+    assert {"qualification", "source_admission"} <= set(qualification_clock_calls)
+    assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     proof = captured[0]["_closer_controlled_proof"]
     expected = proof["expected"]
     assert expected["qualification_record_sha256"] == ORIGINAL_SHA

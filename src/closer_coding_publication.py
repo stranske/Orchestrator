@@ -110,7 +110,7 @@ def _path(value):
     return value
 
 
-def validate_policy(value):
+def validate_policy(value, *, _prepare_context=False):
     """Closed, explicit necessary policy shape only. Never an authority producer."""
     anchor_mode = type(value) is dict and value.get("schema") == ANCHOR_POLICY_SCHEMA
     _exact(
@@ -121,9 +121,14 @@ def validate_policy(value):
             "consumer_id",
             "git_executable",
             "allowed_path_prefixes",
-            "trusted_context_sha256",
+            *({"trusted_context_sha256"} if not _prepare_context else set()),
             *_BOUNDS,
             *({"baseline_limits"} if anchor_mode else set()),
+            *(
+                {"git_environment_v1"}
+                if type(value) is dict and "git_environment_v1" in value
+                else set()
+            ),
         },
     )
     _need(
@@ -141,7 +146,7 @@ def validate_policy(value):
         and ".." not in PurePosixPath(executable["path"]).parts
         and not any(ord(c) < 32 for c in executable["path"])
         and _sha(executable["sha256"])
-        and _sha(value["trusted_context_sha256"]),
+        and (_prepare_context or _sha(value["trusted_context_sha256"])),
         "source Git/context pin missing",
     )
     prefixes = value["allowed_path_prefixes"]
@@ -165,6 +170,9 @@ def validate_policy(value):
     )
     if anchor_mode:
         _baseline_limits(value["baseline_limits"])
+    if "git_environment_v1" in value:
+        _need(anchor_mode, "private Git context requires explicit v2 publication")
+        _private_git_spec(value["git_environment_v1"])
     return _copy(value)
 
 
@@ -1820,6 +1828,92 @@ def _read_command(kind, pr=None):
     return fixed[kind]
 
 
+def _close_physical_controls(items):
+    errors = []
+    for item in reversed(items):
+        try:
+            item.close()
+        except Exception:
+            errors.append(True)
+    _need(not errors, "publication physical control cleanup unknown")
+
+
+def _private_git_spec(value):
+    _exact(value, {"schema", "home", "config_sha256"})
+    _need(
+        value["schema"] == "closer-publication-private-git-environment/v1"
+        and type(value["home"]) is str
+        and Path(value["home"]).is_absolute()
+        and str(Path(value["home"])) == value["home"]
+        and ".." not in Path(value["home"]).parts
+        and _sha(value["config_sha256"]),
+        "private Git environment differs",
+    )
+    return _copy(value)
+
+
+def private_git_environment_data(policy, original=None, *, held=None):
+    """Necessary child environment DATA; never a permit or native principal proof.
+
+    Root HOME and account/model routes are unchanged. Only Git children get the
+    reviewed private global config; their fixed GH helper uses the original
+    existing GitHub config directory explicitly, without reading token values.
+    """
+    import shutil
+    import stat
+
+    original = dict(os.environ) if original is None else dict(original)
+    _need(
+        not any(
+            k.startswith(("GIT_", "DYLD_", "LD_"))
+            or k in {"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH", "IFS"}
+            for k in original
+        ),
+        "inherited Git/runtime override unsupported",
+    )
+    spec = policy.get("git_environment_v1")
+    if spec is None:
+        return original
+    spec = _private_git_spec(spec)
+    own = []
+    try:
+        home = Path(spec["home"])
+        for path, entries in (
+            (home, {".gitconfig", ".config"}),
+            (home / ".config", {"git"}),
+            (home / ".config/git", set()),
+        ):
+            item = _PhysicalDirectory(path, closed_entries=True)
+            own.append(item)
+            meta = path.stat(follow_symlinks=False)
+            _need(
+                meta.st_uid == os.getuid()
+                and stat.S_IMODE(meta.st_mode) == 0o700
+                and set(os.listdir(path)) == entries,
+                "private Git home or closed config inventory differs",
+            )
+        config = _PhysicalFile(home / ".gitconfig", 65536)
+        own.append(config)
+        _need(config.sha256 == spec["config_sha256"], "private Git config differs")
+        gh = shutil.which("gh", path=original.get("PATH"))
+        _need(type(gh) is str, "existing fixed GitHub helper unavailable")
+        route = _fixed_helper_route(
+            b"!gh auth git-credential\0", str(Path(gh).resolve(strict=True)), original
+        )
+        result = {
+            **original,
+            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / ".config"),
+            "GH_CONFIG_DIR": route["config_directory"],
+        }
+        if held is not None:
+            held.extend(own)
+            own = []
+        return result
+    finally:
+        _close_physical_controls(own)
+
+
 def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=(), object_input=None):
     import dispatcher
 
@@ -1829,15 +1923,8 @@ def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=(),
         str(workspace),
         *_read_command(kind, pr),
     ]
-    source_env = dict(os.environ)
-    _need(
-        not any(
-            k.startswith(("GIT_", "DYLD_", "LD_"))
-            or k in {"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "CDPATH", "IFS"}
-            for k in source_env
-        ),
-        "inherited Git/runtime override unsupported",
-    )
+    original_environment = dict(os.environ)
+    source_env = private_git_environment_data(observed.policy, original_environment)
     if observed.policy["schema"] == ANCHOR_POLICY_SCHEMA:
         source_env.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1")
     _need(
@@ -1856,12 +1943,13 @@ def _fixed_git_read(observed, workspace, kind, *, pr=None, files=(), missing=(),
     def starting(_):
         observed.check()
         _need(
-            {
+            original_environment == dict(os.environ)
+            and {
                 k: v
                 for k, v in source_env.items()
                 if k not in {"GIT_NO_LAZY_FETCH", "GIT_NO_REPLACE_OBJECTS"}
             }
-            == dict(os.environ),
+            == private_git_environment_data(observed.policy, original_environment),
             "publication observation environment changed",
         )
         if object_input is not None:
@@ -2024,31 +2112,33 @@ def _fixed_helper_route(helper_values, gh_path, environment):
     }
 
 
-def _observe_git_context(observed, pr):
+def _collect_git_context_data(workspace, repository, policy, read, environment):
+    """Same canonical physical/parser inventory for runtime and preparatory DATA.
+
+    This collector cannot create HostGit/native-principal/Root authority. The
+    runtime passes its original observed read transport and retains all handles.
+    """
     import shutil
 
-    import closer_dispatcher as closer
     import worktree_git
 
-    observed.check()
-    workspace = closer.selected_workspace(observed.workspaces, observed.target)
     _need(
         type(workspace) is str
         and not worktree_git.disabled()
         and worktree_git.is_provisioned(workspace),
         "provisioned publication workspace unavailable",
     )
-    pins = worktree_git.expected_pins(workspace, observed.controller.config.repository)
+    pins = worktree_git.expected_pins(workspace, repository)
     _need(type(pins) is tuple and len(pins) == 3, "publication Git topology refused")
     git_dir, common, worktree = pins
     held = []
     try:
         for path in pins:
             held.append(_PhysicalDirectory(path))
-        binary = _PhysicalFile(observed.policy["git_executable"]["path"], 256 * 1048576)
+        binary = _PhysicalFile(policy["git_executable"]["path"], 256 * 1048576)
         held.append(binary)
         _need(
-            binary.sha256 == observed.policy["git_executable"]["sha256"],
+            binary.sha256 == policy["git_executable"]["sha256"],
             "pinned Git binary differs",
         )
         for path in (
@@ -2057,16 +2147,17 @@ def _observe_git_context(observed, pr):
             git_dir / "commondir",
             git_dir / "HEAD",
         ):
-            held.append(_PhysicalFile(path, observed.policy["max_total_bytes"]))
+            held.append(_PhysicalFile(path, policy["max_total_bytes"]))
+        child_environment = private_git_environment_data(policy, environment, held=held)
         names = _configuration_names(
-            _fixed_git_read(observed, worktree, "config_names", files=held),
-            observed.policy["max_ack_bytes"],
+            read("config_names", files=held),
+            policy["max_ack_bytes"],
         )
         # Includes, executable settings and nonfile sources were refused above.
         # Explicit paths from the selected Git cover absent global/system files too.
         paths = {str(common / "config")}
         for kind in ("system_paths", "global_paths"):
-            raw = _fixed_git_read(observed, worktree, kind, files=held)
+            raw = read(kind, files=held)
             try:
                 paths.update(line for line in raw.decode().splitlines() if line)
             except UnicodeError:
@@ -2077,7 +2168,7 @@ def _observe_git_context(observed, pr):
         for path in sorted(paths):
             target = Path(path)
             if target.exists() or target.is_symlink():
-                item = _PhysicalFile(target, observed.policy["max_total_bytes"])
+                item = _PhysicalFile(target, policy["max_total_bytes"])
                 held.append(item)
                 normalized.append(item.check())
             else:
@@ -2135,7 +2226,7 @@ def _observe_git_context(observed, pr):
             "absent_config_files": missing,
             "config_name_inventory_sha256": digest(names),
         }
-        raw_shell = _fixed_git_read(observed, worktree, "helper_shell", files=held, missing=missing)
+        raw_shell = read("helper_shell", files=held, missing=missing)
         try:
             shell_path = Path(raw_shell.decode("utf-8").strip())
         except UnicodeError:
@@ -2143,14 +2234,14 @@ def _observe_git_context(observed, pr):
         shell_file = _PhysicalFile(shell_path, 256 * 1048576)
         held.append(shell_file)
         source["helper_shell"] = shell_file.check()
-        gh = shutil.which("gh")
+        gh = shutil.which("gh", path=environment.get("PATH"))
         _need(type(gh) is str, "native Git helper executable unavailable")
         gh_file = _PhysicalFile(Path(gh).resolve(strict=True), 256 * 1048576)
         held.append(gh_file)
         import shlex
 
         fixed_helper = ("!" + shlex.quote(str(gh_file.path)) + " auth git-credential").encode()
-        route = _fixed_helper_route(b"\0" + fixed_helper + b"\0", gh_file.path, dict(os.environ))
+        route = _fixed_helper_route(b"\0" + fixed_helper + b"\0", gh_file.path, environment)
         auth_root = Path(route["config_directory"])
         held.append(_PhysicalDirectory(auth_root))
         for name in ("hosts.yml", "config.yml"):
@@ -2163,15 +2254,14 @@ def _observe_git_context(observed, pr):
         # API and helper must retain the same PATH selection and nonsecret auth
         # file identities. No credential content is read or retained.
         _need(
-            len(os.environ.get("PATH", "").encode()) <= observed.policy["max_ack_bytes"],
+            len(environment.get("PATH", "").encode()) <= policy["max_ack_bytes"],
             "native helper PATH bound",
         )
-        for directory in os.environ.get("PATH", "").split(os.pathsep):
+        for directory in environment.get("PATH", "").split(os.pathsep):
             _need(
                 directory and Path(directory).is_absolute(), "relative Git helper PATH unsupported"
             )
             held.append(_PhysicalDirectory(directory, immutable_children=True))
-        environment = dict(os.environ)
         source.update(
             gh=gh_file.check(),
             helper_route=route,
@@ -2184,6 +2274,96 @@ def _observe_git_context(observed, pr):
                 {k: environment.get(k) for k in ("PATH", "GH_CONFIG_DIR", "GH_HOST")}
             ),
         )
+        if "git_environment_v1" in policy:
+            source["private_git_environment"] = _copy(policy["git_environment_v1"])
+            source["environment_sha256"] = digest(
+                {
+                    k: child_environment.get(k)
+                    for k in ("PATH", "GH_CONFIG_DIR", "GH_HOST", "HOME", "XDG_CONFIG_HOME")
+                }
+            )
+        result = (source, held, missing, route, gh_file)
+        held = []  # Physical handles transfer to native producer or DATA-only inspection.
+        return result
+    finally:
+        errors = []
+        for item in reversed(held):
+            try:
+                item.close()
+            except Exception:
+                errors.append(True)
+        _need(not errors, "publication observation cleanup unknown")
+
+
+def inspect_git_context_data(workspace, repository, policy):
+    """Read-only actual physical DATA, no permit or native principal attestation.
+
+    The input deliberately omits trusted_context_sha256: this is the source
+    inspection that computes it before original admission, not a placeholder.
+    """
+    import dispatcher
+
+    policy = validate_policy(policy, _prepare_context=True)
+    original = dict(os.environ)
+
+    def read(kind, *, files=(), missing=()):
+        environment = private_git_environment_data(policy, original)
+        for item in files:
+            item.check()
+        _need(
+            not any(Path(p).exists() or Path(p).is_symlink() for p in missing),
+            "preparatory absent Git configuration changed",
+        )
+        result = dispatcher.run_observed_offload(
+            [policy["git_executable"]["path"], "-C", str(workspace), *_read_command(kind)],
+            callback=lambda _: None,
+            observation={},
+            cwd=str(workspace),
+            stdin=None,
+            env=environment,
+            output_limit=policy["max_ack_bytes"],
+            timeout=policy["max_native_io_seconds"],
+        )
+        _need(
+            dict(os.environ) == original
+            and result.returncode == 0
+            and type(result.stdout) is str
+            and len(result.stdout.encode("utf-8")) <= policy["max_ack_bytes"],
+            "preparatory fixed Git observation unavailable",
+        )
+        for item in files:
+            item.check()
+        return result.stdout.encode("utf-8")
+
+    facts, held, _missing, _route, _gh = _collect_git_context_data(
+        workspace, repository, policy, read, original
+    )
+    try:
+        return {
+            "schema": "closer-publication-hostgit-preparation-data/v1",
+            "trusted_context_sha256": digest(facts),
+            "observed": facts,
+            "native_principal_proven": False,
+            "runtime_authority": False,
+        }
+    finally:
+        _close_physical_controls(held)
+
+
+def _observe_git_context(observed, pr):
+    import closer_dispatcher as closer
+
+    observed.check()
+    workspace = closer.selected_workspace(observed.workspaces, observed.target)
+
+    def read(kind, *, files=(), missing=()):
+        return _fixed_git_read(observed, workspace, kind, files=files, missing=missing)
+
+    environment = dict(os.environ)
+    source, held, missing, route, gh_file = _collect_git_context_data(
+        workspace, observed.controller.config.repository, observed.policy, read, environment
+    )
+    try:
         _need(
             digest(source) == observed.policy["trusted_context_sha256"],
             "source-approved Git configuration provenance differs",
@@ -2191,17 +2371,11 @@ def _observe_git_context(observed, pr):
         route_proof = _observe_helper_api_route(observed, route, gh_file, held, environment)
         source["approved_context_sha256"] = observed.policy["trusted_context_sha256"]
         source["native_helper_principal"] = route_proof
-        result = _HostGitLease(observed, pr, worktree, held, source, missing, environment)
-        held = []  # Ownership transfers only after the genuine route producer.
+        result = _HostGitLease(observed, pr, workspace, held, source, missing, environment)
+        held = []
         return result
     finally:
-        cleanup_errors = []
-        for item in reversed(held):
-            try:
-                item.close()
-            except Exception:
-                cleanup_errors.append(True)
-        _need(not cleanup_errors, "publication observation cleanup unknown")
+        _close_physical_controls(held)
 
 
 class _HostGitLease:
@@ -2215,7 +2389,8 @@ class _HostGitLease:
         )
         self.observed, self.pr, self.workspace = observed, pr, Path(workspace)
         self.held, self.summary, self.missing = held, _copy(summary), tuple(missing)
-        self.environment = dict(environment)
+        self.original_environment = dict(environment)
+        self.environment = private_git_environment_data(observed.policy, environment)
         self.closed = False
         self.object_anchor = None
 
@@ -2224,7 +2399,15 @@ class _HostGitLease:
         self.observed.check()
         if self.object_anchor is not None:
             self.object_anchor.check()
-        _need(dict(os.environ) == self.environment, "publication native route environment changed")
+        _need(
+            dict(os.environ) == self.original_environment,
+            "publication native route environment changed",
+        )
+        _need(
+            self.environment
+            == private_git_environment_data(self.observed.policy, self.original_environment),
+            "publication child Git environment changed",
+        )
         for item in self.held:
             item.check()
         _need(

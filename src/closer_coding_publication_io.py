@@ -976,6 +976,9 @@ def require_io_admission(controller, custody, operation, selection, host):
 
 def _reopen_or_prepare_staging(scope, custody, host):
     handoff = scope.history["handoff"]
+    prior = scope.history["baseline"].get("existing_objects")
+    if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
+        _need(type(prior) is dict, "retained original object fingerprint unavailable")
     names = set(os.listdir(custody.fd))
     stage_name = "publication-staging-" + scope.slot
     marker_name = "publication-staging-intent-" + scope.slot + ".json"
@@ -1019,7 +1022,7 @@ def _reopen_or_prepare_staging(scope, custody, host):
         try:
             if scope.policy["schema"] == publication.ANCHOR_POLICY_SCHEMA:
                 data.object_anchor = publication._source_snapshot_seed(
-                    host, scope.history["baseline"]["baseline"]
+                    host, scope.history["baseline"]["baseline"], prior=prior
                 )
             _need(
                 publication._bytes(data.check()) == publication._bytes(stage["private_files"]),
@@ -1053,7 +1056,9 @@ def _reopen_or_prepare_staging(scope, custody, host):
             hooks[path.name] = publication._held_file_bytes(item)
         finally:
             item.close()
-    objects = publication._source_snapshot_seed(host, scope.history["baseline"]["baseline"])
+    objects = publication._source_snapshot_seed(
+        host, scope.history["baseline"]["baseline"], prior=prior
+    )
     scope.check()
     return publication._build_staging_data(
         custody,

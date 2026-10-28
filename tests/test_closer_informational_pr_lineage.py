@@ -2,6 +2,7 @@
 
 import copy
 import time
+from urllib.parse import parse_qs
 
 import pytest
 from test_closer_owned_delivery_lineage import PREFIX, REPO, cross
@@ -64,6 +65,10 @@ def observe(rows, seed, *, race=None):
         calls.append(key)
         counts[key] = counts.get(key, 0) + 1
         value = copy.deepcopy(rows[key])
+        if isinstance(value, list) and "?" in args[3]:
+            query = parse_qs(args[3].split("?", 1)[1])
+            size, page = int(query["per_page"][0]), int(query["page"][0])
+            value = value[(page - 1) * size : page * size]
         if race and counts[key] > 1:
             race(key, value)
         return 0, value
@@ -243,3 +248,22 @@ def test_merged_information_state_is_rechecked(neighborhood):
 
     with pytest.raises(ownership.OwnershipUnavailable, match="changed during observation"):
         observe(rows, seed, race=race)
+
+
+@pytest.mark.parametrize("events,held", [(30, False), (100, True)])
+def test_multi_page_incumbent_keeps_original_finite_call_budget(neighborhood, events, held):
+    rows, seed = neighborhood
+    for number in (984, 983, 988):
+        key = PREFIX + "/issues/" + str(number) + "/timeline"
+        rows[key].extend(
+            {"event": "labeled", "id": 100000 + index, "label": {"name": "inert"}}
+            for index in range(events - len(rows[key]))
+        )
+    assert ownership.MAX_CALLS == 32
+    if held:
+        with pytest.raises(ownership.OwnershipUnavailable, match="call budget exhausted"):
+            observe(rows, seed)
+    else:
+        value, calls = observe(rows, seed)
+        assert value["ownership"]["kind"] == "existing"
+        assert len(calls) == 30 <= ownership.MAX_CALLS

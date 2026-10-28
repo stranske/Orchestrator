@@ -1,0 +1,254 @@
+"""Actual local Git causal controls; no API/helper/account/provider operations."""
+
+import copy
+import hashlib
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+import closer_coding_publication as pub
+import provision
+import worktree_git
+
+
+@pytest.fixture
+def context(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    original = root / "original-home"
+    original.mkdir(mode=0o700)
+    (original / ".config").mkdir(mode=0o700)
+    auth = original / ".config/gh"
+    auth.mkdir(mode=0o700)
+    # Explicitly synthetic private account file; never read by source inspector.
+    (auth / "hosts.yml").write_text("synthetic: no-token\n")
+    (auth / "hosts.yml").chmod(0o600)
+    (original / ".gitconfig").write_text('[filter "lfs"]\n\tprocess = /must-not-execute\n')
+    private = root / "private-git-home"
+    private.mkdir(mode=0o700)
+    (private / ".config").mkdir(mode=0o700)
+    (private / ".config/git").mkdir(mode=0o700)
+    config = private / ".gitconfig"
+    config.write_text("[user]\n\tname = Synthetic Owner\n\temail = owner@invalid.test\n")
+    config.chmod(0o600)
+    for name in list(os.environ):
+        if name.startswith(("GIT_", "DYLD_", "LD_")) or name in {
+            "GH_CONFIG_DIR",
+            "XDG_CONFIG_HOME",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "BASH_ENV",
+            "ENV",
+            "SHELLOPTS",
+            "BASHOPTS",
+            "CDPATH",
+            "IFS",
+        }:
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("HOME", str(original))
+    monkeypatch.setenv(
+        "PATH",
+        "/opt/homebrew/Cellar/git/2.49.0/bin:/opt/homebrew/Cellar/gh/2.94.0/bin:/usr/bin:/bin",
+    )
+    git = Path(shutil.which("git")).resolve()
+    gh = Path(shutil.which("gh")).resolve()
+    assert git.is_file() and gh.is_file()
+    repos, worktrees = root / "repos", root / "worktrees"
+    repos.mkdir(mode=0o700)
+    worktrees.mkdir(mode=0o700)
+    monkeypatch.setattr(provision, "REPOS_DIR", repos)
+    monkeypatch.setattr(provision, "WORKTREES_DIR", worktrees)
+    policy = {
+        "schema": pub.ANCHOR_POLICY_SCHEMA,
+        "mode": "owned_existing_pr",
+        "consumer_id": "synthetic-owner",
+        "git_executable": {
+            "path": str(git),
+            "sha256": hashlib.sha256(git.read_bytes()).hexdigest(),
+        },
+        "allowed_path_prefixes": ["a.py"],
+        "max_files": 2,
+        "max_file_bytes": 65536,
+        "max_total_bytes": 131072,
+        "max_ack_bytes": 65536,
+        "max_push_submissions": 1,
+        "request_timeout_seconds": 120,
+        "max_native_io_seconds": 15,
+        "baseline_limits": {
+            "schema": "closer-publication-baseline-limits/v1",
+            "max_files": 4096,
+            "max_file_bytes": 80 * 1048576,
+            "max_total_bytes": 128 * 1048576,
+            "max_inventory_bytes": 1048576,
+        },
+        "git_environment_v1": {
+            "schema": "closer-publication-private-git-environment/v1",
+            "home": str(private),
+            "config_sha256": hashlib.sha256(config.read_bytes()).hexdigest(),
+        },
+    }
+    env = pub.private_git_environment_data(policy)
+    repo = provision.canonical_path("acme/repo")
+    subprocess.run([str(git), "init", str(repo)], env=env, capture_output=True, check=True)
+    (repo / "a.py").write_text("before\n")
+    for args in [["add", "a.py"], ["-c", "commit.gpgsign=false", "commit", "-m", "original"]]:
+        subprocess.run([str(git), "-C", str(repo), *args], env=env, capture_output=True, check=True)
+    head = (
+        subprocess.check_output([str(git), "-C", str(repo), "rev-parse", "HEAD"], env=env)
+        .decode()
+        .strip()
+    )
+    return {
+        "policy": policy,
+        "private": private,
+        "original": original,
+        "config": config,
+        "git": git,
+        "repo": repo,
+        "head": head,
+        "env": env,
+    }
+
+
+def test_private_environment_ignores_executable_global_but_retains_original_auth(context):
+    before = dict(os.environ)
+    env = pub.private_git_environment_data(context["policy"])
+    assert dict(os.environ) == before
+    assert env["HOME"] == str(context["private"]) != before["HOME"]
+    assert env["GH_CONFIG_DIR"] == str(context["original"] / ".config/gh")
+    assert "GH_TOKEN" not in env and "GITHUB_TOKEN" not in env
+    raw = subprocess.check_output(
+        [str(context["git"]), "-C", str(context["repo"]), *pub._read_command("config_names")],
+        env=env,
+    )
+    names = pub._configuration_names(raw, 65536)
+    assert not any(key.startswith("filter.") for _, _, key in names)
+    assert context["original"].joinpath(".gitconfig").read_text().startswith('[filter "lfs"]')
+
+
+@pytest.mark.parametrize("fault", ["hash", "extra", "redirect", "environment"])
+def test_private_context_tamper_refuses_before_child(context, monkeypatch, fault):
+    policy = copy.deepcopy(context["policy"])
+    if fault == "hash":
+        policy["git_environment_v1"]["config_sha256"] = "a" * 64
+    elif fault == "extra":
+        (context["private"] / "extra").write_text("unexpected")
+    elif fault == "redirect":
+        policy["git_environment_v1"]["home"] = str(context["private"]) + "/.."
+    else:
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/malicious")
+    with pytest.raises(pub.PublicationHeld):
+        pub.private_git_environment_data(policy)
+
+
+def test_actual_create_only_named_worktree_and_inspection_have_no_native_authority(context):
+    prepared = provision.provision_absent_owned_head(
+        "acme/repo#989",
+        context["head"],
+        "codex/synthetic-existing-pr",
+        git_policy=context["policy"],
+    )
+    assert worktree_git.is_provisioned(prepared["worktree"])
+    assert worktree_git.expected_pins(prepared["worktree"], "acme/repo")
+    assert prepared["runtime_admission"] is prepared["native_ownership_proven"] is False
+    before = dict(os.environ)
+    facts = pub.inspect_git_context_data(prepared["worktree"], "acme/repo", context["policy"])
+    assert facts["runtime_authority"] is facts["native_principal_proven"] is False
+    policy = {**context["policy"], "trusted_context_sha256": facts["trusted_context_sha256"]}
+    assert pub.validate_policy(policy) == policy
+    assert dict(os.environ) == before
+    assert facts["observed"]["helper_route"]["config_directory"] == str(
+        context["original"] / ".config/gh"
+    )
+    assert all(row["sha256"] is None for row in facts["observed"]["auth_metadata"])
+    with pytest.raises(RuntimeError, match="worktree must be absent"):
+        provision.provision_absent_owned_head(
+            "acme/repo#989",
+            context["head"],
+            "codex/synthetic-existing-pr",
+            git_policy=context["policy"],
+        )
+
+
+@pytest.mark.parametrize("fault", ["branch", "head", "target"])
+def test_absent_owned_provision_never_resets_or_adopts_existing_branch(context, fault):
+    git, repo, env = context["git"], context["repo"], context["env"]
+    target, head, branch = "acme/repo#989", context["head"], "codex/synthetic-existing-pr"
+    if fault == "branch":
+        subprocess.run([str(git), "-C", str(repo), "branch", branch, head], env=env, check=True)
+    elif fault == "head":
+        head = "a" * 40
+    else:
+        target = "acme/repo"  # A repository-only request cannot invent an owned PR.
+    before = subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env)
+    with pytest.raises((RuntimeError, ValueError, subprocess.CalledProcessError)):
+        provision.provision_absent_owned_head(target, head, branch, git_policy=context["policy"])
+    assert subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env) == before
+    assert not provision.worktree_path("acme/repo#989", "closer").exists()
+
+
+def test_unknown_config_and_hooks_remain_refused(context):
+    prepared = provision.provision_absent_owned_head(
+        "acme/repo#989",
+        context["head"],
+        "codex/synthetic-existing-pr",
+        git_policy=context["policy"],
+    )
+    hook = context["repo"] / ".git/hooks/pre-push"
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o700)
+    with pytest.raises(pub.PublicationHeld, match="active hooks"):
+        pub.inspect_git_context_data(prepared["worktree"], "acme/repo", context["policy"])
+    hook.unlink()
+    context["config"].write_text('[filter "lfs"]\n\tprocess = /must-not-execute\n')
+    context["policy"]["git_environment_v1"]["config_sha256"] = hashlib.sha256(
+        context["config"].read_bytes()
+    ).hexdigest()
+    with pytest.raises(pub.PublicationHeld, match="unsupported config provenance"):
+        pub.inspect_git_context_data(prepared["worktree"], "acme/repo", context["policy"])
+
+
+@pytest.mark.parametrize("fault", ["hook", "executable_config"])
+def test_create_only_provision_refuses_controls_before_checkout(context, fault):
+    repo, git, env = context["repo"], context["git"], context["env"]
+    if fault == "hook":
+        hook = repo / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\nexit 42\n")
+        hook.chmod(0o700)
+    else:
+        with context["config"].open("a") as handle:
+            handle.write("[core]\n\thooksPath = /must-not-execute\n")
+        context["policy"]["git_environment_v1"]["config_sha256"] = hashlib.sha256(
+            context["config"].read_bytes()
+        ).hexdigest()
+        env = pub.private_git_environment_data(context["policy"])
+    before = subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env)
+    with pytest.raises((pub.PublicationHeld, RuntimeError)):
+        provision.provision_absent_owned_head(
+            "acme/repo#989",
+            context["head"],
+            "codex/synthetic-existing-pr",
+            git_policy=context["policy"],
+        )
+    assert subprocess.check_output([str(git), "-C", str(repo), "show-ref"], env=env) == before
+    assert not provision.worktree_path("acme/repo#989", "closer").exists()
+
+
+def test_cleanup_failure_does_not_leave_other_original_files_open(tmp_path, monkeypatch):
+    files = []
+    for name in ["first", "second"]:
+        path = tmp_path / name
+        path.write_text("control")
+        files.append(pub._PhysicalFile(path.resolve(), 100))
+    real_close = files[1].close
+
+    def failed_close():
+        real_close()
+        raise OSError("synthetic close outcome")
+
+    monkeypatch.setattr(files[1], "close", failed_close)
+    with pytest.raises(pub.PublicationHeld, match="cleanup unknown"):
+        pub._close_physical_controls(files)
+    assert all(item.fd is None for item in files)

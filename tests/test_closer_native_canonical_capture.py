@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -258,27 +259,109 @@ def test_auxiliary_inventory_is_retained_without_capture_or_proof(native_world):
     )
 
 
-@pytest.mark.parametrize(
-    "damage",
-    [
-        "missing_capture",
-        "duplicate_capture",
-        "partial_inventory",
-        "foreign_run",
-        "wrong_source",
-        "corrupt_zip",
-        "crc",
-        "duplicate_event_json",
-        "required_context",
-        "missing_event",
-        "duplicate_event",
-        "traversal_event",
-        "wrong_event",
-        "wrong_request",
-        "wrong_material",
-        "aux_event_only",
-    ],
-)
+# Capture admission and bridge binding are distinct production refusal layers.
+# A fixture KeyError is never a documented held outcome.
+REFUSALS = {
+    "missing_capture": (
+        "unknown",
+        "native input capture missing or ambiguous",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "duplicate_capture": (
+        "unknown",
+        "native input capture missing or ambiguous",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "partial_inventory": (
+        "unknown",
+        "native artifact inventory incomplete or malformed",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "foreign_run": (
+        "unknown",
+        "native run repository/workflow/event/attempt identity mismatch; retained corpus is diagnostic only",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "wrong_source": (
+        "unknown",
+        "native manifest repository/PR/merge/source-run binding mismatch",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "corrupt_zip": (
+        "unknown",
+        "native input manifest missing or ambiguous",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "crc": (
+        "unknown",
+        "native input manifest missing or ambiguous",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "duplicate_event_json": (
+        "complete",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        ValueError,
+        "duplicate response key",
+    ),
+    "required_context": (
+        "partial",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "missing_event": (
+        "complete",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_members_ambiguous",
+    ),
+    "duplicate_event": (
+        "unknown",
+        "native input manifest missing or ambiguous",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "traversal_event": (
+        "unknown",
+        "native input manifest missing or ambiguous",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_capture_incomplete",
+    ),
+    "wrong_event": (
+        "complete",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        bridge.CorrectionInputsUnavailable,
+        "correction_original_manifest_changed",
+    ),
+    "wrong_request": (
+        "complete",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        bridge.CorrectionInputsUnavailable,
+        "correction_original_manifest_changed",
+    ),
+    "wrong_material": (
+        "complete",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        bridge.CorrectionInputsUnavailable,
+        "correction_original_manifest_changed",
+    ),
+    "aux_event_only": (
+        "complete",
+        "native verifier NON_PASS evidence is resolution-only, never acceptance proof",
+        bridge.CorrectionInputsUnavailable,
+        "correction_native_members_ambiguous",
+    ),
+}
+
+
+@pytest.mark.parametrize("damage", list(REFUSALS))
 def test_missing_ambiguous_or_corrupt_required_capture_remains_held(native_world, damage):
     w = native_world
     raw, total = None, None
@@ -332,5 +415,8 @@ def test_missing_ambiguous_or_corrupt_required_capture_remains_held(native_world
             value["material"]["code"]["head_sha"] = "0" * 40
         w["files"]["verification-event-manifest.json"] = evidence._bytes(value)
     section, _ = collect(w, total=total, raw=raw)
-    with pytest.raises((ValueError, KeyError)):
+    status, collection_reason, error_type, refusal_reason = REFUSALS[damage]
+    assert section["status"] == status and section["reason"] == collection_reason
+    with pytest.raises(error_type, match="^" + re.escape(refusal_reason) + "$") as caught:
         joined(w, section)
+    assert type(caught.value) is error_type
