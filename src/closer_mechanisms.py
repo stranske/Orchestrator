@@ -207,6 +207,27 @@ def _signature(record: dict, key: bytes) -> str:
     return hmac.new(key, json.dumps(record, sort_keys=True).encode(), hashlib.sha256).hexdigest()
 
 
+def verify_signed_record(root: Path, signed: dict) -> dict:
+    """Return an authenticated supervisor record without exposing signing helpers."""
+    root = Path(root)
+    if (
+        not root.is_absolute()
+        or root.resolve() != root
+        or not root.is_dir()
+        or stat.S_IMODE(root.stat().st_mode) != 0o700
+    ):
+        raise MechanismError("supervisor verification root unsafe")
+    if not isinstance(signed, dict):
+        raise MechanismError("signed supervisor receipt is not an object")
+    record = signed.get("record")
+    signature = signed.get("signature")
+    if not isinstance(record, dict) or not isinstance(signature, str):
+        raise MechanismError("signed supervisor receipt is malformed")
+    if not hmac.compare_digest(signature, _signature(record, _key(root))):
+        raise MechanismError("supervisor receipt signature differs")
+    return record
+
+
 def qualification_problems(manifest: dict) -> list[str]:
     """Fixed pinned observer; unsigned caller receipts and other mechanisms hold."""
     try:

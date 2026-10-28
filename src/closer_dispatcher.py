@@ -48,6 +48,8 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 # (blocking 0 or drainable==blocking) with authority true. Check date 2026-10-30.
 RESERVATION_DRAIN_PASS_CHECK_TS = int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp())
 RESERVATION_DRAIN_PASS_CHECK_LABEL = "2026-10-30"
+PIPELINE_ADMISSION_PASS_CHECK_TS = int(datetime(2026, 11, 3, tzinfo=timezone.utc).timestamp())
+PIPELINE_ADMISSION_PASS_CHECK_LABEL = "2026-11-03"
 # A terminal reconciliation plan performs live GitHub reads under its own 120-second
 # request deadline. Bound the receipt diagnostic as a whole as well, so a backlog of
 # historical advertisements cannot turn one expired/admitted receipt into an
@@ -895,8 +897,9 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
 
     Legacy assessment writes can invalidate its old accounting receipt. That is
     still a legacy barrier, not permission to extend its round or replay an
-    operation. The pipeline must prove its own prior continuation, and every
-    action still checks the original legacy operation dependency.
+    operation. An expired accounting window must not prevent a fresh pipeline
+    attempt; pipeline admission and every original operation dependency still
+    independently gate its actions.
     """
     legacy_bound = _deadline_with_legacy_round(requested_deadline, legacy_state, state_path)
     sampled_at = time.time()
@@ -919,11 +922,11 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
         ]
         if not candidates or len(candidates) != len(state["runs"]):
             return legacy_bound, "missing_or_malformed_pipeline_runs"
-        run_id, previous = max(candidates, key=lambda pair: pair[1]["created"])
-        if previous["deadline"] > sampled_at:
+        if any(run["deadline"] > sampled_at for _, run in candidates):
             # Another adopted round retains its original window. Do not use
             # this caller to renew it or preempt its owner.
             return legacy_bound, "prior_pipeline_window_active"
+        run_id, previous = max(candidates, key=lambda pair: pair[1]["created"])
         summary = previous.get("receipt_summary")
         if summary is not None and (
             not isinstance(summary, dict)
@@ -953,7 +956,10 @@ def _deadline_with_pipeline_round(requested_deadline, legacy_state, state_path):
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError) as exc:
         # Unverifiable adoption retains the old bound and a bounded diagnostic.
         return legacy_bound, f"pipeline_adoption_unverifiable:{type(exc).__name__}"
-    return legacy_bound, "no_pipeline_continuation_proof"
+    # This grants an execution window only. It neither authenticates the old
+    # stop nor releases reservations, uncertain operations, or target writers.
+    # run_pipeline must still admit/reconcile the prior run before doing work.
+    return requested_deadline, "legacy_window_expired_fresh_admission"
 
 
 def _confirmed_post_merge_label_event(target, operation, evidence):
@@ -10904,11 +10910,15 @@ def _main_admitted(args, p, assignment_rows, targets):
             deadline, admission_reason = _deadline_with_pipeline_round(
                 deadline, previous_state, args.state
             )
+            admission_sampled_at = time.time()
             budget_admission = {
                 "reason": admission_reason,
                 "scope": "pipeline",
+                "sampled_at": admission_sampled_at,
                 "requested_deadline": requested_deadline,
                 "selected_deadline": deadline,
+                "selected_deadline_expired": deadline < admission_sampled_at,
+                "selected_deadline_age_seconds": max(0, admission_sampled_at - deadline),
                 "legacy_deadline": (previous_state.get("round") or {}).get("deadline"),
                 "legacy_state_digest": digest(previous_state),
                 "legacy_round_renewed": False,
@@ -11048,6 +11058,8 @@ def _main_admitted(args, p, assignment_rows, targets):
         # receipt, including admitted rounds (authority true) and runs that never
         # built a budget_admission row. Shadow uses a different pipeline path.
         if not args.shadow:
+            if (budget_admission or {}).get("scope") == "pipeline":
+                result["pipeline_admission_pass"] = pipeline_admission_pass_number(result)
             pipeline_path = _pipeline_state_path(args.state)
             try:
                 if result.get("reason") == "admission_deadline_expired":
@@ -11159,6 +11171,65 @@ def _admitted_reservation_counts(pipeline_path):
             "deadlock": False,
         }
     return _expired_admission_diagnostics(pipeline_path)
+
+
+def pipeline_admission_pass_number(receipt, *, now=None):
+    """Grade #978's receipt conditions, without certifying live/post-merge provenance.
+
+    The deadline diagnostics describe admission time, not the later time at which
+    this receipt is graded. The runtime owner must retain the first real post-merge
+    receipt; this read-only grade cannot establish that a receipt came from it.
+    """
+    stamp = time.time() if now is None else float(now)
+    admission = receipt.get("budget_admission")
+    admission = admission if isinstance(admission, dict) else {}
+    targets = receipt.get("targets")
+    targets = targets if isinstance(targets, dict) else {}
+    advanced = sorted(
+        target
+        for target, row in targets.items()
+        if isinstance(row, dict)
+        and isinstance(row.get("status"), str)
+        and row["status"].strip()
+        and row["status"] != "deferred"
+    )
+    reason = admission.get("reason")
+    selected = admission.get("selected_deadline")
+    sampled_at = admission.get("sampled_at")
+    age = admission.get("selected_deadline_age_seconds")
+    result = {
+        "check_date": PIPELINE_ADMISSION_PASS_CHECK_LABEL,
+        "scope": "receipt_conditions_only",
+        "admission_reason": reason,
+        "advanced_targets": advanced,
+        "status": "pending",
+        "reason": f"check date {PIPELINE_ADMISSION_PASS_CHECK_LABEL} not reached",
+    }
+    if stamp < PIPELINE_ADMISSION_PASS_CHECK_TS:
+        return result
+    if (
+        admission.get("scope") != "pipeline"
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or not _finite_number(sampled_at)
+        or not 0 <= sampled_at <= stamp
+        or not _finite_number(selected)
+        or not isinstance(admission.get("selected_deadline_expired"), bool)
+        or not _finite_number(age)
+        or age < 0
+    ):
+        result.update(status="unmeasured", reason="pipeline deadline diagnostics unread")
+    elif reason == "no_pipeline_continuation_proof":
+        result.update(status="fail", reason="expired legacy admission fallback retained")
+    elif admission["selected_deadline_expired"] or age > 0:
+        result.update(status="fail", reason="selected deadline already expired at admission")
+    elif selected <= sampled_at:
+        result.update(status="fail", reason="selected deadline is not after admission sample")
+    elif not advanced:
+        result.update(status="fail", reason="no target has a non-deferred status")
+    else:
+        result.update(status="pass", reason="current admission deadline with target progress")
+    return result
 
 
 def reservation_drain_pass_number(receipt, *, now=None):
