@@ -356,7 +356,11 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(tmp_path):
     for index in range(1000):
         (repo / "src" / ("file-" + str(index))).write_text("unique loose object " + str(index))
     git("add", ".")
-    git("commit", "-m", "loose-heavy")
+    # Git2.55 defaults to geometric auto-maintenance at100 loose objects.
+    # This control measures loose-object descriptor ownership, not repacking.
+    # Keep its setup genuinely loose without changing production ODB admission.
+    git("-c", "maintenance.auto=false", "commit", "-m", "loose-heavy")
+    assert list((repo / ".git/objects/pack").iterdir()) == []
     head = git("rev-parse", "HEAD").strip().decode()
     native = pub._tree_records(git("ls-tree", "-rz", "--full-tree", head), policy)
     rows = pub._physical_inventory(

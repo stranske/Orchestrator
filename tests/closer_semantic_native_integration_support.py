@@ -45,6 +45,12 @@ def integrated_reference(base):
         dispatcher["unreserved_pipeline_ast_sha256"] = deferred[
             "after_unreserved_pipeline_ast_sha256"
         ]
+        # Overlay only separately reviewed current-source AST families.
+        # Historical source maps remain byte-identical and every other family
+        # still compares against the prior receiver and optional-audit pins.
+        for name, change in publication_admission_reference()["dispatcher_top_level_delta"].items():
+            assert dispatcher["top_level_ast"].get(name) == change["before"]
+            dispatcher["top_level_ast"][name] = change["after"]
     return original
 
 
@@ -58,3 +64,23 @@ def audit_deferral_reference():
     raw = AUDIT_DEFERRAL_MANIFEST.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == AUDIT_DEFERRAL_SHA256
     return json.loads(raw)
+
+
+PUBLICATION_ADMISSION_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_publication_admission_v1.json"
+)
+PUBLICATION_ADMISSION_SHA256 = "a48c513b6e61dcca9750a6b11a66601a7f0ab4efe865bbf553a03400b494c735"
+
+
+def publication_admission_reference():
+    raw = PUBLICATION_ADMISSION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PUBLICATION_ADMISSION_SHA256
+    return json.loads(raw)
+
+
+def integrated_native_source_reference():
+    original = copy.deepcopy(current_receiver_reference()["protected_native_source_sha256"])
+    for name, change in publication_admission_reference()["protected_native_modules"].items():
+        assert original[name] == change["before_file_sha256"]
+        original[name] = change["after_file_sha256"]
+    return original

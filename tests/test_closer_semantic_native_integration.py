@@ -9,9 +9,7 @@ from closer_semantic_audit_support import fingerprint, functions, source_path
 
 
 def test_native_operational_and_latest_reader_sources_are_exact_reviewed0953():
-    for filename, expected in support.current_receiver_reference()[
-        "protected_native_source_sha256"
-    ].items():
+    for filename, expected in support.integrated_native_source_reference().items():
         assert hashlib.sha256(source_path(filename).read_bytes()).hexdigest() == expected, filename
 
 
@@ -63,3 +61,64 @@ def test_native_integration_manifest_is_pinned_not_a_mutable_allowlist(tmp_path,
     monkeypatch.setattr(support, "MANIFEST", path)
     with pytest.raises(AssertionError):
         support.native_reference()
+
+
+def test_current_publication_admission_overlay_preserves_unreviewed_ast_families():
+    import copy
+
+    reviewed = support.publication_admission_reference()
+    assert set(reviewed["dispatcher_top_level_delta"]) == {
+        "GitHub",
+        "_controlled_launch_inputs",
+        "_controlled_launch_options",
+        "_controlled_model_contract",
+        "_validate_controlled_result",
+        "requirements",
+    }
+    assert set(reviewed["protected_native_modules"]) == {
+        "closer_campaign.py",
+        "closer_coding_worker.py",
+        "closer_correction_controller.py",
+        "closer_queue.py",
+    }
+    for filename, change in reviewed["protected_native_modules"].items():
+        top = functions(source_path(filename).read_text())
+        before = change["before_top_level_ast"]
+        changed = change["changed_top_level_ast"]
+        added = change["added_top_level_ast"]
+        assert set(top) == set(before) | set(added), filename
+        assert {
+            name: fingerprint(node)
+            for name, node in top.items()
+            if name not in changed and name not in added
+        } == {name: value for name, value in before.items() if name not in changed}, filename
+        for name, pair in changed.items():
+            assert before[name] == pair["before"]
+            assert fingerprint(top[name]) == pair["after"]
+        for name, value in added.items():
+            assert fingerprint(top[name]) == value
+        if "class_method_scope" in change:
+            scope = change["class_method_scope"]
+            node = copy.deepcopy(top[scope["class"]])
+            node.body = [
+                item
+                for item in node.body
+                if not (
+                    isinstance(item, ast.FunctionDef) and item.name in scope["only_changed_methods"]
+                )
+            ]
+            assert fingerprint(node) == scope["remaining_class_ast_sha256"]
+
+
+def test_current_publication_admission_overlay_is_pinned_not_a_mutable_allowlist(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "changed.json"
+    path.write_bytes(
+        support.PUBLICATION_ADMISSION_MANIFEST.read_bytes().replace(
+            b'"requirements"', b'"unreviewed"', 1
+        )
+    )
+    monkeypatch.setattr(support, "PUBLICATION_ADMISSION_MANIFEST", path)
+    with pytest.raises(AssertionError):
+        support.publication_admission_reference()
