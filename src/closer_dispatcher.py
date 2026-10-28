@@ -2446,7 +2446,8 @@ class Closer:
                     isinstance(projection, dict)
                     and projection.get("schema")
                     == "closer-correction-controller-policy-projection/v1"
-                    and projection.get("repository") == target.split("#", 1)[0]
+                    and isinstance(projection.get("repository"), str)
+                    and projection["repository"].casefold() == target.split("#", 1)[0].casefold()
                     and projection.get("purpose") == "frontier-correlation-only"
                     and all(
                         isinstance(projection.get(key), str)

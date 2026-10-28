@@ -1,0 +1,21 @@
+{
+  "base": "818682d2e2a1aadb2f27e6a169e4af970b62d461",
+  "dispatcher": {
+    "after_closer_ast_sha256": "3baae1fd84c43f5e0af2dbc26c31b059e92c93dd0769ef4d35a9c174ca03c580",
+    "after_file_sha256": "0702c1deb258df257b3b7d01e47a03e46435f373f6cbac886e1effe8a17d1b0e",
+    "after_fragment": "                    and isinstance(projection.get(\"repository\"), str)\n                    and projection[\"repository\"].casefold() == target.split(\"#\", 1)[0].casefold()\n",
+    "before_closer_ast_sha256": "af7a02d4e5a331239635cd8d369131983164cdf0c1a1a4f9486e06b2a517370f",
+    "before_file_sha256": "2c8e71a4a8b76559ef9f64475deffb16293a6c43f256dc6a17e087ce1e90c675",
+    "before_fragment": "                    and projection.get(\"repository\") == target.split(\"#\", 1)[0]\n"
+  },
+  "role_source": {
+    "after_execution_contract": "8adc660e7c173be41f86eefd75258c1a7680149517b714b675a4207a88e27862",
+    "after_file_sha256": "257d746d07e7741e78b239cb1a6e93122e60637913f3505db265f8da03eed553",
+    "before_execution_contract": "a4f10abc2bf51b552838cc198cf9a3246424c80bc743e8e9a56a0fcf934d2823",
+    "before_file_sha256": "72d866e42d87eb06d1210fb32a90a6d6478abcb70d7163389bc4a3486ea54bed",
+    "physical_qualification_performed": false,
+    "qualification_record_sha256": "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
+  },
+  "schema": "current-repository-identity-static-reference/v1",
+  "scope": "Only exact case-insensitive GitHub repository equality for non-authorizing controller correlation. Different repository/owner or malformed projection still excludes binding. No new physical qualification, time renewal or action authority."
+}

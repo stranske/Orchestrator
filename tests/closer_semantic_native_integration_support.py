@@ -111,6 +111,9 @@ def integrated_reference(base):
         for name, change in source_admission_reference()["dispatcher_function_delta"].items():
             assert dispatcher["top_level_ast"].get(name) == change["before"]
             dispatcher["top_level_ast"][name] = change["after"]
+        identity = repository_identity_reference()["dispatcher"]
+        assert dispatcher["top_level_ast"]["Closer"] == identity["before_closer_ast_sha256"]
+        dispatcher["top_level_ast"]["Closer"] = identity["after_closer_ast_sha256"]
     return original
 
 
@@ -150,6 +153,14 @@ def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    identity = repository_identity_reference()["role_source"]
+    if hashlib.sha256(raw).hexdigest() == identity["after_file_sha256"]:
+        raw = raw.replace(
+            identity["after_execution_contract"].encode(),
+            identity["before_execution_contract"].encode(),
+            1,
+        )
+        assert hashlib.sha256(raw).hexdigest() == identity["before_file_sha256"]
     bounded = finite_prepare_reference()["role_source"]
     if hashlib.sha256(raw).hexdigest() == bounded["after_file_sha256"]:
         # Test-only comparison of one exact separately reviewed source relation.
@@ -261,9 +272,26 @@ def finite_prepare_reference():
 
 def before_finite_prepare_source(source):
     """Restore only an exact whole-file-pinned prospective delta for old audits."""
+    identity = repository_identity_reference()["dispatcher"]
+    assert hashlib.sha256(source.encode()).hexdigest() == identity["after_file_sha256"]
+    assert source.count(identity["after_fragment"]) == 1
+    source = source.replace(identity["after_fragment"], identity["before_fragment"], 1)
+    assert hashlib.sha256(source.encode()).hexdigest() == identity["before_file_sha256"]
     pin = finite_prepare_reference()["dispatcher"]
     assert hashlib.sha256(source.encode()).hexdigest() == pin["after_file_sha256"]
     assert source.count(pin["after_fragment"]) == 1
     restored = source.replace(pin["after_fragment"], pin["before_fragment"], 1)
     assert hashlib.sha256(restored.encode()).hexdigest() == pin["before_file_sha256"]
     return restored
+
+
+REPOSITORY_IDENTITY_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_repository_identity_v1.json"
+)
+REPOSITORY_IDENTITY_SHA256 = "7fe47d02bb5e2f5a36761c2c58447a8b4b9e75f058cd51a14c8b67ba45e3dfd1"
+
+
+def repository_identity_reference():
+    raw = REPOSITORY_IDENTITY_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == REPOSITORY_IDENTITY_SHA256
+    return json.loads(raw)
