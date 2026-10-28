@@ -7270,9 +7270,28 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 != frozen["action_id"]
             ):
                 # Refuse before collection/model/effects; ACT still independently checks.
+                # Preserve the complete observation outside the bounded callback,
+                # just as the ordinary preparation path does. Verifier excerpts
+                # can exceed the callback budget even when all we need is a hold.
+                snapshot_bytes = json.dumps(
+                    snap, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode()
+                snapshot_path = (
+                    retained_dir
+                    / "snapshots"
+                    / f"{hashlib.sha256(snapshot_bytes).hexdigest()}.json"
+                )
+                closer_evidence._atomic_write(snapshot_path, snapshot_bytes)
                 return {
                     "revision": snap.get("revision"),
-                    "snapshot": snap,
+                    "snapshot": {
+                        key: snap.get(key)
+                        for key in ("target", "head", "base", "merge", "revision", "state", "kind")
+                    },
+                    "snapshot_ref": {
+                        "path": str(snapshot_path),
+                        "sha256": hashlib.sha256(snapshot_bytes).hexdigest(),
+                    },
                     "proposal": {
                         "action": "wait",
                         "eligible": False,

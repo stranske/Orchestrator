@@ -9,6 +9,7 @@ from closer_semantic_audit_support import fingerprint, functions, source_path
 from closer_semantic_native_integration_support import (
     advisory_plan_omission_reference,
     audit_deferral_reference,
+    before_finite_prepare_source,
 )
 
 
@@ -26,6 +27,7 @@ def inner(run, name):
 
 def reviewed_pipeline_before_plan_omission(source):
     """Test-only exact prospective projection before the historical audit."""
+    source = before_finite_prepare_source(source)
     pin = advisory_plan_omission_reference()["dispatcher"]
     assert hashlib.sha256(source.encode()).hexdigest() == pin["after_file_sha256"]
     run = copy.deepcopy(functions(source)["_run_staged_pipeline"])
