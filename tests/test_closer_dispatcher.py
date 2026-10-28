@@ -4365,8 +4365,12 @@ def _adopted_pipeline(tmp_path, *, active=False):
     return path
 
 
+@pytest.mark.parametrize(
+    ("admission_reason", "expected_exit", "stop_valid"),
+    [("valid_pipeline_stop", 0, True), ("legacy_window_expired_fresh_admission", 78, False)],
+)
 def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, admission_reason, expected_exit, stop_valid
 ):
     start = time.time()
     monkeypatch.setattr(adapter.time, "time", lambda: start)
@@ -4376,7 +4380,14 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     state_path.write_text(json.dumps(state))
     before = state_path.read_bytes()
     assert adapter._validly_finished_legacy_round(state_path, state) is False
-    _adopted_pipeline(tmp_path)
+    pipeline_path = _adopted_pipeline(tmp_path)
+    if admission_reason == "legacy_window_expired_fresh_admission":
+        pipeline_state = closer_pipeline._load(pipeline_path)
+        previous = next(iter(pipeline_state["runs"].values()))
+        previous["targets"][TARGET]["status"] = "deferred"
+        closer_pipeline._save(pipeline_path, pipeline_state)
+        assert closer_pipeline.validate_stop(pipeline_path)["valid"] is False
+    pipeline_before = pipeline_path.read_bytes()
     assignment = tmp_path / "assignment.json"
     assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
@@ -4384,11 +4395,38 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
     monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
     monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
-    monkeypatch.setattr(
-        adapter,
-        "_run_staged_pipeline",
-        lambda _a, _t, _b, deadline: seen.append(deadline) or {"status": "budget-observed"},
-    )
+    stages = []
+
+    def prepare(target, _ctx):
+        stages.append(("prepare", target))
+        return {"revision": "fresh-read", "snapshot": {"target": target}}
+
+    def interpret(target, _ctx):
+        stages.append(("interpret", target))
+        return {"substantive_needs": []}
+
+    def act(target, _ctx):
+        stages.append(("act", target))
+        return {"status": "completed", "target_complete": True}
+
+    def run_scheduler(args, targets, _backend, deadline):
+        # Exercise the emitted CLI receipt with real scheduling and stop validation.
+        # Only the external stage callbacks are synthetic.
+        seen.append(deadline)
+        return closer_pipeline.run_pipeline(
+            adapter._pipeline_state_path(args.state),
+            targets,
+            prepare=prepare,
+            interpret=interpret,
+            exception=lambda *_: pytest.fail("no exception stage expected"),
+            act=act,
+            capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+            deadline=deadline,
+            coordinator_mode=args.coordinator_mode,
+            coordination_admission=args._coordination_admission,
+        )
+
+    monkeypatch.setattr(adapter, "_run_staged_pipeline", run_scheduler)
     assert (
         adapter.main(
             [
@@ -4404,19 +4442,126 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
                 "--workers",
             ]
         )
-        == 0
+        == expected_exit
     )
-    admission = json.loads(capsys.readouterr().out)["budget_admission"]
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["validation"]["valid"] is stop_valid
+    if not stop_valid:
+        assert "unverified_deferral:" + TARGET in receipt["validation"]["reasons"]
+        assert receipt["reason"] == "prior_run_has_no_valid_stop"
+        assert receipt["authority"] is False
+        assert receipt["targets"] == {}
+        assert stages == []
+        assert pipeline_path.read_bytes() == pipeline_before
+    else:
+        assert receipt["targets"][TARGET]["status"] == "completed"
+        assert stages == [("prepare", TARGET), ("interpret", TARGET), ("act", TARGET)]
+    admission = receipt["budget_admission"]
     assert seen == [start + 10 + 300]
     assert admission == {
-        "reason": "valid_pipeline_stop",
+        "reason": admission_reason,
         "scope": "pipeline",
+        "sampled_at": start,
         "requested_deadline": start + 310,
         "selected_deadline": start + 310,
+        "selected_deadline_expired": False,
+        "selected_deadline_age_seconds": 0,
         "legacy_deadline": state["round"]["deadline"],
         "legacy_state_digest": adapter.digest(state),
         "legacy_round_renewed": False,
     }
+    assert admission["selected_deadline"] > start
+    assert receipt["pipeline_admission_pass"] == adapter.pipeline_admission_pass_number(
+        receipt, now=start
+    )
+    check_at = adapter.PIPELINE_ADMISSION_PASS_CHECK_TS
+    assert adapter.pipeline_admission_pass_number(receipt, now=check_at - 1)["status"] == "pending"
+    graded = adapter.pipeline_admission_pass_number(receipt, now=check_at)
+    assert graded["scope"] == "receipt_conditions_only"
+    assert graded["status"] == ("pass" if stop_valid else "fail")
+    assert graded["advanced_targets"] == ([TARGET] if stop_valid else [])
+    if stop_valid:
+        # A non-deferred row and an absent/invalid diagnostic must not manufacture
+        # a pass. Check copies so grading cannot alter the original CLI receipt.
+        receipt_before = copy.deepcopy(receipt)
+        fresh = copy.deepcopy(receipt)
+        fresh["budget_admission"]["reason"] = "legacy_window_expired_fresh_admission"
+        fresh["targets"][SOURCE] = {"status": "deferred"}
+        fresh_grade = adapter.pipeline_admission_pass_number(fresh, now=check_at)
+        assert fresh_grade["status"] == "pass"
+        assert fresh_grade["advanced_targets"] == [TARGET]
+        assert (
+            adapter.pipeline_admission_pass_number(fresh, now=check_at + 86400)["status"] == "pass"
+        )
+        # Grading a retained receipt uses its admission sample, not the later
+        # check date. An expired deadline cannot pass through false/zero flags.
+        for selected in [0, start - 1, start]:
+            candidate = copy.deepcopy(fresh)
+            candidate["budget_admission"]["selected_deadline"] = selected
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"] == "fail"
+            )
+        for changes, expected in [
+            ({"reason": "no_pipeline_continuation_proof"}, "fail"),
+            ({"selected_deadline_expired": True, "selected_deadline_age_seconds": 1}, "fail"),
+            ({"selected_deadline_expired": False, "selected_deadline_age_seconds": 1}, "fail"),
+            ({"reason": ""}, "unmeasured"),
+            ({"reason": None}, "unmeasured"),
+            ({"scope": "resource_scoped"}, "unmeasured"),
+            ({"sampled_at": None}, "unmeasured"),
+            ({"sampled_at": True}, "unmeasured"),
+            ({"sampled_at": "today"}, "unmeasured"),
+            ({"sampled_at": float("nan")}, "unmeasured"),
+            ({"sampled_at": float("inf")}, "unmeasured"),
+            ({"sampled_at": -1}, "unmeasured"),
+            ({"sampled_at": check_at + 1}, "unmeasured"),
+            ({"selected_deadline": None}, "unmeasured"),
+            ({"selected_deadline": True}, "unmeasured"),
+            ({"selected_deadline": float("nan")}, "unmeasured"),
+            ({"selected_deadline": 10**1000}, "unmeasured"),
+            ({"selected_deadline": -(10**1000)}, "unmeasured"),
+            ({"selected_deadline_expired": None}, "unmeasured"),
+            ({"selected_deadline_age_seconds": None}, "unmeasured"),
+            ({"selected_deadline_age_seconds": True}, "unmeasured"),
+            ({"selected_deadline_age_seconds": float("inf")}, "unmeasured"),
+            ({"selected_deadline_age_seconds": 10**1000}, "unmeasured"),
+            ({"selected_deadline_age_seconds": -1}, "unmeasured"),
+        ]:
+            candidate = copy.deepcopy(receipt)
+            candidate["budget_admission"].update(changes)
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
+                == expected
+            )
+        for targets in [
+            None,
+            [],
+            {},
+            {TARGET: None},
+            {TARGET: {}},
+            {TARGET: {"status": ""}},
+            {TARGET: {"status": " "}},
+            {TARGET: {"status": True}},
+        ]:
+            candidate = {**receipt, "targets": targets}
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"] == "fail"
+            )
+        candidate = {**receipt, "targets": {TARGET: {"status": "deferred"}}}
+        assert adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"] == "fail"
+        for missing_admission in [None, [], {}]:
+            candidate = {**receipt, "budget_admission": missing_admission}
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
+                == "unmeasured"
+            )
+        candidate = copy.deepcopy(receipt)
+        del candidate["budget_admission"]["sampled_at"]
+        assert (
+            adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
+            == "unmeasured"
+        )
+        assert receipt == receipt_before
     assert state_path.read_bytes() == before
     assert (
         adapter._deadline_with_legacy_round(time.time() + 310, state, state_path)
@@ -4435,7 +4580,8 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
     pipeline = closer_pipeline._empty()
     pipeline["runs"]["prior"] = {
         "created": 1,
-        "deadline": 2,
+        # A genuinely active pipeline retains the expired legacy bound.
+        "deadline": time.time() + 45,
         "assignment": [TARGET],
         "targets": {TARGET: {"status": "uncertain"}},
     }
@@ -4477,6 +4623,13 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
     )
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["budget_admission"]["selected_deadline"] == state["round"]["deadline"]
+    assert receipt["budget_admission"]["selected_deadline_expired"] is True
+    assert receipt["budget_admission"]["selected_deadline_age_seconds"] > 0
+    grade = adapter.pipeline_admission_pass_number(
+        receipt, now=adapter.PIPELINE_ADMISSION_PASS_CHECK_TS
+    )
+    assert grade["status"] == "fail"
+    assert grade["reason"] == "selected deadline already expired at admission"
     assert receipt["blocking_reservations"] == 1
     assert receipt["drainable_reservations"] == 0
     assert receipt["deadlock"] is True
@@ -4504,7 +4657,7 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
         "malformed_extra_run",
     ],
 )
-def test_independent_pipeline_budget_requires_its_own_admission_proof(tmp_path, case):
+def test_pipeline_budget_preserves_unverifiable_or_active_windows(tmp_path, case):
     import closer_pipeline
 
     legacy = _terminal_queue_state(tmp_path)
@@ -4540,15 +4693,183 @@ def test_independent_pipeline_budget_requires_its_own_admission_proof(tmp_path, 
         closer_pipeline._save(path, state)
     legacy_before = state_path.read_bytes()
     pipeline_before = path.read_bytes() if path.exists() else None
-    selected, reason = adapter._deadline_with_pipeline_round(time.time() + 310, legacy, state_path)
-    assert selected == legacy["round"]["deadline"]
+    requested = time.time() + 310
+    selected, reason = adapter._deadline_with_pipeline_round(requested, legacy, state_path)
+    if case in {"missing_receipt", "unrecognized_stop"}:
+        assert selected == requested
+        assert reason == "legacy_window_expired_fresh_admission"
+        if case == "unrecognized_stop":
+            assert closer_pipeline.validate_stop(path)["valid"] is False
+    else:
+        assert selected == legacy["round"]["deadline"]
     assert reason and reason != "valid_pipeline_stop"
     assert state_path.read_bytes() == legacy_before
     assert (path.read_bytes() if path.exists() else None) == pipeline_before
 
 
+@pytest.mark.parametrize("operation_status", ["submitted", "running", "uncertain"])
+def test_pipeline_admission_does_not_select_expired_legacy_deadline(tmp_path, operation_status):
+    import closer_resources
+
+    legacy = _terminal_queue_state(tmp_path)
+    legacy["items"][TARGET]["operation"] = {
+        "id": "incumbent-operation",
+        "status": operation_status,
+        "repo_keys": [TARGET.split("#")[0]],
+    }
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(legacy))
+    path = _adopted_pipeline(tmp_path)
+    state = closer_pipeline._load(path)
+    previous = next(iter(state["runs"].values()))
+    previous["targets"][TARGET]["status"] = "deferred"
+    closer_pipeline._save(path, state)
+    with closer_resources.legacy_reserve(
+        closer_resources.scoped_root(path),
+        ["pr:" + TARGET],
+        target=TARGET,
+        owner="original-owner",
+        deadline=time.time() + 45,
+        causal_binding={"pipeline_run_id": previous["receipt_summary"]["run_id"]},
+    ):
+        pass
+    # The finished run's invalid stop remains invalid; a fresh execution
+    # window cannot turn it into proof or erase the incumbent operation.
+    assert closer_pipeline.validate_stop(path)["valid"] is False
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    requested = time.time() + 310
+    selected, reason = adapter._deadline_with_pipeline_round(requested, legacy, state_path)
+    assert (selected, reason) == (
+        requested,
+        "legacy_window_expired_fresh_admission",
+    )
+
+    # Exercise the real scheduler with the fresh budget: deadline selection must
+    # not authorize work across the unresolved prior run or its reservation.
+    def forbidden_stage(*_args):
+        pytest.fail("fresh deadline must not bypass admission barriers")
+
+    receipt = closer_pipeline.run_pipeline(
+        path,
+        [TARGET],
+        prepare=forbidden_stage,
+        interpret=forbidden_stage,
+        exception=forbidden_stage,
+        act=forbidden_stage,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=selected,
+        coordinator_mode="legacy",
+    )
+    assert receipt["status"] == "blocked"
+    assert receipt["reason"] == "prior_run_has_no_valid_stop"
+    assert receipt["authority"] is False
+    assert receipt["prior_stop"]["valid"] is False
+    assert receipt["targets"] == {}
+    with pytest.raises(RuntimeError, match="reconcile it in the original closer queue"):
+        adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
+    assert closer_pipeline.validate_stop(path)["valid"] is False
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+    # Isolate the retained reservation: repair the fixture's prior stop and
+    # remove its native operation so neither earlier refusal can mask this gate.
+    previous["targets"][TARGET]["status"] = "completed"
+    closer_pipeline._save(path, state)
+    legacy["items"][TARGET].pop("operation")
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    state_path.write_text(json.dumps(legacy))
+    assert closer_pipeline._validate_stop_legacy(path)["valid"] is True
+    assert closer_pipeline.validate_stop(path)["reasons"] == ["unresolved_resource_reservations"]
+    reservation_before = {
+        p: p.read_bytes() for p in [state_path, path, *tmp_path.rglob("legacy-intent.json")]
+    }
+    selected, reason = adapter._deadline_with_pipeline_round(requested, legacy, state_path)
+    assert (selected, reason) == (requested, "legacy_window_expired_fresh_admission")
+
+    # The fresh window must also let a disjoint target advance. Checking only
+    # fenced targets would miss a scheduler that still defers the entire round.
+    unrelated = "other/repo#99"
+    stages = []
+
+    def record_stage(stage, target):
+        assert target == unrelated, "retained reservation must still fence its target"
+        stages.append(stage)
+
+    def prepare_unrelated(target, _ctx):
+        record_stage("prepare", target)
+        return {"revision": "unrelated-revision", "snapshot": {"target": target}}
+
+    def interpret_unrelated(target, _ctx):
+        record_stage("interpret", target)
+        return {"substantive_needs": []}
+
+    def act_unrelated(target, _ctx):
+        record_stage("act", target)
+        return {"status": "completed", "target_complete": True}
+
+    receipt = closer_pipeline.run_pipeline(
+        path,
+        [TARGET, unrelated],
+        prepare=prepare_unrelated,
+        interpret=interpret_unrelated,
+        exception=forbidden_stage,
+        act=act_unrelated,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        # The synthetic backend has no branch/source aliases beyond these keys.
+        resource_keys=lambda target, _ctx: closer_resources.default_resource_keys(target),
+        deadline=selected,
+        coordinator_mode="resource_scoped",
+    )
+    row = receipt["targets"][TARGET]
+    assert row["status"] == "deferred"
+    assert row["deferred_reason"] == "scope_quarantined"
+    proof = json.loads(Path(row["scope_proof"]["path"]).read_text())
+    assert proof["stage"] == "target_admission"
+    assert proof["admitted"] is False
+    assert proof["callback_started"] is False
+    assert proof["snapshot"]["global_reasons"] == []
+    assert proof["reason"].startswith("quarantined_resource:")
+    assert any(
+        item["target"] == TARGET and item["reason"] == "retained_resource_intent"
+        for item in proof["snapshot"]["items"]
+    )
+    assert not any(
+        item["reason"] == "unresolved_native_item" for item in proof["snapshot"]["items"]
+    )
+    assert closer_resources.unknown_reservations(closer_resources.scoped_root(path)) == {
+        "pr:" + TARGET: TARGET
+    }
+    assert receipt["targets"][unrelated]["status"] == "completed"
+    assert stages == ["prepare", "interpret", "act"]
+    assert all(p.read_bytes() == raw for p, raw in reservation_before.items())
+
+    previous["deadline"] = time.time() + 45
+    previous["receipt_summary"]["deadline"] = previous["deadline"]
+    closer_pipeline._save(path, state)
+    assert adapter._deadline_with_pipeline_round(requested, legacy, state_path) == (
+        legacy["round"]["deadline"],
+        "prior_pipeline_window_active",
+    )
+
+
+def test_older_active_pipeline_window_cannot_be_hidden_by_a_newer_expired_run(tmp_path):
+    legacy = _terminal_queue_state(tmp_path)
+    legacy["items"][TARGET]["revision"] = "later-assessment"
+    path = _adopted_pipeline(tmp_path)
+    state = closer_pipeline._load(path)
+    state["runs"]["older-active"] = {
+        "created": 1,
+        "deadline": time.time() + 45,
+    }
+    closer_pipeline._save(path, state)
+    assert adapter._deadline_with_pipeline_round(
+        time.time() + 310, legacy, tmp_path / "legacy-queue.json"
+    ) == (legacy["round"]["deadline"], "prior_pipeline_window_active")
+
+
 @pytest.mark.parametrize("status", ["submitted", "running", "uncertain"])
 def test_fresh_pipeline_budget_never_releases_a_legacy_operation_barrier(tmp_path, status):
+    import closer_resources
+
     state = _terminal_queue_state(tmp_path)
     state_path = tmp_path / "legacy-queue.json"
     state["items"][TARGET]["operation"] = {
@@ -4557,16 +4878,56 @@ def test_fresh_pipeline_budget_never_releases_a_legacy_operation_barrier(tmp_pat
         "repo_keys": [TARGET.split("#")[0]],
     }
     state_path.write_text(json.dumps(state))
-    _adopted_pipeline(tmp_path)
+    pipeline_path = _adopted_pipeline(tmp_path)
+    assert closer_pipeline.validate_stop(pipeline_path)["valid"] is True
+    pipeline_before = pipeline_path.read_bytes()
     before = state_path.read_bytes()
     requested = time.time() + 310
-    assert adapter._deadline_with_pipeline_round(requested, state, state_path) == (
+    selected, reason = adapter._deadline_with_pipeline_round(requested, state, state_path)
+    assert (selected, reason) == (
         requested,
         "valid_pipeline_stop",
+    )
+
+    # A valid prior stop gets past the earlier regression's refusal. The real
+    # scoped scheduler must still fence the unresolved original queue operation
+    # before any read, reasoning, or mutation callback starts.
+    def forbidden_stage(*_args):
+        pytest.fail("fresh deadline must not bypass the original operation's scope")
+
+    receipt = closer_pipeline.run_pipeline(
+        pipeline_path,
+        [TARGET],
+        prepare=forbidden_stage,
+        interpret=forbidden_stage,
+        exception=forbidden_stage,
+        act=forbidden_stage,
+        capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
+        deadline=selected,
+        coordinator_mode="resource_scoped",
+    )
+    row = receipt["targets"][TARGET]
+    assert row["status"] == "deferred"
+    assert row["deferred_reason"] == "scope_quarantined"
+    proof = json.loads(Path(row["scope_proof"]["path"]).read_text())
+    assert proof["stage"] == "target_admission"
+    assert proof["admitted"] is False
+    assert proof["callback_started"] is False
+    assert proof["snapshot"]["global_reasons"] == []
+    assert proof["reason"].startswith("quarantined_resource:")
+    assert any(
+        item["run_id"] == "native_queue"
+        and item["target"] == TARGET
+        and item["reason"] == "unresolved_native_item"
+        and item["source_path"] == str(state_path)
+        for item in proof["snapshot"]["items"]
     )
     with pytest.raises(RuntimeError, match="reconcile it in the original closer queue"):
         adapter._legacy_operation_dependency(state_path, TARGET, snapshot())
     assert state_path.read_bytes() == before
+    assert pipeline_path.read_bytes() == pipeline_before
+    assert closer_pipeline.validate_stop(pipeline_path)["valid"] is True
+    assert closer_resources.unknown_reservations(closer_resources.scoped_root(pipeline_path)) == {}
 
 
 @pytest.mark.parametrize("branch", ["safe_pipeline_continuation", "expired_pipeline_recovery"])
