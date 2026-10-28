@@ -4405,6 +4405,70 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
         "legacy_round_renewed": False,
     }
     assert admission["selected_deadline"] > start
+    assert receipt["pipeline_admission_pass"] == adapter.pipeline_admission_pass_number(
+        receipt, now=start
+    )
+    check_at = adapter.PIPELINE_ADMISSION_PASS_CHECK_TS
+    assert adapter.pipeline_admission_pass_number(receipt, now=check_at - 1)["status"] == "pending"
+    graded = adapter.pipeline_admission_pass_number(receipt, now=check_at)
+    assert graded["scope"] == "receipt_conditions_only"
+    assert graded["status"] == ("pass" if stop_valid else "fail")
+    assert graded["advanced_targets"] == ([TARGET] if stop_valid else [])
+    if stop_valid:
+        # A non-deferred row and an absent/invalid diagnostic must not manufacture
+        # a pass. Check copies so grading cannot alter the original CLI receipt.
+        receipt_before = copy.deepcopy(receipt)
+        fresh = copy.deepcopy(receipt)
+        fresh["budget_admission"]["reason"] = "legacy_window_expired_fresh_admission"
+        fresh["targets"][SOURCE] = {"status": "deferred"}
+        fresh_grade = adapter.pipeline_admission_pass_number(fresh, now=check_at)
+        assert fresh_grade["status"] == "pass"
+        assert fresh_grade["advanced_targets"] == [TARGET]
+        for changes, expected in [
+            ({"reason": "no_pipeline_continuation_proof"}, "fail"),
+            ({"selected_deadline_expired": True, "selected_deadline_age_seconds": 1}, "fail"),
+            ({"selected_deadline_expired": False, "selected_deadline_age_seconds": 1}, "fail"),
+            ({"reason": ""}, "unmeasured"),
+            ({"reason": None}, "unmeasured"),
+            ({"scope": "resource_scoped"}, "unmeasured"),
+            ({"selected_deadline": None}, "unmeasured"),
+            ({"selected_deadline": True}, "unmeasured"),
+            ({"selected_deadline": float("nan")}, "unmeasured"),
+            ({"selected_deadline_expired": None}, "unmeasured"),
+            ({"selected_deadline_age_seconds": None}, "unmeasured"),
+            ({"selected_deadline_age_seconds": True}, "unmeasured"),
+            ({"selected_deadline_age_seconds": float("inf")}, "unmeasured"),
+            ({"selected_deadline_age_seconds": -1}, "unmeasured"),
+        ]:
+            candidate = copy.deepcopy(receipt)
+            candidate["budget_admission"].update(changes)
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
+                == expected
+            )
+        for targets in [
+            None,
+            [],
+            {},
+            {TARGET: None},
+            {TARGET: {}},
+            {TARGET: {"status": ""}},
+            {TARGET: {"status": " "}},
+            {TARGET: {"status": True}},
+        ]:
+            candidate = {**receipt, "targets": targets}
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"] == "fail"
+            )
+        candidate = {**receipt, "targets": {TARGET: {"status": "deferred"}}}
+        assert adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"] == "fail"
+        for missing_admission in [None, [], {}]:
+            candidate = {**receipt, "budget_admission": missing_admission}
+            assert (
+                adapter.pipeline_admission_pass_number(candidate, now=check_at)["status"]
+                == "unmeasured"
+            )
+        assert receipt == receipt_before
     assert state_path.read_bytes() == before
     assert (
         adapter._deadline_with_legacy_round(time.time() + 310, state, state_path)
@@ -4468,6 +4532,11 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
     assert receipt["budget_admission"]["selected_deadline"] == state["round"]["deadline"]
     assert receipt["budget_admission"]["selected_deadline_expired"] is True
     assert receipt["budget_admission"]["selected_deadline_age_seconds"] > 0
+    grade = adapter.pipeline_admission_pass_number(
+        receipt, now=adapter.PIPELINE_ADMISSION_PASS_CHECK_TS
+    )
+    assert grade["status"] == "fail"
+    assert grade["reason"] == "selected deadline already expired at admission"
     assert receipt["blocking_reservations"] == 1
     assert receipt["drainable_reservations"] == 0
     assert receipt["deadlock"] is True

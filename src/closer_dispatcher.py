@@ -41,6 +41,8 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 # (blocking 0 or drainable==blocking) with authority true. Check date 2026-10-30.
 RESERVATION_DRAIN_PASS_CHECK_TS = int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp())
 RESERVATION_DRAIN_PASS_CHECK_LABEL = "2026-10-30"
+PIPELINE_ADMISSION_PASS_CHECK_TS = int(datetime(2026, 11, 3, tzinfo=timezone.utc).timestamp())
+PIPELINE_ADMISSION_PASS_CHECK_LABEL = "2026-11-03"
 # A terminal reconciliation plan performs live GitHub reads under its own 120-second
 # request deadline. Bound the receipt diagnostic as a whole as well, so a backlog of
 # historical advertisements cannot turn one expired/admitted receipt into an
@@ -10633,6 +10635,8 @@ def _main_admitted(args, p, assignment_rows, targets):
         # receipt, including admitted rounds (authority true) and runs that never
         # built a budget_admission row. Shadow uses a different pipeline path.
         if not args.shadow:
+            if (budget_admission or {}).get("scope") == "pipeline":
+                result["pipeline_admission_pass"] = pipeline_admission_pass_number(result)
             pipeline_path = _pipeline_state_path(args.state)
             try:
                 if result.get("reason") == "admission_deadline_expired":
@@ -10744,6 +10748,64 @@ def _admitted_reservation_counts(pipeline_path):
             "deadlock": False,
         }
     return _expired_admission_diagnostics(pipeline_path)
+
+
+def pipeline_admission_pass_number(receipt, *, now=None):
+    """Grade #978's receipt conditions, without certifying live/post-merge provenance.
+
+    The deadline diagnostics describe admission time, not the later time at which
+    this receipt is graded. The runtime owner must retain the first real post-merge
+    receipt; this read-only grade cannot establish that a receipt came from it.
+    """
+    stamp = time.time() if now is None else float(now)
+    admission = receipt.get("budget_admission")
+    admission = admission if isinstance(admission, dict) else {}
+    targets = receipt.get("targets")
+    targets = targets if isinstance(targets, dict) else {}
+    advanced = sorted(
+        target
+        for target, row in targets.items()
+        if isinstance(row, dict)
+        and isinstance(row.get("status"), str)
+        and row["status"].strip()
+        and row["status"] != "deferred"
+    )
+    reason = admission.get("reason")
+    selected = admission.get("selected_deadline")
+    age = admission.get("selected_deadline_age_seconds")
+    result = {
+        "check_date": PIPELINE_ADMISSION_PASS_CHECK_LABEL,
+        "scope": "receipt_conditions_only",
+        "admission_reason": reason,
+        "advanced_targets": advanced,
+        "status": "pending",
+        "reason": f"check date {PIPELINE_ADMISSION_PASS_CHECK_LABEL} not reached",
+    }
+    if stamp < PIPELINE_ADMISSION_PASS_CHECK_TS:
+        return result
+    if (
+        admission.get("scope") != "pipeline"
+        or not isinstance(reason, str)
+        or not reason.strip()
+        or not isinstance(selected, (int, float))
+        or isinstance(selected, bool)
+        or not math.isfinite(selected)
+        or not isinstance(admission.get("selected_deadline_expired"), bool)
+        or not isinstance(age, (int, float))
+        or isinstance(age, bool)
+        or not math.isfinite(age)
+        or age < 0
+    ):
+        result.update(status="unmeasured", reason="pipeline deadline diagnostics unread")
+    elif reason == "no_pipeline_continuation_proof":
+        result.update(status="fail", reason="expired legacy admission fallback retained")
+    elif admission["selected_deadline_expired"] or age > 0:
+        result.update(status="fail", reason="selected deadline already expired at admission")
+    elif not advanced:
+        result.update(status="fail", reason="no target has a non-deferred status")
+    else:
+        result.update(status="pass", reason="current admission deadline with target progress")
+    return result
 
 
 def reservation_drain_pass_number(receipt, *, now=None):
