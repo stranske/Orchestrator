@@ -24,6 +24,7 @@ import contextlib
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import selectors
@@ -97,7 +98,7 @@ class SubscriptionLease:
     frontier_id: str = ""
     target: str = ""
     observation: dict[str, Any] | None = None
-    request_started: float = 0.0
+    request_started: float | None = None
 
     def check(self, pool_id: str, run_id: str) -> None:
         if (
@@ -771,9 +772,18 @@ def run_wave(
     """
     started = time.monotonic()
     preflight = PreflightBudget(_preflight_clock or time.monotonic)
-    if isinstance(held_lease, SubscriptionLease) and held_lease.request_started > 0:
-        preflight.used = max(0.0, started - held_lease.request_started)
-        started = min(started, held_lease.request_started)
+    lease_started = (
+        held_lease.request_started if isinstance(held_lease, SubscriptionLease) else None
+    )
+    if lease_started is not None:
+        if (
+            type(lease_started) not in (int, float)
+            or not math.isfinite(lease_started)
+            or lease_started > started
+        ):
+            raise ValueError("original lease monotonic timing is invalid")
+        preflight.used = started - lease_started
+        started = lease_started
     preflight.resume()
     prepare_wave(prepared.plan_text, prepared.prompts_text, prepared.pins)
     plan = strict_final(prepared.plan_text)
@@ -804,6 +814,7 @@ def run_wave(
     runtime = runtime or NativeRuntime()
     if not runtime.is_fixture and (
         not isinstance(held_lease, SubscriptionLease)
+        or lease_started is None
         or held_lease.is_fixture
         or cell_seconds != 45
         or wave_seconds != 480
