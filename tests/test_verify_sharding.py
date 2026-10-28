@@ -178,6 +178,7 @@ def test_only_final_printed_summary_supplies_counts():
     assert (result["passed"], result["skipped"], result["failed"]) == (2, 1, 0)
 
 
+@pytest.mark.needs_coverage_module
 def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
     (tmp_path / "src").mkdir()
     (tmp_path / "config").mkdir()
@@ -218,6 +219,7 @@ def test_xdist_shard_coverage_measures_worker_execution(tmp_path, monkeypatch):
     assert 2 in files[widget]["executed_lines"]
 
 
+@pytest.mark.needs_coverage_module
 @pytest.mark.parametrize("missing", [False, True])
 @pytest.mark.parametrize("verdict", [0, 1])
 def test_aggregate_coverage_requires_every_shard_without_changing_verdict(

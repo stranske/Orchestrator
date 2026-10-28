@@ -76,6 +76,7 @@ jobs:
         env:
           ORCH_STATE_DIR: ${{ runner.temp }}/orch-state
           ORCH_LOCAL_RUNTIME: ${{ runner.temp }}/orch-runtime
+          ORCH_REQUIRE_COVERAGE: '1'
         run: |
           python3 src/verify.py --pytest-shard ${{ matrix.shard }}/6 --coverage --shard-output shard-results
       - name: Stage worker coverage measurement

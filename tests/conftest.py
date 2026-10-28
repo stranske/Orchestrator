@@ -49,6 +49,7 @@ Design notes:
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import os
 import shutil
@@ -302,6 +303,11 @@ def _charge(report: pytest.TestReport | pytest.CollectReport) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     global _GUARD, _HOOK_INSTALLED
+    config.addinivalue_line(
+        "markers",
+        "needs_coverage_module: runs `python -m coverage`; skipped where the module is not installed "
+        "(Gate's coverage-off shards), a failure where ORCH_REQUIRE_COVERAGE=1 (CI coverage shards)",
+    )
     _GUARD = arm(TESTS_DIR)
     _WATCHED.clear()
     _WATCHED.update(_GUARD.watched)
@@ -442,3 +448,18 @@ def isolate_feature_goals(request, tmp_path, monkeypatch):
         monkeypatch.setattr(
             feature_goals, "report", lambda now=None, **kw: feature_goals.drift([], now)
         )
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Gate's sharded Python legs run with coverage OFF and do not install the tool.
+
+    The CI coverage shards install it and set ORCH_REQUIRE_COVERAGE=1, so a missing module there is
+    a failure rather than a silent loss of these tests.
+    """
+    if item.get_closest_marker("needs_coverage_module") is None:
+        return
+    if importlib.util.find_spec("coverage") is not None:
+        return
+    if os.environ.get("ORCH_REQUIRE_COVERAGE") == "1":
+        pytest.fail("ORCH_REQUIRE_COVERAGE=1 but the coverage module is not installed")
+    pytest.skip("coverage is not installed in this environment (coverage-off shard)")
