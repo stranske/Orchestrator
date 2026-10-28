@@ -18,6 +18,16 @@ import worktree_git
 
 @pytest.fixture
 def context(tmp_path, monkeypatch):
+    # Discover the actual platform tools before changing the fixture PATH.
+    git = Path(shutil.which("git")).resolve(strict=True)
+    gh = Path(shutil.which("gh")).resolve(strict=True)
+    physical_bins = list(
+        dict.fromkeys(
+            path.resolve(strict=True)
+            for path in (git.parent, gh.parent, Path("/usr/bin"), Path("/bin"))
+        )
+    )
+    assert all(path.is_dir() for path in physical_bins)
     root = tmp_path.resolve()
     original = root / "original-home"
     original.mkdir(mode=0o700)
@@ -50,13 +60,9 @@ def context(tmp_path, monkeypatch):
         }:
             monkeypatch.delenv(name)
     monkeypatch.setenv("HOME", str(original))
-    monkeypatch.setenv(
-        "PATH",
-        "/opt/homebrew/Cellar/git/2.49.0/bin:/opt/homebrew/Cellar/gh/2.94.0/bin:/usr/bin:/bin",
-    )
-    git = Path(shutil.which("git")).resolve()
-    gh = Path(shutil.which("gh")).resolve()
-    assert git.is_file() and gh.is_file()
+    monkeypatch.setenv("PATH", os.pathsep.join(str(path) for path in physical_bins))
+    assert Path(shutil.which("git")).resolve(strict=True) == git
+    assert Path(shutil.which("gh")).resolve(strict=True) == gh
     repos, worktrees = root / "repos", root / "worktrees"
     repos.mkdir(mode=0o700)
     worktrees.mkdir(mode=0o700)
