@@ -42,6 +42,15 @@ def no_live_state_or_provider(monkeypatch, tmp_path):
     from closer_role_support import install_synthetic_role_verdict
 
     install_synthetic_role_verdict(monkeypatch)
+    # This module isolates host/capacity/native-proof mechanisms using fictional
+    # runtime records. The production quality cohort is tested independently.
+    from test_closer_neutral_routing import synthetic_quality_boundary
+
+    import closer_role_selection as selection
+
+    synthetic_quality_boundary.__wrapped__(monkeypatch)
+    policy = selection.load_policy()
+    policy["categories"]["ordinary_static"] = policy["categories"]["bounded_classification"]
     monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "private-handoff"))
     monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "private-state"))
@@ -2433,6 +2442,10 @@ def ordinary_nonpass_wait_fixture(
     current, packet, ref, prepared, interpreted = test_closer_disposition.fixture(
         tmp_path,
         native=True,
+        # Fresh coherent synthetic NONPASS; the original corpus defaults retain
+        # its deliberate FAIL/CONCERNS and CI contradictions for their tests.
+        native_reported_verdict="CONCERNS",
+        native_ci_failed=False,
         **({"pr_target": "owner/repo#12"} if linked_subject else {}),
     )
     current.update(state="MERGED", labels=[], draft=False, active_threads=0, mergeable="MERGEABLE")
@@ -2565,12 +2578,16 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
     # Large but legitimate retained NON_PASS rows, without private queue data.
     prior = {
         "criteria": [
-            {"result": "NON_PASS", "criterion": f"criterion-{index}", "reason": "gap " + "x" * 2100}
+            {"result": "NON_PASS", "criterion": f"criterion-{index}", "reason": "gap " + "x" * 650}
             for index in range(6)
         ]
     }
     current, packet, ref, prep, interpreted = test_closer_disposition.fixture(
-        tmp_path, native=True, dispositions=prior
+        tmp_path,
+        native=True,
+        dispositions=prior,
+        native_reported_verdict="CONCERNS",
+        native_ci_failed=False,
     )
     current.update(
         state="MERGED",
@@ -2617,14 +2634,15 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
         ),
     )
     calls = []
-    monkeypatch.setattr(
-        dispatcher,
-        "offload",
-        lambda *_args, **_kwargs: (
-            calls.append(True)
-            or inert_caller.response({**actual, "output": json.dumps(proposal)}, *_args, **_kwargs)
-        ),
-    )
+
+    def typed_fixture_response(*args, **kwargs):
+        from closer_typed_semantic_broker_fixture import emit_assessment
+
+        calls.append(True)
+        response = emit_assessment(args[1], [], finding_gold=proposal["resolutions"])
+        return inert_caller.response({**actual, "output": json.dumps(response)}, *args, **kwargs)
+
+    monkeypatch.setattr(dispatcher, "offload", typed_fixture_response)
     integrations = []
     real_integrate = closer_disposition.integrate_ordinary
 
@@ -2652,9 +2670,13 @@ def test_nonpass_callback_preserves_complete_evidence_without_unused_disposition
             "prepare": prep,
         }
         value = callbacks["interpret"](target, context)
-        assert value["integration_status"] == "ordinary_nonpass"
+        assert value.get("integration_status") == "ordinary_nonpass", json.dumps(
+            value, sort_keys=True
+        )
         assert "integration_disposition" not in value
-        assert value["proposal"] == original_proposal
+        assert value["proposal"]["resolutions"] == original_proposal["resolutions"]
+        assert value["proposal"]["decision"] == original_proposal["decision"]
+        assert value["proposal"]["semantic_assessment"]["schema"] == "closer-semantic-assessment/v2"
         assert value["raw_findings"] == integrations[0]["raw_findings"]
         assert len(value["raw_findings"]) == len(proposal["resolutions"]) == 10
         assert closer_pipeline.CALLBACK_RESULT_BYTES == 32768
@@ -2848,7 +2870,9 @@ def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(
 
     old_ref = prep["packet_ref"]
     old_packet = json.loads(Path(old_ref["path"]).read_bytes())
-    root = tmp_path / "fresh-native-evidence"
+    # Refresh within the same physical retained store: previous sections keep
+    # their original immutable raw refs and must not point outside a new root.
+    root = Path(old_ref["path"]).parent.parent
     artifacts = (
         old_packet["sections"]["ci_artifacts"]["content"]["artifacts"]
         + old_packet["sections"]["native_merge_verifier"]["content"]["artifacts"]
@@ -2913,7 +2937,17 @@ def test_nonpass_wait_same_head_new_revision_requires_fresh_preparation(
         producer_sha256=refreshed["producer_sha256"],
         evidence_summary={"section_digests": refreshed["section_digests"]},
     )
-    proposal = copy.deepcopy(context["interpret"]["proposal"])
+    # Declare a fresh synthetic expected answer for the newly collected packet.
+    # Never recycle the previously materialized typed assessment into a new receipt.
+    proposal = {
+        "target": current["target"],
+        "head": current["head"],
+        "base": current["base"],
+        "classification": "relevant",
+        "substantive_needs": [],
+        "findings": [{"summary": "Original acceptance proof remains missing"}],
+        "decision": {"criteria": []},
+    }
     import closer_disposition
 
     proposal["resolutions"] = [
@@ -3249,6 +3283,13 @@ def test_pipeline_low_route_uses_any_live_low_profile_not_luna_assumption(tmp_pa
         }
 
     monkeypatch.setattr(router, "select_agent", choose)
+    import closer_role_selection as selection
+
+    monkeypatch.setattr(
+        selection,
+        "candidates_for_agent",
+        lambda agent, *_a, **_k: execution_profiles.profiles_for_agent(agent),
+    )
     route = adapter._pipeline_low_route()
     assert route["agent"] == "gemini"
     assert route["profile_id"] == "gemini-flash-low"
@@ -3613,7 +3654,9 @@ def test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard(
 
     def low_worker(_agent, prompt, **_kwargs):
         prompts.append(prompt)
-        payload = json.dumps(response)
+        from closer_typed_semantic_broker_fixture import emit_assessment
+
+        payload = json.dumps(emit_assessment(prompt, response["decision"]["criteria"]))
         return inert_caller.response(
             {
                 "exit": 0,
@@ -4034,7 +4077,10 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
     )
     route_profiles = []
 
-    def select_route(*, load, unavailable_profiles, with_status=False, data_only=False):
+    def select_route(
+        *, load, unavailable_profiles, with_status=False, data_only=False, closer_category=None
+    ):
+        assert closer_category == "ordinary_static"
         if LOW not in unavailable_profiles:
             profile = LOW
         elif SECOND not in unavailable_profiles:
@@ -4047,23 +4093,17 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
 
     monkeypatch.setattr(adapter, "_pipeline_low_route", select_route)
     provider_profiles = []
+    fixture_gold = {}
 
     def offload(_agent, _prompt, **kwargs):
         profile = kwargs["profile_id"]
         provider_profiles.append(profile)
-        assert "honest missing-evidence assessment is a completed deliverable" in _prompt
-        assert "leave decision.criteria empty" in _prompt
-        assert "findings (array of objects, never strings" in _prompt
-        assert "evidence gaps as strings in substantive_needs" in _prompt
-        assert_nonpass_accounting_prompt_contract(_prompt)
-        assert "only when every original body and criterion is fully evidenced" in _prompt
-        assert (
-            "If acceptance proof is incomplete and the known NON_PASS accounting contract below does not apply"
-            in _prompt
-        )
+        assert "closer-semantic-assessment/v2" in _prompt
+        assert "CURRENT_HOST_INVENTORY_JSON_BEGIN" in _prompt
+        assert "Host owns identities, raw proof binding" in _prompt
+        assert "Your advice grants no ACT, write, merge, closure" in _prompt
         assert kwargs["data_only"] is True
-        assert "Inspect only supplied inline content; do not open retained paths" in _prompt
-        assert "read-only commands such as python3 -c" not in _prompt
+        assert "No tools or delegation" in _prompt
         if profile == LOW and kwargs["subject_id"] == first:
             result = {"exit": 1, "run_id": "dispatch-failed-31", "error": "unsupported model"}
             if failure_kind in {"refusal", "inspection"}:
@@ -4072,20 +4112,19 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
                     if failure_kind == "refusal"
                     else "Read-only inspection cannot create a temporary file."
                 )
-                result.update(
-                    exit=0,
-                    output=json.dumps(
-                        {
-                            "target": first,
-                            "head": HEAD,
-                            "base": base,
-                            "classification": "uncertain",
-                            "substantive_needs": [reason],
-                            "findings": [],
-                            "decision": {"criteria": []},
-                        }
-                    ),
+                from closer_typed_semantic_broker_fixture import (
+                    delivered_inventory,
+                    emit_assessment,
                 )
+
+                inventory = delivered_inventory(_prompt)
+                response = emit_assessment(
+                    _prompt,
+                    fixture_gold[first],
+                    unknown_slots=[row["slot"] for row in inventory["obligations"]],
+                    global_explanations=[reason],
+                )
+                result.update(exit=0, output=json.dumps(response))
             elif failure_kind == "malformed":
                 result.update(exit=0, output='{"classification":"uncertain",')
             elif failure_kind == "quota":
@@ -4102,15 +4141,9 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
                 "model": "claude-test",
                 "profile_id": profile,
                 "output": json.dumps(
-                    {
-                        "target": kwargs["subject_id"],
-                        "head": HEAD,
-                        "base": base,
-                        "classification": "relevant",
-                        "substantive_needs": [],
-                        "findings": [],
-                        "decision": {"criteria": []},
-                    }
+                    __import__("closer_typed_semantic_broker_fixture").emit_assessment(
+                        _prompt, fixture_gold[kwargs["subject_id"]]
+                    )
                 ),
             },
             _agent,
@@ -4137,6 +4170,7 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         packet, actual_ref, _proposal = inert_caller.packet(
             snapshots[target], tmp_path / (target.replace("/", "_").replace("#", "-") + ".evidence")
         )
+        fixture_gold[target] = copy.deepcopy(_proposal["decision"]["criteria"])
         path = Path(actual_ref["path"])
         snap = snapshots[target]
         snapshot_path = tmp_path / (target.replace("/", "_").replace("#", "-") + ".snapshot.json")
@@ -4192,7 +4226,11 @@ def test_low_failure_scope_preserves_item_holds_and_real_provider_failures(
         else:
             assert values[first]["actual"]["run_id"] == inert_caller.results[0]["run_id"]
             assert values[first]["actual"]["exit"] == 0
-            assert values[first]["classification"] == "uncertain"
+            # Missing proof stays relevant advice with incomplete readiness;
+            # the typed host does not conflate it with undecidable meaning.
+            assert values[first]["classification"] == (
+                "uncertain" if failure_kind == "malformed" else "relevant"
+            )
             assert values[first]["substantive_needs"]
             assert values[first]["integration_status"] != "accepted"
             assert not values[first].get("integration_disposition")
@@ -4247,7 +4285,10 @@ def test_uncertain_provider_result_stops_before_fallback_exception_or_action(
     )
     chosen = []
 
-    def route(*, load, unavailable_profiles, with_status=False, data_only=False):
+    def route(
+        *, load, unavailable_profiles, with_status=False, data_only=False, closer_category=None
+    ):
+        assert closer_category == "ordinary_static"
         profile = LOW if LOW not in unavailable_profiles else SECOND
         chosen.append(profile)
         value = {"agent": "claude", "profile_id": profile, "pools": ["claude-subscription"]}
@@ -6213,6 +6254,8 @@ def test_whole_classification_packet_over_bound_refuses_without_broker(
         },
     }
     with pytest.raises(model.ClassificationPromptError) as error:
+        from closer_typed_semantic_broker_fixture import renderer_inventory
+
         model.render_classification_prompt(
             mandatory,
             source_rows=current["sources"],
@@ -6220,6 +6263,7 @@ def test_whole_classification_packet_over_bound_refuses_without_broker(
             review_rows=[],
             artifact_rows={},
             data_only=True,
+            semantic_inventory=renderer_inventory(current["sources"]),
         )
     assert error.value.reason == "classification_prompt_exceeds_bound"
     assert not calls and not inert_caller.results

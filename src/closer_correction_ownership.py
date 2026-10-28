@@ -15,7 +15,9 @@ from datetime import datetime, timezone
 
 import closer_correction_classification as contract
 
-MAX_PAGES = 4
+PAGE_SIZE = 25
+MAX_ITEMS = 400
+MAX_PAGES = MAX_ITEMS // PAGE_SIZE
 MAX_CALLS = 32
 MAX_REPLY_BYTES = 131072
 MAX_TOTAL_BYTES = 1048576
@@ -90,10 +92,13 @@ class _Reads:
         self.bytes = 0
         self.refs = []
 
-    def get(self, endpoint):
+    def get(self, endpoint, *, fields=None):
         _need(self.calls < MAX_CALLS, "native ownership call budget exhausted")
         self.calls += 1
-        value = self.github.api(endpoint)
+        value = self.github.api(
+            endpoint,
+            **({"method": "POST", "fields": fields, "resource": "graphql"} if fields else {}),
+        )
         raw = _raw(value)
         self.bytes += len(raw)
         _need(
@@ -106,8 +111,8 @@ class _Reads:
     def pages(self, endpoint):
         found, identities = [], set()
         for page in range(1, MAX_PAGES + 1):
-            rows = self.get(endpoint + f"?per_page=100&page={page}")
-            _need(isinstance(rows, list) and len(rows) <= 100, "native page malformed")
+            rows = self.get(endpoint + f"?per_page={PAGE_SIZE}&page={page}")
+            _need(isinstance(rows, list) and len(rows) <= PAGE_SIZE, "native page malformed")
             for row in rows:
                 _need(isinstance(row, dict), "native event malformed")
                 # A cross-reference lacks a numeric event ID in the REST shape.
@@ -155,7 +160,7 @@ class _Reads:
                 )
                 identities.add(identity)
                 found.append(row)
-            if len(rows) < 100:
+            if len(rows) < PAGE_SIZE:
                 return found
         raise OwnershipUnavailable("native pagination incomplete")
 
@@ -218,6 +223,168 @@ def _related(rows, repository):
     return related
 
 
+def _owned_delivery_neighbor(reads, repo, candidate, owner, permission, neighbors, source):
+    """Join one delivery and at most one owned, completely nonclosing reference."""
+    from types import SimpleNamespace
+
+    import closer_coding_publication as publication
+
+    _need(1 <= len(neighbors) <= 2, "additional related PR unresolved")
+    login, name = repo.split("/")
+    delivery_count = 0
+    for number, (node_id, is_pr) in neighbors.items():
+        _need(is_pr, "additional related PR unresolved")
+        # Both complete relation directions are native, not inferred from body text.
+        query = (
+            "query {repository(owner:"
+            + json.dumps(login)
+            + ",name:"
+            + json.dumps(name)
+            + "){databaseId nameWithOwner issue(number:"
+            + str(candidate["number"])
+            + "){id number closedByPullRequestsReferences(first:2){nodes{id number "
+            + "repository{nameWithOwner}} pageInfo{hasNextPage}}} pullRequest(number:"
+            + number
+            + "){id number state isDraft merged headRefOid baseRefOid headRefName "
+            + "headRepository{nameWithOwner} body closingIssuesReferences(first:2){nodes{id "
+            + "number repository{nameWithOwner}} pageInfo{hasNextPage}}}}}"
+        )
+        if len(neighbors) == 2:
+            original = (
+                " original:issue(number:"
+                + str(source["number"])
+                + "){id number closedByPullRequestsReferences(first:2){nodes{id number "
+                + "repository{nameWithOwner}} pageInfo{hasNextPage}}}"
+            )
+            query = query[:-2] + original + query[-2:]
+        fields = {"query": query}
+        document = reads.get("graphql", fields=fields)
+        repository = document["data"]["repository"]
+        issue, pr = repository["issue"], repository["pullRequest"]
+        closes, deliveries = pr["closingIssuesReferences"], issue["closedByPullRequestsReferences"]
+        if len(neighbors) == 2:
+            original = repository.get("original")
+            _need(isinstance(original, dict), "original source closing relation unresolved")
+            _need(
+                original["id"] == source["node_id"]
+                and str(original["number"]) == source["number"]
+                and original["closedByPullRequestsReferences"]["pageInfo"]["hasNextPage"] is False
+                and original["closedByPullRequestsReferences"]["nodes"] == [],
+                "original source closing relation unresolved",
+            )
+        _need(
+            repository["nameWithOwner"].lower() == repo
+            and issue["id"] == candidate["node_id"]
+            and issue["number"] == candidate["number"]
+            and pr["id"] == node_id
+            and str(pr["number"]) == number
+            and closes["pageInfo"]["hasNextPage"] is False
+            and deliveries["pageInfo"]["hasNextPage"] is False
+            and len(deliveries["nodes"]) == 1
+            and any(
+                deliveries["nodes"]
+                == [
+                    {
+                        "id": known_node,
+                        "number": int(known_number),
+                        "repository": {"nameWithOwner": repository["nameWithOwner"]},
+                    }
+                ]
+                for known_number, (known_node, _) in neighbors.items()
+            ),
+            "unique reciprocal owned delivery unavailable",
+        )
+        pull_path = f"repos/{repo}/pulls/{number}"
+        pull = reads.get(pull_path)
+        snapshot = {
+            "pr_target": repo + "#" + number,
+            "head": pr["headRefOid"],
+            "base": pr["baseRefOid"],
+            "head_branch": pr["headRefName"],
+            "head_repository": pr["headRepository"]["nameWithOwner"],
+            "body": pr["body"],
+            "state": pr["state"],
+            "draft": pr["isDraft"],
+        }
+        config = SimpleNamespace(
+            repository=repo,
+            repository_id=repository["databaseId"],
+            writer_login=owner,
+            writer_id=permission["user"]["id"],
+        )
+        if deliveries["nodes"][0]["id"] == node_id:
+            _need(pr["merged"] is False, "owned delivery already merged")
+            _need(
+                closes["nodes"]
+                == [
+                    {
+                        "id": candidate["node_id"],
+                        "number": candidate["number"],
+                        "repository": {"nameWithOwner": repository["nameWithOwner"]},
+                    }
+                ],
+                "unique reciprocal owned delivery unavailable",
+            )
+            publication._owned_pr_projection(pull, snapshot, candidate["node_id"], config)
+            delivery_count += 1
+        else:
+            head, base, author = (
+                pull.get("head") or {},
+                pull.get("base") or {},
+                pull.get("user") or {},
+            )
+            _need(
+                closes["nodes"] == []
+                and pull.get("node_id") == node_id
+                and str(pull.get("number")) == number
+                and author.get("login") == owner
+                and author.get("id") == config.writer_id
+                and type(config.writer_id) is int
+                and config.writer_id > 0
+                and type(config.repository_id) is int
+                and config.repository_id > 0
+                and head.get("ref") not in {base.get("ref"), publication.ctl.BRANCH}
+                and isinstance(head.get("ref"), str)
+                and bool(head["ref"])
+                and (head.get("repo") or {}).get("id") == config.repository_id
+                and (base.get("repo") or {}).get("id") == config.repository_id
+                and (head.get("repo") or {}).get("full_name", "").lower() == repo
+                and (base.get("repo") or {}).get("full_name", "").lower() == repo
+                and head.get("sha") == pr["headRefOid"]
+                and base.get("sha") == pr["baseRefOid"]
+                and all(
+                    re.fullmatch(r"[a-f0-9]{40}", str(oid))
+                    for oid in (head.get("sha"), base.get("sha"))
+                )
+                and head.get("ref") == pr["headRefName"]
+                and pr["headRepository"]["nameWithOwner"].lower() == repo
+                and pull.get("body") == pr["body"]
+                and (
+                    (
+                        pull.get("state") == "open"
+                        and pr["state"] == "OPEN"
+                        and pull.get("merged") is False
+                        and pr["merged"] is False
+                    )
+                    or (
+                        pull.get("state") == "closed"
+                        and pr["state"] == "MERGED"
+                        and pull.get("merged") is True
+                        and pr["merged"] is True
+                    )
+                )
+                and pull.get("draft") is False
+                and pr["isDraft"] is False,
+                "informational PR native ownership or empty closing relation unresolved",
+            )
+        _need(
+            reads.get(pull_path) == pull and reads.get("graphql", fields=fields) == document,
+            "owned delivery changed during observation",
+        )
+
+    _need(delivery_count == 1, "unique reciprocal owned delivery unavailable")
+
+
 def collect_ownership(*, github, seed, deadline, now=None):
     """Read complete bounded known-subject timelines and re-read them for races.
 
@@ -248,8 +415,10 @@ def collect_ownership(*, github, seed, deadline, now=None):
         source_link is None or source_link == (seed["source_issue"]["node_id"], False),
         "native linked source node differs",
     )
-    _need(not any(is_pr for _, is_pr in neighbors.values()), "additional related PR unresolved")
+    delivery_neighbors = {key: value for key, value in neighbors.items() if value[1]}
+    neighbors = {key: value for key, value in neighbors.items() if not value[1]}
     _need(len(neighbors) <= 1, "multiple incumbent candidates")
+    _need(not delivery_neighbors or len(neighbors) == 1, "additional related PR unresolved")
     # An assignment on the original source cannot be silently relabeled absence.
     _need(
         not any(
@@ -306,6 +475,10 @@ def collect_ownership(*, github, seed, deadline, now=None):
             and (permission.get("user") or {}).get("login", "").lower() == owner.lower(),
             "incumbent write ownership unknown",
         )
+        if delivery_neighbors:
+            _owned_delivery_neighbor(
+                reads, repo, candidate, owner, permission, delivery_neighbors, seed["source_issue"]
+            )
         incumbent = {
             "issue": identity,
             "owner": owner,

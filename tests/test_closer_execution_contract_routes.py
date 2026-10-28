@@ -54,6 +54,9 @@ def inert_transport(controlled_world, monkeypatch):
     return caller
 
 
+_DECLARED_LOW = {}
+
+
 def prepared(tmp_path, monkeypatch):
     assert _PREPARED is not None, "runtime contract must run inside the actual CLI-owned fixture"
     return _PREPARED
@@ -125,6 +128,9 @@ def native_callback_case(test):
             low = callbacks["interpret"](TARGET, ctx)
             assert low["integration_status"] == "accepted", low
             ctx["interpret"] = low
+            # Keep the original pre-response fixture specification separately.
+            # Named tests may declare a NEW response, never re-emit this actual.
+            _DECLARED_LOW[id(low)] = (delivery, copy.deepcopy(delivery.proposal), ctx)
             delivery.frontier = callbacks["finite_frontier"]
             install_exception_readback(delivery, callbacks)
             monkeypatch.setattr(sys.modules[__name__], "_PREPARED", (delivery, callbacks, ctx))
@@ -145,32 +151,9 @@ def native_callback_case(test):
 
 
 def install_exception_readback(delivery, callbacks):
-    caller = delivery.inert_caller
-    original = callbacks["exception"]
-
-    def exception(target, context):
-        current = context["interpret"]
-        packet, root = contracts.load_retained_packet(context["prepare"]["packet_ref"])
-        snap = json.loads(Path(context["prepare"]["snapshot_ref"]["path"]).read_bytes())
-        # A changed proposed response gets its OWN real invocation and immutable
-        # receipt. Never relabel or overwrite the original completed low run.
-        actual = caller.interpretation(
-            snap, packet, context["prepare"]["packet_ref"], copy.deepcopy(current["proposal"])
-        )
-        stage_needs = list(current.get("substantive_needs", []))
-        current.update({key: value for key, value in actual.items() if key != "substantive_needs"})
-        current["run_id"] = actual["actual"]["run_id"]
-        current["classification"] = actual["proposal"].get("classification")
-        current["substantive_needs"] = list(
-            dict.fromkeys([*stage_needs, *actual["proposal"].get("substantive_needs", [])])
-        )
-        checked = disposition.integrate_ordinary(
-            target, snap, context["prepare"]["packet_ref"], context["prepare"], actual
-        )
-        current["integration_status"] = checked["status"]
-        return original(target, context)
-
-    callbacks["exception"] = exception
+    # The production full_interpretation replays the original sealed typed
+    # response. Named fixtures declare a new response explicitly in named().
+    return None
 
 
 def actual_worker(delivery, ctx, low, request):
@@ -209,14 +192,21 @@ def actual_worker(delivery, ctx, low, request):
         )
 
 
-def named(low):
-    row = low["proposal"]["decision"]["criteria"][1]
-    low["proposal"]["adjudication_request"] = {
-        "basis": {"source": row["source"], "criterion": row["criterion"]},
-        "question": "Does this retained receipt prove the named report criterion?",
-        "evidence_refs": row["evidence"],
-    }
-    return row
+def named(low, *, global_explanations=()):
+    delivery, declared, context = _DECLARED_LOW[id(low)]
+    gold = copy.deepcopy(declared)
+    gold["decision"]["criteria"][1]["result"] = "UNKNOWN"
+    gold["substantive_needs"] = list(global_explanations)
+    prep = context["prepare"]
+    packet, _root = contracts.load_retained_packet(prep["packet_ref"])
+    snap = json.loads(Path(prep["snapshot_ref"]["path"]).read_bytes())
+    actual = delivery.inert_caller.interpretation(snap, packet, prep["packet_ref"], gold)
+    low.update(actual)
+    low["run_id"] = actual["actual"]["run_id"]
+    low["classification"] = actual["proposal"]["classification"]
+    low["substantive_needs"] = list(actual["proposal"]["substantive_needs"])
+    assert low["proposal"]["semantic_followup"]["status"] == "candidate"
+    return low["proposal"]["decision"]["criteria"][1]
 
 
 def scoped_answer(req, row):
@@ -248,7 +238,7 @@ def forbidden(*_a, **_kw):
 @pytest.mark.parametrize(
     "kind", ["missing", "generic", "multiple", "unknown", "missing_row", "security", "authority"]
 )
-def test_actual_exception_admission_refuses_before_route_or_worker(tmp_path, monkeypatch, kind):
+def test_actual_exception_admission_refuses_before_route_or_provider(tmp_path, monkeypatch, kind):
     delivery, cb, ctx = prepared(tmp_path, monkeypatch)
     low = ctx["interpret"]
     row = named(low)
@@ -271,8 +261,26 @@ def test_actual_exception_admission_refuses_before_route_or_worker(tmp_path, mon
         low["proposal"]["findings"] = [{"authority_conflict": True}]
     low["substantive_needs"] = ["a disputed finding"]
     monkeypatch.setattr(adapter, "_exception_route", forbidden)
-    monkeypatch.setattr(delivery.backend, "worker", forbidden)
-    result = cb["exception"](TARGET, ctx)
+    monkeypatch.setattr(delivery.backend, "offload_fn", forbidden)
+    prep = ctx["prepare"]
+    packet, root = contracts.load_retained_packet(prep["packet_ref"])
+    snap = json.loads(Path(prep["snapshot_ref"]["path"]).read_bytes())
+    # First build the source's actual request, then inject only the named fault.
+    valid = contracts.build_adjudication_request(
+        snap,
+        packet,
+        prep["packet_ref"],
+        basis={"source": row["source"], "criterion": row["criterion"]},
+        question="Does the supplied evidence satisfy the named original criterion?",
+        evidence_refs=row["evidence"],
+        retained_dir=root,
+    )
+    request = None if kind == "missing" else copy.deepcopy(valid)
+    if kind in {"generic", "unknown"}:
+        request["basis"] = explicit["basis"]
+    elif kind == "multiple":
+        request["question"] = explicit["question"]
+    result = actual_worker(delivery, ctx, low["proposal"], request)
     assert result["status"] == "pending", result
     assert result["pending_kind"] == "external_event"
     assert result["pending_evidence"]["target"] == TARGET
@@ -287,12 +295,8 @@ def test_actual_exception_admission_refuses_before_route_or_worker(tmp_path, mon
 def test_actual_named_advice_merges_one_row_then_full_guard(tmp_path, monkeypatch, uncertain):
     delivery, cb, ctx = prepared(tmp_path, monkeypatch)
     low = ctx["interpret"]
-    row = named(low)
+    row = named(low, global_explanations=["original global ambiguity"] if uncertain else [])
     row["result"] = "UNKNOWN"
-    if uncertain:
-        low["proposal"].update(
-            classification="uncertain", substantive_needs=["original global ambiguity"]
-        )
     original = copy.deepcopy(low["proposal"])
     calls, integrations = [], []
     real_integrate = disposition.integrate_ordinary
@@ -317,7 +321,9 @@ def test_actual_named_advice_merges_one_row_then_full_guard(tmp_path, monkeypatc
     assert merged["decision"]["criteria"][1]["result"] == "PASS"
     assert merged["decision"]["criteria"][0] == original["decision"]["criteria"][0]
     assert merged["classification"] == original["classification"]
-    assert merged["substantive_needs"] == original["substantive_needs"]
+    assert merged["substantive_needs"] == [
+        need for need in original["substantive_needs"] if need != "semantic_acceptance_proof_gap"
+    ]
     assert merged["findings"] == original["findings"]
     assert low["proposal"] == original
     # Re-entry re-reads the exact native scoped response and repeats full integration.
@@ -516,9 +522,7 @@ def test_actual_pipeline_persists_generic_request_hold_before_action(tmp_path, m
     assert row["status"] == "held" and row["stage"] == "exception", row
     pending = row["results"]["exception"]
     assert pending["status"] == "pending" and pending["pending_kind"] == "external_event"
-    assert (
-        pending["pending_evidence"]["contract_reason"] == "one_bound_adjudication_request_required"
-    )
+    assert pending["pending_evidence"]["contract_reason"] == "semantic_dispute_not_admitted"
     assert pending["pending_evidence"]["target"] == TARGET
     assert pending["pending_evidence"]["revision"] == row["revision"]
     assert "act" not in row["results"]
@@ -597,7 +601,7 @@ def test_scoped_worker_interruption_never_gains_completion_authority(tmp_path, m
     assert result["authority"] is False
     assert result.get("validated", {}).get("status") != "accepted"
     if kind == "missing_run":
-        assert result["validated"]["reason"] == "worker_execution_unverified"
+        assert result["validated"]["reason"] == "actual_scoped_receipt_required"
     elif kind == "cancelled":
         assert delivery.inert_caller.results[-1]["raw_exit"] == 130
         assert result["status"] == "uncertain"
@@ -654,7 +658,9 @@ def test_post_transport_combined_prompt_bound_precedes_any_strong_allocation(
     assert identity["target"] == TARGET and identity["revision"] == ctx["revision"]
     assert identity["basis"]["source"] == row["source"]
     assert identity["request_id"]
-    delivery.proposal = copy.deepcopy(ctx["interpret"]["proposal"])
+    delivery.proposal = copy.deepcopy(_DECLARED_LOW[id(ctx["interpret"])][1])
+    # New declared oversize fixture, before native sealing; no actual answer reuse.
+    delivery.proposal["decision"]["criteria"][1]["proofs"][0]["relevance"] = padding
     with monkeypatch.context() as no_strong:
         no_strong.setattr(delivery.backend, "worker", forbidden)
         held = cb["interpret"](TARGET, {**ctx, "work_key": "oversized-native-low"})
@@ -666,8 +672,8 @@ def test_actual_worker_rechecks_combined_prompt_bound_before_its_route(tmp_path,
     from pathlib import Path
 
     delivery, _cb, ctx = prepared(tmp_path, monkeypatch)
-    low = ctx["interpret"]["proposal"]
     row = named(ctx["interpret"])
+    low = ctx["interpret"]["proposal"]
     row["proofs"][0]["relevance"] = "x" * 100000
     prep = ctx["prepare"]
     packet, root = contracts.load_retained_packet(prep["packet_ref"])
@@ -748,7 +754,22 @@ def test_post_transport_unknown_fields_never_reach_strong_prompt(tmp_path, monke
         packet_ref=prep["packet_ref"],
         retained_dir=root,
     )
-    merged = contracts.merge_selected_response(ctx["interpret"]["proposal"], req, answer)
+    import closer_semantic_assessment as semantic
+
+    low = ctx["interpret"]
+    merged = semantic.reconcile_selected(
+        low["proposal"]["semantic_assessment"],
+        req,
+        answer,
+        snapshot=snap,
+        packet=packet,
+        packet_ref=prep["packet_ref"],
+        retained_dir=root,
+        strong_actual=adapter._worker_actual(result["worker"]),
+        expected_catalog_sha256=low["actual"]["_closer_controlled_proof"]["expected"]["basis"][
+            "semantic_catalog_sha256"
+        ],
+    )
     checked = disposition.integrate_ordinary(
         TARGET,
         snap,
@@ -772,9 +793,24 @@ def test_owner_required_hold_retains_only_actually_bound_named_identity(
     if not bound:
         ctx["interpret"]["proposal"]["adjudication_request"]["basis"] = {"finding_id": "invented"}
     monkeypatch.setattr(adapter, "_exception_route", forbidden)
-    monkeypatch.setattr(delivery.backend, "worker", forbidden)
-    result = cb["exception"](TARGET, ctx)
-    assert result["status"] == "pending" and result["requires_coordinator"] is True
+    monkeypatch.setattr(delivery.backend, "offload_fn", forbidden)
+    prep = ctx["prepare"]
+    packet, root = contracts.load_retained_packet(prep["packet_ref"])
+    snap = json.loads(Path(prep["snapshot_ref"]["path"]).read_bytes())
+    request = contracts.build_adjudication_request(
+        snap,
+        packet,
+        prep["packet_ref"],
+        basis={"source": row["source"], "criterion": row["criterion"]},
+        question="Does the supplied evidence satisfy the named original criterion?",
+        evidence_refs=row["evidence"],
+        retained_dir=root,
+    )
+    if not bound:
+        request["basis"] = {"finding_id": "invented"}
+    result = actual_worker(delivery, ctx, ctx["interpret"]["proposal"], request)
+    assert result["status"] == "pending"
+    assert result["requires_coordinator"] is bound
     assert result["source_owners"] == [row["source"]]
     assert result["authority"] is False
     identity = result["pending_evidence"].get("adjudication_request")
@@ -798,7 +834,7 @@ def test_owner_required_hold_retains_only_actually_bound_named_identity(
 # All runtime cases execute within InertCaller.staged's actual CLI-owned backend
 # frame and held scope. Pure disposition/mechanical tests above need no wrapper.
 for _name in (
-    "test_actual_exception_admission_refuses_before_route_or_worker",
+    "test_actual_exception_admission_refuses_before_route_or_provider",
     "test_actual_named_advice_merges_one_row_then_full_guard",
     "test_actual_strong_response_rejects_rebinding_and_broad_rewrites",
     "test_actual_worker_strong_prompt_is_one_data_only_question",

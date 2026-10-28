@@ -314,7 +314,9 @@ def _publication_configuration_selected(binding):
     consumers = field["config"].get("consumers")
     if type(consumers) is not dict:
         return True
-    return any(type(row) is not dict or "publication_v1" in row for row in consumers.values())
+    return any(
+        type(row) is not dict or publication.publication_key(row) for row in consumers.values()
+    )
 
 
 def attach_existing_root(backend, target, snapshot, operation, pipeline_context):

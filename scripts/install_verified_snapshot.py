@@ -52,6 +52,7 @@ OWNED_FILES = (
     "config/coverage-baseline.json",
     "config/test-shards.json",
     "config/model_epochs.json",
+    "closer_role_selection.json",
     "tools/make_test_shards.py",
 )
 GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", "htmlcov"}

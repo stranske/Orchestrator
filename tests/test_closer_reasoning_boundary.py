@@ -26,6 +26,33 @@ PROFILE = "claude-sonnet-5-5-low"
 controlled_world = _controlled_world
 
 
+def declared_report_assessment(prompt, declared_response, snapshot):
+    """Specific synthetic report implementation gold, emitted BEFORE sealing.
+
+    The fake GitHub source in this fixture supplies report.py with this exact
+    returning function. This is not a provider response or model-quality grade.
+    """
+    from closer_typed_semantic_broker_fixture import emit_assessment
+
+    import closer_disposition
+
+    proof = {
+        "kind": "codepatch",
+        "filename": "report.py",
+        "excerpt": "return 'original'",
+        "relevance": "The supplied synthetic report function preserves the declared exact original report output.",
+    }
+    gold = [
+        {"source": source, "criterion": text, "result": "PASS", "proofs": [proof]}
+        for source, text in closer_disposition._expected(snapshot)
+    ]
+    return emit_assessment(
+        prompt,
+        gold,
+        global_explanations=declared_response.get("substantive_needs", []),
+    )
+
+
 @pytest.fixture
 def native_world(tmp_path, monkeypatch, request):
     """Real CLI/backend/registry/coordinator; synthetic role and transport admission."""
@@ -178,8 +205,9 @@ def native_world(tmp_path, monkeypatch, request):
                     deadline=time.time(),
                 ):
                     pytest.fail("native reasoning did not hold the real shared pool")
+        typed = declared_report_assessment(prompt, response, snapshot)
         return inert_caller.response(
-            {"exit": 0, "output": json.dumps(response)}, agent, prompt, **kwargs
+            {"exit": 0, "output": json.dumps(typed)}, agent, prompt, **kwargs
         )
 
     monkeypatch.setattr(dispatcher, "offload", provider)
@@ -262,10 +290,10 @@ def test_missing_base_retains_evidence_gap_without_starting_controlled_model(nat
     row = state["frontiers"][w.frontier["frontier_id"]]["items"][TARGET]
     assert row["status"] != "completed", result
     assert "delivery:base_missing" in shard.read_text()
-    assert (
-        "reviewed controlled execution contract or original lease unavailable" in shard.read_text()
-    )
-    assert "unsupported_assessment_tool_boundary" in shard.read_text()
+    # Current host readiness reaches this genuine missing-base hold before
+    # any transport admission; do not require a later binary/role refusal.
+    assert row["results"]["interpret"]["classification"] == "evidence_pending"
+    assert row["results"]["interpret"]["authority"] is False
     protected_unchanged(w)
 
 

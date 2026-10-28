@@ -53,6 +53,17 @@ class TestExceptionRoute:
             return _make_capacity_report()
 
         monkeypatch.setattr(adapter, "_fresh_capacity_report", mock_fresh_report)
+        import closer_role_selection as selection
+        import execution_profiles
+
+        monkeypatch.setattr(
+            selection,
+            "candidates_for_agent",
+            lambda agent, role, transport, category=None, **kwargs: execution_profiles.profiles_for_agent(
+                agent, transport=transport
+            ),
+        )
+        monkeypatch.setattr(adapter, "_profile_exception_qualified", lambda *a, **kw: True)
 
     def test_route_function_exists(self):
         """Verify that _exception_route function exists."""
@@ -86,7 +97,9 @@ class TestExceptionRoute:
             monkeypatch.setattr(
                 execution_profiles,
                 "profiles_for_agent",
-                lambda agent, transport: [mock_profile] if agent != "aider" else [],
+                lambda agent, transport, include_explicit=False: (
+                    [mock_profile] if agent != "aider" else []
+                ),
             )
             monkeypatch.setattr(execution_profiles, "get_profile", lambda pid: mock_profile)
 
@@ -143,7 +156,9 @@ class TestExceptionRoute:
         monkeypatch.setattr(
             execution_profiles,
             "profiles_for_agent",
-            lambda agent, transport: [mock_profile] if agent != "aider" else [],
+            lambda agent, transport, include_explicit=False: (
+                [mock_profile] if agent != "aider" else []
+            ),
         )
         monkeypatch.setattr(execution_profiles, "get_profile", lambda pid: mock_profile)
 
@@ -185,7 +200,9 @@ class TestExceptionRoute:
         monkeypatch.setattr(
             execution_profiles,
             "profiles_for_agent",
-            lambda agent, transport: [mock_profile] if agent == "gemini" else [],
+            lambda agent, transport, include_explicit=False: (
+                [mock_profile] if agent == "gemini" else []
+            ),
         )
         monkeypatch.setattr(
             execution_profiles,
@@ -232,7 +249,9 @@ class TestExceptionRoute:
         monkeypatch.setattr(
             execution_profiles,
             "profiles_for_agent",
-            lambda agent, transport: [mock_profile] if agent != "aider" else [],
+            lambda agent, transport, include_explicit=False: (
+                [mock_profile] if agent != "aider" else []
+            ),
         )
         monkeypatch.setattr(execution_profiles, "get_profile", lambda pid: mock_profile)
 
@@ -306,7 +325,9 @@ TestExceptionCallbackIdentity.test_non_codex_exception_callback_identity = (
 
 
 class TestInterpretationCapacityDeferral:
-    def test_route_reservation_exhaustion_is_a_capacity_deferral(self, tmp_path, monkeypatch):
+    def test_route_reservation_exhaustion_is_a_capacity_deferral(
+        self, tmp_path, monkeypatch, controlled_world
+    ):
         from test_closer_dispatcher import (
             TARGET,
             FakeGitHub,
@@ -320,7 +341,7 @@ class TestInterpretationCapacityDeferral:
         import closer_resources
 
         postverify = snapshot()
-        postverify.update(state="MERGED", merge="d" * 40)
+        postverify.update(state="MERGED", merge="d" * 40, base="b" * 40)
         postverify["verifier"] = {
             "schema": "verifier-corpus-decision/v1",
             "verdict": "PASS",
@@ -337,6 +358,16 @@ class TestInterpretationCapacityDeferral:
         backend = adapter.Closer(fake_gh, state_path=tmp_path / "state.json")
         # This case begins after admission; never depend on the host's controller.
         monkeypatch.setattr(backend, "campaign_admission", lambda *_args: {"allowed": True})
+        from closer_inert_dispatcher_support import InertCaller
+
+        import closer_evidence
+
+        monkeypatch.setenv("HANDOFF_DIR", str(tmp_path / "handoff"))
+        monkeypatch.setenv("HOME", str(controlled_world.root / "private-home"))
+        caller = InertCaller(controlled_world, monkeypatch)
+        caller.activate()
+        packet, _ref, _gold = caller.packet(postverify, tmp_path / "state.json.evidence")
+        monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *a, **kw: packet)
         monkeypatch.setattr(adapter, "GitHub", lambda **_kwargs: fake_gh)
         callbacks = {}
 
@@ -417,7 +448,9 @@ class TestPipelineCapacity:
         monkeypatch.setattr(
             execution_profiles,
             "profiles_for_agent",
-            lambda agent, transport: [mock_profile] if agent == "gemini" else [],
+            lambda agent, transport, include_explicit=False: (
+                [mock_profile] if agent == "gemini" else []
+            ),
         )
 
         capacity = adapter._pipeline_capacity()
@@ -437,7 +470,11 @@ class TestPipelineCapacity:
         )
 
         # Mock execution_profiles
-        monkeypatch.setattr(execution_profiles, "profiles_for_agent", lambda agent, transport: [])
+        monkeypatch.setattr(
+            execution_profiles,
+            "profiles_for_agent",
+            lambda agent, transport, include_explicit=False: [],
+        )
 
         capacity = adapter._pipeline_capacity()
         assert capacity["exception"] == 0

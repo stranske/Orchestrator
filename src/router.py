@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import random
 import sys
@@ -40,6 +41,7 @@ from typing import Any, NotRequired, Tuple, TypedDict, Union
 import adapters
 import capabilities
 import claims
+import closer_role_selection
 import execution_profiles
 import feedback
 
@@ -292,15 +294,28 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
     return [profile for profile in profiles if profile["requested_model"] == expected_model]
 
 
-def _route_profiles(entry: RouteEntry, spec: RouteSpec, transport: str) -> list[dict]:
+def _route_profiles(
+    entry: RouteEntry,
+    spec: RouteSpec,
+    transport: str,
+    *,
+    category=None,
+    selection_policy=None,
+    independent_of_provider=None,
+) -> list[dict]:
     role = spec.get("closer_role")
     if role is not None:
         import closer_role_qualification as roles
 
         return [
             profile
-            for profile in execution_profiles.profiles_for_agent(
-                entry["agent"], transport=transport
+            for profile in closer_role_selection.candidates_for_agent(
+                entry["agent"],
+                role,
+                transport,
+                category,
+                policy=selection_policy,
+                independent_of_provider=independent_of_provider,
             )
             if adapters.automatic_profile_within_cap(profile)
             and roles.is_runtime_qualified(profile, role)
@@ -647,6 +662,8 @@ def select_agent(
     causal_context: dict | None = None,
     profile_transport: str = "local",
     simulate: bool = False,
+    closer_category: str | None = None,
+    independent_of_provider: str | None = None,
 ):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
@@ -671,6 +688,28 @@ def select_agent(
         return None
     load = load or {}
     neutral = bool(spec.get("neutral_prior"))
+    selection_policy = None
+    if neutral:
+        try:
+            selection_policy = closer_role_selection.load_policy()
+            if (
+                closer_role_selection.category_spec(
+                    spec["closer_role"], closer_category, selection_policy
+                )
+                is None
+            ):
+                return None
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            # Policy contents, paths and exception messages are not diagnostic data.
+            failure_kind = next(
+                kind.__name__
+                for kind in (OSError, ValueError, TypeError, KeyError)
+                if isinstance(error, kind)
+            )
+            logging.getLogger(__name__).warning(
+                "closer selection policy unavailable (%s)", failure_kind
+            )
+            return None
     if neutral and learned is None:
         learned = {
             entry["agent"]: {"rank": 0, "n_obs": 0, "posterior": 0.5, "score": 0.5}
@@ -699,7 +738,14 @@ def select_agent(
         raw_agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
-        agent_profiles = _route_profiles(entry, spec, profile_transport)
+        agent_profiles = _route_profiles(
+            entry,
+            spec,
+            profile_transport,
+            category=closer_category,
+            selection_policy=selection_policy,
+            independent_of_provider=independent_of_provider,
+        )
         if neutral and not agent_profiles:
             continue
         if (
@@ -713,7 +759,17 @@ def select_agent(
         if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
             entry.get("mode")
         ):
-            agent_profiles = []
+            if neutral:
+                expected_model = adapters.resolve_model(
+                    "codex", adapters.effective_tier("codex", entry.get("mode"))
+                )
+                agent_profiles = [
+                    p
+                    for p in agent_profiles
+                    if expected_model and p["requested_model"] == expected_model
+                ]
+            else:
+                agent_profiles = []
         elif entry["agent"] == "codex" and not neutral:
             preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
             agent_profiles = [p for p in agent_profiles if p["profile_id"] == preferred]
@@ -752,7 +808,7 @@ def select_agent(
         )  # 16(e): continuous pacing within the tier
         # Stable table rank is the legacy learned-rank fallback.
         score = score + (
-            _learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx,
+            (_learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx),
         )
         scored.append((score, entry, st, idx))
     if not scored:
@@ -811,7 +867,10 @@ def select_agent(
                 "cold_start": cold_start,
                 "evidence_state": (
                     "sparse"
-                    if max((_learned_n_obs(learned, e["agent"]) for e in spec["agents"]), default=0)
+                    if max(
+                        (_learned_n_obs(learned, e["agent"]) for e in spec["agents"]),
+                        default=0,
+                    )
                     < feedback.PRIOR_STRENGTH
                     else "observed"
                 ),
@@ -821,7 +880,14 @@ def select_agent(
             else {}
         ),
     }
-    profiles = _route_profiles(entry, spec, profile_transport)
+    profiles = _route_profiles(
+        entry,
+        spec,
+        profile_transport,
+        category=closer_category,
+        selection_policy=selection_policy,
+        independent_of_provider=independent_of_provider,
+    )
     if (
         entry["agent"] == "gemini"
         and not profiles
@@ -834,13 +900,25 @@ def select_agent(
         # Model health may change since admission (for example a catalog refresh).
         # Never turn that disappearance into an unprofiled local dispatch.
         return None
+    if neutral and not profiles:
+        return None
     if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
         entry.get("mode")
     ):
-        profiles = []
-        result["reasoning_effort"] = execution_profiles.get_profile(
-            execution_profiles.default_codex_profile(task_type, entry.get("mode"))
-        )["reasoning_effort"]
+        if neutral:
+            expected_model = adapters.resolve_model(
+                "codex", adapters.effective_tier("codex", entry.get("mode"))
+            )
+            profiles = [
+                p for p in profiles if expected_model and p["requested_model"] == expected_model
+            ]
+            if not profiles:
+                return None
+        else:
+            profiles = []
+            result["reasoning_effort"] = execution_profiles.get_profile(
+                execution_profiles.default_codex_profile(task_type, entry.get("mode"))
+            )["reasoning_effort"]
     elif entry["agent"] == "codex" and not neutral:
         preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
         profiles = [profile for profile in profiles if profile["profile_id"] == preferred]
@@ -893,6 +971,14 @@ def select_agent(
         if not envelope["selected_profile_id"]:
             return None
         selected = execution_profiles.get_profile(envelope["selected_profile_id"])
+        if neutral:
+            scope = closer_role_selection.quality_scope(
+                selected, spec["closer_role"], closer_category, policy=selection_policy
+            )
+            if scope is None:
+                return None
+            result["closer_selection"] = scope
+            result["requested_provider"] = selected["provider"]
         result.update(
             {
                 "selected_profile_id": selected["profile_id"],

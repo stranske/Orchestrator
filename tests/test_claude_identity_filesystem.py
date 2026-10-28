@@ -641,11 +641,12 @@ def test_real_retention_barrier_reaches_closer_interpret_uncertainty(
 ):
     import time
 
-    from closer_inert_dispatcher_support import LOW, InertCaller
+    from closer_inert_dispatcher_support import InertCaller
     from test_closer_dispatcher import FakeGitHub, adapter, closer, snapshot
 
     import closer_evidence
     import closer_pipeline
+    import execution_profiles
 
     monkeypatch.setenv("HOME", str(controlled_world.root / "private-home"))
     monkeypatch.setenv("HANDOFF_DIR", str(controlled_world.root / "private-handoff"))
@@ -707,7 +708,17 @@ def test_real_retention_barrier_reaches_closer_interpret_uncertainty(
     monkeypatch.setattr(closer_pipeline, "run_pipeline", pipeline_stub)
     args = SimpleNamespace(state=str(tmp_path / "pipeline-state.json"), max_workers=1, shadow=False)
     caller.staged(args, [target], backend, time.time() + 180)
-    assert calls == [("claude", LOW)] and len(caller.results) == 1
+    assert len(calls) == len(caller.results) == 1
+    selected = execution_profiles.get_profile(calls[0][1])
+    import closer_role_qualification as roles
+    import closer_role_selection as selection
+
+    assert calls[0][0] == selected["agent"] == "claude"
+    assert roles.is_runtime_qualified(selected, roles.BOUNDED_CLASSIFICATION)
+    assert selection.quality_scope(selected, roles.BOUNDED_CLASSIFICATION, "ordinary_static")
+    observed = json.loads(controlled_world.capture.read_text())
+    assert observed["argv"][observed["argv"].index("--model") + 1] == selected["requested_model"]
+    assert observed["argv"][observed["argv"].index("--effort") + 1] == selected["reasoning_effort"]
     assert controlled_world.events["auth"] == controlled_world.events["auth_closed"] == 1
     assert not backend.gh.calls
 

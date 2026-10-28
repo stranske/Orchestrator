@@ -42,6 +42,14 @@ def http_seam(tmp_path, monkeypatch):
     (seam / "sitecustomize.py").write_text("""
 import io,json,os,time,urllib.request,urllib.error
 from http.client import HTTPMessage
+from pathlib import Path
+original_read_bytes=Path.read_bytes
+def delayed_loader_read(path):
+    if str(path)==os.environ.get("CORE_HTTP_SLOW_LOADER"):
+        time.sleep(2)
+    return original_read_bytes(path)
+Path.read_bytes=delayed_loader_read
+time.sleep(float(os.environ.get("CORE_HTTP_BOOT_DELAY","0")))
 
 def opener(request, *, timeout):
     with open(os.environ["CORE_HTTP_AUDIT"],"a") as stream:
@@ -84,17 +92,41 @@ def test_http_status_headers_retained_without_body(bundle, http_seam, monkeypatc
     assert len(http_seam.read_text().splitlines()) == 1
 
 
-def test_hung_response_killed_once_by_original_request_window(bundle, http_seam, monkeypatch):
+@pytest.mark.parametrize("bootstrap_delay", [0, 2])
+def test_hung_response_killed_once_by_original_request_window(
+    bundle, http_seam, monkeypatch, bootstrap_delay
+):
+    monkeypatch.setenv("CORE_HTTP_BOOT_DELAY", str(bootstrap_delay))
     monkeypatch.setenv("CORE_HTTP_DELAY", "5")
+    spawned = []
+    original_popen = dispatcher.subprocess.Popen
+
+    def record_spawn(*args, **kwargs):
+        child = original_popen(*args, **kwargs)
+        spawned.append(child.pid)
+        return child
+
+    monkeypatch.setattr(dispatcher.subprocess, "Popen", record_spawn)
     started = time.monotonic()
     with resources.inventory_request(time.time() + 1.2):
         with pytest.raises(subprocess.TimeoutExpired):
             rb._CoreHTTPTransport(bundle)("GET", "/repos/owner/repo", None)
     assert time.monotonic() - started < 3.5
-    rows = [json.loads(line) for line in http_seam.read_text().splitlines()]
-    assert len(rows) == 1
+    # The original window also covers interpreter/Core bootstrap. A child killed
+    # there has made zero HTTP attempts; it must still be reaped without retry.
+    rows = (
+        [json.loads(line) for line in http_seam.read_text().splitlines()]
+        if http_seam.exists()
+        else []
+    )
+    assert len(spawned) == 1
+    assert len(rows) <= 1
+    if bootstrap_delay:
+        assert rows == []
+    if rows:
+        assert rows[0]["pid"] == spawned[0]
     with pytest.raises(ProcessLookupError):
-        os.kill(rows[0]["pid"], 0)
+        os.kill(spawned[0], 0)
 
 
 def test_expired_request_refuses_before_spawn(bundle, http_seam):
@@ -172,6 +204,7 @@ def test_finite_pool_observes_exact_request_and_resolves_only_reaped_group(
     root = tmp_path / "pool-root"
     if hang:
         monkeypatch.setenv("CORE_HTTP_DELAY", "5")
+        monkeypatch.setenv("CORE_HTTP_SLOW_LOADER", str(Path(rb.__file__).resolve()))
     with resources.pool_slot(
         root,
         "io",
@@ -205,7 +238,12 @@ def test_finite_pool_observes_exact_request_and_resolves_only_reaped_group(
         assert row["run_id"].startswith("core-http-")
         # This resolves local request-process capacity ONLY; no assertion of a
         # remote effect or Core/queue operation completion is inferred.
-    assert len(http_seam.read_text().splitlines()) == 1
+    if hang:
+        assert not http_seam.exists()  # the original deadline expires in loader bootstrap
+        with pytest.raises(ProcessLookupError):
+            os.killpg(row["process_group"], 0)
+    else:
+        assert len(http_seam.read_text().splitlines()) == 1
 
 
 def test_loaded_bootstrap_replacement_refused_before_request(bundle, http_seam, tmp_path):
@@ -292,7 +330,12 @@ def test_rate_classification_requires_strict_boolean(bundle, http_seam, monkeypa
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT"])
-def test_http_child_self_deadline_without_parent_watchdog(bundle, http_seam, monkeypatch, method):
+@pytest.mark.parametrize("slow_loader", [False, True])
+def test_http_child_self_deadline_without_parent_watchdog(
+    bundle, http_seam, monkeypatch, method, slow_loader, record_property
+):
+    if slow_loader:
+        monkeypatch.setenv("CORE_HTTP_SLOW_LOADER", str(Path(rb.__file__).resolve()))
     monkeypatch.setenv("CORE_HTTP_DELAY", "2")
     deadline = time.monotonic() + 0.8
     path = (
@@ -320,19 +363,37 @@ def test_http_child_self_deadline_without_parent_watchdog(bundle, http_seam, mon
     started = time.monotonic()
     # No production supervisor here. Harness3s is only a test runaway guard;
     # the child must independently stop at the captured0.8s absolute deadline.
-    done = subprocess.run(
+    with subprocess.Popen(
         [sys.executable, "-c", rb._CORE_HTTP_CHILD, str(deadline)],
-        input=json.dumps(packet),
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=3,
-    )
-    assert done.returncode == -signal.SIGALRM
+    ) as child:
+        try:
+            child.communicate(json.dumps(packet), timeout=3)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+            raise
+    assert child.returncode == -signal.SIGALRM
     assert time.monotonic() - started < 1.5
-    rows = [json.loads(line) for line in http_seam.read_text().splitlines()]
-    assert len(rows) == 1 and rows[0]["method"] == method
+    # Child SIGALRM covers loader/Core bootstrap as well as response reads.
+    # The HTTP audit cannot identify a child that died before its first request.
+    rows = (
+        [json.loads(line) for line in http_seam.read_text().splitlines()]
+        if http_seam.exists()
+        else []
+    )
+    record_property("http_attempt_count", len(rows))
+    record_property("reaped_child_pid", child.pid)
+    assert len(rows) <= 1
+    if slow_loader:
+        assert rows == []
+    if rows:
+        assert rows[0]["method"] == method and rows[0]["pid"] == child.pid
     with pytest.raises(ProcessLookupError):
-        os.kill(rows[0]["pid"], 0)
+        os.kill(child.pid, 0)
 
 
 @pytest.mark.parametrize("deadline", ["expired", "nan", "inf", "long"])

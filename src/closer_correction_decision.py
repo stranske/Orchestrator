@@ -109,6 +109,29 @@ def _materialize_selected(
 
     accounting = None
     try:
+        if (proof.get("expected") or {}).get("task_type") == "closer_exception":
+            import closer_conservative_intake as intake
+
+            _packet, root = intake.contracts_packet(retained_packet_ref)
+            document = closer._read_controlled_receipt(request_ref, root)
+            if not intake.is_invitation_request(document):
+                raise DecisionUnavailable("named proof is not a source invitation request")
+            return intake.materialize_invitation(
+                document=document,
+                proof=proof,
+                run_id=run_id,
+                basis=basis,
+                receipt_root=receipt_root,
+                profile_id=profile_id,
+                request_ref=request_ref,
+                original_request=original_request,
+                seed_bundle=seed_bundle,
+                source_body=source_body,
+                raw_findings=raw_findings,
+                retained_packet_ref=retained_packet_ref,
+                now=now,
+                persist=_persist,
+            )
         inputs, request, prompt, bound_basis, root = producer.prepare(
             original_request=original_request,
             seed_bundle=seed_bundle,

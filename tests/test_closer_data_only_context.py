@@ -2,6 +2,7 @@
 
 import copy
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from test_closer_reasoning_boundary import controlled_world as controlled_world
@@ -285,9 +286,7 @@ def test_request_and_section_content_share_one_budget(request_only_packet):
     assert request["content_supplied"] is False and "content" not in request
 
 
-def test_real_native_prompt_supplies_full_nonissue_request_beyond_optional_sample(
-    native_world, capsys
-):
+def test_unstructured_nonissue_body_survives_before_typed_inventory_hold(native_world, capsys):
     import json
 
     w = native_world
@@ -314,19 +313,34 @@ def test_real_native_prompt_supplies_full_nonissue_request_beyond_optional_sampl
     )
     w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(frontier)
     cd.main(w.argv)
-    capsys.readouterr()
-    assert w.events["provider"] == 1
+    result = json.loads(capsys.readouterr().out)
+    row = result["targets"][w.snapshot["target"]]["results"]
+    # No source obligation inventory exists for this unstructured nonissue.
+    # Keep the complete original body as host input without inventing Tasks/AC
+    # or running a model under an unavailable typed catalog.
+    assert row["interpret"]["reason"] == "action_evidence_not_ready"
+    assert w.events["provider"] == 0 and not w.events["prompts"]
     assert w.events["effect"] == 0
-    prompt = w.events["prompts"][0]
-    mandatory = json.JSONDecoder().raw_decode(prompt[prompt.index('{"mandatory":') :])[0][
-        "mandatory"
-    ]
-    request = mandatory["data_only_evidence"]["current_request"]
+    prep = row["prepare"]
+    retained_snapshot = json.loads(Path(prep["snapshot_ref"]["path"]).read_bytes())
+    packet = json.loads(Path(prep["packet_ref"]["path"]).read_bytes())
+    context = cd.data_only_evidence_context(
+        packet,
+        snapshot=retained_snapshot,
+        readiness=ce.action_evidence_readiness(
+            retained_snapshot,
+            packet,
+            (prep.get("proposal") or {}).get("action", "collect_evidence"),
+            retained_dir=Path(prep["packet_ref"]["path"]).parent.parent,
+        ),
+        retained_dir=Path(prep["packet_ref"]["path"]).parent.parent,
+    )
+    request = context["current_request"]
     assert request["content_supplied"] is True
     assert request["content"]["body"] == w.snapshot["body"]
     assert request["content"]["title"] == w.snapshot["title"]
-    assert "EXACT_REQUEST_TAIL" in prompt
-    assert "explicit snapshot below" not in prompt
+    assert "EXACT_REQUEST_TAIL" in request["content"]["body"]
+    assert "explicit snapshot below" not in json.dumps(request)
     assert all(path.read_bytes() == original for path, original in w.originals.items())
 
 
@@ -495,3 +509,17 @@ def test_native_interpret_maps_only_proven_no_spawn_transport_refusal(
         assert profile_slots
         assert all(json.loads(path.read_text())["status"] == "resolved" for path in profile_slots)
     assert all(path.read_bytes() == raw for path, raw in w.originals.items())
+
+
+@pytest.fixture(autouse=True)
+def synthetic_transport_quality_boundary(monkeypatch):
+    # This module varies transport/capacity under synthetic runtime role facts;
+    # the actual cohort/null bindings are covered by the real-policy controls.
+    from test_closer_neutral_routing import synthetic_quality_boundary
+
+    import closer_role_qualification as roles
+    import closer_role_selection as selection
+
+    synthetic_quality_boundary.__wrapped__(monkeypatch)
+    policy = selection.load_policy()
+    policy["categories"]["ordinary_static"] = policy["categories"][roles.BOUNDED_CLASSIFICATION]

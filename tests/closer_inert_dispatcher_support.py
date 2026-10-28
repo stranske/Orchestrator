@@ -133,6 +133,16 @@ class InertCaller:
 
     def activate(self):
         patch, world = self.patch, self.world
+        # This caller already issues synthetic runtime/auth/capacity facts. Its
+        # staged/native tests isolate those mechanisms, not the real quality
+        # cohort. Production policy bytes and real-policy tests are untouched.
+        from test_closer_neutral_routing import synthetic_quality_boundary
+
+        import closer_role_selection as selection
+
+        synthetic_quality_boundary.__wrapped__(patch)
+        policy = selection.load_policy()
+        policy["categories"]["ordinary_static"] = policy["categories"][roles.BOUNDED_CLASSIFICATION]
         patch.setitem(sys.modules, "dispatcher", dispatcher)
         patch.setattr(adapters, "DATA_ONLY_CLAUDE_SHA256", self.binary)
         patch.setattr(execution, "CLAUDE_BINARY_SHA256", self.binary)
@@ -986,8 +996,16 @@ class InertCaller:
         )
 
     def interpretation(self, snap, packet, ref, proposal, *, native_mode=None):
+        if "semantic_assessment" in proposal or "actual" in proposal:
+            raise ValueError("fresh declared fixture gold required; never re-emit an actual answer")
+        from closer_typed_semantic_broker_fixture import emit_assessment
+
         import closer_model_contracts as model
         import closer_resources as resources
+        import closer_semantic_assessment as semantic
+
+        root = Path(ref["path"]).parent.parent
+        inventory = semantic.catalog_input(snap, packet, ref, root)
 
         readiness = evidence.action_evidence_readiness(
             snap, packet, "collect_evidence", retained_dir=Path(ref["path"]).parent.parent
@@ -1011,6 +1029,13 @@ class InertCaller:
             artifact_rows={},
             data_only=True,
             readiness=readiness,
+            semantic_inventory=inventory,
+        )
+        synthetic = emit_assessment(
+            prompt,
+            proposal["decision"]["criteria"],
+            global_explanations=proposal.get("substantive_needs", []),
+            finding_gold=proposal.get("resolutions", ()),
         )
         frontier = self.frontier({snap["target"]: snap})
         with resources.pool_slot(
@@ -1041,10 +1066,11 @@ class InertCaller:
                     "head": snap["head"],
                     "base": snap["base"],
                     "packet_sha256": ref["sha256"],
+                    "semantic_catalog_sha256": semantic.catalog_digest(inventory),
                 },
                 deadline=time.time() + 30,
                 offload=lambda agent, prompt, **kwargs: self.response(
-                    {"exit": 0, "output": json.dumps(proposal), "_native_mode": native_mode},
+                    {"exit": 0, "output": json.dumps(synthetic), "_native_mode": native_mode},
                     agent,
                     prompt,
                     **kwargs,
@@ -1054,9 +1080,18 @@ class InertCaller:
         if native_mode is not None:
             return result
         assert result["exit"] == 0, result
+        canonical, followup = semantic.adjudication_candidate(
+            closer._worker_proposal(result, agent="claude"),
+            snapshot=snap,
+            packet=packet,
+            packet_ref=ref,
+            retained_dir=root,
+            expected_catalog_sha256=semantic.catalog_digest(inventory),
+        )
+        canonical["semantic_followup"] = followup
         return {
             "actual": closer._worker_actual(result),
-            "proposal": closer._worker_proposal(result, agent="claude"),
+            "proposal": canonical,
             "requested_agent": "claude",
             "requested_profile": LOW,
             "substantive_needs": [],

@@ -4472,9 +4472,21 @@ def offload(
                 out["agent_log_tail"] = agent_log_tail
             return out
         except OSError as exc:
+            try:
+                import closer_queue
+
+                read_diagnostic = closer_queue._native_read_failure(exc)
+            except Exception:
+                # Optional diagnostics must never replace the original failure.
+                read_diagnostic = None
             return {
                 "agent": agent,
                 "exit": 126,
+                **(
+                    {"read_only_deadline_diagnostic": read_diagnostic}
+                    if read_diagnostic is not None
+                    else {}
+                ),
                 "output": "",
                 "error": f"process start failed: {exc}",
                 "cwd": str(run_cwd),

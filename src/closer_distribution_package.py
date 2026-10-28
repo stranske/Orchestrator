@@ -102,6 +102,10 @@ def build_public_runtime_descriptor(
     if not _SHA.fullmatch(candidate_sha):
         raise ValueError("candidate_sha must be a 40-char lowercase git SHA")
     digests = module_digests(module_dir, modules)
+    if "closer_role_selection.py" in digests:
+        import closer_role_selection as selection
+
+        selection._policy_bytes(selection.policy_path(module_dir))
     launcher = {
         "version": LAUNCHER_VERSION,
         "module": "closer_launcher.py",
@@ -214,6 +218,11 @@ def materialize_runtime_tree(
     problems = validate_public_runtime_descriptor(descriptor)
     if problems:
         raise DistributionPackageError("; ".join(problems))
+    import closer_role_selection as selection
+
+    # The Python source pin contains the expected data SHA. Do not introduce an
+    # unbound manifest field or a config directory inside the flat native image.
+    policy = selection._policy_bytes(selection.policy_path(module_dir))
     dest = dest.resolve()
     if dest.exists():
         raise DistributionPackageError(
@@ -226,6 +235,8 @@ def materialize_runtime_tree(
         shutil.copy2(src, target)
         if sha256_file(target) != digest:
             raise DistributionPackageError(f"materialized digest mismatch: {name}")
+    (dest / selection.POLICY_FILENAME).write_bytes(policy)
+    selection._policy_bytes(dest / selection.POLICY_FILENAME)
     (dest / "closer-runtime-package.json").write_text(
         json.dumps(dict(descriptor), indent=2, sort_keys=True) + "\n"
     )

@@ -307,7 +307,7 @@ def terminal_origin_from_pr(repo, pr, decision):
         body, url = comment.get("body"), comment.get("url")
         match = exact.fullmatch(url.lower()) if isinstance(url, str) else None
         if (
-            author.get("login") != "github-actions[bot]"
+            author.get("login") not in TRUSTED_AUTHORS
             or author.get("__typename") != "Bot"
             or not isinstance(body, str)
             or len(body.encode()) > 65536

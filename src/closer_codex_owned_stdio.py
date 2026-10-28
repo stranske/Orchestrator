@@ -134,11 +134,12 @@ class SourceReader(ctl.NativeConsumerReader):
         raise BootstrapHeld("actual_worker_reader_factory_required")
 
     def read_native_identity(self):
-        _reader_live(self)
         session = next((s for s in _SESSIONS.values() if s.reader is self), None)
-        _need(session is not None and session.phase in {"metadata", "final", "turn"})
-        session.check()
+        _need(type(session) is _OwnedSession and session.phase in {"metadata", "final", "turn"})
+        # The fixed refresh owns its full entry check. Recheck after native I/O
+        # before returning identity; no native observation is reused as a permit.
         _refresh_identity(session)
+        session.check()
         _need(session.protocol.snapshot()["native_claim_identity_match_present"])
         return {
             "account_id": session.protocol._native_account_id,
@@ -146,17 +147,18 @@ class SourceReader(ctl.NativeConsumerReader):
         }
 
     def verify_installed_confinement(self, *, command, cwd, env, custody_path):
-        _reader_live(self)
         session = next((s for s in _SESSIONS.values() if s.reader is self), None)
-        _need(session is not None)
-        session.check()
+        _need(type(session) is _OwnedSession)
         _need(
             list(session.route.transport_argv) == command
             and cwd == session.route.cwd
             and env == dict(session.route.environment)
             and custody_path == session.guard.custody.path
         )
+        # The actual source observer checks the full session before its fixed
+        # RPCs. Recheck even its cached-witness path after the fresh observation.
         _observe_effective_confinement(session)
+        session.check()
 
 
 def _observe_effective_confinement(session):
@@ -246,6 +248,9 @@ def prepare(frame, guard, argv, cwd, profile):
         and runtime._HISTORY_RESTRICTIONS.get((threading.get_ident(), frame)) is guard
     )
     _reader_live(guard.reader)
+    import closer_coding_publication as publication
+
+    publication.validate_coding_workspace(frame, cwd)
     reg = guard.controller.config.consumers[guard.consumer_id]
     import closer_coding_session_v2 as session_contract
     import execution_profiles
@@ -572,10 +577,14 @@ class _OwnedSession:
             and self.pid == os.getpid()
             and _SESSIONS.get((self.thread, self.frame)) is self
             and self.guard.active
+            and self.reader is self.guard.reader
+            and type(self.route) is BootstrapRoute
+            and self.route.guard is self.guard
         )
-        _reader_live(self.reader)
         self.guard.controller._require_writer(self.guard.operation, self.guard.custody)
         self.guard.controller.live(self.guard.operation)
+        # verify_route authenticates the same reader/root, then checks the held
+        # route/confinement/physical identities; no external effect precedes it.
         verify_route(self.route)
 
 

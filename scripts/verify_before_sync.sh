@@ -206,6 +206,7 @@ for label, path in (
     ("mirror/config/coverage-baseline.json", src / "config/coverage-baseline.json"),
     ("mirror/config/test-shards.json", src / "config/test-shards.json"),
     ("mirror/config/model_epochs.json", src / "config/model_epochs.json"),
+    ("mirror/closer_role_selection.json", src / "config/closer_role_selection.json"),
     ("mirror/.verify-floor.json", src / ".verify-floor.json"),
     ("mirror/CLAUDE.md", src / "CLAUDE.md"),
     ("mirror/AGENTS.md", src / "AGENTS.md"),

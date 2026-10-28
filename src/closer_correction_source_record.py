@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SCHEMA = "closer-correction-source-decision/v1"
+INVITATION_SCHEMA = "closer-correction-source-invitation/v1"
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -407,7 +408,7 @@ def terminal_operation_links(cfg, start_ref, process):
                 old_row = old_entry["items"][target]
                 correction = old_row["results"]["exception"]["correction"]
                 _need(
-                    record.get("schema") == SCHEMA
+                    record.get("schema") in {SCHEMA, INVITATION_SCHEMA}
                     and record.get("issuer_source_sha256") == _source_sha()
                     and record.get("anchor") == str(anchor)
                     and frame["frontier"] == frontier
@@ -450,6 +451,25 @@ def terminal_operation_links(cfg, start_ref, process):
 
 
 def _ordinary_selected(materialized, original):
+    import closer_conservative_intake as intake
+
+    if materialized.get("kind") == intake.INVITATION_DECISION:
+        decision = materialized.get("decision") or {}
+        _need(
+            decision.get("schema") == intake.INVITATION_DECISION
+            and decision.get("request_sha256") == original["request_sha256"]
+            and decision.get("provider_generation_performed") is False
+            and decision.get("acceptance_authority") is False
+            and decision.get("mechanical_repair_authority") is False
+            and decision.get("security_clearance") is False
+            and decision.get("authority") is False
+            and materialized.get("proof_role") == "named_criterion_basis"
+            and materialized.get("proof", {}).get("expected", {}).get("task_type")
+            == "closer_exception"
+            and materialized.get("basis_provider_run_id") == materialized["proof"]["run_id"],
+            "source invitation acquired risk or acceptance authority",
+        )
+        return
     rows = materialized.get("decision", {}).get("findings")
     _need(isinstance(rows, list), "source classifier decision inventory missing")
     selected = [row for row in rows if row.get("id") == original["finding"]["id"]]
@@ -571,7 +591,11 @@ def retain_original_decision(
     intent_ref = _reference(parent / (key + ".correction-intent.json"), parent_fd)
     link_ref = _reference(parent / (key + ".correction-result.json"), parent_fd)
     record = {
-        "schema": SCHEMA,
+        "schema": (
+            INVITATION_SCHEMA
+            if materialized.get("kind") == "closer-source-corrective-invitation/v1"
+            else SCHEMA
+        ),
         "issuer_source_sha256": _source_sha(),
         "identity": intent["identity"],
         "anchor": intent["anchor"],
@@ -587,8 +611,17 @@ def retain_original_decision(
         "owner_semantics_sha256": bridge._owner_semantic_digest(
             intent["original_request"], intent["inputs"]
         ),
-        "classifier_decision_sha256": bridge.contract.digest(materialized["decision"]),
-        "classifier_run_id": materialized["actual"]["run_id"],
+        **(
+            {
+                "invitation_decision_sha256": bridge.contract.digest(materialized["decision"]),
+                "basis_provider_run_id": materialized["basis_provider_run_id"],
+            }
+            if materialized.get("kind") == "closer-source-corrective-invitation/v1"
+            else {
+                "classifier_decision_sha256": bridge.contract.digest(materialized["decision"]),
+                "classifier_run_id": materialized["actual"]["run_id"],
+            }
+        ),
     }
     owner._current(context, preparation, now=time.time())
     check()
@@ -609,7 +642,7 @@ def original_decision_reference(path, parent_fd, identity, intent_sha):
     except FileNotFoundError:
         return None
     _need(
-        record.get("schema") == SCHEMA
+        record.get("schema") in {SCHEMA, INVITATION_SCHEMA}
         and record.get("identity") == identity
         and record.get("issuer_source_sha256") == _source_sha()
         and record.get("intent_ref", {}).get("sha256") == intent_sha,
@@ -808,17 +841,30 @@ def _qualified_owner_projection(context, row, snapshot, packet, root, *, histori
         "base": snapshot["base"],
         "packet_sha256": prep["packet_ref"]["sha256"],
     }
-    low, low_proof = owner._stage(
-        context["interpret"],
-        task="closer_interpret",
-        basis=basis,
-        operation_id=row["stage_results"]["interpret"]["work_key"],
-        now=(
-            time.time()
-            if not historical
-            else retained_provider_time(context["interpret"]["actual"]["_closer_controlled_proof"])
-        ),
-    )
+    if context["interpret"].get("actual", {}).get("kind") == "source_native_conservative_inventory":
+        import closer_conservative_intake as intake
+
+        low, low_proof = intake.original_low(
+            context["interpret"],
+            context=context,
+            row=row,
+            snapshot=snapshot,
+            packet_ref=prep["packet_ref"],
+        )
+    else:
+        low, low_proof = owner._stage(
+            context["interpret"],
+            task="closer_interpret",
+            basis=basis,
+            operation_id=row["stage_results"]["interpret"]["work_key"],
+            now=(
+                time.time()
+                if not historical
+                else retained_provider_time(
+                    context["interpret"]["actual"]["_closer_controlled_proof"]
+                )
+            ),
+        )
     strong_stage = context["exception"]
     strong_basis = strong_stage["actual"]["_closer_controlled_proof"]["expected"]["basis"]
     _need(
@@ -934,7 +980,7 @@ def _read_local_facts(context, ref, *, require_current_deadline):
 
     record = closer._read_controlled_receipt(ref, root)
     _need(
-        record.get("schema") == SCHEMA
+        record.get("schema") in {SCHEMA, INVITATION_SCHEMA}
         and record.get("issuer_source_sha256") == _source_sha()
         and record.get("anchor") == str(root)
         and record.get("original_frame", {}).get("state_path") == context["state_path"],
@@ -988,8 +1034,21 @@ def _read_local_facts(context, ref, *, require_current_deadline):
     )
     _need(
         materialized.get("status") == "materialized"
-        and bridge.contract.digest(materialized["decision"]) == record["classifier_decision_sha256"]
-        and materialized["actual"]["run_id"] == record["classifier_run_id"],
+        and (
+            (
+                record["schema"] == INVITATION_SCHEMA
+                and materialized.get("kind") == "closer-source-corrective-invitation/v1"
+                and bridge.contract.digest(materialized["decision"])
+                == record["invitation_decision_sha256"]
+                and materialized["basis_provider_run_id"] == record["basis_provider_run_id"]
+            )
+            or (
+                record["schema"] == SCHEMA
+                and bridge.contract.digest(materialized["decision"])
+                == record["classifier_decision_sha256"]
+                and materialized["actual"]["run_id"] == record["classifier_run_id"]
+            )
+        ),
         "current original classifier proof unavailable",
     )
     _ordinary_selected(materialized, original)
@@ -1505,3 +1564,38 @@ def execute_candidate(candidate, operation):
             "failure_diagnostic": diagnostic,
             **({"first_failure_diagnostic": first_failure} if first_failure is not None else {}),
         }
+
+
+def original_provider_proofs(context, materializer):
+    """Legacy three runs, or exactly one named basis for a source invitation.
+
+    A host inventory is recomputed; it is never appended as a provider proof.
+    This does not grant effect authority or renew any original observation.
+    """
+    import closer_conservative_intake as intake
+    import closer_dispatcher as closer
+
+    if context["interpret"].get("actual", {}).get("kind") != intake.KIND:
+        return [
+            context[stage]["actual"]["_closer_controlled_proof"]
+            for stage in ("interpret", "exception")
+        ] + [materializer["proof"]]
+    prep, snapshot, packet, root = _prepared(context)
+    document = closer._read_controlled_receipt(materializer["request_ref"], root)
+    _need(
+        intake.is_invitation_request(document)
+        and document["original_request"] == materializer["original_request"]
+        and document["strong_stage"]["actual"] == context["exception"]["actual"]
+        and materializer["proof"] == context["exception"]["actual"]["_closer_controlled_proof"]
+        and materializer["proof"]["expected"]["task_type"] == "closer_exception",
+        "source invitation actual provider inventory differs",
+    )
+    row = intake.original_row(context)
+    intake.original_low(
+        context["interpret"],
+        context=context,
+        row=row,
+        snapshot=snapshot,
+        packet_ref=prep["packet_ref"],
+    )
+    return [materializer["proof"]]

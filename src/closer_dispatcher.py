@@ -119,9 +119,13 @@ def _controlled_model_contract(task_type):
         "dispatcher",
         "adapters",
         "closer_data_only_execution",
+        "closer_claude_role_admission",
         "transport_saved_result",
         "transport_qualification",
         "closer_model_contracts",
+        "closer_role_selection",
+        "closer_semantic_assessment",
+        "router",
         "closer_execution_contracts",
         "closer_adjudication_policy",
         "closer_disposition",
@@ -142,7 +146,6 @@ def _controlled_model_contract(task_type):
             "closer_correction_ownership",
             "closer_campaign",
             "verifier_evidence",
-            "router",
         )
     for name in selected_sources:
         module = importlib.import_module(name)
@@ -156,7 +159,9 @@ def _controlled_model_contract(task_type):
             raise ControlledOriginUnavailable("controlled source changed during read")
         sources[name + ".py"] = hashlib.sha256(raw).hexdigest()
     import closer_execution_contracts as contracts
+    import closer_role_selection as selection
 
+    sources["config/closer_role_selection.json"] = selection.policy_sha256()
     descriptor = {
         "schema": "closer-production-model-contract/v1",
         "role": role,
@@ -201,11 +206,7 @@ def _controlled_prompt_size(prompt, limits):
 
 def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier, target, prompt):
     """Use only reviewed role-record limits and the currently held original lease."""
-    import closer_claude_auth
-    import closer_data_only_execution as execution
-    import closer_resources
     import closer_role_qualification as roles
-    import dispatcher
     import execution_profiles
 
     profile = execution_profiles.get_profile(profile_id)
@@ -213,14 +214,64 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
     record = roles.qualified_record(profile, role)
     if record is None or not roles.is_runtime_qualified(profile, role):
         raise ControlledOriginUnavailable("reviewed runtime role qualification unavailable")
+    return _controlled_launch_inputs(
+        profile=profile,
+        record=record,
+        task_type=task_type,
+        operation_id=operation_id,
+        frontier=frontier,
+        target=target,
+        prompt=prompt,
+    )
+
+
+def _controlled_launch_inputs(
+    *, profile, record, task_type, operation_id, frontier, target, prompt, qualification=None
+):
+    """Share the existing physical launch inputs without opening role admission."""
+    import closer_claude_auth
+    import closer_claude_role_admission as admission
+    import closer_data_only_execution as execution
+    import closer_resources
+    import closer_role_qualification as roles
+    import dispatcher
+
+    if qualification is None:
+        caller = sys._getframe(1)
+        if (
+            caller.f_code is not _controlled_launch_options.__code__
+            or caller.f_globals is not globals()
+            or admission.is_qualification_operation(operation_id)
+        ):
+            raise ControlledOriginUnavailable("production launch admission caller differs")
+    else:
+        admission.require_launch_permit(qualification, operation_id, profile, record)
+    role = roles.TASK_ROLES.get(task_type)
+    profile_id = profile["profile_id"]
     descriptor = _controlled_model_contract(task_type)
     limits = execution.validate_limits(record.get("execution_limits"))
+    source_admission = None
     if (
         record.get("production_model_contract") != descriptor
         or limits["model_contract_sha256"] != descriptor["contract_sha256"]
         or limits["role"] != role
     ):
-        raise ControlledOriginUnavailable("reviewed production execution contract unavailable")
+        if qualification is not None:
+            raise ControlledOriginUnavailable("reviewed production execution contract unavailable")
+        try:
+            support = roles.execution_source_support(
+                record,
+                roles.profile_identity(profile),
+                descriptor,
+                task_type=task_type,
+                checked_at=time.time(),
+            )
+            limits = execution.validate_limits(support["limits"])
+            source_admission = support["admission"]
+        except (ValueError, KeyError, TypeError) as error:
+            raise ControlledOriginUnavailable(
+                "reviewed production execution contract unavailable"
+            ) from error
     prompt_bytes = _controlled_prompt_size(prompt, limits)
     if (
         not isinstance(frontier, dict)
@@ -314,6 +365,10 @@ def _controlled_launch_options(*, profile_id, task_type, operation_id, frontier,
         "qualification_id": record["qualification_id"],
         "qualification_record_sha256": _contract_digest(record),
     }
+    if source_admission is not None:
+        expected["qualification_source_admission"] = source_admission
+    if qualification is not None:
+        expected["qualification_only"] = True
     return options, expected, observed
 
 
@@ -338,17 +393,27 @@ def _read_controlled_receipt(ref, root):
     return _strict_response_json(raw.decode())
 
 
-def _validate_controlled_result(result, expected, observed, *, receipt_root):
+def _validate_controlled_result(result, expected, observed, *, receipt_root, _qualification=None):
     """Authenticate local observed execution before existing semantic validators.
 
     A restarted caller must obtain expected/observed from its original sealed
     stage row. Caller declarations or this local proof do not authenticate a
     remote Workflows decision or grant acceptance authority.
     """
+    import closer_claude_role_admission as admission
     import closer_data_only_execution as execution
     import transport_qualification
     import transport_saved_result
 
+    qualification_only = (
+        expected.get("qualification_only") is True
+        or admission.is_qualification_operation(expected.get("operation_id"))
+        or admission.is_qualification_result(result)
+    )
+    if qualification_only:
+        admission.require_validation_permit(_qualification, expected)
+    elif _qualification is not None:
+        raise ControlledOriginUnavailable("qualification permit cannot validate production")
     try:
         origin = result["data_only_origin"]
         receipt = _read_controlled_receipt(result.get("provider_result_ref"), receipt_root)
@@ -1215,14 +1280,35 @@ def requirements(body):
     """
     found = []
     section = ""
+    fence = None
     for line in body.splitlines():
+        was_fenced = fence is not None
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            token, tail = marker.groups()
+            if fence is None:
+                fence = (token[0], len(token))
+            elif token[0] == fence[0] and len(token) >= fence[1] and not tail.strip():
+                fence = None
+        # Preserve existing Markdown section behavior. Only the new exact plain
+        # heading is gated by fences; arbitrary prose/quotes do not open scope.
         if re.match(r"^#{1,6}\s", line):
             section = line.lower()
             continue
+        active = any(word in section for word in ("task", "acceptance", "success criteria"))
         if (
-            any(word in section for word in ("task", "acceptance", "success criteria"))
-            and line.strip()
+            not active
+            and not was_fenced
+            and marker is None
+            and re.fullmatch(
+                r" {0,3}tasks[ \t]+and[ \t]+acceptance[ \t]+criteria[ \t]*:[ \t]*",
+                line,
+                flags=re.IGNORECASE,
+            )
         ):
+            section = "tasks and acceptance criteria"
+            continue
+        if active and line.strip():
             text = re.sub(r"^\s*(?:[-*+] |\d+[.)] )(?:\[[ xX]\]\s*)?", "", line).strip()
             if text:
                 found.append(text)
@@ -1876,40 +1962,50 @@ class GitHub:
         return self.api(endpoint, _text=True)
 
     def api(self, endpoint, *, method="GET", fields=None, resource="core", _text=False):
-        remaining = self.deadline - time.time()
-        if remaining < 2:
-            raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
-        throttle = gh_capacity.throttle(resource, allow_wait_s=min(2, remaining))
-        if throttle.get("action") == "defer":
-            raise RoundCapacityDeferred(
-                resource=resource, throttle=throttle, observed_at=time.time()
+        import closer_queue
+
+        read_call = closer_queue._read_timing_start(method, endpoint)
+        try:
+            remaining = self.deadline - time.time()
+            if remaining < 2:
+                error = RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
+                closer_queue._read_deadline_failure(read_call, error, remaining, "before_throttle")
+                raise error
+            throttle = gh_capacity.throttle(resource, allow_wait_s=min(2, remaining))
+            if throttle.get("action") == "defer":
+                raise RoundCapacityDeferred(
+                    resource=resource, throttle=throttle, observed_at=time.time()
+                )
+            remaining = self.deadline - time.time()
+            if remaining < 2:
+                error = RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
+                closer_queue._read_deadline_failure(read_call, error, remaining, "after_throttle")
+                raise error
+            args = ["api", "--method", method, endpoint]
+            for key, value in (fields or {}).items():
+                args += ["-f", f"{key}={value}"]
+            rc, doc = self.api_fn(
+                args,
+                resource=resource,
+                timeout_s=max(1, min(25, int(remaining))),
+                **({"raw_body": True} if _text else {}),
             )
-        remaining = self.deadline - time.time()
-        if remaining < 2:
-            raise RoundDeadlineExhausted(deadline=self.deadline, remaining_seconds=remaining)
-        args = ["api", "--method", method, endpoint]
-        for key, value in (fields or {}).items():
-            args += ["-f", f"{key}={value}"]
-        rc, doc = self.api_fn(
-            args,
-            resource=resource,
-            timeout_s=max(1, min(25, int(remaining))),
-            **({"raw_body": True} if _text else {}),
-        )
-        is_dispatch = method == "POST" and endpoint.endswith(
-            "/actions/workflows/agents-verifier.yml/dispatches"
-        )
-        if is_dispatch and rc and isinstance(doc, dict) and str(doc.get("status")) == "422":
-            raise GitHubNoEffectRejected("GitHub rejected verifier dispatch inputs (HTTP 422)")
-        if is_dispatch and not rc and doc is None:
-            return {"accepted": True}  # workflow_dispatch returns 204 without a body.
-        if (
-            rc
-            or not isinstance(doc, str if _text else (dict, list))
-            or (isinstance(doc, dict) and doc.get("errors"))
-        ):
-            raise RuntimeError(f"GitHub outcome unknown: {method} {endpoint}: {str(doc)[:400]}")
-        return doc
+            is_dispatch = method == "POST" and endpoint.endswith(
+                "/actions/workflows/agents-verifier.yml/dispatches"
+            )
+            if is_dispatch and rc and isinstance(doc, dict) and str(doc.get("status")) == "422":
+                raise GitHubNoEffectRejected("GitHub rejected verifier dispatch inputs (HTTP 422)")
+            if is_dispatch and not rc and doc is None:
+                return {"accepted": True}  # workflow_dispatch returns 204 without a body.
+            if (
+                rc
+                or not isinstance(doc, str if _text else (dict, list))
+                or (isinstance(doc, dict) and doc.get("errors"))
+            ):
+                raise RuntimeError(f"GitHub outcome unknown: {method} {endpoint}: {str(doc)[:400]}")
+            return doc
+        finally:
+            closer_queue._read_timing_finish(read_call)
 
     def snapshot(self, target):
         repo, num = target.split("#")
@@ -4919,10 +5015,17 @@ def _profile_exception_qualified(
     )
 
 
-def _validated_pipeline_exception_route(profile_id: str):
+def _validated_pipeline_exception_route(profile_id: str, *, closer_category=None):
+    import closer_role_selection as selection
     import execution_profiles
 
     profile = execution_profiles.get_profile(profile_id)
+    try:
+        scope = selection.quality_scope(profile, "strong_criterion_adjudication", closer_category)
+        if scope is None:
+            return None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
     if not profile or not _profile_exception_qualified(
         _fresh_capacity_report(), profile, repair=False
     ):
@@ -4933,6 +5036,7 @@ def _validated_pipeline_exception_route(profile_id: str):
         "profile_id": profile_id,
         "pools": list(profile.get("capacity_pool_ids") or []),
         "mode": "assess",
+        "closer_selection": scope,
     }
 
 
@@ -4990,6 +5094,27 @@ def _correction_profile_qualified(profile, *, task_type="closer_correction_class
         return False
 
 
+def _typed_ordinary_static_category(snapshot, inventory, *, collection_mode):
+    """Host intended-use allocation for authenticated typed evidence advice only.
+
+    The caller rebuilt inventory from the original physical packet. This names
+    a readonly advisory use, never a judgment that every criterion is static or
+    satisfied. Required execution proof still belongs to the materializer.
+    """
+    import closer_execution_contracts as contracts
+
+    if (
+        collection_mode
+        or type(inventory) is not dict
+        or inventory.get("mode") != "ordinary_acceptance"
+        or inventory.get("host_residual_holds") != []
+        or type(inventory.get("findings")) is not list
+        or contracts.owner_review_required([snapshot, inventory["findings"]])
+    ):
+        return None
+    return "ordinary_static"
+
+
 def _pipeline_low_route(
     *,
     load=None,
@@ -4997,13 +5122,22 @@ def _pipeline_low_route(
     with_status=False,
     data_only=False,
     task_type="closer_interpret",
+    closer_category=None,
 ):
     """Choose a role-qualified classification profile through the existing router."""
     if task_type not in {"closer_interpret", "closer_correction_classification"}:
         raise ValueError("unsupported bounded classification task")
     load = load if load is not None else {}
-    import execution_profiles
+    import closer_role_selection as selection
     import router
+
+    try:
+        selection_policy = selection.load_policy()
+        role = _exception_role(False, False)
+        if selection.category_spec(role, closer_category, selection_policy) is None:
+            return (None, "qualification_unavailable") if with_status else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return (None, "qualification_unavailable") if with_status else None
 
     with _PIPELINE_ROUTE_LOCK:
         # Capacity can change while another worker reserves a shared pool. Refresh
@@ -5011,6 +5145,14 @@ def _pipeline_low_route(
         report = _fresh_capacity_report()
         if report is None:
             return (None, "unknown") if with_status else None
+        quality_profiles = {
+            agent: selection.candidates_for_agent(
+                agent, role, "offload", closer_category, policy=selection_policy
+            )
+            for agent in report["agents"]
+        }
+        if not any(quality_profiles.values()):
+            return (None, "qualification_unavailable") if with_status else None
         unavailable_profiles = set(unavailable_profiles or ())
         eligible = set()
         available_profiles = {}
@@ -5035,7 +5177,7 @@ def _pipeline_low_route(
                 unsupported_assessment |= assessment_problem is not None
             if row.get("state") not in {"ok", "warn"}:
                 continue
-            profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            profiles = quality_profiles.get(agent, [])
             capacity_candidate |= assessment_problem is None and any(
                 p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
                 for p in profiles
@@ -5079,7 +5221,7 @@ def _pipeline_low_route(
                 else (
                     "unsupported_assessment_tool_boundary"
                     if unsupported_assessment and not qualified_assessment
-                    else "qualification_unavailable" if capacity_candidate else "exhausted"
+                    else ("qualification_unavailable" if capacity_candidate else "exhausted")
                 )
             )
             return (None, status) if with_status else None
@@ -5092,6 +5234,7 @@ def _pipeline_low_route(
             load=load or {},
             per_agent_cap=1,
             learned=_closer_learned(task_type),
+            closer_category=closer_category,
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
@@ -5117,11 +5260,18 @@ def _pipeline_low_route(
 
 
 def _exception_route(
-    *, load=None, unavailable_profiles=None, repair=False, substantive=True, with_status=False
+    *,
+    load=None,
+    unavailable_profiles=None,
+    repair=False,
+    substantive=True,
+    with_status=False,
+    closer_category=None,
+    independent_of_provider=None,
 ):
     """Choose a currently usable exception/repair profile through the existing router."""
     load = load if load is not None else {}
-    import execution_profiles
+    import closer_role_selection as selection
     import router
 
     mode = "mid" if repair else "assess"
@@ -5129,10 +5279,31 @@ def _exception_route(
         "closer_repair" if repair else "closer_exception" if substantive else "closer_interpret"
     )
 
+    try:
+        selection_policy = selection.load_policy()
+        role = _exception_role(repair, substantive)
+        if selection.category_spec(role, closer_category, selection_policy) is None:
+            return (None, "qualification_unavailable") if with_status else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return (None, "qualification_unavailable") if with_status else None
+
     with _PIPELINE_ROUTE_LOCK:
         report = _fresh_capacity_report()
         if report is None:
             return (None, "unknown") if with_status else None
+        quality_profiles = {
+            agent: selection.candidates_for_agent(
+                agent,
+                role,
+                "offload",
+                closer_category,
+                policy=selection_policy,
+                independent_of_provider=independent_of_provider,
+            )
+            for agent in _EXCEPTION_ELIGIBLE_AGENTS
+        }
+        if not any(quality_profiles.values()):
+            return (None, "qualification_unavailable") if with_status else None
         unavailable_profiles = set(unavailable_profiles or ())
         eligible = set()
         available_profiles = {}
@@ -5143,7 +5314,7 @@ def _exception_route(
             row = report["agents"].get(agent, {})
             if row.get("state") not in {"ok", "warn"}:
                 continue
-            profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+            profiles = quality_profiles.get(agent, [])
             capacity_candidate |= any(
                 p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
                 for p in profiles
@@ -5193,6 +5364,8 @@ def _exception_route(
             load=load or {},
             per_agent_cap=1,
             learned=_closer_learned(task_type),
+            closer_category=closer_category,
+            independent_of_provider=independent_of_provider,
         )
         if not pick:
             status = "busy" if any(load.get(agent, 0) for agent in eligible) else "exhausted"
@@ -5304,6 +5477,7 @@ def _execute_profile_route(
     frontier_target=None,
     data_only=False,
     task_type="closer_interpret",
+    closer_category=None,
 ):
     """Reserve registry pools across processes, recheck cached capacity, invoke exactly once.
 
@@ -5427,6 +5601,7 @@ def _execute_profile_route(
             load=load,
             unavailable_profiles=excluded,
             with_status=True,
+            **({"closer_category": closer_category} if closer_category is not None else {}),
             **({"repair": repair} if lane != "low" else {"data_only": True} if data_only else {}),
             **(
                 {"task_type": task_type}
@@ -6403,7 +6578,6 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         if backend.assignment_rows.get(t, {}).get("execution_state") in {None, "active"}
     ]
     drift_candidate = min(audit_targets) if audit_targets else None
-    audit_generation = int(time.time())
 
     def previous_preparations(target):
         history = (
@@ -6745,6 +6919,17 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             import dispatcher
 
             try:
+                import closer_semantic_assessment
+
+                original_snapshot, original_packet = full_snapshot(prep)
+                original_catalog_sha = closer_semantic_assessment.catalog_digest(
+                    closer_semantic_assessment.catalog_input(
+                        original_snapshot,
+                        original_packet,
+                        prep.get("packet_ref", {}),
+                        packet_evidence_root(prep),
+                    )
+                )
                 proved = _revalidate_controlled_proof(
                     actual.get("_closer_controlled_proof"),
                     run_id=actual.get("run_id"),
@@ -6754,15 +6939,23 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         "head": (prep.get("snapshot") or {}).get("head"),
                         "base": (prep.get("snapshot") or {}).get("base"),
                         "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                        "semantic_catalog_sha256": original_catalog_sha,
                     },
                     receipt_root=dispatcher.DISPATCH_LOG_DIR,
                 )
                 # Semantic integration reads the physically retained provider
                 # response, never a substituted inline proposal or summary.
-                value = {
-                    **value,
-                    "proposal": _worker_proposal(proved, agent=value.get("requested_agent")),
-                }
+                assessment = _worker_proposal(proved, agent=value.get("requested_agent"))
+                canonical, followup = closer_semantic_assessment.adjudication_candidate(
+                    assessment,
+                    snapshot=original_snapshot,
+                    packet=original_packet,
+                    packet_ref=prep.get("packet_ref", {}),
+                    retained_dir=packet_evidence_root(prep),
+                    expected_catalog_sha256=original_catalog_sha,
+                )
+                canonical["semantic_followup"] = followup
+                value = {**value, "proposal": canonical}
             except (OSError, ValueError, TypeError, KeyError) as error:
                 raise CompletedResponseReadError(
                     error,
@@ -7144,21 +7337,14 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             else []
         )
         semantic_cache_key = packet.get("semantic_cache_key")
-        # Stable evidence keys permit ordinary interpretation reuse. A due semantic
-        # audit intentionally changes only one target's key per invocation, so the
-        # sampled audit cannot be swallowed by that cache or fan out to the fleet.
+        # The current typed-v2 contract cannot carry the optional producer audit.
+        # Keep its due marker for honest deferral, but never invalidate an otherwise
+        # reusable per-PR assessment merely to request unsupported audit work.
         audit_due = target == drift_candidate and (
             not latest_drift
             or latest_drift.get("producer_sha256") != packet.get("producer_sha256")
             or time.time() - float(latest_drift.get("drift_review_at", 0) or 0) >= 24 * 3600
         )
-        if audit_due and isinstance(semantic_cache_key, str):
-            semantic_cache_key = (
-                "closer-evidence-semantic/v1:"
-                + hashlib.sha256(
-                    f"{semantic_cache_key}:drift:{audit_generation}".encode()
-                ).hexdigest()
-            )
         compact_sections = {}
         for name, section in packet.get("sections", {}).items():
             compact_sections[name] = {
@@ -7744,10 +7930,66 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         attempt,
                         retained_plan.get("plan_actual") or {},
                     )
+        # Existing source-owned necessary rails do not require a model planner.
+        # The old validator/Store/collector still bound every read and retry.
+        if collection_mode:
+            import closer_semantic_assessment
+
+            try:
+                host_plan = closer_semantic_assessment.host_collection_plan(
+                    admitted_snapshot,
+                    raw_packet,
+                    readiness,
+                    existing_requests=prep.get("recovery_requests", []),
+                )
+            except (ValueError, TypeError, KeyError) as error:
+                pending = evidence_pending(target, prep, readiness)
+                pending["reason"] = "host_collection_selector_unavailable:" + str(error)[:160]
+                return pending
+            if host_plan["evidence_requests"]:
+                attempt = recovery_store.begin(admitted_snapshot, raw_packet, readiness)
+                if attempt is not None:
+                    return collect_or_defer(
+                        target,
+                        context,
+                        prep,
+                        admitted_snapshot,
+                        raw_packet,
+                        readiness,
+                        host_plan,
+                        attempt,
+                        {},
+                    )
+            pending = evidence_pending(target, prep, readiness)
+            pending["reason"] = "existing_necessary_collection_selector_or_new_progress_required"
+            pending["next_trigger"] = (
+                "an exact source-admitted collector selector or genuine new retained observation changes this requirement; unchanged no-progress input stays blocked"
+            )
+            return pending
+        import closer_semantic_assessment
+
+        try:
+            semantic_inventory = closer_semantic_assessment.catalog_input(
+                admitted_snapshot,
+                raw_packet,
+                prep.get("packet_ref", {}),
+                packet_evidence_root(prep),
+            )
+            semantic_catalog_sha = closer_semantic_assessment.catalog_digest(semantic_inventory)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            pending = evidence_pending(target, prep, readiness or {"ready": False, "gaps": []})
+            pending["reason"] = "semantic_catalog_unavailable:" + str(error)[:200]
+            return pending
+        # Only this authenticated typed ordinary evidence-advice branch chooses
+        # the source category. No prompt text/model subtype can allocate it.
+        closer_category = _typed_ordinary_static_category(
+            admitted_snapshot, semantic_inventory, collection_mode=collection_mode
+        )
         route, route_status = _pipeline_low_route(
             load=route_load,
             unavailable_profiles=failed_low_profiles,
             with_status=True,
+            closer_category=closer_category,
             **({"data_only": True} if data_only else {}),
         )
         while route is None and route_status == "busy":
@@ -7762,6 +8004,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 load=route_load,
                 unavailable_profiles=failed_low_profiles,
                 with_status=True,
+                closer_category=closer_category,
                 **({"data_only": True} if data_only else {}),
             )
         if not route:
@@ -7808,11 +8051,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         )
         run_drift = False
         drift_deferred_for_budget = False
-        with drift_lock:
-            nonlocal drift_claimed
-            if drift_due and not drift_claimed and not collection_mode:
-                drift_claimed = True
-                run_drift = True
+        # The exact typed-v2 carrier has no producer-audit fields. Do not ask
+        # this assessment to perform an unsupported optional second job, spend
+        # another model turn, or manufacture audit completion/timestamps.
+        nonlocal drift_claimed
+        audit_unavailable_current_contract = drift_due
         drift_cases = packet.get("drift_sample", []) if isinstance(packet, dict) else []
         drift_sections = {}
         if run_drift:
@@ -7959,6 +8202,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     collection_mode=collection_mode,
                     readiness=readiness,
                     collection_instructions=recovery.COLLECTION_INSTRUCTIONS,
+                    semantic_inventory=semantic_inventory,
                 )
                 break
             except closer_model_contracts.ClassificationPromptError as exc:
@@ -8024,6 +8268,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                     "head": snap.get("head"),
                     "base": snap.get("base"),
                     "packet_sha256": (prep.get("packet_ref") or {}).get("sha256"),
+                    "semantic_catalog_sha256": semantic_catalog_sha,
                 },
                 mode="assess",
             )
@@ -8044,6 +8289,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 load=route_load,
                 deadline=context["deadline"],
                 unavailable_profiles=failed_low_profiles,
+                closer_category=closer_category,
                 finite_frontier=finite_frontier,
                 frontier_target=target,
                 **({"data_only": True} if data_only else {}),
@@ -8269,7 +8515,21 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             return interpret(target, context)
         with route_lock:
             route_lock.notify_all()
-        proposal = _worker_proposal(result, agent=route["agent"])
+        assessment = _worker_proposal(result, agent=route["agent"])
+        semantic_error = None
+        try:
+            proposal, followup = closer_semantic_assessment.adjudication_candidate(
+                assessment,
+                snapshot=admitted_snapshot,
+                packet=raw_packet,
+                packet_ref=prep.get("packet_ref", {}),
+                retained_dir=packet_evidence_root(prep),
+                expected_catalog_sha256=semantic_catalog_sha,
+            )
+            proposal["semantic_followup"] = followup
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            proposal = {}
+            semantic_error = "semantic_assessment_invalid:" + str(error)[:200]
         valid = (
             result.get("exit") == 0
             and isinstance(result.get("run_id"), str)
@@ -8293,7 +8553,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 (
                     "incomplete_low_assessment"
                     if incomplete_assessment
-                    else "unparseable_or_ambiguous_cheap_result"
+                    else semantic_error or "unparseable_or_ambiguous_cheap_result"
                 )
             ]
         )
@@ -8316,7 +8576,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             "status": (
                 ("complete" if valid and drift_complete else "pending")
                 if run_drift
-                else ("deferred_prompt_budget" if drift_deferred_for_budget else "not_due")
+                else (
+                    "audit_unavailable_current_contract"
+                    if audit_unavailable_current_contract
+                    else ("deferred_prompt_budget" if drift_deferred_for_budget else "not_due")
+                )
             ),
             "producer_sha256": producer_sha,
             "summary": None,
@@ -8597,6 +8861,42 @@ def _run_staged_pipeline(args, targets, backend, deadline):
         import closer_execution_contracts as contracts
 
         low_proposal = interpreted.get("proposal")
+        low_catalog_sha = None
+        if isinstance(low_proposal, dict) and low_proposal.get("semantic_assessment") is not None:
+            low_proof = (interpreted.get("actual") or {}).get("_closer_controlled_proof") or {}
+            low_catalog_sha = (low_proof.get("expected", {}).get("basis") or {}).get(
+                "semantic_catalog_sha256"
+            )
+            followup = low_proposal.get("semantic_followup") or {}
+            if not isinstance(low_catalog_sha, str) or followup.get("status") != "candidate":
+                known_unmet = (low_proposal.get("semantic_summary") or {}).get(
+                    "known_unmet"
+                ) is True
+                reason = (
+                    "protected_low_catalog_view_required"
+                    if not isinstance(low_catalog_sha, str)
+                    else (
+                        "known_unmet_requires_independently_admitted_source_route"
+                        if known_unmet
+                        else followup.get("reason", "semantic_dispute_not_admitted")
+                    )
+                )
+                refusal = contracts.deterministic_refusal(
+                    contracts.ContractError(
+                        reason,
+                        owner_required=known_unmet or reason == "qualified_source_owner_required",
+                    ),
+                    exception_snapshot,
+                )
+                refusal["pending_evidence"]["semantic_followup"] = followup
+                refusal["pending_evidence"]["event_id"] = "semantic-followup:" + digest(
+                    [target, prep.get("revision"), prep.get("packet_ref"), followup]
+                )
+                if reason == "semantic_gap_requires_existing_collection_selector":
+                    refusal["next_trigger"] = (
+                        "an existing source-admitted collector rail or exact original-proof locator resolves this bound slot; unchanged input does not spend another model turn"
+                    )
+                return refusal
         named_request = None
         owner_required = contracts.owner_review_required(
             [
@@ -8783,9 +9083,24 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         packet_ref=prep.get("packet_ref"),
                         retained_dir=packet_evidence_root(prep),
                     )
-                    merged = contracts.merge_selected_response(
-                        low_proposal, named_request, scoped_answer
-                    )
+                    if isinstance(low_proposal.get("semantic_assessment"), dict):
+                        import closer_semantic_assessment
+
+                        merged = closer_semantic_assessment.reconcile_selected(
+                            low_proposal["semantic_assessment"],
+                            named_request,
+                            scoped_answer,
+                            snapshot=exception_snapshot,
+                            packet=_packet,
+                            packet_ref=prep.get("packet_ref", {}),
+                            retained_dir=packet_evidence_root(prep),
+                            strong_actual=_worker_actual(worker_row),
+                            expected_catalog_sha256=low_catalog_sha,
+                        )
+                    else:
+                        merged = contracts.merge_selected_response(
+                            low_proposal, named_request, scoped_answer
+                        )
                     validated = closer_disposition.integrate_ordinary(
                         target,
                         exception_snapshot,
@@ -9204,9 +9519,30 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                         packet_ref=prep.get("packet_ref"),
                         retained_dir=packet_evidence_root(prep),
                     )
-                    merged = contracts.merge_selected_response(
-                        low_proposal, named_request, scoped_answer
-                    )
+                    if isinstance(low_proposal.get("semantic_assessment"), dict):
+                        import closer_semantic_assessment
+
+                        low_proof = (interpreted.get("actual") or {}).get(
+                            "_closer_controlled_proof"
+                        ) or {}
+                        low_catalog_sha = (low_proof.get("expected", {}).get("basis") or {}).get(
+                            "semantic_catalog_sha256"
+                        )
+                        merged = closer_semantic_assessment.reconcile_selected(
+                            low_proposal["semantic_assessment"],
+                            named_request,
+                            scoped_answer,
+                            snapshot=snap,
+                            packet=_packet,
+                            packet_ref=prep.get("packet_ref", {}),
+                            retained_dir=packet_evidence_root(prep),
+                            strong_actual=strong.get("actual"),
+                            expected_catalog_sha256=low_catalog_sha,
+                        )
+                    else:
+                        merged = contracts.merge_selected_response(
+                            low_proposal, named_request, scoped_answer
+                        )
                     integration = closer_disposition.integrate_ordinary(
                         target,
                         snap,

@@ -157,18 +157,47 @@ def callbacks_for(delivery, monkeypatch):
     }
 
 
-def native_delivery(tmp_path, monkeypatch):
+def native_delivery(tmp_path, monkeypatch, *, large=False):
     """Actual CLI ownership; only the external provider/collector data ports vary.
 
     The exported OfflineDelivery and callbacks_for stay unchanged for their other
     importers. No test-global caller or production callback override is installed.
     """
+    import test_closer_delivery_lifecycle as lifecycle
+    import test_closer_disposition as pure_disposition
     from closer_inert_dispatcher_support import InertCaller
+    from closer_semantic_fixture_support import physical_product
     from test_dispatcher_controlled_data_only import world
 
     import closer_evidence
 
+    # Source data is constructed BEFORE OfflineDelivery/InertCaller restrict
+    # subprocesses. Existing source validators consume genuine Git/blob bytes.
+    product = physical_product(tmp_path / "physical-product")
+    monkeypatch.setattr(lifecycle, "HEAD", product.head)
+    monkeypatch.setattr(pure_disposition, "HEAD", product.head)
+    monkeypatch.setattr(pure_disposition, "BASE", product.base)
     delivery = OfflineDelivery(tmp_path, monkeypatch)
+    delivery.current.update(head=product.head, base=product.base, merge=product.head)
+    delivery.supply_native_pass(monkeypatch)
+    if large:
+        body = "## Tasks\n" + "\n".join(
+            "- [ ] Ship the report requirement " + str(i) for i in range(1, 10)
+        )
+        delivery.current["sources"][0]["body"] = body
+        delivery.source_issue["body"] = body
+        delivery.refresh()
+        delivery.semantic_text_length = 1800
+        import io
+        import zipfile
+
+        archive = io.BytesIO()
+        criterion = adapter.requirements(body)[0]
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr(
+                "junit.xml", '<testsuite tests="1"><testcase name="' + criterion + '"/></testsuite>'
+            )
+        delivery.archive = archive.getvalue()
     monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
     caller = InertCaller(world.__wrapped__(tmp_path, monkeypatch), monkeypatch)
     caller.world.args["data_only_limits"].update(max_final_bytes=48 * 1024)
@@ -178,13 +207,31 @@ def native_delivery(tmp_path, monkeypatch):
     monkeypatch.setattr(adapter, "_exception_route", _REAL_EXCEPTION)
     monkeypatch.setattr(adapter, "_fresh_capacity_report", _REAL_CAPACITY)
     monkeypatch.setattr(adapter, "_pipeline_capacity", lambda: {"io": 2, "low": 1, "exception": 1})
-    delivery.backend.workspaces = {"owner/repo": str(tmp_path)}
+    delivery.backend.workspaces = {"owner/repo": str(product.root)}
+    original_api = delivery.api
+
+    def source_api(endpoint, *, method="GET", **kwargs):
+        if endpoint in product.docs:
+            assert method == "GET"
+            return copy.deepcopy(product.docs[endpoint])
+        if "/compare/" in endpoint:
+            assert method == "GET" and endpoint.endswith(product.base + "..." + product.head)
+            return copy.deepcopy(product.diff)
+        return original_api(endpoint, method=method, **kwargs)
+
+    delivery.api = source_api
     packet, _, proposal = caller.packet(delivery.current, tmp_path / "queue.json.evidence")
     # Generate the synthetic candidate before native emission and its immutable
     # receipt, rather than substitute an inline completed proposal afterward.
-    bound_adjudication(proposal)
+    bound_adjudication(proposal, disputed=True)
     delivery.proposal = proposal
-    monkeypatch.setattr(closer_evidence, "collect_evidence", lambda *_a, **_kw: packet)
+    original_collect = closer_evidence.collect_evidence
+
+    def local_collect(snapshot, _api, destination, **kwargs):
+        kwargs["artifact_fetch"] = lambda *_a, **_kw: delivery.archive
+        return original_collect(snapshot, source_api, destination, **kwargs)
+
+    monkeypatch.setattr(closer_evidence, "collect_evidence", local_collect)
     delivery.caller = caller
     delivery.low_response = delivery.offload
     delivery.strong_response = lambda *_a, **_kw: pytest.fail("unexpected strong invocation")
@@ -314,8 +361,8 @@ def test_batch_low_and_strong_parser_matrix(tmp_path, monkeypatch, style):
 
     delivery.low_response = output
     low = cb["interpret"](TARGET, context)
-    assert low["integration_status"] == "accepted", low
-    bound_adjudication(low["proposal"])
+    assert low["integration_status"] == "exception", low
+    assert low["proposal"]["semantic_followup"]["status"] == "candidate"
     context["interpret"] = low
     strong_row = {
         "exit": 0,
@@ -353,10 +400,13 @@ def test_batch_strong_uncertain_restarts_without_duplicate(tmp_path, monkeypatch
     def needs_senior(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        proposal.update(
-            classification="uncertain", substantive_needs=["offline evidence ambiguity"]
-        )
-        bound_adjudication(proposal)
+        proposal["global_concerns"] = [
+            {
+                "kind": "ambiguity",
+                "citations": [],
+                "explanation": "Declared synthetic global evidence ambiguity remains.",
+            }
+        ]
         result["output"] = json.dumps(proposal)
         return result
 
@@ -466,7 +516,7 @@ def test_batch_strong_large_native_response_is_retained_once(tmp_path, monkeypat
     delivery = native_delivery(tmp_path, monkeypatch)
     cb, context = native_callbacks_for(delivery, monkeypatch)
     low = cb["interpret"](TARGET, context)
-    bound_adjudication(low["proposal"])
+    assert low["proposal"]["semantic_followup"]["status"] == "candidate"
     context["interpret"] = low
     row = {
         "exit": 0,
@@ -573,7 +623,7 @@ def test_batch_strong_nondecisions_never_gain_authority(
     delivery = native_delivery(tmp_path, monkeypatch)
     cb, context = native_callbacks_for(delivery, monkeypatch)
     low = cb["interpret"](TARGET, context)
-    bound_adjudication(low["proposal"])
+    assert low["proposal"]["semantic_followup"]["status"] == "candidate"
     context["interpret"] = low
     delivery.strong_response = lambda *_a: worker_result["worker"]
     strong = cb["exception"](TARGET, context)
@@ -589,22 +639,16 @@ def test_batch_large_proofs_cross_native_stages_and_refuse_unstarted_effect(tmp_
 
     import closer_disposition
 
-    delivery = native_delivery(tmp_path, monkeypatch)
+    delivery = native_delivery(tmp_path, monkeypatch, large=True)
     original = delivery.offload
 
     def low(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        for row in proposal["decision"]["criteria"]:
-            for proof in row["proofs"]:
-                proof["relevance"] += (
-                    " Ship the report evidence is retained in this test receipt." * 300
-                )
-        proposal.update(classification="relevant", substantive_needs=[])
-        bound_adjudication(proposal, disputed=True)
+        assert proposal["schema"] == "closer-semantic-assessment/v2"
+        assert all(len(row["explanation"]) <= 2000 for row in proposal["obligations"])
         result["output"] = json.dumps(proposal)
         assert len(result["output"]) > 32768
-        delivery.proposal_for_strong = proposal
         return result
 
     delivery.low_response = low
@@ -612,8 +656,10 @@ def test_batch_large_proofs_cross_native_stages_and_refuse_unstarted_effect(tmp_
 
     def response(envelope, prompt, options):
         strong_calls.append(1)
-        proposal = copy.deepcopy(delivery.proposal_for_strong)
-        response = scoped_response(proposal, envelope["adjudication_request"])
+        response = scoped_response(
+            {"decision": {"criteria": [envelope["selected_row"]]}},
+            envelope["adjudication_request"],
+        )
         return {"exit": 0, "output": json.dumps(response)}
 
     delivery.strong_response = response
@@ -732,7 +778,7 @@ def test_batch_supervisor_closure_effect_unit_keeps_native_source_checks(tmp_pat
 
 def test_batch_retained_low_proposal_hash_is_checked_before_escalation(tmp_path, monkeypatch):
 
-    delivery = native_delivery(tmp_path, monkeypatch)
+    delivery = native_delivery(tmp_path, monkeypatch, large=True)
     cb, context = native_callbacks_for(delivery, monkeypatch)
     # Produce a valid normal packet-bound response, with a large reviewer note.
     original = delivery.offload
@@ -740,7 +786,8 @@ def test_batch_retained_low_proposal_hash_is_checked_before_escalation(tmp_path,
     def large(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        proposal["reviewer_note"] = "x" * 18000
+        assert proposal["schema"] == "closer-semantic-assessment/v2"
+        assert len(result["output"]) > 16384
         result["output"] = json.dumps(proposal)
         return result
 
@@ -757,12 +804,11 @@ def test_batch_retained_low_proposal_hash_is_checked_before_escalation(tmp_path,
 def test_batch_completed_response_retention_fault_never_repeats_provider(
     tmp_path, monkeypatch, failed_suffix
 ):
-    import copy
     import hashlib
 
     import closer_evidence
 
-    delivery = native_delivery(tmp_path, monkeypatch)
+    delivery = native_delivery(tmp_path, monkeypatch, large=True)
     original = delivery.offload
     native_outputs = delivery.native_outputs
     strong_calls = []
@@ -770,25 +816,21 @@ def test_batch_completed_response_retention_fault_never_repeats_provider(
     def low(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        for row in proposal["decision"]["criteria"]:
-            for proof in row["proofs"]:
-                proof["relevance"] += (
-                    " Ship the report evidence is retained in this test receipt." * 300
-                )
-        proposal.update(classification="relevant", substantive_needs=[])
-        bound_adjudication(proposal, disputed=True)
+        assert proposal["schema"] == "closer-semantic-assessment/v2"
+        assert all(len(row["explanation"]) <= 2000 for row in proposal["obligations"])
         result.update(
             output=json.dumps(proposal),
         )
-        delivery.proposal_for_strong = proposal
         return result
 
     delivery.low_response = low
 
     def response(envelope, prompt, options):
         strong_calls.append(1)
-        proposal = copy.deepcopy(delivery.proposal_for_strong)
-        response = scoped_response(proposal, envelope["adjudication_request"])
+        response = scoped_response(
+            {"decision": {"criteria": [envelope["selected_row"]]}},
+            envelope["adjudication_request"],
+        )
         row = {
             "exit": 0,
             "output": json.dumps(response),
@@ -843,14 +885,15 @@ def test_batch_completed_response_retention_fault_never_repeats_provider(
 
 def test_batch_oversized_actual_retained_file_is_rejected_before_read(tmp_path, monkeypatch):
 
-    delivery = native_delivery(tmp_path, monkeypatch)
+    delivery = native_delivery(tmp_path, monkeypatch, large=True)
     cb, context = native_callbacks_for(delivery, monkeypatch)
     original = delivery.offload
 
     def large(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        proposal["reviewer_note"] = "x" * 18000
+        assert proposal["schema"] == "closer-semantic-assessment/v2"
+        assert len(result["output"]) > 16384
         result["output"] = json.dumps(proposal)
         return result
 
@@ -913,10 +956,17 @@ def test_batch_strong_validation_summary_cannot_replace_original_proofs(
     def uncertain(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        proposal.update(classification="uncertain", substantive_needs=["offline missing proof"])
-        if tamper == "output_hash":
-            proposal.update(classification="relevant", substantive_needs=[])
-        bound_adjudication(proposal, disputed=True)
+        proposal["global_concerns"] = (
+            []
+            if tamper == "output_hash"
+            else [
+                {
+                    "kind": "ambiguity",
+                    "citations": [],
+                    "explanation": "Declared synthetic independent missing-proof concern.",
+                }
+            ]
+        )
         result["output"] = json.dumps(proposal)
         return result
 
@@ -1022,7 +1072,7 @@ def test_batch_completed_retained_read_fault_never_repeats_provider(
 
     import closer_evidence
 
-    delivery = native_delivery(tmp_path, monkeypatch)
+    delivery = native_delivery(tmp_path, monkeypatch, large=True)
     original = delivery.offload
     strong_calls = []
     original_refs = []
@@ -1030,14 +1080,14 @@ def test_batch_completed_retained_read_fault_never_repeats_provider(
     def low(agent, prompt, **kw):
         result = original(agent, prompt, **kw)
         proposal = json.loads(result["output"])
-        proposal["reviewer_note"] = "x" * 18000
-        if stage != "act":
-            proposal.update(classification="relevant", substantive_needs=[])
-            bound_adjudication(proposal, disputed=True)
+        assert proposal["schema"] == "closer-semantic-assessment/v2"
+        if stage == "act":
+            for row in proposal["obligations"]:
+                row.update(status="satisfied")
+                row.pop("gap", None)
         result.update(
             output=json.dumps(proposal),
         )
-        delivery.proposal_for_strong = proposal
         return result
 
     delivery.low_response = low
@@ -1047,8 +1097,10 @@ def test_batch_completed_retained_read_fault_never_repeats_provider(
         assert (
             stage == "strong_act"
         ), "corrupted completed low evidence must not dispatch strong work"
-        proposal = copy.deepcopy(delivery.proposal_for_strong)
-        response = scoped_response(proposal, envelope["adjudication_request"])
+        response = scoped_response(
+            {"decision": {"criteria": [envelope["selected_row"]]}},
+            envelope["adjudication_request"],
+        )
         return {"exit": 0, "output": json.dumps(response)}
 
     delivery.strong_response = response

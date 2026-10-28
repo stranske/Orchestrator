@@ -62,20 +62,22 @@ def test_finite_cli_known_no_start_releases_only_its_collection_attempt(tmp_path
     first = callbacks["interpret"](target, context)
     assert first["classification"] == "assessment_transport_unavailable"
     assert len(refusals) == 1 and refusals[0]["data_only"] is True
-    assert not calls and not refreshes
+    assert not calls and refreshes == [{"diff_files"}]
     snapshot = context["prepare"]["snapshot"]
     store = recovery.RecoveryStore(tmp_path / "state.json.evidence")
     with store.locked(recovery.digest(recovery.binding(snapshot))) as journal:
         assert len(journal["attempts"]) == 1
-        assert next(iter(journal["attempts"].values()))["state"] == "not_started"
+        attempt = next(iter(journal["attempts"].values()))
+        assert attempt["state"] == "settled" and attempt["outcome"] == "recovered"
+        latest = journal["latest"]
+        assert not latest["plan_actual"].get("run_id")
 
     # The same unchanged packet can now use the restored confined transport;
     # no new observation or artificial retry token is needed for a proven
     # no-spawn refusal. The real recovery journal and rescreen remain active.
     monkeypatch.setattr(dispatcher, "offload", original_offload)
-    second = callbacks["interpret"](target, context)
-    assert second["evidence_recovery"]["outcome"] == "recovered"
-    assert len(calls) == 2 and refreshes == [{"diff_files"}]
+    second = callbacks["interpret"](target, {**context, "prepare": latest["prepare"]})
+    assert len(calls) == 1 and refreshes == [{"diff_files"}]
     assert second["authority"] is False
 
 

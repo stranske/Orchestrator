@@ -725,3 +725,39 @@ def test_muse_accounting_failure_warns_without_discarding_native_deliverable(
     assert captured[0]["raw_exit_codes"] == [0]
     assert captured[0]["window_end_ts"] - captured[0]["window_start_ts"] == 18000
     assert "fixture subscription accounting failed" in capsys.readouterr().err
+
+
+def test_actual_native_failure_retains_only_safe_source_deadline_diagnostic(
+    fake_offload, monkeypatch
+):
+    import time
+
+    import closer_dispatcher as closer
+    import closer_queue as queue
+
+    secret = "SYNTHETIC_PRIVATE_QUERY_NEVER_EXPORT"
+
+    def refused(*a, **kw):
+        client = closer.GitHub(
+            deadline=time.time() + 1, api_fn=lambda *a, **kw: pytest.fail("must not send")
+        )
+        client.api(
+            "repos/private-owner/private-repo/issues/3?token=" + secret,
+            fields={"Authorization": secret},
+        )
+
+    monkeypatch.setattr(d.subprocess, "run", refused)
+    operation = {
+        "action": "correction_coding",
+        "request_started_at": time.time(),
+        "deadline": time.time() + 20,
+        "id": "synthetic",
+    }
+    with queue._callback_invocation("acme/repo#3", operation, time.time):
+        result = d.offload("cursor", "inspect", timeout=1, max_network_retries=0)
+    assert result["exit"] == 126 and result["attempts"] == 1
+    diagnostic = result["read_only_deadline_diagnostic"]
+    assert diagnostic["sanitized_path"] == "/repos/{owner}/{repo}/issues/3"
+    assert diagnostic["method"] == "GET" and diagnostic["phase"] == "before_throttle"
+    assert diagnostic["authority"] is False and diagnostic["retry_authorized"] is False
+    assert secret not in json.dumps(result)

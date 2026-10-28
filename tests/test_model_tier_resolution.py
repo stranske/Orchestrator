@@ -1479,6 +1479,11 @@ def test_closer_selected_profile_is_not_downgraded_by_legacy_mode(
         return profile["profile_id"] == chosen["profile_id"] and requested_role == role
 
     monkeypatch.setattr(roles, "is_runtime_qualified", fixture_role_oracle)
+    # This is the existing fictional argv-only cohort, not production model
+    # quality. Keep exact model/effort pinning independent of the new policy.
+    from test_closer_neutral_routing import synthetic_quality_boundary
+
+    synthetic_quality_boundary.__wrapped__(monkeypatch)
     cap = {
         "agents": {agent: {"state": "ok"}},
         "profiles": {p["profile_id"]: {"state": "ok"} for p in profiles},

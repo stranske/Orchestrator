@@ -1,0 +1,27 @@
+{
+  "added_constant_ast": {
+    "PIPELINE_ADMISSION_PASS_CHECK_LABEL": "8f916b77f50ec2d70061f138bd47f6b6969735e342507d7d1f472fb05b283d3a",
+    "PIPELINE_ADMISSION_PASS_CHECK_TS": "8107339cb4476d7960b3209a27447aa9387352311b188eaf2214a6506dc94610"
+  },
+  "combined_dispatcher_sha256": "121b221335d5a691ea11b287506529ba5afd269d3a395170c95c103a02283525",
+  "current_main": "27104546c69886fe73f2f77d773721c500a98735",
+  "function_delta": {
+    "_deadline_with_pipeline_round": {
+      "after": "df46d69fceebea48c5c3f7a442847df7353ea4904ecd32d0b3515e8108551c0d",
+      "before": "5ef2e441dd8c448e2a6e1a8527c65178799324abafb03ff88d489c99bbae4c6e"
+    },
+    "_main_admitted": {
+      "after": "5241032dd0de1c705f035afd07b7e0e720a6124712494be7a77cfab1370c95da",
+      "before": "7daf3f64bf316ff8658416f6d079293d48c2d10fbd8153bc9626bb3513e536f7"
+    },
+    "pipeline_admission_pass_number": {
+      "after": "d870b0a91a1f3091acd0eafbce6aa585f945cfac0c0a1f5894be08919cf59b40",
+      "before": null
+    }
+  },
+  "historical_snapshots_unchanged": true,
+  "merged_commit": "4b7d14316a319fe60aef54db147c72958d31be36",
+  "schema": "prospective-main982-admission-audit/v1",
+  "scope": "Only reviewed expired-pipeline admission selection, receipt diagnostics and read-only November3 receipt grade; all other families stay under existing exact audits. No qualification rebinding or action authority.",
+  "source_pr": 982
+}

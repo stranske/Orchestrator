@@ -313,6 +313,7 @@ def test_unbound_or_partial_proof_never_gets_semantic_credit(proof, damage, tmp_
 
 
 def test_no_reviewed_production_limits_never_borrows_auth_or_spawns(monkeypatch):
+    before = dict(roles.ROLE_QUALIFICATIONS)
     import closer_claude_auth
 
     monkeypatch.setattr(
@@ -329,7 +330,7 @@ def test_no_reviewed_production_limits_never_borrows_auth_or_spawns(monkeypatch)
             target="offline/repo#1",
             prompt="bounded",
         )
-    assert roles.ROLE_QUALIFICATIONS == {}
+    assert roles.ROLE_QUALIFICATIONS == before
 
 
 def test_strong_descriptor_pins_real_named_evidence_policy_and_dependency_sources():
@@ -535,6 +536,8 @@ def test_actual_inert_supervisor_caller_receipt_semantics_and_restart(
             "collect_evidence",
             retained_dir=Path(packet_ref["path"]).parent.parent,
         )
+        import closer_semantic_assessment as semantic
+
         prompt = model.render_classification_prompt(
             {
                 "target": TARGET,
@@ -554,6 +557,9 @@ def test_actual_inert_supervisor_caller_receipt_semantics_and_restart(
             artifact_rows={},
             data_only=True,
             readiness=readiness,
+            semantic_inventory=semantic.catalog_input(
+                snapshot, packet, packet_ref, Path(packet_ref["path"]).parent.parent
+            ),
         )
         response = proposal
     else:

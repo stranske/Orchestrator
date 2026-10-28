@@ -224,14 +224,12 @@ def _effect(custody, config, request, *, phase, proof_sha, source_ref, seed):
 
 def _issuance_proofs(context, admission, issued_at_ms):
     """Producer-only current qualification snapshots, bound to actual proofs."""
+    import closer_correction_source_record as source
     import closer_dispatcher as closer
     import closer_role_qualification as roles
     import execution_profiles
 
-    proofs = [
-        context[stage]["actual"]["_closer_controlled_proof"] for stage in ("interpret", "exception")
-    ]
-    proofs.append(admission["materializer"]["proof"])
+    proofs = source.original_provider_proofs(context, admission["materializer"])
     snapshots = []
     for proof in proofs:
         expected = proof["expected"]
@@ -244,7 +242,7 @@ def _issuance_proofs(context, admission, issued_at_ms):
             and qualified["qualification_id"] == expected["qualification_id"]
             and closer._contract_digest(qualified) == expected["qualification_record_sha256"]
             and qualified["profile_identity"] == expected["profile_identity"]
-            and qualified["production_model_contract"] == expected["production_model_contract"],
+            and roles.execution_record_matches(qualified, expected, checked_at=issued_at_ms / 1000),
             "current original role qualification differs",
         )
         receipt = closer._read_controlled_receipt(
@@ -264,7 +262,8 @@ def _issuance_proofs(context, admission, issued_at_ms):
         )
         snapshots.append({"proof": proof, "qualification": qualified, "role": role})
     _need(
-        len({p["proof"]["run_id"] for p in snapshots}) == 3, "original role run identities overlap"
+        len({p["proof"]["run_id"] for p in snapshots}) == len(proofs),
+        "original role run identities overlap",
     )
     return snapshots
 
@@ -702,14 +701,13 @@ def _proof_knowledge(record, admission, context, row):
     import execution_profiles
 
     snapshots = json.loads(record["original_proofs_json"])
-    proofs = [
-        context[stage]["actual"]["_closer_controlled_proof"] for stage in ("interpret", "exception")
-    ]
-    proofs.append(admission["materializer"]["proof"])
+
+    proofs = source.original_provider_proofs(context, admission["materializer"])
     _need(
         type(snapshots) is list
-        and len(snapshots) == len(proofs) == 3
-        and len({p["run_id"] for p in proofs}) == 3,
+        and len(snapshots) == len(proofs)
+        and len(proofs) in {1, 3}
+        and len({p["run_id"] for p in proofs}) == len(proofs),
         "original proof/qualification inventory differs",
     )
     cutoff = record["issued_at_ms"] / 1000
@@ -727,7 +725,7 @@ def _proof_knowledge(record, admission, context, row):
             and qualified["qualification_id"] == expected["qualification_id"]
             and qualified["profile_identity"] == expected["profile_identity"]
             and closer._contract_digest(qualified) == expected["qualification_record_sha256"]
-            and qualified["production_model_contract"] == expected["production_model_contract"]
+            and roles.execution_record_matches(qualified, expected, checked_at=cutoff)
             and not roles.qualification_problems(
                 profile, role, now=cutoff, records={qualified["qualification_id"]: qualified}
             ),
@@ -756,7 +754,7 @@ def _proof_knowledge(record, admission, context, row):
     original = closer._read_controlled_receipt(record["source_record_ref"], root)
     _need(
         _hash(original) == record["original_source_record_sha256"]
-        and original["schema"] == source.SCHEMA
+        and original["schema"] in {source.SCHEMA, source.INVITATION_SCHEMA}
         and original["issuer_source_sha256"] == source._LOADED_SOURCE_SHA256
         and original["original_frame"]["state_path"] == context["state_path"]
         and original["original_frame"]["pipeline_run_id"] == context["pipeline_run_id"]
@@ -777,63 +775,96 @@ def _proof_knowledge(record, admission, context, row):
         and intent["original_request"] == admission["request"]
         and source.materializer_arguments(intent, result) == admission["materializer"]
         and decision == result["decision"]
-        and closer._contract_digest(decision) == original["classifier_decision_sha256"]
-        and original["classifier_run_id"] == proofs[-1]["run_id"],
+        and (
+            (
+                original["schema"] == source.INVITATION_SCHEMA
+                and closer._contract_digest(decision) == original["invitation_decision_sha256"]
+                and original["basis_provider_run_id"] == proofs[-1]["run_id"]
+            )
+            or (
+                original["schema"] == source.SCHEMA
+                and closer._contract_digest(decision) == original["classifier_decision_sha256"]
+                and original["classifier_run_id"] == proofs[-1]["run_id"]
+            )
+        ),
         "protected original decision/qualification/request bytes differ",
     )
-    # Replay only the pure semantic projection from the exact emitted classifier
-    # result. This does not call either materializer or a historical role scope.
-    import closer_correction_bridge as bridge
-    import closer_correction_decision as decisions
-    import closer_correction_producer as producer
-    import closer_data_only_execution as execution
+    if original["schema"] == source.INVITATION_SCHEMA:
+        import closer_conservative_intake as intake
 
-    args = admission["materializer"]
-    inputs, classification, prompt, basis, decision_root = producer.prepare(
-        **{
-            k: args[k]
-            for k in (
-                "original_request",
-                "seed_bundle",
-                "source_body",
-                "raw_findings",
-                "retained_packet_ref",
-                "basis",
-            )
-        }
-    )
-    expected = proofs[-1]["expected"]
-    _need(
-        args["basis"] == basis
-        and expected["basis"] == basis
-        and expected["task_type"] == producer.TASK
-        and expected["profile_id"] == args["profile_id"]
-        and expected["prompt"]
-        == execution.validate_payload(prompt, limits=expected["limits"], kind="prompt")
-        and closer._read_controlled_receipt(args["request_ref"], decision_root) == classification
-        and bridge._owner_semantic_digest(admission["request"], intent["inputs"])
-        == original["owner_semantics_sha256"],
-        "original selected classifier prompt/request semantics differ",
-    )
-    qualified = snapshots[-1]["qualification"]
-    projected = decisions.project_explicit_semantics(
-        semantic=closer._strict_response_json(controlled_results[-1]["output"]),
-        request=classification,
-        profile={
-            "id": args["profile_id"],
-            "role": "closer_interpret",
-            "qualification_ref": "github:stranske/Orchestrator:src/closer_role_qualification.py#ROLE_QUALIFICATIONS/"
-            + qualified["qualification_id"],
-            "qualification_sha256": closer._contract_digest(qualified),
-        },
-        **inputs,
-    )
-    projected.update(
-        retained_packet_ref=args["retained_packet_ref"]["path"],
-        decision_evidence_ref=proofs[-1]["provider_result_ref"]["path"],
-    )
-    _need(projected == decision, "original classifier emitted decision differs")
-    source._ordinary_selected({"decision": decision}, admission["request"])
+        _need(len(proofs) == 1, "invitation invented a provider run")
+        projected = intake.retained_invitation_projection(
+            context=context,
+            row=row,
+            materializer=admission["materializer"],
+            strong_result=controlled_results[0],
+        )
+        _need(projected == decision, "original source invitation projection differs")
+        source._ordinary_selected(
+            {
+                "kind": intake.INVITATION_DECISION,
+                "decision": decision,
+                "proof_role": "named_criterion_basis",
+                "proof": proofs[0],
+                "basis_provider_run_id": proofs[0]["run_id"],
+            },
+            admission["request"],
+        )
+    else:
+        # Replay only the pure semantic projection from the exact emitted classifier
+        # result. This does not call either materializer or a historical role scope.
+        import closer_correction_bridge as bridge
+        import closer_correction_decision as decisions
+        import closer_correction_producer as producer
+        import closer_data_only_execution as execution
+
+        args = admission["materializer"]
+        inputs, classification, prompt, basis, decision_root = producer.prepare(
+            **{
+                k: args[k]
+                for k in (
+                    "original_request",
+                    "seed_bundle",
+                    "source_body",
+                    "raw_findings",
+                    "retained_packet_ref",
+                    "basis",
+                )
+            }
+        )
+        expected = proofs[-1]["expected"]
+        _need(
+            args["basis"] == basis
+            and expected["basis"] == basis
+            and expected["task_type"] == producer.TASK
+            and expected["profile_id"] == args["profile_id"]
+            and expected["prompt"]
+            == execution.validate_payload(prompt, limits=expected["limits"], kind="prompt")
+            and closer._read_controlled_receipt(args["request_ref"], decision_root)
+            == classification
+            and bridge._owner_semantic_digest(admission["request"], intent["inputs"])
+            == original["owner_semantics_sha256"],
+            "original selected classifier prompt/request semantics differ",
+        )
+        qualified = snapshots[-1]["qualification"]
+        projected = decisions.project_explicit_semantics(
+            semantic=closer._strict_response_json(controlled_results[-1]["output"]),
+            request=classification,
+            profile={
+                "id": args["profile_id"],
+                "role": "closer_interpret",
+                "qualification_ref": "github:stranske/Orchestrator:src/closer_role_qualification.py#ROLE_QUALIFICATIONS/"
+                + qualified["qualification_id"],
+                "qualification_sha256": closer._contract_digest(qualified),
+            },
+            **inputs,
+        )
+        projected.update(
+            retained_packet_ref=args["retained_packet_ref"]["path"],
+            decision_evidence_ref=proofs[-1]["provider_result_ref"]["path"],
+        )
+        _need(projected == decision, "original classifier emitted decision differs")
+        source._ordinary_selected({"decision": decision}, admission["request"])
     facts = {
         "request": admission["request"],
         "raw_findings": intent["inputs"]["raw_findings"],

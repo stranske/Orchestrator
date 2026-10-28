@@ -1,0 +1,33 @@
+{
+  "schema": "corrective-verifier-deployed-source-evidence/v1",
+  "effective_helper_commit": "c18c14d945cb736e96982dcbb56ca56bfc185ed6",
+  "observed_helper_commit": "375f48c9b203417f20afc91f2d98ed8ab9c2ce58",
+  "observed_run": 40620861168,
+  "observed_job": 122594352832,
+  "caller_repository": "stranske/Orchestrator",
+  "caller_repository_id": 1342306972,
+  "observed_caller_commit": "5d14a7e6c8d4083e4f5798507a13ae378b027064",
+  "caller_sha256": "ab9f3d7618f4b65b6c43b58104bdcd9c92320471dca8fd437b2c34b2c721f9f2",
+  "normative_sources": {
+    ".github/workflows/reusable-agents-verifier.yml": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
+    ".github/scripts/verifier_gzip_assets.js": "b9782f228c0e34d27c9eb457df6ee002c0ddc29ee5c3db2081071392c3e3a6c4",
+    ".github/scripts/verification_event.js": "d2b0e789efba0e966f5c68789e0e5ec8533e615660a7afad26513df67ef1785b",
+    ".github/scripts/agents_verifier_context.js": "7e2ccc0031d754bfeaf9b8f878592b297cf47bb5ea1c3e435bc4be4fb7477b6c",
+    "scripts/langchain/pr_verifier.py": "97c55f4d891c548fafd81de609f58a939627371b55a06a62a53f23e3b8b23435",
+    "tools/verifier_corpus_evidence.py": "9b112e4207c5cc7986f2b2fbc5eb5c846e9b24dfc2f8c2eb803d1d627882fe45"
+  },
+  "observed_normative_sources": {
+    ".github/workflows/reusable-agents-verifier.yml": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
+    ".github/scripts/verifier_gzip_assets.js": "b9782f228c0e34d27c9eb457df6ee002c0ddc29ee5c3db2081071392c3e3a6c4",
+    ".github/scripts/verification_event.js": "d2b0e789efba0e966f5c68789e0e5ec8533e615660a7afad26513df67ef1785b",
+    ".github/scripts/agents_verifier_context.js": "7e2ccc0031d754bfeaf9b8f878592b297cf47bb5ea1c3e435bc4be4fb7477b6c",
+    "scripts/langchain/pr_verifier.py": "97c55f4d891c548fafd81de609f58a939627371b55a06a62a53f23e3b8b23435",
+    "tools/verifier_corpus_evidence.py": "9b112e4207c5cc7986f2b2fbc5eb5c846e9b24dfc2f8c2eb803d1d627882fe45"
+  },
+  "native_normative_diff_files": [
+    ".github/scripts/__tests__/campaign-no-change-qualification.test.js",
+    ".github/scripts/maint71_merge_sync_prs.js",
+    "docs/ops/CONSUMER_REPO_MAINTENANCE.md"
+  ],
+  "evidence_scope": "Native canonical content/ancestry and prior actual helper checkout; not a current corrective PASS, provider call, root admission or fleet-wide deployment claim."
+}

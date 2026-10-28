@@ -351,7 +351,23 @@ def inert_caller(tmp_path, monkeypatch):
     return runtime.InertCaller(controlled, monkeypatch)
 
 
-def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, causes=None):
+def declared_unknown_assessment(prompt, reason="Original criteria still require closer judgment"):
+    """New synthetic test spec: every original obligation remains unproved.
+
+    This is emitted before sealing and never parses or repairs a captured answer.
+    It preserves the old fixture's explicit uncertainty without inventing proof.
+    """
+    from closer_typed_semantic_broker_fixture import delivered_inventory, emit_assessment
+
+    view = delivered_inventory(prompt)
+    gold = [
+        {"source": row["source"], "criterion": row["text"], "result": "UNKNOWN", "proofs": []}
+        for row in view["obligations"]
+    ]
+    return emit_assessment(prompt, gold, global_explanations=[reason])
+
+
+def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True):
     import time
 
     import test_closer_dispatcher as runtime
@@ -412,47 +428,24 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
     manifest.write_bytes(evidence._bytes(packet))
     prep = readiness_tests.prepared(tmp_path, snap, packet)
     callbacks, calls, refreshes = {}, [], []
+    import closer_semantic_assessment as semantic
+
+    source_host_plan = semantic.host_collection_plan
+    host_plans = []
+
+    def observed_host_plan(*args, **kwargs):
+        plan = source_host_plan(*args, **kwargs)
+        host_plans.append(copy.deepcopy(plan))
+        return plan
+
+    monkeypatch.setattr(semantic, "host_collection_plan", observed_host_plan)
     backend = runtime.closer(tmp_path, snap, apply=True, workers=True)
     caller = inert_caller(tmp_path, monkeypatch)
     monkeypatch.setattr(dispatcher, "GitHub", lambda **_kw: backend.gh)
 
     def offload(_agent, prompt, **_kw):
         calls.append(prompt)
-        if "gap-directed second-pass" in prompt:
-            screen = evidence.action_evidence_readiness(
-                snap, packet, "collect_evidence", retained_dir=root
-            )
-            response = {
-                "target": snap["target"],
-                "head": snap["head"],
-                "base": snap["base"],
-                "classification": "relevant",
-                "substantive_needs": [],
-                "findings": [],
-                "evidence_requests": [
-                    {
-                        "requirement_id": r["id"],
-                        "necessity": "necessary",
-                        "reason": "Fetch the exact missing section",
-                    }
-                    for r in recovery.required(screen)
-                ],
-                "collection_causes": (
-                    causes
-                    if causes is not None
-                    else [{"kind": "transient_api_failure", "section": "diff_files"}]
-                ),
-            }
-        else:
-            response = {
-                "target": snap["target"],
-                "head": snap["head"],
-                "base": snap["base"],
-                "classification": "uncertain",
-                "substantive_needs": ["Original criteria still require closer judgment"],
-                "findings": [],
-                "decision": {"criteria": []},
-            }
+        response = declared_unknown_assessment(prompt)
         return caller.response({"exit": 0, "output": json.dumps(response)}, _agent, prompt, **_kw)
 
     monkeypatch.setattr(transport, "offload", offload)
@@ -475,7 +468,10 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
 
     monkeypatch.setattr(dispatcher, "collect_native_evidence", collect)
     args = SimpleNamespace(
-        state=str(tmp_path / "state.json"), shadow=False, max_workers=1, evidence_recovery=True
+        state=str(tmp_path / "state.json"),
+        shadow=False,
+        max_workers=1,
+        evidence_recovery=True,
     )
 
     def invoke(stage, target, context):
@@ -500,6 +496,7 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
         }
     )
     callbacks["_inert_caller"] = caller
+    callbacks["_host_plans"] = host_plans
     return (
         callbacks,
         {"prepare": prep, "deadline": time.time() + 100, "revision": snap["revision"]},
@@ -511,14 +508,15 @@ def recovery_callbacks(tmp_path, monkeypatch, *, recover, initial_missing=True, 
 def test_real_dispatcher_collects_then_rescreens_and_reenters_same_closer(tmp_path, monkeypatch):
     callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
     result = callbacks["interpret"](context["prepare"]["snapshot"]["target"], context)
-    assert len(calls) == 2
-    assert "gap-directed second-pass" in calls[0] and "gap-directed second-pass" not in calls[1]
+    assert len(calls) == 1
+    assert "gap-directed second-pass" not in calls[0]
+    assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
     assert refreshes == [{"diff_files"}]
     assert result["evidence_recovery"]["outcome"] == "recovered"
     assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
     assert not result.get("accepted") and result["authority"] is False
     actual_runs = callbacks["_inert_caller"].results
-    assert len(actual_runs) == 2
+    assert len(actual_runs) == 1
     for actual in actual_runs:
         reference = actual["provider_result_ref"]
         path = Path(reference["path"])
@@ -542,7 +540,8 @@ def test_real_dispatcher_retains_no_progress_and_does_not_buy_another_collection
     assert first["evidence_recovery"]["outcome"] == "no_progress"
     second = callbacks["interpret"](target, {**context, "prepare": first["recovered_prepare"]})
     assert second["status"] == "pending"
-    assert len(calls) == 1 and refreshes == [{"diff_files"}]
+    assert not calls and refreshes == [{"diff_files"}]
+    assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
 
 
 def test_authoritative_capacity_reset_resumes_one_saved_plan_without_model_recollection(
@@ -566,15 +565,16 @@ def test_authoritative_capacity_reset_resumes_one_saved_plan_without_model_recol
     monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: 100))
     with pytest.raises(dispatcher.RoundCapacityDeferred):
         callbacks["interpret"](target, context)
-    assert len(calls) == 1
+    assert not calls
     waiting = callbacks["interpret"](target, context)
-    assert waiting["status"] == "pending" and len(calls) == 1
+    assert waiting["status"] == "pending" and not calls
     monkeypatch.setattr(recovery, "time", SimpleNamespace(time=lambda: 111))
     result = callbacks["interpret"](target, context)
     assert result["evidence_recovery"]["outcome"] == "recovered"
-    # Original collection model + normal closer assessment; the saved plan was
-    # resumed at the real reset without another collection-model request.
-    assert len(calls) == 2
+    # The saved HOST plan resumes at the real reset with no model planning;
+    # exactly one subsequent ordinary assessment is physically retained.
+    assert len(calls) == 1
+    assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
     assert refreshes == [{"diff_files"}]
 
 
@@ -626,23 +626,13 @@ def test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads(
     model_calls = []
     request = {**log_request(snap), "necessity": level}
 
+    context["prepare"]["recovery_requests"] = recovery.validate_requests(
+        {"evidence_requests": [request]}, snap, {}, {"requirements": []}
+    )
+
     def offload(_agent, prompt, **_kwargs):
         model_calls.append(prompt)
-        response = {
-            "target": snap["target"],
-            "head": snap["head"],
-            "base": snap["base"],
-            "classification": "uncertain",
-            "substantive_needs": (
-                [request["reason"]]
-                if len(model_calls) == 1
-                else ["Original acceptance still needs closer judgment"]
-            ),
-            "findings": [],
-            "decision": {"criteria": []},
-        }
-        if len(model_calls) == 1:
-            response["evidence_requests"] = [request]
+        response = declared_unknown_assessment(prompt)
         return callbacks["_inert_caller"].response(
             {
                 "exit": 0,
@@ -656,7 +646,8 @@ def test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads(
     monkeypatch.setattr(transport, "offload", offload)
     result = callbacks["interpret"](snap["target"], context)
     if level == "necessary":
-        assert len(model_calls) == 2 and len(log_gh.reads) == 3
+        assert len(model_calls) == 1 and len(log_gh.reads) == 3
+        assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
         assert refreshes == [set()]
         assert result["evidence_recovery"]["outcome"] == "recovered"
     else:
@@ -731,19 +722,13 @@ def test_partial_log_progress_is_kept_and_only_unresolved_job_is_retried(tmp_pat
         {**log_request(snap), "locator": {"kind": "job_log", "job_id": 89}},
     ]
 
+    context["prepare"]["recovery_requests"] = recovery.validate_requests(
+        {"evidence_requests": requests}, snap, {}, {"requirements": []}
+    )
+
     def offload(_agent, prompt, **_kwargs):
         model_calls.append(prompt)
-        proposal = {
-            "target": snap["target"],
-            "head": snap["head"],
-            "base": snap["base"],
-            "classification": "uncertain",
-            "substantive_needs": ["Original criteria still require judgment"],
-            "findings": [],
-            "decision": {"criteria": []},
-        }
-        if len(model_calls) == 1:
-            proposal["evidence_requests"] = requests
+        proposal = declared_unknown_assessment(prompt)
         return callbacks["_inert_caller"].response(
             {
                 "exit": 0,
@@ -759,13 +744,14 @@ def test_partial_log_progress_is_kept_and_only_unresolved_job_is_retried(tmp_pat
     assert (
         first["status"] == "pending" and first["evidence_recovery"]["outcome"] == "partial_progress"
     )
-    assert reads == [88, 89] and len(model_calls) == 1
+    assert reads == [88, 89] and not model_calls
+    assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
     ready_second = True
     second = callbacks["interpret"](
         snap["target"], {**context, "prepare": first["recovered_prepare"]}
     )
     assert second["evidence_recovery"]["outcome"] == "recovered"
-    assert reads == [88, 89, 89] and len(model_calls) == 2
+    assert reads == [88, 89, 89] and len(model_calls) == 1
     assert refreshes == [set(), set()]
 
 
@@ -1105,7 +1091,7 @@ def test_assessment_failure_cannot_overwrite_successful_recovery(tmp_path, monke
 
     def fail_assessment(**kwargs):
         routes.append(kwargs)
-        if len(routes) > 1:
+        if len(routes) >= 1:
             if failure == "deadline":
                 raise dispatcher.RoundDeadlineExhausted(deadline=0, remaining_seconds=0)
             raise RuntimeError("low provider capacity snapshot is stale or unavailable")
@@ -1122,8 +1108,8 @@ def test_assessment_failure_cannot_overwrite_successful_recovery(tmp_path, monke
     assert latest["prepare"]["packet_ref"] != context["prepare"]["packet_ref"]
     monkeypatch.setattr(dispatcher, "_pipeline_low_route", original)
     result = callbacks["interpret"](target, {**context, "prepare": latest["prepare"]})
-    assert result["classification"] == "uncertain"
-    assert len(calls) == 2 and refreshes == [{"diff_files"}]
+    assert result["classification"] == "relevant" and result["substantive_needs"]
+    assert len(calls) == 1 and refreshes == [{"diff_files"}]
 
 
 @pytest.mark.parametrize("failure", ["deadline", "capacity_without_reset"])
@@ -1143,7 +1129,7 @@ def test_read_deferral_without_reset_resumes_saved_plan(tmp_path, monkeypatch, f
     monkeypatch.setattr(dispatcher, "collect_native_evidence", original)
     result = callbacks["interpret"](target, context)
     assert result["evidence_recovery"]["outcome"] == "recovered"
-    assert len(calls) == 2 and refreshes == [{"diff_files"}]
+    assert len(calls) == 1 and refreshes == [{"diff_files"}]
 
 
 def test_deadline_before_provider_start_is_retryable_but_uncertain_invocation_is_held(
@@ -1163,8 +1149,11 @@ def test_deadline_before_provider_start_is_retryable_but_uncertain_invocation_is
         callbacks["interpret"](target, context)
     assert not calls
     monkeypatch.setattr(dispatcher, "_execute_profile_route", original)
-    result = callbacks["interpret"](target, context)
-    assert result["evidence_recovery"]["outcome"] == "recovered"
+    records = list((tmp_path / "state.json.evidence" / "recovery").glob("*.json"))
+    latest = json.loads(records[0].read_text())["latest"]
+    assert latest["outcome"] == "recovered" and not latest["plan_actual"].get("run_id")
+    result = callbacks["interpret"](target, {**context, "prepare": latest["prepare"]})
+    assert len(calls) == 1 and result["authority"] is False
 
 
 def test_bounded_job_log_preserves_failure_tail_and_provenance(tmp_path):
@@ -1240,23 +1229,14 @@ def test_deadline_raised_after_provider_invocation_remains_held(tmp_path, monkey
     assert result["status"] == "pending" and len(started) == 1
 
 
-RETAINED_COLLECTION_CASES = json.loads(
-    (Path(__file__).parent / "fixtures" / "collection-cause-retained-four.json").read_text()
-)
-
-
-@pytest.mark.parametrize("case", RETAINED_COLLECTION_CASES, ids=lambda case: case["target"])
-def test_retained_auxiliary_causes_do_not_block_targeted_read_and_reentry(
-    tmp_path, monkeypatch, case
-):
-    callbacks, context, calls, refreshes = recovery_callbacks(
-        tmp_path, monkeypatch, recover=True, causes=case["collection_causes"]
-    )
+def test_source_owned_targeted_read_and_reentry_without_model_cause_carrier(tmp_path, monkeypatch):
+    callbacks, context, calls, refreshes = recovery_callbacks(tmp_path, monkeypatch, recover=True)
     result = callbacks["interpret"](context["prepare"]["snapshot"]["target"], context)
     assert result["evidence_recovery"]["outcome"] == "recovered"
     assert refreshes == [{"diff_files"}]
-    assert len(calls) == 2  # one collection plan, then the same normal closer
-    assert "gap-directed second-pass" in calls[0] and "gap-directed second-pass" not in calls[1]
+    assert len(calls) == 1  # source host plan, then one ordinary assessment
+    assert "gap-directed second-pass" not in calls[0]
+    assert callbacks["_host_plans"][0]["source"] == "existing_readiness_and_admitted_requests"
     assert result["recovered_prepare"]["revision"] == context["prepare"]["revision"]
     assert result["authority"] is False and not result.get("accepted")
 
