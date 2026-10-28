@@ -2278,19 +2278,26 @@ def cursor_closer_native_entry_snapshot(
             pins = payload["policy"]["toml_sha256"]
             if not isinstance(pins, dict) or not pins:
                 raise ValueError("manifest policy.toml_sha256 is empty")
-            named_pins = {f"{Path(name).parent.name}/{Path(name).name}" for name in pins}
-            if len(pins) != 2 or named_pins != _CURSOR_POLICY_PINS:
+            expected_pins = {
+                str(closer_mechanisms.AUTOMATIONS / relative): relative
+                for relative in _CURSOR_POLICY_PINS
+            }
+            if not all(isinstance(name, str) for name in pins) or set(pins) != set(expected_pins):
                 report["pin_set_error"] = {
-                    "missing": sorted(_CURSOR_POLICY_PINS - named_pins),
-                    "unexpected": sorted(named_pins - _CURSOR_POLICY_PINS),
+                    "missing": sorted(
+                        expected_pins[name] for name in set(expected_pins) - set(pins)
+                    ),
+                    "unexpected": sorted(str(name) for name in set(pins) - set(expected_pins)),
                 }
             else:
                 mismatches = []
                 for filename, pinned in sorted(pins.items()):
-                    current = hashlib.sha256(Path(filename).read_bytes()).hexdigest()
+                    path = Path(filename)
+                    if not path.is_absolute() or path.resolve() != path or path.is_symlink():
+                        raise ValueError("canonical policy path retargeted")
+                    current = hashlib.sha256(path.read_bytes()).hexdigest()
                     if current != pinned:
-                        path = Path(filename)
-                        mismatches.append(f"{path.parent.name}/{path.name}")
+                        mismatches.append(expected_pins[filename])
                 report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             report["hash_error"] = type(exc).__name__
