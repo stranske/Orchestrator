@@ -42,3 +42,5 @@ into the historical 375 entry. All six native source blobs and the unchanged
 caller workflow were fetched and validated at their exact commits. Every future
 helper or source change still requires explicit review. No current or historical
 entry supplies typed corrective scope, artifact proof, owner or action authority.
+
+Released4308 helper `826ecfe743dc198aafb1b19c7d9b0b0ac4ff554e` has its own fourth exact entry. Only the parser compatibility comment fingerprint differs from864; guard functions and runtime behavior are unchanged. Historical entries retain their actual source bytes, and unknown future helpers still hold.

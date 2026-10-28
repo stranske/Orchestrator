@@ -55,7 +55,7 @@ def source_world(monkeypatch):
 
 
 def test_original_c18_pin_is_preserved_not_relabelled_observed_run():
-    assert len(readback.DEPLOYED_SOURCE_PINS) == 3
+    assert len(readback.DEPLOYED_SOURCE_PINS) == 4
     pin = readback.DEPLOYED_SOURCE_PINS[0]
     assert pin == {
         "caller_sha256": FACTS["caller_sha256"],

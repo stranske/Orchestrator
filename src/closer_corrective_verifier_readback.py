@@ -29,10 +29,11 @@ CALLEE = ".github/workflows/reusable-agents-verifier.yml"
 CENTRAL = "stranske/Workflows"
 # Whole caller/reusable and normative consumer source fingerprints. An unmerged
 # candidate is not an installed/deployed producer and must not populate this.
-# Three exact native-proven versions, never a moving-main or byte-equivalence rule.
+# Four exact native-proven versions, never a moving-main or byte-equivalence rule.
 # c18 remains a supported historical entry; retained run40620861168 actually
 # checked out375, which therefore has its OWN exact entry. Current merged864
-# includes the reviewed4307 collector fix. Eventual run/attempt/helper/reusable,
+# includes the reviewed4307 collector fix;826 adds the reviewed4308 parser-only
+# compatibility comment. Eventual run/attempt/helper/reusable,
 # canonical-source, upload/artifact and owner/action joins remain unchanged.
 DEPLOYED_SOURCE_PINS: tuple[dict, ...] = (
     {
@@ -72,6 +73,19 @@ DEPLOYED_SOURCE_PINS: tuple[dict, ...] = (
             "tools/verifier_corpus_evidence.py": "9b112e4207c5cc7986f2b2fbc5eb5c846e9b24dfc2f8c2eb803d1d627882fe45",
         },
         "helper_commit": "86450a7a6ba26fdccc77ed50ce7876dc455689cc",
+        "reusable_sha256": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
+    },
+    {
+        "caller_sha256": "ab9f3d7618f4b65b6c43b58104bdcd9c92320471dca8fd437b2c34b2c721f9f2",
+        "central": {
+            ".github/workflows/reusable-agents-verifier.yml": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
+            ".github/scripts/verifier_gzip_assets.js": "b9782f228c0e34d27c9eb457df6ee002c0ddc29ee5c3db2081071392c3e3a6c4",
+            ".github/scripts/verification_event.js": "d2b0e789efba0e966f5c68789e0e5ec8533e615660a7afad26513df67ef1785b",
+            ".github/scripts/agents_verifier_context.js": "0cb1329e483256ce4b40184d7ce8baff00bd1732449d399cdc40fb3e44a0c9a7",
+            "scripts/langchain/pr_verifier.py": "ef95423bc7bb1592d0ad260880a991c5ad801dfe5d0be98d8ff02ac20f0c5630",
+            "tools/verifier_corpus_evidence.py": "9b112e4207c5cc7986f2b2fbc5eb5c846e9b24dfc2f8c2eb803d1d627882fe45",
+        },
+        "helper_commit": "826ecfe743dc198aafb1b19c7d9b0b0ac4ff554e",
         "reusable_sha256": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
     },
 )
