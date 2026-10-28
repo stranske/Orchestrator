@@ -104,7 +104,7 @@ def test_aggregate_fails_when_a_shard_summary_is_missing(summaries):
         verify.aggregate_pytest(summaries)
 
 
-def test_aggregate_sums_counts_and_keeps_the_collected_equality(summaries):
+def test_aggregate_sums_counts_and_keeps_the_collected_equality(summaries, monkeypatch):
     # JUnit's totals deliberately disagree; only the printed summaries may supply counts.
     (summaries / "shard-1.xml").write_text('<testsuite tests="999999" failures="999999"/>')
     result = verify.aggregate_pytest(summaries)
@@ -155,6 +155,37 @@ def test_aggregate_sums_counts_and_keeps_the_collected_equality(summaries):
     assert not verify._floor_problems({"collected": 11, "passed": 10}, result)
     assert verify._floor_problems({"collected": 10, "passed": 10}, result)
     assert verify._floor_problems({"collected": 12, "passed": 10}, result)
+    # Two distinct collected identities are required: duplicate delivery cannot
+    # hide the missing test merely by preserving summed counts/floor equality.
+    pair = summaries / "pair"
+    pair.mkdir()
+    first = json.loads((summaries / "shard-1.json").read_text())
+    with monkeypatch.context() as patch:
+        patch.setattr(verify, "shard_plan", lambda: [["a.py"], ["b.py"]])
+        for index in (1, 2):
+            row = {
+                **first,
+                "shard": f"{index}/2",
+                "output": "1 passed in 1s",
+                "test_inventory": [["full.module.C", f"test_{index}"]],
+                "skip_records": [],
+                "collection_skip_records": [],
+                "inventory_error": None,
+            }
+            (pair / f"shard-{index}.json").write_text(json.dumps(row))
+        unique = verify.aggregate_pytest(pair)
+        assert unique["collected"] == 2 and not verify._floor_problems(
+            {"collected": 2, "passed": 2}, unique
+        )
+        second = json.loads((pair / "shard-2.json").read_text())
+        second["test_inventory"] = [["full.module.C", "test_1"]]
+        (pair / "shard-2.json").write_text(json.dumps(second))
+        with pytest.raises(ValueError, match="duplicate testcase identity across shards"):
+            verify.aggregate_pytest(pair)
+        second.pop("test_inventory")
+        (pair / "shard-2.json").write_text(json.dumps(second))
+        with pytest.raises(ValueError, match="testcase inventory"):
+            verify.aggregate_pytest(pair)
 
 
 def test_failed_shard_counts_reach_the_existing_verifier(summaries):

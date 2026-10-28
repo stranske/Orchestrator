@@ -579,6 +579,7 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
     plan = shard_plan()
     shape, _ = tree_shape()
     parts = []
+    seen_identities: set[tuple[str, str]] = set()
     for index in range(1, len(plan) + 1):
         spec = f"{index}/{len(plan)}"
         path = directory / f"shard-{index}.json"
@@ -633,6 +634,10 @@ def aggregate_pytest(directory: pathlib.Path) -> dict:
             )
         ):
             raise ValueError(f"shard {spec}: missing or invalid testcase inventory")
+        identities = {tuple(row) for row in inventory}
+        if seen_identities.intersection(identities):
+            raise ValueError(f"shard {spec}: duplicate testcase identity across shards")
+        seen_identities.update(identities)
         py["collected"] = len(inventory)
         py["skipped"] = max(0, py["skipped"] - len(collection_skips))
         py["test_inventory"] = inventory

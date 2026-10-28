@@ -409,8 +409,10 @@ import builtins, importlib.util, sys
 from pathlib import Path
 source = Path(sys.argv[1]); sys.path.insert(0, sys.argv[2])
 original = builtins.__import__
+forbidden_attempts = []
 def guarded(name, *args, **kwargs):
     if name.split('.')[0] in {'vibe', 'mistralai', 'httpx'}:
+        forbidden_attempts.append(name)
         raise RuntimeError('forbidden backend import: ' + name)
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
@@ -418,6 +420,7 @@ spec = importlib.util.spec_from_file_location('closer_vibe_observing_backend', s
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module
 spec.loader.exec_module(module)
+assert not forbidden_attempts, 'forbidden backend import attempts: ' + repr(forbidden_attempts)
 assert not any(name.split('.')[0] in {'vibe', 'mistralai', 'httpx'} for name in sys.modules)
 """
     source = Path(v.__file__).resolve()
@@ -432,6 +435,17 @@ assert not any(name.split('.')[0] in {'vibe', 'mistralai', 'httpx'} for name in 
         args + [str(injected), str(source.parent)], capture_output=True, text=True, timeout=30
     )
     assert control.returncode != 0 and "forbidden backend import: httpx" in control.stderr
+    injected.write_bytes(
+        source.read_bytes() + b"\ntry:\n    import httpx\nexcept RuntimeError:\n    pass\n"
+    )
+    swallowed = subprocess.run(
+        args + [str(injected), str(source.parent)], capture_output=True, text=True, timeout=30
+    )
+    assert (
+        swallowed.returncode != 0
+        and "forbidden backend import attempts: ['httpx']" in swallowed.stderr
+    )
+
     assert (
         inspect.signature(v.NativeRequestLimits).parameters["max_output_tokens"].default
         is inspect.Parameter.empty
