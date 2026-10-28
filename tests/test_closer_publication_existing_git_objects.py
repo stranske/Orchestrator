@@ -5,6 +5,7 @@ import errno
 import hashlib
 import os
 import subprocess
+import threading
 
 import pytest
 from test_closer_coding_publication import TEST_POLICY, values
@@ -359,12 +360,18 @@ def _owned_object_descriptors(anchor):
         if holder.fd is not None:
             meta = os.fstat(holder.fd)
             result.append((holder, holder.fd, (meta.st_dev, meta.st_ino, meta.st_mode)))
+        for _path, fd, _original_identity in holder.ancestors.held:
+            meta = os.fstat(fd)
+            result.append((holder.ancestors, fd, (meta.st_dev, meta.st_ino, meta.st_mode)))
     return result
 
 
 def _assert_owned_object_descriptors_closed(owned):
     for holder, fd, identity in owned:
-        assert holder.fd is None
+        if hasattr(holder, "fd"):
+            assert holder.fd is None
+        else:
+            assert holder.held == []
         try:
             meta = os.fstat(fd)
         except OSError as error:
@@ -402,20 +409,47 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(
         "tree_oid": pub._tree_oid(rows),
         "files": rows,
     }
+    commit_raw = git("cat-file", "commit", head)
     # Other pytest/runtime descriptors may close during collection or GC. Only
     # this anchor's own descriptors establish its ownership and release contract.
     unrelated = [os.open(os.devnull, os.O_RDONLY) for _ in range(4)]
-    original_close = os.close
-    anchor = pub._ExistingObjects(
-        repo / ".git/objects", baseline, git("cat-file", "commit", head), policy
-    )
+    original_close, original_open, original_dup = os.close, os.open, os.dup
+    owner_thread = threading.get_ident()
+    created = {}
+
+    def capture(call, *args, **kwargs):
+        fd = call(*args, **kwargs)
+        if threading.get_ident() == owner_thread:
+            meta = os.fstat(fd)
+            created[fd] = (meta.st_dev, meta.st_ino, meta.st_mode)
+        return fd
+
+    def live_created():
+        result = set()
+        for fd, identity in created.items():
+            try:
+                meta = os.fstat(fd)
+            except OSError as error:
+                assert error.errno == errno.EBADF
+            else:
+                if (meta.st_dev, meta.st_ino, meta.st_mode) == identity:
+                    result.add(fd)
+        return result
+
+    # Include transient native opens, so an unregistered descriptor leak also
+    # fails. Observe only this test thread, never pytest/background ownership.
+    monkeypatch.setattr(os, "open", lambda *a, **k: capture(original_open, *a, **k))
+    monkeypatch.setattr(os, "dup", lambda *a, **k: capture(original_dup, *a, **k))
+    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit_raw, policy)
     owned = _owned_object_descriptors(anchor)
     leak_fd = owned[0][1]
     try:
         assert len(anchor.identities) >= 1000
         assert 0 < len(owned) < 40
+        assert live_created() == {fd for _, fd, _ in owned}
         anchor.check()
         assert _owned_object_descriptors(anchor) == owned
+        assert live_created() == {fd for _, fd, _ in owned}
         if lifecycle == "unrelated_cleanup":
             for fd in unrelated:
                 original_close(fd)
@@ -436,6 +470,7 @@ def test_loose_heavy_existing_head_has_constant_held_descriptor_count(
         else:
             anchor.close()
         _assert_owned_object_descriptors_closed(owned)
+        assert live_created() == set()
     finally:
         anchor.close()
         for fd in unrelated:
