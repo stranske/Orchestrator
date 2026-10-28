@@ -32,3 +32,13 @@ The fingerprint fixture records native source facts only. Its unit-test API and
 content projections are explicitly inert; they cannot mint a native execution.
 The separate reviewed source handoff retains actual GET responses, ancestry,
 job-checkout proof, artifact digest and a fresh read-only pre-POST support check.
+
+
+The next source registration retains c18 unchanged, adds the exact observed
+`375f48c9b203417f20afc91f2d98ed8ab9c2ce58` helper for retained run 40620861168,
+and separately pins merged current helper `86450a7a6ba26fdccc77ed50ce7876dc455689cc`.
+The current 4307 collector has a different fingerprint; it is never substituted
+into the historical 375 entry. All six native source blobs and the unchanged
+caller workflow were fetched and validated at their exact commits. Every future
+helper or source change still requires explicit review. No current or historical
+entry supplies typed corrective scope, artifact proof, owner or action authority.

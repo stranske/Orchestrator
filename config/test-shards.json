@@ -111,7 +111,8 @@
     "tests/test_closer_owned_delivery_lineage.py",
     "tests/test_closer_closed_source_admission.py",
     "tests/test_closer_ownership_pagination.py",
-    "tests/test_closer_informational_pr_lineage.py"
+    "tests/test_closer_informational_pr_lineage.py",
+    "tests/test_corrective_verifier_current_source_pins.py"
   ],
   "shards": [
     [
@@ -726,7 +727,8 @@
       "tests/test_closer_owned_delivery_lineage.py",
       "tests/test_closer_closed_source_admission.py",
       "tests/test_closer_ownership_pagination.py",
-      "tests/test_closer_informational_pr_lineage.py"
+      "tests/test_closer_informational_pr_lineage.py",
+      "tests/test_corrective_verifier_current_source_pins.py"
     ]
   ]
 }

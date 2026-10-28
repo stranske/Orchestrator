@@ -54,8 +54,8 @@ def source_world(monkeypatch):
     )
 
 
-def test_pin_is_current_canonical_source_not_relabelled_observed_run():
-    assert len(readback.DEPLOYED_SOURCE_PINS) == 1
+def test_original_c18_pin_is_preserved_not_relabelled_observed_run():
+    assert len(readback.DEPLOYED_SOURCE_PINS) == 3
     pin = readback.DEPLOYED_SOURCE_PINS[0]
     assert pin == {
         "caller_sha256": FACTS["caller_sha256"],
@@ -100,7 +100,7 @@ def test_changed_normative_source_never_reuses_deployed_pin(source_world, path):
         "repository_id",
         "default_branch",
         "helper_movement",
-        "old_observed_helper",
+        "unregistered_historical_helper",
         "forged_record_override",
     ],
 )
@@ -112,10 +112,8 @@ def test_forged_or_changed_native_source_identity_holds(source_world, change):
         w.record["pr"]["repository_id"] += 1
     elif change == "default_branch":
         w.docs[f"repos/{w.repo}"]["default_branch"] = "other"
-    elif change == "old_observed_helper":
-        w.docs[f"repos/{readback.CENTRAL}/branches/main"]["commit"]["sha"] = FACTS[
-            "observed_helper_commit"
-        ]
+    elif change == "unregistered_historical_helper":
+        w.docs[f"repos/{readback.CENTRAL}/branches/main"]["commit"]["sha"] = "e" * 40
     else:
         w.docs[f"repos/{readback.CENTRAL}/branches/main"]["commit"]["sha"] = "b" * 40
         if change == "forged_record_override":
