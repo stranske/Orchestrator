@@ -2,8 +2,8 @@
 
 Only reviewed records in this module qualify a production role. Capacity
 reports, candidate metadata and worker output are not qualification authority.
-The registry intentionally starts empty: fixture success does not qualify a
-real model. Consumers must additionally check installed transport confinement
+Reviewed current native records are finite and role-specific; fixture success
+does not qualify a real model. Consumers must additionally check installed transport confinement
 and acquire the existing shared provider pools before invoking a worker.
 """
 
@@ -33,7 +33,104 @@ ROLES = frozenset(TASK_ROLES.values())
 # Qualification of a repair worker is not permission to run any of these
 # operations: the bound action plan must independently admit the exact fix.
 MECHANICAL_OPERATIONS = frozenset({"format", "lint_fix", "docstring_fix"})
-ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {}
+# One independently reviewed native observation; expiry is not auto-refreshed.
+ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
+    "sonnet-current-role-qualification:98cf04ae2c3b7c89fba34b5e68eecc7d8781ecdaabda872894d24dc30dace7b6": {
+        "schema": "closer-role-qualification/v1",
+        "status": "qualified",
+        "qualification_id": "sonnet-current-role-qualification:98cf04ae2c3b7c89fba34b5e68eecc7d8781ecdaabda872894d24dc30dace7b6",
+        "role": "strong_criterion_adjudication",
+        "profile_identity": {
+            "profile_id": "claude-sonnet-5-5-high-v2",
+            "agent": "claude",
+            "provider": "anthropic",
+            "requested_model": "claude-sonnet-5-5",
+            "reasoning_effort": "high",
+            "permission_mode": "workspace-write",
+            "adapter_version": "claude-cli-profile-v2",
+            "prompt_version": "orchestrator-prompt-v1",
+            "lifecycle_status": "active",
+            "transport_support": ["experiment", "local", "offload"],
+            "capacity_pool_ids": ["claude-subscription"],
+            "requires_explicit_selection": True,
+        },
+        "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
+        "qualified_at": 1793146888.844447,
+        "expires_at": 1793233288.844447,
+        "transport": "offload",
+        "named_criterion_only": True,
+        "confinement": {
+            "data_only": True,
+            "tools": False,
+            "mcp": False,
+            "hooks": False,
+            "project_context": False,
+            "adapter_build_sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+        },
+        "execution_limits": {
+            "schema": "closer-data-only-limits/v1",
+            "role": "strong_criterion_adjudication",
+            "model_contract_sha256": "c91e3ae08ff554d95dcc87734996234b17afd217bae3ecd21e13bff5aed77f8a",
+            "max_prompt_bytes": 65536,
+            "max_final_bytes": 16384,
+            "max_native_result_bytes": 65536,
+            "max_output_tokens": 4096,
+            "max_turns": 1,
+            "timeout_seconds": 60,
+        },
+        "production_model_contract": {
+            "schema": "closer-production-model-contract/v1",
+            "role": "strong_criterion_adjudication",
+            "sources": {
+                "closer_dispatcher.py": "81635a53d3005a6e578f7128b9ed1dae219b872dc6e946f5b4ec1047038b7ead",
+                "dispatcher.py": "ebe1434897ea1bab3cf5da69c0e7f39456f3b0d857e8d5a3ec51c74ec1d7f413",
+                "adapters.py": "4156636c6251e480d2f7bd22dced52fd344028f65e4931b5018127b75f77fbeb",
+                "closer_data_only_execution.py": "68c9dbac68bcf6ee98b403130b3b008f4412c9f8c8eccf8c2b85021038ad14f2",
+                "closer_claude_role_admission.py": "f7dd1ca2616e6f9c6f0bd809b17c29763f0cc76e345756c3891ca0c74011dadf",
+                "transport_saved_result.py": "468697f68fb973c5a37ea7dcbd1226508664935ad997662a90718fbc5087996d",
+                "transport_qualification.py": "b54e9e8d529647615650b9d999eec6a943cb53416fd30f73fce13ad7ad6aedc1",
+                "closer_model_contracts.py": "d0e95012d1cb48e8d275bf1ba3221ed9d931ede48da2321cb1a36bd769a66d62",
+                "closer_role_selection.py": "ee7b429db1e0f48afccfc50ebc2de4e9eb05ada2b64e9bea3998df6dd84ce651",
+                "closer_semantic_assessment.py": "922b5a684a4cb6e2c5f051a8ecde8ae779fc9a07962dcb926e501d45ebef870d",
+                "router.py": "d7b9d4ed8d4d18be040c4e016b80a188f09cbaa8c319b6cd5147e99b298f2069",
+                "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",
+                "closer_adjudication_policy.py": "9ecc5df250160104104c561b6bcfbbb35921891e0cbec6cf0f098a924feb15e1",
+                "closer_disposition.py": "a726f59d1376dacb9b78117bbc7071bd67f7c1c3412e885c9fd9c721c309ca9c",
+                "closer_evidence.py": "b8f70648aaef9768aef8104d8740dd13007e2b57f72b96fb7c3910c3efbf2918",
+                "closer_mechanical_source.py": "af61c2722c4794717eddf36e8986d725978285167d220d2b86c063f25a8bfc67",
+                "closer_mechanical_catalog.py": "86e732b5f9611dbd70b7bdb28011cf189b5ac8ca8b19af9de07542eeb2520b78",
+                "closer_mechanical_executor.py": "21a753583dc734278bd2cd5709a70b181898bb759fbd4e56baa54db15549d7f0",
+                "closer_local_tool_confinement.py": "5152c424069a58d6cf4f93ce43cf2a2c22d81a38e3ffb0cd03d21b179c40365f",
+                "config/closer_role_selection.json": "266263f0a44319b08400fb7f3c1a7e93004b338f0548ea2b70e859332777afbf",
+            },
+            "model_contract": {
+                "request_schema": "closer-criterion-request/v2",
+                "response_schema": "closer-criterion-response/v1",
+                "prompt_builder": "closer_execution_contracts.build_adjudication_prompt",
+                "response_validator": "closer_execution_contracts.validate_adjudication_response",
+                "merge": "closer_execution_contracts.merge_selected_response",
+                "max_prompt_bytes": 65536,
+                "retained_io_required": True,
+                "acceptance_authority": False,
+                "evidence_policy": "closer-adjudication-evidence/v2",
+                "prompt_version": "closer-adjudication-prompt/v2",
+                "controller_action_policy": "closer-adjudication-action-policy/v1",
+            },
+            "authority": False,
+            "contract_sha256": "c91e3ae08ff554d95dcc87734996234b17afd217bae3ecd21e13bff5aed77f8a",
+        },
+        "evidence_refs": [
+            {
+                "reference": "retained-native-evidence:sha256:86659d4edc706a268bd1cefcfba745e373275d5e08bf1118b24be264d09f67ad",
+                "sha256": "86659d4edc706a268bd1cefcfba745e373275d5e08bf1118b24be264d09f67ad",
+            },
+            {
+                "reference": "reviewed-model-quality:sha256:7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+                "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+            },
+        ],
+    }
+}
 _LOGGER = logging.getLogger(__name__)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _IDENTITY_TEXT = (

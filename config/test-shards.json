@@ -100,7 +100,8 @@
     "tests/test_closer_owned_native_read_checks.py",
     "tests/test_closer_read_deadline_diagnostic.py",
     "tests/test_closer_sonnet_role_admission.py",
-    "tests/test_closer_plain_tasks_heading.py"
+    "tests/test_closer_plain_tasks_heading.py",
+    "tests/test_closer_sonnet_reviewed_record.py"
   ],
   "shards": [
     [
@@ -704,7 +705,8 @@
       "tests/test_closer_owned_native_read_checks.py",
       "tests/test_closer_read_deadline_diagnostic.py",
       "tests/test_closer_sonnet_role_admission.py",
-      "tests/test_closer_plain_tasks_heading.py"
+      "tests/test_closer_plain_tasks_heading.py",
+      "tests/test_closer_sonnet_reviewed_record.py"
     ]
   ]
 }

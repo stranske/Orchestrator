@@ -313,6 +313,7 @@ def test_unbound_or_partial_proof_never_gets_semantic_credit(proof, damage, tmp_
 
 
 def test_no_reviewed_production_limits_never_borrows_auth_or_spawns(monkeypatch):
+    before = dict(roles.ROLE_QUALIFICATIONS)
     import closer_claude_auth
 
     monkeypatch.setattr(
@@ -329,7 +330,7 @@ def test_no_reviewed_production_limits_never_borrows_auth_or_spawns(monkeypatch)
             target="offline/repo#1",
             prompt="bounded",
         )
-    assert roles.ROLE_QUALIFICATIONS == {}
+    assert roles.ROLE_QUALIFICATIONS == before
 
 
 def test_strong_descriptor_pins_real_named_evidence_policy_and_dependency_sources():

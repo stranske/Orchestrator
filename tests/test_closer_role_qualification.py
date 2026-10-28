@@ -69,9 +69,8 @@ def qualified(profile, value, role=roles.STRONG_CRITERION_ADJUDICATION, **kwargs
     )
 
 
-def test_production_registry_does_not_fabricate_qualification(profile):
-    assert roles.ROLE_QUALIFICATIONS == {}
-    assert not roles.is_qualified(profile, roles.STRONG_CRITERION_ADJUDICATION, now=NOW)
+def test_empty_registry_does_not_fabricate_qualification(profile):
+    assert not roles.is_qualified(profile, roles.STRONG_CRITERION_ADJUDICATION, now=NOW, records={})
 
 
 @pytest.mark.parametrize("role", sorted(roles.ROLES))

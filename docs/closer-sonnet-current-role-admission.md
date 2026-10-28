@@ -71,3 +71,18 @@ This real-body control uses a fresh inert current-producer packet and the actual
 named request/response builder and proof validators; it is not a native provider
 or historical author execution proof. After composition, source and packet pins
 must still be regenerated before the single actual current-source canary.
+
+## Reviewed current native observation
+
+A single current-source public callback completed on 2026-10-28 at
+00:21:28.844447 UTC with a valid scoped negative answer, one native attempt and
+clean process cleanup. Independent review supports the source-owned Sonnet High
+V2 named-criterion record only. Its explicit expiry is 2026-10-29 at
+00:21:28.844447 UTC, 24 hours from the original observation; this is a reviewed
+finite record, not a newly invented maximum-lifetime policy or automatic refresh.
+
+Public evidence references are content-addressed. The protected local native
+receipt and quality evidence retain their original bytes. Registry insertion
+does not change the observed model descriptor. Fresh confinement, account,
+capacity, pool and action checks remain required for every production call. No
+bounded-inventory interpretation or repair role is enrolled by this record.

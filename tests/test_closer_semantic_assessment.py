@@ -343,9 +343,13 @@ def test_unmodified_host_security_strong_and_parser_ast_and_only_reserved_dispat
     for filename in (
         "closer_disposition.py",
         "closer_execution_contracts.py",
-        "closer_role_qualification.py",
     ):
         assert source_unchanged(base, filename), filename
+    # Reviewed native record insertion changes registry data only. All validator
+    # ASTs remain exact; pin this explicit successor instead of rewriting history.
+    assert hashlib.sha256(source_path("closer_role_qualification.py").read_bytes()).hexdigest() == (
+        "777d487936453695a513ea6fd217c7a7499fd5975f4053710af5e3f683d02617"
+    )
     for filename, allowed in (
         (
             "closer_model_contracts.py",

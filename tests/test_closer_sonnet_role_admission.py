@@ -29,6 +29,9 @@ _ACTUAL_QUALITY = admission._quality
 
 @pytest.fixture
 def world(tmp_path, monkeypatch, request):
+    # Callback controls start unregistered and must never enroll themselves.
+    monkeypatch.setattr(roles, "ROLE_QUALIFICATIONS", {})
+
     def forbidden(*_a, **_kw):
         raise AssertionError("No subprocess/auth/native call in source admission control")
 
