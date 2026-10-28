@@ -3330,7 +3330,6 @@ class _ExistingObjects:
     ):
         baseline = validate_baseline_data(baseline, policy)
         self.path, self.baseline, self.closed = Path(path), _copy(baseline), False
-        self.content_bound = policy["baseline_limits"]["max_total_bytes"]
         self.read_context = read_context
         _need(
             deadline is None or (type(deadline) in (int, float) and 0 < deadline < float("inf")),
@@ -3495,7 +3494,10 @@ class _ExistingObjects:
 
         Loose payloads bind the original SHA256 and native OID. Pack content
         binds its native Git container OID; index/sidecar bytes bind an original
-        SHA256. Normal unchanged barriers perform metadata checks only.
+        SHA256. Every stream is bounded by the ORIGINAL authenticated stat size
+        and original operation deadline. History containers are not HEAD payloads;
+        loose decompressed payloads still bind the validated HEAD size and hashes.
+        Normal unchanged barriers perform metadata checks only.
         """
         import zlib
 
@@ -3516,8 +3518,7 @@ class _ExistingObjects:
             _need(directory is not None, "original object directory unavailable")
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
             _need(
-                self._regular_identity(os.fstat(fd)) == expected
-                and expected[5] <= self.content_bound,
+                self._regular_identity(os.fstat(fd)) == expected,
                 "bounded original object bytes unavailable",
             )
             count = 0

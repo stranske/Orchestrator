@@ -40,6 +40,7 @@ NATIVE_INPUT_COMPONENTS = frozenset(
         "verifier-pr-diff.patch",
         "verifier-diff-summary.md",
         "closer-correction-seeds.json",
+        "verification-event-manifest.json",
     }
 )
 MAX_ARTIFACTS = 20
@@ -2108,6 +2109,12 @@ def _native_manifest_from_archive(archive: bytes, root: Path, *, retain=None) ->
                     ("evaluation-execution.json", "native-evaluation-execution", None, False),
                     ("closer-correction-seeds.json", "native-correction-seeds", None, False),
                     (
+                        "verification-event-manifest.json",
+                        "native-verification-event-manifest",
+                        None,
+                        False,
+                    ),
+                    (
                         "verifier-diff-summary.md",
                         "native-verifier-diff-summary",
                         "diff_summary_sha256",
@@ -2511,6 +2518,36 @@ def _native_verifier_section(
             return _section("pending", {"verifier": marker}, reason="collection deadline reached")
         artifacts_doc = api(f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100")
         inventory = artifacts_doc.get("artifacts", [])
+        if (
+            not isinstance(inventory, list)
+            or not all(isinstance(item, dict) for item in inventory)
+            or artifacts_doc.get("total_count", len(inventory)) != len(inventory)
+        ):
+            return _section("unknown", reason="native artifact inventory incomplete or malformed")
+        names = native_capture_artifact_names(run_id)
+        captures = [item for item in inventory if item.get("name") in names]
+        # These are native observations, not selected input captures or fulfilled
+        # proof obligations. Their availability never authenticates a capture.
+        auxiliary = [
+            {"metadata": item, "capture_requested": False, "proof_status": "not-native-input-proof"}
+            for item in inventory[:MAX_ARTIFACTS]
+            if item.get("name") not in names
+        ]
+        if len(captures) != 1:
+            return _section(
+                "unknown",
+                {
+                    "verifier": marker,
+                    "auxiliary_artifacts": auxiliary,
+                    "unavailable": [
+                        {
+                            "run_id": int(run_id),
+                            "reason": "native input capture missing or ambiguous",
+                        }
+                    ],
+                },
+                reason="native input capture missing or ambiguous",
+            )
         artifacts: list[dict[str, Any]] = []
         missing: list[dict[str, Any]] = []
         manifests: list[dict[str, Any]] = []
@@ -2522,7 +2559,7 @@ def _native_verifier_section(
                 "bytes_remaining": MAX_PACKET_ARCHIVE_BYTES,
             }
         )
-        for artifact in inventory[:MAX_ARTIFACTS]:
+        for artifact in captures:
             ident = {
                 "id": artifact.get("id"),
                 "name": artifact.get("name"),
@@ -2627,6 +2664,7 @@ def _native_verifier_section(
                         for k in ("id", "run_attempt", "status", "conclusion", "head_sha", "event")
                     },
                     "artifacts": artifacts,
+                    "auxiliary_artifacts": auxiliary,
                     "unavailable": missing,
                 },
                 reason="native input manifest missing or ambiguous",
@@ -2650,6 +2688,7 @@ def _native_verifier_section(
             "verifier": marker,
             "run": native_run,
             "artifacts": artifacts,
+            "auxiliary_artifacts": auxiliary,
             "input_manifest": {**presented["manifest"], "raw": manifest_ref},
             **(
                 {"input_manifest_projection": presented["manifest_projection"]}

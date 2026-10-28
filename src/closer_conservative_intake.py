@@ -389,7 +389,7 @@ def try_from_pipeline(target, context, callback):
             "intake_original_receipt_changed",
         )
         return result
-    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
         # No provider was started. Preserve the selected source route as a
         # bounded wait; never invoke a model callback under its IO-only guards.
         return {
@@ -402,6 +402,8 @@ def try_from_pipeline(target, context, callback):
                 "event_id": "source_native_intake_unavailable",
             },
             "reason": "source_native_intake_unavailable",
+            # Exception messages may contain private native inputs or credentials.
+            "failure_type": type(error).__name__[:64],
             "provider_generation_performed": False,
             "authority": False,
         }

@@ -86,11 +86,20 @@ def collect_original_inputs(snapshot, packet, packet_ref):
             for r in artifact.get("receipts", [])
             if r.get("kind") == "native-comparison" and r.get("path") == "comparison.json"
         ]
+        events = [
+            r
+            for r in artifact.get("receipts", [])
+            if r.get("kind") == "native-verification-event-manifest"
+            and r.get("path") == "verification-event-manifest.json"
+        ]
         if seeds:
-            _need(len(seeds) == len(reports) == 1, "correction_native_members_ambiguous")
-            candidates.append((artifact, seeds[0], reports[0]))
+            _need(
+                len(seeds) == len(reports) == len(events) == 1,
+                "correction_native_members_ambiguous",
+            )
+            candidates.append((artifact, seeds[0], reports[0], events[0]))
     _need(len(candidates) == 1, "correction_seed_capture_missing_or_ambiguous")
-    artifact, seed_ref, report_ref = candidates[0]
+    artifact, seed_ref, report_ref, event_ref = candidates[0]
     bundle = _read_controlled_receipt(seed_ref.get("raw"), root)
     report = _read_controlled_receipt(report_ref.get("raw"), root)
     _need(
@@ -104,8 +113,9 @@ def collect_original_inputs(snapshot, packet, packet_ref):
         and bundle.get("result_sha256") == report_ref["raw"]["sha256"],
         "correction_seed_original_result_changed",
     )
-    manifest_ref = (section.get("content") or {}).get("input_manifest", {}).get("raw")
-    manifest = _read_controlled_receipt(manifest_ref, root)
+    # Input snapshot and verification request/material are distinct producer
+    # documents. The event manifest must come from this SAME selected archive.
+    manifest = _read_controlled_receipt(event_ref.get("raw"), root)
     _need(
         manifest.get("verification_event") == bundle["verification_event"]
         and manifest.get("assessment_identity") == bundle.get("assessment_identity")

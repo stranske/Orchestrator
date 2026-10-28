@@ -617,7 +617,7 @@ def test_native_manual_nonpass_requires_exact_manifest_and_source_run(tmp_path):
                 "repository": {"full_name": "acme/repo"},
             }
         if endpoint.endswith("/runs/900/artifacts?per_page=100"):
-            return {"artifacts": [{"id": 9, "name": "verifier-input", "expired": False}]}
+            return {"artifacts": [{"id": 9, "name": "comparison-results-900", "expired": False}]}
         raise AssertionError(endpoint)
 
     snap = snapshot(merge=merge, verifier=marker)

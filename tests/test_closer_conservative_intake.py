@@ -387,21 +387,22 @@ def _fault_routing_control(world, monkeypatch, tmp_path, *, fault, selected, cha
         },
     )
     events, issuing = [], []
+    private_error_text = "SYNTHETIC_CREDENTIAL_NOT_FOR_WAIT_DIAGNOSTIC"
     original_queue = intake._queue
 
     def queue(*args, **kwargs):
         issuing.append(True)
         if fault == "queue":
-            raise OSError("synthetic local queue read failure")
+            raise OSError(private_error_text)
         return original_queue(*args, **kwargs)
 
     def native_inputs(*_):
         if fault == "native_after_ready" and issuing:
-            raise ValueError("synthetic native proof changed after route readiness")
+            raise ValueError(private_error_text)
         return copy.deepcopy(inputs)
 
     def failed_write(*_args, **_kwargs):
-        raise OSError("synthetic receipt write failure")
+        raise OSError(private_error_text)
 
     monkeypatch.setattr(intake, "_queue", queue)
     monkeypatch.setattr(bridge, "collect_original_inputs", native_inputs)
@@ -449,6 +450,12 @@ def _fault_routing_control(world, monkeypatch, tmp_path, *, fault, selected, cha
     if selected:
         result = row["results"]["interpret"]
         assert result["reason"] == "source_native_intake_unavailable"
+        assert result["failure_type"] == (
+            "ValueError" if fault == "native_after_ready" else "OSError"
+        )
+        assert private_error_text not in json.dumps(result)
+        assert result["status"] == "pending" and result["pending_kind"] == "external_event"
+        assert result["next_trigger"] == "reconcile_source_native_intake_before_readmission"
         assert result["provider_generation_performed"] is False
         assert result["authority"] is False
         assert "actual" not in result and "_closer_controlled_proof" not in result

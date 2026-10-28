@@ -719,3 +719,131 @@ def test_stream_verification_scopes_once_per_file_and_keeps_original_deadline(
         assert checks == ["scope", "scope"]
     finally:
         anchor.close()
+
+
+def history_container_fixture(tmp_path, *, head_cap, many_objects=False):
+    """Native history container can exceed HEAD without enlarging HEAD policy."""
+    import shutil
+
+    repo, git, _env, _base, _candidate, _pr, _commit, policy = fixture(tmp_path, packed=False)
+    (repo / "src/fix.py").write_bytes(b"before\n")
+    history = repo / "history"
+    history.mkdir()
+    if many_objects:
+        for index in range(200):
+            (history / str(index)).write_bytes(("historical object " + str(index)).encode())
+    else:
+        (history / "old.bin").write_bytes(
+            b"".join(hashlib.sha256(str(index).encode()).digest() for index in range(8192))
+        )
+    git("add", ".")
+    git("-c", "maintenance.auto=false", "commit", "-m", "retain real native history")
+    shutil.rmtree(history)
+    git("add", "-A")
+    git("-c", "maintenance.auto=false", "commit", "-m", "small current head")
+    git("-c", "pack.writeReverseIndex=true", "repack", "-a", "-d", "-l")
+    policy["baseline_limits"]["max_total_bytes"] = head_cap
+    policy["baseline_limits"]["max_file_bytes"] = head_cap
+    head = git("rev-parse", "HEAD").strip().decode()
+    tree = pub._tree_records(git("ls-tree", "-rz", "--full-tree", head), policy)
+    rows = pub._physical_inventory(
+        repo, policy, lambda: None, original_paths=set(tree), allow_new=False
+    )
+    baseline = {
+        "schema": "closer-publication-baseline-data/v2",
+        "base_oid": head,
+        "head_oid": head,
+        "tree_oid": pub._tree_oid(rows),
+        "files": rows,
+    }
+    assert sum(row["blob"]["size"] for row in rows) < head_cap
+    pub.validate_baseline_data(baseline, policy)
+    return repo, git, baseline, git("cat-file", "commit", head), policy
+
+
+def test_healthy_history_pack_exceeds_head_cap_and_native_freshening_is_not_growth(tmp_path):
+    import time
+
+    repo, git, baseline, commit, policy = history_container_fixture(tmp_path, head_cap=32768)
+    pack = next((repo / ".git/objects/pack").glob("*.pack"))
+    assert pack.stat().st_size > policy["baseline_limits"]["max_total_bytes"]
+    assert all(
+        p.stat().st_size < policy["baseline_limits"]["max_total_bytes"]
+        for p in (repo / ".git/objects/pack").iterdir()
+        if p.suffix != ".pack"
+    )
+    os.utime(pack, (time.time() - 3600, time.time() - 3600))
+    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy)
+    try:
+        original = anchor.summary()
+        before = pack.stat()
+        oid = git("hash-object", "-w", "--stdin", raw=b"before\n").strip().decode()
+        assert oid == next(
+            r["blob"]["git_oid"] for r in baseline["files"] if r["path"] == "src/fix.py"
+        )
+        assert (pack.stat().st_mtime_ns, pack.stat().st_ctime_ns) != (
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        anchor.check()
+        assert anchor.summary() == original
+        cold = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy, prior=original)
+        cold.close()
+    finally:
+        anchor.close()
+
+
+def test_native_history_index_and_reverse_index_are_not_head_payloads(tmp_path):
+    repo, _git, baseline, commit, policy = history_container_fixture(
+        tmp_path, head_cap=512, many_objects=True
+    )
+    for suffix in (".idx", ".rev"):
+        item = next((repo / ".git/objects/pack").glob("*" + suffix))
+        assert item.stat().st_size > policy["baseline_limits"]["max_total_bytes"]
+    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy)
+    try:
+        original = anchor.summary()
+        for item in (repo / ".git/objects/pack").iterdir():
+            os.utime(item, ns=(item.stat().st_atime_ns, item.stat().st_mtime_ns + 1000000))
+        anchor.check()
+        assert anchor.summary() == original
+        cold = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy, prior=original)
+        cold.close()
+    finally:
+        anchor.close()
+
+
+@pytest.mark.parametrize("suffix", [".pack", ".idx", ".rev"])
+@pytest.mark.parametrize("damage", ["same_size_corruption", "truncation"])
+def test_history_container_original_size_and_content_survive_cap_separation(
+    tmp_path, suffix, damage
+):
+    repo, _git, baseline, commit, policy = history_container_fixture(
+        tmp_path, head_cap=512, many_objects=True
+    )
+    item = next((repo / ".git/objects/pack").glob("*" + suffix))
+    original = item.stat()
+    assert original.st_size > policy["baseline_limits"]["max_total_bytes"]
+    anchor = pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy)
+    proof = anchor.summary()
+    mode = original.st_mode & 0o777
+    try:
+        item.chmod(0o600)
+        with item.open("r+b") as stream:
+            if damage == "truncation":
+                stream.truncate(original.st_size - 1)
+            else:
+                stream.seek(10)
+                byte = stream.read(1)
+                stream.seek(10)
+                stream.write(bytes([byte[0] ^ 1]))
+        item.chmod(mode)
+        assert item.stat().st_ino == original.st_ino
+        if damage == "same_size_corruption":
+            assert item.stat().st_size == original.st_size
+        with pytest.raises(pub.PublicationHeld):
+            anchor.check()
+        with pytest.raises(pub.PublicationHeld):
+            pub._ExistingObjects(repo / ".git/objects", baseline, commit, policy, prior=proof)
+    finally:
+        anchor.close()
