@@ -93,7 +93,14 @@
     "tests/test_closer_semantic_role_receiving.py",
     "tests/test_closer_semantic_strong_role_view.py",
     "tests/test_closer_typed_semantic_broker_fixture.py",
-    "tests/test_closer_optional_audit_deferral.py"
+    "tests/test_closer_optional_audit_deferral.py",
+    "tests/test_closer_publication_owned_workspace.py",
+    "tests/test_closer_queue_fixed_refusal.py",
+    "tests/test_closer_publication_existing_git_objects.py",
+    "tests/test_closer_owned_native_read_checks.py",
+    "tests/test_closer_read_deadline_diagnostic.py",
+    "tests/test_closer_sonnet_role_admission.py",
+    "tests/test_closer_plain_tasks_heading.py"
   ],
   "shards": [
     [
@@ -690,7 +697,14 @@
       "tests/test_closer_semantic_role_receiving.py",
       "tests/test_closer_semantic_strong_role_view.py",
       "tests/test_closer_typed_semantic_broker_fixture.py",
-      "tests/test_closer_optional_audit_deferral.py"
+      "tests/test_closer_optional_audit_deferral.py",
+      "tests/test_closer_publication_owned_workspace.py",
+      "tests/test_closer_queue_fixed_refusal.py",
+      "tests/test_closer_publication_existing_git_objects.py",
+      "tests/test_closer_owned_native_read_checks.py",
+      "tests/test_closer_read_deadline_diagnostic.py",
+      "tests/test_closer_sonnet_role_admission.py",
+      "tests/test_closer_plain_tasks_heading.py"
     ]
   ]
 }

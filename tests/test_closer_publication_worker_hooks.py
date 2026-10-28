@@ -18,6 +18,7 @@ from test_closer_coding_session_v2 import consumers
 import closer_coding_publication as publication
 import closer_coding_session_v2 as session
 import closer_coding_worker as worker
+import closer_queue as queue
 
 
 def configured():
@@ -94,6 +95,7 @@ def test_unissued_selected_baseline_block_has_zero_provider_effects():
     effects = []
     env = dict(
         publication_policy=TEST_POLICY,
+        queue=queue,
         publication=publication,
         root=object(),
         controller=object(),
