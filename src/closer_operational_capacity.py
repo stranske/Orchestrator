@@ -319,6 +319,23 @@ def publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:
         return report
 
 
+def declared_profile_ids(report: dict) -> tuple[str, ...] | None:
+    """Return a current native report's closed scope, or ``None`` for global reports.
+
+    A malformed or stale object that merely claims this schema returns an empty
+    scope.  That preserves the ordinary global route while failing closed for a
+    claimed scoped route.
+    """
+    if not isinstance(report, dict) or report.get("schema") != SCHEMA:
+        return None
+    try:
+        if not validate_report(report, now=time.time()):
+            return ()
+    except (KeyError, TypeError, ValueError, OSError):
+        return ()
+    return tuple(report["profile_ids"])
+
+
 def selftest() -> None:
     """Offline invariant checks with disposable operational input paths only."""
     import tempfile

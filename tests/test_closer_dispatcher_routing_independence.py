@@ -479,6 +479,55 @@ class TestPipelineCapacity:
         capacity = adapter._pipeline_capacity()
         assert capacity["exception"] == 0
 
+    @pytest.mark.parametrize(
+        ("schema", "profile_ids", "expected"),
+        [
+            ("closer-operational-capacity/v1", ["claude-explicit"], 1),
+            ("closer-operational-capacity/v1", ["other-profile"], 0),
+            (None, ["claude-explicit"], 0),
+        ],
+    )
+    def test_explicit_profile_requires_matching_scoped_report(
+        self, monkeypatch, schema, profile_ids, expected
+    ):
+        """A named native scope is the only capacity path that admits explicit profiles."""
+        import closer_operational_capacity
+        import execution_profiles
+
+        profile = {
+            "profile_id": "claude-explicit",
+            "agent": "claude",
+            "capacity_pool_ids": ["claude-pool"],
+            "requires_explicit_selection": True,
+        }
+        report = _make_capacity_report(
+            agents_state={agent: {"state": "shed"} for agent in ELIGIBLE_AGENTS},
+            profiles_state={"claude-explicit": {"state": "ok"}},
+            pools_state={"claude-pool": {"state": "ok"}},
+        )
+        report["agents"]["claude"] = {"state": "ok"}
+        if schema is not None:
+            report["schema"] = schema
+            # This unit isolates the dispatcher seam; operational-capacity has
+            # its own exact producer/freshness validation tests.
+            monkeypatch.setattr(
+                closer_operational_capacity, "validate_report", lambda *_a, **_kw: True
+            )
+        report["profile_ids"] = profile_ids
+        monkeypatch.setattr(adapter, "_fresh_capacity_report", lambda: report)
+        monkeypatch.setattr(
+            execution_profiles,
+            "profiles_for_agent",
+            lambda agent, transport, include_explicit=False: (
+                [profile] if agent == "claude" and include_explicit else []
+            ),
+        )
+        monkeypatch.setattr(adapter, "_profile_exception_qualified", lambda *_a, **_kw: True)
+
+        capacity = adapter._pipeline_capacity()
+        assert capacity["exception"] == expected
+        assert capacity["low"] == expected
+
 
 @pytest.fixture(autouse=True)
 def synthetic_role_boundary(monkeypatch):

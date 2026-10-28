@@ -705,16 +705,29 @@ def select_route(
     import closer_role_qualification as roles
 
     usable = {"ok", "warn"}
+    import closer_operational_capacity
+
+    declared = closer_operational_capacity.declared_profile_ids(report)
+    declared_ids = set(declared or ())
     options: dict[str, list[dict[str, Any]]] = {}
     for agent_name, row in report["agents"].items():
         if str(agent_name).casefold() == "aider" or not isinstance(row, dict):
             continue
         if row.get("state") not in usable:
             continue
+        profile_rows = (
+            profiles.profiles_for_agent(agent_name, transport="offload", include_explicit=True)
+            if declared_ids
+            else profiles.profiles_for_agent(agent_name, transport="offload")
+        )
         found = [
             p
-            for p in profiles.profiles_for_agent(agent_name, transport="offload")
+            for p in profile_rows
             if str(p.get("agent", "")).casefold() != "aider"
+            and (
+                (declared is None and not p.get("requires_explicit_selection"))
+                or p.get("profile_id") in declared_ids
+            )
             and adapters.automatic_profile_within_cap(p)
             and roles.is_runtime_qualified(p, roles.BOUNDED_CLASSIFICATION)
             and report["profiles"].get(p["profile_id"], {}).get("state") in usable

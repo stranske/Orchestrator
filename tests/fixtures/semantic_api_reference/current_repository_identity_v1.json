@@ -9,13 +9,13 @@
     "before_fragment": "                    and projection.get(\"repository\") == target.split(\"#\", 1)[0]\n"
   },
   "role_source": {
-    "after_execution_contract": "8adc660e7c173be41f86eefd75258c1a7680149517b714b675a4207a88e27862",
-    "after_file_sha256": "257d746d07e7741e78b239cb1a6e93122e60637913f3505db265f8da03eed553",
+    "after_execution_contract": "0b818202e8d4208332b5ecb48679bf7fdcc8da6eab23719d2f4dc5278f52178a",
+    "after_file_sha256": "ed8d19a20a11b254be34936198151621fd1d602631a5556349f453beaebda092",
     "before_execution_contract": "a4f10abc2bf51b552838cc198cf9a3246424c80bc743e8e9a56a0fcf934d2823",
     "before_file_sha256": "72d866e42d87eb06d1210fb32a90a6d6478abcb70d7163389bc4a3486ea54bed",
     "physical_qualification_performed": false,
     "qualification_record_sha256": "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
   },
   "schema": "current-repository-identity-static-reference/v1",
-  "scope": "Only exact case-insensitive GitHub repository equality for non-authorizing controller correlation. Different repository/owner or malformed projection still excludes binding. No new physical qualification, time renewal or action authority."
+  "scope": "Only exact case-insensitive GitHub repository equality for non-authorizing controller correlation. The reviewed #997 dispatcher capacity/route enumeration repair updates the closed execution-source descriptor from 8adc to 0b81; it performs no physical qualification, time renewal, or action authority change. Different repository/owner or malformed projection still excludes binding."
 }

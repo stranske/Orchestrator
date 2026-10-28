@@ -288,7 +288,7 @@ def before_finite_prepare_source(source):
 REPOSITORY_IDENTITY_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_repository_identity_v1.json"
 )
-REPOSITORY_IDENTITY_SHA256 = "7fe47d02bb5e2f5a36761c2c58447a8b4b9e75f058cd51a14c8b67ba45e3dfd1"
+REPOSITORY_IDENTITY_SHA256 = "166b2176314c73273d47dc4472f783fdcd1513fd3cf5ab76c0525e7116382647"
 
 
 def repository_identity_reference():
