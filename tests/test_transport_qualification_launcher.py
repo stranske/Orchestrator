@@ -942,6 +942,75 @@ def test_monotonic_reference_does_not_discard_lease_setup_time(
     assert report["seconds"] >= 121
 
 
+@pytest.mark.parametrize(
+    "lease_started", [True, "10", float("nan"), float("inf"), -float("inf"), 101.0]
+)
+def test_invalid_original_lease_clock_refuses_before_receipt_or_launch(
+    wave, tmp_path, monkeypatch, lease_started
+):
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: 100.0)
+    lease = launcher.SubscriptionLease("invalid-clock", is_fixture=True)
+    lease.request_started = lease_started
+    with pytest.raises(ValueError, match="original lease monotonic timing is invalid"):
+        launcher.run_wave(
+            wave[1],
+            run_id="invalid-clock",
+            receipt_parent=tmp_path,
+            held_lease=lease,
+            execute=True,
+            oauth_token=TOKEN,
+            runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        )
+    assert not (tmp_path / "invalid-clock").exists()
+
+
+def test_native_lease_missing_original_clock_refuses_before_receipt_or_launch(wave, tmp_path):
+    lease = launcher.SubscriptionLease("missing-clock", is_fixture=False)
+    with pytest.raises(ValueError, match="native execution requires original subscription lease"):
+        launcher.run_wave(
+            wave[1],
+            run_id="missing-clock",
+            receipt_parent=tmp_path,
+            held_lease=lease,
+            execute=True,
+            oauth_token=TOKEN,
+            runtime=launcher.NativeRuntime(),
+        )
+    assert not (tmp_path / "missing-clock").exists()
+
+
+def test_lease_setup_exhausts_whole_wave_while_preflight_remains_available(
+    wave, tmp_path, monkeypatch
+):
+    clock = [0.0]
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    preflight_checks = []
+    monkeypatch.setattr(
+        launcher.PreflightBudget, "check", lambda _self: preflight_checks.append(True)
+    )
+    with launcher.held_subscription_lease(
+        "whole-setup", deadline=time.time(), offline_root=tmp_path / "whole-setup-pool"
+    ) as lease:
+        clock[0] = 110.0
+        report = launcher.run_wave(
+            wave[1],
+            run_id="whole-setup",
+            receipt_parent=tmp_path,
+            held_lease=lease,
+            execute=True,
+            oauth_token=TOKEN,
+            wave_seconds=100,
+            runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        )
+    assert report["status"] == "stopped"
+    assert report["cli_launch_count"] == 0
+    assert report["preflight_seconds"] == 110 < 120
+    assert report["seconds"] == 110
+    assert preflight_checks == []  # whole-wave guard fires before the independent preflight check
+    assert read_receipt(report, 1)["failure_type"] == "ValueError"
+    assert read_receipt(report, 1)["failure_stage"] == "prelaunch_hash_lease_argv"
+
+
 def test_kill_group_does_not_equate_reaped_leader_with_group_absence(monkeypatch):
     class LeaderGone:
         pid = 123456789
