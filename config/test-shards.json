@@ -105,7 +105,8 @@
     "tests/test_closer_conservative_intake.py",
     "tests/test_closer_conservative_invitation.py",
     "tests/test_closer_review_diagnostic_contracts.py",
-    "tests/test_verifier_native_bot_origin.py"
+    "tests/test_verifier_native_bot_origin.py",
+    "tests/test_corrective_verifier_deployed_pins.py"
   ],
   "shards": [
     [
@@ -714,7 +715,8 @@
       "tests/test_closer_conservative_intake.py",
       "tests/test_closer_conservative_invitation.py",
       "tests/test_closer_review_diagnostic_contracts.py",
-      "tests/test_verifier_native_bot_origin.py"
+      "tests/test_verifier_native_bot_origin.py",
+      "tests/test_corrective_verifier_deployed_pins.py"
     ]
   ]
 }

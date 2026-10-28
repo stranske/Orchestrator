@@ -1,6 +1,6 @@
 """Exact corrective evaluator input readback over existing native read transport.
 
-Source pins stay empty until reviewed canonical code is actually deployed. Native
+Source pins record reviewed canonical code actually deployed centrally. Native
 metadata, receipt and source checks authenticate the artifact; fixture hashes,
 comment text or a compact corrective row alone never establish scope coverage.
 """
@@ -29,7 +29,25 @@ CALLEE = ".github/workflows/reusable-agents-verifier.yml"
 CENTRAL = "stranske/Workflows"
 # Whole caller/reusable and normative consumer source fingerprints. An unmerged
 # candidate is not an installed/deployed producer and must not populate this.
-DEPLOYED_SOURCE_PINS: tuple[dict, ...] = ()
+# Current canonical Workflows c18, caller fingerprint observed at Orchestrator
+# 5d14. Run40620861168 actually checked out375; its six normative sources are
+# byte-identical, not an assertion that that run executed c18. Fresh pre-POST
+# branch/content checks and eventual native job/checkout/artifact checks remain.
+DEPLOYED_SOURCE_PINS: tuple[dict, ...] = (
+    {
+        "caller_sha256": "ab9f3d7618f4b65b6c43b58104bdcd9c92320471dca8fd437b2c34b2c721f9f2",
+        "central": {
+            ".github/workflows/reusable-agents-verifier.yml": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
+            ".github/scripts/verifier_gzip_assets.js": "b9782f228c0e34d27c9eb457df6ee002c0ddc29ee5c3db2081071392c3e3a6c4",
+            ".github/scripts/verification_event.js": "d2b0e789efba0e966f5c68789e0e5ec8533e615660a7afad26513df67ef1785b",
+            ".github/scripts/agents_verifier_context.js": "7e2ccc0031d754bfeaf9b8f878592b297cf47bb5ea1c3e435bc4be4fb7477b6c",
+            "scripts/langchain/pr_verifier.py": "97c55f4d891c548fafd81de609f58a939627371b55a06a62a53f23e3b8b23435",
+            "tools/verifier_corpus_evidence.py": "9b112e4207c5cc7986f2b2fbc5eb5c846e9b24dfc2f8c2eb803d1d627882fe45",
+        },
+        "helper_commit": "c18c14d945cb736e96982dcbb56ca56bfc185ed6",
+        "reusable_sha256": "4970235b5970773b72d824dc8b1a7fa9b0046a6ef19d1db20e752733e624ca52",
+    },
+)
 SOURCE_FILES = (
     CALLEE,
     ".github/scripts/verifier_gzip_assets.js",

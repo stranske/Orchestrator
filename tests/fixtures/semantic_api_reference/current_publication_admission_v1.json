@@ -228,22 +228,24 @@
     },
     "closer_queue.py": {
       "added_top_level_ast": {
-        "_ReadFailureEnvelope": "e0f59f12c0876a4148b951f075bb7e09a72162b07221e01e23484397a2c02863",
-        "_ReadTiming": "63a3db5f0fff47d39e1df5c51f1f307bf7691e5ff37cd3a65045b935ca648cc9",
-        "_attach_read_failure": "5c842f6724e5a316ffc09df817b7a42abd96192106c7f27400ca5199fb6c1d8b",
-        "_coding_timing_point": "9f034124e3c7876004f5eb0999f15af4183465bf1c03baf4857319d24ae8126f",
+        "_ReadFailureEnvelope": "d02c3afac03c7662e3e43f07cab01a7896ceccff5cf6ee70401a520a35a32ca9",
+        "_ReadTiming": "967f7e8a4d0c87bfe13c60adeb4dab2eec0019c5280ea86c245d7bd2ea4badd9",
+        "_attach_read_failure": "44e4a7da5ad3815fc4198ea2178f4e43abbc7241c17b7cf145348d169f4ac4e2",
+        "_coding_timing_point": "efc1d8b688b52d877e33c81e9d46597284add2c833e910bee15c469e04f41d01",
         "_fixed_controller_refusal": "c0e6e84fc958ef532719e49613279d838d897fc04d88435c4d9b53dcea2b16ab",
         "_native_read_failure": "ea6ca8d3e103b9d86924578ab5f140dd843815e705d384f8da71a3773074d9ca",
+        "_note_read_capture_failure": "d8aac6c21008e240489ba49c84fcb6e66e1fc08bbcf2a9396979c3a1d0cd495b",
+        "_queued_read_capture_error": "11a6483e3e0abf493e63343d27ee8fe7e582fdb8e6ae328aa2c435a0211ac299",
         "_queued_read_failure": "d3804b41fc6c8bf2abf10a0afcad386bb1b8762e4a0087ac80470064e8b2ef4f",
         "_read_api_caller": "2b2a12d5e66760f156d22c85eb18dfaa633a601f5ca7b474f28771f0cc6267c9",
-        "_read_deadline_failure": "0624e5fbf931a6d9d4232fc20903ecb5131a050d7261e662685a1b1fc47fc06f",
+        "_read_deadline_failure": "d912722a2792ac3470147fd0e248d28aaf5f811f425bd4957afe54ae68add80f",
         "_read_timing": "47a64d400c64480d59ac4531737f2e43dc1bf5cde558817b0502ec8a8cf4442b",
-        "_read_timing_finish": "32c2211a42937b15389adfbd7e928850d75cca6d29822fbc4e83eb9e05cbac5b",
-        "_read_timing_start": "fe4f668d5f181cc91b3985a992df6752917115befae58487f0e5a84e765b8f38",
+        "_read_timing_finish": "5f427a18a6d7261d09047bf45051a82deb4679cf0d9ef9ab915c4f6e0154eb5b",
+        "_read_timing_start": "b93fc627bcb427b7c0f0f84207f33a50300a6c462bf929d8173c01840330c03a",
         "_safe_read_endpoint": "51846c9136aae53ee3adb1ac6829d2ee5e4dc8a3c372f234702420de3edeaccb",
         "_validated_read_payload": "0137f2fa867f12f0878441d4520ae7844b23dd83aba3c56ec91959d390973e91"
       },
-      "after_file_sha256": "26d4ea7f40f64101adedff94459356c5d63099580f2c6ef3ade6aaab1f136681",
+      "after_file_sha256": "5b8138340e7284d0f5a8f09f5e1f22cb4891bb78a9330f703b7b280dffc723dd",
       "before_file_sha256": "fe9f02c66e58d81d8ce0b1828098ad4dcbf4e5af906f9d34d62c8bb15265329d",
       "before_top_level_ast": {
         "QueueStateError": "c18be450f73c21830ccbb823bbdc125d958376a9a292252254843d05af3d6266",
@@ -301,7 +303,7 @@
           "before": "a1b485aab3686eea62a911dc7801c0d93e85723eddb5ff87d2ad36959c8e8106"
         },
         "run_round": {
-          "after": "3bf7cf0ecb230c962ddf69634de02bb9a9d0ee7e65dc668cdfc9d1190bce4833",
+          "after": "27c2f233fdf1bd253b33d9f596810c16e43c12261e898bda945c4cbfc89618ce",
           "before": "03c1c2f90b937bc006751116cf114274ca9477a64c0e115751c26dae82007de7"
         }
       },
@@ -323,6 +325,21 @@
     "scope": "Move publication-key detection inside existing per-campaign hold boundary; other native AST families and historical fixtures unchanged.",
     "source_commit": "d3f4c02b4aefef6a7a05c45f6b626fe4eedb9793",
     "source_commit_prefix": "d3f4c02b"
+  },
+  "reviewed_native_followups": {
+    "diagnostics": {
+      "queue_prior_after_sha256": "26d4ea7f40f64101adedff94459356c5d63099580f2c6ef3ade6aaab1f136681",
+      "scope": "Private nonauthoritative capture-failure class marker; original UNKNOWN and no-effect boundary preserved.",
+      "source_leaf": "c61c53f4ae6e48f921dcf4c17cdeb16d7f977a2a"
+    },
+    "role_registry": {
+      "after_file_sha256": "22c548797584abac3a32ebbccf047c8bdaf44be8d62b528f03400aa85e4a3234",
+      "after_registry_ast_sha256": "842c21686f26aada85f03997ffc57b320fc166375adb68d4f895618affbce799",
+      "before_file_sha256": "777d487936453695a513ea6fd217c7a7499fd5975f4053710af5e3f683d02617",
+      "before_registry_ast_sha256": "1b641a02bee68eb27faa8bae93f708bdd39fc44ddbc2ba8a92378fd2d912c330",
+      "outside_registry_ast_sha256": "32bd5aae9a059c92c44472c9502a169d42ecb2784381f5495fc35fb1bbcaa447",
+      "scope": "Only reviewed actual e033 descriptor Sonnet role record successor; validator and other module AST unchanged."
+    }
   },
   "reviewed_source_leaves": [
     "e5bc72a9",

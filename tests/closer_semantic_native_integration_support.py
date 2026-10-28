@@ -1,11 +1,12 @@
 """Explicit native0953 + semantic-v2 test baseline; historical data stays intact."""
 
+import ast
 import copy
 import hashlib
 import json
 from pathlib import Path
 
-from closer_semantic_audit_support import reference
+from closer_semantic_audit_support import fingerprint, reference, source_path
 
 MANIFEST = Path(__file__).parent / "fixtures/semantic_api_reference/native_0953_guard_audits.json"
 MANIFEST_SHA256 = "e112f9f7152621f13470e8da11950aa9b29e000ee4bcba846ce3c1701ca995b3"
@@ -69,7 +70,7 @@ def audit_deferral_reference():
 PUBLICATION_ADMISSION_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_publication_admission_v1.json"
 )
-PUBLICATION_ADMISSION_SHA256 = "fc3157ee92924c00058fb1609f7651e8f76d64d51a916e449e6c3f7c6c139f0d"
+PUBLICATION_ADMISSION_SHA256 = "990854306667d809d1a604fe8eb3b0537ed2a10b9923f9a38b06038009231da8"
 
 
 def publication_admission_reference():
@@ -84,3 +85,22 @@ def integrated_native_source_reference():
         assert original[name] == change["before_file_sha256"]
         original[name] = change["after_file_sha256"]
     return original
+
+
+def assert_reviewed_role_registry_successor(source=None):
+    """Pin the reviewed record while preserving every other module AST statement."""
+    change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
+    raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    registry = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "ROLE_QUALIFICATIONS"
+    ]
+    assert len(registry) == 1
+    tree.body.remove(registry[0])
+    assert fingerprint(tree) == change["outside_registry_ast_sha256"]
+    assert fingerprint(registry[0]) == change["after_registry_ast_sha256"]

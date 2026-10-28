@@ -10,10 +10,14 @@ import pytest
 from closer_semantic_audit_support import (
     fingerprint,
     original_act_merge,
-    source_path,
     source_unchanged,
 )
-from closer_semantic_native_integration_support import integrated_reference as reference
+from closer_semantic_native_integration_support import (
+    assert_reviewed_role_registry_successor,
+)
+from closer_semantic_native_integration_support import (
+    integrated_reference as reference,
+)
 from test_closer_semantic_host_glue import candidate, disputed
 
 import closer_dispatcher as closer
@@ -152,6 +156,4 @@ def test_dispatcher_ast_only_reserved_semantic_hunks_and_exact_one_act_merge():
 
     # Exact reviewed native-registry data successor; validation function ASTs
     # remain unchanged, and the historical audit fixture is not rewritten.
-    assert hashlib.sha256(source_path("closer_role_qualification.py").read_bytes()).hexdigest() == (
-        "777d487936453695a513ea6fd217c7a7499fd5975f4053710af5e3f683d02617"
-    )
+    assert_reviewed_role_registry_successor()
