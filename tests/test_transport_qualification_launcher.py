@@ -917,6 +917,31 @@ def test_lease_setup_time_counts_against_preflight_and_whole_wave(wave, tmp_path
     assert report["preflight_seconds"] >= 120 and report["seconds"] >= 121
 
 
+@pytest.mark.parametrize("clock_start", [-100.0, 0.0, 10.0])
+def test_monotonic_reference_does_not_discard_lease_setup_time(
+    wave, tmp_path, monkeypatch, clock_start
+):
+    clock = [clock_start]
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    with launcher.held_subscription_lease(
+        "lease-clock", deadline=time.time(), offline_root=tmp_path / "lease-clock-pool"
+    ) as lease:
+        clock[0] += 121  # elapsed setup is real to this clock, independent of its origin
+        report = launcher.run_wave(
+            wave[1],
+            run_id="lease-clock",
+            receipt_parent=tmp_path,
+            held_lease=lease,
+            execute=True,
+            oauth_token=TOKEN,
+            runtime=launcher.FixtureRuntime(wave[0], launcher.file_sha(wave[0])),
+        )
+    assert report["status"] == "stopped"
+    assert report["cli_launch_count"] == 0
+    assert report["preflight_seconds"] >= 120
+    assert report["seconds"] >= 121
+
+
 def test_kill_group_does_not_equate_reaped_leader_with_group_absence(monkeypatch):
     class LeaderGone:
         pid = 123456789
