@@ -290,6 +290,9 @@ def _world(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(reconcile, "MANIFEST_SHA256", _sha(manifest_path))
     monkeypatch.setattr(reconcile, "HEAD", "h" * 40)
+    monkeypatch.setattr(reconcile, "STATE_REVISION", campaign["revision"])
+    monkeypatch.setattr(reconcile, "STATE_SHA256", _sha(state))
+    monkeypatch.setattr(reconcile, "RESULT_SHA256", _sha(result_path))
 
     def gh(endpoint):
         content = base64.b64encode(ctl.canonical(index)).decode()
@@ -339,6 +342,26 @@ def test_plan_and_seal_preserve_unknown_bytes(tmp_path, monkeypatch):
     result.write_bytes(before + b" ")
     with pytest.raises((ValueError, RuntimeError)):
         reconcile.validate(reference, manifest, state, "worker")
+
+
+@pytest.mark.parametrize("changed", ["revision", "unrelated_state_field", "result_encoding"])
+def test_first_observation_requires_exact_reviewed_census(tmp_path, monkeypatch, changed):
+    manifest, state, result, _ = _world(tmp_path, monkeypatch)
+    if changed == "result_encoding":
+        # Even the same parsed result is not the original retained byte stream.
+        result.write_bytes(result.read_bytes() + b" ")
+    else:
+        document = json.loads(state.read_bytes())
+        if changed == "revision":
+            document["revision"] += 1
+        else:
+            document["unreviewed"] = "all checked lifecycle fields remain identical"
+        _write(state, document)
+    before = state.read_bytes(), result.read_bytes()
+    with pytest.raises(reconcile.ReconciliationError, match="reviewed original census"):
+        reconcile.collect(manifest, state, "worker")
+    assert (state.read_bytes(), result.read_bytes()) == before
+    assert not list(tmp_path.rglob("retained-no-b-current-*.json"))
 
 
 def test_duplicate_collect_and_changing_github_snapshot_refuse(tmp_path, monkeypatch):
