@@ -191,8 +191,9 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     )
     verified = cast(dict[str, Any], verification)
     _canonical(verified["snapshot_path"])
-    mirror = (Path.home() / ".codex/orchestrator-mirror").resolve()
-    inspector = Path.home() / ".codex/orchestrator-mirror/scripts/install_verified_snapshot.py"
+    mirror = (Path.home() / ".codex/orchestrator-mirror").parent.resolve() / "orchestrator-mirror"
+    physical_mirror = mirror.resolve()
+    inspector = physical_mirror / "scripts/install_verified_snapshot.py"
     try:
         generation = subprocess.run(
             [
@@ -228,6 +229,7 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         "installed_generation": record["installed_generation"],
         "snapshot_digest": verified["snapshot_digest"],
         "mirror": str(mirror),
+        "physical_mirror": str(physical_mirror),
         "python": str(Path(sys.executable).resolve()),
         "inspector": str(inspector),
         "inspector_sha256": _sha(host._read(inspector)[1]),
