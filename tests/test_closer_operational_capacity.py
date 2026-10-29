@@ -89,6 +89,34 @@ def test_fresh_metrics_exact_new_profiles_and_shared_balance(host):
     assert scoped.validate_report(report, now=NOW)
 
 
+def test_declared_profiles_require_a_current_valid_operational_report(host, monkeypatch):
+    """Scoped admission cannot be forged by a schema/profile_ids lookalike."""
+    cfg, _, _ = host
+    report = scoped.evaluate(cfg, now=NOW)
+    monkeypatch.setattr(scoped.time, "time", lambda: NOW)
+    assert scoped.declared_profile_ids(report) == (PROFILE,)
+
+    stale = copy.deepcopy(report)
+    stale["expires_at"] = NOW
+    assert scoped.declared_profile_ids(stale) == ()
+
+    malformed = {"schema": scoped.SCHEMA, "profile_ids": [PROFILE]}
+    assert scoped.declared_profile_ids(malformed) == ()
+
+    global_report = copy.deepcopy(report)
+    global_report.pop("schema")
+    assert scoped.declared_profile_ids(global_report) is None
+
+    report_path = Path(cfg["runtime_manifest"]).parent / "oversized-report.json"
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", str(report_path))
+    for field in ("original_deadline", "generated_at", "expires_at"):
+        overflowing = copy.deepcopy(report)
+        overflowing[field] = 10**4000
+        assert scoped.declared_profile_ids(overflowing) == ()
+        report_path.write_text(json.dumps(overflowing))
+        assert closer_dispatcher._fresh_capacity_report() is None
+
+
 @pytest.mark.parametrize("kind", ["missing", "stale"])
 def test_trial_permission_is_not_quota_freshness(host, kind):
     cfg, polls, _ = host

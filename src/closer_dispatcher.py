@@ -4970,7 +4970,7 @@ def _fresh_capacity_report():
         ):
             return None
         return report
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
         return None
 
 
@@ -5702,12 +5702,11 @@ def _pipeline_capacity():
     # Count distinct currently usable classification-qualified pools. The shared reservation
     # lock arbitrates any overlap with the strong exception lane at dispatch time.
     low_pools = set()
-    import execution_profiles
 
     for agent, row in report["agents"].items():
         if row.get("state") not in {"ok", "warn"}:
             continue
-        for profile in execution_profiles.profiles_for_agent(agent, transport="offload"):
+        for profile in _report_profiles_for_agent(report, agent, transport="offload"):
             if (
                 str(agent).casefold() == "aider"
                 or str(profile.get("agent", "")).casefold() == "aider"
@@ -5720,16 +5719,37 @@ def _pipeline_capacity():
                         low_pools.add(pool)
     # Exception work is now admitted through any eligible agent with capability-qualified
     # approved registered profiles. Check all eligible agents (excluding Aider).
-    import execution_profiles
-
     exception = int(
         any(
             _profile_exception_qualified(report, profile, repair=False)
             for agent_name in _EXCEPTION_ELIGIBLE_AGENTS
-            for profile in execution_profiles.profiles_for_agent(agent_name, transport="offload")
+            for profile in _report_profiles_for_agent(report, agent_name, transport="offload")
         )
     )
     return {"io": io_capacity, "low": min(4, len(low_pools)), "exception": exception}
+
+
+def _report_profiles_for_agent(report, agent, *, transport):
+    """Return profiles a capacity report actually authorizes for this route.
+
+    Explicit-only profiles stay out of ordinary/global reports.  A current native
+    scoped report may name one, but only if its exact profile id is in that
+    report's declared scope.
+    """
+    import closer_operational_capacity
+    import execution_profiles
+
+    declared = closer_operational_capacity.declared_profile_ids(report)
+    if declared is None:
+        return execution_profiles.profiles_for_agent(agent, transport=transport)
+    declared_ids = set(declared)
+    return [
+        profile
+        for profile in execution_profiles.profiles_for_agent(
+            agent, transport=transport, include_explicit=True
+        )
+        if profile.get("profile_id") in declared_ids
+    ]
 
 
 def _legacy_operation_dependency(state_path, target, snapshot, *, remote_only=False):
