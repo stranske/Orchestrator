@@ -15,7 +15,14 @@ different current manifest's pinned render. After CAS, validation is against
 the new contract only; invoking the old contract would be circular because its
 wrapper pin intentionally no longer matches.
 
-The output remains non-authoritative. A later, separate source-owned consumer
-must validate the sealed transition and newly qualified source, then issue its
-own one-use held campaign and typed business demand. It must not reuse old
+Operator flow is deliberately explicit and uses the fully installed Runtime
+API only: call `plan` with the old witnesses, replacement manifest, strict
+rebound worker configuration/frontier, and installed release journal; call
+`apply` with that exact plan confirmation; then call `prepare_held` with only
+the sealed disposition and its plan digest. `prepare_held` creates one inert
+generation-one HELD campaign through the readmission intent/known protocol.
+
+That is still non-authoritative. A later, separate normal
+`closer_native_readmission.admit_initialized` call must validate the current
+source factory and typed demand before clearing the hold. It must not reuse old
 authority or invoke old native entry.
