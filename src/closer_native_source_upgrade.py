@@ -140,6 +140,12 @@ def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id:
 
     state = _canonical(state_path)
     _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "done"},
+        "old campaign is not terminal exact round state",
+    )
     workers = document.get("workers")
     if not isinstance(workers, list):
         raise SourceUpgradeHeld("old campaign worker list missing")
@@ -303,3 +309,59 @@ def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
                 Path(tmp).unlink()
             except FileNotFoundError:
                 pass
+
+
+def prepare_held(seal_path: str | Path, new_worker_config: dict[str, Any], frontier: dict[str, Any], *,
+                 confirm_plan_sha256: str) -> dict[str, Any]:
+    """After CAS, consume a sealed upgrade once into a fresh held campaign.
+
+    This is deliberately a preparation record only.  It cannot issue typed
+    business demand, clear the source initialization hold, or invoke native
+    entry; those remain the current source's later admission boundary.
+    """
+    import closer_campaign as campaign
+    import closer_frontier_policy as policy
+    import closer_native_observer as native
+    import closer_native_readmission as readmission
+
+    seal, seal_raw, record = _object(seal_path, "source upgrade seal")
+    _need(record.get("schema") == SCHEMA and record.get("stage") == "sealed_pre_cas", "upgrade seal invalid")
+    _need(record.get("plan_sha256") == confirm_plan_sha256, "held confirmation differs from sealed upgrade")
+    known = seal.with_name("source-upgrade-known.json")
+    _need(known.exists(), "wrapper CAS is not known")
+    new_path = _canonical(record["new"]["manifest"])
+    destination = _canonical(record["new"]["state"])
+    _need(not destination.exists(), "fresh held campaign already exists")
+    _, raw, manifest = _manifest(new_path)
+    _need(_sha(raw) == record["new"]["manifest_sha256"], "new manifest differs from seal")
+    native.contract(manifest)  # current/new contract only, after CAS
+    _need(_sha(host._read(record["wrapper"]["path"])[1]) == record["wrapper"]["after_sha256"],
+          "current wrapper differs from sealed new pin")
+    problems = campaign.qualify(manifest, new_path.parent)
+    _need(not problems, "new source qualification failed")
+    old_state = _canonical(record["old"]["state"])
+    old_result = _canonical(record["old"]["result"])
+    _need(_sha(host._read(old_state)[1]) == record["old"]["state_sha256"], "old state changed")
+    _need(_sha(host._read(old_result)[1]) == record["old"]["result_sha256"], "old result changed")
+    cfg_path, _m, _raw, cfg = readmission._new_runtime(new_path, new_worker_config)
+    _need(cfg_path == new_path, "new worker config runtime changed")
+    try:
+        fresh = policy.validate_frontier(frontier, targets=frontier.get("targets"))
+        old_doc = _object(old_state, "old campaign state")[2]
+        old_frontier = policy.validate_frontier(old_doc["worker_config"]["finite_frontier"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("fresh held frontier invalid") from exc
+    readmission._guard_fresh(manifest, cfg, destination, fresh, old_frontier)
+    # Existing source initialization produces a held record; no demand is
+    # admitted here. A one-use marker prevents a second preparation.
+    marker = seal.with_name("source-upgrade-held-consumed.json")
+    _need(not marker.exists(), "sealed source upgrade already consumed")
+    with host._hold(readmission._new_lock_rows(manifest)):
+        _need(not destination.exists() and not marker.exists(), "fresh held state changed")
+        created = readmission._begin_fresh(campaign, destination, manifest, cfg, fresh, old_doc,
+                                           confirm_plan_sha256)
+        host._write_once(marker, {"schema": SCHEMA, "seal_sha256": _sha(seal_raw),
+                                  "state": str(destination), "revision": created["revision"],
+                                  "authority": False})
+    return {"status": "fresh_held_prepared", "authority": False, "state": str(destination),
+            "revision": created["revision"], "marker": str(marker)}
