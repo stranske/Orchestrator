@@ -362,6 +362,25 @@ def test_duplicate_collect_and_changing_github_snapshot_refuse(tmp_path, monkeyp
         reconcile.plan(manifest, state, "worker")
 
 
+def test_validate_allows_only_explicit_hash_pinned_preparation_intent(tmp_path, monkeypatch):
+    manifest, state, result, _ = _world(tmp_path, monkeypatch)
+    sealed = reconcile.collect(manifest, state, "worker")
+    root = json.loads(manifest.read_text())["mechanism_contract"]["observation_root"]
+    intent = Path(root) / "nonce" / ("readmission-reconciled-" + _sha(result) + ".json")
+    _write(intent, {"schema": "closer-native-readmission/v1", "stage": "preparation_intent"})
+    reference = {key: sealed[key] for key in ("path", "sha256")}
+    exact = _ref(intent)
+    with pytest.raises(reconcile.ReconciliationError):
+        reconcile.validate(reference, manifest, state, "worker")
+    assert (
+        reconcile.validate(reference, manifest, state, "worker", allowed_intent=exact)
+        == sealed["record"]
+    )
+    intent.write_text('{"changed":true}')
+    with pytest.raises(reconcile.ReconciliationError):
+        reconcile.validate(reference, manifest, state, "worker", allowed_intent=exact)
+
+
 def test_historical_consumer_creates_one_fresh_campaign(tmp_path, monkeypatch):
     manifest, state, result, _ = _world(tmp_path, monkeypatch)
     sealed = reconcile.collect(manifest, state, "worker")

@@ -365,6 +365,138 @@ def _plan(reference, new_manifest_path, new_manifest_raw, cfg, destination, fron
     return payload, _digest(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
 
 
+def _intent_token(plan, plan_sha256):
+    """The write-ahead record is exact-plan-only and has no effect authority."""
+    return {
+        "schema": "closer-native-readmission/v1",
+        "stage": "preparation_intent",
+        "authority": False,
+        "plan": plan,
+        "plan_sha256": plan_sha256,
+    }
+
+
+def _canonical_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _known_path(intent_path):
+    return intent_path.with_name(intent_path.name.removesuffix(".json") + ".known.json")
+
+
+def _expected_fresh_document(campaign_module, destination, manifest, cfg, fresh, old, plan_sha256):
+    """Make the sole legal pre-admission document without writing it."""
+    initialization = _initialization(manifest, destination)
+    demand = manifest["mechanism_contract"].get("controller_demand") or {}
+    campaign_id = demand.get("campaign_id", old["campaign_id"] + ":readmission:" + plan_sha256[:12])
+    owner = demand.get("owner", old["owner"])
+    targets = list(fresh["targets"])
+    worker_config = {**cfg, "finite_frontier": fresh}
+    return campaign_id, targets, owner, worker_config, initialization
+
+
+def _untouched_fresh_document(
+    document, campaign_id, owner, manifest, worker_config, initialization
+):
+    """Reject every pre-existing state except the precise write-ahead recovery state."""
+    import closer_campaign as campaign
+
+    return (
+        isinstance(document, dict)
+        and document.get("campaign_id") == campaign_id
+        and document.get("owner") == owner
+        and document.get("release_pin") == manifest["package_digest"]
+        and document.get("generation") == 1
+        and document.get("revision") == 1
+        and document.get("phase") == "work"
+        and document.get("max_workers") == 1
+        and document.get("targets") == {campaign.ROUND_UNIT: "pending"}
+        and document.get("workers") == []
+        and document.get("release_attempt") is None
+        and document.get("release_record") is None
+        and document.get("assignment_targets") == worker_config["finite_frontier"]["targets"]
+        and document.get("worker_config") == worker_config
+        and (
+            (
+                initialization is None
+                and document.get("hold") is None
+                and "correction_controller" not in document
+            )
+            or (
+                initialization is not None
+                and all(document.get(key) == value for key, value in initialization.items())
+            )
+        )
+        and not any(
+            key in document
+            for key in (
+                "demand_admission",
+                "demand_assignment",
+                "demand_prepared",
+                "demand_wake",
+                "demand_continuations",
+                "hold_followups",
+            )
+        )
+    )
+
+
+def _recover_or_create(
+    campaign_module, native, destination, manifest, cfg, fresh, old, plan_sha256, intent_path, token
+):
+    """Write intent before creation; a matching interrupted creation may only be sealed."""
+    known_path = _known_path(intent_path)
+    token_raw = _canonical_bytes(token)
+    if known_path.exists():
+        raise ReadmissionHeld("fresh preparation already consumed")
+    if intent_path.exists():
+        if host._read(intent_path)[1] != token_raw:
+            raise ReadmissionHeld("existing preparation intent differs from exact fresh plan")
+    else:
+        try:
+            native._immutable(intent_path, token_raw)
+        except AttributeError as exc:
+            raise ReadmissionHeld("native immutable receipt writer unavailable") from exc
+    campaign_id, targets, owner, worker_config, initialization = _expected_fresh_document(
+        campaign_module, destination, manifest, cfg, fresh, old, plan_sha256
+    )
+    holder = campaign_module.Campaign(destination)
+    current = holder.read() if destination.exists() else None
+    if current is None:
+        holder.begin(
+            campaign_id,
+            targets,
+            owner=owner,
+            release_pin=manifest["package_digest"],
+            worker_config=worker_config,
+            _source_initialization=initialization,
+            _require_absent=True,
+        )
+    stream = holder._locked()
+    try:
+        current = holder._read_unlocked()
+        if not _untouched_fresh_document(
+            current, campaign_id, owner, manifest, worker_config, initialization
+        ):
+            raise ReadmissionHeld("new campaign state is not the exact untouched preparation")
+        state_raw = host._read(destination)[1]
+        known = {
+            "schema": "closer-native-readmission/v1",
+            "stage": "preparation_known",
+            "authority": False,
+            "intent_sha256": _digest(token_raw),
+            "state": str(destination),
+            "state_sha256": _digest(state_raw),
+        }
+        try:
+            native._immutable(known_path, _canonical_bytes(known))
+        except FileExistsError:
+            raise ReadmissionHeld("fresh preparation already consumed") from None
+    finally:
+        stream.close()
+    return known_path
+
+
 def apply_prospective(
     manifest_path,
     campaign_state,
@@ -398,8 +530,6 @@ def apply_prospective(
         raise ReadmissionHeld("fresh finite frontier is invalid") from exc
     destination = _canonical(new_state)
     _guard_fresh(new_manifest, cfg, destination, fresh, old_frontier)
-    if destination.exists():
-        raise ReadmissionHeld("new campaign path must be absent")
     plan, plan_sha256 = _plan(
         reference, new_manifest_path, new_manifest_raw, cfg, destination, fresh
     )
@@ -413,13 +543,7 @@ def apply_prospective(
     if not isinstance(nonce, str) or not nonce:
         raise ReadmissionHeld("proof has no admission identity")
     reservation = old_root / nonce / ("readmission-" + reference["result_sha256"] + ".json")
-    token = {
-        "schema": "closer-native-readmission/v1",
-        "stage": "preparation_intent",
-        "authority": False,
-        "plan": plan,
-        "plan_sha256": plan_sha256,
-    }
+    token = _intent_token(plan, plan_sha256)
 
     rows = (
         _new_lock_rows(reference["manifest"])
@@ -435,8 +559,6 @@ def apply_prospective(
     with _hold_rows(rows):
         renewed = prospective_reference(manifest_path, campaign_state, worker_id)
         _guard_fresh(new_manifest, cfg, destination, fresh, old_frontier)
-        if destination.exists():
-            raise ReadmissionHeld("new campaign path must be absent")
         if _new_runtime(new_manifest_path, cfg)[2] != new_manifest_raw:
             raise ReadmissionHeld("new runtime changed before consumption")
         if (
@@ -445,15 +567,21 @@ def apply_prospective(
             or renewed["proof"] != reference["proof"]
         ):
             raise ReadmissionHeld("retained evidence changed before consumption")
-        try:
-            native._immutable(reservation, json.dumps(token, sort_keys=True).encode())
-        except FileExistsError as exc:
-            raise ReadmissionHeld("prospective proof already consumed") from exc
-        _begin_fresh(
-            campaign, destination, new_manifest, cfg, fresh, reference["state"], plan_sha256
+        known = _recover_or_create(
+            campaign,
+            native,
+            destination,
+            new_manifest,
+            cfg,
+            fresh,
+            reference["state"],
+            plan_sha256,
+            reservation,
+            token,
         )
     return {
         "reservation": str(reservation),
+        "known": str(known),
         "new_state": str(destination),
         "plan_sha256": plan_sha256,
         "authority": False,
@@ -546,12 +674,16 @@ def main(argv=None):
     return 0
 
 
-def historical_reference(reference, manifest_path, campaign_state, worker_id):
+def historical_reference(
+    reference, manifest_path, campaign_state, worker_id, *, allowed_intent=None
+):
     """Strict deferred reader for the separately reviewed reconciliation producer."""
     from closer_retained_reconciliation import validate
 
     try:
-        record = validate(reference, manifest_path, campaign_state, worker_id)
+        record = validate(
+            reference, manifest_path, campaign_state, worker_id, allowed_intent=allowed_intent
+        )
     except (OSError, ValueError, RuntimeError) as exc:
         raise ReadmissionHeld(
             "retained reconciliation is no longer current or already consumed"
@@ -601,14 +733,14 @@ def apply_historical(
         new_manifest_path, new_worker_config
     )
     destination = _canonical(new_state)
-    if destination.exists():
-        raise ReadmissionHeld("new campaign path must be absent")
     with _hold_rows(
         reconciliation.lock_rows(manifest_path, campaign_state) + _new_lock_rows(new_manifest)
     ):
-        record = historical_reference(reference, manifest_path, campaign_state, worker_id)
-        original = record.get("original", {})
         try:
+            # This unsigned read only derives the *expected* immutable token.  The
+            # complete signed/current record is validated below before any write.
+            preliminary = host._obj(reference["path"])[2]["record"]
+            original = preliminary["original"]
             state_path = _canonical(original["state"])
             state_raw = state_path.read_bytes()
             old = _json(state_raw, "retained campaign")
@@ -626,8 +758,6 @@ def apply_historical(
         except (KeyError, OSError, StopIteration, TypeError, ValueError) as exc:
             raise ReadmissionHeld("retained reconciliation cannot bind a fresh campaign") from exc
         _guard_fresh(new_manifest, cfg, destination, fresh, old_frontier)
-        if destination.exists():
-            raise ReadmissionHeld("new campaign path must be absent")
         old_manifest = _json(host._read(_canonical(manifest_path))[1], "historical manifest")
         if old_manifest["package_digest"] == new_manifest["package_digest"]:
             raise ReadmissionHeld("historical readmission requires the repaired runtime")
@@ -658,20 +788,38 @@ def apply_historical(
         reservation = (
             root / nonce / ("readmission-reconciled-" + original["result"]["sha256"] + ".json")
         )
-        receipt = {
-            "schema": "closer-native-readmission/v1",
-            "stage": "preparation_intent",
-            "authority": False,
-            "plan": plan,
-            "plan_sha256": plan_sha256,
-        }
-        try:
-            native._immutable(reservation, json.dumps(receipt, sort_keys=True).encode())
-        except FileExistsError as exc:
-            raise ReadmissionHeld("retained reconciliation already consumed") from exc
-        _begin_fresh(campaign, destination, new_manifest, cfg, fresh, old, plan_sha256)
+        token = _intent_token(plan, plan_sha256)
+        token_raw = _canonical_bytes(token)
+        allowed_intent = None
+        if reservation.exists():
+            if host._read(reservation)[1] != token_raw:
+                raise ReadmissionHeld("existing preparation intent differs from exact fresh plan")
+            allowed_intent = {"path": str(reservation), "sha256": _digest(token_raw)}
+        record = historical_reference(
+            reference,
+            manifest_path,
+            campaign_state,
+            worker_id,
+            allowed_intent=allowed_intent,
+        )
+        # The validated record must be the same original used to derive the token.
+        if record.get("original") != original:
+            raise ReadmissionHeld("reconciliation changed before exact intent validation")
+        known = _recover_or_create(
+            campaign,
+            native,
+            destination,
+            new_manifest,
+            cfg,
+            fresh,
+            old,
+            plan_sha256,
+            reservation,
+            token,
+        )
     return {
         "reservation": str(reservation),
+        "known": str(known),
         "new_state": str(destination),
         "plan_sha256": plan_sha256,
         "authority": False,

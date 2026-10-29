@@ -163,7 +163,9 @@ def _remote(anchor: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _inventory(directory: Path, dispatch: Path, custody: Path) -> dict[str, Any]:
+def _inventory(
+    directory: Path, dispatch: Path, custody: Path, *, allowed_intent=None, allowed_intent_name=None
+) -> dict[str, Any]:
     import closer_resources as resources
 
     expected = {
@@ -177,8 +179,18 @@ def _inventory(directory: Path, dispatch: Path, custody: Path) -> dict[str, Any]
     }
     output_name = "retained-no-b-current-" + WORKER + ".json"
     names = {item.name for item in directory.iterdir()}
+    allowed = {}
+    if allowed_intent is not None:
+        path = host._path(allowed_intent["path"])
+        _need(
+            path.parent == directory and path.name == allowed_intent_name,
+            "intent path differs",
+        )
+        _need(_ref(path) == allowed_intent, "intent bytes differ")
+        allowed[path.name] = allowed_intent
     _need(
-        names - {output_name} == expected, "native invocation inventory has an unreviewed boundary"
+        names - {output_name, *allowed} == expected,
+        "native invocation inventory has an unreviewed boundary",
     )
     witnesses = [_ref(directory / name) for name in sorted(expected)]
     root = directory.parent
@@ -229,7 +241,9 @@ def _inventory(directory: Path, dispatch: Path, custody: Path) -> dict[str, Any]
     }
 
 
-def _snapshot(manifest_path: Path, state: Path, worker_id: str) -> dict[str, Any]:
+def _snapshot(
+    manifest_path: Path, state: Path, worker_id: str, *, allowed_intent=None
+) -> dict[str, Any]:
     import claims
     import closer_correction_controller as controller
 
@@ -344,6 +358,8 @@ def _snapshot(manifest_path: Path, state: Path, worker_id: str) -> dict[str, Any
         directory,
         host._path(cfg["dispatch_state"]),
         host._path(inspection["identity"]["custody_path"]),
+        allowed_intent=allowed_intent,
+        allowed_intent_name="readmission-reconciled-" + host._sha(result_raw) + ".json",
     )
     return {
         "producer": _producer(),
@@ -428,7 +444,12 @@ def plan(manifest_path: str | Path, campaign_state: str | Path, worker_id: str) 
 
 
 def validate(
-    reference: dict[str, str], manifest_path: str | Path, campaign_state: str | Path, worker_id: str
+    reference: dict[str, str],
+    manifest_path: str | Path,
+    campaign_state: str | Path,
+    worker_id: str,
+    *,
+    allowed_intent=None,
 ) -> dict[str, Any]:
     path, _, envelope = host._obj(reference["path"])
     _need(
@@ -446,7 +467,12 @@ def validate(
         and path == root / NONCE / ("retained-no-b-current-" + worker_id + ".json"),
         "unrecognized reconciliation",
     )
-    current = _snapshot(host._path(manifest_path), host._path(campaign_state), worker_id)
+    current = _snapshot(
+        host._path(manifest_path),
+        host._path(campaign_state),
+        worker_id,
+        allowed_intent=allowed_intent,
+    )
     _need(
         all(record.get(key) == value for key, value in current.items()),
         "reconciliation current evidence changed",

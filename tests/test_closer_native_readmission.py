@@ -324,17 +324,14 @@ def _reference(monkeypatch, tmp_path):
 
     import closer_campaign as campaign
 
-    class FakeCampaign:
+    RealCampaign = campaign.Campaign
+
+    class FakeCampaign(RealCampaign):
         created = []
-
-        def __init__(self, path):
-            self.path = path
-
-        def _locked(self):
-            return nullcontext()
 
         def begin(self, *args, **kwargs):
             FakeCampaign.created.append((self.path, args, kwargs))
+            return super().begin(*args, **kwargs)
 
     monkeypatch.setattr(campaign, "Campaign", FakeCampaign)
     return old_frontier, raw, reference, new_manifest_path, cfg, FakeCampaign
@@ -430,8 +427,84 @@ def test_failed_creation_retains_one_use_intent_without_claiming_success(monkeyp
     intent = json.loads(reservation.read_bytes())
     assert intent["stage"] == "preparation_intent" and intent["authority"] is False
     assert not destination.exists()
+    changed_frontier = _frontier("different")
+    changed_plan = readmission.plan_prospective(
+        "manifest", "old-state", "0123456789ab", manifest, cfg, destination, changed_frontier
+    )
+    with pytest.raises(readmission.ReadmissionHeld, match="intent differs"):
+        readmission.apply_prospective(
+            "manifest",
+            "old-state",
+            "0123456789ab",
+            manifest,
+            cfg,
+            destination,
+            changed_frontier,
+            confirm_plan_sha256=changed_plan["plan_sha256"],
+        )
+    # An intent without a state is a write-ahead retry, not a consumed proof.
+    monkeypatch.setattr(fake, "begin", fake.__mro__[1].begin)
+    readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    assert destination.is_file()
     with pytest.raises(readmission.ReadmissionHeld, match="already consumed"):
         readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+
+
+def test_postwrite_resume_seals_exact_held_campaign_without_second_begin(monkeypatch, tmp_path):
+    _old, _raw, reference, manifest, cfg, fake = _reference(monkeypatch, tmp_path)
+    fresh = _frontier("fresh")
+    destination = tmp_path / "fresh.campaign.json"
+    planned = readmission.plan_prospective(
+        "manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh
+    )
+    import closer_native_observer as native
+
+    actual_immutable = native._immutable
+    calls = []
+
+    def fail_only_known(path, raw):
+        calls.append(path)
+        if str(path).endswith(".known.json"):
+            raise OSError("simulated crash after campaign creation")
+        return actual_immutable(path, raw)
+
+    monkeypatch.setattr(native, "_immutable", fail_only_known)
+    inputs = ("manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh)
+    with pytest.raises(OSError, match="after campaign creation"):
+        readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    assert destination.is_file() and len(fake.created) == 1
+    monkeypatch.setattr(native, "_immutable", actual_immutable)
+    result = readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    assert result["known"].endswith(".known.json") and len(fake.created) == 1
+
+
+def test_existing_intent_refuses_changed_frontier_or_noninitial_state(monkeypatch, tmp_path):
+    _old, _raw, _reference_value, manifest, cfg, fake = _reference(monkeypatch, tmp_path)
+    fresh = _frontier("fresh")
+    destination = tmp_path / "fresh.campaign.json"
+    planned = readmission.plan_prospective(
+        "manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh
+    )
+    inputs = ("manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh)
+    result = readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    assert result["authority"] is False
+    # A created worker is never recoverable as a preparation, even if its intent matches.
+    document = json.loads(destination.read_text())
+    document["workers"] = [{"worker_id": "different", "state": "started"}]
+    destination.write_text(json.dumps(document))
+    changed = _frontier("changed")
+    with pytest.raises(readmission.ReadmissionHeld):
+        readmission.apply_prospective(
+            "manifest",
+            "old-state",
+            "0123456789ab",
+            manifest,
+            cfg,
+            destination,
+            changed,
+            confirm_plan_sha256="not-the-old-plan",
+        )
+    assert len(fake.created) == 1
 
 
 def test_historical_reader_requires_exact_decision(monkeypatch):
@@ -449,7 +522,9 @@ def test_historical_reader_requires_exact_decision(monkeypatch):
         },
     }
     monkeypatch.setitem(
-        sys.modules, "closer_retained_reconciliation", SimpleNamespace(validate=lambda *_: valid)
+        sys.modules,
+        "closer_retained_reconciliation",
+        SimpleNamespace(validate=lambda *_, **__: valid),
     )
     assert readmission.historical_reference("ref", "manifest", "state", "worker") == valid
     valid["decision"]["max_fresh_generations"] = 2

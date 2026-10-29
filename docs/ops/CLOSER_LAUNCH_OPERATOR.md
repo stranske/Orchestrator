@@ -87,3 +87,10 @@ The finalizer validates current qualification, source projection, custody and
 fresh queue observations under ownership locks. `Campaign.begin` clears only
 the untouched initial hold in the transaction that stores the admitted snapshot.
 Refusal preserves the held campaign. Native entry still owns actual work.
+
+Fresh preparation records an immutable exact-plan `preparation_intent` before
+creating its campaign. If storage fails before creation, only the same plan may
+retry. If it fails after the untouched initial held record was written, the same
+plan may only seal its hash-pinned `preparation_known` receipt; it never calls
+`begin` again. Any changed manifest, worker configuration, frontier, state
+path, or non-initial worker/effect state remains held.
