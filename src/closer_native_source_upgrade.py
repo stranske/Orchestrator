@@ -336,6 +336,7 @@ def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -
 
 def _physical_recipe(
     old_cfg: dict[str, Any],
+    old_doc: dict[str, Any],
     old_policy: dict[str, Any],
     old_state: Path,
     new: dict[str, Any],
@@ -372,9 +373,20 @@ def _physical_recipe(
         "old worker config lacks physical recipe fields",
     )
     old_root = old_state.parent
-    for key in ("assignment", "dispatch_state"):
-        path = _canonical(old_cfg[key])
-        _need(path.parent == old_root, "old physical path is outside old campaign root")
+    dispatch = _canonical(old_cfg["dispatch_state"])
+    _need(dispatch.parent == old_root, "old dispatch path is outside old campaign root")
+    assignment = _canonical(old_cfg["assignment"])
+    demand = old_doc.get("demand_assignment")
+    admission = old_doc.get("demand_admission")
+    _need(
+        isinstance(demand, dict)
+        and isinstance(admission, dict)
+        and assignment.parent == old_root / (old_state.name + ".demand")
+        and assignment.name == str(demand.get("sha256", "")) + ".json"
+        and _sha(host._read(assignment)[1]) == demand.get("sha256")
+        and admission.get("assignment", {}).get("sha256") == demand.get("sha256"),
+        "old source demand assignment binding differs",
+    )
     cfg = json.loads(json.dumps(old_cfg, sort_keys=True))
     expected_handoff = (Path.home() / ".codex/handoff").resolve()
     _need(
@@ -383,7 +395,7 @@ def _physical_recipe(
     )
     cfg["runtime_manifest"] = str(new_path)
     cfg["finite_frontier"] = frontier
-    cfg["assignment"] = str(new_state.parent / Path(old_cfg["assignment"]).name)
+    cfg["assignment"] = str(new_state.parent / assignment.name)
     cfg["dispatch_state"] = str(new_state.parent / Path(old_cfg["dispatch_state"]).name)
     cfg["policy"] = _rebased_policy({"policy": old_policy}, new, new_state)
     cfg["coordinator_contract_pin"] = closer_pipeline.scoped_capability()
@@ -628,6 +640,7 @@ def plan(
         raise SourceUpgradeHeld("pre-CAS frontier invalid") from exc
     cfg = _physical_recipe(
         reference["state"]["worker_config"],
+        reference["state"],
         old["policy"],
         Path(reference["state_path"]),
         new,
