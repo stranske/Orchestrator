@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 import venv
 from pathlib import Path
 
 import pytest
 
-from closer_release import ReleaseConflict, ReleaseError, ReleaseRecord
+from closer_release import ReleaseConflict, ReleaseError, ReleaseHeld, ReleaseRecord
 
 CANDIDATE = "a" * 40
 INCUMBENT = "generation-v1:" + "b" * 64
 DIGEST = "c" * 64
 GENERATION = "generation-v1:" + "d" * 64
+
+
+@pytest.fixture(autouse=True)
+def private_release_home(tmp_path, monkeypatch):
+    """Release tests must never inspect or create the user's live Closer lane."""
+    monkeypatch.setenv("HOME", str(tmp_path / "private-home"))
 
 
 def start_verified(record: ReleaseRecord, tmp_path):
@@ -30,6 +38,15 @@ def start_verified(record: ReleaseRecord, tmp_path):
         log_path=tmp_path / "verify.log",
         exit_code=0,
     )
+
+
+def wait_for_path(path: Path, timeout: float = 10) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        threading.Event().wait(0.01)
+    return path.exists()
 
 
 def test_record_survives_restart_and_preserves_original_incumbent_token(tmp_path):
@@ -152,6 +169,7 @@ VERIFIER_SOURCE = r"""#!/usr/bin/env bash
 set -eu
 mode=verify
 if [[ "${1:-}" == "--identity" ]]; then mode=identity; shift; fi
+if [[ -n "${VERIFIER_LOG:-}" ]]; then printf '%s\n' "$mode" >> "$VERIFIER_LOG"; fi
 if [[ "$mode" == identity ]]; then source_path="$1"; [[ -d "$source_path" ]]; printf '%s\n' "$SOURCE_FINGERPRINT"; exit 0; fi
 [[ -z "${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-}" ]]
 [[ -z "${VERIFY_BEFORE_SYNC_TREE:-}" ]]
@@ -176,6 +194,7 @@ FAKE_INSTALLER = r"""import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -185,7 +204,18 @@ mirror = Path(args[0])
 def token():
     return "generation-v1:" + state.read_text().strip()
 
+def mark_and_wait(started_name, release_name):
+    started = os.environ.get(started_name)
+    if started:
+        Path(started).write_text("started")
+    release = os.environ.get(release_name)
+    if release:
+        while not Path(release).exists():
+            time.sleep(0.01)
+
 if "--generation-token" in args:
+    if state.read_text().strip() == "d" * 64:
+        mark_and_wait("READBACK_STARTED", "READBACK_RELEASE")
     print(token())
     raise SystemExit(0)
 if "--digest" in args:
@@ -201,13 +231,14 @@ if token() != expected_generation:
     raise SystemExit(2)
 if (snapshot / "payload").read_text() != "candidate payload" or expected != "c" * 64:
     raise SystemExit(3)
+mark_and_wait("INSTALL_STARTED", "INSTALL_RELEASE")
 mirror.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(snapshot / "payload", mirror / "payload")
 state.write_text("d" * 64)
 """
 
 
-def make_fake_release(tmp_path, monkeypatch, *, extra_env=None, python=None):
+def make_fake_release(tmp_path, monkeypatch, *, extra_env=None, python=None, invoke=True):
     import sys
 
     source = tmp_path / "source"
@@ -258,17 +289,21 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None, python=None):
     monkeypatch.setenv("EXPECTED_STORAGE_LEDGER", shared)
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
-    result = journal.verify_and_install(
-        candidate_sha=CANDIDATE if (extra_env or {}).get("WRONG_CANDIDATE") else candidate,
-        lane_owner="closer",
-        source=source,
-        mirror=mirror,
-        verifier=verifier,
-        installer=installer,
-        python=python or sys.executable,
-        bash="/bin/bash",
-        run_id="fake-run",
-    )
+    def call():
+        return journal.verify_and_install(
+            candidate_sha=CANDIDATE if (extra_env or {}).get("WRONG_CANDIDATE") else candidate,
+            lane_owner="closer",
+            source=source,
+            mirror=mirror,
+            verifier=verifier,
+            installer=installer,
+            python=python or sys.executable,
+            bash="/bin/bash",
+            run_id="fake-run",
+        )
+    if not invoke:
+        return journal, mirror, generation_state, call
+    result = call()
     return result, journal, mirror, generation_state
 
 
@@ -374,3 +409,119 @@ def test_release_refuses_unbound_source_before_install(tmp_path, monkeypatch, fl
         make_fake_release(tmp_path, monkeypatch, extra_env={flag: "1"})
     assert not (tmp_path / "release.json").exists()
     assert (tmp_path / "mirror" / "payload").read_text() == "incumbent payload\n"
+
+
+def test_source_held_closer_lane_preserves_verified_receipt_and_resumes_without_reverification(
+    tmp_path, monkeypatch
+):
+    verifier_log = tmp_path / "verifier.log"
+    monkeypatch.setenv("VERIFIER_LOG", str(verifier_log))
+    journal, mirror, _generation, call = make_fake_release(tmp_path, monkeypatch, invoke=False)
+    lane = Path.home() / ".codex/handoff/.lane-closer.lock"
+    lane.mkdir(parents=True)
+
+    with pytest.raises(ReleaseHeld, match="source installation held"):
+        call()
+
+    held = journal.read()
+    assert held["stage"] == "verified"
+    assert held["verification"]["verified"] is True
+    assert (mirror / "payload").read_text() == "incumbent payload\n"
+    verifier_calls = verifier_log.read_text().splitlines()
+    assert verifier_calls == ["identity", "verify", "identity"]
+
+    # An interrupted install remains uncertain.  A subsequently-held native
+    # lane must defer it as-is rather than manufacture an install failure.
+    journal.transition(
+        "installing", lane_owner="closer", expected_revision=held["revision"]
+    )
+    with pytest.raises(ReleaseHeld, match="source installation held"):
+        call()
+    assert journal.read()["stage"] == "installing"
+    assert journal.read()["failure"] is None
+
+    lane.rmdir()
+    resumed = call()
+    assert resumed["stage"] == "installed"
+    assert verifier_log.read_text().splitlines() == verifier_calls
+
+
+def test_source_install_waits_for_shared_closer_coordination_lock(tmp_path, monkeypatch):
+    import closer_native_lease as lease
+
+    started = tmp_path / "install-started"
+    monkeypatch.setenv("INSTALL_STARTED", str(started))
+    journal, _mirror, _generation, call = make_fake_release(tmp_path, monkeypatch, invoke=False)
+    lane = Path.home() / ".codex/handoff/.lane-closer.lock"
+    holder = lease._parent_lock(lease._coord_path(lane))
+    try:
+        with pytest.raises(ReleaseHeld, match="coordination lock contended"):
+            call()
+        held = journal.read()
+        assert held["stage"] == "verified"
+        assert held["failure"] is None
+        assert not started.exists(), "installer ran while the native coordination lock was held"
+    finally:
+        lease._unlock(holder)
+
+    assert call()["stage"] == "installed"
+    assert started.read_text() == "started"
+    assert journal.read()["stage"] == "installed"
+
+
+def test_source_holds_shared_closer_coordination_lock_through_install_and_readback(
+    tmp_path, monkeypatch
+):
+    import closer_native_lease as lease
+
+    install_started = tmp_path / "install-started"
+    install_release = tmp_path / "install-release"
+    readback_started = tmp_path / "readback-started"
+    readback_release = tmp_path / "readback-release"
+    monkeypatch.setenv("INSTALL_STARTED", str(install_started))
+    monkeypatch.setenv("INSTALL_RELEASE", str(install_release))
+    monkeypatch.setenv("READBACK_STARTED", str(readback_started))
+    monkeypatch.setenv("READBACK_RELEASE", str(readback_release))
+    _journal, _mirror, _generation, call = make_fake_release(tmp_path, monkeypatch, invoke=False)
+    outcome = {}
+
+    def install():
+        try:
+            outcome["result"] = call()
+        except BaseException as exc:  # Assert it in the parent after cleanup.
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=install, daemon=True)
+    worker.start()
+    contender = None
+    acquired = threading.Event()
+    try:
+        assert wait_for_path(install_started), "installer did not reach its bounded test gate"
+
+        lane = Path.home() / ".codex/handoff/.lane-closer.lock"
+
+        def contend():
+            handle = lease._parent_lock(lease._coord_path(lane))
+            try:
+                acquired.set()
+            finally:
+                lease._unlock(handle)
+
+        contender = threading.Thread(target=contend, daemon=True)
+        contender.start()
+        assert not acquired.wait(0.2)
+        install_release.touch()
+        assert wait_for_path(readback_started), "readback did not reach its bounded test gate"
+        assert not acquired.wait(0.2), "coordination lock was released before readback"
+    finally:
+        install_release.touch()
+        readback_release.touch()
+        worker.join(timeout=10)
+        if contender is not None:
+            contender.join(timeout=10)
+        assert not worker.is_alive()
+        assert contender is None or not contender.is_alive()
+
+    assert "error" not in outcome
+    assert outcome["result"]["stage"] == "installed"
+    assert acquired.is_set()
