@@ -1,10 +1,259 @@
 import hashlib
+import json
+import time
 from contextlib import nullcontext
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 import closer_native_readmission as readmission
-from closer_frontier_policy import make_frontier
+from closer_frontier_policy import action_identity, make_frontier
+
+
+def _initialized_world(monkeypatch, tmp_path):
+    """Real held campaign bytes; only qualification/custody/remote seams are fake."""
+    import closer_campaign as campaign
+    import closer_correction_controller as controller
+    import closer_dispatcher as dispatcher
+    import closer_queue as queue
+    import closer_runtime_binding as binding
+    import closer_source_installation as installation
+
+    target = "source/repo#984"
+    observed = {
+        "target": target,
+        "action": "review",
+        "eligible": True,
+        "revision": "head-1",
+        "operation_binding": {"source": "fixture"},
+    }
+    frontier = make_frontier(
+        [target],
+        owner="source-owner",
+        frontier_id="fresh-authority",
+        bindings={
+            target: {
+                "revision": observed["revision"],
+                "action_id": action_identity(
+                    target, observed["revision"], observed["action"], observed["operation_binding"]
+                ),
+            }
+        },
+    )
+    state = tmp_path / "campaigns" / "fresh.campaign.json"
+    root = tmp_path / "native-observation"
+    root.mkdir()
+    for name in ("native-entry.lock", "native-supervisor.lock"):
+        (root / name).write_bytes(b"")
+    manifest_path = tmp_path / "runtime" / "host-manifest.json"
+    manifest_path.parent.mkdir()
+    manifest_path.write_text("{}")
+    config = {"state_path": str(state), "bootstrap_anchor_sha256": "a" * 64}
+    manifest = {
+        "package_digest": "b" * 64,
+        "policy": {"correction_controller_installation": {"config": config}},
+        "mechanism_contract": {
+            "campaign_root": str(state.parent),
+            "observation_root": str(root),
+            "controller_demand": {
+                "schema": "closer-controller-demand/v1",
+                "campaign_state": str(state),
+                "campaign_id": "fresh-campaign",
+                "owner": "source-owner",
+            },
+        },
+    }
+    home = tmp_path / "home"
+    monkeypatch.setattr(readmission.Path, "home", classmethod(lambda _cls: home))
+    coord = home / ".codex/handoff/.lane-closer.lock.coord.lock"
+    coord.parent.mkdir(parents=True)
+    coord.write_bytes(b"")
+    custody = tmp_path / "custody"
+    custody.mkdir()
+    (custody / "writer.lock").write_bytes(b"")
+    inspection = {
+        "identity": {"custody_path": str(custody)},
+        "highwater": {"pending_transactions": []},
+    }
+    monkeypatch.setattr(campaign, "load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(campaign, "qualify", lambda *_a, **_k: [])
+    monkeypatch.setattr(controller, "inspect_provisioned_custody", lambda _config: inspection)
+    monkeypatch.setattr(binding, "binding_from_manifest", lambda _path: object())
+    monkeypatch.setattr(
+        installation,
+        "controller_policy_projection",
+        lambda _binding: {"purpose": "frontier-correlation-only"},
+    )
+    monkeypatch.setattr(dispatcher, "GitHub", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        dispatcher,
+        "Closer",
+        lambda *_a, **_k: SimpleNamespace(observe=lambda _target: dict(observed)),
+    )
+    monkeypatch.setattr(queue, "_observation", lambda value, _target: value)
+    (root / "native-qualification.json").write_text("qualified")
+    cfg = {
+        "granularity": "round",
+        "mechanism": "native-handoff/v1",
+        "runtime_manifest": str(manifest_path),
+        "dispatch_state": str(tmp_path / "dispatch.json"),
+        "finite_frontier": frontier,
+    }
+    initialization = readmission._initialization(manifest, state)
+    campaign.Campaign(state).begin(
+        "fresh-campaign",
+        [target],
+        owner="source-owner",
+        release_pin=manifest["package_digest"],
+        worker_config=cfg,
+        _source_initialization=initialization,
+    )
+    now = time.time()
+    assignment = json.dumps(
+        {
+            "generation": 1,
+            "generated_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+            "errors": [],
+            "targets": [{"target": target, "due": now - 1}],
+        },
+        sort_keys=True,
+    ).encode()
+    package = {
+        "package_digest": manifest["package_digest"],
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "qualification_digest": hashlib.sha256(
+            (root / "native-qualification.json").read_bytes()
+        ).hexdigest(),
+    }
+    request = {
+        "schema": "closer-demand-request/v1",
+        "campaign_id": "fresh-campaign",
+        "owner": "source-owner",
+        "campaign_generation": 1,
+        "expected_revision": 1,
+        "assignment_generation": 1,
+        "assignment_sha256": hashlib.sha256(assignment).hexdigest(),
+        **package,
+        "not_before": now - 1,
+        "deadline": now + 60,
+        "targets": [target],
+    }
+    return SimpleNamespace(
+        state=state,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        assignment=assignment,
+        request=request,
+        observed=observed,
+        root=root,
+    )
+
+
+def test_admit_initialized_atomically_clears_only_matching_source_hold(monkeypatch, tmp_path):
+    world = _initialized_world(monkeypatch, tmp_path)
+    before = world.state.read_bytes()
+    result = readmission.admit_initialized(
+        world.manifest_path, world.state, world.assignment, world.request
+    )
+    after = __import__("closer_campaign").Campaign(world.state).read()
+    assert result["status"] == "source_demand_admitted"
+    assert (
+        after["hold"] is None
+        and after["demand_admission"]["schema"] == "closer-demand-admission/v1"
+    )
+    assert after["revision"] == 2 and before != world.state.read_bytes()
+
+
+@pytest.mark.parametrize("failure", ["projection", "manifest", "action", "revision"])
+def test_admit_initialized_refusals_preserve_real_held_campaign_bytes(
+    monkeypatch, tmp_path, failure
+):
+    world = _initialized_world(monkeypatch, tmp_path)
+    before = world.state.read_bytes()
+    if failure == "projection":
+        import closer_source_installation as installation
+
+        monkeypatch.setattr(installation, "controller_policy_projection", lambda _binding: None)
+    elif failure == "manifest":
+        import closer_campaign as campaign
+
+        def qualify(*_a, **_k):
+            world.manifest_path.write_text('{"changed":true}')
+            return []
+
+        monkeypatch.setattr(campaign, "qualify", qualify)
+    else:
+        changed = dict(world.observed)
+        if failure == "action":
+            changed["action"] = "different"
+        else:
+            changed["revision"] = "head-2"
+        import closer_dispatcher as dispatcher
+
+        monkeypatch.setattr(
+            dispatcher,
+            "Closer",
+            lambda *_a, **_k: SimpleNamespace(observe=lambda _target: changed),
+        )
+    with pytest.raises(readmission.ReadmissionHeld):
+        readmission.admit_initialized(
+            world.manifest_path, world.state, world.assignment, world.request
+        )
+    assert world.state.read_bytes() == before
+
+
+def test_guard_fresh_keeps_generic_bindings_exact_but_allows_controlled_action_rebind(
+    monkeypatch, tmp_path
+):
+    """Only a controller-bound campaign may replace an action identity at one revision."""
+    import claims
+    import closer_host_restore_contract as host
+
+    destination = tmp_path / "campaigns" / "fresh.campaign.json"
+    destination.parent.mkdir()
+    old = _frontier("old", ("source/repo#984",))
+    fresh = json.loads(json.dumps(old))
+    fresh["frontier_id"] = "fresh"
+    fresh["bindings"]["source/repo#984"]["action_id"] = "f" * 64
+    cfg = {"granularity": "round", "mechanism": "native-handoff/v1"}
+    monkeypatch.setattr(host, "_lane_absent", lambda: None)
+    monkeypatch.setattr(claims, "holder", lambda _target: None)
+
+    generic = {"mechanism_contract": {"campaign_root": str(destination.parent)}}
+    with pytest.raises(readmission.ReadmissionHeld, match="target scope"):
+        readmission._guard_fresh(generic, cfg, destination, fresh, old)
+
+    controlled = {
+        "mechanism_contract": {
+            "campaign_root": str(destination.parent),
+            "controller_demand": {
+                "schema": "closer-controller-demand/v1",
+                "campaign_state": str(destination),
+                "campaign_id": "fresh-campaign",
+                "owner": "closer-owner",
+            },
+        },
+        "policy": {
+            "correction_controller_installation": {
+                "config": {
+                    "state_path": str(destination),
+                    "bootstrap_anchor_sha256": "a" * 64,
+                }
+            }
+        },
+    }
+    readmission._guard_fresh(controlled, cfg, destination, fresh, old)
+
+    revision_drift = json.loads(json.dumps(fresh))
+    revision_drift["bindings"]["source/repo#984"]["revision"] = "different-head"
+    with pytest.raises(readmission.ReadmissionHeld, match="target scope"):
+        readmission._guard_fresh(controlled, cfg, destination, revision_drift, old)
+
+    owner_drift = json.loads(json.dumps(fresh))
+    owner_drift["owner"] = "other-owner"
+    with pytest.raises(readmission.ReadmissionHeld, match="owner changed"):
+        readmission._guard_fresh(controlled, cfg, destination, owner_drift, old)
 
 
 def _frontier(frontier_id, targets=("target-1",)):
