@@ -126,7 +126,9 @@ def _old_diagnostic(
         " if hashlib.sha256(b).hexdigest()!=h: raise SystemExit(31)\n"
         " out[n]=h\n"
         "sys.path.insert(0,str(pathlib.Path(m['module_dir']))); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
-        "m=c.load_manifest(r); d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']); rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
+        "m=c.load_manifest(r); d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
+        "if not isinstance(p,dict): raise SystemExit(34)\n"
+        "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
         "source_target=targets[0]; row=a['targets'][source_target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets);\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
@@ -534,6 +536,7 @@ def plan(
     _same_identity(old, new)
     reference = _completed_reference(old_path, old_state, worker_id)
     _old_native_terminal(old)
+    host._lane_absent()
     custody = _old_custody_quiet(old)
     index = fresh_read_native_index(
         old["policy"]["correction_controller_installation"]["config"], custody
@@ -560,7 +563,6 @@ def plan(
         and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
         "new state is not fresh current campaign",
     )
-    host._lane_absent()
     # Freeze the only proposed inputs before CAS. These remain non-authoritative
     # until the later current-source admission path observes demand again.
     import closer_frontier_policy as policy
