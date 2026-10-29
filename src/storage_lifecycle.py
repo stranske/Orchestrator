@@ -16,6 +16,8 @@ import json
 import math
 import os
 import platform
+import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -35,6 +37,7 @@ STRICT_RELEASE_FLOOR = 27 * GIB
 INITIAL_VERIFY_PEAK = 29_490_778_112 - 5_630_369_792
 OBSERVED_OPERATING_MARGIN = 5_630_369_792
 JSON = dict[str, Any]
+_SYSTEM_POPEN = subprocess.Popen
 
 
 class StorageBlocked(RuntimeError):
@@ -1279,6 +1282,7 @@ ABORT_RECONCILIATION_SCHEMA = "storage-abort-reconciliation-request/v1"
 ABORT_RECONCILIATION_PLAN_SCHEMA = "storage-abort-reconciliation-plan/v1"
 ABORT_RECONCILIATION_RECEIPT_SCHEMA = "storage-abort-reconciliation-receipt/v1"
 ABORT_RECONCILIATION_EVIDENCE_LIMIT = 1024 * 1024
+STAGE_SOURCE_BINDING_SCHEMA = "storage-run-stage-source-binding/v2"
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -1407,7 +1411,7 @@ def _private_reconciliation_directory(state_dir: Path) -> Path:
     return directory
 
 
-def _create_private_json_once(path: Path, value: JSON) -> None:
+def _create_private_json_once(path: Path, value: JSON) -> str:
     raw = json.dumps(value, sort_keys=True).encode()
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -1425,6 +1429,197 @@ def _create_private_json_once(path: Path, value: JSON) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+    return _sha256_bytes(raw)
+
+
+def _stage_source_binding_path(directory: Path, job: str) -> Path:
+    if not job.isalnum() or len(job) > 64:
+        raise StorageBlocked("invalid storage job identity")
+    return directory / f"{job}.stage-source.json"
+
+
+def _command_argv_matches(command: object, argv: object) -> bool:
+    if (
+        not isinstance(command, str)
+        or not isinstance(argv, list)
+        or not all(isinstance(value, str) for value in argv)
+    ):
+        return False
+    try:
+        return shlex.split(command) == argv
+    except ValueError:
+        return False
+
+
+def _sealed_release_parent(value: object, *, require_release: bool) -> bool:
+    if not isinstance(value, dict):
+        return False
+    basic = {"pid", "ppid", "pgid", "command", "argv", "command_sha256"}
+    release = basic | {"candidate_sha", "journal"}
+    if set(value) not in ({*basic}, {*release}) or any(
+        type(value.get(key)) is not int for key in ("pid", "ppid", "pgid")
+    ):
+        return False
+    if not _command_argv_matches(value.get("command"), value.get("argv")):
+        return False
+    if value.get("command_sha256") != _sha256_bytes(value["command"].encode()):
+        return False
+    if set(value) == basic:
+        return not require_release
+    candidate = value.get("candidate_sha")
+    journal = value.get("journal")
+    argv = value["argv"]
+    if (
+        not isinstance(candidate, str)
+        or re.fullmatch(r"[0-9a-f]{40}", candidate) is None
+        or not isinstance(journal, str)
+        or not Path(journal).is_absolute()
+        or argv.count("--expected-source-sha") != 1
+        or argv.count("--journal") != 1
+    ):
+        return False
+    source_index = argv.index("--expected-source-sha")
+    journal_index = argv.index("--journal")
+    return (
+        source_index + 1 < len(argv)
+        and journal_index + 1 < len(argv)
+        and argv[source_index + 1] == candidate
+        and argv[journal_index + 1] == journal
+        and "install" in argv
+        and any(Path(entry).name == "closer_verified_release.py" for entry in argv)
+    )
+
+
+def _stage_source_binding(
+    *,
+    job: str,
+    row: JSON,
+    child_command: list[str],
+    release_parent: JSON,
+) -> JSON:
+    source_command = row.get("source_command")
+    if (
+        type(source_command) is not list
+        or len(source_command) != 4
+        or source_command[0] != "bash"
+        or source_command[2] != "--identity"
+        or not all(isinstance(value, str) and value for value in source_command)
+        or not isinstance(row.get("source_identity"), str)
+        or not row["source_identity"]
+        or not isinstance(row.get("root"), str)
+        or not isinstance(row.get("root_identity"), list)
+        or len(row["root_identity"]) != 2
+        or any(type(value) is not int for value in row["root_identity"])
+        or not isinstance(row.get("owner_token_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", row["owner_token_sha256"])
+        or type(row.get("owner_pid")) is not int
+        or type(row.get("child_pgid")) is not int
+        or not child_command
+        or not all(isinstance(value, str) and value for value in child_command)
+        or not _sealed_release_parent(release_parent, require_release=False)
+    ):
+        raise StorageBlocked("storage stage/source binding inputs differ")
+    body = {
+        "schema": STAGE_SOURCE_BINDING_SCHEMA,
+        "job": job,
+        "root": row["root"],
+        "root_identity": row["root_identity"],
+        "owner_token_sha256": row["owner_token_sha256"],
+        "owner_pid": row["owner_pid"],
+        "child_pgid": row["child_pgid"],
+        "source_identity": row["source_identity"],
+        "source_command": source_command,
+        "child_command": child_command,
+        "release_parent": release_parent,
+    }
+    return {**body, "sha256": _json_digest(body)}
+
+
+def _read_stage_source_binding(state_dir: Path, job: str, row: JSON) -> JSON:
+    expected = row.get("stage_source_binding_sha256")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise StorageBlocked("storage stage/source binding is missing")
+    _path, binding, digest = _read_private_json_once(
+        _stage_source_binding_path(state_dir, job), label="storage stage/source binding"
+    )
+    body = {key: value for key, value in binding.items() if key != "sha256"}
+    if (
+        digest != expected
+        or binding.get("sha256") != _json_digest(body)
+        or binding.get("schema") != STAGE_SOURCE_BINDING_SCHEMA
+        or binding.get("job") != job
+        or not isinstance(binding.get("source_identity"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", binding["source_identity"])
+        or any(
+            binding.get(key) != row.get(key)
+            for key in (
+                "root",
+                "root_identity",
+                "owner_token_sha256",
+                "owner_pid",
+                "child_pgid",
+                "source_identity",
+                "source_command",
+            )
+        )
+        or not isinstance(binding.get("child_command"), list)
+        or not all(isinstance(value, str) and value for value in binding["child_command"])
+        or not _sealed_release_parent(binding.get("release_parent"), require_release=False)
+    ):
+        raise StorageBlocked("storage stage/source binding differs from reservation")
+    return binding
+
+
+def _release_parent_snapshot() -> JSON:
+    """Seal the original release parent, not a later abort-report assertion."""
+    parent = os.getppid()
+    try:
+        process = _SYSTEM_POPEN(
+            ["ps", "-p", str(parent), "-o", "pid=,ppid=,pgid=,command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = process.communicate(timeout=10)
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, process.args, stdout, stderr)
+        fields = stdout.strip().split(None, 3)
+        pid, ppid, pgid = (int(fields[index]) for index in range(3))
+        command = fields[3]
+        argv = shlex.split(command)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise StorageBlocked("release parent snapshot unavailable") from error
+    if pid != parent:
+        raise StorageBlocked("release parent snapshot identity changed")
+    record = {
+        "pid": pid,
+        "ppid": ppid,
+        "pgid": pgid,
+        "command": command,
+        "argv": argv,
+        "command_sha256": _sha256_bytes(command.encode()),
+    }
+    try:
+        source_index = argv.index("--expected-source-sha")
+        journal_index = argv.index("--journal")
+    except ValueError:
+        return record
+    if (
+        argv.count("--expected-source-sha") != 1
+        or argv.count("--journal") != 1
+        or source_index + 1 >= len(argv)
+        or journal_index + 1 >= len(argv)
+        or Path(argv[journal_index + 1]).is_absolute() is False
+        or re.fullmatch(r"[0-9a-f]{40}", argv[source_index + 1]) is None
+        or not any(Path(value).name == "closer_verified_release.py" for value in argv)
+        or "install" not in argv
+    ):
+        return record
+    return {
+        **record,
+        "candidate_sha": argv[source_index + 1],
+        "journal": argv[journal_index + 1],
+    }
 
 
 def _abort_reconciliation_request(request_path: Path) -> tuple[Path, JSON, str]:
@@ -1456,7 +1651,7 @@ def _abort_reconciliation_request(request_path: Path) -> tuple[Path, JSON, str]:
         or not isinstance(request["expected_row_sha256"], str)
         or len(request["expected_row_sha256"]) != 64
         or not isinstance(request["candidate_sha"], str)
-        or len(request["candidate_sha"]) != 40
+        or re.fullmatch(r"[0-9a-f]{40}", request["candidate_sha"]) is None
         or not isinstance(request["incumbent_token"], str)
         or any(
             not isinstance(request[field], str)
@@ -1516,6 +1711,7 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         raise StorageBlocked("recorded storage reservation is unavailable") from error
     if not isinstance(row, dict) or _json_digest(row) != request["expected_row_sha256"]:
         raise StorageBlocked("recorded storage reservation changed")
+    stage_binding = _read_stage_source_binding(state_dir, request["job"], row)
     root = Path(row.get("root", ""))
     root_identity = row.get("root_identity")
     if (
@@ -1569,16 +1765,18 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         records[pid] = process
     owner_record = records.get(owner_pid)
     child_record = records.get(child_pgid)
-    release_records = [
-        record
-        for record in records.values()
-        if _sha256_bytes(record["command"].encode()) == request["release_owner_process_sha256"]
-        and request["candidate_sha"] in record["command"]
-    ]
+    parent = stage_binding["release_parent"]
+    if not _sealed_release_parent(parent, require_release=True):
+        raise StorageBlocked("sealed storage provenance has no recognized release parent")
+    release_records = [record for record in records.values() if record.get("pid") == parent["pid"]]
     if (
         owner_record is None
         or child_record is None
         or len(release_records) != 1
+        or release_records[0] != {key: parent[key] for key in ("pid", "ppid", "pgid", "command")}
+        or _sha256_bytes(release_records[0]["command"].encode()) != parent["command_sha256"]
+        or _sha256_bytes(release_records[0]["command"].encode())
+        != request["release_owner_process_sha256"]
         or _sha256_bytes(owner_record["command"].encode()) != request["owner_process_sha256"]
         or _sha256_bytes(child_record["command"].encode()) != request["child_process_sha256"]
     ):
@@ -1593,6 +1791,44 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         or child_record["ppid"] != owner_pid
     ):
         raise StorageBlocked("abort proof process tree does not match recorded ownership")
+    try:
+        release_argv = shlex.split(release_record["command"])
+        owner_argv = shlex.split(owner_record["command"])
+        child_argv = shlex.split(child_record["command"])
+    except ValueError as error:
+        raise StorageBlocked("abort proof process command cannot be parsed") from error
+    try:
+        candidate_index = release_argv.index("--expected-source-sha")
+        journal_index = release_argv.index("--journal")
+    except ValueError as error:
+        raise StorageBlocked("abort parent lacks typed source/journal flags") from error
+    if (
+        release_argv.count("--expected-source-sha") != 1
+        or release_argv.count("--journal") != 1
+        or candidate_index + 1 >= len(release_argv)
+        or journal_index + 1 >= len(release_argv)
+        or release_argv != parent["argv"]
+        or release_argv[candidate_index + 1] != parent["candidate_sha"]
+        or parent["candidate_sha"] != request["candidate_sha"]
+        or release_argv[journal_index + 1] != parent["journal"]
+        or failed_path != Path(parent["journal"])
+    ):
+        raise StorageBlocked("abort parent differs from sealed release provenance")
+    source = stage_binding["source_command"][-1]
+    source_positions = [index for index, value in enumerate(owner_argv) if value == "--source"]
+    if (
+        len(source_positions) != 1
+        or source_positions[0] + 1 >= len(owner_argv)
+        or owner_argv[source_positions[0] + 1] != source
+        or not any(
+            Path(value).name == "storage_lifecycle.py"
+            and index + 1 < len(owner_argv)
+            and owner_argv[index + 1] == "run"
+            for index, value in enumerate(owner_argv)
+        )
+        or child_argv != stage_binding["child_command"]
+    ):
+        raise StorageBlocked("abort proof source command differs from sealed storage provenance")
     idle(root)
     receipt_path = state_dir / "receipts" / f"{request['job']}.json"
     if receipt_path.exists() or receipt_path.is_symlink():
@@ -1606,6 +1842,14 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         "state_dir": str(state_dir.resolve()),
         "job": request["job"],
         "row_sha256": request["expected_row_sha256"],
+        "source_provenance": {
+            "binding_path": str(_stage_source_binding_path(state_dir, request["job"])),
+            "binding_sha256": stage_binding["sha256"],
+            "source_identity": stage_binding["source_identity"],
+            "source_command": stage_binding["source_command"],
+            "child_command": stage_binding["child_command"],
+            "release_parent": stage_binding["release_parent"],
+        },
         "root": str(root),
         "root_identity": root_identity,
         "intent_path": str(intent_path),
@@ -1643,6 +1887,7 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             "plan_sha256": plan["sha256"],
             "caller": "original-human-task-reconciler",
             "action": "finish_terminal_retain_root",
+            "source_provenance": plan["source_provenance"],
         }
         intent_path = Path(plan["intent_path"])
         _create_private_json_once(intent_path, intent)
@@ -1657,6 +1902,7 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             "root_retained": True,
             "physical_reclaim_claimed": False,
             "calibration_updated": False,
+            "source_provenance": plan["source_provenance"],
         }
         manager.finish(
             request["job"],
@@ -1676,6 +1922,7 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             "plan_sha256": plan["sha256"],
             "receipt": {"path": str(receipt_path), "sha256": receipt_sha256},
             "root_retained": True,
+            "source_provenance": plan["source_provenance"],
         }
         _create_private_json_once(Path(plan["known_path"]), known)
         return known
@@ -1931,6 +2178,22 @@ def run_job(
             start_new_session=True,
         )
         lifecycle_call("bind", job, child_pgid=child.pid)
+        with manager.locked(deadline=time.monotonic() + lifecycle_lock_timeout_seconds) as data:
+            row = dict(data["jobs"][job])
+        stage_binding = _stage_source_binding(
+            job=job,
+            row=row,
+            child_command=list(args.command),
+            release_parent=_release_parent_snapshot(),
+        )
+        binding_sha256 = _create_private_json_once(
+            _stage_source_binding_path(manager.directory, job), stage_binding
+        )
+        lifecycle_call(
+            "bind",
+            job,
+            stage_source_binding_sha256=binding_sha256,
+        )
         lowest = admitted["available_before"]
         warned = False
         while child.poll() is None:

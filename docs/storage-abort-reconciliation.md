@@ -24,6 +24,19 @@ The request is an owner-private regular JSON file with this exact shape:
 }
 ```
 
+The original storage producer must have sealed an owner-private
+`<job>.stage-source.json` when it staged the child and pinned that record's hash
+in the reservation. Reconciliation cross-checks this original-run record against
+the row's source identity, identity command, root/token, owner PID and child PGID,
+then joins the recorded child argv and owner `--source` to the abort process tree.
+The v2 stage record also seals the original release parent process/tree, exact argv
+and its typed `--expected-source-sha` and `--journal` arguments. Reconciliation
+requires that original parent invocation, its direct storage child, and the
+request's exact failed journal; finding a SHA elsewhere in a command is insufficient.
+The verifier identity remains distinct from the release candidate. Candidate SHAs
+must be exactly 40 lowercase hexadecimal characters. Legacy rows without this
+producer record are held; do not backfill or rewrite historical evidence.
+
 First create an evidence-only plan, then apply exactly that plan:
 
 ```sh
