@@ -213,59 +213,148 @@ def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
     )
 
 
+def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[str, str]:
+    """Validate literal pre-import f858 identity metadata without filesystem effects."""
+    modules = doc.get("modules")
+    _need(
+        doc.get("candidate_sha") == REVIEWED_OLD_CANDIDATE,
+        "old release is not reviewed no-ACT predecessor",
+    )
+    _need(
+        isinstance(modules, dict)
+        and bool(modules)
+        and all(
+            isinstance(name, str)
+            and Path(name).name == name
+            and isinstance(digest, str)
+            and _DIGEST.fullmatch(digest)
+            for name, digest in modules.items()
+        ),
+        "old manifest closure invalid",
+    )
+    _need(
+        _sha(json.dumps(modules, sort_keys=True, separators=(",", ":")).encode())
+        == REVIEWED_OLD_MODULES_SHA256,
+        "old manifest closure is not the reviewed predecessor",
+    )
+    _need(
+        doc.get("public_runtime_descriptor") == "closer-runtime-package.json"
+        and _sha(descriptor_raw) == REVIEWED_OLD_DESCRIPTOR_SHA256,
+        "old public descriptor is not the reviewed predecessor",
+    )
+    try:
+        descriptor = json.loads(descriptor_raw)
+    except ValueError as exc:
+        raise SourceUpgradeHeld("old public descriptor invalid") from exc
+    _need(isinstance(descriptor, dict), "old public descriptor invalid")
+    for field in ("candidate_sha", "modules", "package_digest", "state_versions"):
+        _need(descriptor.get(field) == doc.get(field), "old public descriptor binding differs")
+    return dict(cast(dict[str, str], modules))
+
+
+def _old_module_bytes(doc: dict[str, Any]) -> tuple[bytes, dict[str, bytes]]:
+    """Capture a reviewed old closure without importing any of its code."""
+    try:
+        base = _canonical(doc["module_dir"])
+        _need(
+            _canonical(doc["module_path"]) == base / "closer_campaign.py",
+            "old runtime entrypoint differs",
+        )
+        descriptor_raw = host._read(base / "closer-runtime-package.json")[1]
+        modules = _reviewed_old_metadata(doc, descriptor_raw)
+        executable = {
+            str(path.relative_to(base))
+            for path in base.rglob("*")
+            if path.is_file() and path.suffix in {".py", ".pyc", ".pyo"}
+        }
+        _need(executable == set(modules), "old runtime contains undeclared executable code")
+        captured = {}
+        for name, digest in modules.items():
+            raw = host._read(base / name)[1]
+            _need(_sha(raw) == digest, "old manifest module differs")
+            captured[name] = raw
+        return descriptor_raw, captured
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, SourceUpgradeHeld):
+            raise
+        raise SourceUpgradeHeld("old runtime closure unavailable") from exc
+
+
 def _old_diagnostic(
     manifest: Path, state: Path, worker_id: str, *, interpreter: Path
 ) -> dict[str, Any]:
     """Run a fixed read-only validator under the old physical interpreter.
 
-    It imports the old pinned modules only after hashing their closure, then
-    calls the actual old cohort and completion validators. It never invokes
-    native entry or a provider.
+    Imports use privately staged, already verified bytes. Original manifest,
+    state and proof paths remain unchanged. Native entry/providers are never called.
     """
     _, raw, doc = _object(manifest, "old manifest")
     try:
-        _need(_sha(interpreter.read_bytes()) == REVIEWED_OLD_INTERPRETER_SHA256,
-              "old interpreter differs from reviewed predecessor")
+        _need(
+            _sha(host._read(_canonical(interpreter))[1]) == REVIEWED_OLD_INTERPRETER_SHA256,
+            "old interpreter differs from reviewed predecessor",
+        )
     except OSError as exc:
         raise SourceUpgradeHeld("old interpreter unavailable") from exc
-    modules = doc.get("modules")
-    if not isinstance(modules, dict) or not modules:
-        raise SourceUpgradeHeld("old manifest module closure missing")
+    descriptor_raw, captured = _old_module_bytes(doc)
+    modules = doc["modules"]
     program = (
         "import hashlib,json,pathlib,sys\n"
-        "r=pathlib.Path(sys.argv[1]); s=pathlib.Path(sys.argv[2]); w=sys.argv[3]; m=json.loads(r.read_text()); out={}\n"
-        "for n,h in m['modules'].items():\n"
-        " p=pathlib.Path(m['module_dir'])/n; b=p.read_bytes();\n"
-        " if hashlib.sha256(b).hexdigest()!=h: raise SystemExit(31)\n"
-        " out[n]=h\n"
-        "sys.path.insert(0,str(pathlib.Path(m['module_dir']))); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
-        "m=c.load_manifest(r);\n"
+        "r=pathlib.Path(sys.argv[1]); s=pathlib.Path(sys.argv[2]); w=sys.argv[3]; stage=pathlib.Path(sys.argv[4]); raw=sys.stdin.buffer.read(); m=json.loads(raw); out=m['modules']\n"
+        "for name,digest in out.items():\n"
+        " if hashlib.sha256((stage/name).read_bytes()).hexdigest()!=digest: raise SystemExit(31)\n"
+        "sys.path.insert(0,str(stage)); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
         "if c.validate_manifest(m) or c.verify_modules(m): raise SystemExit(35)\n"
+        "from closer_mechanisms import mechanism; mechanism(m)\n"
         "d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
         "source_target=targets[0]; row=a['targets'][source_target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets);\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(r.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
-    try:
-        run = subprocess.run(
-            [str(interpreter), "-I", "-B", "-c", program, str(manifest), str(state), worker_id],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        _need(
-            run.returncode == 0 and len(run.stdout) <= 65536,
-            "old source diagnostic failed: " + run.stderr[-500:],
-        )
-        answer = json.loads(run.stdout)
-    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-        raise SourceUpgradeHeld("old source diagnostic unavailable") from exc
+    with tempfile.TemporaryDirectory(prefix="old-source-diagnostic-") as stage_name:
+        stage = Path(stage_name)
+        stage.chmod(0o700)
+        try:
+            for name, module_raw in captured.items():
+                target = stage / name
+                target.write_bytes(module_raw)
+                target.chmod(0o600)
+            (stage / "closer-runtime-package.json").write_bytes(descriptor_raw)
+            policy_raw = host._read(Path(doc["module_dir"]) / "closer_role_selection.json")[1]
+            (stage / "closer_role_selection.json").write_bytes(policy_raw)
+            run = subprocess.run(
+                [
+                    str(interpreter),
+                    "-I",
+                    "-B",
+                    "-c",
+                    program,
+                    str(manifest),
+                    str(state),
+                    worker_id,
+                    str(stage),
+                ],
+                input=raw.decode(),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            _need(
+                run.returncode == 0 and len(run.stdout) <= 65536,
+                "old source diagnostic failed: " + run.stderr[-500:],
+            )
+            answer = json.loads(run.stdout)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            raise SourceUpgradeHeld("old source diagnostic unavailable") from exc
+    _old_module_bytes(doc)
     _need(
-        answer.get("manifest_sha256") == _sha(raw) and answer.get("modules") == modules,
+        answer.get("manifest_sha256") == _sha(raw)
+        and answer.get("modules") == modules
+        and host._read(manifest)[1] == raw,
         "old source diagnostic differs",
     )
     return answer
@@ -276,37 +365,14 @@ def _manifest(path: str | Path, *, old: bool = False) -> tuple[Path, bytes, dict
 
     value, raw, doc = _object(path, "manifest")
     if old:
-        modules = doc.get("modules")
+        _old_module_bytes(doc)
+        contract = doc.get("mechanism_contract")
+        interpreter = contract.get("interpreter") if isinstance(contract, dict) else None
         _need(
-            isinstance(doc.get("module_dir"), str)
-            and isinstance(modules, dict)
-            and bool(modules)
-            and all(
-                isinstance(name, str)
-                and Path(name).name == name
-                and isinstance(digest, str)
-                and _DIGEST.fullmatch(digest)
-                for name, digest in modules.items()
-            ),
-            "old manifest closure invalid",
+            isinstance(interpreter, dict)
+            and interpreter.get("sha256") == REVIEWED_OLD_INTERPRETER_SHA256,
+            "old interpreter is not the reviewed predecessor",
         )
-        _need(
-            _sha(json.dumps(modules, sort_keys=True, separators=(",", ":")).encode())
-            == REVIEWED_OLD_MODULES_SHA256,
-            "old manifest closure is not the reviewed predecessor",
-        )
-        descriptor = doc.get("public_runtime_descriptor")
-        _need(isinstance(descriptor, str) and Path(descriptor).name == descriptor,
-              "old public descriptor invalid")
-        descriptor_path = Path(doc["module_dir"]) / descriptor
-        try:
-            _need(_sha(descriptor_path.read_bytes()) == REVIEWED_OLD_DESCRIPTOR_SHA256,
-                  "old public descriptor is not the reviewed predecessor")
-        except OSError as exc:
-            raise SourceUpgradeHeld("old public descriptor unavailable") from exc
-        interpreter = doc.get("mechanism_contract", {}).get("interpreter", {})
-        _need(interpreter.get("sha256") == REVIEWED_OLD_INTERPRETER_SHA256,
-              "old interpreter is not the reviewed predecessor")
     else:
         _need(
             not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
@@ -1223,6 +1289,7 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     _old_manifest_path, _old_manifest_raw, old_manifest = _pinned_object(
         old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
     )
+    _old_module_bytes(old_manifest)
     old_state = _canonical(record["old"]["state"])
     old_result = _canonical(record["old"]["result"])
     _need(_sha(host._read(old_state)[1]) == record["old"]["state_sha256"], "old state changed")
@@ -1289,6 +1356,7 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
         )
         _need(locked_old_manifest == old_manifest, "old manifest changed under locks")
+        _old_module_bytes(locked_old_manifest)
         _locked_state_path, _locked_state_raw, old_doc = _pinned_object(
             old_state, record["old"]["state_sha256"], "old campaign state"
         )

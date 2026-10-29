@@ -45,7 +45,9 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
         upgrade._incomplete_cohort({"completed": True}, {"accepted": False})
 
 
-def test_old_diagnostic_refuses_a_non_source_module_closure(tmp_path, monkeypatch):
+def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
+    tmp_path, monkeypatch
+):
     module = tmp_path / "closer_correction_bridge.py"
     module.write_text("# exact old source\n")
     manifest = tmp_path / "host-manifest.json"
@@ -54,20 +56,13 @@ def test_old_diagnostic_refuses_a_non_source_module_closure(tmp_path, monkeypatc
     )
     state = tmp_path / "old.campaign.json"
     state.write_text('{"workers": []}')
-    actual_run = upgrade.subprocess.run
-    returncodes = []
-
-    def capture_run(*args, **kwargs):
-        result = actual_run(*args, **kwargs)
-        returncodes.append(result.returncode)
-        return result
-
-    monkeypatch.setattr(upgrade.subprocess, "run", capture_run)
-    with pytest.raises(upgrade.SourceUpgradeHeld, match="diagnostic"):
+    calls = []
+    monkeypatch.setattr(upgrade.subprocess, "run", lambda *a, **k: calls.append(a))
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="old .* unavailable"):
         upgrade._old_diagnostic(
             manifest, state, "worker", interpreter=Path(sys.executable).resolve()
         )
-    assert returncodes == [31]
+    assert calls == []
 
 
 def test_installed_release_refuses_a_modified_inspector_before_execution(tmp_path, monkeypatch):
