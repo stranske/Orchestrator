@@ -8,6 +8,16 @@ import pytest
 import closer_launch_preflight as preflight
 
 
+def test_preflight_selftest_is_observed_by_the_real_verifier():
+    import verify
+
+    assert verify.run_selftests(["closer_launch_preflight"], jobs=1) == {
+        "ok": ["closer_launch_preflight"],
+        "failed": {},
+        "skipped": {},
+    }
+
+
 @pytest.mark.parametrize("alias_kind", ["relative", "symlink"])
 def test_noncanonical_manifest_is_held_before_runtime_or_capacity_reads(tmp_path, alias_kind):
     target = tmp_path / "manifest.json"

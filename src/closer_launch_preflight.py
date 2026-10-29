@@ -203,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         assert _report_reasons(report, ["profile"]) == []
         report["agents"]["claude"]["state"] = "shed"
         assert _report_reasons(report, ["profile"])
+        print("closer_launch_preflight selftest: PASS (diagnostic only; no native launch)")
         return 0
     if args.manifest is None:
         parser.error("--manifest is required unless --selftest is used")

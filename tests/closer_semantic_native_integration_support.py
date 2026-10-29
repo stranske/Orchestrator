@@ -223,7 +223,7 @@ def finite_no_start_v2_reference():
 STRONG_ROLE_ENROLLMENT_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_strong_role_enrollment_v1.json"
 )
-STRONG_ROLE_ENROLLMENT_SHA256 = "c5fbdf7813c488c94c4333397ebbca0c4b9487d4cf8c0ee29371338cf87f63bf"
+STRONG_ROLE_ENROLLMENT_SHA256 = "8d5be1378f1056cebfac2c8b5241cd87af185e8135f0d0a91e13c2fec2fa94fa"
 
 
 def strong_role_enrollment_reference():
@@ -262,6 +262,20 @@ def assert_reviewed_role_registry_successor(source=None):
         registry.value.values.remove(record)
         assert fingerprint(registry) == enrollment["before_registry_ast_sha256"]
         assert fingerprint(tree) == enrollment["before_module_ast_without_new_record_sha256"]
+        assert enrollment["only_changed_definitions"] == [
+            "_selected_record",
+            "qualification_problems",
+            "qualified_record",
+        ]
+        tree.body = [
+            n
+            for n in tree.body
+            if not (
+                isinstance(n, ast.FunctionDef) and n.name in enrollment["only_changed_definitions"]
+            )
+            and n is not registry
+        ]
+        assert fingerprint(tree) == enrollment["unchanged_module_ast_sha256"]
         return
     identity = repository_identity_reference()["role_source"]
     if hashlib.sha256(raw).hexdigest() == identity["after_file_sha256"]:

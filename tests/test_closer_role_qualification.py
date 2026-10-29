@@ -262,6 +262,9 @@ def test_qualified_record_does_not_relax_rejection_paths(profile):
         is None
     )
     assert roles.qualified_record(profile, role, now=NOW, records={}) is None
+    missing_identity = dict(profile)
+    missing_identity.pop("profile_id")
+    assert roles.qualified_record(missing_identity, role, now=NOW, records=records) is None
     records["duplicate"] = dict(evidence, qualification_id="duplicate")
     assert roles.qualified_record(profile, role, now=NOW, records=records) is None
 

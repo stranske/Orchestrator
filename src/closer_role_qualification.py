@@ -459,8 +459,10 @@ def qualified_record(
         return None
     snapshot = deepcopy(dict(source))
     current = time.time() if now is None else now
+    if qualification_problems(profile, role, now=current, records=snapshot):
+        return None
     selected = _selected_record(profile, role, current, snapshot)
-    if selected is None or qualification_problems(profile, role, now=current, records=snapshot):
+    if selected is None:
         return None
     return dict(selected[1])
 
