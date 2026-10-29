@@ -267,6 +267,24 @@ def test_staging_inventory_refuses_root_replacement_during_atomic_temp_retry(tmp
     assert parked.is_dir() and runtime.is_dir()
 
 
+@pytest.mark.parametrize("aliased_root", ["runtime", "state"])
+def test_staging_inventory_refuses_top_level_state_root_symlink(tmp_path, aliased_root):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "module.py").write_text("pass\n")
+    runtime_target = tmp_path / "runtime-target"
+    state_target = tmp_path / "state-target"
+    runtime_target.mkdir()
+    state_target.mkdir()
+    alias = tmp_path / f"{aliased_root}-alias"
+    alias.symlink_to(runtime_target if aliased_root == "runtime" else state_target)
+    runtime = alias if aliased_root == "runtime" else runtime_target
+    state = alias if aliased_root == "state" else state_target
+
+    with pytest.raises(storage.StorageBlocked, match="physical directory"):
+        storage.staging_bytes(source, runtime, state, 1024**2)
+
+
 def test_unknown_state_copy_symlink_does_not_underestimate(tmp_path):
     source, runtime = tmp_path / "source", tmp_path / "runtime"
     source.mkdir()
