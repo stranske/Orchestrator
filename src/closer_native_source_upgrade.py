@@ -22,6 +22,10 @@ from typing import Any, cast
 import closer_host_restore_contract as host
 
 SCHEMA = "closer-native-source-upgrade/v1"
+# This route is deliberately scoped to the reviewed predecessor whose owner
+# criterion stopped before Native ACT. A manifest that merely self-describes a
+# matching shape is not enough to establish that control-flow ordering.
+REVIEWED_OLD_CANDIDATE = "f858dc3857ad7a90461126abd945edc0d380d9b3"
 
 
 class SourceUpgradeHeld(RuntimeError):
@@ -266,6 +270,7 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
 
     old_path, old_raw, old = _manifest(old_manifest)
     new_path, new_raw, new = _manifest(new_manifest)
+    _need(old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE, "old release is not reviewed no-ACT predecessor")
     _need(old.get("candidate_sha") != new.get("candidate_sha"), "source candidate release is not different")
     _same_identity(old, new)
     reference = _completed_reference(old_path, old_state, worker_id)
