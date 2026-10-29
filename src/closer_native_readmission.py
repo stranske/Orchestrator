@@ -256,6 +256,8 @@ def require_preparation_known(state_path, document, *, initial=False):
             raise ReadmissionHeld("prepared manifest changed while binding producer")
         producer = _preparation_producer(manifest_path, manifest, manifest_raw)
         token = _json(intent_raw, "preparation intent")
+    except ReadmissionHeld:
+        raise
     except (OSError, RuntimeError, ValueError, TypeError) as exc:
         raise ReadmissionHeld("preparation runtime producer is unavailable") from exc
     try:
