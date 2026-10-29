@@ -26,6 +26,11 @@ def _digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _producer_sha256():
+    """Hash the module that is actually enforcing the readmission boundary."""
+    return _digest(host._read(Path(__file__).resolve())[1])
+
+
 def _canonical(path):
     path = Path(path).absolute()
     if path.is_symlink() or path.resolve() != path:
@@ -117,6 +122,8 @@ def _new_runtime(manifest_path, worker_config):
         source = Path(module.__file__).resolve()
         if manifest.get("modules", {}).get(source.name) != _digest(host._read(source)[1]):
             raise ReadmissionHeld("new runtime does not contain the current native refusal repair")
+    if manifest.get("modules", {}).get(Path(__file__).name) != _producer_sha256():
+        raise ReadmissionHeld("new runtime does not contain the executing readmission boundary")
     if not isinstance(worker_config, dict):
         raise ReadmissionHeld("new worker configuration is required")
     cfg = json.loads(json.dumps(worker_config, sort_keys=True))
@@ -201,6 +208,18 @@ def _initialization(manifest, destination):
     }
 
 
+def _preparation_producer(manifest_path, manifest, manifest_raw):
+    """Require every preparation receipt to name this pinned executing module."""
+    producer = _producer_sha256()
+    if manifest.get("modules", {}).get(Path(__file__).name) != producer:
+        raise ReadmissionHeld("prepared manifest does not pin the executing readmission boundary")
+    return {
+        "producer_sha256": producer,
+        "manifest": str(manifest_path),
+        "manifest_sha256": _digest(manifest_raw),
+    }
+
+
 def require_preparation_known(state_path, document, *, initial=False):
     """A preparation-origin campaign cannot reach business gates before its seal."""
     origin = document.get("preparation_origin") if isinstance(document, dict) else None
@@ -218,6 +237,38 @@ def require_preparation_known(state_path, document, *, initial=False):
     intent_raw = host._read(intent)[1]
     if _digest(intent_raw) != origin["sha256"]:
         raise ReadmissionHeld("preparation intent differs from campaign origin")
+    worker_config = document.get("worker_config") if isinstance(document, dict) else None
+    manifest_value = (
+        worker_config.get("runtime_manifest") if isinstance(worker_config, dict) else None
+    )
+    if not isinstance(manifest_value, str):
+        raise ReadmissionHeld("preparation campaign has no pinned runtime manifest")
+    try:
+        import closer_campaign as campaign
+
+        manifest_path = _canonical(manifest_value)
+        manifest_raw = host._read(manifest_path)[1]
+        manifest = campaign.load_manifest(manifest_path)
+        if (
+            manifest != _json(manifest_raw, "prepared manifest")
+            or host._read(manifest_path)[1] != manifest_raw
+        ):
+            raise ReadmissionHeld("prepared manifest changed while binding producer")
+        producer = _preparation_producer(manifest_path, manifest, manifest_raw)
+        token = _json(intent_raw, "preparation intent")
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
+        raise ReadmissionHeld("preparation runtime producer is unavailable") from exc
+    if (
+        token.get("schema") != "closer-native-readmission/v1"
+        or token.get("stage") != "preparation_intent"
+        or token.get("authority") is not False
+        or any(token.get(key) != value for key, value in producer.items())
+        or not isinstance(token.get("plan"), dict)
+        or token["plan"].get("producer_sha256") != producer["producer_sha256"]
+        or token["plan"].get("new", {}).get("manifest") != producer["manifest"]
+        or token["plan"].get("new", {}).get("manifest_sha256") != producer["manifest_sha256"]
+    ):
+        raise ReadmissionHeld("preparation intent producer differs from current runtime")
     known_path = _known_path(intent)
     try:
         known = _json(host._read(known_path)[1], "preparation known receipt")
@@ -234,6 +285,8 @@ def require_preparation_known(state_path, document, *, initial=False):
         or len(known["state_sha256"]) != 64
     ):
         raise ReadmissionHeld("preparation known receipt differs from campaign origin")
+    if any(known.get(key) != value for key, value in producer.items()):
+        raise ReadmissionHeld("preparation known receipt producer differs from current runtime")
     if initial and known["state_sha256"] != _digest(host._read(state_path)[1]):
         raise ReadmissionHeld("preparation known receipt does not bind current initial state")
 
@@ -379,7 +432,7 @@ def _hold_rows(rows):
 def _plan(reference, new_manifest_path, new_manifest_raw, cfg, destination, frontier):
     payload = {
         "schema": "closer-native-readmission-plan/v1",
-        "producer_sha256": _digest(host._read(Path(__file__).resolve())[1]),
+        "producer_sha256": _producer_sha256(),
         "authority": False,
         "original": {
             "state": reference["state_path"],
@@ -409,6 +462,9 @@ def _intent_token(plan, plan_sha256):
         "schema": "closer-native-readmission/v1",
         "stage": "preparation_intent",
         "authority": False,
+        "producer_sha256": plan["producer_sha256"],
+        "manifest": plan["new"]["manifest"],
+        "manifest_sha256": plan["new"]["manifest_sha256"],
         "plan": plan,
         "plan_sha256": plan_sha256,
     }
@@ -529,6 +585,9 @@ def _recover_or_create(
             "stage": "preparation_known",
             "authority": False,
             "intent_sha256": _digest(token_raw),
+            "producer_sha256": token["producer_sha256"],
+            "manifest": token["manifest"],
+            "manifest_sha256": token["manifest_sha256"],
             "state": str(destination),
             "state_sha256": _digest(state_raw),
         }
@@ -807,7 +866,7 @@ def apply_historical(
             raise ReadmissionHeld("historical readmission requires the repaired runtime")
         plan = {
             "schema": "closer-native-readmission-plan/v1",
-            "producer_sha256": _digest(host._read(Path(__file__).resolve())[1]),
+            "producer_sha256": _producer_sha256(),
             "authority": False,
             "reconciliation": reference,
             "old_result_sha256": original["result"]["sha256"],

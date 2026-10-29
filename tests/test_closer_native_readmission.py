@@ -3,6 +3,7 @@ import json
 import time
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +53,11 @@ def _initialized_world(monkeypatch, tmp_path):
     config = {"state_path": str(state), "bootstrap_anchor_sha256": "a" * 64}
     manifest = {
         "package_digest": "b" * 64,
+        "modules": {
+            "closer_native_readmission.py": hashlib.sha256(
+                Path(readmission.__file__).read_bytes()
+            ).hexdigest()
+        },
         "policy": {"correction_controller_installation": {"config": config}},
         "mechanism_contract": {
             "campaign_root": str(state.parent),
@@ -492,6 +498,31 @@ def test_unknown_without_reconciliation_or_prospective_proof_is_held(tmp_path):
         readmission.prospective_reference(tmp_path / "manifest", tmp_path / "missing", "worker")
 
 
+def test_new_runtime_requires_manifest_pin_for_executing_readmission_module(monkeypatch, tmp_path):
+    import closer_campaign as campaign
+    import closer_native_observer as native
+    import closer_runtime_binding as binding
+
+    manifest_path = tmp_path / "runtime" / "host-manifest.json"
+    manifest_path.parent.mkdir()
+    manifest_path.write_text("{}")
+    manifest = {
+        "modules": {
+            Path(module.__file__)
+            .name: hashlib.sha256(Path(module.__file__).read_bytes())
+            .hexdigest()
+            for module in (native, binding, readmission)
+        }
+    }
+    monkeypatch.setattr(campaign, "load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(native, "contract", lambda _manifest: None)
+    cfg = {"runtime_manifest": str(manifest_path)}
+    assert readmission._new_runtime(manifest_path, cfg)[0] == manifest_path
+    manifest["modules"]["closer_native_readmission.py"] = "0" * 64
+    with pytest.raises(readmission.ReadmissionHeld, match="executing readmission"):
+        readmission._new_runtime(manifest_path, cfg)
+
+
 def test_failed_creation_retains_one_use_intent_without_claiming_success(monkeypatch, tmp_path):
     import json
 
@@ -633,7 +664,28 @@ def test_preparation_known_requires_exact_origin_and_initial_state(monkeypatch, 
     world = _initialized_world(monkeypatch, tmp_path)
     document = json.loads(world.state.read_text())
     intent = world.root / "intent.json"
-    intent.write_bytes(b'{"exact":"intent"}')
+    manifest_raw = world.manifest_path.read_bytes()
+    producer = hashlib.sha256(Path(readmission.__file__).read_bytes()).hexdigest()
+    intent.write_text(
+        json.dumps(
+            {
+                "schema": "closer-native-readmission/v1",
+                "stage": "preparation_intent",
+                "authority": False,
+                "producer_sha256": producer,
+                "manifest": str(world.manifest_path),
+                "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                "plan": {
+                    "producer_sha256": producer,
+                    "new": {
+                        "manifest": str(world.manifest_path),
+                        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                    },
+                },
+            },
+            sort_keys=True,
+        )
+    )
     document["preparation_origin"] = {
         "path": str(intent),
         "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
@@ -649,6 +701,9 @@ def test_preparation_known_requires_exact_origin_and_initial_state(monkeypatch, 
                 "stage": "preparation_known",
                 "authority": False,
                 "intent_sha256": document["preparation_origin"]["sha256"],
+                "producer_sha256": producer,
+                "manifest": str(world.manifest_path),
+                "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
                 "state": str(world.state),
                 "state_sha256": hashlib.sha256(world.state.read_bytes()).hexdigest(),
             }
@@ -658,6 +713,112 @@ def test_preparation_known_requires_exact_origin_and_initial_state(monkeypatch, 
     document["preparation_origin"]["sha256"] = "0" * 64
     with pytest.raises(readmission.ReadmissionHeld, match="intent differs"):
         readmission.require_preparation_known(world.state, document, initial=True)
+
+
+@pytest.mark.parametrize("tampered", ["intent", "known", "manifest"])
+def test_preparation_known_rejects_tampered_producer_binding(monkeypatch, tmp_path, tampered):
+    world = _initialized_world(monkeypatch, tmp_path)
+    document = json.loads(world.state.read_text())
+    manifest_raw = world.manifest_path.read_bytes()
+    producer = hashlib.sha256(Path(readmission.__file__).read_bytes()).hexdigest()
+    intent = world.root / "intent.json"
+    token = {
+        "schema": "closer-native-readmission/v1",
+        "stage": "preparation_intent",
+        "authority": False,
+        "producer_sha256": producer,
+        "manifest": str(world.manifest_path),
+        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+        "plan": {
+            "producer_sha256": producer,
+            "new": {
+                "manifest": str(world.manifest_path),
+                "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+            },
+        },
+    }
+    if tampered == "intent":
+        token["producer_sha256"] = "0" * 64
+    intent.write_text(json.dumps(token, sort_keys=True))
+    document["preparation_origin"] = {
+        "path": str(intent),
+        "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
+    }
+    world.state.write_text(json.dumps(document, sort_keys=True))
+    known = {
+        "schema": "closer-native-readmission/v1",
+        "stage": "preparation_known",
+        "authority": False,
+        "intent_sha256": document["preparation_origin"]["sha256"],
+        "producer_sha256": producer,
+        "manifest": str(world.manifest_path),
+        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+        "state": str(world.state),
+        "state_sha256": hashlib.sha256(world.state.read_bytes()).hexdigest(),
+    }
+    if tampered == "known":
+        known["producer_sha256"] = "0" * 64
+    if tampered == "manifest":
+        world.manifest["modules"]["closer_native_readmission.py"] = "0" * 64
+        world.manifest_path.write_text(json.dumps(world.manifest, sort_keys=True))
+    readmission._known_path(intent).write_text(json.dumps(known, sort_keys=True))
+    with pytest.raises(readmission.ReadmissionHeld, match="producer"):
+        readmission.require_preparation_known(world.state, document, initial=True)
+
+
+def test_admit_initialized_blocks_tampered_preparation_producer(monkeypatch, tmp_path):
+    world = _initialized_world(monkeypatch, tmp_path)
+    document = json.loads(world.state.read_text())
+    manifest_raw = world.manifest_path.read_bytes()
+    producer = hashlib.sha256(Path(readmission.__file__).read_bytes()).hexdigest()
+    intent = world.root / "intent.json"
+    intent.write_text(
+        json.dumps(
+            {
+                "schema": "closer-native-readmission/v1",
+                "stage": "preparation_intent",
+                "authority": False,
+                "producer_sha256": producer,
+                "manifest": str(world.manifest_path),
+                "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                "plan": {
+                    "producer_sha256": producer,
+                    "new": {
+                        "manifest": str(world.manifest_path),
+                        "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                    },
+                },
+            },
+            sort_keys=True,
+        )
+    )
+    document["preparation_origin"] = {
+        "path": str(intent),
+        "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
+    }
+    world.state.write_text(json.dumps(document, sort_keys=True))
+    readmission._known_path(intent).write_text(
+        json.dumps(
+            {
+                "schema": "closer-native-readmission/v1",
+                "stage": "preparation_known",
+                "authority": False,
+                "intent_sha256": document["preparation_origin"]["sha256"],
+                "producer_sha256": "0" * 64,
+                "manifest": str(world.manifest_path),
+                "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                "state": str(world.state),
+                "state_sha256": hashlib.sha256(world.state.read_bytes()).hexdigest(),
+            },
+            sort_keys=True,
+        )
+    )
+    before = world.state.read_bytes()
+    with pytest.raises(readmission.ReadmissionHeld, match="producer"):
+        readmission.admit_initialized(
+            world.manifest_path, world.state, world.assignment, world.request
+        )
+    assert world.state.read_bytes() == before
 
 
 def test_historical_reader_requires_exact_decision(monkeypatch):
