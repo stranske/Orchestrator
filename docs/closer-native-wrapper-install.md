@@ -41,6 +41,9 @@ its two pre-provisioned locks and the fresh campaign state must be absent.
 
 Prospective installation only makes the pinned wrapper physically available.
 It does not qualify it, consume the no-start proof, create a campaign, or
-launch anything. Run the ordinary model-free qualification, then the existing
-`closer_native_readmission.py ... --kind prospective` flow to create and admit
-the fresh held campaign. A valid v2 proof alone is not an automatic retry.
+launch anything. Run the ordinary model-free qualification. The existing
+prospective readmission consumer still validates the old wrapper contract and
+therefore cannot complete after this wrapper CAS. Keep the installed wrapper
+held until a reviewed consumer can validate the sealed transition under the
+new contract. This installer is not a complete prospective recovery path, and
+a valid v2 proof alone does not permit retry.
