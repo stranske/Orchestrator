@@ -1144,10 +1144,19 @@ class Reservations:
             row.update(status="staged", remaining=row["peak"])
 
     def finish(
-        self, job: str, receipt: JSON, *, terminal: bool, deadline: float | None = None
+        self,
+        job: str,
+        receipt: JSON,
+        *,
+        terminal: bool,
+        deadline: float | None = None,
+        expected_row_sha256: str | None = None,
+        calibrate: bool = True,
     ) -> None:
         with self.locked(deadline=deadline) as data:
             row = data["jobs"][job]
+            if expected_row_sha256 is not None and _json_digest(row) != expected_row_sha256:
+                raise StorageBlocked("reservation changed before terminal reconciliation")
             receipt = {**row, **receipt, "available_after": self.free(self.volume)}
             receipts = self.directory / "receipts"
             receipts.mkdir(exist_ok=True, mode=0o700)
@@ -1157,7 +1166,7 @@ class Reservations:
                 # measured owned growth. Preserve all pre-existing legacy estimates.
                 contract = row.get("measurement_contract")
                 sampled_peak = _owned_sample_peak(receipt)
-                if isinstance(contract, dict) and sampled_peak is not None:
+                if calibrate and isinstance(contract, dict) and sampled_peak is not None:
                     self._owned_calibration(data, contract)
                     candidate = {
                         "contract": contract,
@@ -1210,6 +1219,400 @@ def idle(root: Path) -> None:
                 raise StorageBlocked("open file in owned storage")
     if not visible:
         raise StorageBlocked("open-file inspection is blind to supervisor")
+
+
+ABORT_RECONCILIATION_SCHEMA = "storage-abort-reconciliation-request/v1"
+ABORT_RECONCILIATION_PLAN_SCHEMA = "storage-abort-reconciliation-plan/v1"
+ABORT_RECONCILIATION_RECEIPT_SCHEMA = "storage-abort-reconciliation-receipt/v1"
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    if path.is_symlink():
+        raise StorageBlocked("reconciliation evidence is a symlink")
+    info = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode):
+        raise StorageBlocked("reconciliation evidence is not a regular file")
+    return _sha256_bytes(path.read_bytes())
+
+
+def _private_regular_digest(path: Path, *, label: str) -> str:
+    if path.is_symlink():
+        raise StorageBlocked(f"{label} is a symlink")
+    info = path.stat(follow_symlinks=False)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) & 0o077
+    ):
+        raise StorageBlocked(f"unsafe {label}")
+    return _sha256_bytes(path.read_bytes())
+
+
+def _read_json_reference(reference: Any, *, label: str) -> tuple[Path, JSON]:
+    if (
+        not isinstance(reference, dict)
+        or set(reference) != {"path", "sha256"}
+        or not isinstance(reference["path"], str)
+        or not isinstance(reference["sha256"], str)
+        or len(reference["sha256"]) != 64
+    ):
+        raise StorageBlocked(f"invalid {label} reference")
+    path = Path(reference["path"])
+    if not path.is_absolute() or _sha256_file(path) != reference["sha256"]:
+        raise StorageBlocked(f"{label} reference changed")
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        raise StorageBlocked(f"unreadable {label} evidence") from error
+    if not isinstance(value, dict):
+        raise StorageBlocked(f"invalid {label} evidence")
+    return path.resolve(), value
+
+
+@contextlib.contextmanager
+def _nonblocking_owner_lock(path: Path) -> Iterator[None]:
+    """Take the pre-existing per-job lock; never create a recovery authority."""
+    if path.is_symlink():
+        raise StorageBlocked("storage job owner lock is a symlink")
+    try:
+        descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError as error:
+        raise StorageBlocked("storage job owner lock is missing") from error
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise StorageBlocked("unsafe storage job owner lock")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            if error.errno in (errno.EAGAIN, errno.EWOULDBLOCK, 11):
+                raise StorageBlocked("storage job owner is still active") from error
+            raise
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _dead_process(pid: Any, *, label: str) -> None:
+    if type(pid) is not int or pid <= 1:
+        raise StorageBlocked(f"invalid recorded {label}")
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return
+    except PermissionError as error:
+        raise StorageBlocked(f"cannot inspect recorded {label}") from error
+    raise StorageBlocked(f"recorded {label} is still live")
+
+
+def _dead_process_group(pgid: Any, *, label: str) -> None:
+    if type(pgid) is not int or pgid <= 1:
+        raise StorageBlocked(f"invalid recorded {label}")
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return
+    except PermissionError as error:
+        raise StorageBlocked(f"cannot inspect recorded {label}") from error
+    raise StorageBlocked(f"recorded {label} is still live")
+
+
+def _private_reconciliation_directory(state_dir: Path) -> Path:
+    directory = state_dir / "abort-reconciliations"
+    if directory.exists() or directory.is_symlink():
+        info = directory.lstat()
+        if (
+            directory.is_symlink()
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+        ):
+            raise StorageBlocked("unsafe reconciliation evidence directory")
+    return directory
+
+
+def _create_private_json_once(path: Path, value: JSON) -> None:
+    raw = json.dumps(value, sort_keys=True).encode()
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError as error:
+        raise StorageBlocked("existing reconciliation evidence; preserve and inspect") from error
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        os.close(descriptor)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _abort_reconciliation_request(request_path: Path) -> tuple[JSON, str]:
+    digest = _sha256_file(request_path)
+    try:
+        request = json.loads(request_path.read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        raise StorageBlocked("unreadable reconciliation request") from error
+    required = {
+        "schema",
+        "caller",
+        "state_dir",
+        "job",
+        "expected_row_sha256",
+        "abort_proof",
+        "failed_release",
+        "candidate_sha",
+        "incumbent_token",
+        "owner_process_sha256",
+        "child_process_sha256",
+        "release_owner_process_sha256",
+    }
+    if not isinstance(request, dict) or set(request) != required:
+        raise StorageBlocked("invalid reconciliation request shape")
+    if (
+        request["schema"] != ABORT_RECONCILIATION_SCHEMA
+        or request["caller"] != "original-human-task-reconciler"
+        or not isinstance(request["state_dir"], str)
+        or not isinstance(request["job"], str)
+        or not request["job"].isalnum()
+        or not isinstance(request["expected_row_sha256"], str)
+        or len(request["expected_row_sha256"]) != 64
+        or not isinstance(request["candidate_sha"], str)
+        or len(request["candidate_sha"]) != 40
+        or not isinstance(request["incumbent_token"], str)
+        or any(
+            not isinstance(request[field], str)
+            or len(request[field]) != 64
+            or any(char not in "0123456789abcdef" for char in request[field])
+            for field in (
+                "expected_row_sha256",
+                "owner_process_sha256",
+                "child_process_sha256",
+                "release_owner_process_sha256",
+            )
+        )
+    ):
+        raise StorageBlocked("invalid reconciliation request")
+    return request, digest
+
+
+def _abort_reconciliation_plan(request_path: Path) -> JSON:
+    """Read-only evidence validation for one interrupted, pre-install verifier."""
+    request, request_sha256 = _abort_reconciliation_request(request_path)
+    state_dir = Path(request["state_dir"])
+    if not state_dir.is_absolute() or state_dir.is_symlink() or not state_dir.is_dir():
+        raise StorageBlocked("invalid reconciliation storage state directory")
+    if state_dir.stat().st_uid != os.getuid() or stat.S_IMODE(state_dir.stat().st_mode) & 0o077:
+        raise StorageBlocked("unsafe reconciliation storage state directory")
+    abort_path, abort = _read_json_reference(request["abort_proof"], label="abort proof")
+    failed_path, failed = _read_json_reference(request["failed_release"], label="failed release")
+    if (
+        abort.get("candidate") != request["candidate_sha"]
+        or abort.get("signal") != "SIGTERM"
+        or not isinstance(abort.get("processes"), list)
+        or failed.get("candidate_sha") != request["candidate_sha"]
+        or failed.get("incumbent_token") != request["incumbent_token"]
+        or failed.get("installed_generation") is not None
+        or failed.get("stage") != "failed"
+        or failed.get("failure", {}).get("stage") != "verification"
+        or failed.get("failure", {}).get("exit_code") != 143
+        or failed.get("verification", {}).get("verified") is not False
+        or failed.get("verification", {}).get("exit_code") != 143
+        or failed.get("verification", {}).get("log_path") != str(abort_path)
+    ):
+        raise StorageBlocked("release evidence is not an unverified aborted pre-install run")
+    evidence = _private_reconciliation_directory(state_dir)
+    intent_path = evidence / f"{request['job']}.intent.json"
+    known_path = evidence / f"{request['job']}.known.json"
+    if (
+        intent_path.exists()
+        or intent_path.is_symlink()
+        or known_path.exists()
+        or known_path.is_symlink()
+    ):
+        raise StorageBlocked("prior reconciliation evidence exists; preserve and inspect")
+    ledger_path = state_dir / "reservations.json"
+    _private_regular_digest(ledger_path, label="reservation ledger")
+    try:
+        ledger = json.loads(ledger_path.read_bytes())
+        row = ledger["jobs"][request["job"]]
+    except (KeyError, ValueError, TypeError, OSError) as error:
+        raise StorageBlocked("recorded storage reservation is unavailable") from error
+    if not isinstance(row, dict) or _json_digest(row) != request["expected_row_sha256"]:
+        raise StorageBlocked("recorded storage reservation changed")
+    root = Path(row.get("root", ""))
+    root_identity = row.get("root_identity")
+    if (
+        not root.is_absolute()
+        or root.is_symlink()
+        or not isinstance(root_identity, list)
+        or len(root_identity) != 2
+        or any(type(value) is not int for value in root_identity)
+    ):
+        raise StorageBlocked("recorded owned root is invalid")
+    info = root.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) & 0o077
+        or (info.st_dev, info.st_ino) != tuple(root_identity)
+    ):
+        raise StorageBlocked("recorded owned root identity changed")
+    owner_path = root / "owner.json"
+    _private_regular_digest(owner_path, label="owned root marker")
+    try:
+        owner = json.loads(owner_path.read_bytes())
+    except (OSError, ValueError, UnicodeDecodeError) as error:
+        raise StorageBlocked("unreadable owned root marker") from error
+    if not isinstance(owner, dict):
+        raise StorageBlocked("invalid owned root marker")
+    token = owner.get("token")
+    if (
+        owner.get("job") != request["job"]
+        or not isinstance(token, str)
+        or (hashlib.sha256(token.encode()).hexdigest() != row.get("owner_token_sha256"))
+    ):
+        raise StorageBlocked("owned root marker does not bind the reservation")
+    if row.get("status") != "staged":
+        raise StorageBlocked("reservation is not the recorded staged verification")
+    owner_pid, child_pgid = row.get("owner_pid"), row.get("child_pgid")
+    _dead_process(owner_pid, label="owner pid")
+    _dead_process_group(child_pgid, label="child process group")
+    records: dict[int, JSON] = {}
+    for process in abort["processes"]:
+        if not isinstance(process, dict) or set(process) != {"pid", "ppid", "pgid", "command"}:
+            raise StorageBlocked("invalid abort process evidence")
+        pid = process.get("pid")
+        if type(pid) is not int or pid in records:
+            raise StorageBlocked("duplicate or invalid abort-proof pid")
+        _dead_process(pid, label="abort-proof pid")
+        _dead_process_group(process.get("pgid"), label="abort-proof process group")
+        command = process.get("command")
+        if not isinstance(command, str):
+            raise StorageBlocked("invalid abort process command")
+        records[pid] = process
+    owner_record = records.get(owner_pid)
+    child_record = records.get(child_pgid)
+    release_records = [
+        record
+        for record in records.values()
+        if _sha256_bytes(record["command"].encode()) == request["release_owner_process_sha256"]
+        and request["candidate_sha"] in record["command"]
+    ]
+    if (
+        owner_record is None
+        or child_record is None
+        or len(release_records) != 1
+        or _sha256_bytes(owner_record["command"].encode()) != request["owner_process_sha256"]
+        or _sha256_bytes(child_record["command"].encode()) != request["child_process_sha256"]
+    ):
+        raise StorageBlocked("abort proof does not bind the recorded verifier process tree")
+    release_record = release_records[0]
+    if (
+        release_record["pid"] != release_record["pgid"]
+        or owner_record["ppid"] != release_record["pid"]
+        or owner_record["pgid"] != release_record["pgid"]
+        or child_record["pid"] != child_pgid
+        or child_record["pgid"] != child_pgid
+        or child_record["ppid"] != owner_pid
+    ):
+        raise StorageBlocked("abort proof process tree does not match recorded ownership")
+    idle(root)
+    receipt_path = state_dir / "receipts" / f"{request['job']}.json"
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise StorageBlocked("terminal storage receipt already exists; preserve and inspect")
+    body = {
+        "schema": ABORT_RECONCILIATION_PLAN_SCHEMA,
+        "request_path": str(request_path.resolve()),
+        "request_sha256": request_sha256,
+        "abort_proof": {"path": str(abort_path), "sha256": request["abort_proof"]["sha256"]},
+        "failed_release": {"path": str(failed_path), "sha256": request["failed_release"]["sha256"]},
+        "state_dir": str(state_dir.resolve()),
+        "job": request["job"],
+        "row_sha256": request["expected_row_sha256"],
+        "root": str(root),
+        "root_identity": root_identity,
+        "intent_path": str(intent_path),
+        "known_path": str(known_path),
+        "receipt_path": str(receipt_path),
+        "action": "finish_terminal_retain_root",
+    }
+    return {**body, "sha256": _json_digest(body)}
+
+
+def plan_abort_reconciliation(request_path: Path) -> JSON:
+    """Produce an exact, side-effect-free reconciliation plan."""
+    request, _ = _abort_reconciliation_request(request_path)
+    with _nonblocking_owner_lock(Path(request["state_dir"]) / f"{request['job']}.owner"):
+        return _abort_reconciliation_plan(request_path)
+
+
+def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str) -> JSON:
+    """Consume one plan to terminally reconcile a dead verifier without retiring its root."""
+    if not isinstance(expected_plan_sha256, str) or len(expected_plan_sha256) != 64:
+        raise StorageBlocked("invalid expected reconciliation plan hash")
+    request, _ = _abort_reconciliation_request(request_path)
+    state_dir = Path(request["state_dir"])
+    with _nonblocking_owner_lock(state_dir / f"{request['job']}.owner"):
+        plan = _abort_reconciliation_plan(request_path)
+        if plan["sha256"] != expected_plan_sha256:
+            raise StorageBlocked("reconciliation plan changed before apply")
+        evidence = _private_reconciliation_directory(state_dir)
+        evidence.mkdir(mode=0o700, exist_ok=True)
+        evidence = _private_reconciliation_directory(state_dir)
+        intent = {
+            "schema": ABORT_RECONCILIATION_RECEIPT_SCHEMA,
+            "stage": "intent",
+            "authority": False,
+            "plan_sha256": plan["sha256"],
+            "caller": "original-human-task-reconciler",
+            "action": "finish_terminal_retain_root",
+        }
+        intent_path = Path(plan["intent_path"])
+        _create_private_json_once(intent_path, intent)
+        manager = Reservations(state_dir, Path(plan["root"]).parent, floor=0)
+        receipt = {
+            "schema": ABORT_RECONCILIATION_RECEIPT_SCHEMA,
+            "status": "verification_aborted_pre_install_reconciled",
+            "exit_code": 143,
+            "verified": False,
+            "caller": "original-human-task-reconciler",
+            "plan_sha256": plan["sha256"],
+            "root_retained": True,
+            "physical_reclaim_claimed": False,
+            "calibration_updated": False,
+        }
+        manager.finish(
+            request["job"],
+            receipt,
+            terminal=True,
+            expected_row_sha256=plan["row_sha256"],
+            calibrate=False,
+        )
+        receipt_path = Path(plan["receipt_path"])
+        receipt_sha256 = _private_regular_digest(receipt_path, label="terminal storage receipt")
+        known = {
+            "schema": ABORT_RECONCILIATION_RECEIPT_SCHEMA,
+            "stage": "known",
+            "authority": False,
+            "plan_sha256": plan["sha256"],
+            "receipt": {"path": str(receipt_path), "sha256": receipt_sha256},
+            "root_retained": True,
+        }
+        _create_private_json_once(Path(plan["known_path"]), known)
+        return known
 
 
 def retire(
@@ -1634,11 +2037,32 @@ def main() -> int:
     staged = sub.add_parser("staged")
     staged.add_argument("--state-dir", type=Path, required=True)
     staged.add_argument("--job", required=True)
+    reconcile = sub.add_parser("reconcile-abort")
+    reconcile.add_argument("--request", type=Path, required=True)
+    reconcile.add_argument("--apply", action="store_true")
+    reconcile.add_argument("--expected-plan-sha256")
     args = parser.parse_args()
     if args.action == "staged":
         Reservations(args.state_dir, Path.cwd(), floor=STRICT_RELEASE_FLOOR).staged(
             args.job, os.environ["ORCH_STORAGE_OWNER_TOKEN"]
         )
+        return 0
+    if args.action == "reconcile-abort":
+        if args.apply:
+            if not args.expected_plan_sha256:
+                parser.error("reconcile-abort --apply requires --expected-plan-sha256")
+            print(
+                json.dumps(
+                    apply_abort_reconciliation(
+                        args.request, expected_plan_sha256=args.expected_plan_sha256
+                    ),
+                    sort_keys=True,
+                )
+            )
+        else:
+            if args.expected_plan_sha256:
+                parser.error("--expected-plan-sha256 requires --apply")
+            print(json.dumps(plan_abort_reconciliation(args.request), sort_keys=True))
         return 0
     args.command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if len(args.command) < 2 or args.command[0] != "bash":
