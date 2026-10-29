@@ -361,6 +361,7 @@ def _physical_recipe(
         "handoff_dir",
         "native_hooks",
         "receipt_reserve_seconds",
+        "apply",
     }
     _need(set(old_cfg) <= allowed, "old worker config has unknown executable field")
     _need(
@@ -390,6 +391,7 @@ def _physical_recipe(
         and cfg.get("execution_policy") == "finite-frontier/v2"
         and cfg.get("dispatch_workers") == 1
         and cfg.get("coordinator_mode") == "resource_scoped"
+        and cfg.get("apply") is True
         and cfg.get("request_timeout_seconds") == 120,
         "physical recipe mode differs",
     )
@@ -442,6 +444,19 @@ def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
         raise SourceUpgradeHeld("old physical custody unavailable") from exc
     _need(
         not inspection["highwater"]["pending_transactions"], "old custody has pending transaction"
+    )
+    custody_path = _canonical(inspection["identity"]["custody_path"])
+    _need(
+        set(os.listdir(custody_path))
+        == {"namespace.json", "highwater-0000000000000000.json", "writer.lock"},
+        "old custody inventory is not pristine no-ACT state",
+    )
+    _need(
+        inspection["highwater"]["anchor"].get("revision") == 0, "old custody revision is not zero"
+    )
+    _need(
+        controller.inspect_provisioned_custody(config) == inspection,
+        "old custody changed during recheck",
     )
     return inspection
 
