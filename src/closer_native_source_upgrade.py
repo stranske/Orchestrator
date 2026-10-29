@@ -304,8 +304,13 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
         old_frontier = policy.validate_frontier(reference["state"]["worker_config"]["finite_frontier"])
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceUpgradeHeld("pre-CAS frontier invalid") from exc
-    cfg = json.loads(json.dumps(new_worker_config, sort_keys=True))
-    _need(cfg.get("runtime_manifest") == str(new_path), "pre-CAS config does not pin new manifest")
+    # Strict rebind: all old worker knobs remain byte-for-byte identical.  The
+    # only new values are the current manifest and one fresh finite frontier.
+    cfg = json.loads(json.dumps(reference["state"]["worker_config"], sort_keys=True))
+    cfg["runtime_manifest"] = str(new_path)
+    cfg["finite_frontier"] = fresh
+    supplied = json.loads(json.dumps(new_worker_config, sort_keys=True))
+    _need(supplied == cfg, "pre-CAS worker config is not strict old-to-new rebind")
     readmission._guard_fresh(new, cfg, state, fresh, old_frontier)
     receipt = _canonical(restore_receipt)
     wrapper = _wrapper_plan(old_path, old, new_path, new, receipt)
@@ -455,10 +460,25 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     _need(not marker.exists(), "sealed source upgrade already consumed")
     with host._hold(readmission._new_lock_rows(manifest)):
         _need(not destination.exists() and not marker.exists(), "fresh held state changed")
-        created = readmission._begin_fresh(campaign, destination, manifest, cfg, fresh, old_doc,
-                                           confirm_plan_sha256)
+        reference = {
+            "state_path": str(old_state), "state_sha256": record["old"]["state_sha256"],
+            "worker": record["old"]["diagnostic"].get("cohort", {}),
+            "result_path": str(old_result), "result_sha256": record["old"]["result_sha256"],
+            # This is a sealed no-ACT disposition reference, never a fabricated
+            # no-start proof; generic preparation only hashes it for provenance.
+            "proof": {"schema": SCHEMA, "plan_sha256": confirm_plan_sha256,
+                      "diagnostic": record["old"]["diagnostic"]},
+        }
+        plan_doc, readmission_sha = readmission._plan(reference, new_path, raw, cfg, destination, fresh)
+        token = readmission._intent_token(plan_doc, readmission_sha)
+        intent = seal.with_name("source-upgrade-readmission-intent.json")
+        known = readmission._recover_or_create(campaign, native, destination, manifest, cfg, fresh,
+                                               old_doc, readmission_sha, intent, token)
+        created = campaign.Campaign(destination).read()
+        if created is None:
+            raise SourceUpgradeHeld("known preparation did not create held campaign")
         host._write_once(marker, {"schema": SCHEMA, "seal_sha256": _sha(seal_raw),
                                   "state": str(destination), "revision": created["revision"],
-                                  "authority": False})
+                                  "known": str(known), "authority": False})
     return {"status": "fresh_held_prepared", "authority": False, "state": str(destination),
             "revision": created["revision"], "marker": str(marker)}
