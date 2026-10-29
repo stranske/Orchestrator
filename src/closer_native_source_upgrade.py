@@ -602,6 +602,7 @@ def plan(
             "diagnostic": diagnostic,
         },
         "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
+        "restore_receipt": {"path": str(receipt), "sha256": _sha(host._read(receipt)[1])},
         "new_release": release,
         "held_recipe": {
             "worker_config": cfg,
@@ -624,14 +625,37 @@ def plan(
     return result
 
 
-def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
+def apply(
+    old_manifest,
+    old_state,
+    worker_id,
+    new_manifest,
+    new_state,
+    restore_receipt,
+    new_worker_config,
+    frontier,
+    new_release_journal,
+    *,
+    expected_plan_sha256: str,
+) -> dict[str, Any]:
     """One-way CAS after a sealed intent; it creates no campaign or native work."""
     import closer_native_wrapper_install as install
 
-    first = plan(*args)
+    inputs = (
+        old_manifest,
+        old_state,
+        worker_id,
+        new_manifest,
+        new_state,
+        restore_receipt,
+        new_worker_config,
+        frontier,
+        new_release_journal,
+    )
+    first = plan(*inputs)
     _need(first["plan_sha256"] == expected_plan_sha256, "plan changed")
     with host._hold(first["locks"]):
-        second = plan(*args)
+        second = plan(*inputs)
         _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
         seal = Path(first["seal"])
         intent = seal.with_name("source-upgrade-intent.json")
@@ -650,7 +674,12 @@ def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
         )
         # Re-read the archived base through the installer helper; no old
         # contract is invoked after this point.
-        restored_doc, _ = install._restored_predecessor(Path(args[-1]))
+        receipt_path, receipt_raw = host._ref(first["restore_receipt"], "sealed_restore_receipt")
+        _need(
+            _sha(receipt_raw) == first["restore_receipt"]["sha256"],
+            "sealed restore receipt changed",
+        )
+        restored_doc, _ = install._restored_predecessor(receipt_path)
         data = install._render(
             install._guard_source(install._archived_base(restored_doc)), new, new_path
         )
