@@ -1,6 +1,7 @@
 """Contract tests for the source-owned wrapper installer."""
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ from test_closer_native_capacity import capacity_host as capacity_host
 from test_closer_native_observer import host as host
 
 import closer_campaign as campaign
+import closer_mechanisms as mechanisms
 import closer_native_observer as native
 import closer_native_readmission as readmission
 import closer_native_wrapper_install as install
@@ -703,6 +705,75 @@ def test_post_cas_prepare_refuses_missing_or_unauthenticated_receipt_artifacts(
                 "prepare-prospective",
                 "--receipt",
                 str(known),
+                "--expected-plan-sha256",
+                proposal["plan_sha256"],
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "held"
+    assert not args[4].exists()
+
+
+@pytest.mark.parametrize("artifact", ("known", "seal"))
+def test_post_cas_prepare_refuses_validly_signed_malformed_or_divergent_records(
+    capacity_host, monkeypatch, tmp_path, capsys, artifact
+):
+    """HMAC validity is necessary, not a substitute for exact record joins."""
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    known = Path(proposal["receipt"])
+    path = (
+        known if artifact == "known" else known.with_name("wrapper-install-prospective-seal.json")
+    )
+    document = json.loads(path.read_text())
+    if artifact == "known":
+        document["record"]["held_recipe"] = None
+    else:
+        document["record"]["after_sha256"] = "0" * 64
+    root = Path(json.loads(args[3].read_text())["mechanism_contract"]["observation_root"])
+    document["signature"] = mechanisms._signature(document["record"], mechanisms._key(root))
+    path.chmod(0o600)
+    path.write_text(json.dumps(document))
+    assert (
+        readmission.main(
+            [
+                "prepare-prospective",
+                "--receipt",
+                str(known),
+                "--expected-plan-sha256",
+                proposal["plan_sha256"],
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "held"
+    assert not args[4].exists()
+
+
+def test_post_cas_prepare_rechecks_old_witnesses_under_fences(
+    capacity_host, monkeypatch, tmp_path, capsys
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    original_hold = readmission._hold_rows
+
+    @contextlib.contextmanager
+    def mutate_after_first_read(rows):
+        with original_hold(rows):
+            args[1].chmod(0o600)
+            args[1].write_bytes(args[1].read_bytes() + b" ")
+            yield
+
+    monkeypatch.setattr(readmission, "_hold_rows", mutate_after_first_read)
+    assert (
+        readmission.main(
+            [
+                "prepare-prospective",
+                "--receipt",
+                str(proposal["receipt"]),
                 "--expected-plan-sha256",
                 proposal["plan_sha256"],
             ]

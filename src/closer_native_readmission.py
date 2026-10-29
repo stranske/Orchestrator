@@ -732,12 +732,16 @@ def _installed_wrapper_record(path):
     if not isinstance(raw_plan, dict):
         raise ReadmissionHeld("wrapper install known receipt is malformed")
     new = raw_plan.get("new_manifest")
-    if not isinstance(new, dict) or not isinstance(new.get("path"), str):
+    recipe = raw_plan.get("held_recipe")
+    if (
+        not isinstance(new, dict)
+        or not isinstance(new.get("path"), str)
+        or not isinstance(recipe, dict)
+        or not isinstance(recipe.get("worker_config"), dict)
+    ):
         raise ReadmissionHeld("wrapper install known receipt lacks new manifest")
     new_path = _canonical(new["path"])
-    _path, manifest, raw, _cfg = _new_runtime(
-        new_path, raw_plan.get("held_recipe", {}).get("worker_config")
-    )
+    _path, manifest, raw, _cfg = _new_runtime(new_path, recipe["worker_config"])
     root = _canonical(manifest["mechanism_contract"]["observation_root"])
     if path != root / "wrapper-install-prospective-known.json":
         raise ReadmissionHeld("wrapper install known receipt path differs")
