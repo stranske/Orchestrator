@@ -368,6 +368,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      VERIFY_PYTEST_WORKERS: "4"
     permissions:
       contents: write
     steps:

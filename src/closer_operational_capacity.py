@@ -64,12 +64,42 @@ def _read(path: Path) -> tuple[dict, str | None]:
     return value, _sha(raw)
 
 
-def _operational_inputs_match(inputs) -> bool:
+def _scoped_input_paths(profile_ids) -> tuple[Path, ...] | None:
+    """Return the host inputs that can affect this exact profile scope.
+
+    A scoped report is not a fleet-wide snapshot.  Requiring a write to an
+    unrelated provider's usage poll to remain byte-identical makes a valid
+    selected pool disappear between admission and dispatch.  Keep the input
+    fence closed over every selected agent (and therefore every selected
+    profile/pool), while leaving unselected operational observations outside
+    the report's freshness contract.
+    """
+    if not isinstance(profile_ids, list) or not profile_ids:
+        return None
+    selected = set()
+    for profile_id in profile_ids:
+        profile = execution_profiles.get_profile(profile_id)
+        if (
+            not isinstance(profile, dict)
+            or profile.get("agent") not in AGENTS
+            or profile.get("lifecycle_status") != "active"
+        ):
+            return None
+        selected.add(profile["agent"])
     polls = Path.home() / ".codex/orchestrator/usage-poll"
     sheds = Path.home() / ".codex/handoff/capacity-shed"
-    expected = [polls / (agent + "-usage.json") for agent in ("codex", "claude")]
-    expected += [sheds / agent for agent in AGENTS]
-    if not isinstance(inputs, dict) or set(inputs) != {str(path) for path in expected}:
+    paths = [sheds / agent for agent in sorted(selected)]
+    paths.extend(polls / f"{agent}-usage.json" for agent in sorted(selected & {"codex", "claude"}))
+    return tuple(paths)
+
+
+def _operational_inputs_match(inputs, profile_ids) -> bool:
+    expected = _scoped_input_paths(profile_ids)
+    if (
+        expected is None
+        or not isinstance(inputs, dict)
+        or set(inputs) != {str(path) for path in expected}
+    ):
         return False
     try:
         for path in expected:
@@ -104,6 +134,7 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         row = execution_profiles.get_profile(key)
         if not row or row.get("agent") not in AGENTS or row.get("lifecycle_status") != "active":
             raise CapacityError("unknown or inactive scoped profile")
+    selected_agents = {execution_profiles.get_profile(key)["agent"] for key in requested}
     trials = config.get("bounded_trial_agents", [])
     if not isinstance(trials, list) or set(trials) - set(AGENTS) or (control_plane_only and trials):
         raise CapacityError("unsupported bounded trial policy")
@@ -133,7 +164,8 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         after = _raw(marker_path)
         if before != after:
             raise CapacityError("shed marker changed during decision")
-        inputs[str(marker_path)] = _sha(before) if before is not None else None
+        if agent in selected_agents:
+            inputs[str(marker_path)] = _sha(before) if before is not None else None
         model = capacity.AGENTS[agent].get("model")
         policy_trial = model in {"metered", "flat"} or (
             model == "ccusage" and capacity.AGENTS[agent].get("block_token_limit") is None
@@ -145,7 +177,8 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         if agent in {"codex", "claude"}:
             path = poll_dir / f"{agent}-usage.json"
             raw, input_hash = _read(path)
-            inputs[str(path)] = input_hash
+            if agent in selected_agents:
+                inputs[str(path)] = input_hash
             observation = pacing_usage.polled_usage(agent, now, data=raw)
             poll = observation["poll"]
             used = observation.get("used_fraction")
@@ -278,7 +311,7 @@ def validate_report(report: dict, *, now: float) -> bool:
             )
             or (
                 report.get("control_plane_only", False) is False
-                and _operational_inputs_match(report.get("input_sha256"))
+                and _operational_inputs_match(report.get("input_sha256"), report["profile_ids"])
             )
         )
     )
