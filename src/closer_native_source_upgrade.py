@@ -36,6 +36,15 @@ def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _plan_sha(plan: dict[str, Any]) -> str:
+    body = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"plan_sha256", "stage", "status", "at"}
+    }
+    return _sha(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
+
+
 def _need(value: object, reason: str) -> None:
     if not value:
         raise SourceUpgradeHeld(reason)
@@ -621,7 +630,7 @@ def plan(
             / "source-upgrade-current-disposition.json"
         ),
     }
-    result["plan_sha256"] = _sha(json.dumps(result, sort_keys=True, separators=(",", ":")).encode())
+    result["plan_sha256"] = _plan_sha(result)
     return result
 
 
@@ -662,7 +671,9 @@ def apply(
         _need(not intent.exists() and not seal.exists(), "source upgrade already consumed")
         # Both records are immutable, and the seal intentionally precedes CAS:
         # after the wrapper changes, old native.contract would be circular.
-        host._write_once(seal, {**first, "stage": "sealed_pre_cas", "at": time.time()})
+        sealed = {**first, "stage": "sealed_pre_cas", "at": time.time()}
+        _need(_plan_sha(sealed) == first["plan_sha256"], "plan body differs before seal")
+        host._write_once(seal, sealed)
         host._write_once(intent, {**first, "stage": "intent", "at": time.time()})
         wrapper = Path(first["wrapper"]["path"])
         new_path = Path(first["new"]["manifest"])
@@ -757,8 +768,16 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         record.get("plan_sha256") == confirm_plan_sha256,
         "held confirmation differs from sealed upgrade",
     )
+    _need(_plan_sha(record) == confirm_plan_sha256, "sealed plan body differs from digest")
     known = seal.with_name("source-upgrade-known.json")
     _need(known.exists(), "wrapper CAS is not known")
+    _known_path, _known_raw, known_record = _object(known, "source upgrade known receipt")
+    _need(
+        known_record.get("plan_sha256") == confirm_plan_sha256
+        and _plan_sha(known_record) == confirm_plan_sha256
+        and known_record.get("status") == "installed",
+        "known receipt differs from sealed plan",
+    )
     new_path = _canonical(record["new"]["manifest"])
     destination = _canonical(record["new"]["state"])
     _need(not destination.exists(), "fresh held campaign already exists")
