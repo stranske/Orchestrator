@@ -272,6 +272,10 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     new_path, new_raw, new = _manifest(new_manifest)
     _need(old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE, "old release is not reviewed no-ACT predecessor")
     _need(old.get("candidate_sha") != new.get("candidate_sha"), "source candidate release is not different")
+    _need(
+        new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),
+        "new manifest does not pin executing source-upgrade boundary",
+    )
     _same_identity(old, new)
     reference = _completed_reference(old_path, old_state, worker_id)
     _old_native_terminal(old)
@@ -352,6 +356,11 @@ def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
             import closer_native_observer as native
             native.contract(new)
             native._check_wrapper_entry(new, new_path)
+            # The only permitted post-CAS difference is the canonical wrapper.
+            # Re-read every new module/source pin after replacement.
+            _, verified_raw, verified = _manifest(new_path)
+            _need(_sha(verified_raw) == first["new"]["manifest_sha256"] and verified == new,
+                  "new source closure changed after wrapper CAS")
             host._write_once(seal.with_name("source-upgrade-known.json"),
                              {**first, "stage": "cas_known", "at": time.time()})
             return {**first, "status": "installed"}
