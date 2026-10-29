@@ -54,6 +54,31 @@ result, so changing the new frontier cannot consume the same proof again.
 The original campaign and result remain unchanged. A failed creation after
 reservation is an uncertain preparation to reconcile, not a retry instruction.
 
+For a genuinely new finite-v2 no-start producer whose wrapper must change,
+the supported sequence is deliberately different: first use
+`closer_native_wrapper_install.py --kind prospective plan|apply`, then run the
+ordinary model-free qualification for the **new** manifest. Next consume only
+the installer's signed current-source known receipt—there are no caller-supplied
+worker-config or frontier arguments after CAS:
+
+```sh
+/opt/anaconda3/bin/python3 -B src/closer_native_readmission.py prepare-prospective \
+  --receipt /absolute/new-observation/wrapper-install-prospective-known.json \
+  --expected-plan-sha256 EXACT_PRE_CAS_PLAN_SHA256
+```
+
+That command verifies the new-source HMAC seal, intent, and known records plus
+the hash-pinned old witnesses, creates only one `source_initialization` HELD
+campaign, and reports JSON `held` on any mismatch. It invokes only the new
+native contract after CAS. Run the separate `admit` command below with freshly
+typed demand to clear that hold; neither wrapper installation nor preparation
+admits demand or launches native work. The held campaign's preparation origin
+hashes the signed wrapper-known receipt path, raw digest, and pre-CAS plan
+digest as provenance. `prepare-prospective` authenticates the HMAC records
+once. Later `admit` validates only the derived local immutable preparation
+intent/known receipt, current producer, and current manifest; it does not
+reopen or reverify the wrapper receipt or old HMAC witnesses.
+
 The supported historical exception is deliberately limited to attempt 13 at
 112e9263. `src/closer_retained_reconciliation.py plan|collect --manifest OLD
 --campaign OLD_STATE --worker 08854e801de3` validates its exact retained

@@ -683,6 +683,9 @@ def apply_prospective(
             },
         ]
     )
+    # Campaign.begin owns its state lock; holding that same advisory lock on a
+    # second descriptor would self-deadlock rather than protect the creation.
+    rows = [row for row in rows if row.get("path") != str(destination) + ".lock"]
     with _hold_rows(rows):
         renewed = prospective_reference(manifest_path, campaign_state, worker_id)
         _guard_fresh(new_manifest, cfg, destination, fresh, old_frontier)
@@ -719,12 +722,252 @@ def plan_prospective(*args, **kwargs):
     return apply_prospective(*args, **kwargs, _plan_only=True)
 
 
+def _installed_wrapper_record(path):
+    """Authenticate the current-source known receipt, never caller JSON."""
+    import closer_mechanisms as mechanisms
+
+    path = _canonical(path)
+    envelope = _json(host._read(path)[1], "wrapper install known receipt")
+    raw_plan = envelope.get("record") if isinstance(envelope, dict) else None
+    if not isinstance(raw_plan, dict):
+        raise ReadmissionHeld("wrapper install known receipt is malformed")
+    new = raw_plan.get("new_manifest")
+    recipe = raw_plan.get("held_recipe")
+    if (
+        not isinstance(new, dict)
+        or not isinstance(new.get("path"), str)
+        or not isinstance(recipe, dict)
+        or not isinstance(recipe.get("worker_config"), dict)
+    ):
+        raise ReadmissionHeld("wrapper install known receipt lacks new manifest")
+    new_path = _canonical(new["path"])
+    _path, manifest, raw, _cfg = _new_runtime(new_path, recipe["worker_config"])
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    if path != root / "wrapper-install-prospective-known.json":
+        raise ReadmissionHeld("wrapper install known receipt path differs")
+    try:
+        plan = mechanisms.verify_signed_record(root, envelope)
+    except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
+        raise ReadmissionHeld("wrapper install known receipt signature differs") from exc
+    producer = _digest(host._read(Path(__file__).resolve())[1])
+    installer = _digest(
+        host._read(Path(__import__("closer_native_wrapper_install").__file__).resolve())[1]
+    )
+    if (
+        plan.get("schema") != "closer-native-wrapper-prospective-install/v1"
+        or plan.get("status") != "installed"
+        or plan.get("authority") is not False
+        or plan.get("producer_sha256") != installer
+        or manifest.get("modules", {}).get("closer_native_wrapper_install.py") != installer
+        or manifest.get("modules", {}).get(Path(__file__).name) != producer
+        or _digest(raw) != new.get("sha256")
+    ):
+        raise ReadmissionHeld("wrapper install known receipt producer or current source differs")
+    # The known receipt is insufficient by itself: bind it to both source-owned
+    # pre-CAS records so a later record cannot stand in for the original
+    # intent/seal pair.
+    plan_body = {key: value for key, value in plan.items() if key not in {"status", "at"}}
+    for suffix, stage in (("seal", "sealed_pre_cas"), ("intent", "intent")):
+        sibling = path.with_name("wrapper-install-prospective-" + suffix + ".json")
+        try:
+            signed = _json(host._read(sibling)[1], "wrapper install " + suffix)
+            prior = mechanisms.verify_signed_record(root, signed)
+        except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
+            raise ReadmissionHeld("wrapper install " + suffix + " signature differs") from exc
+        if (
+            prior.get("status") != stage
+            or {key: value for key, value in prior.items() if key not in {"status", "at"}}
+            != plan_body
+        ):
+            raise ReadmissionHeld("wrapper install " + suffix + " differs from known receipt")
+    return path, plan, new_path, manifest, raw, _cfg
+
+
+def _sealed_old_wrapper_reference(original):
+    """Re-read the retained old witnesses without importing their runtime."""
+    import closer_campaign as campaign
+
+    if not isinstance(original, dict):
+        raise ReadmissionHeld("sealed old evidence is unavailable")
+    try:
+        old_manifest_path = _canonical(original["manifest"])
+        old_manifest_raw = host._read(old_manifest_path)[1]
+        old_manifest = _json(old_manifest_raw, "old manifest")
+        old_state = _canonical(original["state"])
+        old_state_raw = host._read(old_state)[1]
+        old = _json(old_state_raw, "old campaign")
+        old_result = _canonical(original["result"])
+        old_result_raw = host._read(old_result)[1]
+        result = _json(old_result_raw, "old result")
+    except (KeyError, OSError, ValueError, TypeError) as exc:
+        raise ReadmissionHeld("sealed old evidence is unavailable") from exc
+    worker = next(
+        (w for w in old.get("workers", []) if w.get("worker_id") == original.get("worker_id")), None
+    )
+    proof = original.get("proof")
+    disposition = original.get("disposition")
+    if (
+        _digest(old_manifest_raw) != original.get("manifest_sha256")
+        or _digest(old_state_raw) != original.get("state_sha256")
+        or _digest(old_result_raw) != original.get("result_sha256")
+        or old_manifest.get("modules", {}).get(Path(__file__).name)
+        != original.get("readmission_producer_sha256")
+        or not isinstance(worker, dict)
+        or not isinstance(proof, dict)
+        or not isinstance(disposition, dict)
+        or old.get("targets") != {campaign.ROUND_UNIT: "reconcile"}
+        or worker.get("state") != "terminal"
+        or worker.get("outcome") != disposition.get("worker_outcome")
+        or result.get("worker_id") != original.get("worker_id")
+        or result.get("outcome") != disposition.get("outcome")
+        or result.get("target") != disposition.get("target")
+        or result.get("detail") != worker.get("detail")
+        or _digest(_canonical_bytes(proof)) != original.get("proof_sha256")
+        or proof.get("schema") != "native-pre-dispatch-no-start/v2"
+    ):
+        raise ReadmissionHeld("sealed old finite-v2 disposition differs")
+    return {
+        "manifest": old_manifest,
+        "manifest_raw": old_manifest_raw,
+        "state": old,
+        "state_path": old_state,
+        "state_raw": old_state_raw,
+        "result_path": old_result,
+        "result_raw": old_result_raw,
+        "worker": worker,
+        "proof": proof,
+    }
+
+
+def prepare_prospective_wrapper_install(receipt_path, *, confirm_plan_sha256):
+    """Consume a sealed future finite-v2 transition into one held campaign.
+
+    The installer sealed the recipe under the new source's observer HMAC key
+    before CAS.  This consumer validates that seal after CAS without ever
+    evaluating the old contract; typed demand is deliberately left to the
+    separate :func:`admit_initialized` boundary.
+    """
+    import closer_campaign as campaign
+    import closer_frontier_policy as policy
+    import closer_native_observer as native
+
+    receipt, plan, new_path, manifest, raw, cfg = _installed_wrapper_record(receipt_path)
+    if plan.get("plan_sha256") != confirm_plan_sha256:
+        raise ReadmissionHeld("wrapper install confirmation differs from sealed plan")
+    # The plan digest was made before its digest/status fields were appended.
+    body = {k: v for k, v in plan.items() if k not in {"plan_sha256", "status", "at"}}
+    if _digest(_canonical_bytes(body)) != confirm_plan_sha256:
+        raise ReadmissionHeld("wrapper install sealed plan body differs")
+    original = plan.get("original")
+    recipe = plan.get("held_recipe")
+    if not isinstance(original, dict) or not isinstance(recipe, dict):
+        raise ReadmissionHeld("wrapper install sealed evidence or recipe is unavailable")
+    old_reference = _sealed_old_wrapper_reference(original)
+    if _digest(_canonical_bytes(recipe.get("worker_config"))) != recipe.get(
+        "worker_config_sha256"
+    ) or _digest(_canonical_bytes(recipe.get("frontier"))) != recipe.get("frontier_sha256"):
+        raise ReadmissionHeld("sealed held recipe differs")
+    try:
+        fresh = policy.validate_frontier(
+            recipe["frontier"], targets=recipe["frontier"].get("targets")
+        )
+        old_frontier = policy.validate_frontier(
+            old_reference["state"]["worker_config"]["finite_frontier"]
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ReadmissionHeld("sealed finite frontier is invalid") from exc
+    destination = _canonical(plan["new_state"])
+    _guard_fresh(manifest, cfg, destination, fresh, old_frontier)
+    if _initialization(manifest, destination) is None:
+        raise ReadmissionHeld("sealed wrapper transition requires current source initialization")
+    # Current/new contract only, after CAS.  It verifies the physical wrapper
+    # and interpreter pins; no old contract is invoked anywhere in this path.
+    native.contract(manifest)
+    intent = receipt.with_name("wrapper-install-prospective-readmission-intent.json")
+    rows = plan.get("locks")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise ReadmissionHeld("sealed lock closure is unavailable")
+    rows = [row for row in rows if row.get("path") != str(destination) + ".lock"]
+    with _hold_rows(rows):
+        _locked_receipt, locked_plan, locked_path, locked_manifest, locked_raw, locked_cfg = (
+            _installed_wrapper_record(receipt)
+        )
+        if (
+            locked_plan != plan
+            or locked_path != new_path
+            or locked_manifest != manifest
+            or locked_raw != raw
+            or locked_cfg != cfg
+        ):
+            raise ReadmissionHeld("wrapper install known receipt changed")
+        locked_old = _sealed_old_wrapper_reference(original)
+        if locked_old != old_reference:
+            raise ReadmissionHeld("sealed old evidence changed under locks")
+        plan_doc, digest = _plan(
+            {
+                "state_path": str(locked_old["state_path"]),
+                "state_sha256": _digest(locked_old["state_raw"]),
+                "worker": locked_old["worker"],
+                "result_path": str(locked_old["result_path"]),
+                "result_sha256": _digest(locked_old["result_raw"]),
+                "proof": locked_old["proof"],
+            },
+            new_path,
+            raw,
+            cfg,
+            destination,
+            fresh,
+        )
+        token = _intent_token(plan_doc, digest)
+        # The generic preparation protocol hashes this token into the campaign
+        # origin. Retain the authenticated wrapper transition receipt and its
+        # raw digest as provenance. Later typed admission validates the derived
+        # local preparation records, not this receipt or the old HMAC witnesses.
+        token["wrapper_install_receipt"] = {
+            "path": str(receipt),
+            "sha256": _digest(host._read(receipt)[1]),
+            "plan_sha256": confirm_plan_sha256,
+        }
+        known = _recover_or_create(
+            campaign,
+            native,
+            destination,
+            manifest,
+            cfg,
+            fresh,
+            locked_old["state"],
+            digest,
+            intent,
+            token,
+        )
+    return {
+        "status": "fresh_held_prepared",
+        "authority": False,
+        "state": str(destination),
+        "known": str(known),
+    }
+
+
 def plan_historical(*args, **kwargs):
     return apply_historical(*args, **kwargs, _plan_only=True)
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "prepare-prospective":
+        parser = argparse.ArgumentParser(description=prepare_prospective_wrapper_install.__doc__)
+        parser.add_argument("--receipt", required=True, type=Path)
+        parser.add_argument("--expected-plan-sha256", required=True)
+        args = parser.parse_args(argv[1:])
+        try:
+            result = prepare_prospective_wrapper_install(
+                args.receipt, confirm_plan_sha256=args.expected_plan_sha256
+            )
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            print(json.dumps({"status": "held", "authority": False, "reason": str(exc)}))
+            return 2
+        print(json.dumps(result, sort_keys=True))
+        return 0
     if argv and argv[0] == "admit":
         parser = argparse.ArgumentParser(description=admit_initialized.__doc__)
         for name in ("manifest", "state", "assignment", "request"):

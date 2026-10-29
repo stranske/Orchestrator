@@ -15,6 +15,13 @@ captured into a private temporary directory, rehashed before import, and runs
 its own version-aware validation against the original manifest/proof paths.
 Undeclared Python or cached bytecode is refused before execution, and original
 closure/manifest bytes are checked again before accepting the diagnostic.
+The parent captures exact campaign bytes into the private staging directory;
+the old campaign reader takes its lock on that snapshot. Cohort and proof
+validation retain the original campaign path. This avoids reacquiring the
+parent's real campaign lock during locked plan validation. The returned
+snapshot digest must match the captured reference and the original bytes
+must remain unchanged. Validate this composition under the actual plan lock
+closure before another release, as well as outside the locks.
 Validate this read-only boundary against the actual predecessor before a new
 full release; simulated transition fixtures alone do not establish compatibility.
 

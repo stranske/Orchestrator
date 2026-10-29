@@ -56,6 +56,7 @@ def test_prepare_held_rejects_malformed_untrusted_manifest_reference(tmp_path, v
     [
         "none",
         "old_result",
+        "diagnostic_state",
         "old_manifest",
         "seal_recipe",
         "unsigned_seal",
@@ -442,7 +443,18 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         "cohort": {"completed": False, "worker_id": result["worker_id"]},
         "completed_round": {"accepted": False},
     }
-    monkeypatch.setattr(upgrade, "_old_diagnostic", lambda *_a, **_k: diagnostic)
+    monkeypatch.setattr(
+        upgrade,
+        "_old_diagnostic",
+        lambda *_a, **_k: {
+            **diagnostic,
+            "state_sha256": (
+                "0" * 64
+                if interference == "diagnostic_state"
+                else hashlib.sha256(Path(_a[1]).read_bytes()).hexdigest()
+            ),
+        },
+    )
     monkeypatch.setattr(upgrade, "fresh_read_native_index", lambda *_a: {"offline": "fixed"})
     monkeypatch.setattr(
         upgrade,
@@ -454,21 +466,6 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     worker_config = upgrade._physical_recipe(
         cfg, old_document, old["policy"], old_state, new, new_path, new_state, frontier
     )
-    plan = upgrade.plan(
-        old_path,
-        old_state,
-        result["worker_id"],
-        new_path,
-        new_state,
-        receipt,
-        worker_config,
-        frontier,
-        old_state.parent / "release.json",
-    )
-    lock_paths = {row["path"] for row in plan["locks"]}
-    assert str(custody / "writer.lock") in lock_paths
-    assert str(new_custody / "writer.lock") in lock_paths
-    assert plan["authority"] is False and not new_state.exists()
     inputs = (
         old_path,
         old_state,
@@ -480,6 +477,16 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         frontier,
         old_state.parent / "release.json",
     )
+    if interference == "diagnostic_state":
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="diagnostic campaign differs"):
+            upgrade.plan(*inputs)
+        assert not new_state.exists()
+        return
+    plan = upgrade.plan(*inputs)
+    lock_paths = {row["path"] for row in plan["locks"]}
+    assert str(custody / "writer.lock") in lock_paths
+    assert str(new_custody / "writer.lock") in lock_paths
+    assert plan["authority"] is False and not new_state.exists()
 
     def apply_bound():
         return upgrade.apply(*inputs, expected_plan_sha256=plan["plan_sha256"])

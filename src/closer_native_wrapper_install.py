@@ -36,6 +36,38 @@ def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def _canonical(value: dict[str, Any]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _source_root(manifest: dict[str, Any]) -> Path:
+    """Return the current source-owned HMAC domain without native.contract.
+
+    Before CAS the old wrapper deliberately cannot satisfy the new contract.
+    The private observation root and its key are nevertheless the current
+    source's authenticated record domain.
+    """
+    import closer_mechanisms as mechanisms
+
+    try:
+        return host._path(mechanisms._root(manifest))
+    except (KeyError, OSError, ValueError, mechanisms.MechanismError) as exc:
+        raise InstallHeld("current source record root is unavailable") from exc
+
+
+def _signed_source_record(manifest: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    import closer_mechanisms as mechanisms
+
+    root = _source_root(manifest)
+    try:
+        # This is source-installation bookkeeping only.  Recovery never mints
+        # a new key; the seal and intent must already authenticate.
+        key = mechanisms._key(root, create=True)
+    except (OSError, mechanisms.MechanismError) as exc:
+        raise InstallHeld("current source signing key is unavailable") from exc
+    return {"record": record, "signature": mechanisms._signature(record, key)}
+
+
 def _need(ok: object, why: str) -> None:
     if not ok:
         raise InstallHeld(why)
@@ -89,7 +121,11 @@ def _manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
         source = Path(filename).resolve()
         _need(
             manifest["modules"].get(source.name) == _sha(host._read(source)[1]),
-            "new native engine differs from current repaired source",
+            # Old manifests are never imported.  The wrapper transition is
+            # supported only across this shared native/binding reader ABI;
+            # differing readmission/installer producer bytes are retained
+            # evidence and are authenticated by the later signed records.
+            "native/binding reader ABI differs from current source",
         )
     for key in ("campaign_root", "observation_root"):
         root = host._path(contract[key])
@@ -434,6 +470,14 @@ def plan_prospective(
     )
     rows = _prospective_rows(predecessor, reference, manifest, state)
     _existing_locks_present(rows)
+    # The future producer, not a post-CAS caller, chooses the only legal
+    # finite continuation: exact old bindings under a distinct deterministic
+    # frontier identity and the new pinned runtime manifest.
+    old_cfg = reference["state"]["worker_config"]
+    fresh_cfg = json.loads(json.dumps(old_cfg, sort_keys=True))
+    fresh_cfg["runtime_manifest"] = str(path)
+    fresh_frontier = json.loads(json.dumps(old_cfg["finite_frontier"], sort_keys=True))
+    fresh_frontier["frontier_id"] = "wrapper-readmission-" + reference["result_sha256"][:32]
     result = {
         "schema": PROSPECTIVE_SCHEMA,
         "producer_sha256": _sha(Path(__file__).read_bytes()),
@@ -447,6 +491,13 @@ def plan_prospective(
             "worker_id": reference["worker"]["worker_id"],
             "result": reference["result_path"],
             "result_sha256": reference["result_sha256"],
+            "readmission_producer_sha256": old["modules"].get("closer_native_readmission.py"),
+            "disposition": {
+                "outcome": reference["result"]["outcome"],
+                "target": reference["result"]["target"],
+                "worker_outcome": reference["worker"]["outcome"],
+            },
+            "proof": reference["proof"],
             "proof_sha256": _sha(
                 json.dumps(reference["proof"], sort_keys=True, separators=(",", ":")).encode()
             ),
@@ -454,6 +505,12 @@ def plan_prospective(
         "restore_receipt_sha256": _sha(host._read(restore_receipt)[1]),
         "new_manifest": {"path": str(path), "sha256": _sha(raw)},
         "new_state": str(state),
+        "held_recipe": {
+            "worker_config": fresh_cfg,
+            "worker_config_sha256": _sha(_canonical(fresh_cfg)),
+            "frontier": fresh_frontier,
+            "frontier_sha256": _sha(_canonical(fresh_frontier)),
+        },
         "wrapper": str(wrapper),
         "renderer_base_sha256": RESTORED_SHA,
         "before_sha256": _sha(source),
@@ -478,13 +535,21 @@ def apply_prospective(*args, expected_plan_sha256: str) -> dict[str, Any]:
         _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
         receipt = Path(first["receipt"])
         intent = receipt.with_name("wrapper-install-prospective-intent.json")
-        if intent.exists() or receipt.exists():
-            raise InstallHeld("prior prospective install requires reconciliation")
-        host._write_once(intent, {**first, "status": "intent_recorded", "at": time.time()})
+        seal = receipt.with_name("wrapper-install-prospective-seal.json")
         wrapper = Path(first["wrapper"])
         manifest_path = Path(first["new_manifest"]["path"])
         _, manifest_raw, manifest = host._obj(manifest_path)
         _need(_sha(manifest_raw) == first["new_manifest"]["sha256"], "manifest changed")
+        if intent.exists() or receipt.exists():
+            raise InstallHeld("prior prospective install requires reconciliation")
+        sealed = {**first, "status": "sealed_pre_cas", "at": time.time()}
+        if seal.exists() or intent.exists() or receipt.exists():
+            raise InstallHeld("prior prospective install requires reconciliation")
+        host._write_once(seal, _signed_source_record(manifest, sealed))
+        host._write_once(
+            intent,
+            _signed_source_record(manifest, {**first, "status": "intent", "at": time.time()}),
+        )
         restored, _predecessor = _restored_predecessor(args[-1])
         data = _render(_guard_source(_archived_base(restored)), manifest, manifest_path)
         _need(_sha(data) == first["after_sha256"], "preview changed before replacement")
@@ -526,7 +591,12 @@ def apply_prospective(*args, expected_plan_sha256: str) -> dict[str, Any]:
                 "manifest changed after replacement",
             )
             native._check_wrapper_entry(manifest, manifest_path)
-            host._write_once(receipt, {**first, "status": "installed", "at": time.time()})
+            known_record = {**first, "status": "installed", "at": time.time()}
+            known_envelope = _signed_source_record(manifest, known_record)
+            # Compatibility/readability only; consumers authenticate the
+            # signed ``record.status`` above, never this mirror field.
+            known_envelope["status"] = "installed"
+            host._write_once(receipt, known_envelope)
             return {**first, "status": "installed"}
         except Exception as exc:
             if replaced:

@@ -49,11 +49,14 @@ writer holding the same lock closure is refused and preserved. This is a
 cooperative Source locking contract, not a claim of atomic protection from an
 arbitrary same-UID writer that ignores those locks.
 
-Prospective installation only makes the pinned wrapper physically available.
-It does not qualify it, consume the no-start proof, create a campaign, or
-launch anything. Run the ordinary model-free qualification. The existing
-prospective readmission consumer still validates the old wrapper contract and
-therefore cannot complete after this wrapper CAS. Keep the installed wrapper
-held until a reviewed consumer can validate the sealed transition under the
-new contract. This installer is not a complete prospective recovery path, and
-a valid v2 proof alone does not permit retry.
+Prospective installation only performs the wrapper CAS. The supported recovery
+sequence is: prospective wrapper `plan|apply`; ordinary model-free
+qualification of the new manifest; `closer_native_readmission.py
+prepare-prospective --receipt SIGNED_KNOWN --expected-plan-sha256 PLAN_SHA`; and
+then the separate, fresh typed `admit` step. The post-CAS preparation command
+accepts no caller-provided worker configuration or frontier: it authenticates
+the new-source HMAC seal, intent, and known receipt, binds the exact pre-CAS
+old manifest/state/result/no-start witnesses, and invokes only the new native
+contract. It creates one source-initialization HELD campaign, not demand,
+native work, publication, or acceptance. A bad/missing receipt or any changed
+witness remains `held`; a valid v2 proof alone never permits retry.
