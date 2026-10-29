@@ -1278,32 +1278,52 @@ def idle(root: Path) -> None:
 ABORT_RECONCILIATION_SCHEMA = "storage-abort-reconciliation-request/v1"
 ABORT_RECONCILIATION_PLAN_SCHEMA = "storage-abort-reconciliation-plan/v1"
 ABORT_RECONCILIATION_RECEIPT_SCHEMA = "storage-abort-reconciliation-receipt/v1"
+ABORT_RECONCILIATION_EVIDENCE_LIMIT = 1024 * 1024
 
 
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _sha256_file(path: Path) -> str:
-    if path.is_symlink():
-        raise StorageBlocked("reconciliation evidence is a symlink")
-    info = path.stat(follow_symlinks=False)
-    if not stat.S_ISREG(info.st_mode):
-        raise StorageBlocked("reconciliation evidence is not a regular file")
-    return _sha256_bytes(path.read_bytes())
-
-
-def _private_regular_digest(path: Path, *, label: str) -> str:
-    if path.is_symlink():
-        raise StorageBlocked(f"{label} is a symlink")
-    info = path.stat(follow_symlinks=False)
-    if (
-        not stat.S_ISREG(info.st_mode)
-        or info.st_uid != os.getuid()
-        or stat.S_IMODE(info.st_mode) & 0o077
-    ):
-        raise StorageBlocked(f"unsafe {label}")
-    return _sha256_bytes(path.read_bytes())
+def _read_private_json_once(path: Path, *, label: str) -> tuple[Path, JSON, str]:
+    """Read a bounded owner-private JSON record once, from the descriptor hashed."""
+    if not path.is_absolute():
+        raise StorageBlocked(f"{label} path is not absolute")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError as error:
+        raise StorageBlocked(f"{label} is missing") from error
+    except OSError as error:
+        raise StorageBlocked(f"unreadable {label}") from error
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) & 0o077
+            or info.st_size > ABORT_RECONCILIATION_EVIDENCE_LIMIT
+        ):
+            raise StorageBlocked(f"unsafe {label}")
+        blocks: list[bytes] = []
+        total = 0
+        while True:
+            block = os.read(descriptor, min(65536, ABORT_RECONCILIATION_EVIDENCE_LIMIT + 1 - total))
+            if not block:
+                break
+            blocks.append(block)
+            total += len(block)
+            if total > ABORT_RECONCILIATION_EVIDENCE_LIMIT:
+                raise StorageBlocked(f"{label} exceeds read bound")
+        raw = b"".join(blocks)
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise StorageBlocked(f"unreadable {label}") from error
+    if not isinstance(value, dict):
+        raise StorageBlocked(f"invalid {label}")
+    return Path(os.path.abspath(path)), value, _sha256_bytes(raw)
 
 
 def _read_json_reference(reference: Any, *, label: str) -> tuple[Path, JSON]:
@@ -1315,16 +1335,10 @@ def _read_json_reference(reference: Any, *, label: str) -> tuple[Path, JSON]:
         or len(reference["sha256"]) != 64
     ):
         raise StorageBlocked(f"invalid {label} reference")
-    path = Path(reference["path"])
-    if not path.is_absolute() or _sha256_file(path) != reference["sha256"]:
+    path, value, digest = _read_private_json_once(Path(reference["path"]), label=label)
+    if digest != reference["sha256"]:
         raise StorageBlocked(f"{label} reference changed")
-    try:
-        value = json.loads(path.read_bytes())
-    except (OSError, ValueError, UnicodeDecodeError) as error:
-        raise StorageBlocked(f"unreadable {label} evidence") from error
-    if not isinstance(value, dict):
-        raise StorageBlocked(f"invalid {label} evidence")
-    return path.resolve(), value
+    return path, value
 
 
 @contextlib.contextmanager
@@ -1413,12 +1427,10 @@ def _create_private_json_once(path: Path, value: JSON) -> None:
         os.close(directory)
 
 
-def _abort_reconciliation_request(request_path: Path) -> tuple[JSON, str]:
-    digest = _sha256_file(request_path)
-    try:
-        request = json.loads(request_path.read_bytes())
-    except (OSError, ValueError, UnicodeDecodeError) as error:
-        raise StorageBlocked("unreadable reconciliation request") from error
+def _abort_reconciliation_request(request_path: Path) -> tuple[Path, JSON, str]:
+    canonical_path, request, digest = _read_private_json_once(
+        request_path, label="reconciliation request"
+    )
     required = {
         "schema",
         "caller",
@@ -1459,12 +1471,11 @@ def _abort_reconciliation_request(request_path: Path) -> tuple[JSON, str]:
         )
     ):
         raise StorageBlocked("invalid reconciliation request")
-    return request, digest
+    return canonical_path, request, digest
 
 
-def _abort_reconciliation_plan(request_path: Path) -> JSON:
+def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256: str) -> JSON:
     """Read-only evidence validation for one interrupted, pre-install verifier."""
-    request, request_sha256 = _abort_reconciliation_request(request_path)
     state_dir = Path(request["state_dir"])
     if not state_dir.is_absolute() or state_dir.is_symlink() or not state_dir.is_dir():
         raise StorageBlocked("invalid reconciliation storage state directory")
@@ -1498,11 +1509,10 @@ def _abort_reconciliation_plan(request_path: Path) -> JSON:
     ):
         raise StorageBlocked("prior reconciliation evidence exists; preserve and inspect")
     ledger_path = state_dir / "reservations.json"
-    _private_regular_digest(ledger_path, label="reservation ledger")
     try:
-        ledger = json.loads(ledger_path.read_bytes())
+        _, ledger, _ = _read_private_json_once(ledger_path, label="reservation ledger")
         row = ledger["jobs"][request["job"]]
-    except (KeyError, ValueError, TypeError, OSError) as error:
+    except (KeyError, TypeError) as error:
         raise StorageBlocked("recorded storage reservation is unavailable") from error
     if not isinstance(row, dict) or _json_digest(row) != request["expected_row_sha256"]:
         raise StorageBlocked("recorded storage reservation changed")
@@ -1525,10 +1535,9 @@ def _abort_reconciliation_plan(request_path: Path) -> JSON:
     ):
         raise StorageBlocked("recorded owned root identity changed")
     owner_path = root / "owner.json"
-    _private_regular_digest(owner_path, label="owned root marker")
     try:
-        owner = json.loads(owner_path.read_bytes())
-    except (OSError, ValueError, UnicodeDecodeError) as error:
+        _, owner, _ = _read_private_json_once(owner_path, label="owned root marker")
+    except StorageBlocked as error:
         raise StorageBlocked("unreadable owned root marker") from error
     if not isinstance(owner, dict):
         raise StorageBlocked("invalid owned root marker")
@@ -1590,7 +1599,7 @@ def _abort_reconciliation_plan(request_path: Path) -> JSON:
         raise StorageBlocked("terminal storage receipt already exists; preserve and inspect")
     body = {
         "schema": ABORT_RECONCILIATION_PLAN_SCHEMA,
-        "request_path": str(request_path.resolve()),
+        "request_path": str(request_path),
         "request_sha256": request_sha256,
         "abort_proof": {"path": str(abort_path), "sha256": request["abort_proof"]["sha256"]},
         "failed_release": {"path": str(failed_path), "sha256": request["failed_release"]["sha256"]},
@@ -1609,19 +1618,19 @@ def _abort_reconciliation_plan(request_path: Path) -> JSON:
 
 def plan_abort_reconciliation(request_path: Path) -> JSON:
     """Produce an exact, side-effect-free reconciliation plan."""
-    request, _ = _abort_reconciliation_request(request_path)
+    canonical_path, request, request_sha256 = _abort_reconciliation_request(request_path)
     with _nonblocking_owner_lock(Path(request["state_dir"]) / f"{request['job']}.owner"):
-        return _abort_reconciliation_plan(request_path)
+        return _abort_reconciliation_plan(canonical_path, request, request_sha256)
 
 
 def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str) -> JSON:
     """Consume one plan to terminally reconcile a dead verifier without retiring its root."""
     if not isinstance(expected_plan_sha256, str) or len(expected_plan_sha256) != 64:
         raise StorageBlocked("invalid expected reconciliation plan hash")
-    request, _ = _abort_reconciliation_request(request_path)
+    canonical_path, request, request_sha256 = _abort_reconciliation_request(request_path)
     state_dir = Path(request["state_dir"])
     with _nonblocking_owner_lock(state_dir / f"{request['job']}.owner"):
-        plan = _abort_reconciliation_plan(request_path)
+        plan = _abort_reconciliation_plan(canonical_path, request, request_sha256)
         if plan["sha256"] != expected_plan_sha256:
             raise StorageBlocked("reconciliation plan changed before apply")
         evidence = _private_reconciliation_directory(state_dir)
@@ -1657,7 +1666,9 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             calibrate=False,
         )
         receipt_path = Path(plan["receipt_path"])
-        receipt_sha256 = _private_regular_digest(receipt_path, label="terminal storage receipt")
+        _, _, receipt_sha256 = _read_private_json_once(
+            receipt_path, label="terminal storage receipt"
+        )
         known = {
             "schema": ABORT_RECONCILIATION_RECEIPT_SCHEMA,
             "stage": "known",

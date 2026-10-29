@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +28,18 @@ def _rebind_proof(case: dict) -> dict:
     request["abort_proof"]["sha256"] = _sha(case["proof"])
     _write(case["request"], request)
     return request
+
+
+def _hold_owner_lock(path: str, ready, release) -> None:
+    import fcntl
+
+    descriptor = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        ready.set()
+        release.wait(10)
+    finally:
+        os.close(descriptor)
 
 
 @pytest.fixture
@@ -241,21 +255,131 @@ def test_apply_accepts_existing_private_reconciliation_namespace(aborted):
     assert Path(known["receipt"]["path"]).is_file()
 
 
+def test_reconciliation_does_not_update_existing_calibration(aborted):
+    ledger_path = aborted["state"] / "reservations.json"
+    ledger = json.loads(ledger_path.read_text())
+    contract = {"sha256": "a" * 64}
+    calibration = {
+        "contract": contract,
+        "allocated_highwater_bytes": 123,
+        "access_sequence": 1,
+    }
+    ledger["owned_measurements"] = {contract["sha256"]: calibration}
+    ledger["owned_cache_sequence"] = 1
+    _write(ledger_path, ledger)
+    plan = storage.plan_abort_reconciliation(aborted["request"])
+    storage.apply_abort_reconciliation(aborted["request"], expected_plan_sha256=plan["sha256"])
+    after = json.loads(ledger_path.read_text())
+    assert after["owned_measurements"] == {contract["sha256"]: calibration}
+    assert after["owned_cache_sequence"] == 1
+
+
+def test_request_and_reference_are_single_descriptor_snapshots(aborted, monkeypatch):
+    request_raw = aborted["request"].read_bytes()
+    replacement = aborted["request"].with_name("replacement-request.json")
+    changed = json.loads(request_raw)
+    changed["job"] = "otherjob"
+    _write(replacement, changed)
+    original_read = storage.os.read
+    replaced = False
+
+    def replace_after_read(descriptor, amount):
+        nonlocal replaced
+        raw = original_read(descriptor, amount)
+        if raw and not replaced:
+            replaced = True
+            os.replace(replacement, aborted["request"])
+        return raw
+
+    monkeypatch.setattr(storage.os, "read", replace_after_read)
+    plan = storage.plan_abort_reconciliation(aborted["request"])
+    assert plan["request_path"] == str(Path(os.path.abspath(aborted["request"])))
+    assert plan["job"] == aborted["job"]
+    assert plan["request_sha256"] == hashlib.sha256(request_raw).hexdigest()
+
+
+def test_reference_payload_is_hashed_and_parsed_from_same_snapshot(aborted, monkeypatch):
+    request = json.loads(aborted["request"].read_text())
+    raw = aborted["proof"].read_bytes()
+    replacement = aborted["proof"].with_name("replacement-proof.json")
+    changed = json.loads(raw)
+    changed["candidate"] = "0" * 40
+    _write(replacement, changed)
+    original_read = storage.os.read
+    replaced = False
+
+    def replace_after_read(descriptor, amount):
+        nonlocal replaced
+        chunk = original_read(descriptor, amount)
+        if chunk and not replaced:
+            replaced = True
+            os.replace(replacement, aborted["proof"])
+        return chunk
+
+    monkeypatch.setattr(storage.os, "read", replace_after_read)
+    _, proof = storage._read_json_reference(request["abort_proof"], label="abort proof")
+    assert proof["candidate"] != "0" * 40
+
+
+def test_cli_plan_and_apply_emit_sorted_json(aborted, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["storage_lifecycle.py", "reconcile-abort", "--request", str(aborted["request"])],
+    )
+    assert storage.main() == 0
+    plan_text = capsys.readouterr().out
+    plan = json.loads(plan_text)
+    assert plan_text == json.dumps(plan, sort_keys=True) + "\n"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "storage_lifecycle.py",
+            "reconcile-abort",
+            "--request",
+            str(aborted["request"]),
+            "--apply",
+            "--expected-plan-sha256",
+            plan["sha256"],
+        ],
+    )
+    assert storage.main() == 0
+    known_text = capsys.readouterr().out
+    assert known_text == json.dumps(json.loads(known_text), sort_keys=True) + "\n"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["storage_lifecycle.py", "reconcile-abort", "--request", "request.json", "--apply"],
+        [
+            "storage_lifecycle.py",
+            "reconcile-abort",
+            "--request",
+            "request.json",
+            "--expected-plan-sha256",
+            "0" * 64,
+        ],
+    ],
+)
+def test_cli_rejects_incomplete_or_mismatched_apply_arguments(monkeypatch, argv):
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit, match="2"):
+        storage.main()
+
+
 def test_plan_refuses_held_owner_lock(aborted):
     path = aborted["state"] / f"{aborted['job']}.owner"
-    descriptor = os.open(path, os.O_RDWR)
+    context = multiprocessing.get_context("fork")
+    ready, release = context.Event(), context.Event()
+    holder = context.Process(target=_hold_owner_lock, args=(str(path), ready, release))
+    holder.start()
     try:
-        import fcntl
-
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        # A forked holder is needed because locks are process-scoped.
         with pytest.raises(storage.StorageBlocked, match="still active"):
-            # Simulate the conflicting process by treating acquisition failure as the source guard.
-            original = storage.fcntl.flock
-            storage.fcntl.flock = lambda *_args: (_ for _ in ()).throw(OSError(11, "busy"))
-            try:
-                storage.plan_abort_reconciliation(aborted["request"])
-            finally:
-                storage.fcntl.flock = original
+            assert ready.wait(5)
+            storage.plan_abort_reconciliation(aborted["request"])
     finally:
-        os.close(descriptor)
+        release.set()
+        holder.join(10)
+        assert holder.exitcode == 0
