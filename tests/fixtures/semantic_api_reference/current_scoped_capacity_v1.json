@@ -1,7 +1,7 @@
 {
   "schema": "reviewed-scoped-capacity-source-delta/v1",
   "base": "f129904460bf8337e6353e805206ff61d8e7aceb",
-  "scope": "Only capacity enumeration of profiles in an already validated scoped report, and rejecting overflowing numeric report values. Existing route selectors, model, parser, tools, limits and qualification record are unchanged.",
+  "scope": "Only capacity enumeration of profiles in an already validated scoped report, scoped freshness inputs for the profiles actually named by that report, and rejecting overflowing numeric report values. Existing route selectors, model, parser, tools, limits and qualification record are unchanged.",
   "dispatcher": {
     "before_file_sha256": "0702c1deb258df257b3b7d01e47a03e46435f373f6cbac886e1effe8a17d1b0e",
     "after_file_sha256": "d78b8d6642b64b94d366544a1515a5ffcd463bf6d101d04251fcaab8ac304256",
@@ -27,7 +27,7 @@
   },
   "operational": {
     "before_file_sha256": "1eeda5ea6319bfb5816f6fe9a28d7e8be6f7df7819e3a5de085a2b9aea100f02",
-    "after_file_sha256": "ec678c502d558a99956216d9547978a6e2dad36c1a42271e8fc1a527ba0078c5",
+    "after_file_sha256": "0a863466e7186b01b46b2c26dc857fcb30bc78387d64e7834af65df353949214",
     "added_function": "declared_profile_ids",
     "added_ast_sha256": "20c18ba023f5fbd0fbe19fc3d628e57afd818c2165ead5a84bd56825d693700f"
   }

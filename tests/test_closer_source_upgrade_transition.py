@@ -51,6 +51,7 @@ def test_prepare_held_rejects_malformed_untrusted_manifest_reference(tmp_path, v
         upgrade.prepare_held(seal, confirm_plan_sha256="a" * 64)
 
 
+@pytest.mark.parametrize("predecessor_kind", ["owner_criterion", "capacity"])
 @pytest.mark.parametrize(
     "interference",
     [
@@ -69,14 +70,21 @@ def test_prepare_held_rejects_malformed_untrusted_manifest_reference(tmp_path, v
         "post_cas_unknown",
     ],
 )
-def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_path, interference):
+def test_public_source_upgrade_plan_apply_and_known_held(
+    host, monkeypatch, tmp_path, interference, predecessor_kind
+):
     old, old_path, wrapper = host
+    candidate = (
+        upgrade.REVIEWED_CAPACITY_CANDIDATE
+        if predecessor_kind == "capacity"
+        else upgrade.REVIEWED_OLD_CANDIDATE
+    )
     modules = Path(old["module_dir"])
     for name in distribution.RUNTIME_PINNED_MODULES:
         shutil.copy2(Path(upgrade.__file__).parent / name, modules / name)
     rebuilt = campaign.make_manifest(
         modules,
-        candidate_sha=upgrade.REVIEWED_OLD_CANDIDATE,
+        candidate_sha=candidate,
         state_versions={"campaign": 1, "release": 1},
         python=str(Path(sys.executable).resolve()),
         portable=_core(tmp_path),
@@ -92,7 +100,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     )
     public = distribution.build_public_runtime_descriptor(
         modules,
-        candidate_sha=upgrade.REVIEWED_OLD_CANDIDATE,
+        candidate_sha=candidate,
         state_versions=rebuilt["state_versions"],
         supported_core={
             "owner": "Workflows",
@@ -115,7 +123,11 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     old["command_digest"] = campaign.sha256_json(old["command"])
     monkeypatch.setattr(
         upgrade,
-        "REVIEWED_OLD_MODULES_SHA256",
+        (
+            "REVIEWED_CAPACITY_MODULES_SHA256"
+            if predecessor_kind == "capacity"
+            else "REVIEWED_OLD_MODULES_SHA256"
+        ),
         hashlib.sha256(
             json.dumps(old["modules"], sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
@@ -123,7 +135,11 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     descriptor = Path(old["module_dir"]) / old["public_runtime_descriptor"]
     monkeypatch.setattr(
         upgrade,
-        "REVIEWED_OLD_DESCRIPTOR_SHA256",
+        (
+            "REVIEWED_CAPACITY_DESCRIPTOR_SHA256"
+            if predecessor_kind == "capacity"
+            else "REVIEWED_OLD_DESCRIPTOR_SHA256"
+        ),
         hashlib.sha256(descriptor.read_bytes()).hexdigest(),
     )
     monkeypatch.setattr(
@@ -443,6 +459,12 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         "cohort": {"completed": False, "worker_id": result["worker_id"]},
         "completed_round": {"accepted": False},
     }
+    if predecessor_kind == "capacity":
+        from test_closer_source_upgrade_capacity_stop import capacity_stop
+
+        diagnostic.pop("correction")
+        diagnostic.pop("queue_receipt")
+        diagnostic["capacity_disposition"] = capacity_stop()
     monkeypatch.setattr(
         upgrade,
         "_old_diagnostic",

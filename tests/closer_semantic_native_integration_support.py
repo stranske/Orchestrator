@@ -425,7 +425,7 @@ def repository_identity_reference():
 SCOPED_CAPACITY_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_scoped_capacity_v1.json"
 )
-SCOPED_CAPACITY_SHA256 = "c8e7da06d060dbe19d2608fb1ff92485661342db3b6a68739790b728e74671c9"
+SCOPED_CAPACITY_SHA256 = "4f337dc499f74c198e6909758c651ca8761c47d3b53306c3f004c4c63775da25"
 
 
 def scoped_capacity_reference():

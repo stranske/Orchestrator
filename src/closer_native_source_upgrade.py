@@ -35,6 +35,16 @@ REVIEWED_OLD_CANDIDATE = "f858dc3857ad7a90461126abd945edc0d380d9b3"
 REVIEWED_OLD_MODULES_SHA256 = "c5dea1b0710044385caa0f0baf0490b7a61aa49b10b49496b03dd2f258371add"
 REVIEWED_OLD_DESCRIPTOR_SHA256 = "019d7bc8010dd5e921d194ad6e073d5ab90ab13299996c82463a5b0356a63ea6"
 REVIEWED_OLD_INTERPRETER_SHA256 = "d01b09973b5bd3ff617e7849ce9c0bdb8991256f495ce190720ccc976cdaaee7"
+# A second reviewed predecessor stopped in the generic exception router before
+# selecting a provider. Its signed round is a capacity disposition, not the
+# earlier owner-criterion disposition and never a no-B/accepted result.
+REVIEWED_CAPACITY_CANDIDATE = "4e8ae9de575bc1108498933fb0cd0ee495a42aa8"
+REVIEWED_CAPACITY_MODULES_SHA256 = (
+    "2fed5eaa7da160068d4655cb4358cfa8459719d29be8a17d7564c5e7f77db041"
+)
+REVIEWED_CAPACITY_DESCRIPTOR_SHA256 = (
+    "d785039a57ef32c7ea7e2f72f349802b75658ebba1b40917c856c9ab5a3c1f58"
+)
 # Deliberately literal: the inspector is executed before any installed-release
 # fact can be trusted.  This is the clean reviewed f858 source file, not a
 # digest supplied by a release journal or the inspected generation.
@@ -213,13 +223,100 @@ def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
     )
 
 
+def _capacity_no_act(value: object) -> None:
+    """Recognize only the reviewed pre-route exception-capacity branch."""
+    _need(isinstance(value, dict), "capacity disposition unavailable")
+    row = cast(dict[str, Any], value)
+    _need(
+        row.get("row_status") == "capacity_blocked"
+        and row.get("row_error") == "worker_capacity"
+        and row.get("row_next_trigger") == "fresh shared-pool capacity snapshot"
+        and row.get("result_stages") == ["exception", "interpret", "prepare"]
+        and row.get("native_effect_contract") is None,
+        "capacity disposition is not the isolated pre-route branch",
+    )
+    exception = row.get("exception")
+    _need(isinstance(exception, dict), "capacity exception unavailable")
+    exception = cast(dict[str, Any], exception)
+    evidence = exception.get("resource_evidence")
+    _need(isinstance(evidence, dict), "capacity evidence unavailable")
+    capacity = cast(dict[str, Any], evidence).get("capacity")
+    _need(isinstance(capacity, dict), "capacity evidence unavailable")
+    capacity = cast(dict[str, Any], capacity)
+    sampled = capacity.get("sampled_at")
+    _need(
+        set(exception) == {"status", "reason", "next_trigger", "resource_evidence"}
+        and exception.get("status") == "deferred"
+        and exception.get("reason") == "worker_capacity"
+        and exception.get("next_trigger") == "fresh shared-pool capacity snapshot"
+        and evidence == {"capacity": capacity}
+        and set(capacity) == {"lane", "available", "required", "sampled_at"}
+        and capacity.get("lane") == "exception"
+        and type(capacity.get("available")) is int
+        and capacity.get("available") == 0
+        and type(capacity.get("required")) is int
+        and capacity.get("required") == 1
+        and isinstance(sampled, (int, float))
+        and not isinstance(sampled, bool)
+        and 0 < sampled < float("inf"),
+        "capacity exception contains effects or a different stop",
+    )
+    interpretation = row.get("interpretation")
+    _need(isinstance(interpretation, dict), "capacity interpretation unavailable")
+    interpretation = cast(dict[str, Any], interpretation)
+    actual = interpretation.get("actual")
+    _need(
+        isinstance(actual, dict)
+        and set(actual) == {"kind", "provider_generation_performed", "host_intake_ref"}
+        and actual.get("kind") == "source_native_conservative_inventory"
+        and actual.get("provider_generation_performed") is False,
+        "capacity disposition has prior provider work",
+    )
+    reference = cast(dict[str, Any], actual).get("host_intake_ref")
+    _need(
+        isinstance(reference, dict)
+        and set(reference) == {"path", "sha256", "bytes"}
+        and isinstance(reference.get("path"), str)
+        and Path(reference["path"]).is_absolute()
+        and isinstance(reference.get("sha256"), str)
+        and _DIGEST.fullmatch(reference["sha256"])
+        and type(reference.get("bytes")) is int
+        and 0 < reference["bytes"] <= 128 * 1024,
+        "capacity source intake reference invalid",
+    )
+    _need(
+        interpretation
+        == {
+            "classification": "source_native_conservative_inventory",
+            "authority": False,
+            "actual": actual,
+            "requested_agent": None,
+            "requested_profile": None,
+        },
+        "capacity disposition has prior provider work",
+    )
+
+
+def _diagnostic_no_act(candidate: str, diagnostic: dict[str, Any]) -> None:
+    if candidate == REVIEWED_CAPACITY_CANDIDATE:
+        _capacity_no_act(diagnostic.get("capacity_disposition"))
+    else:
+        _need(candidate == REVIEWED_OLD_CANDIDATE, "unreviewed no-ACT predecessor")
+        correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
+        _need(
+            isinstance(correction, dict) and isinstance(queue, dict), "old diagnostic shape invalid"
+        )
+        _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
+
+
 def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[str, str]:
     """Validate literal pre-import f858 identity metadata without filesystem effects."""
     modules = doc.get("modules")
     _need(
-        doc.get("candidate_sha") == REVIEWED_OLD_CANDIDATE,
+        doc.get("candidate_sha") in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE},
         "old release is not reviewed no-ACT predecessor",
     )
+    capacity = doc.get("candidate_sha") == REVIEWED_CAPACITY_CANDIDATE
     _need(
         isinstance(modules, dict)
         and bool(modules)
@@ -234,12 +331,13 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
     )
     _need(
         _sha(json.dumps(modules, sort_keys=True, separators=(",", ":")).encode())
-        == REVIEWED_OLD_MODULES_SHA256,
+        == (REVIEWED_CAPACITY_MODULES_SHA256 if capacity else REVIEWED_OLD_MODULES_SHA256),
         "old manifest closure is not the reviewed predecessor",
     )
     _need(
         doc.get("public_runtime_descriptor") == "closer-runtime-package.json"
-        and _sha(descriptor_raw) == REVIEWED_OLD_DESCRIPTOR_SHA256,
+        and _sha(descriptor_raw)
+        == (REVIEWED_CAPACITY_DESCRIPTOR_SHA256 if capacity else REVIEWED_OLD_DESCRIPTOR_SHA256),
         "old public descriptor is not the reviewed predecessor",
     )
     try:
@@ -314,9 +412,17 @@ def _old_diagnostic(
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
-        "source_target=targets[0]; row=a['targets'][source_target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets);\n"
+        "source_target=targets[0]; row=a['targets'][source_target]; results=row['results']; correction=None; queue=None; capacity=None\n"
+        f"if m['candidate_sha']=={REVIEWED_CAPACITY_CANDIDATE!r}:\n"
+        " if len(d['workers'])!=1 or d.get('coding_continuations'): raise SystemExit(36)\n"
+        " i=results['interpret']; ref=i['actual']['host_intake_ref']; ip=pathlib.Path(ref['path']); ir=ip.read_bytes()\n"
+        " if ip.is_symlink() or ip.resolve()!=ip or len(ir)>128*1024 or len(ir)!=ref['bytes'] or hashlib.sha256(ir).hexdigest()!=ref['sha256']: raise SystemExit(37)\n"
+        " capacity={'row_status':row.get('status'),'row_error':row.get('error'),'row_next_trigger':row.get('deferred_next_trigger'),'result_stages':sorted(results),'native_effect_contract':results['prepare']['native_effect_contract'],'exception':results['exception'],'interpretation':{'classification':i.get('classification'),'authority':i.get('authority'),'actual':i['actual'],'requested_agent':i['requested_agent'],'requested_profile':i['requested_profile']}}\n"
+        "else:\n"
+        " correction=results['exception']['correction']; queue=results['act']['queue_receipt']\n"
+        "verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets)\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'capacity_disposition':capacity,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
     with tempfile.TemporaryDirectory(prefix="old-source-diagnostic-") as stage_name:
         stage = Path(stage_name)
@@ -585,6 +691,59 @@ def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
         _need(old_config.get(key) == new_config.get(key), "source upgrade identity changed: " + key)
 
 
+def _derived_coding_capability(policy: dict[str, Any]) -> dict[str, str] | None:
+    """Derive, never caller-select, the static coding capability.
+
+    The old f858 policy predates the continuation field.  It is safe to add the
+    field only when the currently materialized controller installation already
+    has exactly one complete Source-owned Codex coding/publication consumer.
+    This function is data validation only; it does not create an admission,
+    alter controller custody, or invoke a provider.
+    """
+    try:
+        import closer_coding_continuation as continuation
+        import closer_coding_publication as publication
+        import closer_coding_session_runtime as coding_runtime
+        import closer_coding_session_v2 as coding_session
+        import closer_correction_controller as controller
+        import execution_profiles
+
+        config = policy["correction_controller_installation"]["config"]
+        consumers = config["consumers"]
+        if not isinstance(consumers, dict):
+            return None
+        draft = coding_session.prepare_admission_policy(consumers)
+        if draft.snapshot_utf8 is None:
+            return None
+        snapshot = coding_session.validate_admission_snapshot(json.loads(draft.snapshot_utf8))
+        consumer_id = snapshot["consumer_id"]
+        consumer = consumers.get(consumer_id)
+        if not isinstance(consumer, dict):
+            return None
+        # A continuation cannot lawfully create a coding worker without the
+        # existing publication path and its independent current-budget ceiling.
+        if publication.validate_consumer_mode(consumer_id, consumer) is None:
+            return None
+        coding_session.validate_budget(consumer[coding_runtime.CURRENT_FIELD])
+        profile = execution_profiles.get_profile(coding_session.PROFILE)
+        if not (
+            consumer.get("runner") == "existing-local-controller"
+            and consumer.get("agent") == "codex"
+            and consumer.get("profile_id") == coding_session.PROFILE
+            and consumer.get("profile_sha256")
+            == snapshot["profile_sha256"]
+            == controller.source_digest(profile)
+            and isinstance(consumer.get("owner_login"), str)
+            and bool(consumer["owner_login"])
+        ):
+            return None
+        return continuation.validate_capability(
+            {"schema": continuation.CAPABILITY_SCHEMA, "consumer_id": consumer_id}
+        )
+    except (ImportError, KeyError, TypeError, ValueError, RuntimeError):
+        return None
+
+
 def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -> dict[str, Any]:
     """The sole lawful policy transformation for this reviewed source upgrade."""
     expected = json.loads(json.dumps(old["policy"], sort_keys=True))
@@ -605,6 +764,21 @@ def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -
             confinement["helper_sha256"] = new["modules"][helper.name]
     except (KeyError, TypeError) as exc:
         raise SourceUpgradeHeld("policy lacks reviewed rebase structure") from exc
+    try:
+        import closer_coding_continuation as continuation
+
+        derived = _derived_coding_capability(expected)
+        existing = expected.get(continuation.POLICY_FIELD)
+        if existing is None:
+            if derived is not None:
+                expected[continuation.POLICY_FIELD] = derived
+        else:
+            _need(
+                derived is not None and continuation.validate_capability(existing) == derived,
+                "existing coding capability no longer matches qualified source consumer",
+            )
+    except ImportError as exc:
+        raise SourceUpgradeHeld("coding capability validator unavailable") from exc
     _need(new.get("policy") == expected, "new policy changes fields outside lawful rebase")
     return expected
 
@@ -914,7 +1088,7 @@ def plan(
     old_path, old_raw, old = _manifest(old_manifest, old=True)
     new_path, new_raw, new = _manifest(new_manifest)
     _need(
-        old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE,
+        old.get("candidate_sha") in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE},
         "old release is not reviewed no-ACT predecessor",
     )
     _need(
@@ -948,11 +1122,10 @@ def plan(
         in reference["state"]["worker_config"]["finite_frontier"]["targets"],
         "old diagnostic scopes differ",
     )
-    correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
     cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
-    if not all(isinstance(value, dict) for value in (correction, queue, cohort, completed)):
+    if not all(isinstance(value, dict) for value in (cohort, completed)):
         raise SourceUpgradeHeld("old diagnostic shape invalid")
-    _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
+    _diagnostic_no_act(old["candidate_sha"], diagnostic)
     _incomplete_cohort(cast(dict[str, Any], cohort), cast(dict[str, Any], completed))
     state = _canonical(new_state)
     _need(

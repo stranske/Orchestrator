@@ -2,13 +2,20 @@
 
 `closer_native_source_upgrade.py` is a bounded preparation/CAS boundary for a
 terminal worker whose Source correction stopped before Native ACT. It accepts
-only the exact `owned_unknown` owner-criterion disposition, an empty ACT queue,
-null deferred operation accounting, and `completed=false` / `accepted=false`.
+the exact reviewed owner-criterion disposition, or the separately reviewed
+pre-route exception-capacity disposition, and `completed=false` /
+`accepted=false`. The former requires an empty ACT queue and null deferred
+operation accounting. The latter requires the exact capacity-deferred result,
+no ACT stage or coding continuation, a source-native interpretation with no
+provider generation or selected profile, and its retained intake reference.
+Both require pristine controller custody and the unchanged remote index anchor.
 It does not reinterpret retirement evidence, retry the old campaign, or create
 new business demand.
 
-The supported predecessor is the reviewed `f858dc3857ad7a90461126abd945edc0d380d9b3`
-release. Its 191-module map, public descriptor bytes and physical interpreter
+The supported predecessors are reviewed `f858dc3857ad7a90461126abd945edc0d380d9b3`
+(owner criterion, 191 modules) and
+`4e8ae9de575bc1108498933fb0cd0ee495a42aa8` (pre-route capacity, 192 modules).
+Each exact module map and public descriptor, plus the physical interpreter,
 are pinned before any old import. The current release has a different module
 closure; its strict validator is used only for the replacement. Old code is
 captured into a private temporary directory, rehashed before import, and runs
@@ -45,6 +52,13 @@ source facts and the externally confirmed plan digest revalidate under the
 original locks. Existing records are never overwritten. Partial or different
 records remain held. After replacement, a missing known-CAS receipt remains
 uncertain and cannot create a campaign or retry the CAS automatically.
+
+The strict policy rebase may also add the static coding-worker capability
+derived from the existing controller installation's sole complete Codex coding
+consumer. Source validates its session admission policy, profile digest, current
+budget and publication mode. Caller-selected capabilities remain refused. This
+prepares the later authenticated continuation producer; it creates no coding
+admission, worker or publication by itself.
 
 Operator flow is deliberately explicit and uses the fully installed Runtime
 API only: call `plan` with the old witnesses, replacement manifest, strict
