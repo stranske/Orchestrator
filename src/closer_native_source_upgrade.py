@@ -383,8 +383,12 @@ def _physical_recipe(
         and isinstance(admission, dict)
         and assignment.parent == old_root / (old_state.name + ".demand")
         and assignment.name == str(demand.get("sha256", "")) + ".json"
+        and demand.get("path") == str(assignment)
         and _sha(host._read(assignment)[1]) == demand.get("sha256")
-        and admission.get("assignment", {}).get("sha256") == demand.get("sha256"),
+        and admission.get("assignment_sha256") == demand.get("sha256")
+        and admission.get("campaign_id") == old_doc.get("campaign_id")
+        and admission.get("owner") == old_doc.get("owner")
+        and admission.get("campaign_generation") == old_doc.get("generation"),
         "old source demand assignment binding differs",
     )
     cfg = json.loads(json.dumps(old_cfg, sort_keys=True))
