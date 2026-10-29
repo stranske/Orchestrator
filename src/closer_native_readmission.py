@@ -211,6 +211,7 @@ def _begin_fresh(campaign_module, destination, manifest, cfg, fresh, old, plan_s
         release_pin=manifest["package_digest"],
         worker_config={**cfg, "finite_frontier": fresh},
         _source_initialization=initialization,
+        _require_absent=True,
     )
 
 
@@ -223,8 +224,13 @@ def admit_initialized(manifest_path, state_path, assignment_bytes, request):
 
     manifest_path = _canonical(manifest_path)
     state_path = _canonical(state_path)
-    manifest = campaign.load_manifest(manifest_path)
     manifest_raw = host._read(manifest_path)[1]
+    manifest = campaign.load_manifest(manifest_path)
+    if (
+        manifest != _json(manifest_raw, "current manifest")
+        or host._read(manifest_path)[1] != manifest_raw
+    ):
+        raise ReadmissionHeld("manifest changed while reading source demand inputs")
     initialization = _initialization(manifest, state_path)
     if initialization is None:
         raise ReadmissionHeld("initial admission requires a controlled source campaign")
@@ -409,6 +415,7 @@ def apply_prospective(
     reservation = old_root / nonce / ("readmission-" + reference["result_sha256"] + ".json")
     token = {
         "schema": "closer-native-readmission/v1",
+        "stage": "preparation_intent",
         "authority": False,
         "plan": plan,
         "plan_sha256": plan_sha256,
@@ -653,6 +660,7 @@ def apply_historical(
         )
         receipt = {
             "schema": "closer-native-readmission/v1",
+            "stage": "preparation_intent",
             "authority": False,
             "plan": plan,
             "plan_sha256": plan_sha256,

@@ -181,7 +181,7 @@ CONTROLLED_INITIALIZATION_MANIFEST = (
     / "fixtures/semantic_api_reference/current_controlled_initialization_v1.json"
 )
 CONTROLLED_INITIALIZATION_SHA256 = (
-    "316eae17fd730d97122912c9fbe1790b626072d0537b8e72f423e5a8f2d79f9f"
+    "7d25578fb85fc42fc86a3379e0b2c182d4e7b968e26253c080314ebc75c7aea5"
 )
 
 

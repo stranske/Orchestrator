@@ -19,6 +19,15 @@ DIGEST = "c" * 64
 CAND = "a" * 40
 
 
+def test_fresh_creation_refuses_existing_identical_campaign_without_writing(tmp_path):
+    campaign = cc.Campaign(tmp_path / "fresh.campaign.json")
+    campaign.begin("fresh", ["target"], owner="owner", release_pin=DIGEST)
+    before = campaign.path.read_bytes()
+    with pytest.raises(cc.CampaignError, match="destination already exists"):
+        campaign.begin("fresh", ["target"], owner="owner", release_pin=DIGEST, _require_absent=True)
+    assert campaign.path.read_bytes() == before
+
+
 @pytest.fixture(autouse=True)
 def handoff(tmp_path, monkeypatch):
     monkeypatch.setattr("closer_runtime_binding.policy_problem", lambda policy: None)

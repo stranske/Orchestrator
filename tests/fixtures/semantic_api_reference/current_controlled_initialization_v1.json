@@ -2,11 +2,11 @@
   "base_commit": "0a9b0f93909c82532add2d022e26e768df785839",
   "files": {
     "closer_campaign.py": {
-      "after_file_sha256": "89270e5925605e70596aff8d64d689b181443c1dfca9b6b3720e0c66f8a52d14",
-      "after_node_ast_sha256": "02d47e8385175f0aed6db9d9320afa9be92f9add34c98aa6bae1116bd8cd7015",
+      "after_file_sha256": "29f3ac735e2381d0e9f5b7d6b6c88f3158b6ce9ea57836869b8e3ab45a6dc308",
+      "after_node_ast_sha256": "c0f6bbc42c8dc365842a83a249d723940ecf86c103302b8db38eb1cdd72017d8",
       "after_top_level_ast": {
         "ActionSpec": "7d5213704d8b42f43d748755a850a7f374f19dffabd75f166c09e7de3c3c1dd3",
-        "Campaign": "5ce85572bb2dd2308e14bde782283cfd9e15896215adabcef7ede2613ec73114",
+        "Campaign": "7226072270d153080220d5f1ffb5d16f0667cbb3b4eb449bdbc570b2019a99b1",
         "CampaignError": "2f411c7aabac07c032d5df5a2f08dcf2c38f3a382116c866660997e9d2523a21",
         "CoreAdapterMissing": "77d71ec77957d667d8dd015e5e561f3aa9be5c49bcedb0d81646a4daca2bbf14",
         "CoreOperationAdapter": "8ec445b365734b34d8ef66790baa7ddb4e42744d82c3c76f7c9106d15ba5a086",

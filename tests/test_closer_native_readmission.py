@@ -64,6 +64,7 @@ def _initialized_world(monkeypatch, tmp_path):
             },
         },
     }
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True))
     home = tmp_path / "home"
     monkeypatch.setattr(readmission.Path, "home", classmethod(lambda _cls: home))
     coord = home / ".codex/handoff/.lane-closer.lock.coord.lock"
@@ -401,6 +402,36 @@ def test_apply_rejects_target_drift_and_wrong_plan(monkeypatch, tmp_path):
 def test_unknown_without_reconciliation_or_prospective_proof_is_held(tmp_path):
     with pytest.raises(readmission.ReadmissionHeld, match="signed prospective"):
         readmission.prospective_reference(tmp_path / "manifest", tmp_path / "missing", "worker")
+
+
+def test_failed_creation_retains_one_use_intent_without_claiming_success(monkeypatch, tmp_path):
+    import json
+
+    _old, _raw, reference, manifest, cfg, fake = _reference(monkeypatch, tmp_path)
+    fresh = _frontier("fresh")
+    destination = tmp_path / "fresh.campaign.json"
+    planned = readmission.plan_prospective(
+        "manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh
+    )
+
+    def failed_begin(*_args, **_kwargs):
+        raise RuntimeError("creation storage failure")
+
+    monkeypatch.setattr(fake, "begin", failed_begin)
+    inputs = ("manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh)
+    with pytest.raises(RuntimeError, match="creation storage failure"):
+        readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    reservation = (
+        tmp_path
+        / "native-observation"
+        / reference["proof"]["admission_nonce"]
+        / ("readmission-" + reference["result_sha256"] + ".json")
+    )
+    intent = json.loads(reservation.read_bytes())
+    assert intent["stage"] == "preparation_intent" and intent["authority"] is False
+    assert not destination.exists()
+    with pytest.raises(readmission.ReadmissionHeld, match="already consumed"):
+        readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
 
 
 def test_historical_reader_requires_exact_decision(monkeypatch):

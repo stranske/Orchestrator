@@ -212,6 +212,7 @@ class Campaign:
         _demand_outcome: dict[str, Any] | None = None,
         _retirement: dict[str, Any] | None = None,
         _source_initialization: Mapping[str, Any] | None = None,
+        _require_absent: bool = False,
     ) -> dict[str, Any]:
         """Create the record, or resume the same campaign under the same owner.
 
@@ -276,6 +277,8 @@ class Campaign:
         stream = self._locked()
         try:
             current = self._read_unlocked()
+            if _require_absent and current is not None:
+                raise CampaignError("fresh campaign destination already exists")
             original_current = current
             retirement_record = None
             if current is not None:

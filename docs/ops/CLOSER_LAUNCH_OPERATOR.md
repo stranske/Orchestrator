@@ -12,8 +12,9 @@ Use the source-owned operator only after the normal release/install gates:
 refresh). It never swaps the wrapper, clears a campaign, creates an admission,
 or qualifies a model. A `ready` diagnostic is not authority.
 
-The only execution form is deliberately explicit and invokes the manifest's
-unchanged canonical native entrypoint, which repeats its own fresh guards:
+The execution form requires a matching run identity before planning or capacity
+refresh. It invokes `/bin/bash <canonical-wrapper> closer`, preserving the
+native entry's OS parent identity and repeating its fresh guards:
 
 ```sh
 /opt/anaconda3/bin/python3 -B src/closer_launch_operator.py launch \
@@ -44,8 +45,11 @@ Completed-cohort retirement is not a recovery path for this failed cohort.
 `--worker`, `--new-manifest`, `--new-worker-config`, `--new-state`, and
 `--frontier`. Configuration and frontier arguments are saved JSON files;
 `apply` additionally requires the exact `--expected-plan-sha256` returned by
-`plan`. The new frontier keeps the original targets and action bindings and
-uses a new frontier identity. The one-use reservation is keyed to the original
+`plan`. The new frontier keeps the original targets and revisions and uses a new
+frontier identity. Ordinary recovery keeps action bindings too. A controlled
+campaign may bind its action to its newly qualified source installation;
+admission independently re-observes that exact action before clearing its hold.
+The one-use reservation is keyed to the original
 result, so changing the new frontier cannot consume the same proof again.
 The original campaign and result remain unchanged. A failed creation after
 reservation is an uncertain preparation to reconcile, not a retry instruction.
@@ -67,3 +71,19 @@ repaired runtime. Both recovery forms acquire the existing ownership locks,
 revalidate before one-use consumption, create only a fresh campaign, and leave
 all actual work to ordinary native admission and effect guards. Neither form
 permits acceptance, merge, publication, or a model call on its own.
+
+A manifest with `controller_demand` creates the fresh campaign with an atomic
+`source_initialization` hold, using its declared identity and controller config.
+It cannot use the shared assignment. After native qualification and local
+custody validation, admit saved typed demand with:
+
+```sh
+/opt/anaconda3/bin/python3 -B src/closer_native_readmission.py admit \
+  --manifest /absolute/host-manifest.json --state /absolute/fresh.campaign.json \
+  --assignment /absolute/current-assignment.json --request /absolute/current-request.json
+```
+
+The finalizer validates current qualification, source projection, custody and
+fresh queue observations under ownership locks. `Campaign.begin` clears only
+the untouched initial hold in the transaction that stores the admitted snapshot.
+Refusal preserves the held campaign. Native entry still owns actual work.
