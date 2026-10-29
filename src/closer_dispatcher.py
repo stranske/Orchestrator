@@ -4970,7 +4970,7 @@ def _fresh_capacity_report():
         ):
             return None
         return report
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, OverflowError):
         return None
 
 

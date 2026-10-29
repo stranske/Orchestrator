@@ -20,6 +20,11 @@ def test_exact_capacity_successor_rejects_unreviewed_code_and_fixture_changes(
         source + "\n# unrelated source change\n",
         source.replace("def _run_staged_pipeline(", "def unreviewed_pipeline(", 1),
         source.replace("declared_ids = set(declared)", "declared_ids = set()", 1),
+        source.replace(
+            reviewed["dispatcher"]["validation_function"]["after_fragment"],
+            reviewed["dispatcher"]["validation_function"]["before_fragment"],
+            1,
+        ),
     ):
         assert changed != source
         with pytest.raises(AssertionError):

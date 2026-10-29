@@ -331,7 +331,7 @@ def declared_profile_ids(report: dict) -> tuple[str, ...] | None:
     try:
         if not validate_report(report, now=time.time()):
             return ()
-    except (KeyError, TypeError, ValueError, OSError):
+    except (KeyError, TypeError, ValueError, OSError, OverflowError):
         return ()
     return tuple(report["profile_ids"])
 

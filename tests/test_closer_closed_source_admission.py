@@ -277,7 +277,7 @@ def test_prospective_source_audit_rejects_modified_policy_or_legacy_code():
     for before, after in (
         (b'"freshness_renewed": False', b'"freshness_renewed": True'),
         (b"def qualified_record(", b"def another_record("),
-        (b'"execution_contract_sha256": "275a', b'"execution_contract_sha256": "0000'),
+        (b'"execution_contract_sha256": "239d', b'"execution_contract_sha256": "0000'),
     ):
         assert before in raw
         with pytest.raises(AssertionError):

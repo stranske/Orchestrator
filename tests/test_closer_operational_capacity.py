@@ -107,6 +107,15 @@ def test_declared_profiles_require_a_current_valid_operational_report(host, monk
     global_report.pop("schema")
     assert scoped.declared_profile_ids(global_report) is None
 
+    report_path = Path(cfg["runtime_manifest"]).parent / "oversized-report.json"
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", str(report_path))
+    for field in ("original_deadline", "generated_at", "expires_at"):
+        overflowing = copy.deepcopy(report)
+        overflowing[field] = 10**4000
+        assert scoped.declared_profile_ids(overflowing) == ()
+        report_path.write_text(json.dumps(overflowing))
+        assert closer_dispatcher._fresh_capacity_report() is None
+
 
 @pytest.mark.parametrize("kind", ["missing", "stale"])
 def test_trial_permission_is_not_quota_freshness(host, kind):

@@ -115,9 +115,9 @@ def integrated_reference(base):
         assert dispatcher["top_level_ast"]["Closer"] == identity["before_closer_ast_sha256"]
         dispatcher["top_level_ast"]["Closer"] = identity["after_closer_ast_sha256"]
         capacity = scoped_capacity_reference()["dispatcher"]
-        changed = capacity["changed_function"]
-        assert dispatcher["top_level_ast"][changed["name"]] == changed["before_ast_sha256"]
-        dispatcher["top_level_ast"][changed["name"]] = changed["after_ast_sha256"]
+        for changed in (capacity["changed_function"], capacity["validation_function"]):
+            assert dispatcher["top_level_ast"][changed["name"]] == changed["before_ast_sha256"]
+            dispatcher["top_level_ast"][changed["name"]] = changed["after_ast_sha256"]
         added = capacity["added_function"]
         assert added["name"] not in dispatcher["top_level_ast"]
         dispatcher["top_level_ast"][added["name"]] = added["ast_sha256"]
@@ -296,7 +296,7 @@ def before_finite_prepare_source(source):
 REPOSITORY_IDENTITY_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_repository_identity_v1.json"
 )
-REPOSITORY_IDENTITY_SHA256 = "0a2acde4078e9dbd7d1c983ab8e7eeaad37d2788e44e9b6959ccfdfa8d5b03ff"
+REPOSITORY_IDENTITY_SHA256 = "4ff696cea743352bd382e51082904a09306bcc436c99233bc31ebee96e607df5"
 
 
 def repository_identity_reference():
@@ -308,7 +308,7 @@ def repository_identity_reference():
 SCOPED_CAPACITY_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_scoped_capacity_v1.json"
 )
-SCOPED_CAPACITY_SHA256 = "594c06c0129ff4087f8e451dc0fed8da2d44b8b8a421577203fa16a8f1d65b5f"
+SCOPED_CAPACITY_SHA256 = "c8e7da06d060dbe19d2608fb1ff92485661342db3b6a68739790b728e74671c9"
 
 
 def scoped_capacity_reference():
@@ -319,6 +319,7 @@ def scoped_capacity_reference():
     assert value["schema"] == "reviewed-scoped-capacity-source-delta/v1"
     change = value["dispatcher"]
     assert change["changed_function"]["name"] == "_pipeline_capacity"
+    assert change["validation_function"]["name"] == "_fresh_capacity_report"
     assert change["added_function"]["name"] == "_report_profiles_for_agent"
     assert (
         hashlib.sha256(source_path("closer_operational_capacity.py").read_bytes()).hexdigest()
@@ -334,5 +335,8 @@ def before_scoped_capacity_source(source):
     assert source.count(change["after_fragment"]) == source.count(change["added_fragment"]) == 1
     restored = source.replace(change["after_fragment"], change["before_fragment"], 1)
     restored = restored.replace(change["added_fragment"], "", 1)
+    validation = change["validation_function"]
+    assert restored.count(validation["after_fragment"]) == 1
+    restored = restored.replace(validation["after_fragment"], validation["before_fragment"], 1)
     assert hashlib.sha256(restored.encode()).hexdigest() == change["before_file_sha256"]
     return restored
