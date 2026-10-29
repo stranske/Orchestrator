@@ -332,6 +332,11 @@ def _physical_recipe(
         path = _canonical(old_cfg[key])
         _need(path.parent == old_root, "old physical path is outside old campaign root")
     cfg = json.loads(json.dumps(old_cfg, sort_keys=True))
+    expected_handoff = (Path.home() / ".codex/handoff").resolve()
+    _need(
+        _canonical(cfg["handoff_dir"]) == expected_handoff and cfg.get("handoff_agent") == "codex",
+        "old handoff identity/path differs",
+    )
     cfg["runtime_manifest"] = str(new_path)
     cfg["finite_frontier"] = frontier
     cfg["assignment"] = str(new_state.parent / Path(old_cfg["assignment"]).name)
@@ -729,7 +734,7 @@ def apply(
             )
             host._write_once(
                 seal.with_name("source-upgrade-known.json"),
-                {**first, "stage": "cas_known", "at": time.time()},
+                {**first, "stage": "cas_known", "status": "installed", "at": time.time()},
             )
             return {**first, "status": "installed"}
         except Exception as exc:
@@ -797,6 +802,13 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     _need(_sha(host._read(old_state)[1]) == record["old"]["state_sha256"], "old state changed")
     _need(_sha(host._read(old_result)[1]) == record["old"]["result_sha256"], "old result changed")
     old_manifest = _object(record["old"]["manifest"], "old manifest")[2]
+    _old_native_terminal(old_manifest)
+    host._lane_absent()
+    _completed_reference(
+        _canonical(record["old"]["manifest"]),
+        old_state,
+        record["old"]["diagnostic"]["cohort"]["worker_id"],
+    )
     inspection = _old_custody_quiet(old_manifest)
     _need(
         fresh_read_native_index(
