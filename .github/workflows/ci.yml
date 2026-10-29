@@ -399,7 +399,7 @@ jobs:
           command -v zsh
 
       - name: Install dependencies
-        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 coverage -r requirements.lock
+        run: python -m pip install --quiet pytest pytest-xdist==3.8.0 pytest-cov==7.0.0 coverage -r requirements.lock
 
       - name: Reconcile
         env:
