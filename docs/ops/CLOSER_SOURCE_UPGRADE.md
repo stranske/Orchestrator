@@ -15,6 +15,13 @@ different current manifest's pinned render. After CAS, validation is against
 the new contract only; invoking the old contract would be circular because its
 wrapper pin intentionally no longer matches.
 
+A complete matching pre-CAS seal can resume the same operation after a later
+intent write fails, provided the old wrapper preimage, absent new state, all
+source facts and the externally confirmed plan digest revalidate under the
+original locks. Existing records are never overwritten. Partial or different
+records remain held. After replacement, a missing known-CAS receipt remains
+uncertain and cannot create a campaign or retry the CAS automatically.
+
 Operator flow is deliberately explicit and uses the fully installed Runtime
 API only: call `plan` with the old witnesses, replacement manifest, strict
 rebound worker configuration/frontier, and installed release journal; call

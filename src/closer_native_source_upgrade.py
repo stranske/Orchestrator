@@ -818,19 +818,26 @@ def apply(
         _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
         seal = Path(first["seal"])
         intent = seal.with_name("source-upgrade-intent.json")
-        existing = seal.exists() or intent.exists()
-        if existing:
-            _need(seal.exists() and intent.exists(), "partial pre-CAS source upgrade records")
+        _need(
+            not seal.with_name("source-upgrade-known.json").exists(),
+            "source upgrade already known",
+        )
+        _need(not intent.exists() or seal.exists(), "intent has no pre-CAS seal")
+        if seal.exists():
             _seal_path, _seal_raw, prior_seal = _object(seal, "pre-CAS source upgrade seal")
+            _need(
+                prior_seal.get("stage") == "sealed_pre_cas"
+                and _plan_sha(prior_seal) == first["plan_sha256"]
+                and prior_seal.get("plan_sha256") == first["plan_sha256"],
+                "pre-CAS source upgrade records differ",
+            )
+        if intent.exists():
             _intent_path, _intent_raw, prior_intent = _object(
                 intent, "pre-CAS source upgrade intent"
             )
             _need(
-                prior_seal.get("stage") == "sealed_pre_cas"
-                and prior_intent.get("stage") == "intent"
-                and _plan_sha(prior_seal) == first["plan_sha256"]
+                prior_intent.get("stage") == "intent"
                 and _plan_sha(prior_intent) == first["plan_sha256"]
-                and prior_seal.get("plan_sha256") == first["plan_sha256"]
                 and prior_intent.get("plan_sha256") == first["plan_sha256"],
                 "pre-CAS source upgrade records differ",
             )
@@ -838,9 +845,6 @@ def apply(
         # after the wrapper changes, old native.contract would be circular.
         sealed = {**first, "stage": "sealed_pre_cas", "at": time.time()}
         _need(_plan_sha(sealed) == first["plan_sha256"], "plan body differs before seal")
-        if not existing:
-            host._write_once(seal, sealed)
-            host._write_once(intent, {**first, "stage": "intent", "at": time.time()})
         wrapper = Path(first["wrapper"]["path"])
         new_path = Path(first["new"]["manifest"])
         _, new_raw, new = _manifest(new_path)
@@ -871,6 +875,13 @@ def apply(
                 stream.flush()
                 os.fchmod(stream.fileno(), 0o755)
                 os.fsync(stream.fileno())
+            # A valid seal without its later intent is recoverable only after
+            # plan() reauthenticates the exact old wrapper and all facts above.
+            # Partial or different existing records are never overwritten.
+            if not seal.exists():
+                host._write_once(seal, sealed)
+            if not intent.exists():
+                host._write_once(intent, {**first, "stage": "intent", "at": time.time()})
             os.replace(tmp, wrapper)
             replaced = True
             directory = os.open(wrapper.parent, os.O_RDONLY)

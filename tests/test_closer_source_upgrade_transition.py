@@ -30,7 +30,17 @@ import closer_pipeline as pipeline
 
 
 @pytest.mark.parametrize(
-    "interference", ["none", "old_result", "seal_recipe", "old_lock", "custody_lock"]
+    "interference",
+    [
+        "none",
+        "old_result",
+        "seal_recipe",
+        "old_lock",
+        "custody_lock",
+        "pre_cas_retry",
+        "tampered_recovery",
+        "post_cas_unknown",
+    ],
 )
 def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_path, interference):
     old, old_path, wrapper = host
@@ -384,7 +394,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     assert str(custody / "writer.lock") in lock_paths
     assert str(new_custody / "writer.lock") in lock_paths
     assert plan["authority"] is False and not new_state.exists()
-    applied = upgrade.apply(
+    inputs = (
         old_path,
         old_state,
         result["worker_id"],
@@ -394,8 +404,59 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         worker_config,
         frontier,
         old_state.parent / "release.json",
-        expected_plan_sha256=plan["plan_sha256"],
     )
+
+    def apply_bound():
+        return upgrade.apply(*inputs, expected_plan_sha256=plan["plan_sha256"])
+
+    original_write = upgrade.host._write_once
+    if interference in {"pre_cas_retry", "tampered_recovery", "post_cas_unknown"}:
+        failed_name = (
+            "source-upgrade-known.json"
+            if interference == "post_cas_unknown"
+            else "source-upgrade-intent.json"
+        )
+
+        def fail_write(path, value):
+            if Path(path).name == failed_name:
+                raise RuntimeError("private-injected-payload")
+            return original_write(path, value)
+
+        monkeypatch.setattr(upgrade.host, "_write_once", fail_write)
+        if interference == "post_cas_unknown":
+            with pytest.raises(
+                upgrade.SourceUpgradeHeld, match="known_receipt_write:RuntimeError"
+            ) as caught:
+                apply_bound()
+            assert "private-injected-payload" not in str(caught.value)
+            assert (
+                hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["after_sha256"]
+            )
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="CAS is not known"):
+                upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
+            with pytest.raises(upgrade.SourceUpgradeHeld):
+                apply_bound()
+            assert not new_state.exists()
+            return
+        with pytest.raises(RuntimeError, match="private-injected-payload"):
+            apply_bound()
+        seal = Path(plan["seal"])
+        assert seal.exists() and not seal.with_name("source-upgrade-intent.json").exists()
+        assert hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["before_sha256"]
+        monkeypatch.setattr(upgrade.host, "_write_once", original_write)
+        if interference == "tampered_recovery":
+            changed = json.loads(seal.read_bytes())
+            changed["held_recipe"]["worker_config"]["apply"] = False
+            seal.chmod(0o600)
+            seal.write_text(json.dumps(changed))
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="records differ"):
+                apply_bound()
+            assert not new_state.exists()
+            assert (
+                hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["before_sha256"]
+            )
+            return
+    applied = apply_bound()
     assert applied["status"] == "installed"
     assert wrapper.read_bytes() == install._render(install._guard_source(base), new, new_path)
     assert not new_state.exists()
