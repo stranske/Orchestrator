@@ -126,9 +126,11 @@ def _old_diagnostic(
         " if hashlib.sha256(b).hexdigest()!=h: raise SystemExit(31)\n"
         " out[n]=h\n"
         "sys.path.insert(0,str(pathlib.Path(m['module_dir']))); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
-        "m=c.load_manifest(r); d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']); rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); target=x['target']; row=a['targets'][target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],[target]);\n"
+        "m=c.load_manifest(r); d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']); rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
+        "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
+        "source_target=targets[0]; row=a['targets'][source_target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets);\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(r.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'target':target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(r.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
     try:
         run = subprocess.run(
@@ -138,7 +140,10 @@ def _old_diagnostic(
             text=True,
             timeout=10,
         )
-        _need(run.returncode == 0 and len(run.stdout) <= 65536, "old source diagnostic failed")
+        _need(
+            run.returncode == 0 and len(run.stdout) <= 65536,
+            "old source diagnostic failed: " + run.stderr[-500:],
+        )
         answer = json.loads(run.stdout)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise SourceUpgradeHeld("old source diagnostic unavailable") from exc
@@ -538,8 +543,10 @@ def plan(
         old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
     )
     _need(
-        diagnostic.get("target") == reference["worker"].get("target"),
-        "old diagnostic target differs",
+        diagnostic.get("worker_target") == reference["worker"].get("target")
+        and diagnostic.get("source_target")
+        in reference["state"]["worker_config"]["finite_frontier"]["targets"],
+        "old diagnostic scopes differ",
     )
     correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
     cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
