@@ -201,6 +201,43 @@ def _initialization(manifest, destination):
     }
 
 
+def require_preparation_known(state_path, document, *, initial=False):
+    """A preparation-origin campaign cannot reach business gates before its seal."""
+    origin = document.get("preparation_origin") if isinstance(document, dict) else None
+    if origin is None:
+        return
+    if (
+        not isinstance(origin, dict)
+        or set(origin) != {"path", "sha256"}
+        or not isinstance(origin.get("path"), str)
+        or not isinstance(origin.get("sha256"), str)
+        or len(origin["sha256"]) != 64
+    ):
+        raise ReadmissionHeld("preparation origin is invalid")
+    intent = _canonical(origin["path"])
+    intent_raw = host._read(intent)[1]
+    if _digest(intent_raw) != origin["sha256"]:
+        raise ReadmissionHeld("preparation intent differs from campaign origin")
+    known_path = _known_path(intent)
+    try:
+        known = _json(host._read(known_path)[1], "preparation known receipt")
+    except (OSError, ValueError, TypeError) as exc:
+        raise ReadmissionHeld("preparation known receipt is unavailable") from exc
+    state_path = _canonical(state_path)
+    if (
+        known.get("schema") != "closer-native-readmission/v1"
+        or known.get("stage") != "preparation_known"
+        or known.get("authority") is not False
+        or known.get("intent_sha256") != origin["sha256"]
+        or known.get("state") != str(state_path)
+        or not isinstance(known.get("state_sha256"), str)
+        or len(known["state_sha256"]) != 64
+    ):
+        raise ReadmissionHeld("preparation known receipt differs from campaign origin")
+    if initial and known["state_sha256"] != _digest(host._read(state_path)[1]):
+        raise ReadmissionHeld("preparation known receipt does not bind current initial state")
+
+
 def _begin_fresh(campaign_module, destination, manifest, cfg, fresh, old, plan_sha256):
     initialization = _initialization(manifest, destination)
     demand = manifest["mechanism_contract"].get("controller_demand") or {}
@@ -267,6 +304,7 @@ def admit_initialized(manifest_path, state_path, assignment_bytes, request):
         current = campaign.Campaign(state_path).read()
         if current is None:
             raise ReadmissionHeld("one-use fresh preparation has not created the initial campaign")
+        require_preparation_known(state_path, current, initial=True)
         if request.get("targets") != current.get("assignment_targets"):
             raise ReadmissionHeld("completed demand differs from the exact finite target scope")
         import closer_dispatcher as dispatcher
@@ -396,7 +434,7 @@ def _expected_fresh_document(campaign_module, destination, manifest, cfg, fresh,
 
 
 def _untouched_fresh_document(
-    document, campaign_id, owner, manifest, worker_config, initialization
+    document, campaign_id, owner, manifest, worker_config, initialization, origin
 ):
     """Reject every pre-existing state except the precise write-ahead recovery state."""
     import closer_campaign as campaign
@@ -416,6 +454,7 @@ def _untouched_fresh_document(
         and document.get("release_record") is None
         and document.get("assignment_targets") == worker_config["finite_frontier"]["targets"]
         and document.get("worker_config") == worker_config
+        and document.get("preparation_origin") == origin
         and (
             (
                 initialization is None
@@ -447,12 +486,16 @@ def _recover_or_create(
     """Write intent before creation; a matching interrupted creation may only be sealed."""
     known_path = _known_path(intent_path)
     token_raw = _canonical_bytes(token)
+    origin = {"path": str(intent_path), "sha256": _digest(token_raw)}
     if known_path.exists():
         raise ReadmissionHeld("fresh preparation already consumed")
-    if intent_path.exists():
+    existing_intent = intent_path.exists()
+    if existing_intent:
         if host._read(intent_path)[1] != token_raw:
             raise ReadmissionHeld("existing preparation intent differs from exact fresh plan")
     else:
+        if destination.exists():
+            raise ReadmissionHeld("unowned fresh campaign exists before preparation intent")
         try:
             native._immutable(intent_path, token_raw)
         except AttributeError as exc:
@@ -471,12 +514,13 @@ def _recover_or_create(
             worker_config=worker_config,
             _source_initialization=initialization,
             _require_absent=True,
+            _preparation_origin=origin,
         )
     stream = holder._locked()
     try:
         current = holder._read_unlocked()
         if not _untouched_fresh_document(
-            current, campaign_id, owner, manifest, worker_config, initialization
+            current, campaign_id, owner, manifest, worker_config, initialization, origin
         ):
             raise ReadmissionHeld("new campaign state is not the exact untouched preparation")
         state_raw = host._read(destination)[1]
@@ -777,12 +821,6 @@ def apply_historical(
             "max_fresh_generations": 1,
         }
         plan_sha256 = _digest(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode())
-        if _plan_only:
-            return {"plan": plan, "plan_sha256": plan_sha256, "authority": False}
-        if confirm_plan_sha256 != plan_sha256:
-            raise ReadmissionHeld("explicit confirmation does not bind the complete fresh plan")
-        if _new_runtime(new_manifest_path, cfg)[2] != new_manifest_raw:
-            raise ReadmissionHeld("new runtime changed before consumption")
         root = _canonical(old_manifest["mechanism_contract"]["observation_root"])
         nonce = original["admission_nonce"]
         reservation = (
@@ -805,6 +843,12 @@ def apply_historical(
         # The validated record must be the same original used to derive the token.
         if record.get("original") != original:
             raise ReadmissionHeld("reconciliation changed before exact intent validation")
+        if _plan_only:
+            return {"plan": plan, "plan_sha256": plan_sha256, "authority": False}
+        if confirm_plan_sha256 != plan_sha256:
+            raise ReadmissionHeld("explicit confirmation does not bind the complete fresh plan")
+        if _new_runtime(new_manifest_path, cfg)[2] != new_manifest_raw:
+            raise ReadmissionHeld("new runtime changed before consumption")
         known = _recover_or_create(
             campaign,
             native,

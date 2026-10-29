@@ -507,6 +507,65 @@ def test_existing_intent_refuses_changed_frontier_or_noninitial_state(monkeypatc
     assert len(fake.created) == 1
 
 
+def test_existing_unowned_destination_refuses_before_writing_intent(monkeypatch, tmp_path):
+    _old, _raw, reference, manifest, cfg, _fake = _reference(monkeypatch, tmp_path)
+    fresh = _frontier("fresh")
+    destination = tmp_path / "fresh.campaign.json"
+    destination.write_text("{}")
+    planned = readmission.plan_prospective(
+        "manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh
+    )
+    with pytest.raises(readmission.ReadmissionHeld, match="unowned fresh campaign"):
+        readmission.apply_prospective(
+            "manifest",
+            "old-state",
+            "0123456789ab",
+            manifest,
+            cfg,
+            destination,
+            fresh,
+            confirm_plan_sha256=planned["plan_sha256"],
+        )
+    reservation = (
+        tmp_path
+        / "native-observation"
+        / reference["proof"]["admission_nonce"]
+        / ("readmission-" + reference["result_sha256"] + ".json")
+    )
+    assert not reservation.exists()
+
+
+def test_preparation_known_requires_exact_origin_and_initial_state(monkeypatch, tmp_path):
+    world = _initialized_world(monkeypatch, tmp_path)
+    document = json.loads(world.state.read_text())
+    intent = world.root / "intent.json"
+    intent.write_bytes(b'{"exact":"intent"}')
+    document["preparation_origin"] = {
+        "path": str(intent),
+        "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
+    }
+    world.state.write_text(json.dumps(document, sort_keys=True))
+    with pytest.raises(readmission.ReadmissionHeld, match="preparation known"):
+        readmission.require_preparation_known(world.state, document, initial=True)
+    known = readmission._known_path(intent)
+    known.write_text(
+        json.dumps(
+            {
+                "schema": "closer-native-readmission/v1",
+                "stage": "preparation_known",
+                "authority": False,
+                "intent_sha256": document["preparation_origin"]["sha256"],
+                "state": str(world.state),
+                "state_sha256": hashlib.sha256(world.state.read_bytes()).hexdigest(),
+            }
+        )
+    )
+    readmission.require_preparation_known(world.state, document, initial=True)
+    document["preparation_origin"]["sha256"] = "0" * 64
+    with pytest.raises(readmission.ReadmissionHeld, match="intent differs"):
+        readmission.require_preparation_known(world.state, document, initial=True)
+
+
 def test_historical_reader_requires_exact_decision(monkeypatch):
     import sys
     from types import SimpleNamespace

@@ -7,6 +7,7 @@ controller custody inspector.  Only GitHub's network transport is replaced.
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -447,6 +448,54 @@ def test_historical_consumer_creates_one_fresh_campaign(tmp_path, monkeypatch):
             new_root / "second.campaign.json",
             fresh,
             confirm_plan_sha256=proposal["plan_sha256"],
+        )
+
+
+def test_historical_plan_refuses_invalid_reconciliation_signature(tmp_path, monkeypatch):
+    manifest, state, _result, _ = _world(tmp_path, monkeypatch)
+    sealed = reconcile.collect(manifest, state, "worker")
+    envelope = json.loads(Path(sealed["path"]).read_text())
+    envelope["signature"] = "bad"
+    os.chmod(sealed["path"], 0o600)
+    Path(sealed["path"]).write_text(json.dumps(envelope))
+    new_root = tmp_path / "new-campaigns"
+    new_root.mkdir()
+    new_obs = tmp_path / "new-observation"
+    new_obs.mkdir()
+    for leaf in ("native-entry.lock", "native-supervisor.lock"):
+        _write(new_obs / leaf, b"")
+    new_manifest = {
+        "package_digest": "new-package",
+        "mechanism_contract": {"campaign_root": str(new_root), "observation_root": str(new_obs)},
+    }
+    new_path = tmp_path / "new-manifest.json"
+    _write(new_path, new_manifest)
+    cfg = {
+        "runtime_manifest": str(new_path),
+        "mechanism": mechanisms.NATIVE,
+        "granularity": "round",
+    }
+    monkeypatch.setattr(
+        readmission,
+        "_new_runtime",
+        lambda _p, _c: (new_path, new_manifest, new_path.read_bytes(), cfg),
+    )
+    fresh = make_frontier(
+        ["stranske/Orchestrator#984"],
+        owner="old-owner",
+        frontier_id="fresh",
+        bindings={"stranske/Orchestrator#984": {"revision": "r1", "action_id": "1" * 64}},
+    )
+    with pytest.raises(readmission.ReadmissionHeld):
+        readmission.plan_historical(
+            sealed,
+            manifest,
+            state,
+            "worker",
+            new_path,
+            cfg,
+            new_root / "fresh.campaign.json",
+            fresh,
         )
 
 

@@ -94,3 +94,6 @@ retry. If it fails after the untouched initial held record was written, the same
 plan may only seal its hash-pinned `preparation_known` receipt; it never calls
 `begin` again. Any changed manifest, worker configuration, frontier, state
 path, or non-initial worker/effect state remains held.
+The first campaign write records the intent reference atomically. Any campaign
+with that origin remains unavailable to demand admission or native business
+publication until its matching known receipt binds the exact initial state.
