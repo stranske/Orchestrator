@@ -43,6 +43,7 @@ RUNTIME_PINNED_MODULES = module_closure(
         "closer_native_readmission.py",
         "closer_retained_reconciliation.py",
         "closer_host_restore_contract.py",
+        "closer_native_wrapper_install.py",
     ),
 )
 

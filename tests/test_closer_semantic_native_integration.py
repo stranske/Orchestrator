@@ -1,7 +1,9 @@
 """Pure native/semantic source-union guards; no original process mechanism run."""
 
 import ast
+import copy
 import hashlib
+import json
 
 import closer_semantic_native_integration_support as support
 import pytest
@@ -11,6 +13,80 @@ from closer_semantic_audit_support import fingerprint, functions, source_path
 def test_native_operational_and_latest_reader_sources_are_exact_reviewed0953():
     for filename, expected in support.integrated_native_source_reference().items():
         assert hashlib.sha256(source_path(filename).read_bytes()).hexdigest() == expected, filename
+
+
+def _top_level_ast(raw):
+    tree = ast.parse(raw)
+    return {
+        node.name: fingerprint(node)
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+    }, tree
+
+
+def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
+    reviewed = support.finite_no_start_v2_reference()
+    for filename, change in reviewed["files"].items():
+        after = source_path(filename).read_bytes()
+        assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
+        before_top = change["before_top_level_ast"]
+        after_top, after_tree = _top_level_ast(after)
+        assert (
+            hashlib.sha256(
+                json.dumps(before_top, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            == change["before_top_level_ast_sha256"]
+        )
+        assert (
+            hashlib.sha256(
+                json.dumps(after_top, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            == change["after_top_level_ast_sha256"]
+        )
+        scope = change.get("class_method_scope")
+        if scope:
+            after_class = next(
+                node
+                for node in after_tree.body
+                if isinstance(node, ast.ClassDef) and node.name == scope["class"]
+            )
+            assert (
+                scope["before_remaining_class_ast_sha256"]
+                == scope["after_remaining_class_ast_sha256"]
+            )
+            for node, expected in ((after_class, scope["before_remaining_class_ast_sha256"]),):
+                remaining = copy.deepcopy(node)
+                remaining.body = [
+                    item
+                    for item in remaining.body
+                    if not (
+                        isinstance(item, ast.FunctionDef)
+                        and item.name in scope["only_changed_methods"]
+                    )
+                ]
+                assert fingerprint(remaining) == expected
+        for name, node_change in change["changed_nodes"].items():
+            if "." in name:
+                cls, method = name.split(".")
+                after_node = next(
+                    item
+                    for item in next(
+                        node
+                        for node in after_tree.body
+                        if isinstance(node, ast.ClassDef) and node.name == cls
+                    ).body
+                    if isinstance(item, ast.FunctionDef) and item.name == method
+                )
+            else:
+                before_node, after_node = before_top[name], after_top[name]
+                assert before_node == node_change["before_ast_sha256"]
+                assert after_node == node_change["after_ast_sha256"]
+                continue
+            assert fingerprint(after_node) == node_change["after_ast_sha256"]
+        changed_top = {name.split(".")[0] for name in change["changed_nodes"]}
+        assert {name: value for name, value in after_top.items() if name not in changed_top} == {
+            name: value for name, value in before_top.items() if name not in changed_top
+        }
 
 
 def test_current_native_top_level_entry_functions_are_not_backrevved():
@@ -61,6 +137,18 @@ def test_native_integration_manifest_is_pinned_not_a_mutable_allowlist(tmp_path,
     monkeypatch.setattr(support, "MANIFEST", path)
     with pytest.raises(AssertionError):
         support.native_reference()
+
+
+def test_finite_no_start_v2_successor_fixture_is_pinned(tmp_path, monkeypatch):
+    changed = tmp_path / "finite-no-start.json"
+    changed.write_bytes(
+        support.FINITE_NO_START_V2_MANIFEST.read_bytes().replace(
+            b"pre_dispatch_no_start_proof", b"unreviewed_method", 1
+        )
+    )
+    monkeypatch.setattr(support, "FINITE_NO_START_V2_MANIFEST", changed)
+    with pytest.raises(AssertionError):
+        support.finite_no_start_v2_reference()
 
 
 def test_current_publication_admission_overlay_preserves_unreviewed_ast_families():

@@ -120,9 +120,36 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
     assert environment["VERIFY_PYTEST_WORKERS"] == "1"
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in environment
     assert "CLOSER_CORE_PACKAGE" not in environment
-    assert "-n numprocesses" in subprocess.check_output(
-        [str(checked.python), "-m", "pytest", "--help"], env=environment, text=True
+    assert "--numprocesses" in subprocess.check_output(
+        [str(checked.python), "-m", "pytest", "--help", "--color=no"], env=environment, text=True
     )
+
+
+@pytest.mark.parametrize(
+    "help_text",
+    [
+        "  -n numprocesses, --numprocesses=numprocesses\n",
+        "  -n NUMPROCESSES, --numprocesses=NUMPROCESSES\n",
+        "  \x1b[32m-n\x1b[0m NUMPROCESSES, --numprocesses=NUMPROCESSES\n",
+    ],
+)
+def test_xdist_probe_accepts_both_help_metavar_presentations(monkeypatch, help_text):
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, help_text, ""),
+    )
+    preflight._check_xdist(Path(sys.executable), {})
+
+
+def test_xdist_probe_still_refuses_missing_worker_option(monkeypatch):
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, "  -q quiet\n", ""),
+    )
+    with pytest.raises(preflight.PreflightError, match="does not advertise"):
+        preflight._check_xdist(Path(sys.executable), {})
 
 
 def test_virtualenv_invocation_path_is_preserved_and_child_keeps_venv_prefix(tmp_path):

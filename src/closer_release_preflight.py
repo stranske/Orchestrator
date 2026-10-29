@@ -235,7 +235,7 @@ def _same_executable(first: object, second: object) -> bool:
 def _check_xdist(python: Path, env: dict[str, str]) -> None:
     try:
         result = subprocess.run(
-            [str(python), "-m", "pytest", "--help"],
+            [str(python), "-m", "pytest", "--help", "--color=no"],
             env=env,
             text=True,
             stdout=subprocess.PIPE,
@@ -247,9 +247,11 @@ def _check_xdist(python: Path, env: dict[str, str]) -> None:
         raise PreflightError(
             "xdist_probe_failed", f"selected Python could not run pytest help: {exc}"
         ) from exc
-    if result.returncode or "-n numprocesses" not in result.stdout:
+    plain_help = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout)
+    if result.returncode or re.search(r"(?m)^\s*-n(?:\s|[=,])", plain_help) is None:
         raise PreflightError(
-            "xdist_unavailable", "selected Python pytest does not accept pytest-xdist -n"
+            "xdist_unavailable",
+            f"selected Python pytest does not advertise pytest-xdist -n (status {result.returncode}): {result.stderr[-256:]}",
         )
 
 

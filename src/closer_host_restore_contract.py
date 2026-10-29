@@ -524,11 +524,10 @@ def _hold(rows: list[dict[str, Any]]) -> Iterator[None]:
 def _write_once(path: Path, item: dict[str, Any]) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-    try:
-        os.write(fd, (json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode())
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write((json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n").encode())
+        stream.flush()
+        os.fsync(stream.fileno())
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)
@@ -560,10 +559,13 @@ def apply(request_path: str | Path, expected_plan_sha256: str) -> dict[str, Any]
         fd, temporary = tempfile.mkstemp(prefix=".host-restore-", dir=wrapper.parent)
         replaced = False
         try:
-            os.write(fd, replacement)
-            os.fsync(fd)
-            os.close(fd)
-            os.chmod(temporary, first["mode"])
+            stream = os.fdopen(fd, "wb")
+            fd = -1
+            with stream:
+                stream.write(replacement)
+                stream.flush()
+                os.fchmod(stream.fileno(), first["mode"])
+                os.fsync(stream.fileno())
             os.replace(temporary, wrapper)
             replaced = True
             directory = os.open(wrapper.parent, os.O_RDONLY)
@@ -585,8 +587,9 @@ def apply(request_path: str | Path, expected_plan_sha256: str) -> dict[str, Any]
                 raise Refused("postreplace_outcome_uncertain")
             raise
         finally:
-            with contextlib.suppress(OSError):
-                os.close(fd)
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
             with contextlib.suppress(FileNotFoundError):
                 Path(temporary).unlink()
 

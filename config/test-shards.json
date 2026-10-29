@@ -122,7 +122,8 @@
     "tests/test_closer_native_readmission.py",
     "tests/test_closer_native_readmission_integration.py",
     "tests/test_closer_retained_reconciliation.py",
-    "tests/test_closer_launch_operator.py"
+    "tests/test_closer_launch_operator.py",
+    "tests/test_closer_native_wrapper_install.py"
   ],
   "shards": [
     [
@@ -216,7 +217,8 @@
       "tests/test_vibe_observing_backend.py",
       "tests/test_workflow_compiler.py",
       "tests/test_closer_host_restore_contract.py",
-      "tests/test_closer_retained_reconciliation.py"
+      "tests/test_closer_retained_reconciliation.py",
+      "tests/test_closer_native_wrapper_install.py"
     ],
     [
       "tests/test_adapters_coverage.py",

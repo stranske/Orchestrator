@@ -153,7 +153,32 @@ def integrated_native_source_reference():
     for name, change in publication_admission_reference()["protected_native_modules"].items():
         assert original[name] == change["before_file_sha256"]
         original[name] = change["after_file_sha256"]
+    # Finite no-start v2 is an independently pinned successor.  Do not rewrite
+    # 0953 or broaden the publication overlay to cover its two native methods.
+    for name, change in finite_no_start_v2_reference()["files"].items():
+        assert original[name] == change["before_file_sha256"]
+        original[name] = change["after_file_sha256"]
     return original
+
+
+FINITE_NO_START_V2_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_finite_no_start_v2.json"
+)
+FINITE_NO_START_V2_SHA256 = "c4b75cd83a6070d18609cda61077a4044b91123fecdb2dcad4d92de04e139586"
+
+
+def finite_no_start_v2_reference():
+    raw = FINITE_NO_START_V2_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == FINITE_NO_START_V2_SHA256
+    value = json.loads(raw)
+    assert value["base_commit"] == "112e9263fd7545bd5a3ab50913a867126fbe862a"
+    assert set(value["files"]) == {"closer_native_observer.py", "closer_runtime_binding.py"}
+    observer = value["files"]["closer_native_observer.py"]
+    assert set(observer["changed_nodes"]) == {"pre_dispatch_no_start_proof"}
+    binding = value["files"]["closer_runtime_binding.py"]
+    assert set(binding["changed_nodes"]) == {"PinnedNativeHooks.begin_terminal_receipt"}
+    assert binding["class_method_scope"]["only_changed_methods"] == ["begin_terminal_receipt"]
+    return value
 
 
 def assert_reviewed_role_registry_successor(source=None):
