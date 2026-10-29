@@ -162,7 +162,7 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     )
     return {"path": str(journal), "sha256": _sha(host._read(journal)[1]),
             "candidate_sha": candidate, "installed_generation": record["installed_generation"],
-            "snapshot_digest": verification["snapshot_digest"]}
+            "snapshot_digest": cast(dict[str, Any], verification)["snapshot_digest"]}
 
 
 def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id: str) -> dict[str, Any]:
