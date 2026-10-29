@@ -352,9 +352,10 @@ def test_actual_cli_install_returns_nonzero_for_a_failed_existing_gate(tmp_path)
 
 def test_operator_script_cannot_shadow_release_record_module(tmp_path):
     root = Path(__file__).parents[1]
+    module_root = root / "src" if (root / "src").is_dir() else root
     env = {
         **os.environ,
-        "PYTHONPATH": os.pathsep.join((str(root / "scripts"), str(root / "src"))),
+        "PYTHONPATH": os.pathsep.join((str(root / "scripts"), str(module_root))),
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     result = subprocess.run(

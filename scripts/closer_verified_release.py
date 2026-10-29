@@ -10,7 +10,12 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+# The repository runs this from ``scripts/`` while the exec mirror is flat:
+# build_exec_mirror.sh copies src/*.py into the mirror root.  Select the real
+# package directory in either shape so the preflight and release siblings are
+# imported from the same source closure.
+SOURCE_ROOT = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
+sys.path.insert(0, str(SOURCE_ROOT))
 
 from closer_release_preflight import (  # noqa: E402
     DEFAULT_PYTHON,
