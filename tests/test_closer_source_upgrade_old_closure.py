@@ -1,6 +1,7 @@
 """Version-skew and pre-import trust regressions; synthetic proofs are not business evidence."""
 
 import copy
+import fcntl
 import hashlib
 import json
 import stat
@@ -103,9 +104,13 @@ def _synthetic_old_runtime(tmp_path, monkeypatch):
         "row_sha256": {target: "a" * 64},
     }
     campaign = (
+        "import fcntl,pathlib\n"
         "class Campaign:\n"
-        " def __init__(self, path): pass\n"
-        " def read(self): return {'workers':[{'worker_id':'test-worker','target':'test/repo#1'}]}\n"
+        " def __init__(self, path): self.path=pathlib.Path(path)\n"
+        " def read(self):\n"
+        "  with self.path.with_name(self.path.name+'.lock').open('a+b') as stream:\n"
+        "   fcntl.flock(stream.fileno(),fcntl.LOCK_EX)\n"
+        "   return {'workers':[{'worker_id':'test-worker','target':'test/repo#1'}]}\n"
         "def validate_manifest(m): return []\n"
         "def verify_modules(m): return []\n"
         f"def _cohort_worker_evidence(*a): return {{'result':{{'simulation_only':True}}}}, {{'dispatch_state':{str(tmp_path / 'dispatch')!r}}}, {{'completed_round':{proof!r}}}, {{'completed':False}}\n"
@@ -219,3 +224,27 @@ def test_old_diagnostic_imports_captured_bytes_when_original_is_swapped(tmp_path
     assert observed
     assert not sentinel.exists()
     assert not observed[0].exists()
+
+
+def test_old_diagnostic_reads_snapshot_while_parent_holds_real_campaign_lock(tmp_path, monkeypatch):
+    """The apply fence and old reader must not deadlock across processes."""
+    _root, manifest, state, interpreter = _synthetic_old_runtime(tmp_path, monkeypatch)
+    lock_path = state.with_name(state.name + ".lock")
+    with lock_path.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        answer = upgrade._old_diagnostic(manifest, state, "test-worker", interpreter=interpreter)
+    assert answer["state_sha256"] == hashlib.sha256(state.read_bytes()).hexdigest()
+    assert answer["result"]["simulation_only"] is True
+
+
+def test_old_diagnostic_refuses_original_campaign_drift_after_snapshot(tmp_path, monkeypatch):
+    _root, manifest, state, interpreter = _synthetic_old_runtime(tmp_path, monkeypatch)
+    actual_run = upgrade.subprocess.run
+
+    def change_original(argv, **kwargs):
+        state.write_text('{"revision":2}')
+        return actual_run(argv, **kwargs)
+
+    monkeypatch.setattr(upgrade.subprocess, "run", change_original)
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="old campaign changed"):
+        upgrade._old_diagnostic(manifest, state, "test-worker", interpreter=interpreter)

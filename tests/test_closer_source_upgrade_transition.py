@@ -442,7 +442,14 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         "cohort": {"completed": False, "worker_id": result["worker_id"]},
         "completed_round": {"accepted": False},
     }
-    monkeypatch.setattr(upgrade, "_old_diagnostic", lambda *_a, **_k: diagnostic)
+    monkeypatch.setattr(
+        upgrade,
+        "_old_diagnostic",
+        lambda *_a, **_k: {
+            **diagnostic,
+            "state_sha256": hashlib.sha256(Path(_a[1]).read_bytes()).hexdigest(),
+        },
+    )
     monkeypatch.setattr(upgrade, "fresh_read_native_index", lambda *_a: {"offline": "fixed"})
     monkeypatch.setattr(
         upgrade,

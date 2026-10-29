@@ -289,6 +289,7 @@ def _old_diagnostic(
     state and proof paths remain unchanged. Native entry/providers are never called.
     """
     _, raw, doc = _object(manifest, "old manifest")
+    state, state_raw, _state_doc = _object(state, "old campaign state")
     try:
         _need(
             _sha(host._read(_canonical(interpreter))[1]) == REVIEWED_OLD_INTERPRETER_SHA256,
@@ -306,13 +307,16 @@ def _old_diagnostic(
         "sys.path.insert(0,str(stage)); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
         "if c.validate_manifest(m) or c.verify_modules(m): raise SystemExit(35)\n"
         "from closer_mechanisms import mechanism; mechanism(m)\n"
-        "d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
+        # apply() already holds the real campaign lock. The old reader may
+        # take its own lock only on this private byte-identical snapshot;
+        # cohort/proof validation still uses the original campaign path.
+        "snapshot=stage/'old-campaign-snapshot.json'; d=c.Campaign(snapshot).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
         "source_target=targets[0]; row=a['targets'][source_target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets);\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
     with tempfile.TemporaryDirectory(prefix="old-source-diagnostic-") as stage_name:
         stage = Path(stage_name)
@@ -323,6 +327,9 @@ def _old_diagnostic(
                 target.write_bytes(module_raw)
                 target.chmod(0o600)
             (stage / "closer-runtime-package.json").write_bytes(descriptor_raw)
+            snapshot = stage / "old-campaign-snapshot.json"
+            snapshot.write_bytes(state_raw)
+            snapshot.chmod(0o600)
             policy_raw = host._read(Path(doc["module_dir"]) / "closer_role_selection.json")[1]
             (stage / "closer_role_selection.json").write_bytes(policy_raw)
             run = subprocess.run(
@@ -353,10 +360,12 @@ def _old_diagnostic(
     _old_module_bytes(doc)
     _need(
         answer.get("manifest_sha256") == _sha(raw)
+        and answer.get("state_sha256") == _sha(state_raw)
         and answer.get("modules") == modules
         and host._read(manifest)[1] == raw,
         "old source diagnostic differs",
     )
+    _need(host._read(state)[1] == state_raw, "old campaign changed during diagnostic")
     return answer
 
 
@@ -928,6 +937,10 @@ def plan(
     interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
     diagnostic = _old_diagnostic(
         old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
+    )
+    _need(
+        diagnostic.get("state_sha256") == reference["state_sha256"],
+        "old diagnostic campaign differs from captured reference",
     )
     _need(
         diagnostic.get("worker_target") == reference["worker"].get("target")
