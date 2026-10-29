@@ -10,7 +10,8 @@
   ],
   "untimed_modules": [
     "tests/test_closer_correction_owner.py",
-    "tests/test_storage_abort_reconciliation.py"
+    "tests/test_storage_abort_reconciliation.py",
+    "tests/test_verify_failure_evidence.py"
   ],
   "shards": [
     [
@@ -539,6 +540,7 @@
       "tests/test_verifier_projection_ownership.py",
       "tests/test_verifier_same_material_incomplete.py",
       "tests/test_verify_before_sync.py",
+      "tests/test_verify_failure_evidence.py",
       "tests/test_verify_parallel_selftests.py",
       "tests/test_vibe_isolated_types_proof.py"
     ],
