@@ -5178,7 +5178,7 @@ def _pipeline_low_route(
                 unsupported_assessment |= assessment_problem is not None
             if row.get("state") not in {"ok", "warn"}:
                 continue
-            profiles = _filter_report_profiles(report, quality_profiles.get(agent, []))
+            profiles = quality_profiles.get(agent, [])
             capacity_candidate |= assessment_problem is None and any(
                 p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
                 for p in profiles
@@ -5315,7 +5315,7 @@ def _exception_route(
             row = report["agents"].get(agent, {})
             if row.get("state") not in {"ok", "warn"}:
                 continue
-            profiles = _filter_report_profiles(report, quality_profiles.get(agent, []))
+            profiles = quality_profiles.get(agent, [])
             capacity_candidate |= any(
                 p["profile_id"] not in unavailable_profiles and _profile_has_capacity(report, p)
                 for p in profiles
@@ -5739,21 +5739,17 @@ def _report_profiles_for_agent(report, agent, *, transport):
     import closer_operational_capacity
     import execution_profiles
 
-    declared_ids = set(closer_operational_capacity.declared_profile_ids(report) or ())
-    rows = execution_profiles.profiles_for_agent(
-        agent, transport=transport, include_explicit=bool(declared_ids)
-    )
-    return _filter_report_profiles(report, rows)
-
-
-def _filter_report_profiles(report, rows):
-    import closer_operational_capacity
-
     declared = closer_operational_capacity.declared_profile_ids(report)
     if declared is None:
-        return [profile for profile in rows if not profile.get("requires_explicit_selection")]
+        return execution_profiles.profiles_for_agent(agent, transport=transport)
     declared_ids = set(declared)
-    return [profile for profile in rows if profile.get("profile_id") in declared_ids]
+    return [
+        profile
+        for profile in execution_profiles.profiles_for_agent(
+            agent, transport=transport, include_explicit=True
+        )
+        if profile.get("profile_id") in declared_ids
+    ]
 
 
 def _legacy_operation_dependency(state_path, target, snapshot, *, remote_only=False):

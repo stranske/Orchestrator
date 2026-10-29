@@ -114,6 +114,13 @@ def integrated_reference(base):
         identity = repository_identity_reference()["dispatcher"]
         assert dispatcher["top_level_ast"]["Closer"] == identity["before_closer_ast_sha256"]
         dispatcher["top_level_ast"]["Closer"] = identity["after_closer_ast_sha256"]
+        capacity = scoped_capacity_reference()["dispatcher"]
+        changed = capacity["changed_function"]
+        assert dispatcher["top_level_ast"][changed["name"]] == changed["before_ast_sha256"]
+        dispatcher["top_level_ast"][changed["name"]] = changed["after_ast_sha256"]
+        added = capacity["added_function"]
+        assert added["name"] not in dispatcher["top_level_ast"]
+        dispatcher["top_level_ast"][added["name"]] = added["ast_sha256"]
     return original
 
 
@@ -272,6 +279,7 @@ def finite_prepare_reference():
 
 def before_finite_prepare_source(source):
     """Restore only an exact whole-file-pinned prospective delta for old audits."""
+    source = before_scoped_capacity_source(source)
     identity = repository_identity_reference()["dispatcher"]
     assert hashlib.sha256(source.encode()).hexdigest() == identity["after_file_sha256"]
     assert source.count(identity["after_fragment"]) == 1
@@ -288,10 +296,43 @@ def before_finite_prepare_source(source):
 REPOSITORY_IDENTITY_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_repository_identity_v1.json"
 )
-REPOSITORY_IDENTITY_SHA256 = "166b2176314c73273d47dc4472f783fdcd1513fd3cf5ab76c0525e7116382647"
+REPOSITORY_IDENTITY_SHA256 = "0a2acde4078e9dbd7d1c983ab8e7eeaad37d2788e44e9b6959ccfdfa8d5b03ff"
 
 
 def repository_identity_reference():
     raw = REPOSITORY_IDENTITY_MANIFEST.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == REPOSITORY_IDENTITY_SHA256
     return json.loads(raw)
+
+
+SCOPED_CAPACITY_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_scoped_capacity_v1.json"
+)
+SCOPED_CAPACITY_SHA256 = "594c06c0129ff4087f8e451dc0fed8da2d44b8b8a421577203fa16a8f1d65b5f"
+
+
+def scoped_capacity_reference():
+    """One reviewed enumeration successor, never a mutable AST allowlist."""
+    raw = SCOPED_CAPACITY_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == SCOPED_CAPACITY_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "reviewed-scoped-capacity-source-delta/v1"
+    change = value["dispatcher"]
+    assert change["changed_function"]["name"] == "_pipeline_capacity"
+    assert change["added_function"]["name"] == "_report_profiles_for_agent"
+    assert (
+        hashlib.sha256(source_path("closer_operational_capacity.py").read_bytes()).hexdigest()
+        == value["operational"]["after_file_sha256"]
+    )
+    return value
+
+
+def before_scoped_capacity_source(source):
+    """Undo only exact reviewed capacity bytes before applying older audits."""
+    change = scoped_capacity_reference()["dispatcher"]
+    assert hashlib.sha256(source.encode()).hexdigest() == change["after_file_sha256"]
+    assert source.count(change["after_fragment"]) == source.count(change["added_fragment"]) == 1
+    restored = source.replace(change["after_fragment"], change["before_fragment"], 1)
+    restored = restored.replace(change["added_fragment"], "", 1)
+    assert hashlib.sha256(restored.encode()).hexdigest() == change["before_file_sha256"]
+    return restored
