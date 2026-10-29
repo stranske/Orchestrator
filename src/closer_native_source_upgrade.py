@@ -193,6 +193,11 @@ def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
     """Physical custody is evidence, not a JSON claim from a caller."""
     import closer_correction_controller as controller
 
+    controller_file = Path(controller.__file__).resolve()
+    _need(
+        old.get("modules", {}).get(controller_file.name) == _sha(host._read(controller_file)[1]),
+        "current controller differs from old pinned controller",
+    )
     config = old["policy"]["correction_controller_installation"]["config"]
     try:
         inspection = controller.inspect_provisioned_custody(config)
@@ -311,6 +316,25 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     cfg["finite_frontier"] = fresh
     supplied = json.loads(json.dumps(new_worker_config, sort_keys=True))
     _need(supplied == cfg, "pre-CAS worker config is not strict old-to-new rebind")
+    import closer_pipeline
+    _need(
+        cfg.get("granularity", "round") == "round"
+        and cfg.get("mechanism") == "native-handoff/v1"
+        and cfg.get("execution_policy") == "finite-frontier/v2"
+        and cfg.get("dispatch_workers") == 1
+        and cfg.get("coordinator_mode") == "resource_scoped"
+        and cfg.get("coordinator_contract_pin") == closer_pipeline.scoped_capability(),
+        "strict rebind worker modes/coordinator differ",
+    )
+    hooks = cfg.get("native_hooks")
+    _need(
+        isinstance(hooks, dict)
+        and hooks.get("bounded_no_new_relay") is True
+        and isinstance(hooks.get("prerun"), dict)
+        and isinstance(hooks.get("postrun"), dict)
+        and isinstance(hooks.get("lease_module"), dict),
+        "strict rebind native hooks invalid",
+    )
     readmission._guard_fresh(new, cfg, state, fresh, old_frontier)
     receipt = _canonical(restore_receipt)
     wrapper = _wrapper_plan(old_path, old, new_path, new, receipt)
