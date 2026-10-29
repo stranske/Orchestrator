@@ -1,3 +1,4 @@
+import fcntl
 import json
 import subprocess
 from pathlib import Path
@@ -23,9 +24,7 @@ def test_ledger_keeps_unobserved_business_stages_unknown(tmp_path):
 
 
 def test_launch_needs_matching_explicit_confirmation(monkeypatch, capsys):
-    monkeypatch.setattr(
-        operator, "plan", lambda *_a, **_k: {"launch_permitted_by_diagnostic": True}
-    )
+    monkeypatch.setattr(operator, "plan", lambda *_a, **_k: pytest.fail("plan must not run"))
     try:
         operator.main(
             [
@@ -45,6 +44,32 @@ def test_launch_needs_matching_explicit_confirmation(monkeypatch, capsys):
     else:
         raise AssertionError("mismatched confirmation unexpectedly launched")
     assert "requires --confirm-run-id" in capsys.readouterr().err
+
+
+def test_blocked_diagnostic_returns_75_without_subprocess(monkeypatch, capsys):
+    monkeypatch.setattr(
+        operator, "plan", lambda *_a, **_k: {"launch_permitted_by_diagnostic": False}
+    )
+    monkeypatch.setattr(
+        operator.subprocess, "run", lambda *_a, **_k: pytest.fail("must not launch")
+    )
+    assert (
+        operator.main(
+            [
+                "launch",
+                "--manifest",
+                "/x",
+                "--campaign",
+                "/campaign",
+                "--run-id",
+                "r",
+                "--confirm-run-id",
+                "r",
+            ]
+        )
+        == 75
+    )
+    assert json.loads(capsys.readouterr().out)["launch_permitted_by_diagnostic"] is False
 
 
 def test_launch_crosses_the_canonical_bash_wrapper_boundary(monkeypatch, capsys):
@@ -121,9 +146,75 @@ def test_finite_unavailable_requires_controller_reentry_not_native_relaunch(tmp_
             }
         )
     )
+    campaign.with_name(campaign.name + ".lock").touch()
     gate = operator.campaign_gate(campaign, Path("/manifest"))
     assert gate["stage"] == "held"
     assert gate["accepted_dispositions"] == [
         "native-pre-dispatch-no-start/v2",
         "native-retained-no-b-reconciliation/v1",
     ]
+
+
+def test_campaign_gate_holds_missing_or_malformed_state(tmp_path):
+    missing = tmp_path / "missing.json"
+    assert operator.campaign_gate(missing, Path("/manifest"))["stage"] == "held"
+    malformed = tmp_path / "bad.json"
+    malformed.write_text("not-json")
+    malformed.with_name(malformed.name + ".lock").touch()
+    assert operator.campaign_gate(malformed, Path("/manifest"))["stage"] == "held"
+
+
+def test_campaign_gate_holds_manifest_mismatch_and_active_writer_lock(tmp_path):
+    campaign = tmp_path / "campaign.json"
+    campaign.write_text(
+        json.dumps({"schema_version": 1, "worker_config": {"runtime_manifest": "/other"}})
+    )
+    lock = campaign.with_name(campaign.name + ".lock")
+    lock.touch()
+    assert operator.campaign_gate(campaign, Path("/manifest"))["stage"] == "held"
+    campaign.write_text(
+        json.dumps({"schema_version": 1, "worker_config": {"runtime_manifest": "/manifest"}})
+    )
+    with lock.open("rb") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        assert operator.campaign_gate(campaign, Path("/manifest"))["stage"] == "held"
+
+
+def test_campaign_gate_reports_ready_generic_and_finite_current(tmp_path):
+    def write(name, worker_config):
+        path = tmp_path / name
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "worker_config": worker_config,
+                    "assignment_targets": ["acme/one#1"],
+                    "targets": {"*round*": "pending"},
+                    "workers": [],
+                }
+            )
+        )
+        path.with_name(path.name + ".lock").touch()
+        return path
+
+    generic = write("generic.json", {"runtime_manifest": "/manifest"})
+    assert operator.campaign_gate(generic, Path("/manifest")) == {
+        "stage": "ready",
+        "kind": "non-finite",
+    }
+    frontier = make_frontier(
+        ["acme/one#1"],
+        owner="runner-a",
+        frontier_id="fresh",
+        bindings={
+            "acme/one#1": {
+                "revision": "head-1",
+                "action_id": action_identity("acme/one#1", "head-1", "review", {}),
+            }
+        },
+    )
+    finite = write("finite.json", {"runtime_manifest": "/manifest", "finite_frontier": frontier})
+    assert operator.campaign_gate(finite, Path("/manifest")) == {
+        "stage": "ready",
+        "kind": "finite-current-authority",
+    }

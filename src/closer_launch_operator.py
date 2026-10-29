@@ -9,7 +9,9 @@ never swaps a wrapper, clears a campaign, or manufactures admission.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -38,10 +40,23 @@ def _canonical_wrapper_argv(manifest: dict[str, Any]) -> list[str]:
 
 
 def campaign_gate(campaign_path: Path, manifest_path: Path) -> dict[str, Any]:
-    """Describe the finite retry boundary without mutating a cohort."""
-    from closer_campaign import Campaign
+    """Read an existing campaign without waiting for or creating its writer lock."""
+    from closer_campaign import Campaign, CampaignError
 
-    document = Campaign(campaign_path).read()
+    campaign = Campaign(campaign_path)
+    if (
+        not campaign.path.is_file()
+        or campaign.path.is_symlink()
+        or not campaign.lock_path.is_file()
+    ):
+        return {"stage": "held", "reason": "campaign is absent or unreadable"}
+    try:
+        descriptor = os.open(campaign.lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            document = campaign._read_unlocked()
+    except (CampaignError, OSError):
+        return {"stage": "held", "reason": "campaign is absent or unreadable"}
     if not isinstance(document, dict):
         return {"stage": "held", "reason": "campaign is absent or unreadable"}
     cfg = document.get("worker_config") or {}
@@ -177,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args.command == "launch" and args.confirm_run_id != args.run_id:
+        parser.error("launch requires --confirm-run-id matching --run-id")
     prepared = plan(
         args.manifest,
         args.campaign,
@@ -186,8 +203,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plan":
         print(json.dumps(prepared, sort_keys=True))
         return 0
-    if args.confirm_run_id != args.run_id:
-        parser.error("launch requires --confirm-run-id matching --run-id")
     if not prepared["launch_permitted_by_diagnostic"]:
         print(json.dumps(prepared, sort_keys=True))
         return 75
