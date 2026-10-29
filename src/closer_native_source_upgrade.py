@@ -264,7 +264,8 @@ def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, n
 
 
 def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
-         new_manifest: str | Path, new_state: str | Path, restore_receipt: str | Path) -> dict[str, Any]:
+         new_manifest: str | Path, new_state: str | Path, restore_receipt: str | Path,
+         new_worker_config: dict[str, Any], frontier: dict[str, Any]) -> dict[str, Any]:
     """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
     import closer_native_wrapper_install as install
 
@@ -294,6 +295,18 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     _need(not state.exists() and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
           "new state is not fresh current campaign")
     host._lane_absent()
+    # Freeze the only proposed inputs before CAS. These remain non-authoritative
+    # until the later current-source admission path observes demand again.
+    import closer_frontier_policy as policy
+    import closer_native_readmission as readmission
+    try:
+        fresh = policy.validate_frontier(frontier, targets=frontier.get("targets"))
+        old_frontier = policy.validate_frontier(reference["state"]["worker_config"]["finite_frontier"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("pre-CAS frontier invalid") from exc
+    cfg = json.loads(json.dumps(new_worker_config, sort_keys=True))
+    _need(cfg.get("runtime_manifest") == str(new_path), "pre-CAS config does not pin new manifest")
+    readmission._guard_fresh(new, cfg, state, fresh, old_frontier)
     receipt = _canonical(restore_receipt)
     wrapper = _wrapper_plan(old_path, old, new_path, new, receipt)
     _restored, predecessor = install._restored_predecessor(receipt)
@@ -304,6 +317,10 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
                       "state_sha256": reference["state_sha256"], "result": reference["result_path"], "result_sha256": reference["result_sha256"],
                       "custody": custody, "native_index": index, "diagnostic": diagnostic},
               "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
+              "held_recipe": {"worker_config": cfg,
+                              "worker_config_sha256": _sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()),
+                              "frontier": fresh,
+                              "frontier_sha256": _sha(json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode())},
               "wrapper": wrapper, "locks": rows,
               "seal": str(Path(new["mechanism_contract"]["observation_root"]) / "source-upgrade-current-disposition.json")}
     result["plan_sha256"] = _sha(json.dumps(result, sort_keys=True, separators=(",", ":")).encode())
@@ -377,8 +394,7 @@ def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
                 pass
 
 
-def prepare_held(seal_path: str | Path, new_worker_config: dict[str, Any], frontier: dict[str, Any], *,
-                 confirm_plan_sha256: str) -> dict[str, Any]:
+def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str, Any]:
     """After CAS, consume a sealed upgrade once into a fresh held campaign.
 
     This is deliberately a preparation record only.  It cannot issue typed
@@ -417,14 +433,21 @@ def prepare_held(seal_path: str | Path, new_worker_config: dict[str, Any], front
         ) == record["old"]["native_index"],
         "native index changed after source upgrade seal",
     )
-    cfg_path, _m, _raw, cfg = readmission._new_runtime(new_path, new_worker_config)
+    recipe = record.get("held_recipe")
+    if not isinstance(recipe, dict) or not isinstance(recipe.get("worker_config"), dict) or not isinstance(recipe.get("frontier"), dict):
+        raise SourceUpgradeHeld("sealed held recipe unavailable")
+    cfg_path, _m, _raw, cfg = readmission._new_runtime(new_path, recipe["worker_config"])
     _need(cfg_path == new_path, "new worker config runtime changed")
     try:
-        fresh = policy.validate_frontier(frontier, targets=frontier.get("targets"))
+        fresh = policy.validate_frontier(recipe["frontier"], targets=recipe["frontier"].get("targets"))
         old_doc = _object(old_state, "old campaign state")[2]
         old_frontier = policy.validate_frontier(old_doc["worker_config"]["finite_frontier"])
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceUpgradeHeld("fresh held frontier invalid") from exc
+    _need(_sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()) == recipe.get("worker_config_sha256"),
+          "sealed worker configuration changed")
+    _need(_sha(json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode()) == recipe.get("frontier_sha256"),
+          "sealed frontier changed")
     readmission._guard_fresh(manifest, cfg, destination, fresh, old_frontier)
     # Existing source initialization produces a held record; no demand is
     # admitted here. A one-use marker prevents a second preparation.
