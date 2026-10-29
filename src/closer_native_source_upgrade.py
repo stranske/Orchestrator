@@ -818,13 +818,29 @@ def apply(
         _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
         seal = Path(first["seal"])
         intent = seal.with_name("source-upgrade-intent.json")
-        _need(not intent.exists() and not seal.exists(), "source upgrade already consumed")
+        existing = seal.exists() or intent.exists()
+        if existing:
+            _need(seal.exists() and intent.exists(), "partial pre-CAS source upgrade records")
+            _seal_path, _seal_raw, prior_seal = _object(seal, "pre-CAS source upgrade seal")
+            _intent_path, _intent_raw, prior_intent = _object(
+                intent, "pre-CAS source upgrade intent"
+            )
+            _need(
+                prior_seal.get("stage") == "sealed_pre_cas"
+                and prior_intent.get("stage") == "intent"
+                and _plan_sha(prior_seal) == first["plan_sha256"]
+                and _plan_sha(prior_intent) == first["plan_sha256"]
+                and prior_seal.get("plan_sha256") == first["plan_sha256"]
+                and prior_intent.get("plan_sha256") == first["plan_sha256"],
+                "pre-CAS source upgrade records differ",
+            )
         # Both records are immutable, and the seal intentionally precedes CAS:
         # after the wrapper changes, old native.contract would be circular.
         sealed = {**first, "stage": "sealed_pre_cas", "at": time.time()}
         _need(_plan_sha(sealed) == first["plan_sha256"], "plan body differs before seal")
-        host._write_once(seal, sealed)
-        host._write_once(intent, {**first, "stage": "intent", "at": time.time()})
+        if not existing:
+            host._write_once(seal, sealed)
+            host._write_once(intent, {**first, "stage": "intent", "at": time.time()})
         wrapper = Path(first["wrapper"]["path"])
         new_path = Path(first["new"]["manifest"])
         _, new_raw, new = _manifest(new_path)
@@ -847,6 +863,7 @@ def apply(
         _need(_sha(data) == first["wrapper"]["after_sha256"], "wrapper CAS render changed")
         fd, tmp = tempfile.mkstemp(dir=wrapper.parent, prefix=".source-upgrade-wrapper-")
         replaced = False
+        phase = "wrapper_readback"
         try:
             with os.fdopen(fd, "wb") as stream:
                 fd = -1
@@ -868,15 +885,19 @@ def apply(
             # Current contract only: old contract is invalid by design now.
             import closer_native_observer as native
 
+            phase = "native_contract"
             native.contract(new)
+            phase = "wrapper_entry"
             native._check_wrapper_entry(new, new_path)
             # The only permitted post-CAS difference is the canonical wrapper.
             # Re-read every new module/source pin after replacement.
+            phase = "module_closure"
             _, verified_raw, verified = _manifest(new_path)
             _need(
                 _sha(verified_raw) == first["new"]["manifest_sha256"] and verified == new,
                 "new source closure changed after wrapper CAS",
             )
+            phase = "known_receipt_write"
             host._write_once(
                 seal.with_name("source-upgrade-known.json"),
                 {**first, "stage": "cas_known", "status": "installed", "at": time.time()},
@@ -885,7 +906,7 @@ def apply(
         except Exception as exc:
             if replaced:
                 raise SourceUpgradeHeld(
-                    "post-CAS outcome uncertain: " + type(exc).__name__
+                    "post-CAS outcome uncertain: " + phase + ":" + type(exc).__name__
                 ) from None
             raise
         finally:
