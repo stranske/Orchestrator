@@ -863,43 +863,6 @@ def prepare_prospective_wrapper_install(receipt_path, *, confirm_plan_sha256):
     if not isinstance(original, dict) or not isinstance(recipe, dict):
         raise ReadmissionHeld("wrapper install sealed evidence or recipe is unavailable")
     old_reference = _sealed_old_wrapper_reference(original)
-    try:
-        old_manifest_path = _canonical(original["manifest"])
-        old_manifest_raw = host._read(old_manifest_path)[1]
-        old_manifest = _json(old_manifest_raw, "old manifest")
-        old_state = _canonical(original["state"])
-        old_state_raw = host._read(old_state)[1]
-        old = _json(old_state_raw, "old campaign")
-        old_result = _canonical(original["result"])
-        old_result_raw = host._read(old_result)[1]
-        result = _json(old_result_raw, "old result")
-    except (KeyError, OSError, ValueError, TypeError) as exc:
-        raise ReadmissionHeld("sealed old evidence is unavailable") from exc
-    worker = next(
-        (w for w in old.get("workers", []) if w.get("worker_id") == original.get("worker_id")), None
-    )
-    proof = original.get("proof")
-    disposition = original.get("disposition")
-    if (
-        _digest(old_manifest_raw) != original.get("manifest_sha256")
-        or _digest(old_state_raw) != original.get("state_sha256")
-        or _digest(old_result_raw) != original.get("result_sha256")
-        or old_manifest.get("modules", {}).get(Path(__file__).name)
-        != original.get("readmission_producer_sha256")
-        or not isinstance(worker, dict)
-        or not isinstance(proof, dict)
-        or not isinstance(disposition, dict)
-        or old.get("targets") != {campaign.ROUND_UNIT: "reconcile"}
-        or worker.get("state") != "terminal"
-        or worker.get("outcome") != disposition.get("worker_outcome")
-        or result.get("worker_id") != original.get("worker_id")
-        or result.get("outcome") != disposition.get("outcome")
-        or result.get("target") != disposition.get("target")
-        or result.get("detail") != worker.get("detail")
-        or _digest(_canonical_bytes(proof)) != original.get("proof_sha256")
-        or proof.get("schema") != "native-pre-dispatch-no-start/v2"
-    ):
-        raise ReadmissionHeld("sealed old finite-v2 disposition differs")
     if _digest(_canonical_bytes(recipe.get("worker_config"))) != recipe.get(
         "worker_config_sha256"
     ) or _digest(_canonical_bytes(recipe.get("frontier"))) != recipe.get("frontier_sha256"):

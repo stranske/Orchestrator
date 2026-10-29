@@ -104,13 +104,13 @@ def _synthetic_old_runtime(tmp_path, monkeypatch):
         "row_sha256": {target: "a" * 64},
     }
     campaign = (
-        "import fcntl,pathlib\n"
+        "import fcntl,json,pathlib\n"
         "class Campaign:\n"
         " def __init__(self, path): self.path=pathlib.Path(path)\n"
         " def read(self):\n"
         "  with self.path.with_name(self.path.name+'.lock').open('a+b') as stream:\n"
         "   fcntl.flock(stream.fileno(),fcntl.LOCK_EX)\n"
-        "   return {'workers':[{'worker_id':'test-worker','target':'test/repo#1'}]}\n"
+        "   return json.loads(self.path.read_text())\n"
         "def validate_manifest(m): return []\n"
         "def verify_modules(m): return []\n"
         f"def _cohort_worker_evidence(*a): return {{'result':{{'simulation_only':True}}}}, {{'dispatch_state':{str(tmp_path / 'dispatch')!r}}}, {{'completed_round':{proof!r}}}, {{'completed':False}}\n"
@@ -155,7 +155,7 @@ def _synthetic_old_runtime(tmp_path, monkeypatch):
     manifest = root / "host-manifest.json"
     manifest.write_text(json.dumps(doc))
     state = tmp_path / "campaign.json"
-    state.write_text("{}")
+    state.write_text(json.dumps({"workers": [{"worker_id": "test-worker", "target": target}]}))
     return root, manifest, state, interpreter
 
 
