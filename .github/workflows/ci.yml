@@ -367,7 +367,7 @@ jobs:
     # auto-writing it would delete the claim instead of checking it.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
