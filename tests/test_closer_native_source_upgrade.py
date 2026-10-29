@@ -48,6 +48,13 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
 def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
     tmp_path, monkeypatch
 ):
+    # Isolate the module fence on every supported CI Python. The production
+    # predecessor's physical interpreter is exercised separately.
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OLD_INTERPRETER_SHA256",
+        hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest(),
+    )
     module = tmp_path / "closer_correction_bridge.py"
     module.write_text("# exact old source\n")
     manifest = tmp_path / "host-manifest.json"
