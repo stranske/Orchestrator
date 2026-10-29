@@ -11,14 +11,29 @@ def _record():
     return next(iter(q.ROLE_QUALIFICATIONS.values()))
 
 
+def _historical_registry():
+    record = _record()
+    return {record["qualification_id"]: record}
+
+
 def test_reviewed_record_has_original_finite_observation():
     r = _record()
     assert r["qualified_at"] == 1793161032.187778
     assert r["expires_at"] == 1793247432.187778
     assert r["expires_at"] - r["qualified_at"] == 86400
     p = execution_profiles.get_profile(r["profile_identity"]["profile_id"])
-    assert q.is_qualified(p, q.STRONG_CRITERION_ADJUDICATION, now=r["qualified_at"] + 1)
-    assert not q.is_qualified(p, q.STRONG_CRITERION_ADJUDICATION, now=r["expires_at"])
+    assert q.is_qualified(
+        p,
+        q.STRONG_CRITERION_ADJUDICATION,
+        now=r["qualified_at"] + 1,
+        records=_historical_registry(),
+    )
+    assert not q.is_qualified(
+        p,
+        q.STRONG_CRITERION_ADJUDICATION,
+        now=r["expires_at"],
+        records=_historical_registry(),
+    )
 
 
 def test_record_never_qualifies_other_roles():
@@ -32,7 +47,12 @@ def test_record_identity_cannot_change_effort():
     r = _record()
     p = deepcopy(execution_profiles.get_profile(r["profile_identity"]["profile_id"]))
     p["reasoning_effort"] = "low"
-    assert not q.is_qualified(p, q.STRONG_CRITERION_ADJUDICATION, now=r["qualified_at"] + 1)
+    assert not q.is_qualified(
+        p,
+        q.STRONG_CRITERION_ADJUDICATION,
+        now=r["qualified_at"] + 1,
+        records=_historical_registry(),
+    )
 
 
 def test_content_addressed_evidence_has_no_personal_paths():

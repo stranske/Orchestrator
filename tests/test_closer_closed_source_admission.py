@@ -200,6 +200,16 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
 
     monkeypatch.setattr(roles, "qualification_problems", problems_at_observation)
     monkeypatch.setattr(roles, "execution_source_support", support_at_observation)
+    original_record = roles.qualified_record
+
+    def record_at_observation(profile, role, **kwargs):
+        kwargs.pop("now", None)
+        return original_record(profile, role, now=INSIDE, **kwargs)
+
+    monkeypatch.setattr(roles, "qualified_record", record_at_observation)
+    monkeypatch.setattr(
+        roles, "ROLE_QUALIFICATIONS", {ORIGINAL["qualification_id"]: copy.deepcopy(ORIGINAL)}
+    )
     assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     original_factory = invitation.InertCaller
     captured, callers = [], []

@@ -220,10 +220,49 @@ def finite_no_start_v2_reference():
     return value
 
 
+STRONG_ROLE_ENROLLMENT_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_strong_role_enrollment_v1.json"
+)
+STRONG_ROLE_ENROLLMENT_SHA256 = "c5fbdf7813c488c94c4333397ebbca0c4b9487d4cf8c0ee29371338cf87f63bf"
+
+
+def strong_role_enrollment_reference():
+    raw = STRONG_ROLE_ENROLLMENT_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == STRONG_ROLE_ENROLLMENT_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "closer-strong-role-enrollment-overlay/v1"
+    return value["role_module"]
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    enrollment = strong_role_enrollment_reference()
+    if hashlib.sha256(raw).hexdigest() == enrollment["after_file_sha256"]:
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == enrollment["after_module_ast_sha256"]
+        registry = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "ROLE_QUALIFICATIONS"
+        )
+        assert fingerprint(registry) == enrollment["after_registry_ast_sha256"]
+        pairs = list(zip(registry.value.keys, registry.value.values))
+        key, record = next(
+            pair
+            for pair in pairs
+            if isinstance(pair[0], ast.Constant)
+            and pair[0].value == enrollment["new_qualification_id"]
+        )
+        assert fingerprint(record) == enrollment["new_record_ast_sha256"]
+        registry.value.keys.remove(key)
+        registry.value.values.remove(record)
+        assert fingerprint(registry) == enrollment["before_registry_ast_sha256"]
+        assert fingerprint(tree) == enrollment["before_module_ast_without_new_record_sha256"]
+        return
     identity = repository_identity_reference()["role_source"]
     if hashlib.sha256(raw).hexdigest() == identity["after_file_sha256"]:
         raw = raw.replace(

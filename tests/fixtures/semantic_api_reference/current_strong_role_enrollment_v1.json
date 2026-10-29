@@ -1,0 +1,13 @@
+{
+  "schema": "closer-strong-role-enrollment-overlay/v1",
+  "scope": "One reviewed strong-role record, its expired-history selector, and no other closer_role_qualification definitions.",
+  "role_module": {
+    "after_file_sha256": "6a111d386ecaa6281d823876f545ca601b8b95a803dbea265c25beb055bb8a3a",
+    "after_module_ast_sha256": "301958e5606c89237f97dd6507c0f24c68b62b4084fbb83801161fd8d6df46bf",
+    "before_module_ast_without_new_record_sha256": "ec87ff3ed97f88e5b9f5988fc588593db4b8f114aa3246c4a04276c7c29a1307",
+    "after_registry_ast_sha256": "d21f26ecc404547bf6edbf0f4ede953b6bc44d3b7e3c1a72a201db32ff6b2e6e",
+    "before_registry_ast_sha256": "1f25c2c48cbbf35017fc3b247fb48ff5559d674387917347331600c7095b0ae8",
+    "new_qualification_id": "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2",
+    "new_record_ast_sha256": "ea16720dddbb33aace910f0205c3253113fdc012486959618afff234a3d8efd6"
+  }
+}
