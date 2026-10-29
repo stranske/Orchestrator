@@ -11,6 +11,7 @@ import pytest
 
 import closer_correction_controller as controller
 import closer_native_source_upgrade as upgrade
+import closer_release
 
 
 def no_act():
@@ -33,6 +34,7 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
         (("correction", "act_authorized"), True),
         (("correction", "reason"), "different scope"),
         (("queue", "events"), [{"operation_id": "native"}]),
+        (("queue", "accounting"), ["not-an-accounting-record"]),
     ):
         changed = json.loads(json.dumps(fixture))
         changed[path[0]][path[1]] = value
@@ -66,6 +68,43 @@ def test_old_diagnostic_refuses_a_non_source_module_closure(tmp_path, monkeypatc
             manifest, state, "worker", interpreter=Path(sys.executable).resolve()
         )
     assert returncodes == [31]
+
+
+def test_installed_release_refuses_a_modified_inspector_before_execution(tmp_path, monkeypatch):
+    """The global readback helper itself is a pinned pre-execution witness."""
+    home = tmp_path / "home"
+    mirror = home / ".codex/orchestrator-mirror"
+    inspector = mirror / "scripts/install_verified_snapshot.py"
+    inspector.parent.mkdir(parents=True)
+    inspector.write_text("# substituted inspector\n")
+    journal = tmp_path / "release.json"
+    journal.write_text("{}")
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+
+    class Record:
+        def __init__(self, _path):
+            pass
+
+        def read(self):
+            return {
+                "stage": "installed",
+                "candidate_sha": "a" * 40,
+                "installed_generation": "generation",
+                "verification": {
+                    "verified": True,
+                    "snapshot_digest": "b" * 64,
+                    "snapshot_path": str(snapshot),
+                },
+            }
+
+    calls = []
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(closer_release, "ReleaseRecord", Record)
+    monkeypatch.setattr(upgrade.subprocess, "run", lambda *a, **k: calls.append(a))
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="inspector differs"):
+        upgrade._installed_release(journal, "a" * 40)
+    assert calls == []
 
 
 def test_identity_rejects_principal_epoch_and_anchor_changes():

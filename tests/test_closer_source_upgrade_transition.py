@@ -22,6 +22,7 @@ from test_closer_native_production_composition import _core
 import closer_campaign as campaign
 import closer_correction_controller as controller
 import closer_frontier_policy as policy
+import closer_mechanisms as mechanisms
 import closer_native_observer as native
 import closer_native_readmission as readmission
 import closer_native_source_upgrade as upgrade
@@ -34,7 +35,10 @@ import closer_pipeline as pipeline
     [
         "none",
         "old_result",
+        "old_manifest",
         "seal_recipe",
+        "unsigned_seal",
+        "forged_known",
         "old_lock",
         "custody_lock",
         "pre_cas_retry",
@@ -64,6 +68,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     new_state.parent.mkdir(parents=True)
     new_observation = tmp_path / "new/observations"
     new_observation.mkdir(mode=0o700)
+    mechanisms._key(new_observation, create=True)
     old["mechanism_contract"]["controller_demand"] = {
         "schema": "closer-controller-demand/v1",
         "campaign_state": str(old_state),
@@ -446,10 +451,10 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         monkeypatch.setattr(upgrade.host, "_write_once", original_write)
         if interference == "tampered_recovery":
             changed = json.loads(seal.read_bytes())
-            changed["held_recipe"]["worker_config"]["apply"] = False
+            changed["record"]["held_recipe"]["worker_config"]["apply"] = False
             seal.chmod(0o600)
             seal.write_text(json.dumps(changed))
-            with pytest.raises(upgrade.SourceUpgradeHeld, match="records differ"):
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="signature differs"):
                 apply_bound()
             assert not new_state.exists()
             assert (
@@ -471,14 +476,39 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
             upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
         assert not new_state.exists()
         return
+    if interference == "old_manifest":
+        old_path.write_bytes(old_path.read_bytes() + b" ")
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="old manifest changed"):
+            upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
+        assert not new_state.exists()
+        return
     if interference == "seal_recipe":
         seal = Path(plan["seal"])
         changed = json.loads(seal.read_bytes())
-        changed["held_recipe"]["worker_config"]["apply"] = False
+        changed["record"]["held_recipe"]["worker_config"]["apply"] = False
         seal.chmod(0o600)
         seal.write_text(json.dumps(changed))
-        with pytest.raises(upgrade.SourceUpgradeHeld, match="sealed plan body differs"):
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="signature differs"):
             upgrade.prepare_held(seal, confirm_plan_sha256=plan["plan_sha256"])
+        assert not new_state.exists()
+        return
+    if interference == "unsigned_seal":
+        seal = Path(plan["seal"])
+        envelope = json.loads(seal.read_bytes())
+        seal.chmod(0o600)
+        seal.write_text(json.dumps(envelope["record"], sort_keys=True))
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="upgrade seal invalid"):
+            upgrade.prepare_held(seal, confirm_plan_sha256=plan["plan_sha256"])
+        assert not new_state.exists()
+        return
+    if interference == "forged_known":
+        known = Path(plan["seal"]).with_name("source-upgrade-known.json")
+        changed = json.loads(known.read_bytes())
+        changed["record"]["status"] = "forged"
+        known.chmod(0o600)
+        known.write_text(json.dumps(changed, sort_keys=True))
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="known receipt signature differs"):
+            upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
         assert not new_state.exists()
         return
     if interference in {"old_lock", "custody_lock"}:

@@ -9,7 +9,10 @@ new business demand.
 
 Before changing the wrapper it validates immutable old state/result/cohort/round
 references, runs a bounded `-I -B` hash diagnostic under the old physical
-interpreter, seals the current disposition, and writes an immutable intent. The
+interpreter, seals the current disposition, and writes an immutable intent. Both
+the seal and the post-CAS known receipt are signed with the already-provisioned
+current observation-root mechanism key; unsigned or substituted records are
+held. The seal path is fixed beneath that current observation root. The
 CAS is permitted only from the old manifest's canonical wrapper render to a
 different current manifest's pinned render. After CAS, validation is against
 the new contract only; invoking the old contract would be circular because its
