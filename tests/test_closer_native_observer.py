@@ -101,6 +101,50 @@ def test_native_policy_is_distinct_and_pause_wins(host):
     assert native.policy_problem(manifest["policy"])
 
 
+def test_controlled_campaign_without_typed_demand_refuses_before_global_assignment(
+    host, monkeypatch
+):
+    manifest, manifest_path, _wrapper = host
+    root = Path(manifest["mechanism_contract"]["observation_root"])
+    nonce = "a" * 32
+    state = Path(manifest["mechanism_contract"]["campaign_root"]) / "controlled.campaign.json"
+    manifest["mechanism_contract"]["controller_demand"] = {
+        "schema": "closer-controller-demand/v1",
+        "campaign_state": str(state),
+        "campaign_id": "controlled",
+        "owner": "source-owner",
+    }
+    document = {
+        "campaign_id": "controlled",
+        "owner": "source-owner",
+        "generation": 1,
+        "phase": "work",
+        "hold": None,
+        "targets": {"*round*": "pending"},
+        "workers": [],
+        "worker_config": {
+            "granularity": "round",
+            "coordinator_mode": "resource_scoped",
+            "apply": True,
+        },
+    }
+    monkeypatch.setattr(native, "capacity_contract", lambda *_a, **_k: {"scoped": True})
+    monkeypatch.setattr(native, "entry_active", lambda *_a: True)
+    monkeypatch.setattr(
+        native,
+        "private_test_assignment_source",
+        lambda *_a: pytest.fail("must not read global assignment"),
+    )
+    native._CURRENT_ENTRY[str(root)] = nonce
+    native._CURRENT_ADMISSION[str(root)] = {"nonce": nonce, "context": None}
+    try:
+        with pytest.raises(mechanisms.MechanismError, match="requires admitted source demand"):
+            native.publish_admission(manifest, manifest_path, state, document)
+    finally:
+        native._CURRENT_ENTRY.pop(str(root), None)
+        native._CURRENT_ADMISSION.pop(str(root), None)
+
+
 @pytest.mark.parametrize(
     "change", ["wrapper", "interpreter", "actor", "policy", "closure", "optin"]
 )
