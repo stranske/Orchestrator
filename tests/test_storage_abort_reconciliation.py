@@ -6,6 +6,7 @@ import hashlib
 import json
 import multiprocessing
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -46,6 +47,25 @@ def _rewrite_stage_binding(case: dict, mutate) -> None:
     _write(case["request"], request)
 
 
+def _synchronize_sealed_parent(case: dict, parent: dict) -> None:
+    """Update all authenticated fixture references except the check under test."""
+    _rewrite_stage_binding(case, lambda binding: binding.update(release_parent=parent))
+    proof = json.loads(case["proof"].read_text())
+    proof["processes"][0] = {key: parent[key] for key in ("pid", "ppid", "pgid", "command")}
+    proof["processes"][1]["ppid"] = parent["pid"]
+    proof["processes"][1]["pgid"] = parent["pgid"]
+    _write(case["proof"], proof)
+    request = _rebind_proof(case)
+    request["release_owner_process_sha256"] = parent["command_sha256"]
+    _write(case["request"], request)
+
+
+def _parent(case: dict) -> dict:
+    return json.loads(storage._stage_source_binding_path(case["state"], case["job"]).read_text())[
+        "release_parent"
+    ]
+
+
 def _hold_owner_lock(path: str, ready, release) -> None:
     import fcntl
 
@@ -65,6 +85,12 @@ def aborted(tmp_path, monkeypatch):
     root.mkdir(mode=0o700)
     token = "owner-token"
     job = "c1b375d724024492af362689382f2ca0"
+    candidate = "c6133aa7bd9f06fe299ef7cadc66b35440eaae71"
+    failed = tmp_path / "release-final.json"
+    release_owner_command = (
+        "/opt/anaconda3/bin/python3 -B scripts/closer_verified_release.py install "
+        + f"--expected-source-sha {candidate} --journal {failed}"
+    )
     source_root = tmp_path / "source"
     source_root.mkdir()
     verifier = source_root / "verify_before_sync.sh"
@@ -92,7 +118,21 @@ def aborted(tmp_path, monkeypatch):
     )
     (state / f"{job}.owner").touch(mode=0o600)
     row = json.loads((state / "reservations.json").read_text())["jobs"][job]
-    binding = storage._stage_source_binding(job=job, row=row, child_command=child_command)
+    binding = storage._stage_source_binding(
+        job=job,
+        row=row,
+        child_command=child_command,
+        release_parent={
+            "pid": 7000,
+            "ppid": 1,
+            "pgid": 7000,
+            "command": release_owner_command,
+            "argv": shlex.split(release_owner_command),
+            "command_sha256": hashlib.sha256(release_owner_command.encode()).hexdigest(),
+            "candidate_sha": candidate,
+            "journal": str(failed),
+        },
+    )
     storage._create_private_json_once(storage._stage_source_binding_path(state, job), binding)
     manager.bind(
         job,
@@ -103,8 +143,6 @@ def aborted(tmp_path, monkeypatch):
     manager.staged(job, token)
     row = json.loads((state / "reservations.json").read_text())["jobs"][job]
     proof = tmp_path / "abort.json"
-    candidate = "c6133aa7bd9f06fe299ef7cadc66b35440eaae71"
-    release_owner_command = f"release install --expected-source-sha {candidate}"
     owner_command = (
         f"/opt/anaconda3/bin/python3 {tmp_path}/storage_lifecycle.py run " f"--source {source_root}"
     )
@@ -136,7 +174,6 @@ def aborted(tmp_path, monkeypatch):
             ],
         },
     )
-    failed = tmp_path / "release-final.json"
     _write(
         failed,
         {
@@ -240,6 +277,112 @@ def test_plan_refuses_stage_binding_that_no_longer_matches_row(aborted):
     )
     with pytest.raises(storage.StorageBlocked, match="stage/source binding differs"):
         storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_legacy_stage_binding_without_parent_release_provenance(aborted):
+    _rewrite_stage_binding(aborted, lambda binding: binding.pop("release_parent"))
+    with pytest.raises(storage.StorageBlocked, match="stage/source binding differs"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_abort_parent_pid_reuse(aborted):
+    proof = json.loads(aborted["proof"].read_text())
+    proof["processes"][0]["pid"] += 1
+    proof["processes"][0]["pgid"] += 1
+    proof["processes"][1]["ppid"] += 1
+    proof["processes"][1]["pgid"] += 1
+    _write(aborted["proof"], proof)
+    _rebind_proof(aborted)
+    with pytest.raises(storage.StorageBlocked, match="recorded verifier process tree"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_abort_parent_command_different_from_sealed_stage_parent(aborted):
+    proof = json.loads(aborted["proof"].read_text())
+    proof["processes"][0]["command"] += " --unexpected"
+    _write(aborted["proof"], proof)
+    request = _rebind_proof(aborted)
+    request["release_owner_process_sha256"] = hashlib.sha256(
+        proof["processes"][0]["command"].encode()
+    ).hexdigest()
+    _write(aborted["request"], request)
+    with pytest.raises(storage.StorageBlocked, match="recorded verifier process tree"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_foreign_failed_journal_even_with_matching_parent_tree(aborted):
+    parent = _parent(aborted)
+    foreign = aborted["state"] / "foreign-release.json"
+    parent["argv"][parent["argv"].index("--journal") + 1] = str(foreign)
+    parent["journal"] = str(foreign)
+    parent["command"] = " ".join(shlex.quote(value) for value in parent["argv"])
+    parent["command_sha256"] = hashlib.sha256(parent["command"].encode()).hexdigest()
+    _synchronize_sealed_parent(aborted, parent)
+    with pytest.raises(storage.StorageBlocked, match="sealed release provenance"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_stage_binding_refuses_candidate_outside_exact_typed_flag(aborted):
+    row = json.loads((aborted["state"] / "reservations.json").read_text())["jobs"][aborted["job"]]
+    parent = _parent(aborted)
+    index = parent["argv"].index("--expected-source-sha") + 1
+    parent["argv"][index] = "0" * 40
+    parent["argv"].append(parent["candidate_sha"])
+    parent["command"] = " ".join(shlex.quote(value) for value in parent["argv"])
+    parent["command_sha256"] = hashlib.sha256(parent["command"].encode()).hexdigest()
+    with pytest.raises(storage.StorageBlocked, match="binding inputs differ"):
+        storage._stage_source_binding(
+            job=aborted["job"],
+            row=row,
+            child_command=json.loads(
+                storage._stage_source_binding_path(aborted["state"], aborted["job"]).read_text()
+            )["child_command"],
+            release_parent=parent,
+        )
+
+
+def test_release_parent_snapshot_seals_exact_release_argv(monkeypatch, tmp_path):
+    candidate = "a" * 40
+    journal = tmp_path / "release.json"
+    command = (
+        "/opt/anaconda3/bin/python3 -B scripts/closer_verified_release.py install "
+        f"--expected-source-sha {candidate} --journal {journal}"
+    )
+
+    class Process:
+        args = ["ps"]
+        returncode = 0
+
+        def communicate(self, timeout):
+            assert timeout == 10
+            return f"701 1 701 {command}\n", ""
+
+    monkeypatch.setattr(storage.os, "getppid", lambda: 701)
+    monkeypatch.setattr(storage, "_SYSTEM_POPEN", lambda *_args, **_kwargs: Process())
+    assert storage._release_parent_snapshot() == {
+        "pid": 701,
+        "ppid": 1,
+        "pgid": 701,
+        "command": command,
+        "argv": shlex.split(command),
+        "command_sha256": hashlib.sha256(command.encode()).hexdigest(),
+        "candidate_sha": candidate,
+        "journal": str(journal),
+    }
+
+
+def test_release_parent_snapshot_refuses_mismatched_ps_pid(monkeypatch):
+    class Process:
+        args = ["ps"]
+        returncode = 0
+
+        def communicate(self, timeout):
+            return "702 1 702 release\n", ""
+
+    monkeypatch.setattr(storage.os, "getppid", lambda: 701)
+    monkeypatch.setattr(storage, "_SYSTEM_POPEN", lambda *_args, **_kwargs: Process())
+    with pytest.raises(storage.StorageBlocked, match="snapshot identity changed"):
+        storage._release_parent_snapshot()
 
 
 def test_plan_refuses_live_pid(aborted, monkeypatch):
