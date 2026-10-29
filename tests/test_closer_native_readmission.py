@@ -204,6 +204,97 @@ def test_admit_initialized_refusals_preserve_real_held_campaign_bytes(
     assert world.state.read_bytes() == before
 
 
+def _admit_cli_files(world, tmp_path):
+    assignment = tmp_path / "owned-assignment.json"
+    request = tmp_path / "owned-request.json"
+    assignment.write_bytes(world.assignment)
+    request.write_text(json.dumps(world.request, sort_keys=True))
+    return assignment, request
+
+
+def test_admit_cli_passes_owned_input_bytes_and_reports_success_without_launch(
+    monkeypatch, tmp_path, capsys
+):
+    world = _initialized_world(monkeypatch, tmp_path)
+    assignment, request = _admit_cli_files(world, tmp_path)
+    state_before = world.state.read_bytes()
+    assignment_before = assignment.read_bytes()
+    request_before = request.read_bytes()
+    seen = {}
+
+    def admitted(manifest, state, assignment_bytes, request_value):
+        seen.update(
+            manifest=manifest,
+            state=state,
+            assignment_bytes=assignment_bytes,
+            request=request_value,
+        )
+        return {"authority": False, "status": "source_demand_admitted", "revision": 2}
+
+    monkeypatch.setattr(readmission, "admit_initialized", admitted)
+    exit_code = readmission.main(
+        [
+            "admit",
+            "--manifest",
+            str(world.manifest_path),
+            "--state",
+            str(world.state),
+            "--assignment",
+            str(assignment),
+            "--request",
+            str(request),
+        ]
+    )
+
+    assert exit_code == 0
+    assert seen == {
+        "manifest": world.manifest_path,
+        "state": world.state,
+        "assignment_bytes": assignment_before,
+        "request": json.loads(request_before),
+    }
+    assert json.loads(capsys.readouterr().out) == {
+        "authority": False,
+        "revision": 2,
+        "status": "source_demand_admitted",
+    }
+    assert world.state.read_bytes() == state_before
+    assert assignment.read_bytes() == assignment_before
+    assert request.read_bytes() == request_before
+
+
+def test_admit_cli_reports_held_without_changing_owned_inputs(monkeypatch, tmp_path, capsys):
+    world = _initialized_world(monkeypatch, tmp_path)
+    assignment, request = _admit_cli_files(world, tmp_path)
+    before = (world.state.read_bytes(), assignment.read_bytes(), request.read_bytes())
+
+    def held(*_args):
+        raise readmission.ReadmissionHeld("source gate held")
+
+    monkeypatch.setattr(readmission, "admit_initialized", held)
+    exit_code = readmission.main(
+        [
+            "admit",
+            "--manifest",
+            str(world.manifest_path),
+            "--state",
+            str(world.state),
+            "--assignment",
+            str(assignment),
+            "--request",
+            str(request),
+        ]
+    )
+
+    assert exit_code == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "authority": False,
+        "reason": "source gate held",
+        "status": "held",
+    }
+    assert (world.state.read_bytes(), assignment.read_bytes(), request.read_bytes()) == before
+
+
 def test_guard_fresh_keeps_generic_bindings_exact_but_allows_controlled_action_rebind(
     monkeypatch, tmp_path
 ):

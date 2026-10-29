@@ -201,6 +201,56 @@ def test_ordinary_begin_cannot_clear_source_initialization_hold(tmp_path):
     assert campaign.read()["hold"] == source_initialization()["hold"]
 
 
+def test_malformed_source_initialization_never_creates_or_overwrites_campaign(tmp_path):
+    absent = cc.Campaign(tmp_path / "absent.campaign.json")
+    malformed = {"hold": source_initialization()["hold"]}
+
+    with pytest.raises(ValueError, match="source initialization"):
+        begin_source_initialized(absent, _source_initialization=malformed)
+
+    assert not absent.path.exists()
+    existing = cc.Campaign(tmp_path / "existing.campaign.json")
+    begin_source_initialized(existing)
+    before = existing.path.read_bytes()
+    with pytest.raises(ValueError, match="source initialization"):
+        begin_source_initialized(existing, _source_initialization=malformed)
+
+    assert existing.path.read_bytes() == before
+
+
+def test_source_initialization_rejects_first_write_mixed_with_typed_demand(tmp_path):
+    campaign = cc.Campaign(tmp_path / "source-initialized.campaign.json")
+
+    with pytest.raises(cc.CampaignError, match="must first publish a held campaign"):
+        begin_source_initialized(campaign, **source_initial_demand())
+
+    assert not campaign.path.exists()
+
+
+def test_ordinary_resume_rejects_source_initialization_without_writing(tmp_path):
+    campaign = cc.Campaign(tmp_path / "ordinary.campaign.json")
+    campaign.begin(
+        "ordinary",
+        [SOURCE_INIT_TARGET],
+        owner="source-owner",
+        release_pin="a" * 64,
+        worker_config={"granularity": "round"},
+    )
+    before = campaign.path.read_bytes()
+
+    with pytest.raises(cc.CampaignError, match="source initialization is creation-only"):
+        campaign.begin(
+            "ordinary",
+            [SOURCE_INIT_TARGET],
+            owner="source-owner",
+            release_pin="a" * 64,
+            worker_config={"granularity": "round"},
+            _source_initialization=source_initialization(),
+        )
+
+    assert campaign.path.read_bytes() == before
+
+
 def launch_fn(pids):
     def launcher(command, log):
         pids.append(len(pids) + 1000)
