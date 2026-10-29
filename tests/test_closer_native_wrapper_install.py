@@ -1,5 +1,6 @@
 """Contract tests for the source-owned wrapper installer."""
 
+import base64
 import hashlib
 import json
 import os
@@ -7,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from test_closer_native_capacity import capacity_host as capacity_host
 from test_closer_native_observer import host as host
 
 import closer_campaign as campaign
@@ -264,3 +266,306 @@ def test_postreplace_failure_retains_intent_and_forbids_blind_retry(install_worl
     assert (root / "wrapper-install-intent.json").exists()
     with pytest.raises(install.InstallHeld):
         install.apply(*args, expected_plan_sha256=proposal["plan_sha256"])
+
+
+def _prospective_v2_world(capacity_host, monkeypatch, tmp_path):
+    """Build a real finite-v2 A/B/C no-start result; no provider is invoked."""
+    import copy
+    import sys
+
+    import closer_frontier_policy as policy
+    import closer_mechanisms as mechanisms
+    import closer_runtime_binding as binding
+    from test_closer_native_frontier import finite_host
+
+    manifest, old_manifest, old_campaign, old_doc, _source, clock, _frontier = finite_host(
+        capacity_host
+    )
+    old_state = old_campaign.path
+    old_state_target = Path(manifest["mechanism_contract"]["campaign_root"]) / "old.campaign.json"
+    # The finite fixture supplies a real v2 contract; the wrapper installer also
+    # needs a real source-installation state binding for its render gate.
+    manifest["policy"]["correction_controller_installation"] = {
+        "config": {"state_path": str(old_state_target)}
+    }
+    archived = old_manifest.parent / "archived-original-wrapper.sh"
+    current = Path(manifest["mechanism_contract"]["wrapper"]["path"])
+    archived_bytes = current.read_bytes().replace(
+        native.MARKER.encode(),
+        b'if [[ "$LANE" == "closer" ]]; then\n  echo "original window expired" >&2\n  exit 78\nfi\n'
+        + native.MARKER.encode(),
+        1,
+    )
+    archived.write_bytes(archived_bytes)
+    monkeypatch.setattr(install, "RESTORED_SHA", hashlib.sha256(archived_bytes).hexdigest())
+    old_render = install._render(install._guard_source(archived_bytes), manifest, old_manifest)
+    current.write_bytes(old_render)
+    current.chmod(0o755)
+    manifest["mechanism_contract"]["wrapper"]["sha256"] = hashlib.sha256(old_render).hexdigest()
+    campaign.write_manifest(old_manifest, manifest)
+    native._write(
+        Path(manifest["mechanism_contract"]["observation_root"]) / "native-active.json",
+        {
+            "nonce": native._CURRENT_ADMISSION[str(native.contract(manifest)[3])]["nonce"],
+            "status": "submitted",
+            "binding": native.binding(manifest),
+        },
+    )
+
+    context = native.publish_admission(manifest, old_manifest, old_state, old_doc)
+    worker_id = "a1b2c3d4e5f6"
+    result = campaign.result_path(old_state, worker_id)
+    fields = {
+        "state": str(old_state),
+        "target": campaign.ROUND_UNIT,
+        "owner": old_doc["owner"],
+        "generation": "1",
+        "result": str(result),
+        "runtime-manifest": str(old_manifest),
+        "mechanism": mechanisms.NATIVE,
+    }
+    argv = [
+        manifest["mechanism_contract"]["interpreter"]["path"],
+        manifest["module_path"],
+        "worker",
+    ]
+    for key, value in fields.items():
+        argv.extend(["--" + key, value])
+    native.authorize_worker(manifest, argv)
+    assert (
+        native.accept_worker(
+            manifest,
+            state=str(old_state),
+            target=campaign.ROUND_UNIT,
+            owner=old_doc["owner"],
+            generation=1,
+            result=str(result),
+            manifest_path=str(old_manifest),
+            campaign_id=old_doc["campaign_id"],
+        )
+        == context
+    )
+
+    def launched(doc):
+        doc["worker_config"] = copy.deepcopy(old_doc["worker_config"])
+        doc["workers"].append(
+            {
+                "worker_id": worker_id,
+                "target": campaign.ROUND_UNIT,
+                "pid": None,
+                "claim_target": "offline",
+                "state": "launched",
+            }
+        )
+
+    old_campaign.update(launched)
+    cfg = native.admission_config(manifest, old_campaign.read()["worker_config"], context)
+    cfg["native_worker"] = fields
+    token = "fixture token HANDOFF_EXACT_TOKEN_V1:77\n"
+    token_sha = hashlib.sha256(token.encode()).hexdigest()
+    hooks = object.__new__(binding.PinnedNativeHooks)
+    hooks.bounded = True
+    hooks.interpreter_anchor = Path(sys.executable)
+    hooks.dependencies = {"interpreter": (hooks.interpreter_anchor, "fixture")}
+    hooks.env = {}
+    hooks.prerun = lambda _deadline: (0, token)
+    hooks.owns = lambda candidate: candidate == token
+    hooks._dependencies_match = lambda: True
+    hooks.postrun = lambda _token, _deadline: 65
+    hooks.postrun_result = {
+        "code": 65,
+        "dependencies_valid": True,
+        "refusal": "terminal_named_receipt_unavailable",
+        "cleanup": {
+            "schema": "closer-native-lease-cleanup/v1",
+            "lane": "closer",
+            "lane_dir": str(Path(os.environ["HANDOFF_DIR"]) / ".lane-closer.lock"),
+            "expected_token_sha256": token_sha,
+            "meta_sha256": token_sha,
+            "released_lease_inode": 77,
+            "released": True,
+            "exact_token_matched": True,
+            "released_at": clock[0],
+        },
+    }
+    original_validate = native.validate_admission
+    monkeypatch.setattr(
+        native,
+        "validate_admission",
+        lambda *a, **kw: (
+            (_ for _ in ()).throw(mechanisms.MechanismError("fixture poll changed"))
+            if kw.get("for_effects")
+            else original_validate(*a, **kw)
+        ),
+    )
+    outcome, detail = binding.run_native_round(
+        [
+            str(hooks.interpreter_anchor),
+            "fixture.py",
+            "--assignment",
+            cfg["assignment"],
+            "--finite-frontier-json",
+            json.dumps(cfg["finite_frontier"]),
+            "--request-timeout-seconds",
+            "30",
+        ],
+        cfg,
+        runner=lambda *_a, **_kw: pytest.fail("B must not run"),
+        hooks=hooks,
+        now=lambda: clock[0],
+    )
+    monkeypatch.setattr(native, "validate_admission", original_validate)
+    assert outcome == "unavailable"
+    campaign.write_result(
+        result,
+        worker_id,
+        campaign.ROUND_UNIT,
+        outcome,
+        detail,
+        mechanism=mechanisms.NATIVE,
+        native_admission=context,
+    )
+    campaign.reconcile(old_campaign, pid_alive=lambda _pid: False)
+    root = Path(manifest["mechanism_contract"]["observation_root"])
+    native._write(
+        root / "native-active.json",
+        {"nonce": context["nonce"], "status": "terminal", "binding": native.binding(manifest)},
+    )
+    for name in ("native-entry.lock", "native-supervisor.lock"):
+        (root / name).touch()
+    Path(str(old_state) + ".lock").touch()
+    return manifest, old_manifest, old_state, worker_id, archived_bytes
+
+
+def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
+    manifest, old_manifest, old_state, worker_id, archived = _prospective_v2_world(
+        capacity_host, monkeypatch, tmp_path
+    )
+    old_root = Path(manifest["mechanism_contract"]["observation_root"])
+    new_root = tmp_path / "new-observation"
+    new_root.mkdir(mode=0o700)
+    for name in ("native-entry.lock", "native-supervisor.lock"):
+        (new_root / name).touch()
+    new_campaigns = tmp_path / "new-campaigns"
+    new_campaigns.mkdir()
+    new_state = new_campaigns / "fresh.campaign.json"
+    new_manifest = copy_manifest = json.loads(old_manifest.read_text())
+    copy_manifest["mechanism_contract"]["observation_root"] = str(new_root)
+    copy_manifest["mechanism_contract"]["campaign_root"] = str(new_campaigns)
+    copy_manifest["policy"]["correction_controller_installation"]["config"]["state_path"] = str(
+        new_state
+    )
+    new_manifest_path = tmp_path / "new-host-manifest.json"
+    command = copy_manifest["command"]
+    command[command.index("--manifest") + 1] = str(new_manifest_path)
+    copy_manifest["command_digest"] = campaign.sha256_json(command)
+    new_manifest_path.write_text(json.dumps(copy_manifest, sort_keys=True))
+    preview = install._render(install._guard_source(archived), copy_manifest, new_manifest_path)
+    copy_manifest["mechanism_contract"]["wrapper"]["sha256"] = hashlib.sha256(preview).hexdigest()
+    campaign.write_manifest(new_manifest_path, copy_manifest)
+    home = Path.home()
+    coord = home / ".codex/handoff/.lane-closer.lock.coord.lock"
+    coord.parent.mkdir(parents=True, exist_ok=True)
+    coord.touch()
+    (
+        Path(manifest["mechanism_contract"]["wrapper"]["path"]).parent
+        / ".closer-public989-install.lock"
+    ).touch()
+    legacy = {
+        "old_observation_root": tmp_path / "legacy-old",
+        "new_observation_root": tmp_path / "legacy-new",
+        "old_campaign_root": tmp_path / "legacy-old-campaigns",
+        "new_campaign_root": tmp_path / "legacy-new-campaigns",
+        "custody_path": tmp_path / "legacy-custody",
+    }
+    for directory in legacy.values():
+        directory.mkdir()
+    for root in (legacy["old_observation_root"], legacy["new_observation_root"]):
+        for name in ("native-entry.lock", "native-supervisor.lock"):
+            (root / name).touch()
+    (legacy["custody_path"] / "writer.lock").touch()
+    backup = tmp_path / "backup.json"
+    backup.write_text(
+        json.dumps(
+            {
+                "base64": base64.b64encode(archived).decode(),
+                "sha256": hashlib.sha256(archived).hexdigest(),
+                "mode": 0o755,
+            }
+        )
+    )
+    swap = tmp_path / "swap.json"
+    swap.write_text(
+        json.dumps(
+            {
+                "plan": {
+                    "before_sha256": install.RESTORED_SHA,
+                    "old_manifest_path": str(old_manifest),
+                    "new_runtime_root": str(old_manifest.parent),
+                    "old_runtime_root": str(tmp_path / "legacy-runtime"),
+                    "wrapper": str(manifest["mechanism_contract"]["wrapper"]["path"]),
+                    "canary_state": str(tmp_path / "legacy-state.json"),
+                    **{key: str(value) for key, value in legacy.items()},
+                }
+            }
+        )
+    )
+    receipt = tmp_path / "restore-known.json"
+    ref = lambda path: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    receipt.write_text(
+        json.dumps(
+            {
+                "status": "host_wrapper_restored",
+                "before_sha256": install.RESTORED_SHA,
+                "mode": 0o755,
+                "witnesses": {"backup": ref(backup), "swap_intent": ref(swap)},
+            }
+        )
+    )
+    return old_manifest, old_state, worker_id, new_manifest_path, new_state, receipt
+
+
+def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
+    capacity_host, monkeypatch, tmp_path
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    old_result = campaign.result_path(args[1], args[2])
+    old_state = args[1].read_bytes()
+    old_result_bytes = old_result.read_bytes()
+    proposal = install.plan_prospective(*args)
+    outcome = install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    assert outcome["status"] == "installed"
+    assert args[1].read_bytes() == old_state
+    assert old_result.read_bytes() == old_result_bytes
+    assert not args[4].exists()
+
+
+@pytest.mark.parametrize("change", ["proof", "wrapper", "lock", "namespace"])
+def test_prospective_install_refuses_changed_evidence_or_closure(
+    capacity_host, monkeypatch, tmp_path, change
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    wrapper = Path(json.loads(args[0].read_text())["mechanism_contract"]["wrapper"]["path"])
+    before = wrapper.read_bytes()
+    if change == "proof":
+        result = campaign.result_path(args[1], args[2])
+        value = json.loads(result.read_text())
+        detail = json.loads(value["detail"])
+        detail["native_no_start"]["phases"]["B"]["started"] = True
+        value["detail"] = json.dumps(detail)
+        result.write_text(json.dumps(value))
+    elif change == "wrapper":
+        wrapper.write_bytes(before + b"# tampered\n")
+    elif change == "lock":
+        (
+            Path(json.loads(args[0].read_text())["mechanism_contract"]["observation_root"])
+            / "native-entry.lock"
+        ).unlink()
+    else:
+        (
+            Path(json.loads(args[3].read_text())["mechanism_contract"]["observation_root"])
+            / "foreign"
+        ).write_text("x")
+    with pytest.raises((install.InstallHeld, RuntimeError, ValueError)):
+        install.plan_prospective(*args)
+    assert wrapper.read_bytes() == (before if change != "wrapper" else before + b"# tampered\n")

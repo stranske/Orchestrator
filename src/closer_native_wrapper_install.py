@@ -8,6 +8,7 @@ reconciliation has been authenticated.
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import hashlib
 import json
@@ -22,6 +23,7 @@ from typing import Any
 import closer_host_restore_contract as host
 
 SCHEMA = "closer-native-wrapper-install/v1"
+PROSPECTIVE_SCHEMA = "closer-native-wrapper-prospective-install/v1"
 RESTORED_SHA = "6ba0afd39a280aac9ae8b088efdfe0c17390f7d8f103e6a309c3bf1cb9ede71b"
 RESTORED_MODE = 0o755
 
@@ -185,6 +187,275 @@ def _rows(
     return [{"path": path, "must_exist": merged[path]} for path in sorted(merged)]
 
 
+def _restored_predecessor(
+    receipt_path: str | Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Join the restored canonical bytes to the exact old native campaign.
+
+    The prospective path deliberately has no retained-reconciliation record.
+    It still needs the immutable host-restore receipt and its original swap
+    witness; otherwise a caller could pair a real no-start proof with an
+    unrelated archived wrapper base.  The old no-start campaign is *not* the
+    historical attempt-13 campaign, so no result/state cross-join belongs here.
+    """
+    restored = _receipt(receipt_path)
+    witnesses = restored.get("witnesses")
+    _need(isinstance(witnesses, dict), "host restoration witnesses missing")
+    _, swap_intent = host._json_ref(witnesses.get("swap_intent"), "restored_swap_intent")
+    predecessor = swap_intent.get("plan")
+    _need(isinstance(predecessor, dict), "restoration predecessor plan missing")
+    _need(predecessor.get("before_sha256") == RESTORED_SHA, "restoration predecessor differs")
+    return restored, predecessor
+
+
+def _archived_base(restored: dict[str, Any]) -> bytes:
+    """Read the only permitted renderer base from the restore receipt witness."""
+    witnesses = restored.get("witnesses")
+    _need(isinstance(witnesses, dict), "host restoration witnesses missing")
+    _, backup = host._json_ref(witnesses.get("backup"), "restored_backup")
+    try:
+        raw = base64.b64decode(backup.get("base64", ""), validate=True)
+    except (TypeError, ValueError) as exc:
+        raise InstallHeld("restored backup bytes invalid") from exc
+    _need(
+        _sha(raw) == RESTORED_SHA
+        and backup.get("sha256") == RESTORED_SHA
+        and backup.get("mode") == RESTORED_MODE,
+        "restored backup is not the reviewed canonical preimage",
+    )
+    return raw
+
+
+def _prospective_rows(
+    predecessor: dict[str, Any],
+    reference: dict[str, Any],
+    manifest: dict[str, Any],
+    state: Path,
+) -> list[dict[str, Any]]:
+    """Derive, rather than accept, the old/new writer closure.
+
+    Existing host-restore locks protect the old invocation, custody and any
+    dynamic release resources.  The two native observation roots and old state
+    lock protect the proof while it is consumed.  Only the new state lock is a
+    fresh coordination file.
+    """
+    wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
+    rows = host._locks(predecessor, wrapper)
+    old_root = Path(reference["manifest"]["mechanism_contract"]["observation_root"])
+    new_root = Path(manifest["mechanism_contract"]["observation_root"])
+    rows.extend(
+        {"path": str(root / name), "must_exist": True}
+        for root in (old_root, new_root)
+        for name in ("native-entry.lock", "native-supervisor.lock")
+    )
+    rows.extend(
+        [
+            {"path": str(reference["state_path"]) + ".lock", "must_exist": True},
+            {"path": str(state) + ".lock", "must_exist": False},
+            {"path": str(wrapper.parent / ".closer-public989-install.lock"), "must_exist": True},
+            {
+                "path": str(Path.home() / ".codex/handoff/.lane-closer.lock.coord.lock"),
+                "must_exist": True,
+            },
+        ]
+    )
+    merged: dict[str, bool] = {}
+    for row in rows:
+        path = str(host._path(row["path"]))
+        merged[path] = merged.get(path, False) or bool(row["must_exist"])
+    return [{"path": path, "must_exist": merged[path]} for path in sorted(merged)]
+
+
+def _pristine_prospective_namespace(manifest: dict[str, Any], state: Path) -> None:
+    """Accept only the two pre-provisioned native lock files in a new root."""
+    campaign_root = host._path(manifest["mechanism_contract"]["campaign_root"])
+    observation_root = host._path(manifest["mechanism_contract"]["observation_root"])
+    _need(
+        state.parent == campaign_root
+        and state.name.endswith(".campaign.json")
+        and not state.exists()
+        and not state.is_symlink()
+        and not list(campaign_root.glob("*.campaign.json")),
+        "new campaign namespace is not empty/exact",
+    )
+    _need(
+        not (observation_root / "native-active.json").exists()
+        and not (observation_root / "native-active.json").is_symlink(),
+        "new native namespace already has an invocation",
+    )
+    names = {item.name for item in observation_root.iterdir()}
+    _need(
+        names == {"native-entry.lock", "native-supervisor.lock"},
+        "new native namespace is not pristine",
+    )
+
+
+def _old_parent_terminal(reference: dict[str, Any]) -> None:
+    """Require the old invocation to be terminal before changing its wrapper pin."""
+    root = host._path(reference["manifest"]["mechanism_contract"]["observation_root"])
+    _, _raw, active = host._obj(root / "native-active.json")
+    nonce = reference["proof"].get("admission_nonce")
+    _need(
+        active.get("status") == "terminal"
+        and isinstance(nonce, str)
+        and nonce
+        and active.get("nonce") == nonce,
+        "old native parent is not terminal for the signed no-start proof",
+    )
+
+
+def _existing_locks_present(rows: list[dict[str, Any]]) -> None:
+    """Do not call a vanished inherited lock closure eligible."""
+    for row in rows:
+        if row["must_exist"]:
+            try:
+                host._read(row["path"], 1024 * 1024)
+            except FileNotFoundError as exc:
+                raise InstallHeld("mandatory lock missing") from exc
+
+
+def plan_prospective(
+    old_manifest: str | Path,
+    old_state: str | Path,
+    worker: str,
+    new_manifest: str | Path,
+    new_state: str | Path,
+    restore_receipt: str | Path,
+) -> dict[str, Any]:
+    """Prepare only the wrapper half of a signed finite-v2 readmission.
+
+    It consumes no proof and creates neither a campaign nor a native entry.
+    ``closer_native_readmission.apply_prospective`` remains the sole consumer
+    that can create the fresh held campaign after qualification.
+    """
+    import closer_native_readmission as readmission
+
+    reference = readmission.prospective_reference(old_manifest, old_state, worker)
+    _old_parent_terminal(reference)
+    restored, predecessor = _restored_predecessor(restore_receipt)
+    old_path, old_raw, old = _manifest(old_manifest)
+    path, raw, manifest = _manifest(new_manifest)
+    state = host._path(new_state)
+    _pristine_prospective_namespace(manifest, state)
+    host._lane_absent()
+    wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
+    source = host._read(wrapper)[1]
+    _need(
+        stat.S_IMODE(wrapper.stat().st_mode) == RESTORED_MODE,
+        "canonical wrapper permissions changed",
+    )
+    base = _guard_source(_archived_base(restored))
+    old_preview = _render(base, old, old_path)
+    _need(
+        _sha(source) == old["mechanism_contract"]["wrapper"]["sha256"] and source == old_preview,
+        "current wrapper is not the exact old-manifest render",
+    )
+    preview = _render(base, manifest, path)
+    _need(
+        _sha(preview) == manifest["mechanism_contract"]["wrapper"]["sha256"],
+        "rendered wrapper differs from manifest pin",
+    )
+    rows = _prospective_rows(predecessor, reference, manifest, state)
+    _existing_locks_present(rows)
+    result = {
+        "schema": PROSPECTIVE_SCHEMA,
+        "producer_sha256": _sha(Path(__file__).read_bytes()),
+        "eligible": True,
+        "authority": False,
+        "original": {
+            "manifest": reference["manifest_path"],
+            "manifest_sha256": _sha(old_raw),
+            "state": reference["state_path"],
+            "state_sha256": reference["state_sha256"],
+            "worker_id": reference["worker"]["worker_id"],
+            "result": reference["result_path"],
+            "result_sha256": reference["result_sha256"],
+            "proof_sha256": _sha(
+                json.dumps(reference["proof"], sort_keys=True, separators=(",", ":")).encode()
+            ),
+        },
+        "restore_receipt_sha256": _sha(host._read(restore_receipt)[1]),
+        "new_manifest": {"path": str(path), "sha256": _sha(raw)},
+        "new_state": str(state),
+        "wrapper": str(wrapper),
+        "renderer_base_sha256": RESTORED_SHA,
+        "before_sha256": _sha(source),
+        "after_sha256": _sha(preview),
+        "mode": RESTORED_MODE,
+        "locks": rows,
+        "receipt": str(
+            Path(manifest["mechanism_contract"]["observation_root"])
+            / "wrapper-install-prospective-known.json"
+        ),
+    }
+    result["plan_sha256"] = _sha(json.dumps(result, sort_keys=True, separators=(",", ":")).encode())
+    return result
+
+
+def apply_prospective(*args, expected_plan_sha256: str) -> dict[str, Any]:
+    """Install a future wrapper while preserving the signed finite-v2 evidence."""
+    first = plan_prospective(*args)
+    _need(first["plan_sha256"] == expected_plan_sha256, "plan changed")
+    with host._hold(first["locks"]):
+        second = plan_prospective(*args)
+        _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
+        receipt = Path(first["receipt"])
+        intent = receipt.with_name("wrapper-install-prospective-intent.json")
+        if intent.exists() or receipt.exists():
+            raise InstallHeld("prior prospective install requires reconciliation")
+        host._write_once(intent, {**first, "status": "intent_recorded", "at": time.time()})
+        wrapper = Path(first["wrapper"])
+        manifest_path = Path(first["new_manifest"]["path"])
+        _, manifest_raw, manifest = host._obj(manifest_path)
+        _need(_sha(manifest_raw) == first["new_manifest"]["sha256"], "manifest changed")
+        restored, _predecessor = _restored_predecessor(args[-1])
+        data = _render(_guard_source(_archived_base(restored)), manifest, manifest_path)
+        _need(_sha(data) == first["after_sha256"], "preview changed before replacement")
+        fd, tmp = tempfile.mkstemp(dir=wrapper.parent, prefix=".native-wrapper-")
+        replaced = False
+        try:
+            stream = os.fdopen(fd, "wb")
+            fd = -1
+            with stream:
+                stream.write(data)
+                stream.flush()
+                os.fchmod(stream.fileno(), RESTORED_MODE)
+                os.fsync(stream.fileno())
+            os.replace(tmp, wrapper)
+            replaced = True
+            directory = os.open(wrapper.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            _need(
+                _sha(host._read(wrapper)[1]) == first["after_sha256"]
+                and stat.S_IMODE(wrapper.stat().st_mode) == RESTORED_MODE,
+                "postreplace readback failed",
+            )
+            import closer_native_observer as native
+
+            _need(
+                _sha(host._read(manifest_path)[1]) == first["new_manifest"]["sha256"],
+                "manifest changed after replacement",
+            )
+            native._check_wrapper_entry(manifest, manifest_path)
+            host._write_once(receipt, {**first, "status": "installed", "at": time.time()})
+            return {**first, "status": "installed"}
+        except Exception as exc:
+            if replaced:
+                raise InstallHeld(
+                    f"postreplace outcome uncertain: {type(exc).__name__}: {exc}"
+                ) from None
+            raise
+        finally:
+            if fd >= 0:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            with contextlib.suppress(FileNotFoundError):
+                Path(tmp).unlink()
+
+
 def plan(
     reconciliation: dict[str, str],
     old_manifest: str | Path,
@@ -330,6 +601,7 @@ def apply(*args, expected_plan_sha256: str) -> dict[str, Any]:
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("mode", choices=("plan", "apply"), nargs="?")
+    p.add_argument("--kind", choices=("historical", "prospective"), default="historical")
     p.add_argument("--selftest", action="store_true")
     p.add_argument("--expected-plan-sha256")
     for name in (
@@ -352,23 +624,15 @@ def main(argv=None):
             raise AssertionError("unreviewed preimage accepted")
         print(json.dumps({"selftest": "ok", "authority": False}))
         return 0
-    if not a.mode or any(
-        getattr(a, name) is None
-        for name in (
-            "reconciliation",
-            "old_manifest",
-            "old_state",
-            "new_manifest",
-            "new_state",
-            "restore_receipt",
-        )
-    ):
+    required = ["old_manifest", "old_state", "new_manifest", "new_state", "restore_receipt"]
+    if a.kind == "historical":
+        required.insert(0, "reconciliation")
+    if not a.mode or any(getattr(a, name) is None for name in required):
         p.error("mode and all path inputs are required")
     if a.mode == "apply" and not a.expected_plan_sha256:
         p.error("apply requires --expected-plan-sha256")
     try:
         inputs = [
-            host._obj(a.reconciliation)[2],
             a.old_manifest,
             a.old_state,
             a.worker,
@@ -376,10 +640,14 @@ def main(argv=None):
             a.new_state,
             a.restore_receipt,
         ]
+        if a.kind == "historical":
+            inputs.insert(0, host._obj(a.reconciliation)[2])
         result = (
-            apply(*inputs, expected_plan_sha256=a.expected_plan_sha256)
+            (apply if a.kind == "historical" else apply_prospective)(
+                *inputs, expected_plan_sha256=a.expected_plan_sha256
+            )
             if a.mode == "apply"
-            else plan(*inputs)
+            else (plan if a.kind == "historical" else plan_prospective)(*inputs)
         )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         print(json.dumps({"status": "held", "authority": False, "reason": str(exc)}))

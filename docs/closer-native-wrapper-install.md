@@ -27,3 +27,20 @@ intent receipt is written, including before `rename`, blocks retry. There is no
 automatic reconciliation handler: preserve those receipts and route them to an
 external reviewed recovery procedure rather than deleting, moving, or editing
 them. This version accepts only the explicitly reviewed restored predecessor.
+
+For a newly signed `native-pre-dispatch-no-start/v2` finite refusal, use
+`--kind prospective` instead. It takes the retained old manifest/state/worker,
+the fresh manifest/state, and the host-restore receipt; it does not take (or
+invent) a historical reconciliation reference. The receipt's hash-checked
+archived `6ba…` backup is used only as the renderer base. Planning proves that
+the *current* canonical wrapper is the exact deterministic render of that base
+under the old manifest and that its pin matches; it then previews the fresh
+manifest render from the same base. The old campaign/result/proof are only
+read and remain unchanged. The new native observation root must contain only
+its two pre-provisioned locks and the fresh campaign state must be absent.
+
+Prospective installation only makes the pinned wrapper physically available.
+It does not qualify it, consume the no-start proof, create a campaign, or
+launch anything. Run the ordinary model-free qualification, then the existing
+`closer_native_readmission.py ... --kind prospective` flow to create and admit
+the fresh held campaign. A valid v2 proof alone is not an automatic retry.
