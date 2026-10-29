@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import closer_host_restore_contract as host
 
@@ -227,8 +227,12 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
     diagnostic = _old_diagnostic(old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter)
     _need(diagnostic.get("target") == reference["worker"].get("target"), "old diagnostic target differs")
-    _no_act(diagnostic.get("correction"), diagnostic.get("queue_receipt"))
-    _incomplete_cohort(diagnostic.get("cohort"), diagnostic.get("completed_round"))
+    correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
+    cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
+    if not all(isinstance(value, dict) for value in (correction, queue, cohort, completed)):
+        raise SourceUpgradeHeld("old diagnostic shape invalid")
+    _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
+    _incomplete_cohort(cast(dict[str, Any], cohort), cast(dict[str, Any], completed))
     state = _canonical(new_state)
     _need(not state.exists() and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
           "new state is not fresh current campaign")
