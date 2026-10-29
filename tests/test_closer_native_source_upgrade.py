@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -42,18 +43,29 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
         upgrade._incomplete_cohort({"completed": True}, {"accepted": False})
 
 
-def test_old_diagnostic_refuses_a_non_source_module_closure(tmp_path):
+def test_old_diagnostic_refuses_a_non_source_module_closure(tmp_path, monkeypatch):
     module = tmp_path / "closer_correction_bridge.py"
     module.write_text("# exact old source\n")
-    raw = module.read_bytes()
     manifest = tmp_path / "host-manifest.json"
-    manifest.write_text(json.dumps({"modules": {module.name: hashlib.sha256(raw).hexdigest()}}))
+    manifest.write_text(
+        json.dumps({"module_dir": str(tmp_path), "modules": {module.name: "0" * 64}})
+    )
     state = tmp_path / "old.campaign.json"
     state.write_text('{"workers": []}')
+    actual_run = upgrade.subprocess.run
+    returncodes = []
+
+    def capture_run(*args, **kwargs):
+        result = actual_run(*args, **kwargs)
+        returncodes.append(result.returncode)
+        return result
+
+    monkeypatch.setattr(upgrade.subprocess, "run", capture_run)
     with pytest.raises(upgrade.SourceUpgradeHeld, match="diagnostic"):
         upgrade._old_diagnostic(
-            manifest, state, "worker", interpreter=Path("/opt/anaconda3/bin/python3")
+            manifest, state, "worker", interpreter=Path(sys.executable).resolve()
         )
+    assert returncodes == [31]
 
 
 def test_identity_rejects_principal_epoch_and_anchor_changes():
@@ -150,7 +162,14 @@ def test_lawful_policy_rebase_refuses_unreviewed_controller_policy_changes(tmp_p
             upgrade._rebased_policy({"policy": old_policy}, changed, new_state)
 
 
-def test_fresh_index_is_get_only_and_rejects_principal_drift(monkeypatch):
+@pytest.mark.parametrize(
+    ("principal", "message"),
+    [
+        ({"id": 7, "login": "owner", "type": "User"}, None),
+        ({"id": 8, "login": "different", "type": "User"}, "native index principal changed"),
+    ],
+)
+def test_fresh_index_is_get_only_and_rejects_principal_drift(monkeypatch, principal, message):
     config = {
         "state_path": "/private/tmp/state",
         "repository": "stranske/Orchestrator",
@@ -191,7 +210,7 @@ def test_fresh_index_is_get_only_and_rejects_principal_drift(monkeypatch):
     replies = [
         {"object": {"sha": "c" * 40}},
         {"sha": "blob", "encoding": "base64", "content": base64.b64encode(raw).decode()},
-        {"id": 7, "login": "owner", "type": "User"},
+        principal,
         {"id": 1, "full_name": "stranske/Orchestrator"},
     ]
 
@@ -200,5 +219,9 @@ def test_fresh_index_is_get_only_and_rejects_principal_drift(monkeypatch):
         return SimpleNamespace(returncode=0, stdout=json.dumps(replies.pop(0)))
 
     monkeypatch.setattr(upgrade.subprocess, "run", run)
-    assert upgrade.fresh_read_native_index(config, inspection)["commit_sha"] == "c" * 40
+    if message:
+        with pytest.raises(upgrade.SourceUpgradeHeld, match=message):
+            upgrade.fresh_read_native_index(config, inspection)
+    else:
+        assert upgrade.fresh_read_native_index(config, inspection)["commit_sha"] == "c" * 40
     assert all(argv[:2] == ["gh", "api"] for argv in calls)
