@@ -45,12 +45,16 @@ def test_completion_releases_launched_lane_after_readiness_changes(
         return {"substantive_needs": []}
 
     monkeypatch.setattr(dispatcher, "native_stage_remote_only", lambda t, *_args: ready[t])
+    # This tests lane accounting, not elapsed-time policy. Durable payload
+    # checks in the execution mirror may legitimately take over two seconds.
+    started_at = time.time()
     result = pipeline._run_pipeline_impl(
         tmp_path / "state.json",
         [BAD, PEER],
         **callbacks(interpret),
         capacity_fn=lambda: {"io": 1, "low": 0 if started_native else 1, "exception": 0},
-        deadline=time.time() + 2,
+        deadline=started_at + 2,
+        now=lambda: started_at,
         max_io_workers=1,
         max_low_workers=1,
         max_exception_workers=1,
@@ -75,12 +79,14 @@ def test_changed_native_packet_never_buys_zero_capacity_model_slot(tmp_path, mon
         return {"substantive_needs": []}
 
     monkeypatch.setattr(dispatcher, "native_stage_remote_only", lambda t, *_args: ready[t])
+    started_at = time.time()
     result = pipeline._run_pipeline_impl(
         tmp_path / "state.json",
         [BAD, PEER],
         **callbacks(interpret),
         capacity_fn=lambda: {"io": 2, "low": 0, "exception": 0},
-        deadline=time.time() + 2,
+        deadline=started_at + 2,
+        now=lambda: started_at,
         max_io_workers=2,
         max_low_workers=1,
         max_exception_workers=1,
