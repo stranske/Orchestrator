@@ -471,11 +471,24 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
     new_campaigns.mkdir()
     new_state = new_campaigns / "fresh.campaign.json"
     copy_manifest = json.loads(old_manifest.read_text())
+    # A genuine current-source transition has its modified producers installed
+    # in the fixture package as well as pinned in its new manifest.
+    module_dir = Path(copy_manifest["module_dir"])
+    for module in (Path(install.__file__), Path(readmission.__file__)):
+        target = module_dir / module.name
+        target.write_bytes(module.read_bytes())
+        copy_manifest["modules"][module.name] = hashlib.sha256(target.read_bytes()).hexdigest()
     copy_manifest["mechanism_contract"]["observation_root"] = str(new_root)
     copy_manifest["mechanism_contract"]["campaign_root"] = str(new_campaigns)
     copy_manifest["policy"]["correction_controller_installation"]["config"]["state_path"] = str(
         new_state
     )
+    copy_manifest["mechanism_contract"]["controller_demand"] = {
+        "schema": "closer-controller-demand/v1",
+        "campaign_id": "fixture-prospective-readmission",
+        "owner": json.loads(old_state.read_text())["owner"],
+        "campaign_state": str(new_state),
+    }
     new_custody = Path(str(new_state) + ".evidence") / ("correction-index-1-" + "e" * 64)
     new_custody.mkdir(mode=0o700, parents=True)
     (new_custody / "writer.lock").touch()
@@ -497,6 +510,12 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
     command = copy_manifest["command"]
     command[command.index("--manifest") + 1] = str(new_manifest_path)
     copy_manifest["command_digest"] = campaign.sha256_json(command)
+    copy_manifest["package_digest"] = campaign.sha256_json(
+        [
+            copy_manifest["candidate_sha"], sorted(copy_manifest["modules"].items()),
+            copy_manifest["runtime_digest"], copy_manifest["state_digest"], copy_manifest["portable"],
+        ]
+    )
     new_manifest_path.write_text(json.dumps(copy_manifest, sort_keys=True))
     preview = install._render(install._guard_source(archived), copy_manifest, new_manifest_path)
     copy_manifest["mechanism_contract"]["wrapper"]["sha256"] = hashlib.sha256(preview).hexdigest()
@@ -585,6 +604,16 @@ def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
     assert args[1].read_bytes() == old_state
     assert old_result.read_bytes() == old_result_bytes
     assert not args[4].exists()
+    # This is the real post-CAS path: it reads the signed current-source
+    # receipt and old retained bytes, but does not invoke the old contract or
+    # admit typed demand.  The result is only the one-use initial HELD state.
+    prepared = readmission.prepare_prospective_wrapper_install(
+        receipt, confirm_plan_sha256=proposal["plan_sha256"]
+    )
+    assert prepared["status"] == "fresh_held_prepared"
+    held = campaign.Campaign(args[4]).read()
+    assert held["hold"]["kind"] == "source_initialization"
+    assert "demand_admission" not in held
     # The old signed manifest pins the pre-install wrapper, so either the
     # no-start reader or the install's explicit receipt guard must refuse a
     # second attempt.  In both cases the prior install is never retried.
