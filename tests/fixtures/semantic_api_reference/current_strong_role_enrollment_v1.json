@@ -1,0 +1,20 @@
+{
+  "schema": "closer-strong-role-enrollment-overlay/v1",
+  "scope": "One reviewed strong-role record, its expired-history selector, and no other closer_role_qualification definitions.",
+  "role_module": {
+    "after_file_sha256": "cd6bf88d1fbb5b5d07c9a8ee9a9e11a0a1a47765528342cba2a9258b5162ec53",
+    "after_module_ast_sha256": "26797927d239ce417667b83b318e5fc04dc00c6fd46fef2446e5a8dab7cf1056",
+    "before_module_ast_without_new_record_sha256": "629a729913d767f920b9d8654f282cb63b87c2c34cea289e5e03ac1b9d26eedc",
+    "after_registry_ast_sha256": "d21f26ecc404547bf6edbf0f4ede953b6bc44d3b7e3c1a72a201db32ff6b2e6e",
+    "before_registry_ast_sha256": "1f25c2c48cbbf35017fc3b247fb48ff5559d674387917347331600c7095b0ae8",
+    "new_qualification_id": "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2",
+    "new_record_ast_sha256": "ea16720dddbb33aace910f0205c3253113fdc012486959618afff234a3d8efd6",
+    "base_commit": "ba8d87567a6251ac5ecae1734e8207fa1f51f566",
+    "only_changed_definitions": [
+      "_selected_record",
+      "qualification_problems",
+      "qualified_record"
+    ],
+    "unchanged_module_ast_sha256": "03e0071712ac17b49053db50d41d6092aab10a1e0c938d34c75c746b5edf9874"
+  }
+}

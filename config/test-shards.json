@@ -115,7 +115,15 @@
     "tests/test_corrective_verifier_current_source_pins.py",
     "tests/test_closer_publication_private_git_environment.py",
     "tests/test_closer_publication_io_retained_odb.py",
-    "tests/test_closer_scoped_capacity_source_review.py"
+    "tests/test_closer_scoped_capacity_source_review.py",
+    "tests/test_closer_release_preflight.py",
+    "tests/test_closer_launch_preflight.py",
+    "tests/test_closer_host_restore_contract.py",
+    "tests/test_closer_native_readmission.py",
+    "tests/test_closer_native_readmission_integration.py",
+    "tests/test_closer_retained_reconciliation.py",
+    "tests/test_closer_launch_operator.py",
+    "tests/test_closer_native_wrapper_install.py"
   ],
   "shards": [
     [
@@ -207,7 +215,10 @@
       "tests/test_verify_pytest_workers.py",
       "tests/test_verify_sharding.py",
       "tests/test_vibe_observing_backend.py",
-      "tests/test_workflow_compiler.py"
+      "tests/test_workflow_compiler.py",
+      "tests/test_closer_host_restore_contract.py",
+      "tests/test_closer_retained_reconciliation.py",
+      "tests/test_closer_native_wrapper_install.py"
     ],
     [
       "tests/test_adapters_coverage.py",
@@ -298,7 +309,8 @@
       "tests/test_transport_qualification.py",
       "tests/test_usage_poll_alerts.py",
       "tests/test_verifier_same_material_incomplete.py",
-      "tests/test_wrapper_steps_name_their_python.py"
+      "tests/test_wrapper_steps_name_their_python.py",
+      "tests/test_closer_launch_preflight.py"
     ],
     [
       "tests/test_adjudicator_live_log_bounds.py",
@@ -388,7 +400,8 @@
       "tests/test_value_chain_monitor.py",
       "tests/test_verify_before_sync.py",
       "tests/test_verify_coverage_mode.py",
-      "tests/test_verify_parallel_selftests.py"
+      "tests/test_verify_parallel_selftests.py",
+      "tests/test_closer_release_preflight.py"
     ],
     [
       "tests/test_activation_audit_live_rows.py",
@@ -477,7 +490,8 @@
       "tests/test_switch_review_review_threads.py",
       "tests/test_tick_completion_ping.py",
       "tests/test_tick_helpers_coverage.py",
-      "tests/test_usage_poll.py"
+      "tests/test_usage_poll.py",
+      "tests/test_closer_launch_operator.py"
     ],
     [
       "tests/test_activation_audit_source_memo.py",
@@ -568,7 +582,9 @@
       "tests/test_verify_private_state.py",
       "tests/test_vibe_isolated_types_proof.py",
       "tests/test_worktree_git_guard.py",
-      "tests/test_worktree_git_refusal_record.py"
+      "tests/test_worktree_git_refusal_record.py",
+      "tests/test_closer_native_readmission.py",
+      "tests/test_closer_native_readmission_integration.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",

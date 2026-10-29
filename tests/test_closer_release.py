@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import venv
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,7 @@ if [[ "$mode" == identity ]]; then source_path="$1"; [[ -d "$source_path" ]]; pr
 [[ -z "${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-}" ]]
 [[ -z "${VERIFY_BEFORE_SYNC_TREE:-}" ]]
 [[ -z "${VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG:-}" ]]
+if [[ -n "${EXPECTED_PYTHON:-}" ]]; then [[ "$PYTHON" == "$EXPECTED_PYTHON" ]]; fi
 [[ "${VERIFY_BEFORE_SYNC_OWNER_KEY:-}" == "$EXPECTED_STORAGE_OWNER" ]]
 [[ "${ORCH_STORAGE_STATE_DIR:-}" == "$EXPECTED_STORAGE_LEDGER" ]]
 [[ "$1" == "--snapshot-out" ]]; snapshot="$2"; shift 2
@@ -205,7 +207,7 @@ state.write_text("d" * 64)
 """
 
 
-def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
+def make_fake_release(tmp_path, monkeypatch, *, extra_env=None, python=None):
     import sys
 
     source = tmp_path / "source"
@@ -263,7 +265,7 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None):
         mirror=mirror,
         verifier=verifier,
         installer=installer,
-        python=sys.executable,
+        python=python or sys.executable,
         bash="/bin/bash",
         run_id="fake-run",
     )
@@ -287,6 +289,20 @@ def test_verify_and_install_runs_gate_then_installs_and_reads_back_generation(
     assert result["installed_generation"] == GENERATION
     assert journal.read()["verification"]["snapshot_digest"] == DIGEST
     assert (mirror / "payload").read_text() == "candidate payload"
+
+
+def test_verify_and_install_keeps_selected_venv_python_for_the_gate(tmp_path, monkeypatch):
+    virtualenv = tmp_path / "venv"
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(virtualenv)
+    selected = virtualenv / "bin" / "python"
+    assert selected.is_symlink()
+    result, _, _, _ = make_fake_release(
+        tmp_path,
+        monkeypatch,
+        extra_env={"EXPECTED_PYTHON": str(selected.absolute())},
+        python=selected,
+    )
+    assert result["stage"] == "installed"
 
 
 def test_storage_publication_scope_is_stable_across_generations_and_journal_owners(

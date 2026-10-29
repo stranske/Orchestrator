@@ -129,7 +129,102 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
                 "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
             },
         ],
-    }
+    },
+    "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2": {
+        "schema": "closer-role-qualification/v1",
+        "status": "qualified",
+        "qualification_id": "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2",
+        "role": "strong_criterion_adjudication",
+        "profile_identity": {
+            "profile_id": "claude-sonnet-5-5-high-v2",
+            "agent": "claude",
+            "provider": "anthropic",
+            "requested_model": "claude-sonnet-5-5",
+            "reasoning_effort": "high",
+            "permission_mode": "workspace-write",
+            "adapter_version": "claude-cli-profile-v2",
+            "prompt_version": "orchestrator-prompt-v1",
+            "lifecycle_status": "active",
+            "transport_support": ["experiment", "local", "offload"],
+            "capacity_pool_ids": ["claude-subscription"],
+            "requires_explicit_selection": True,
+        },
+        "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
+        "qualified_at": 1793255742.791692,
+        "expires_at": 1793342142.791692,
+        "transport": "offload",
+        "named_criterion_only": True,
+        "confinement": {
+            "data_only": True,
+            "tools": False,
+            "mcp": False,
+            "hooks": False,
+            "project_context": False,
+            "adapter_build_sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+        },
+        "execution_limits": {
+            "schema": "closer-data-only-limits/v1",
+            "role": "strong_criterion_adjudication",
+            "model_contract_sha256": "239df39539465467e89dc47c852f17330ea3700a485806ef69b21933c52af92a",
+            "max_prompt_bytes": 65536,
+            "max_final_bytes": 16384,
+            "max_native_result_bytes": 65536,
+            "max_output_tokens": 4096,
+            "max_turns": 1,
+            "timeout_seconds": 60,
+        },
+        "production_model_contract": {
+            "schema": "closer-production-model-contract/v1",
+            "role": "strong_criterion_adjudication",
+            "sources": {
+                "adapters.py": "4156636c6251e480d2f7bd22dced52fd344028f65e4931b5018127b75f77fbeb",
+                "closer_adjudication_policy.py": "9ecc5df250160104104c561b6bcfbbb35921891e0cbec6cf0f098a924feb15e1",
+                "closer_claude_role_admission.py": "7aaccbdb1a42b8fdec775b27a11199fc572093af80f8c860a909ed56fe1897ae",
+                "closer_data_only_execution.py": "68c9dbac68bcf6ee98b403130b3b008f4412c9f8c8eccf8c2b85021038ad14f2",
+                "closer_dispatcher.py": "d78b8d6642b64b94d366544a1515a5ffcd463bf6d101d04251fcaab8ac304256",
+                "closer_disposition.py": "a726f59d1376dacb9b78117bbc7071bd67f7c1c3412e885c9fd9c721c309ca9c",
+                "closer_evidence.py": "96bca7b0d0939d77cfcab7c4fe21af4945fa5d0aaff71b67bd14199635ab54a4",
+                "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",
+                "closer_local_tool_confinement.py": "5152c424069a58d6cf4f93ce43cf2a2c22d81a38e3ffb0cd03d21b179c40365f",
+                "closer_mechanical_catalog.py": "86e732b5f9611dbd70b7bdb28011cf189b5ac8ca8b19af9de07542eeb2520b78",
+                "closer_mechanical_executor.py": "21a753583dc734278bd2cd5709a70b181898bb759fbd4e56baa54db15549d7f0",
+                "closer_mechanical_source.py": "af61c2722c4794717eddf36e8986d725978285167d220d2b86c063f25a8bfc67",
+                "closer_model_contracts.py": "d0e95012d1cb48e8d275bf1ba3221ed9d931ede48da2321cb1a36bd769a66d62",
+                "closer_role_selection.py": "ee7b429db1e0f48afccfc50ebc2de4e9eb05ada2b64e9bea3998df6dd84ce651",
+                "closer_semantic_assessment.py": "922b5a684a4cb6e2c5f051a8ecde8ae779fc9a07962dcb926e501d45ebef870d",
+                "config/closer_role_selection.json": "266263f0a44319b08400fb7f3c1a7e93004b338f0548ea2b70e859332777afbf",
+                "dispatcher.py": "220f34ca499e83db81405245d1cf56b21f3bb7b16ca0c8bf55ba66bd8bbd4854",
+                "router.py": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
+                "transport_qualification.py": "b54e9e8d529647615650b9d999eec6a943cb53416fd30f73fce13ad7ad6aedc1",
+                "transport_saved_result.py": "468697f68fb973c5a37ea7dcbd1226508664935ad997662a90718fbc5087996d",
+            },
+            "model_contract": {
+                "acceptance_authority": False,
+                "controller_action_policy": "closer-adjudication-action-policy/v1",
+                "evidence_policy": "closer-adjudication-evidence/v2",
+                "max_prompt_bytes": 65536,
+                "merge": "closer_execution_contracts.merge_selected_response",
+                "prompt_builder": "closer_execution_contracts.build_adjudication_prompt",
+                "prompt_version": "closer-adjudication-prompt/v2",
+                "request_schema": "closer-criterion-request/v2",
+                "response_schema": "closer-criterion-response/v1",
+                "response_validator": "closer_execution_contracts.validate_adjudication_response",
+                "retained_io_required": True,
+            },
+            "authority": False,
+            "contract_sha256": "239df39539465467e89dc47c852f17330ea3700a485806ef69b21933c52af92a",
+        },
+        "evidence_refs": [
+            {
+                "reference": "retained-native-evidence:sha256:82ff806f22863e3f5fca5a942c2cdc666f100a6cfbb922f7f066b8e807ffb20e",
+                "sha256": "82ff806f22863e3f5fca5a942c2cdc666f100a6cfbb922f7f066b8e807ffb20e",
+            },
+            {
+                "reference": "reviewed-model-quality:sha256:7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+                "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+            },
+        ],
+    },
 }
 _LOGGER = logging.getLogger(__name__)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -250,6 +345,38 @@ def _evidence_problems(record: Mapping[str, Any], role: str) -> list[str]:
     return problems
 
 
+def _selected_record(
+    profile: Mapping[str, Any], role: str, current: float, source: Mapping[str, Any]
+) -> tuple[str, Mapping[str, Any]] | None:
+    """Select one live record while retaining only fully valid expired history."""
+    matches = []
+    for key, record in source.items():
+        if not _text(key) or not isinstance(record, Mapping):
+            return None
+        bound = record.get("profile_identity")
+        if (
+            record.get("role") == role
+            and isinstance(bound, Mapping)
+            and bound.get("profile_id") == profile["profile_id"]
+        ):
+            matches.append((key, record))
+    active = []
+    for key, record in matches:
+        started, expires = record.get("qualified_at"), record.get("expires_at")
+        if _finite(started) and _finite(expires) and 0 <= started < expires <= current:
+            # An expired row can remain only as complete historical evidence.
+            # Validate its original observation in a one-row registry; that
+            # recursive call is necessarily live at `started` and cannot renew it.
+            if qualification_problems(profile, role, now=started, records={key: record}):
+                return None
+            continue
+        if _finite(started) and _finite(expires) and 0 <= started <= current < expires:
+            active.append((key, record))
+            continue
+        return None
+    return active[0] if len(active) == 1 else None
+
+
 def qualification_problems(
     profile: Mapping[str, Any],
     role: str,
@@ -275,20 +402,10 @@ def qualification_problems(
     source = ROLE_QUALIFICATIONS if records is None else records
     if not isinstance(source, Mapping):
         return ["role qualification registry is invalid"]
-    matches = []
-    for key, record in source.items():
-        if not _text(key) or not isinstance(record, Mapping):
-            return ["role qualification registry contains a malformed record"]
-        bound = record.get("profile_identity")
-        if (
-            record.get("role") == role
-            and isinstance(bound, Mapping)
-            and bound.get("profile_id") == identity["profile_id"]
-        ):
-            matches.append((key, record))
-    if len(matches) != 1:
+    selected = _selected_record(profile, role, current, source)
+    if selected is None:
         return ["role qualification is missing or ambiguous"]
-    key, record = matches[0]
+    key, record = selected
     problems = []
     if record.get("schema") != SCHEMA or record.get("status") != "qualified":
         problems.append("role qualification schema or status is invalid")
@@ -341,14 +458,13 @@ def qualified_record(
     if not isinstance(source, Mapping):
         return None
     snapshot = deepcopy(dict(source))
-    if qualification_problems(profile, role, now=now, records=snapshot):
+    current = time.time() if now is None else now
+    if qualification_problems(profile, role, now=current, records=snapshot):
         return None
-    return next(
-        dict(record)
-        for record in snapshot.values()
-        if record.get("role") == role
-        and record.get("profile_identity", {}).get("profile_id") == profile["profile_id"]
-    )
+    selected = _selected_record(profile, role, current, snapshot)
+    if selected is None:
+        return None
+    return dict(selected[1])
 
 
 def is_runtime_qualified(

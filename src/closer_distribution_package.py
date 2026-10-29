@@ -34,7 +34,17 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 RUNTIME_PINNED_MODULES = module_closure(
     Path(__file__).resolve().parent,
-    (*PINNED_MODULES, "closer_distribution_package.py", "closer_agent_launchers.py"),
+    (
+        *PINNED_MODULES,
+        "closer_distribution_package.py",
+        "closer_agent_launchers.py",
+        "closer_launch_preflight.py",
+        "closer_launch_operator.py",
+        "closer_native_readmission.py",
+        "closer_retained_reconciliation.py",
+        "closer_host_restore_contract.py",
+        "closer_native_wrapper_install.py",
+    ),
 )
 
 

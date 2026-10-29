@@ -627,8 +627,19 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         )
         return context
     directory = root / nonce
-    assignment_source = private_test_assignment_source(manifest)
     demand = doc.get("demand_admission")
+    if doc.get("preparation_origin") is not None:
+        from closer_native_readmission import require_preparation_known
+
+        try:
+            require_preparation_known(state_path, doc)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise mechanisms.MechanismError("native preparation creation is not sealed") from exc
+    if manifest["mechanism_contract"].get("controller_demand") is not None and demand is None:
+        raise mechanisms.MechanismError(
+            "controlled native campaign requires admitted source demand"
+        )
+    assignment_source = private_test_assignment_source(manifest)
     if "private_test" in manifest["mechanism_contract"] and demand is not None:
         raise mechanisms.MechanismError("private native test cannot use production demand")
     demand_reference = None
@@ -1076,8 +1087,10 @@ def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=Fal
     """
     try:
         context = validate_admission(manifest, cfg["native_admission"], for_effects=False)
-        if context.get("schema") != "native-invocation-admission/v1":
-            return None  # no legacy deadline proof can authorize a new frontier
+        schema = context.get("schema")
+        if schema not in {"native-invocation-admission/v1", "native-invocation-admission/v2"}:
+            return None
+        finite = schema == "native-invocation-admission/v2"
         fields = cfg["native_worker"]
         result = Path(fields["result"])
         worker_id = result.stem
@@ -1091,6 +1104,10 @@ def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=Fal
             return None
         root = contract(manifest)[3]
         directory = root / context["nonce"]
+        if finite:
+            watermark = directory / "action-b-receipt-watermark.json"
+            if watermark.exists() or watermark.is_symlink():
+                return None
         handoff = _read(directory / ("worker-" + worker_id + ".json"))
         original = handoff["record"]
         if (
@@ -1165,13 +1182,8 @@ def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=Fal
                 for value in [*entry_times, *times]
             )
             or not context["started_at"] <= entry_times[0] <= entry_times[1] <= times[0]
-            or not context["started_at"]
-            <= times[0]
-            <= times[1]
-            <= times[2]
-            <= times[3]
-            <= times[4]
-            <= context["original_deadline"]
+            or not context["started_at"] <= times[0] <= times[1] <= times[2] <= times[3] <= times[4]
+            or (not finite and not times[4] <= context["original_deadline"])
         ):
             return None
         if (
@@ -1207,23 +1219,33 @@ def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=Fal
         ):
             return None
         proof = {
-            "schema": "native-pre-dispatch-no-start/v1",
+            "schema": (
+                "native-pre-dispatch-no-start/v2" if finite else "native-pre-dispatch-no-start/v1"
+            ),
             "worker": fields,
             "admission_nonce": context["nonce"],
             "assignment_sha256": context["assignment"]["sha256"],
-            "original_deadline": context["original_deadline"],
             "phases": phases,
             "execution": execution,
             "accepted": False,
         }
-        boundary = directory / ("pre-dispatch-no-start-" + worker_id + ".json")
+        if finite:
+            # This evidence authenticates an observed absence of B.  It does
+            # not refresh the v2 report or confer any new effect authority.
+            proof["finite_frontier"] = context["finite_frontier"]
+            proof["request_timeout_seconds"] = context["request_timeout_seconds"]
+            boundary = directory / ("pre-dispatch-no-start-v2-" + worker_id + ".json")
+        else:
+            proof["original_deadline"] = context["original_deadline"]
+            boundary = directory / ("pre-dispatch-no-start-" + worker_id + ".json")
         record = {"binding": binding(manifest), "proof": proof}
         if record_boundary:
             observed_now = time.time()
             if (
                 not math.isfinite(observed_now)
                 or _CURRENT_ENTRY.get(str(root)) != context["nonce"]
-                or not times[4] <= observed_now < context["original_deadline"]
+                or not times[4] <= observed_now
+                or (not finite and not observed_now < context["original_deadline"])
                 or result.exists()
                 or result.is_symlink()
                 or boundary.exists()
@@ -1484,7 +1506,8 @@ def wrapper_block(manifest_path, campaign_root, interpreter, launcher):
     ]
     return (
         MARKER + "\n"
-        'if [[ "$LANE" == "closer" && -f "$HOME/.codex/handoff/closer-native-handoff.enabled" ]]; then\n'
+        'if [[ "$LANE" == "closer" ]]; then\n'
+        '  [[ -f "$HOME/.codex/handoff/closer-native-handoff.enabled" ]] || exit 78\n'
         "  " + shlex.join(args) + "\n"
         '  exit "$?"\nfi\n' + END_MARKER + "\n"
     )

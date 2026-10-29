@@ -145,7 +145,19 @@ PUBLICATION_ADMISSION_SHA256 = "695eec7282d482e43ebbefc70f3439313cd98d328796901b
 def publication_admission_reference():
     raw = PUBLICATION_ADMISSION_MANIFEST.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == PUBLICATION_ADMISSION_SHA256
-    return json.loads(raw)
+    value = json.loads(raw)
+    change = controlled_initialization_reference()["files"]["closer_campaign.py"]
+    campaign = value["protected_native_modules"]["closer_campaign.py"]
+    assert campaign["after_file_sha256"] == change["before_file_sha256"]
+    campaign["after_file_sha256"] = change["after_file_sha256"]
+    assert (
+        campaign["before_top_level_ast"]["Campaign"] == change["before_top_level_ast"]["Campaign"]
+    )
+    campaign["changed_top_level_ast"]["Campaign"] = {
+        "before": change["before_top_level_ast"]["Campaign"],
+        "after": change["after_top_level_ast"]["Campaign"],
+    }
+    return value
 
 
 def integrated_native_source_reference():
@@ -153,13 +165,118 @@ def integrated_native_source_reference():
     for name, change in publication_admission_reference()["protected_native_modules"].items():
         assert original[name] == change["before_file_sha256"]
         original[name] = change["after_file_sha256"]
+    # Finite no-start v2 is an independently pinned successor.  Do not rewrite
+    # 0953 or broaden the publication overlay to cover its two native methods.
+    for name, change in finite_no_start_v2_reference()["files"].items():
+        assert original[name] == change["before_file_sha256"]
+        original[name] = change["after_file_sha256"]
+    observer = controlled_initialization_reference()["files"]["closer_native_observer.py"]
+    assert original["closer_native_observer.py"] == observer["before_file_sha256"]
+    original["closer_native_observer.py"] = observer["after_file_sha256"]
     return original
+
+
+CONTROLLED_INITIALIZATION_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_controlled_initialization_v1.json"
+)
+CONTROLLED_INITIALIZATION_SHA256 = (
+    "c070e59b4fd2c9ee2ee7c2ee7b2c187e87aa02be3fc0df47398bf2af205bec35"
+)
+
+
+def controlled_initialization_reference():
+    raw = CONTROLLED_INITIALIZATION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == CONTROLLED_INITIALIZATION_SHA256
+    value = json.loads(raw)
+    assert value["base_commit"] == "0a9b0f93909c82532add2d022e26e768df785839"
+    assert {name: change["changed_node"] for name, change in value["files"].items()} == {
+        "closer_campaign.py": "Campaign.begin",
+        "closer_native_observer.py": "publish_admission",
+    }
+    assert set(value["files"]["closer_native_observer.py"]["additional_changed_top_level_ast"]) == {
+        "wrapper_block"
+    }
+    return value
+
+
+FINITE_NO_START_V2_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_finite_no_start_v2.json"
+)
+FINITE_NO_START_V2_SHA256 = "c4b75cd83a6070d18609cda61077a4044b91123fecdb2dcad4d92de04e139586"
+
+
+def finite_no_start_v2_reference():
+    raw = FINITE_NO_START_V2_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == FINITE_NO_START_V2_SHA256
+    value = json.loads(raw)
+    assert value["base_commit"] == "112e9263fd7545bd5a3ab50913a867126fbe862a"
+    assert set(value["files"]) == {"closer_native_observer.py", "closer_runtime_binding.py"}
+    observer = value["files"]["closer_native_observer.py"]
+    assert set(observer["changed_nodes"]) == {"pre_dispatch_no_start_proof"}
+    binding = value["files"]["closer_runtime_binding.py"]
+    assert set(binding["changed_nodes"]) == {"PinnedNativeHooks.begin_terminal_receipt"}
+    assert binding["class_method_scope"]["only_changed_methods"] == ["begin_terminal_receipt"]
+    return value
+
+
+STRONG_ROLE_ENROLLMENT_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_strong_role_enrollment_v1.json"
+)
+STRONG_ROLE_ENROLLMENT_SHA256 = "8d5be1378f1056cebfac2c8b5241cd87af185e8135f0d0a91e13c2fec2fa94fa"
+
+
+def strong_role_enrollment_reference():
+    raw = STRONG_ROLE_ENROLLMENT_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == STRONG_ROLE_ENROLLMENT_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "closer-strong-role-enrollment-overlay/v1"
+    return value["role_module"]
 
 
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    enrollment = strong_role_enrollment_reference()
+    if hashlib.sha256(raw).hexdigest() == enrollment["after_file_sha256"]:
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == enrollment["after_module_ast_sha256"]
+        registry = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "ROLE_QUALIFICATIONS"
+        )
+        assert fingerprint(registry) == enrollment["after_registry_ast_sha256"]
+        pairs = list(zip(registry.value.keys, registry.value.values))
+        key, record = next(
+            pair
+            for pair in pairs
+            if isinstance(pair[0], ast.Constant)
+            and pair[0].value == enrollment["new_qualification_id"]
+        )
+        assert fingerprint(record) == enrollment["new_record_ast_sha256"]
+        registry.value.keys.remove(key)
+        registry.value.values.remove(record)
+        assert fingerprint(registry) == enrollment["before_registry_ast_sha256"]
+        assert fingerprint(tree) == enrollment["before_module_ast_without_new_record_sha256"]
+        assert enrollment["only_changed_definitions"] == [
+            "_selected_record",
+            "qualification_problems",
+            "qualified_record",
+        ]
+        tree.body = [
+            n
+            for n in tree.body
+            if not (
+                isinstance(n, ast.FunctionDef) and n.name in enrollment["only_changed_definitions"]
+            )
+            and n is not registry
+        ]
+        assert fingerprint(tree) == enrollment["unchanged_module_ast_sha256"]
+        return
     identity = repository_identity_reference()["role_source"]
     if hashlib.sha256(raw).hexdigest() == identity["after_file_sha256"]:
         raw = raw.replace(

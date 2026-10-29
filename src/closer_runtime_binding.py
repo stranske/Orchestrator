@@ -1442,7 +1442,12 @@ class PinnedNativeHooks:
 
         self.terminal_watermark = None
         manifest = load_manifest(cfg["runtime_manifest"])
-        context = native.validate_admission(manifest, cfg["native_admission"], for_effects=True)
+        try:
+            context = native.validate_admission(manifest, cfg["native_admission"], for_effects=True)
+        except mechanisms.MechanismError as exc:
+            raise BindingError(
+                "native admission unavailable before dispatcher: " + str(exc)[:256]
+            ) from None
         pipeline = Path(str(cfg["dispatch_state"]) + ".pipeline.json")
         directory = closer_resources.scoped_root(pipeline) / "rounds"
         names: list[str] = []

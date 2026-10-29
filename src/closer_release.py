@@ -190,9 +190,16 @@ class ReleaseRecord:
         mirror = Path(mirror).expanduser().absolute()
         verifier = Path(verifier).expanduser().resolve(strict=True)
         installer = Path(installer).expanduser().resolve(strict=True)
-        python = Path(python or sys.executable).expanduser().resolve(strict=True)
+        # The selected venv interpreter can be a symlink to its base Python.
+        # Preserve that invocation path: it is the environment the preflight
+        # admitted and the path placed first in the verifier's environment.
+        python = Path(python or sys.executable).expanduser().absolute()
         bash_path = Path(bash or shutil.which("bash") or "").expanduser().resolve(strict=True)
-        if not os.access(python, os.X_OK) or not os.access(bash_path, os.X_OK):
+        if (
+            not python.is_file()
+            or not os.access(python, os.X_OK)
+            or not os.access(bash_path, os.X_OK)
+        ):
             raise ValueError("pinned Python and Bash executables must be executable")
         if timeout <= 0:
             raise ValueError("timeout must be positive")

@@ -262,8 +262,112 @@ def test_qualified_record_does_not_relax_rejection_paths(profile):
         is None
     )
     assert roles.qualified_record(profile, role, now=NOW, records={}) is None
+    missing_identity = dict(profile)
+    missing_identity.pop("profile_id")
+    assert roles.qualified_record(missing_identity, role, now=NOW, records=records) is None
     records["duplicate"] = dict(evidence, qualification_id="duplicate")
     assert roles.qualified_record(profile, role, now=NOW, records=records) is None
+
+
+def test_valid_expired_history_selects_one_current_record(profile):
+    old = record(profile)
+    old.update(qualified_at=NOW - 20, expires_at=NOW - 10)
+    current = record(profile)
+    current.update(qualification_id="current", qualified_at=NOW - 1, expires_at=NOW + 10)
+    records = {"offline-qualification": old, "current": current}
+
+    assert roles.is_qualified(
+        profile, roles.STRONG_CRITERION_ADJUDICATION, now=NOW, records=records
+    )
+    assert (
+        roles.qualified_record(
+            profile, roles.STRONG_CRITERION_ADJUDICATION, now=NOW, records=records
+        )
+        == current
+    )
+
+
+def test_expired_history_alone_or_two_live_records_stays_unqualified(profile):
+    expired = record(profile)
+    expired.update(qualified_at=NOW - 20, expires_at=NOW - 10)
+    assert not roles.is_qualified(
+        profile,
+        roles.STRONG_CRITERION_ADJUDICATION,
+        now=NOW,
+        records={"offline-qualification": expired},
+    )
+    live = record(profile)
+    live.update(qualification_id="live")
+    assert not roles.is_qualified(
+        profile,
+        roles.STRONG_CRITERION_ADJUDICATION,
+        now=NOW,
+        records={"offline-qualification": record(profile), "live": live},
+    )
+
+
+def test_invalid_expired_or_future_match_blocks_current_record(profile):
+    current = record(profile)
+    current.update(qualification_id="current")
+    malformed_expired = record(profile)
+    malformed_expired.update(qualification_id="old", qualified_at=NOW - 20, expires_at=NOW - 10)
+    malformed_expired["evidence_refs"] = []
+    future = record(profile)
+    future.update(qualification_id="future", qualified_at=NOW + 1, expires_at=NOW + 10)
+    for conflicting in (malformed_expired, future):
+        records = {"current": current, conflicting["qualification_id"]: conflicting}
+        assert not roles.is_qualified(
+            profile, roles.STRONG_CRITERION_ADJUDICATION, now=NOW, records=records
+        )
+        assert (
+            roles.qualified_record(
+                profile, roles.STRONG_CRITERION_ADJUDICATION, now=NOW, records=records
+            )
+            is None
+        )
+
+
+def test_reviewed_current_strong_record_has_exact_scope_and_preserves_old_row():
+    import closer_dispatcher as dispatcher
+    import execution_profiles
+
+    old_id = "sonnet-current-role-qualification:3e7ba0521480a5d44d6a081e5a43b8895aeded9eba9080dbe8b8ebdca98fb009"
+    current_id = "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2"
+    old = roles.ROLE_QUALIFICATIONS[old_id]
+    current = roles.ROLE_QUALIFICATIONS[current_id]
+    now = current["qualified_at"] + 1
+
+    assert (
+        roles._source_digest(old)
+        == "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
+    )
+    assert (
+        roles._source_digest(current)
+        == "ce2e65fd701578b5b68192dacce4b1551830770f00d4d7817ce9f9c834a4728f"
+    )
+    assert current["expires_at"] == current["qualified_at"] + 86400
+    assert current["execution_limits"]["model_contract_sha256"] == (
+        "239df39539465467e89dc47c852f17330ea3700a485806ef69b21933c52af92a"
+    )
+    assert (
+        current["production_model_contract"]["contract_sha256"]
+        == current["execution_limits"]["model_contract_sha256"]
+    )
+    assert current["production_model_contract"] == dispatcher._controlled_model_contract(
+        "closer_exception"
+    )
+    assert current["evidence_refs"] == [
+        {
+            "reference": "retained-native-evidence:sha256:82ff806f22863e3f5fca5a942c2cdc666f100a6cfbb922f7f066b8e807ffb20e",
+            "sha256": "82ff806f22863e3f5fca5a942c2cdc666f100a6cfbb922f7f066b8e807ffb20e",
+        },
+        {
+            "reference": "reviewed-model-quality:sha256:7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+            "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+        },
+    ]
+    profile = execution_profiles.PROFILE_REGISTRY["claude-sonnet-5-5-high-v2"]
+    assert roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=now) == current
 
 
 def test_runtime_qualification_requires_the_same_supported_installed_build(profile, monkeypatch):

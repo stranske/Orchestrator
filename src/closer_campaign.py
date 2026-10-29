@@ -211,6 +211,9 @@ class Campaign:
         demand_now: float | None = None,
         _demand_outcome: dict[str, Any] | None = None,
         _retirement: dict[str, Any] | None = None,
+        _source_initialization: Mapping[str, Any] | None = None,
+        _require_absent: bool = False,
+        _preparation_origin: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Create the record, or resume the same campaign under the same owner.
 
@@ -221,6 +224,32 @@ class Campaign:
             value is not None for value in demand_inputs
         ):
             raise ValueError("completed demand needs assignment, request and verified package")
+        initialization = None
+        preparation_origin = None
+        if _preparation_origin is not None:
+            preparation_origin = dict(_preparation_origin)
+            if (
+                not _require_absent
+                or set(preparation_origin) != {"path", "sha256"}
+                or not isinstance(preparation_origin.get("path"), str)
+                or not Path(preparation_origin["path"]).is_absolute()
+                or not isinstance(preparation_origin.get("sha256"), str)
+                or not _DIGEST.fullmatch(preparation_origin["sha256"])
+            ):
+                raise ValueError("preparation origin requires create-only intent reference")
+        if _source_initialization is not None:
+            initialization = json.loads(json.dumps(_source_initialization))
+            if (
+                not isinstance(initialization, dict)
+                or set(initialization) != {"hold", "correction_controller"}
+                or not isinstance(initialization["hold"], dict)
+                or set(initialization["hold"]) != {"kind", "reason", "bootstrap_anchor_sha256"}
+                or initialization["hold"].get("kind") != "source_initialization"
+                or not isinstance(initialization["correction_controller"], dict)
+                or set(initialization["correction_controller"]) != {"config"}
+                or not isinstance(initialization["correction_controller"]["config"], dict)
+            ):
+                raise ValueError("source initialization must bind its hold and controller config")
         if not 1 <= max_workers <= MAX_WORKERS_CAP:
             raise ValueError(f"max_workers must be 1..{MAX_WORKERS_CAP}")
         worker_config = dict(worker_config or {})
@@ -258,9 +287,13 @@ class Campaign:
             "release_attempt": None,
             "created_at": _now(),
         }
+        if preparation_origin is not None:
+            fresh["preparation_origin"] = preparation_origin
         stream = self._locked()
         try:
             current = self._read_unlocked()
+            if _require_absent and current is not None:
+                raise CampaignError("fresh campaign destination already exists")
             original_current = current
             retirement_record = None
             if current is not None:
@@ -286,8 +319,51 @@ class Campaign:
                         "campaign finite frontier targets changed; use a new campaign"
                     )
                 if demand_request is None:
+                    if initialization is not None:
+                        raise CampaignError(
+                            "source initialization is creation-only or completed demand"
+                        )
                     return current
             selected: dict[str, Any] = current if current is not None else fresh
+            if initialization is not None:
+                if current is None:
+                    if demand_request is not None:
+                        raise CampaignError(
+                            "source initialization must first publish a held campaign"
+                        )
+                    selected.update(initialization)
+                else:
+                    if (
+                        demand_request is None
+                        or current.get("generation") != 1
+                        or current.get("revision") != 1
+                        or current.get("workers") != []
+                        or current.get("phase") != "work"
+                        or current.get("release_attempt") is not None
+                        or current.get("release_record") is not None
+                        or current.get("max_workers") != 1
+                        or current.get("targets") != {ROUND_UNIT: "pending"}
+                        or current.get("worker_config") != worker_config
+                        or any(current.get(key) != value for key, value in initialization.items())
+                        or any(
+                            key in current
+                            for key in (
+                                "demand_admission",
+                                "demand_assignment",
+                                "demand_prepared",
+                                "demand_wake",
+                                "demand_continuations",
+                                "hold_followups",
+                            )
+                        )
+                    ):
+                        raise CampaignError(
+                            "source initialization no longer matches untouched first campaign"
+                        )
+                    # Clear only this initial hold in the same transaction that
+                    # admits the qualified assignment. Refusal writes nothing.
+                    selected = json.loads(json.dumps(current))
+                    selected["hold"] = None
             if demand_request is not None:
                 if current is None:
                     selected["revision"] = 1  # logical initial record, still not written
