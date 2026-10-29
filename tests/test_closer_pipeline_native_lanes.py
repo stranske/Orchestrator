@@ -137,12 +137,14 @@ def test_readiness_input_failure_is_per_item_before_callback(
             request_timeout_seconds=1,
         )
     else:
+        started_at = time.time()
         result = pipeline._run_pipeline_impl(
             tmp_path / "state.json",
             [BAD, PEER],
             **cb,
             **options,
-            deadline=time.time() + 2,
+            deadline=started_at + 2,
+            now=lambda: started_at,
         )
     assert calls == [PEER]
     assert result["targets"][PEER]["status"] == "completed"
