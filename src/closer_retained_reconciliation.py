@@ -26,6 +26,11 @@ NONCE = "8677d9216de24ab3154beae26cd203d8"
 HEAD = "05a7ce20246df00b09daf091d16e5f25c13e96a7"
 MANIFEST_SHA256 = "a03d3b2a015db29702639576497b8c9b6dcaa35354014d364f8b2a23bcb1ae70"
 MODULE_SET_SHA256 = "e069a709ada9403035a8c910257a55e792c79b6524e46ddf72abd47a681b2756"
+# Exact retained census: the attempt-13 result receipt and the pre-recovery
+# 2026-10-29 04:41 UTC observation. A current structural match cannot replace it.
+STATE_REVISION = 16
+STATE_SHA256 = "27645c64c48881a95047426211a287e8be3fbc717e5bcf0a3cec37052b28d811"
+RESULT_SHA256 = "bf14dbe21b79a8bb96065836eb6c3cbc4371ec9cfb71739dd22ad1674d06f60a"
 MODULES = {
     "closer_runtime_binding.py": "d5ca902d6fc9d2e1a9608f099a55fe4a8fd26b31d06ffb2ee2d6ce3eb7bfcb66",
     "closer_native_observer.py": "967c9386ebdc24cc83f77251504071f222ca97557f44530e0eda2d38b879cf9f",
@@ -252,6 +257,10 @@ def _snapshot(
     _source_closure(manifest)
     _, state_raw, document = host._obj(state)
     _need(
+        document.get("revision") == STATE_REVISION and host._sha(state_raw) == STATE_SHA256,
+        "retained campaign differs from the reviewed original census",
+    )
+    _need(
         worker_id == WORKER and document.get("targets") == {"*round*": "reconcile"},
         "unsupported retained worker/scope",
     )
@@ -274,6 +283,10 @@ def _snapshot(
     directory = root / NONCE
     result_path = Path(str(state) + ".results") / (worker_id + ".json")
     _, result_raw, result = host._obj(result_path)
+    _need(
+        host._sha(result_raw) == RESULT_SHA256,
+        "retained result differs from the reviewed original census",
+    )
     request = {
         "admission": _ref(directory / "admission.json"),
         "worker_handoff": _ref(directory / ("worker-" + worker_id + ".json")),
