@@ -80,7 +80,8 @@ def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
     _need(queue.get("events") == [], "source ACT queue is not empty")
     accounting = queue.get("accounting")
     _need(
-        isinstance(accounting, list) and len(accounting) == 1
+        isinstance(accounting, list)
+        and len(accounting) == 1
         and accounting[0].get("operation_id") is None
         and accounting[0].get("operation_status") is None,
         "source deferred accounting is not sole/null",
@@ -95,7 +96,9 @@ def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
     )
 
 
-def _old_diagnostic(manifest: Path, state: Path, worker_id: str, *, interpreter: Path) -> dict[str, Any]:
+def _old_diagnostic(
+    manifest: Path, state: Path, worker_id: str, *, interpreter: Path
+) -> dict[str, Any]:
     """Run a fixed read-only validator under the old physical interpreter.
 
     It imports the old pinned modules only after hashing their closure, then
@@ -121,21 +124,30 @@ def _old_diagnostic(manifest: Path, state: Path, worker_id: str, *, interpreter:
     try:
         run = subprocess.run(
             [str(interpreter), "-I", "-B", "-c", program, str(manifest), str(state), worker_id],
-            check=False, capture_output=True, text=True, timeout=10,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         _need(run.returncode == 0 and len(run.stdout) <= 65536, "old source diagnostic failed")
         answer = json.loads(run.stdout)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise SourceUpgradeHeld("old source diagnostic unavailable") from exc
-    _need(answer.get("manifest_sha256") == _sha(raw) and answer.get("modules") == modules,
-          "old source diagnostic differs")
+    _need(
+        answer.get("manifest_sha256") == _sha(raw) and answer.get("modules") == modules,
+        "old source diagnostic differs",
+    )
     return answer
 
 
 def _manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
     import closer_campaign as campaign
+
     value, raw, doc = _object(path, "manifest")
-    _need(not campaign.validate_manifest(doc) and not campaign.verify_modules(doc), "manifest closure invalid")
+    _need(
+        not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
+        "manifest closure invalid",
+    )
     return value, raw, doc
 
 
@@ -164,22 +176,42 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     snapshot = _canonical(verified["snapshot_path"])
     inspector = Path.home() / ".codex/orchestrator-mirror/scripts/install_verified_snapshot.py"
     try:
-        generation = subprocess.run([str(inspector), str(snapshot), "--generation-token"],
-                                    text=True, capture_output=True, timeout=10, check=False)
-        digest = subprocess.run([str(inspector), str(snapshot), "--digest"],
-                                text=True, capture_output=True, timeout=10, check=False)
+        generation = subprocess.run(
+            [str(inspector), str(snapshot), "--generation-token"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        digest = subprocess.run(
+            [str(inspector), str(snapshot), "--digest"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
     _need(generation.returncode == digest.returncode == 0, "installed generation inspector failed")
-    _need(generation.stdout.strip() == record["installed_generation"] and digest.stdout.strip() == verified["snapshot_digest"],
-          "installed generation/digest readback differs")
-    return {"path": str(journal), "sha256": _sha(host._read(journal)[1]),
-            "candidate_sha": candidate, "installed_generation": record["installed_generation"],
-            "snapshot_digest": verified["snapshot_digest"],
-            "inspector": str(inspector), "inspector_sha256": _sha(host._read(inspector)[1])}
+    _need(
+        generation.stdout.strip() == record["installed_generation"]
+        and digest.stdout.strip() == verified["snapshot_digest"],
+        "installed generation/digest readback differs",
+    )
+    return {
+        "path": str(journal),
+        "sha256": _sha(host._read(journal)[1]),
+        "candidate_sha": candidate,
+        "installed_generation": record["installed_generation"],
+        "snapshot_digest": verified["snapshot_digest"],
+        "inspector": str(inspector),
+        "inspector_sha256": _sha(host._read(inspector)[1]),
+    }
 
 
-def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id: str) -> dict[str, Any]:
+def _completed_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
     """Read an actual terminal worker without importing no-start authority."""
     import closer_campaign as campaign
 
@@ -194,7 +226,10 @@ def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id:
     workers = document.get("workers")
     if not isinstance(workers, list):
         raise SourceUpgradeHeld("old campaign worker list missing")
-    worker = next((row for row in workers if isinstance(row, dict) and row.get("worker_id") == worker_id), None)
+    worker = next(
+        (row for row in workers if isinstance(row, dict) and row.get("worker_id") == worker_id),
+        None,
+    )
     if not isinstance(worker, dict):
         raise SourceUpgradeHeld("old worker is not terminal")
     _need(worker.get("state") == "terminal", "old worker is not terminal")
@@ -202,12 +237,24 @@ def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id:
         host._dead(worker["pid"])
     result_path = campaign.result_path(state, worker_id)
     _, result_raw, result = _object(result_path, "old result")
-    _need(result.get("worker_id") == worker_id and result.get("target") == worker.get("target"),
-          "old result does not join terminal worker")
-    _need(worker.get("outcome") == result.get("outcome") == "ok", "old completed worker is not exact OK")
-    return {"manifest_path": str(manifest_path), "state_path": str(state), "state_sha256": _sha(state_raw),
-            "state": document, "worker": worker, "result_path": str(result_path),
-            "result_sha256": _sha(result_raw), "result": result}
+    _need(
+        result.get("worker_id") == worker_id and result.get("target") == worker.get("target"),
+        "old result does not join terminal worker",
+    )
+    _need(
+        worker.get("outcome") == result.get("outcome") == "ok",
+        "old completed worker is not exact OK",
+    )
+    return {
+        "manifest_path": str(manifest_path),
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+    }
 
 
 def _old_native_terminal(manifest: dict[str, Any]) -> None:
@@ -224,9 +271,104 @@ def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
     """Pin target/owner/principal/epoch semantics across the source upgrade."""
     old_config = old["policy"]["correction_controller_installation"]["config"]
     new_config = new["policy"]["correction_controller_installation"]["config"]
-    for key in ("repository", "repository_id", "epoch", "writer_id", "writer_login", "writer_type",
-                "bootstrap_anchor_sha256"):
+    for key in (
+        "repository",
+        "repository_id",
+        "epoch",
+        "writer_id",
+        "writer_login",
+        "writer_type",
+        "bootstrap_anchor_sha256",
+    ):
         _need(old_config.get(key) == new_config.get(key), "source upgrade identity changed: " + key)
+
+
+def _physical_recipe(
+    old_cfg: dict[str, Any],
+    old_state: Path,
+    new: dict[str, Any],
+    new_path: Path,
+    new_state: Path,
+    frontier: dict[str, Any],
+) -> dict[str, Any]:
+    """Known-f858 rebind: retain data knobs, derive every executable path."""
+    import closer_pipeline
+
+    allowed = {
+        "runtime_manifest",
+        "finite_frontier",
+        "assignment",
+        "dispatch_state",
+        "policy",
+        "granularity",
+        "mechanism",
+        "execution_policy",
+        "dispatch_workers",
+        "coordinator_mode",
+        "coordinator_contract_pin",
+        "request_timeout_seconds",
+        "handoff_agent",
+        "handoff_dir",
+        "native_hooks",
+        "receipt_reserve_seconds",
+    }
+    _need(set(old_cfg) <= allowed, "old worker config has unknown executable field")
+    _need(
+        set(old_cfg)
+        >= {"assignment", "dispatch_state", "native_hooks", "handoff_dir", "handoff_agent"},
+        "old worker config lacks physical recipe fields",
+    )
+    old_root = old_state.parent
+    for key in ("assignment", "dispatch_state"):
+        path = _canonical(old_cfg[key])
+        _need(path.parent == old_root, "old physical path is outside old campaign root")
+    cfg = json.loads(json.dumps(old_cfg, sort_keys=True))
+    cfg["runtime_manifest"] = str(new_path)
+    cfg["finite_frontier"] = frontier
+    cfg["assignment"] = str(new_state.parent / Path(old_cfg["assignment"]).name)
+    cfg["dispatch_state"] = str(new_state.parent / Path(old_cfg["dispatch_state"]).name)
+    cfg["policy"] = new["policy"]
+    cfg["coordinator_contract_pin"] = closer_pipeline.scoped_capability()
+    _need(
+        cfg.get("granularity", "round") == "round"
+        and cfg.get("mechanism") == "native-handoff/v1"
+        and cfg.get("execution_policy") == "finite-frontier/v2"
+        and cfg.get("dispatch_workers") == 1
+        and cfg.get("coordinator_mode") == "resource_scoped"
+        and cfg.get("request_timeout_seconds") == 120,
+        "physical recipe mode differs",
+    )
+    old_hooks = old_cfg["native_hooks"]
+    _need(isinstance(old_hooks, dict), "old native hooks invalid")
+    hook_root = new_state.parent.parent / "native-hooks"
+    hooks: dict[str, Any] = {"bounded_no_new_relay": True}
+    for phase in ("prerun", "postrun"):
+        old_hook = old_hooks.get(phase)
+        path = hook_root / ("handoff-" + phase + ".sh")
+        _need(
+            isinstance(old_hook, dict) and _sha(host._read(path)[1]) == old_hook.get("sha256"),
+            "new hook differs from old reviewed hook",
+        )
+        hooks[phase] = {"path": str(path), "sha256": old_hook["sha256"]}
+    module_dir = _canonical(new["module_dir"])
+    lease = module_dir / "closer_native_lease.py"
+    _need(
+        _sha(host._read(lease)[1]) == new["modules"].get(lease.name), "new lease module pin differs"
+    )
+    hooks["lease_module"] = {"path": str(lease), "sha256": new["modules"][lease.name]}
+    interpreter = new["mechanism_contract"]["interpreter"]
+    _need(isinstance(interpreter, dict), "new interpreter physical pin missing")
+    mirror = (Path.home() / ".codex/orchestrator-mirror/closer_dispatcher.py").resolve()
+    _need(
+        _sha(host._read(mirror)[1]) == new["modules"].get(mirror.name),
+        "current dispatcher pin differs",
+    )
+    hooks["postrun_dependencies"] = {
+        "interpreter": {"path": interpreter["path"], "sha256": interpreter["sha256"]},
+        "dispatcher": {"path": str(mirror), "sha256": new["modules"][mirror.name]},
+    }
+    cfg["native_hooks"] = hooks
+    return cfg
 
 
 def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
@@ -243,7 +385,9 @@ def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
         inspection = controller.inspect_provisioned_custody(config)
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         raise SourceUpgradeHeld("old physical custody unavailable") from exc
-    _need(not inspection["highwater"]["pending_transactions"], "old custody has pending transaction")
+    _need(
+        not inspection["highwater"]["pending_transactions"], "old custody has pending transaction"
+    )
     return inspection
 
 
@@ -258,9 +402,13 @@ def fresh_read_native_index(config: dict[str, Any], inspection: dict[str, Any]) 
 
     def get(endpoint: str) -> dict[str, Any]:
         try:
-            call = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True,
-                                  timeout=10, check=False)
-            _need(call.returncode == 0 and len(call.stdout) <= 1024 * 1024, "native index GET unavailable")
+            call = subprocess.run(
+                ["gh", "api", endpoint], capture_output=True, text=True, timeout=10, check=False
+            )
+            _need(
+                call.returncode == 0 and len(call.stdout) <= 1024 * 1024,
+                "native index GET unavailable",
+            )
             value = json.loads(call.stdout)
         except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
             raise SourceUpgradeHeld("native index GET unavailable") from exc
@@ -270,30 +418,57 @@ def fresh_read_native_index(config: dict[str, Any], inspection: dict[str, Any]) 
 
     ref = get("repos/" + repository + "/git/ref/heads/" + controller.BRANCH)
     _need(ref.get("object", {}).get("sha") == anchor["commit_sha"], "native index head changed")
-    contents = get("repos/" + repository + "/contents/" + controller.INDEX_PATH + "?ref=" + anchor["commit_sha"])
-    _need(contents.get("sha") == anchor["blob_sha"] and contents.get("encoding") == "base64",
-          "native index blob changed")
+    contents = get(
+        "repos/"
+        + repository
+        + "/contents/"
+        + controller.INDEX_PATH
+        + "?ref="
+        + anchor["commit_sha"]
+    )
+    _need(
+        contents.get("sha") == anchor["blob_sha"] and contents.get("encoding") == "base64",
+        "native index blob changed",
+    )
     principal, repo = get("user"), get("repos/" + repository)
-    _need({key: principal.get(key) for key in ("id", "login", "type")} ==
-          {"id": config.get("writer_id"), "login": config.get("writer_login"), "type": config.get("writer_type")},
-          "native index principal changed")
-    _need(repo.get("id") == config.get("repository_id") and controller.native_repository_name(repo.get("full_name"), repository.lower()),
-          "native index repository changed")
+    _need(
+        {key: principal.get(key) for key in ("id", "login", "type")}
+        == {
+            "id": config.get("writer_id"),
+            "login": config.get("writer_login"),
+            "type": config.get("writer_type"),
+        },
+        "native index principal changed",
+    )
+    _need(
+        repo.get("id") == config.get("repository_id")
+        and controller.native_repository_name(repo.get("full_name"), repository.lower()),
+        "native index repository changed",
+    )
     try:
         raw = base64.b64decode(str(contents.get("content", "")).replace("\n", ""), validate=True)
         data = json.loads(raw)
-        _need(controller.validate_index(data, controller.ControllerConfig(**config)) == data,
-              "native index source validation failed")
+        _need(
+            controller.validate_index(data, controller.ControllerConfig(**config)) == data,
+            "native index source validation failed",
+        )
     except (ValueError, TypeError, RuntimeError) as exc:
         raise SourceUpgradeHeld("native index payload invalid") from exc
     _need(controller.digest(data) == anchor["state_sha256"], "native index state changed")
     _need(data.get("revision") == 0 and data.get("entries") == [], "native index not pristine")
-    return {"commit_sha": anchor["commit_sha"], "blob_sha": anchor["blob_sha"],
-            "state_sha256": anchor["state_sha256"], "principal": {key: principal[key] for key in ("id", "login", "type")},
-            "repository_id": repo["id"], "repository": repo["full_name"]}
+    return {
+        "commit_sha": anchor["commit_sha"],
+        "blob_sha": anchor["blob_sha"],
+        "state_sha256": anchor["state_sha256"],
+        "principal": {key: principal[key] for key in ("id", "login", "type")},
+        "repository_id": repo["id"],
+        "repository": repo["full_name"],
+    }
 
 
-def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, new: dict[str, Any], receipt: Path) -> dict[str, Any]:
+def _wrapper_plan(
+    old_manifest: Path, old: dict[str, Any], new_manifest: Path, new: dict[str, Any], receipt: Path
+) -> dict[str, Any]:
     """Delegate rendering/CAS shape to the reviewed installer, before the CAS."""
     import closer_native_wrapper_install as install
 
@@ -308,16 +483,30 @@ def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, n
     return {"path": str(wrapper), "before_sha256": _sha(before), "after_sha256": _sha(after)}
 
 
-def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
-         new_manifest: str | Path, new_state: str | Path, restore_receipt: str | Path,
-         new_worker_config: dict[str, Any], frontier: dict[str, Any], new_release_journal: str | Path) -> dict[str, Any]:
+def plan(
+    old_manifest: str | Path,
+    old_state: str | Path,
+    worker_id: str,
+    new_manifest: str | Path,
+    new_state: str | Path,
+    restore_receipt: str | Path,
+    new_worker_config: dict[str, Any],
+    frontier: dict[str, Any],
+    new_release_journal: str | Path,
+) -> dict[str, Any]:
     """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
     import closer_native_wrapper_install as install
 
     old_path, old_raw, old = _manifest(old_manifest)
     new_path, new_raw, new = _manifest(new_manifest)
-    _need(old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE, "old release is not reviewed no-ACT predecessor")
-    _need(old.get("candidate_sha") != new.get("candidate_sha"), "source candidate release is not different")
+    _need(
+        old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE,
+        "old release is not reviewed no-ACT predecessor",
+    )
+    _need(
+        old.get("candidate_sha") != new.get("candidate_sha"),
+        "source candidate release is not different",
+    )
     release = _installed_release(new_release_journal, new["candidate_sha"])
     _need(
         new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),
@@ -327,10 +516,17 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     reference = _completed_reference(old_path, old_state, worker_id)
     _old_native_terminal(old)
     custody = _old_custody_quiet(old)
-    index = fresh_read_native_index(old["policy"]["correction_controller_installation"]["config"], custody)
+    index = fresh_read_native_index(
+        old["policy"]["correction_controller_installation"]["config"], custody
+    )
     interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
-    diagnostic = _old_diagnostic(old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter)
-    _need(diagnostic.get("target") == reference["worker"].get("target"), "old diagnostic target differs")
+    diagnostic = _old_diagnostic(
+        old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
+    )
+    _need(
+        diagnostic.get("target") == reference["worker"].get("target"),
+        "old diagnostic target differs",
+    )
     correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
     cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
     if not all(isinstance(value, dict) for value in (correction, queue, cohort, completed)):
@@ -338,33 +534,41 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
     _incomplete_cohort(cast(dict[str, Any], cohort), cast(dict[str, Any], completed))
     state = _canonical(new_state)
-    _need(not state.exists() and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
-          "new state is not fresh current campaign")
+    _need(
+        not state.exists()
+        and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
+        "new state is not fresh current campaign",
+    )
     host._lane_absent()
     # Freeze the only proposed inputs before CAS. These remain non-authoritative
     # until the later current-source admission path observes demand again.
     import closer_frontier_policy as policy
     import closer_native_readmission as readmission
+
     try:
         fresh = policy.validate_frontier(frontier, targets=frontier.get("targets"))
-        old_frontier = policy.validate_frontier(reference["state"]["worker_config"]["finite_frontier"])
+        old_frontier = policy.validate_frontier(
+            reference["state"]["worker_config"]["finite_frontier"]
+        )
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceUpgradeHeld("pre-CAS frontier invalid") from exc
-    # Strict rebind: all old worker knobs remain byte-for-byte identical.  The
-    # only new values are the current manifest and one fresh finite frontier.
-    cfg = json.loads(json.dumps(reference["state"]["worker_config"], sort_keys=True))
-    cfg["runtime_manifest"] = str(new_path)
-    cfg["finite_frontier"] = fresh
+    cfg = _physical_recipe(
+        reference["state"]["worker_config"],
+        Path(reference["state_path"]),
+        new,
+        new_path,
+        state,
+        fresh,
+    )
     supplied = json.loads(json.dumps(new_worker_config, sort_keys=True))
     _need(supplied == cfg, "pre-CAS worker config is not strict old-to-new rebind")
-    import closer_pipeline
     _need(
         cfg.get("granularity", "round") == "round"
         and cfg.get("mechanism") == "native-handoff/v1"
         and cfg.get("execution_policy") == "finite-frontier/v2"
         and cfg.get("dispatch_workers") == 1
         and cfg.get("coordinator_mode") == "resource_scoped"
-        and cfg.get("coordinator_contract_pin") == closer_pipeline.scoped_capability(),
+        and isinstance(cfg.get("coordinator_contract_pin"), dict),
         "strict rebind worker modes/coordinator differ",
     )
     hooks = cfg.get("native_hooks")
@@ -381,19 +585,41 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     wrapper = _wrapper_plan(old_path, old, new_path, new, receipt)
     _restored, predecessor = install._restored_predecessor(receipt)
     rows = install._prospective_rows(predecessor, reference, new, state)
-    result = {"schema": SCHEMA, "authority": False, "eligible": True,
-              "producer_sha256": _sha(Path(__file__).read_bytes()),
-              "old": {"manifest": str(old_path), "manifest_sha256": _sha(old_raw), "state": reference["state_path"],
-                      "state_sha256": reference["state_sha256"], "result": reference["result_path"], "result_sha256": reference["result_sha256"],
-                      "custody": custody, "native_index": index, "diagnostic": diagnostic},
-              "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
-              "new_release": release,
-              "held_recipe": {"worker_config": cfg,
-                              "worker_config_sha256": _sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()),
-                              "frontier": fresh,
-                              "frontier_sha256": _sha(json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode())},
-              "wrapper": wrapper, "locks": rows,
-              "seal": str(Path(new["mechanism_contract"]["observation_root"]) / "source-upgrade-current-disposition.json")}
+    result = {
+        "schema": SCHEMA,
+        "authority": False,
+        "eligible": True,
+        "producer_sha256": _sha(Path(__file__).read_bytes()),
+        "old": {
+            "manifest": str(old_path),
+            "manifest_sha256": _sha(old_raw),
+            "state": reference["state_path"],
+            "state_sha256": reference["state_sha256"],
+            "result": reference["result_path"],
+            "result_sha256": reference["result_sha256"],
+            "custody": custody,
+            "native_index": index,
+            "diagnostic": diagnostic,
+        },
+        "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
+        "new_release": release,
+        "held_recipe": {
+            "worker_config": cfg,
+            "worker_config_sha256": _sha(
+                json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()
+            ),
+            "frontier": fresh,
+            "frontier_sha256": _sha(
+                json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode()
+            ),
+        },
+        "wrapper": wrapper,
+        "locks": rows,
+        "seal": str(
+            Path(new["mechanism_contract"]["observation_root"])
+            / "source-upgrade-current-disposition.json"
+        ),
+    }
     result["plan_sha256"] = _sha(json.dumps(result, sort_keys=True, separators=(",", ":")).encode())
     return result
 
@@ -401,6 +627,7 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
 def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
     """One-way CAS after a sealed intent; it creates no campaign or native work."""
     import closer_native_wrapper_install as install
+
     first = plan(*args)
     _need(first["plan_sha256"] == expected_plan_sha256, "plan changed")
     with host._hold(first["locks"]):
@@ -417,11 +644,16 @@ def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
         new_path = Path(first["new"]["manifest"])
         _, new_raw, new = _manifest(new_path)
         _need(_sha(new_raw) == first["new"]["manifest_sha256"], "new manifest changed before CAS")
-        _need(_sha(host._read(wrapper)[1]) == first["wrapper"]["before_sha256"], "wrapper CAS preimage changed")
+        _need(
+            _sha(host._read(wrapper)[1]) == first["wrapper"]["before_sha256"],
+            "wrapper CAS preimage changed",
+        )
         # Re-read the archived base through the installer helper; no old
         # contract is invoked after this point.
         restored_doc, _ = install._restored_predecessor(Path(args[-1]))
-        data = install._render(install._guard_source(install._archived_base(restored_doc)), new, new_path)
+        data = install._render(
+            install._guard_source(install._archived_base(restored_doc)), new, new_path
+        )
         _need(_sha(data) == first["wrapper"]["after_sha256"], "wrapper CAS render changed")
         fd, tmp = tempfile.mkstemp(dir=wrapper.parent, prefix=".source-upgrade-wrapper-")
         replaced = False
@@ -439,22 +671,32 @@ def apply(*args: Any, expected_plan_sha256: str) -> dict[str, Any]:
                 os.fsync(directory)
             finally:
                 os.close(directory)
-            _need(_sha(host._read(wrapper)[1]) == first["wrapper"]["after_sha256"], "wrapper CAS readback failed")
+            _need(
+                _sha(host._read(wrapper)[1]) == first["wrapper"]["after_sha256"],
+                "wrapper CAS readback failed",
+            )
             # Current contract only: old contract is invalid by design now.
             import closer_native_observer as native
+
             native.contract(new)
             native._check_wrapper_entry(new, new_path)
             # The only permitted post-CAS difference is the canonical wrapper.
             # Re-read every new module/source pin after replacement.
             _, verified_raw, verified = _manifest(new_path)
-            _need(_sha(verified_raw) == first["new"]["manifest_sha256"] and verified == new,
-                  "new source closure changed after wrapper CAS")
-            host._write_once(seal.with_name("source-upgrade-known.json"),
-                             {**first, "stage": "cas_known", "at": time.time()})
+            _need(
+                _sha(verified_raw) == first["new"]["manifest_sha256"] and verified == new,
+                "new source closure changed after wrapper CAS",
+            )
+            host._write_once(
+                seal.with_name("source-upgrade-known.json"),
+                {**first, "stage": "cas_known", "at": time.time()},
+            )
             return {**first, "status": "installed"}
         except Exception as exc:
             if replaced:
-                raise SourceUpgradeHeld("post-CAS outcome uncertain: " + type(exc).__name__) from None
+                raise SourceUpgradeHeld(
+                    "post-CAS outcome uncertain: " + type(exc).__name__
+                ) from None
             raise
         finally:
             if fd >= 0:
@@ -478,8 +720,14 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     import closer_native_readmission as readmission
 
     seal, seal_raw, record = _object(seal_path, "source upgrade seal")
-    _need(record.get("schema") == SCHEMA and record.get("stage") == "sealed_pre_cas", "upgrade seal invalid")
-    _need(record.get("plan_sha256") == confirm_plan_sha256, "held confirmation differs from sealed upgrade")
+    _need(
+        record.get("schema") == SCHEMA and record.get("stage") == "sealed_pre_cas",
+        "upgrade seal invalid",
+    )
+    _need(
+        record.get("plan_sha256") == confirm_plan_sha256,
+        "held confirmation differs from sealed upgrade",
+    )
     known = seal.with_name("source-upgrade-known.json")
     _need(known.exists(), "wrapper CAS is not known")
     new_path = _canonical(record["new"]["manifest"])
@@ -490,8 +738,10 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     release = _installed_release(record["new_release"]["path"], manifest["candidate_sha"])
     _need(release == record["new_release"], "new installed release changed")
     native.contract(manifest)  # current/new contract only, after CAS
-    _need(_sha(host._read(record["wrapper"]["path"])[1]) == record["wrapper"]["after_sha256"],
-          "current wrapper differs from sealed new pin")
+    _need(
+        _sha(host._read(record["wrapper"]["path"])[1]) == record["wrapper"]["after_sha256"],
+        "current wrapper differs from sealed new pin",
+    )
     problems = campaign.qualify(manifest, new_path.parent)
     _need(not problems, "new source qualification failed")
     old_state = _canonical(record["old"]["state"])
@@ -503,24 +753,37 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     _need(
         fresh_read_native_index(
             old_manifest["policy"]["correction_controller_installation"]["config"], inspection
-        ) == record["old"]["native_index"],
+        )
+        == record["old"]["native_index"],
         "native index changed after source upgrade seal",
     )
     recipe = record.get("held_recipe")
-    if not isinstance(recipe, dict) or not isinstance(recipe.get("worker_config"), dict) or not isinstance(recipe.get("frontier"), dict):
+    if (
+        not isinstance(recipe, dict)
+        or not isinstance(recipe.get("worker_config"), dict)
+        or not isinstance(recipe.get("frontier"), dict)
+    ):
         raise SourceUpgradeHeld("sealed held recipe unavailable")
     cfg_path, _m, _raw, cfg = readmission._new_runtime(new_path, recipe["worker_config"])
     _need(cfg_path == new_path, "new worker config runtime changed")
     try:
-        fresh = policy.validate_frontier(recipe["frontier"], targets=recipe["frontier"].get("targets"))
+        fresh = policy.validate_frontier(
+            recipe["frontier"], targets=recipe["frontier"].get("targets")
+        )
         old_doc = _object(old_state, "old campaign state")[2]
         old_frontier = policy.validate_frontier(old_doc["worker_config"]["finite_frontier"])
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceUpgradeHeld("fresh held frontier invalid") from exc
-    _need(_sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()) == recipe.get("worker_config_sha256"),
-          "sealed worker configuration changed")
-    _need(_sha(json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode()) == recipe.get("frontier_sha256"),
-          "sealed frontier changed")
+    _need(
+        _sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode())
+        == recipe.get("worker_config_sha256"),
+        "sealed worker configuration changed",
+    )
+    _need(
+        _sha(json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode())
+        == recipe.get("frontier_sha256"),
+        "sealed frontier changed",
+    )
     readmission._guard_fresh(manifest, cfg, destination, fresh, old_frontier)
     # Existing source initialization produces a held record; no demand is
     # admitted here. A one-use marker prevents a second preparation.
@@ -529,24 +792,54 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     with host._hold(readmission._new_lock_rows(manifest)):
         _need(not destination.exists() and not marker.exists(), "fresh held state changed")
         reference = {
-            "state_path": str(old_state), "state_sha256": record["old"]["state_sha256"],
+            "state_path": str(old_state),
+            "state_sha256": record["old"]["state_sha256"],
             "worker": record["old"]["diagnostic"].get("cohort", {}),
-            "result_path": str(old_result), "result_sha256": record["old"]["result_sha256"],
+            "result_path": str(old_result),
+            "result_sha256": record["old"]["result_sha256"],
             # This is a sealed no-ACT disposition reference, never a fabricated
             # no-start proof; generic preparation only hashes it for provenance.
-            "proof": {"schema": SCHEMA, "plan_sha256": confirm_plan_sha256,
-                      "diagnostic": record["old"]["diagnostic"]},
+            "proof": {
+                "schema": SCHEMA,
+                "plan_sha256": confirm_plan_sha256,
+                "diagnostic": record["old"]["diagnostic"],
+            },
         }
-        plan_doc, readmission_sha = readmission._plan(reference, new_path, raw, cfg, destination, fresh)
+        plan_doc, readmission_sha = readmission._plan(
+            reference, new_path, raw, cfg, destination, fresh
+        )
         token = readmission._intent_token(plan_doc, readmission_sha)
         intent = seal.with_name("source-upgrade-readmission-intent.json")
-        known = readmission._recover_or_create(campaign, native, destination, manifest, cfg, fresh,
-                                               old_doc, readmission_sha, intent, token)
+        known = readmission._recover_or_create(
+            campaign,
+            native,
+            destination,
+            manifest,
+            cfg,
+            fresh,
+            old_doc,
+            readmission_sha,
+            intent,
+            token,
+        )
         created = campaign.Campaign(destination).read()
         if created is None:
             raise SourceUpgradeHeld("known preparation did not create held campaign")
-        host._write_once(marker, {"schema": SCHEMA, "seal_sha256": _sha(seal_raw),
-                                  "state": str(destination), "revision": created["revision"],
-                                  "known": str(known), "authority": False})
-    return {"status": "fresh_held_prepared", "authority": False, "state": str(destination),
-            "revision": created["revision"], "marker": str(marker)}
+        host._write_once(
+            marker,
+            {
+                "schema": SCHEMA,
+                "seal_sha256": _sha(seal_raw),
+                "state": str(destination),
+                "revision": created["revision"],
+                "known": str(known),
+                "authority": False,
+            },
+        )
+    return {
+        "status": "fresh_held_prepared",
+        "authority": False,
+        "state": str(destination),
+        "revision": created["revision"],
+        "marker": str(marker),
+    }
