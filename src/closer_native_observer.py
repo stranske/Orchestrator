@@ -627,8 +627,12 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         )
         return context
     directory = root / nonce
-    assignment_source = private_test_assignment_source(manifest)
     demand = doc.get("demand_admission")
+    if manifest["mechanism_contract"].get("controller_demand") and demand is None:
+        raise mechanisms.MechanismError(
+            "controlled native campaign requires admitted source demand"
+        )
+    assignment_source = private_test_assignment_source(manifest)
     if "private_test" in manifest["mechanism_contract"] and demand is not None:
         raise mechanisms.MechanismError("private native test cannot use production demand")
     demand_reference = None

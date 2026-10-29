@@ -93,7 +93,7 @@ def _reference(monkeypatch, tmp_path):
 def test_apply_consumes_one_proof_then_creates_distinct_campaign(monkeypatch, tmp_path):
     old_frontier, _raw, reference, manifest, cfg, fake = _reference(monkeypatch, tmp_path)
     fresh = _frontier("fresh")
-    destination = tmp_path / "fresh-state.json"
+    destination = tmp_path / "fresh.campaign.json"
     _plan, plan_sha = readmission._plan(
         reference, manifest, b'{"new":true}', cfg, destination, fresh
     )
@@ -132,7 +132,7 @@ def test_apply_rejects_target_drift_and_wrong_plan(monkeypatch, tmp_path):
             "0123456789ab",
             manifest,
             cfg,
-            tmp_path / "new.json",
+            tmp_path / "new.campaign.json",
             _frontier("fresh", ("other",)),
             confirm_plan_sha256="0" * 64,
         )
@@ -143,7 +143,7 @@ def test_apply_rejects_target_drift_and_wrong_plan(monkeypatch, tmp_path):
             "0123456789ab",
             manifest,
             cfg,
-            tmp_path / "new.json",
+            tmp_path / "new.campaign.json",
             _frontier("fresh"),
             confirm_plan_sha256="0" * 64,
         )

@@ -145,7 +145,19 @@ PUBLICATION_ADMISSION_SHA256 = "695eec7282d482e43ebbefc70f3439313cd98d328796901b
 def publication_admission_reference():
     raw = PUBLICATION_ADMISSION_MANIFEST.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == PUBLICATION_ADMISSION_SHA256
-    return json.loads(raw)
+    value = json.loads(raw)
+    change = controlled_initialization_reference()["files"]["closer_campaign.py"]
+    campaign = value["protected_native_modules"]["closer_campaign.py"]
+    assert campaign["after_file_sha256"] == change["before_file_sha256"]
+    campaign["after_file_sha256"] = change["after_file_sha256"]
+    assert (
+        campaign["before_top_level_ast"]["Campaign"] == change["before_top_level_ast"]["Campaign"]
+    )
+    campaign["changed_top_level_ast"]["Campaign"] = {
+        "before": change["before_top_level_ast"]["Campaign"],
+        "after": change["after_top_level_ast"]["Campaign"],
+    }
+    return value
 
 
 def integrated_native_source_reference():
@@ -158,7 +170,31 @@ def integrated_native_source_reference():
     for name, change in finite_no_start_v2_reference()["files"].items():
         assert original[name] == change["before_file_sha256"]
         original[name] = change["after_file_sha256"]
+    observer = controlled_initialization_reference()["files"]["closer_native_observer.py"]
+    assert original["closer_native_observer.py"] == observer["before_file_sha256"]
+    original["closer_native_observer.py"] = observer["after_file_sha256"]
     return original
+
+
+CONTROLLED_INITIALIZATION_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_controlled_initialization_v1.json"
+)
+CONTROLLED_INITIALIZATION_SHA256 = (
+    "316eae17fd730d97122912c9fbe1790b626072d0537b8e72f423e5a8f2d79f9f"
+)
+
+
+def controlled_initialization_reference():
+    raw = CONTROLLED_INITIALIZATION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == CONTROLLED_INITIALIZATION_SHA256
+    value = json.loads(raw)
+    assert value["base_commit"] == "0a9b0f93909c82532add2d022e26e768df785839"
+    assert {name: change["changed_node"] for name, change in value["files"].items()} == {
+        "closer_campaign.py": "Campaign.begin",
+        "closer_native_observer.py": "publish_admission",
+    }
+    return value
 
 
 FINITE_NO_START_V2_MANIFEST = (

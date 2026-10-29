@@ -28,9 +28,17 @@ def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
     reviewed = support.finite_no_start_v2_reference()
     for filename, change in reviewed["files"].items():
         after = source_path(filename).read_bytes()
-        assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
+        successor = support.controlled_initialization_reference()["files"].get(filename)
+        if successor:
+            assert change["after_file_sha256"] == successor["before_file_sha256"]
+            assert hashlib.sha256(after).hexdigest() == successor["after_file_sha256"]
+        else:
+            assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
         before_top = change["before_top_level_ast"]
         after_top, after_tree = _top_level_ast(after)
+        if successor:
+            assert after_top == successor["after_top_level_ast"]
+            after_top = successor["before_top_level_ast"]
         assert (
             hashlib.sha256(
                 json.dumps(before_top, sort_keys=True, separators=(",", ":")).encode()
@@ -149,6 +157,40 @@ def test_finite_no_start_v2_successor_fixture_is_pinned(tmp_path, monkeypatch):
     monkeypatch.setattr(support, "FINITE_NO_START_V2_MANIFEST", changed)
     with pytest.raises(AssertionError):
         support.finite_no_start_v2_reference()
+
+
+def test_controlled_initialization_changes_only_atomic_begin_and_native_demand_guard():
+    for filename, change in support.controlled_initialization_reference()["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        top, tree = _top_level_ast(raw)
+        assert top == change["after_top_level_ast"]
+        selected = change["changed_node"].split(".")[0]
+        assert {k: v for k, v in top.items() if k != selected} == {
+            k: v for k, v in change["before_top_level_ast"].items() if k != selected
+        }
+        if filename == "closer_campaign.py":
+            cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Campaign")
+            node = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "begin")
+            assert fingerprint(node) == change["after_node_ast_sha256"]
+            cls.body = [
+                n for n in cls.body if not (isinstance(n, ast.FunctionDef) and n.name == "begin")
+            ]
+            assert fingerprint(cls) == change["remaining_class_ast_sha256"]
+        else:
+            assert top[selected] == change["after_node_ast_sha256"]
+
+
+def test_controlled_initialization_reference_is_pinned(tmp_path, monkeypatch):
+    path = tmp_path / "changed.json"
+    path.write_bytes(
+        support.CONTROLLED_INITIALIZATION_MANIFEST.read_bytes().replace(
+            b"Campaign.begin", b"Campaign.other", 1
+        )
+    )
+    monkeypatch.setattr(support, "CONTROLLED_INITIALIZATION_MANIFEST", path)
+    with pytest.raises(AssertionError):
+        support.controlled_initialization_reference()
 
 
 def test_current_publication_admission_overlay_preserves_unreviewed_ast_families():
