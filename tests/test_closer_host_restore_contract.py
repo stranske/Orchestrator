@@ -286,17 +286,34 @@ def test_release_lock_resources_are_derived_from_real_config(tmp_path, monkeypat
     assert {str(record) + ".lock", str(record) + ".publisher.lock"} <= paths
 
 
-@pytest.mark.parametrize("mutate", ["backup", "nonce", "result", "lease", "race"])
-def test_refuses_changed_witnesses_and_lease(tmp_path, monkeypatch, mutate):
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        ("backup", "backup_bytes_changed"),
+        ("nonce", "terminal_nonce_changed"),
+        ("result", "raw_unknown_result_binding_changed"),
+        ("lease", "signed_process_or_group_is_live"),
+        ("race", "current_wrapper_not_swapped_bytes"),
+    ],
+)
+def test_refuses_changed_witnesses_and_lease(tmp_path, monkeypatch, mutate, reason):
     request, wrapper, backup, result, terminal = _world(tmp_path, monkeypatch)
     if mutate == "backup":
         Path(json.loads(request.read_text())["backup"]["path"]).write_text("{}")
     elif mutate == "nonce":
-        item = json.loads(terminal.read_text())
-        item["record"]["nonce"] = "foreign"
-        terminal.write_text(json.dumps(item))
+        envelope = json.loads(terminal.read_text())
+        envelope["record"]["nonce"] = "foreign"
+        key = (tmp_path / "observation" / "supervisor.key").read_bytes()
+        envelope["signature"] = mechanisms._signature(envelope["record"], key)
+        _write(terminal, envelope)
+        request_item = json.loads(request.read_text())
+        request_item["terminal"] = _ref(terminal)
+        _write(request, request_item)
     elif mutate == "result":
         result.write_text(json.dumps({"worker_id": "worker1", "outcome": "accepted"}))
+        request_item = json.loads(request.read_text())
+        request_item["result"] = _ref(result)
+        _write(request, request_item)
     elif mutate == "lease":
         monkeypatch.setattr(
             restore,
@@ -305,7 +322,36 @@ def test_refuses_changed_witnesses_and_lease(tmp_path, monkeypatch, mutate):
         )
     else:
         wrapper.write_bytes(b"raced")
-    assert restore.plan(request)["eligible"] is False
+    outcome = restore.plan(request)
+    assert outcome["eligible"] is False
+    assert outcome["reason"] == reason
+
+
+def test_dead_rejects_invalid_and_live_processes_and_accepts_missing_process_group(monkeypatch):
+    for invalid in (True, 0, -1, "1001"):
+        with pytest.raises(restore.Refused, match="signed_pid_invalid"):
+            restore._dead(invalid)
+    monkeypatch.setattr(restore.os, "kill", lambda _pid, _signal: None)
+    with pytest.raises(restore.Refused, match="signed_process_or_group_is_live"):
+        restore._dead(1001)
+    monkeypatch.setattr(
+        restore.os,
+        "kill",
+        lambda _pid, _signal: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    monkeypatch.setattr(
+        restore.os,
+        "killpg",
+        lambda _pid, _signal: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    restore._dead(1001)
+    monkeypatch.setattr(
+        restore.os,
+        "killpg",
+        lambda _pid, _signal: (_ for _ in ()).throw(PermissionError()),
+    )
+    with pytest.raises(restore.Refused, match="signed_pid_liveness_unknown"):
+        restore._dead(1001)
 
 
 def test_lock_contention_and_foreign_request_fields_refuse(tmp_path, monkeypatch):
@@ -387,7 +433,7 @@ def test_foreign_result_symlink_and_missing_mandatory_lock_refuse(tmp_path, monk
 
 
 def test_postreplace_failure_is_uncertain_not_retryable(tmp_path, monkeypatch):
-    request, _, _, _, _ = _world(tmp_path, monkeypatch)
+    request, wrapper, backup, _, _ = _world(tmp_path, monkeypatch)
     proposal = restore.plan(request)
     original = restore._write_once
     calls = 0
@@ -401,4 +447,8 @@ def test_postreplace_failure_is_uncertain_not_retryable(tmp_path, monkeypatch):
 
     monkeypatch.setattr(restore, "_write_once", fail_known)
     with pytest.raises(restore.Refused, match="postreplace_outcome_uncertain"):
+        restore.apply(request, proposal["plan_sha256"])
+    assert wrapper.read_bytes() == backup
+    monkeypatch.setattr(restore, "_write_once", original)
+    with pytest.raises(restore.Refused, match="plan_changed"):
         restore.apply(request, proposal["plan_sha256"])

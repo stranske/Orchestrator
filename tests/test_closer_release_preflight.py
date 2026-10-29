@@ -113,7 +113,7 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
     assert checked.python == Path(sys.executable).absolute()
     assert receipt["child_python"]["executable"] == str(Path(sys.executable).resolve())
     assert receipt["child_python"]["fake_home"] is True
-    assert environment["PATH"].split(":")[0] == str(Path(sys.executable).resolve().parent)
+    assert environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
     assert environment["PYTHON"] == str(Path(sys.executable).absolute())
     assert environment["CLOSER_CORE_SOURCE"] == str(checked.core)
     assert environment["CLOSER_CORE_SOURCE_REVISION"] == checked.expected_core_sha
@@ -201,7 +201,39 @@ def test_existing_release_wrapper_receives_only_the_green_preflight_environment(
     assert kwargs["candidate_sha"] == config.expected_source_sha
     assert kwargs["source"] == config.source.resolve()
     assert environment["CLOSER_CORE_SOURCE"] == str(config.core.resolve())
-    assert environment["PATH"].split(":")[0] == str(Path(sys.executable).resolve().parent)
+    assert environment["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).absolute().parent)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_install_after_preflight_restores_outer_environment_on_success_and_failure(
+    tmp_path, monkeypatch, failure
+):
+    config = fixture_config(tmp_path)
+    outer = dict(os.environ)
+    inner = {"PATH": "/inner", "PYTHON": "/inner/python", "ONLY_INNER": "yes"}
+    monkeypatch.setattr(
+        preflight,
+        "checked_environment",
+        lambda _config: (config, inner, {"ok": True, "phase": "preflight"}),
+    )
+
+    class Record:
+        def __init__(self, _path):
+            pass
+
+        def verify_and_install(self, **_kwargs):
+            assert os.environ["ONLY_INNER"] == "yes"
+            if failure:
+                raise RuntimeError("gate failed")
+            return {"stage": "installed"}
+
+    monkeypatch.setattr(preflight, "ReleaseRecord", Record)
+    if failure:
+        with pytest.raises(RuntimeError, match="gate failed"):
+            preflight.install_after_preflight(config)
+    else:
+        assert preflight.install_after_preflight(config)[1] == {"stage": "installed"}
+    assert dict(os.environ) == outer
 
 
 def test_cli_reports_a_machine_readable_non_authorizing_preflight_error(tmp_path):
