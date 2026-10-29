@@ -109,9 +109,28 @@ def plan(
     if not run_id or len(run_id) > 160:
         raise ValueError("run identity is required and bounded")
     manifest = _load_manifest(manifest_path)
-    # This independently validates the pinned native contract before exposing
-    # argv.  It does not issue entry, admission, or effect authority.
-    native.contract(manifest)
+    # Contract shape alone is insufficient: this exact wrapper must still be
+    # the owned parent entry and opt-in must still be present.  Do this before
+    # capacity refresh because a held wrapper is not launchable.
+    try:
+        native._check_wrapper_entry(manifest, manifest_path)
+    except (OSError, ValueError, RuntimeError, TypeError) as exc:
+        campaign = campaign_gate(campaign_path, manifest_path)
+        held = {
+            "stage": "held",
+            "reason": "canonical native wrapper entry is unavailable: " + str(exc),
+        }
+        return {
+            "schema": "closer-launch-operator-plan/v1",
+            "run_id": run_id,
+            "authority": False,
+            "manifest": None,
+            "business_capacity": held,
+            "campaign": {"path": str(campaign_path), **campaign},
+            "canonical_wrapper_argv": None,
+            "launch_permitted_by_diagnostic": False,
+            "note": "The canonical native wrapper entry must be restored before launch.",
+        }
     report = readiness.inspect(manifest_path, refresh_capacity_owner=refresh_capacity_owner)
     campaign = campaign_gate(campaign_path, manifest_path)
     return {

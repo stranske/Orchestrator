@@ -122,6 +122,40 @@ def test_canonical_wrapper_argv_rejects_relative_or_aliased_wrapper(tmp_path):
         operator._canonical_wrapper_argv({"mechanism_contract": {"wrapper": {"path": str(alias)}}})
 
 
+def test_plan_holds_when_actual_native_wrapper_entry_validation_fails(monkeypatch, tmp_path):
+    """Use the real entry checker, with a physically wrong wrapper source."""
+    import closer_native_observer as native
+
+    manifest_path = tmp_path / "host-manifest.json"
+    wrapper = tmp_path / "wrapper.sh"
+    wrapper.write_text("#!/bin/bash\necho legacy\n")
+    manifest_path.write_text("{}")
+    manifest = {
+        "launcher": {"path": "/bin/true"},
+        "mechanism_contract": {"wrapper": {"path": str(wrapper)}},
+    }
+    value = {"campaign_root": str(tmp_path / "campaigns")}
+    monkeypatch.setattr(operator, "_load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(
+        native, "contract", lambda _manifest: (value, wrapper, Path("/bin/true"), tmp_path)
+    )
+    monkeypatch.setattr(
+        operator,
+        "campaign_gate",
+        lambda *_args: {"stage": "ready", "kind": "finite-current-authority"},
+    )
+    import closer_launch_preflight as readiness
+
+    monkeypatch.setattr(
+        readiness, "inspect", lambda *_args, **_kwargs: pytest.fail("must not refresh")
+    )
+    prepared = operator.plan(manifest_path, tmp_path / "campaign.json", "run-1")
+    assert prepared["launch_permitted_by_diagnostic"] is False
+    assert prepared["business_capacity"]["stage"] == "held"
+    assert "wrapper entry" in prepared["business_capacity"]["reason"]
+    assert prepared["canonical_wrapper_argv"] is None
+
+
 def test_finite_unavailable_requires_controller_reentry_not_native_relaunch(tmp_path):
     campaign = tmp_path / "campaign.json"
     frontier = make_frontier(
