@@ -35,6 +35,11 @@ def test_existing_runtime_is_never_removed_by_materialization(tmp_path):
     assert sentinel.read_text() == "still active"
 
 
+def test_source_upgrade_boundary_is_pinned_in_public_runtime_descriptor():
+    public = descriptor()
+    assert "closer_native_source_upgrade.py" in public["modules"]
+
+
 @pytest.mark.parametrize(
     "field,value", [("module", "../other.py"), ("sha256", "f" * 64), ("compatible_runtime", "99")]
 )
