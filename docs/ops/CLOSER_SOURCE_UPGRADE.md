@@ -7,6 +7,17 @@ null deferred operation accounting, and `completed=false` / `accepted=false`.
 It does not reinterpret retirement evidence, retry the old campaign, or create
 new business demand.
 
+The supported predecessor is the reviewed `f858dc3857ad7a90461126abd945edc0d380d9b3`
+release. Its 191-module map, public descriptor bytes and physical interpreter
+are pinned before any old import. The current release has a different module
+closure; its strict validator is used only for the replacement. Old code is
+captured into a private temporary directory, rehashed before import, and runs
+its own version-aware validation against the original manifest/proof paths.
+Undeclared Python or cached bytecode is refused before execution, and original
+closure/manifest bytes are checked again before accepting the diagnostic.
+Validate this read-only boundary against the actual predecessor before a new
+full release; simulated transition fixtures alone do not establish compatibility.
+
 Before changing the wrapper it validates immutable old state/result/cohort/round
 references, runs a bounded `-I -B` hash diagnostic under the old physical
 interpreter, seals the current disposition, and writes an immutable intent. The

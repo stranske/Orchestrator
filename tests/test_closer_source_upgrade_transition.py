@@ -21,12 +21,14 @@ from test_closer_native_production_composition import _core
 
 import closer_campaign as campaign
 import closer_correction_controller as controller
+import closer_distribution_package as distribution
 import closer_frontier_policy as policy
 import closer_native_observer as native
 import closer_native_readmission as readmission
 import closer_native_source_upgrade as upgrade
 import closer_native_wrapper_install as install
 import closer_pipeline as pipeline
+import closer_role_selection as selection
 
 
 def test_source_upgrade_refuses_nonprivate_observation_root_before_key_creation(tmp_path):
@@ -69,20 +71,65 @@ def test_prepare_held_rejects_malformed_untrusted_manifest_reference(tmp_path, v
 def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_path, interference):
     old, old_path, wrapper = host
     modules = Path(old["module_dir"])
-    shutil.copy2(Path(upgrade.__file__), modules / Path(upgrade.__file__).name)
+    for name in distribution.RUNTIME_PINNED_MODULES:
+        shutil.copy2(Path(upgrade.__file__).parent / name, modules / name)
     rebuilt = campaign.make_manifest(
         modules,
         candidate_sha=upgrade.REVIEWED_OLD_CANDIDATE,
         state_versions={"campaign": 1, "release": 1},
         python=str(Path(sys.executable).resolve()),
         portable=_core(tmp_path),
-        modules=(*old["modules"], Path(upgrade.__file__).name),
+        modules=distribution.RUNTIME_PINNED_MODULES,
         policy=old["policy"],
         campaign_root=old["mechanism_contract"]["campaign_root"],
         manifest_path=old_path,
     )
     rebuilt["mechanism_contract"] = old["mechanism_contract"]
-    old = rebuilt
+    shutil.copy2(
+        selection.policy_path(Path(upgrade.__file__).parent),
+        modules / "closer_role_selection.json",
+    )
+    public = distribution.build_public_runtime_descriptor(
+        modules,
+        candidate_sha=upgrade.REVIEWED_OLD_CANDIDATE,
+        state_versions=rebuilt["state_versions"],
+        supported_core={
+            "owner": "Workflows",
+            "contract": campaign.CONTRACT,
+            "core_version": "1",
+            "package_digest": rebuilt["portable"]["package_digest"],
+        },
+    )
+    (modules / "closer-runtime-package.json").write_text(json.dumps(public))
+    old = distribution.host_binding_from_public(
+        public,
+        install_root=modules,
+        campaign_root=rebuilt["mechanism_contract"]["campaign_root"],
+        core_binding=rebuilt["portable"],
+        python=str(Path(sys.executable).resolve()),
+        policy=rebuilt["policy"],
+        mechanism_contract=rebuilt["mechanism_contract"],
+    )
+    old["command"][old["command"].index("--manifest") + 1] = str(old_path)
+    old["command_digest"] = campaign.sha256_json(old["command"])
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OLD_MODULES_SHA256",
+        hashlib.sha256(
+            json.dumps(old["modules"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    descriptor = Path(old["module_dir"]) / old["public_runtime_descriptor"]
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OLD_DESCRIPTOR_SHA256",
+        hashlib.sha256(descriptor.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OLD_INTERPRETER_SHA256",
+        old["mechanism_contract"]["interpreter"]["sha256"],
+    )
     old_state = Path(old["mechanism_contract"]["campaign_root"]) / "old.campaign.json"
     new_state = tmp_path / "new/campaigns/source-upgrade.campaign.json"
     new_state.parent.mkdir(parents=True)
@@ -265,6 +312,10 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     campaign.write_manifest(old_path, old)
 
     new = copy.deepcopy(old)
+    # This external-service simulation retains its legacy local new-host
+    # binding. The genuine 191/192 public packages are covered separately.
+    new.pop("public_runtime_descriptor")
+    new["distribution"] = copy.deepcopy(rebuilt["distribution"])
     new["mechanism_contract"]["campaign_root"] = str(new_state.parent)
     new["mechanism_contract"]["observation_root"] = str(new_observation)
     new["mechanism_contract"]["controller_demand"].update(
