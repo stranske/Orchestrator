@@ -121,6 +121,21 @@ def _signed_upgrade_record(manifest: dict[str, Any], record: dict[str, Any]) -> 
     return {"record": record, "signature": mechanisms._signature(record, key)}
 
 
+def _provision_upgrade_key(manifest: dict[str, Any]) -> None:
+    """Provision the current observer key only for a brand-new sealed route.
+
+    This is source-owned installation bookkeeping, not an admission, native
+    entry, or business authority.  Recovery never calls this helper: it must
+    authenticate the original signed records with the key that already exists.
+    """
+    import closer_mechanisms as mechanisms
+
+    try:
+        mechanisms._key(_source_upgrade_root(manifest), create=True)
+    except (OSError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source signing key unavailable") from exc
+
+
 def _read_signed_upgrade(
     path: str | Path,
     manifest: dict[str, Any],
@@ -956,6 +971,11 @@ def apply(
             "source upgrade already known",
         )
         _need(not intent.exists() or seal.exists(), "intent has no pre-CAS seal")
+        # A fully fresh observation root has no supervisor key yet.  Once any
+        # upgrade witness exists, recovery must verify it with the original
+        # key rather than minting or replacing one.
+        if not seal.exists() and not intent.exists():
+            _provision_upgrade_key(new)
         if seal.exists():
             _seal_path, _seal_raw, prior_seal = _read_signed_upgrade(
                 seal,

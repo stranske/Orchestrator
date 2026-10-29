@@ -22,7 +22,6 @@ from test_closer_native_production_composition import _core
 import closer_campaign as campaign
 import closer_correction_controller as controller
 import closer_frontier_policy as policy
-import closer_mechanisms as mechanisms
 import closer_native_observer as native
 import closer_native_readmission as readmission
 import closer_native_source_upgrade as upgrade
@@ -68,7 +67,6 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     new_state.parent.mkdir(parents=True)
     new_observation = tmp_path / "new/observations"
     new_observation.mkdir(mode=0o700)
-    mechanisms._key(new_observation, create=True)
     old["mechanism_contract"]["controller_demand"] = {
         "schema": "closer-controller-demand/v1",
         "campaign_state": str(old_state),
@@ -414,6 +412,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     def apply_bound():
         return upgrade.apply(*inputs, expected_plan_sha256=plan["plan_sha256"])
 
+    assert not (new_observation / "supervisor.key").exists()
     original_write = upgrade.host._write_once
     if interference in {"pre_cas_retry", "tampered_recovery", "post_cas_unknown"}:
         failed_name = (
@@ -463,6 +462,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
             return
     applied = apply_bound()
     assert applied["status"] == "installed"
+    assert (new_observation / "supervisor.key").is_file()
     assert wrapper.read_bytes() == install._render(install._guard_source(base), new, new_path)
     assert not new_state.exists()
 
