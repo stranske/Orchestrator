@@ -139,6 +139,32 @@ def _manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
     return value, raw, doc
 
 
+def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
+    """Bind the replacement to an actually installed, verified generation."""
+    import closer_release
+
+    journal = _canonical(path)
+    try:
+        record = closer_release.ReleaseRecord(journal).read()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("new release journal unavailable") from exc
+    if not isinstance(record, dict):
+        raise SourceUpgradeHeld("new release journal unavailable")
+    verification = record.get("verification")
+    _need(
+        record.get("stage") == "installed"
+        and record.get("candidate_sha") == candidate
+        and isinstance(record.get("installed_generation"), str)
+        and isinstance(verification, dict)
+        and verification.get("verified") is True
+        and isinstance(verification.get("snapshot_digest"), str),
+        "new candidate is not fully installed/verified",
+    )
+    return {"path": str(journal), "sha256": _sha(host._read(journal)[1]),
+            "candidate_sha": candidate, "installed_generation": record["installed_generation"],
+            "snapshot_digest": verification["snapshot_digest"]}
+
+
 def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id: str) -> dict[str, Any]:
     """Read an actual terminal worker without importing no-start authority."""
     import closer_campaign as campaign
@@ -270,7 +296,7 @@ def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, n
 
 def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
          new_manifest: str | Path, new_state: str | Path, restore_receipt: str | Path,
-         new_worker_config: dict[str, Any], frontier: dict[str, Any]) -> dict[str, Any]:
+         new_worker_config: dict[str, Any], frontier: dict[str, Any], new_release_journal: str | Path) -> dict[str, Any]:
     """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
     import closer_native_wrapper_install as install
 
@@ -278,6 +304,7 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     new_path, new_raw, new = _manifest(new_manifest)
     _need(old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE, "old release is not reviewed no-ACT predecessor")
     _need(old.get("candidate_sha") != new.get("candidate_sha"), "source candidate release is not different")
+    release = _installed_release(new_release_journal, new["candidate_sha"])
     _need(
         new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),
         "new manifest does not pin executing source-upgrade boundary",
@@ -346,6 +373,7 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
                       "state_sha256": reference["state_sha256"], "result": reference["result_path"], "result_sha256": reference["result_sha256"],
                       "custody": custody, "native_index": index, "diagnostic": diagnostic},
               "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
+              "new_release": release,
               "held_recipe": {"worker_config": cfg,
                               "worker_config_sha256": _sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()),
                               "frontier": fresh,
@@ -445,6 +473,8 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     _need(not destination.exists(), "fresh held campaign already exists")
     _, raw, manifest = _manifest(new_path)
     _need(_sha(raw) == record["new"]["manifest_sha256"], "new manifest differs from seal")
+    release = _installed_release(record["new_release"]["path"], manifest["candidate_sha"])
+    _need(release == record["new_release"], "new installed release changed")
     native.contract(manifest)  # current/new contract only, after CAS
     _need(_sha(host._read(record["wrapper"]["path"])[1]) == record["wrapper"]["after_sha256"],
           "current wrapper differs from sealed new pin")
