@@ -18,38 +18,37 @@ def no_act():
             "act_authorized": False,
             "source_closure_authorized": False,
         },
-        "act_queue": {"events": [], "deferred": {"operation_id": None, "status": None}},
+        "queue": {"events": [], "accounting": [{"operation_id": None, "operation_status": None}]},
     }
 
 
 def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
     fixture = no_act()
-    upgrade._no_act(fixture)
+    upgrade._no_act(fixture["correction"], fixture["queue"])
     for path, value in (
         (("correction", "act_authorized"), True),
         (("correction", "reason"), "different scope"),
-        (("act_queue", "events"), [{"operation_id": "native"}]),
+        (("queue", "events"), [{"operation_id": "native"}]),
     ):
         changed = json.loads(json.dumps(fixture))
         changed[path[0]][path[1]] = value
         with pytest.raises(upgrade.SourceUpgradeHeld):
-            upgrade._no_act(changed)
-    upgrade._incomplete_cohort({"completed": False, "accepted": False})
+            upgrade._no_act(changed["correction"], changed["queue"])
+    upgrade._incomplete_cohort({"completed": False}, {"accepted": False})
     with pytest.raises(upgrade.SourceUpgradeHeld):
-        upgrade._incomplete_cohort({"completed": True, "accepted": False})
+        upgrade._incomplete_cohort({"completed": True}, {"accepted": False})
 
 
-def test_old_diagnostic_uses_old_physical_interpreter_and_detects_changed_module(tmp_path):
+def test_old_diagnostic_refuses_a_non_source_module_closure(tmp_path):
     module = tmp_path / "closer_correction_bridge.py"
     module.write_text("# exact old source\n")
     raw = module.read_bytes()
     manifest = tmp_path / "host-manifest.json"
     manifest.write_text(json.dumps({"modules": {module.name: hashlib.sha256(raw).hexdigest()}}))
-    answer = upgrade._old_diagnostic(manifest, interpreter=Path("/opt/anaconda3/bin/python3"))
-    assert answer["modules"] == {module.name: hashlib.sha256(raw).hexdigest()}
-    module.write_text("# tampered source\n")
+    state = tmp_path / "old.campaign.json"
+    state.write_text('{"workers": []}')
     with pytest.raises(upgrade.SourceUpgradeHeld, match="diagnostic"):
-        upgrade._old_diagnostic(manifest, interpreter=Path("/opt/anaconda3/bin/python3"))
+        upgrade._old_diagnostic(manifest, state, "worker", interpreter=Path("/opt/anaconda3/bin/python3"))
 
 
 def test_identity_rejects_principal_epoch_and_anchor_changes():

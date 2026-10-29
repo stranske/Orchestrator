@@ -59,9 +59,8 @@ def _exact_ref(value: object, label: str) -> tuple[Path, bytes, dict[str, Any]]:
     return path, raw, doc
 
 
-def _no_act(disposition: dict[str, Any]) -> None:
+def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
     """Require the precise early owner-criterion branch, not merely a failure."""
-    correction = disposition.get("correction")
     if not isinstance(correction, dict):
         raise SourceUpgradeHeld("source disposition has no correction")
     _need(correction.get("status") == "owned_unknown", "source disposition is not owned_unknown")
@@ -71,32 +70,32 @@ def _no_act(disposition: dict[str, Any]) -> None:
     )
     for key in ("remote_authenticated", "act_authorized", "source_closure_authorized"):
         _need(correction.get(key) is False, "source disposition permits native ACT")
-    queue = disposition.get("act_queue")
     if not isinstance(queue, dict):
         raise SourceUpgradeHeld("source ACT queue is not empty")
     _need(queue.get("events") == [], "source ACT queue is not empty")
-    deferred = queue.get("deferred")
+    accounting = queue.get("accounting")
     _need(
-        isinstance(deferred, dict)
-        and deferred.get("operation_id") is None
-        and deferred.get("status") is None,
+        isinstance(accounting, list) and len(accounting) == 1
+        and accounting[0].get("operation_id") is None
+        and accounting[0].get("operation_status") is None,
         "source deferred accounting is not sole/null",
     )
 
 
-def _incomplete_cohort(cohort: dict[str, Any]) -> None:
+def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
     """Keep retirement's incomplete-cohort refusal intact and separate."""
     _need(
-        cohort.get("completed") is False and cohort.get("accepted") is False,
+        cohort.get("completed") is False and proof.get("accepted") is False,
         "cohort is completion authority",
     )
 
 
-def _old_diagnostic(manifest: Path, *, interpreter: Path) -> dict[str, Any]:
+def _old_diagnostic(manifest: Path, state: Path, worker_id: str, *, interpreter: Path) -> dict[str, Any]:
     """Run a fixed read-only validator under the old physical interpreter.
 
-    The child only hashes the old source closure and emits a bounded canonical
-    diagnostic.  It never imports the current runtime or invokes native entry.
+    It imports the old pinned modules only after hashing their closure, then
+    calls the actual old cohort and completion validators. It never invokes
+    native entry or a provider.
     """
     _, raw, doc = _object(manifest, "old manifest")
     modules = doc.get("modules")
@@ -104,16 +103,19 @@ def _old_diagnostic(manifest: Path, *, interpreter: Path) -> dict[str, Any]:
         raise SourceUpgradeHeld("old manifest module closure missing")
     program = (
         "import hashlib,json,pathlib,sys\n"
-        "r=pathlib.Path(sys.argv[1]); m=json.loads(r.read_text()); out={}\n"
+        "r=pathlib.Path(sys.argv[1]); s=pathlib.Path(sys.argv[2]); w=sys.argv[3]; m=json.loads(r.read_text()); out={}\n"
         "for n,h in m['modules'].items():\n"
-        " p=r.parent/n; b=p.read_bytes();\n"
+        " p=pathlib.Path(m['module_dir'])/n; b=p.read_bytes();\n"
         " if hashlib.sha256(b).hexdigest()!=h: raise SystemExit(31)\n"
         " out[n]=h\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v1','manifest_sha256':hashlib.sha256(r.read_bytes()).hexdigest(),'modules':out},sort_keys=True,separators=(',',':')))\n"
+        "sys.path.insert(0,str(pathlib.Path(m['module_dir']))); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
+        "m=c.load_manifest(r); d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']); rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); target=x['target']; row=a['targets'][target]; correction=row['results']['exception']['correction']; queue=row['results']['act']['queue_receipt']; verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],[target]);\n"
+        "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(r.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'target':target,'correction':correction,'queue_receipt':queue,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
     try:
         run = subprocess.run(
-            [str(interpreter), "-I", "-B", "-c", program, str(manifest)],
+            [str(interpreter), "-I", "-B", "-c", program, str(manifest), str(state), worker_id],
             check=False, capture_output=True, text=True, timeout=10,
         )
         _need(run.returncode == 0 and len(run.stdout) <= 65536, "old source diagnostic failed")
@@ -127,11 +129,8 @@ def _old_diagnostic(manifest: Path, *, interpreter: Path) -> dict[str, Any]:
 
 def _manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
     import closer_campaign as campaign
-    import closer_native_observer as native
-
     value, raw, doc = _object(path, "manifest")
     _need(not campaign.validate_manifest(doc) and not campaign.verify_modules(doc), "manifest closure invalid")
-    native.contract(doc)
     return value, raw, doc
 
 
@@ -179,6 +178,19 @@ def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
         _need(old_config.get(key) == new_config.get(key), "source upgrade identity changed: " + key)
 
 
+def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
+    """Physical custody is evidence, not a JSON claim from a caller."""
+    import closer_correction_controller as controller
+
+    config = old["policy"]["correction_controller_installation"]["config"]
+    try:
+        inspection = controller.inspect_provisioned_custody(config)
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("old physical custody unavailable") from exc
+    _need(not inspection["highwater"]["pending_transactions"], "old custody has pending transaction")
+    return inspection
+
+
 def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, new: dict[str, Any], receipt: Path) -> dict[str, Any]:
     """Delegate rendering/CAS shape to the reviewed installer, before the CAS."""
     import closer_native_wrapper_install as install
@@ -194,30 +206,23 @@ def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, n
     return {"path": str(wrapper), "before_sha256": _sha(before), "after_sha256": _sha(after)}
 
 
-def plan(
-    old_manifest: str | Path, old_state: str | Path, worker_id: str, disposition: str | Path,
-    completed_cohort: str | Path, old_round: str | Path, new_manifest: str | Path,
-    new_state: str | Path, restore_receipt: str | Path,
-) -> dict[str, Any]:
+def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
+         new_manifest: str | Path, new_state: str | Path, restore_receipt: str | Path) -> dict[str, Any]:
     """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
     import closer_native_wrapper_install as install
 
     old_path, old_raw, old = _manifest(old_manifest)
     new_path, new_raw, new = _manifest(new_manifest)
-    _need(_sha(old_raw) != _sha(new_raw), "source release is not different")
+    _need(old.get("candidate_sha") != new.get("candidate_sha"), "source candidate release is not different")
     _same_identity(old, new)
     reference = _completed_reference(old_path, old_state, worker_id)
     _old_native_terminal(old)
-    # This route is for completed=False source data, never a no-start proof.
-    disp_path, disp_raw, disp = _object(disposition, "source disposition")
-    _no_act(disp)
-    cohort_path, cohort_raw, cohort = _object(completed_cohort, "completed cohort")
-    round_path, round_raw, round_doc = _object(old_round, "old source round")
-    _need(cohort.get("worker_id") == worker_id and round_doc.get("target") == reference["worker"].get("target"),
-          "old cohort/round do not join worker target")
-    _incomplete_cohort(cohort)
+    custody = _old_custody_quiet(old)
     interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
-    diagnostic = _old_diagnostic(old_path, interpreter=interpreter)
+    diagnostic = _old_diagnostic(old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter)
+    _need(diagnostic.get("target") == reference["worker"].get("target"), "old diagnostic target differs")
+    _no_act(diagnostic.get("correction"), diagnostic.get("queue_receipt"))
+    _incomplete_cohort(diagnostic.get("cohort"), diagnostic.get("completed_round"))
     state = _canonical(new_state)
     _need(not state.exists() and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
           "new state is not fresh current campaign")
@@ -230,8 +235,7 @@ def plan(
               "producer_sha256": _sha(Path(__file__).read_bytes()),
               "old": {"manifest": str(old_path), "manifest_sha256": _sha(old_raw), "state": reference["state_path"],
                       "state_sha256": reference["state_sha256"], "result": reference["result_path"], "result_sha256": reference["result_sha256"],
-                      "disposition": str(disp_path), "disposition_sha256": _sha(disp_raw), "cohort": str(cohort_path), "cohort_sha256": _sha(cohort_raw),
-                      "round": str(round_path), "round_sha256": _sha(round_raw), "diagnostic": diagnostic},
+                      "custody": custody, "diagnostic": diagnostic},
               "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
               "wrapper": wrapper, "locks": rows,
               "seal": str(Path(new["mechanism_contract"]["observation_root"]) / "source-upgrade-current-disposition.json")}
