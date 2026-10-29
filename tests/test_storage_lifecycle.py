@@ -376,6 +376,19 @@ def test_terminal_success_and_failure_retire_temp_and_keep_compact_evidence(job,
     assert not list(job.state_dir.rglob("*.tar*"))
 
 
+def test_run_job_seals_immutable_row_bound_stage_source_provenance(job):
+    assert storage.run_job(job, free=lambda _: storage.GIB, probe=lambda _: None) == 0
+    result = receipt(job)
+    binding_path = storage._stage_source_binding_path(job.state_dir, result["job"])
+    binding = json.loads(binding_path.read_text())
+    body = {key: value for key, value in binding.items() if key != "sha256"}
+    assert binding["sha256"] == storage._json_digest(body)
+    assert result["stage_source_binding_sha256"] == storage._sha256_bytes(binding_path.read_bytes())
+    assert binding["source_identity"] == "original"
+    assert binding["source_command"] == ["bash", job.command[1], "--identity", str(job.source)]
+    assert binding["child_command"] == job.command
+
+
 def test_changed_source_is_retained_without_holding_future_growth(job, monkeypatch):
     monkeypatch.setenv("CHANGE_SOURCE", "1")
     monkeypatch.setenv("SOURCE_IDENTITY", str(job.source / "identity"))

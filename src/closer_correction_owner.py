@@ -273,8 +273,13 @@ def _selected_defect(
     seeds = [s for s in inputs["seed_bundle"]["seeds"] if s["finding"]["id"] == raw["id"]]
     _need(len(seeds) == 1, "owner selected seed ambiguous")
     seed = seeds[0]
+    import closer_correction_controller as controller
+
+    source_repository, separator, source_number = source_target.rpartition("#")
     _need(
-        source_target == seed["target"]["repository"] + "#" + seed["source_issue"]["number"],
+        separator == "#"
+        and controller.native_repository_name(source_repository, seed["target"]["repository"])
+        and source_number == seed["source_issue"]["number"],
         "owner source criterion differs from seed",
     )
     test_id = "source-test-" + contract.digest({"seed": seed, "criterion": criterion})
