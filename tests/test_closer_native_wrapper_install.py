@@ -13,6 +13,7 @@ from test_closer_native_observer import host as host
 
 import closer_campaign as campaign
 import closer_native_observer as native
+import closer_native_readmission as readmission
 import closer_native_wrapper_install as install
 import closer_retained_reconciliation as retained
 
@@ -537,9 +538,116 @@ def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
     proposal = install.plan_prospective(*args)
     outcome = install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
     assert outcome["status"] == "installed"
+    assert (
+        hashlib.sha256(Path(proposal["wrapper"]).read_bytes()).hexdigest()
+        == proposal["after_sha256"]
+    )
+    receipt = Path(proposal["receipt"])
+    assert json.loads(receipt.read_text())["status"] == "installed"
     assert args[1].read_bytes() == old_state
     assert old_result.read_bytes() == old_result_bytes
     assert not args[4].exists()
+    # The old signed manifest pins the pre-install wrapper, so either the
+    # no-start reader or the install's explicit receipt guard must refuse a
+    # second attempt.  In both cases the prior install is never retried.
+    with pytest.raises(
+        (install.InstallHeld, readmission.ReadmissionHeld),
+        match="(prior prospective install|no-start)",
+    ):
+        install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+
+
+def test_prospective_install_refuses_policy_state_mismatch_before_wrapper_change(
+    capacity_host, monkeypatch, tmp_path
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    wrapper = Path(json.loads(args[0].read_text())["mechanism_contract"]["wrapper"]["path"])
+    before = wrapper.read_bytes()
+    manifest = json.loads(args[3].read_text())
+    manifest["policy"]["correction_controller_installation"]["config"]["state_path"] = str(
+        tmp_path / "wrong.campaign.json"
+    )
+    campaign.write_manifest(args[3], manifest)
+    with pytest.raises(install.InstallHeld, match="state path"):
+        install.plan_prospective(*args)
+    assert wrapper.read_bytes() == before
+
+
+@pytest.mark.parametrize("existing", ("intent", "receipt"))
+def test_prospective_apply_refuses_wrong_hash_or_existing_install_artifact(
+    capacity_host, monkeypatch, tmp_path, existing
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    wrapper = Path(proposal["wrapper"])
+    before = wrapper.read_bytes()
+    with pytest.raises(install.InstallHeld, match="plan changed"):
+        install.apply_prospective(*args, expected_plan_sha256="0" * 64)
+    artifact = (
+        Path(proposal["receipt"]).with_name("wrapper-install-prospective-intent.json")
+        if existing == "intent"
+        else Path(proposal["receipt"])
+    )
+    artifact.write_text("already consumed")
+    with pytest.raises(install.InstallHeld):
+        install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    assert wrapper.read_bytes() == before
+
+
+def test_prospective_apply_preserves_uncertainty_after_postreplace_failure(
+    capacity_host, monkeypatch, tmp_path
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    wrapper = Path(proposal["wrapper"])
+    monkeypatch.setattr(
+        native,
+        "_check_wrapper_entry",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("postreplace test failure")),
+    )
+    with pytest.raises(install.InstallHeld, match="postreplace outcome uncertain"):
+        install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    assert hashlib.sha256(wrapper.read_bytes()).hexdigest() == proposal["after_sha256"]
+    assert Path(proposal["receipt"]).with_name("wrapper-install-prospective-intent.json").exists()
+    assert not Path(proposal["receipt"]).exists()
+
+
+def test_prospective_cli_plan_and_apply_need_no_reconciliation(
+    capacity_host, monkeypatch, tmp_path, capsys
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    cli = [
+        "--kind",
+        "prospective",
+        "plan",
+        "--old-manifest",
+        str(args[0]),
+        "--old-state",
+        str(args[1]),
+        "--worker",
+        args[2],
+        "--new-manifest",
+        str(args[3]),
+        "--new-state",
+        str(args[4]),
+        "--restore-receipt",
+        str(args[5]),
+    ]
+    assert install.main(cli) == 0
+    proposal = json.loads(capsys.readouterr().out)
+    assert proposal["schema"] == install.PROSPECTIVE_SCHEMA
+    apply_cli = ["apply" if value == "plan" else value for value in cli]
+    assert (
+        install.main(
+            apply_cli
+            + [
+                "--expected-plan-sha256",
+                proposal["plan_sha256"],
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "installed"
 
 
 @pytest.mark.parametrize("change", ["proof", "wrapper", "lock", "namespace"])

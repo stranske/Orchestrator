@@ -325,11 +325,11 @@ def plan_prospective(
     new_state: str | Path,
     restore_receipt: str | Path,
 ) -> dict[str, Any]:
-    """Prepare only the wrapper half of a signed finite-v2 readmission.
+    """Prepare only the wrapper half of a signed finite-v2 transition.
 
     It consumes no proof and creates neither a campaign nor a native entry.
-    ``closer_native_readmission.apply_prospective`` remains the sole consumer
-    that can create the fresh held campaign after qualification.
+    A later, separately authenticated readmission path may inspect this
+    wrapper receipt; this installer grants it no campaign or demand authority.
     """
     import closer_native_readmission as readmission
 
@@ -339,6 +339,8 @@ def plan_prospective(
     old_path, old_raw, old = _manifest(old_manifest)
     path, raw, manifest = _manifest(new_manifest)
     state = host._path(new_state)
+    config = manifest["policy"]["correction_controller_installation"]["config"]
+    _need(config.get("state_path") == str(state), "new policy state path differs")
     _pristine_prospective_namespace(manifest, state)
     host._lane_absent()
     wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
