@@ -953,9 +953,9 @@ def prepare_prospective_wrapper_install(receipt_path, *, confirm_plan_sha256):
         )
         token = _intent_token(plan_doc, digest)
         # The generic preparation protocol hashes this token into the campaign
-        # origin.  Retain the authenticated wrapper transition receipt and its
-        # raw digest there; later typed admission validates that sealed origin,
-        # but does not pretend to revalidate the old HMAC witnesses itself.
+        # origin. Retain the authenticated wrapper transition receipt and its
+        # raw digest as provenance. Later typed admission validates the derived
+        # local preparation records, not this receipt or the old HMAC witnesses.
         token["wrapper_install_receipt"] = {
             "path": str(receipt),
             "sha256": _digest(host._read(receipt)[1]),

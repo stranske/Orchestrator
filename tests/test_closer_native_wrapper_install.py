@@ -664,6 +664,55 @@ def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
         install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
 
 
+@pytest.mark.parametrize(
+    ("artifact", "mutation"),
+    [
+        ("seal", "missing"),
+        ("intent", "missing"),
+        ("known", "missing"),
+        ("seal", "unsigned"),
+        ("intent", "unsigned"),
+        ("known", "unsigned"),
+        ("seal", "tampered"),
+        ("intent", "tampered"),
+        ("known", "tampered"),
+    ],
+)
+def test_post_cas_prepare_refuses_missing_or_unauthenticated_receipt_artifacts(
+    capacity_host, monkeypatch, tmp_path, capsys, artifact, mutation
+):
+    """Every pre-CAS/current receipt is mandatory; no retry is inferred."""
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    known = Path(proposal["receipt"])
+    path = known.with_name("wrapper-install-prospective-" + artifact + ".json")
+    if mutation == "missing":
+        path.unlink()
+    elif mutation == "unsigned":
+        path.chmod(0o600)
+        path.write_text(json.dumps({"record": json.loads(path.read_text())["record"]}))
+    else:
+        document = json.loads(path.read_text())
+        document["record"]["authority"] = True
+        path.chmod(0o600)
+        path.write_text(json.dumps(document))
+    assert (
+        readmission.main(
+            [
+                "prepare-prospective",
+                "--receipt",
+                str(known),
+                "--expected-plan-sha256",
+                proposal["plan_sha256"],
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "held"
+    assert not args[4].exists()
+
+
 def test_prospective_install_refuses_policy_state_mismatch_before_wrapper_change(
     capacity_host, monkeypatch, tmp_path
 ):

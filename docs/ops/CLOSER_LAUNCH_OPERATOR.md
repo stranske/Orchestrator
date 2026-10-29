@@ -74,8 +74,10 @@ native contract after CAS. Run the separate `admit` command below with freshly
 typed demand to clear that hold; neither wrapper installation nor preparation
 admits demand or launches native work. The held campaign's preparation origin
 hashes the signed wrapper-known receipt path, raw digest, and pre-CAS plan
-digest. Later `admit` validates that sealed preparation origin; it does not
-revalidate the old HMAC witnesses.
+digest as provenance. `prepare-prospective` authenticates the HMAC records
+once. Later `admit` validates only the derived local immutable preparation
+intent/known receipt, current producer, and current manifest; it does not
+reopen or reverify the wrapper receipt or old HMAC witnesses.
 
 The supported historical exception is deliberately limited to attempt 13 at
 112e9263. `src/closer_retained_reconciliation.py plan|collect --manifest OLD
