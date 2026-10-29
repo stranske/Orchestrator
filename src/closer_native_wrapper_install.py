@@ -84,7 +84,7 @@ def _receipt(path: str | Path) -> dict[str, Any]:
     return value
 
 
-def _manifest(path: str | Path, *, current_source: bool = True) -> tuple[Path, bytes, dict[str, Any]]:
+def _manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
     import closer_campaign as campaign
 
     value, raw, manifest = host._obj(path)
@@ -121,7 +121,11 @@ def _manifest(path: str | Path, *, current_source: bool = True) -> tuple[Path, b
         source = Path(filename).resolve()
         _need(
             manifest["modules"].get(source.name) == _sha(host._read(source)[1]),
-            "new native engine differs from current repaired source",
+            # Old manifests are never imported.  The wrapper transition is
+            # supported only across this shared native/binding reader ABI;
+            # differing readmission/installer producer bytes are retained
+            # evidence and are authenticated by the later signed records.
+            "native/binding reader ABI differs from current source",
         )
     for key in ("campaign_root", "observation_root"):
         root = host._path(contract[key])
@@ -440,7 +444,7 @@ def plan_prospective(
     reference = readmission.prospective_reference(old_manifest, old_state, worker)
     _old_parent_terminal(reference)
     restored, predecessor = _restored_predecessor(restore_receipt)
-    old_path, old_raw, old = _manifest(old_manifest, current_source=False)
+    old_path, old_raw, old = _manifest(old_manifest)
     path, raw, manifest = _manifest(new_manifest)
     state = host._path(new_state)
     config = manifest["policy"]["correction_controller_installation"]["config"]

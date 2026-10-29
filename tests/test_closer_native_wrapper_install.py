@@ -512,8 +512,11 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
     copy_manifest["command_digest"] = campaign.sha256_json(command)
     copy_manifest["package_digest"] = campaign.sha256_json(
         [
-            copy_manifest["candidate_sha"], sorted(copy_manifest["modules"].items()),
-            copy_manifest["runtime_digest"], copy_manifest["state_digest"], copy_manifest["portable"],
+            copy_manifest["candidate_sha"],
+            sorted(copy_manifest["modules"].items()),
+            copy_manifest["runtime_digest"],
+            copy_manifest["state_digest"],
+            copy_manifest["portable"],
         ]
     )
     new_manifest_path.write_text(json.dumps(copy_manifest, sort_keys=True))
@@ -586,7 +589,7 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
 
 
 def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
-    capacity_host, monkeypatch, tmp_path
+    capacity_host, monkeypatch, tmp_path, capsys
 ):
     args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
     old_result = campaign.result_path(args[1], args[2])
@@ -607,9 +610,46 @@ def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
     # This is the real post-CAS path: it reads the signed current-source
     # receipt and old retained bytes, but does not invoke the old contract or
     # admit typed demand.  The result is only the one-use initial HELD state.
-    prepared = readmission.prepare_prospective_wrapper_install(
-        receipt, confirm_plan_sha256=proposal["plan_sha256"]
+    assert (
+        readmission.main(
+            [
+                "prepare-prospective",
+                "--receipt",
+                str(receipt),
+                "--expected-plan-sha256",
+                "0" * 64,
+            ]
+        )
+        == 2
     )
+    assert json.loads(capsys.readouterr().out)["status"] == "held"
+    assert (
+        readmission.main(
+            [
+                "prepare-prospective",
+                "--receipt",
+                str(receipt),
+                "--expected-plan-sha256",
+                proposal["plan_sha256"],
+            ]
+        )
+        == 0
+    )
+    prepared = json.loads(capsys.readouterr().out)
+    assert prepared["authority"] is False
+    assert (
+        readmission.main(
+            [
+                "prepare-prospective",
+                "--receipt",
+                str(receipt),
+                "--expected-plan-sha256",
+                proposal["plan_sha256"],
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "held"
     assert prepared["status"] == "fresh_held_prepared"
     held = campaign.Campaign(args[4]).read()
     assert held["hold"]["kind"] == "source_initialization"
