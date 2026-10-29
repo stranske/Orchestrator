@@ -36,7 +36,7 @@ def test_guard_requires_exact_reviewed_predecessor(monkeypatch):
     raw = _old_wrapper()
     monkeypatch.setattr(install, "RESTORED_SHA", hashlib.sha256(raw).hexdigest())
     assert b"original window expired" not in install._guard_source(raw)
-    with pytest.raises(install.InstallHeld):
+    with pytest.raises(install.InstallHeld, match="canonical preimage changed"):
         install._guard_source(raw.replace(b"expired", b"changed"))
 
 
@@ -64,15 +64,6 @@ def test_render_keeps_shebang_and_declares_lane_before_guard(monkeypatch, tmp_pa
         < rendered.index(b"CLOSER_NATIVE_QUALIFICATION_REQUEST")
         < rendered.index(b"# BEGIN CLOSER PINNED NATIVE ENTRY v1")
     )
-
-
-def test_old_unknown_fixture_is_never_a_write_target(tmp_path):
-    result = tmp_path / "old.results/worker.json"
-    result.parent.mkdir()
-    result.write_bytes(b'{"outcome":"unknown"}')
-    before = result.read_bytes()
-    (tmp_path / "new").mkdir()
-    assert result.read_bytes() == before
 
 
 def test_readmission_guard_exits_before_dummy_native_entry(monkeypatch, tmp_path):

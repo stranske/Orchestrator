@@ -12,8 +12,10 @@ Planning is read-only.  Apply requires the exact plan digest, acquires the
 derived nonblocking locks, rescans witnesses under lock, writes and fsyncs an
 intent receipt before `rename`, and writes an immutable known receipt only
 after readback.  Any failure after the intent receipt is written, including a
-failure before `rename`, is intentionally unretryable without reconciliation:
-inspect the retained intent and wrapper readback, then write a reconciled
-outcome through the owner-approved procedure before another apply.  It never
-writes campaign state, native index, ledgers, or results, and exposes no
-acceptance, retry, or UNKNOWN-reclassification power.
+failure before `rename`, leaves this command held.  This contract has no
+reconciliation consumer: stop, preserve the append-only intent/known receipts,
+inspect the wrapper and retained evidence, and route that evidence to an
+external reviewed recovery procedure.  Do not delete, move, or edit receipts
+to retry; a later invocation of this command remains held when either receipt
+exists.  It never writes campaign state, native index, ledgers, or results,
+and exposes no acceptance, retry, or UNKNOWN-reclassification power.

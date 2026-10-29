@@ -22,6 +22,8 @@ native entry. The new campaign namespace must be empty at installation.
 Existing old/new native, campaign, custody, canonical-installer and lane locks
 remain part of the CAS guard, including the predecessor's dynamic lock closure.
 Receipts live under the new observation root, so installation does not alter
-the retained reconciliation's historical witnesses. After rename, any failed
-readback/receipt is an uncertain outcome requiring reconciliation, never a blind
-retry. This version accepts only the explicitly reviewed restored predecessor.
+the retained reconciliation's historical witnesses. Any failure after its
+intent receipt is written, including before `rename`, blocks retry. There is no
+automatic reconciliation handler: preserve those receipts and route them to an
+external reviewed recovery procedure rather than deleting, moving, or editing
+them. This version accepts only the explicitly reviewed restored predecessor.

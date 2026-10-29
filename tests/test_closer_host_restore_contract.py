@@ -468,3 +468,20 @@ def test_postreplace_failure_is_uncertain_not_retryable(tmp_path, monkeypatch):
     monkeypatch.setattr(restore, "_write_once", original)
     with pytest.raises(restore.Refused, match="plan_changed"):
         restore.apply(request, proposal["plan_sha256"])
+
+
+def test_prerename_replace_failure_preserves_wrapper_and_holds_retry(tmp_path, monkeypatch):
+    request, wrapper, backup, _, _ = _world(tmp_path, monkeypatch)
+    proposal = restore.plan(request)
+    original_replace = restore.os.replace
+
+    def replace_failure(_source, _destination):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(restore.os, "replace", replace_failure)
+    with pytest.raises(OSError, match="simulated rename failure"):
+        restore.apply(request, proposal["plan_sha256"])
+    assert wrapper.read_bytes() != backup
+    monkeypatch.setattr(restore.os, "replace", original_replace)
+    with pytest.raises(restore.Refused, match="prior_restore_outcome_requires_reconciliation"):
+        restore.apply(request, proposal["plan_sha256"])

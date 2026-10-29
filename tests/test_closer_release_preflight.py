@@ -121,7 +121,10 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in environment
     assert "CLOSER_CORE_PACKAGE" not in environment
     assert "--numprocesses" in subprocess.check_output(
-        [str(checked.python), "-m", "pytest", "--help", "--color=no"], env=environment, text=True
+        [str(checked.python), "-m", "pytest", "--help", "--color=no"],
+        env=environment,
+        text=True,
+        timeout=20,
     )
 
 
