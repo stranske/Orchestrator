@@ -107,6 +107,90 @@ def test_installed_release_refuses_a_modified_inspector_before_execution(tmp_pat
     assert calls == []
 
 
+def _installed_release_fixture(tmp_path, monkeypatch, *, mutate=False):
+    home = tmp_path / "home"
+    mirror = home / ".codex/orchestrator-mirror"
+    inspector = mirror / "scripts/install_verified_snapshot.py"
+    inspector.parent.mkdir(parents=True)
+    observed = tmp_path / "inspector-observed.json"
+    inspector.write_text(
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['INSPECTOR_OBSERVED']).write_text(json.dumps({'file': __file__, 'argv0': sys.argv[0], 'argv': sys.argv[1:]}))\n"
+        "if os.environ.get('MUTATE_INSPECTOR') == '1' and '--generation-token' in sys.argv:\n"
+        " pathlib.Path(__file__).write_text('# changed during inspector execution\\n')\n"
+        "print('generation-v1:fixture' if '--generation-token' in sys.argv else 'd' * 64)\n"
+    )
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    journal = tmp_path / "release.json"
+    journal.write_text("{}")
+
+    class Record:
+        def __init__(self, _path):
+            pass
+
+        def read(self):
+            return {
+                "stage": "installed",
+                "candidate_sha": "a" * 40,
+                "installed_generation": "generation-v1:fixture",
+                "verification": {
+                    "verified": True,
+                    "snapshot_digest": "d" * 64,
+                    "snapshot_path": str(snapshot),
+                },
+            }
+
+    calls = []
+    actual_run = upgrade.subprocess.run
+
+    def capture_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return actual_run(*args, **kwargs)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("INSPECTOR_OBSERVED", str(observed))
+    if mutate:
+        monkeypatch.setenv("MUTATE_INSPECTOR", "1")
+    monkeypatch.setattr(closer_release, "ReleaseRecord", Record)
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256",
+        hashlib.sha256(inspector.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(upgrade.subprocess, "run", capture_run)
+    return journal, inspector, observed, calls
+
+
+def test_installed_release_executes_the_pinned_inspector_with_physical_identity(
+    tmp_path, monkeypatch
+):
+    journal, inspector, observed, calls = _installed_release_fixture(tmp_path, monkeypatch)
+
+    release = upgrade._installed_release(journal, "a" * 40)
+
+    assert release["installed_generation"] == "generation-v1:fixture"
+    assert release["snapshot_digest"] == "d" * 64
+    assert len(calls) == 2
+    for args, kwargs in calls:
+        command = args[0]
+        assert command[:3] == [str(Path(sys.executable).resolve()), "-I", "-B"]
+        assert kwargs["input"] == inspector.read_text()
+    observed_call = json.loads(observed.read_text())
+    assert observed_call["file"] == observed_call["argv0"] == str(inspector)
+    assert observed_call["argv"][-1] == "--digest"
+
+
+def test_installed_release_refuses_inspector_mutation_during_execution(tmp_path, monkeypatch):
+    journal, _inspector, _observed, calls = _installed_release_fixture(
+        tmp_path, monkeypatch, mutate=True
+    )
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="inspector changed"):
+        upgrade._installed_release(journal, "a" * 40)
+    assert len(calls) == 2
+
+
 def test_identity_rejects_principal_epoch_and_anchor_changes():
     old = {
         "policy": {
