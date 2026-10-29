@@ -910,7 +910,31 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     # admitted here. A one-use marker prevents a second preparation.
     marker = seal.with_name("source-upgrade-held-consumed.json")
     _need(not marker.exists(), "sealed source upgrade already consumed")
-    with host._hold(readmission._new_lock_rows(manifest)):
+    sealed_locks = record.get("locks")
+    if not isinstance(sealed_locks, list) or not all(isinstance(row, dict) for row in sealed_locks):
+        raise SourceUpgradeHeld("sealed lock closure unavailable")
+    # Campaign.begin takes its own state lock; retain every other old/new/global
+    # fence from the pre-CAS plan across the final evidence reread.
+    rows = [row for row in sealed_locks if row.get("path") != str(destination) + ".lock"]
+    with host._hold(rows):
+        _need(
+            _sha(host._read(old_state)[1]) == record["old"]["state_sha256"],
+            "old state changed under locks",
+        )
+        _need(
+            _sha(host._read(old_result)[1]) == record["old"]["result_sha256"],
+            "old result changed under locks",
+        )
+        _old_native_terminal(old_manifest)
+        host._lane_absent()
+        _need(_old_custody_quiet(old_manifest) == inspection, "old custody changed under locks")
+        _need(
+            fresh_read_native_index(
+                old_manifest["policy"]["correction_controller_installation"]["config"], inspection
+            )
+            == record["old"]["native_index"],
+            "native index changed under locks",
+        )
         _need(not destination.exists() and not marker.exists(), "fresh held state changed")
         reference = {
             "state_path": str(old_state),
