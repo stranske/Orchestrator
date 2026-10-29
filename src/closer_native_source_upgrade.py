@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -28,6 +29,12 @@ SCHEMA = "closer-native-source-upgrade/v1"
 # criterion stopped before Native ACT. A manifest that merely self-describes a
 # matching shape is not enough to establish that control-flow ordering.
 REVIEWED_OLD_CANDIDATE = "f858dc3857ad7a90461126abd945edc0d380d9b3"
+# Canonical SHA-256 of the sorted 191-entry module map reviewed from f858.
+# This is checked before an old module is imported; the old validator is only
+# a second, version-aware validation fence.
+REVIEWED_OLD_MODULES_SHA256 = "c5dea1b0710044385caa0f0baf0490b7a61aa49b10b49496b03dd2f258371add"
+REVIEWED_OLD_DESCRIPTOR_SHA256 = "019d7bc8010dd5e921d194ad6e073d5ab90ab13299996c82463a5b0356a63ea6"
+REVIEWED_OLD_INTERPRETER_SHA256 = "d01b09973b5bd3ff617e7849ce9c0bdb8991256f495ce190720ccc976cdaaee7"
 # Deliberately literal: the inspector is executed before any installed-release
 # fact can be trusted.  This is the clean reviewed f858 source file, not a
 # digest supplied by a release journal or the inspected generation.
@@ -37,6 +44,7 @@ REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256 = (
 _SEAL_NAME = "source-upgrade-current-disposition.json"
 _INTENT_NAME = "source-upgrade-intent.json"
 _KNOWN_NAME = "source-upgrade-known.json"
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 
 
 class SourceUpgradeHeld(RuntimeError):
@@ -215,6 +223,11 @@ def _old_diagnostic(
     native entry or a provider.
     """
     _, raw, doc = _object(manifest, "old manifest")
+    try:
+        _need(_sha(interpreter.read_bytes()) == REVIEWED_OLD_INTERPRETER_SHA256,
+              "old interpreter differs from reviewed predecessor")
+    except OSError as exc:
+        raise SourceUpgradeHeld("old interpreter unavailable") from exc
     modules = doc.get("modules")
     if not isinstance(modules, dict) or not modules:
         raise SourceUpgradeHeld("old manifest module closure missing")
@@ -226,7 +239,9 @@ def _old_diagnostic(
         " if hashlib.sha256(b).hexdigest()!=h: raise SystemExit(31)\n"
         " out[n]=h\n"
         "sys.path.insert(0,str(pathlib.Path(m['module_dir']))); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
-        "m=c.load_manifest(r); d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
+        "m=c.load_manifest(r);\n"
+        "if c.validate_manifest(m) or c.verify_modules(m): raise SystemExit(35)\n"
+        "d=c.Campaign(s).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
@@ -256,14 +271,47 @@ def _old_diagnostic(
     return answer
 
 
-def _manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
+def _manifest(path: str | Path, *, old: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
     import closer_campaign as campaign
 
     value, raw, doc = _object(path, "manifest")
-    _need(
-        not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
-        "manifest closure invalid",
-    )
+    if old:
+        modules = doc.get("modules")
+        _need(
+            isinstance(doc.get("module_dir"), str)
+            and isinstance(modules, dict)
+            and bool(modules)
+            and all(
+                isinstance(name, str)
+                and Path(name).name == name
+                and isinstance(digest, str)
+                and _DIGEST.fullmatch(digest)
+                for name, digest in modules.items()
+            ),
+            "old manifest closure invalid",
+        )
+        _need(
+            _sha(json.dumps(modules, sort_keys=True, separators=(",", ":")).encode())
+            == REVIEWED_OLD_MODULES_SHA256,
+            "old manifest closure is not the reviewed predecessor",
+        )
+        descriptor = doc.get("public_runtime_descriptor")
+        _need(isinstance(descriptor, str) and Path(descriptor).name == descriptor,
+              "old public descriptor invalid")
+        descriptor_path = Path(doc["module_dir"]) / descriptor
+        try:
+            _need(_sha(descriptor_path.read_bytes()) == REVIEWED_OLD_DESCRIPTOR_SHA256,
+                  "old public descriptor is not the reviewed predecessor")
+        except OSError as exc:
+            raise SourceUpgradeHeld("old public descriptor unavailable") from exc
+        interpreter = doc.get("mechanism_contract", {}).get("interpreter", {})
+        _need(interpreter.get("sha256") == REVIEWED_OLD_INTERPRETER_SHA256,
+              "old interpreter is not the reviewed predecessor")
+    else:
+        _need(
+            not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
+            "manifest closure invalid",
+        )
     return value, raw, doc
 
 
@@ -788,7 +836,7 @@ def plan(
     """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
     import closer_native_wrapper_install as install
 
-    old_path, old_raw, old = _manifest(old_manifest)
+    old_path, old_raw, old = _manifest(old_manifest, old=True)
     new_path, new_raw, new = _manifest(new_manifest)
     _need(
         old.get("candidate_sha") == REVIEWED_OLD_CANDIDATE,

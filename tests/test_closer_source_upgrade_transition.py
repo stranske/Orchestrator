@@ -83,6 +83,20 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     )
     rebuilt["mechanism_contract"] = old["mechanism_contract"]
     old = rebuilt
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OLD_MODULES_SHA256",
+        hashlib.sha256(
+            json.dumps(old["modules"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    descriptor = Path(old["module_dir"]) / old["public_runtime_descriptor"]
+    monkeypatch.setattr(upgrade, "REVIEWED_OLD_DESCRIPTOR_SHA256", hashlib.sha256(descriptor.read_bytes()).hexdigest())
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OLD_INTERPRETER_SHA256",
+        old["mechanism_contract"]["interpreter"]["sha256"],
+    )
     old_state = Path(old["mechanism_contract"]["campaign_root"]) / "old.campaign.json"
     new_state = tmp_path / "new/campaigns/source-upgrade.campaign.json"
     new_state.parent.mkdir(parents=True)
