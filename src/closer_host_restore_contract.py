@@ -555,6 +555,8 @@ def apply(request_path: str | Path, expected_plan_sha256: str) -> dict[str, Any]
         _, _, request = _obj(request_path)
         _, backup = _json_ref(request["backup"], "backup")
         replacement = base64.b64decode(backup["base64"], validate=True)
+        if _sha(replacement) != first["before_sha256"]:
+            raise Refused("replacement_bytes_changed_before_replace")
         wrapper = Path(first["wrapper"])
         fd, temporary = tempfile.mkstemp(prefix=".host-restore-", dir=wrapper.parent)
         replaced = False

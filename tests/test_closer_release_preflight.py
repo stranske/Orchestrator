@@ -277,6 +277,53 @@ def test_cli_install_returns_nonzero_when_existing_release_does_not_install(
     assert payload["error"]["code"] == "release_not_installed"
 
 
+@pytest.mark.parametrize("failure", ["release", "value"])
+def test_cli_install_returns_json_receipt_for_release_refusal(
+    tmp_path, monkeypatch, capsys, failure
+):
+    script = Path(__file__).parents[1] / "scripts" / "closer_verified_release.py"
+    spec = spec_from_file_location("closer_release_cli_refusal_test", script)
+    assert spec and spec.loader
+    cli = module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    exception = (
+        cli.ReleaseError("owned by another candidate")
+        if failure == "release"
+        else ValueError("bad record")
+    )
+    monkeypatch.setattr(
+        cli,
+        "install_after_preflight",
+        lambda _config: (_ for _ in ()).throw(exception),
+    )
+    args = [
+        "install",
+        "--source",
+        str(tmp_path),
+        "--expected-source-sha",
+        "a" * 40,
+        "--mirror",
+        str(tmp_path / "mirror"),
+        "--core",
+        str(tmp_path),
+        "--expected-core-sha",
+        "b" * 40,
+        "--python",
+        sys.executable,
+        "--journal",
+        str(tmp_path / "release.json"),
+        "--owner",
+        "closer",
+    ]
+    assert cli.main(args) == 4
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "ok": False,
+        "phase": "install",
+        "error": {"code": "release_refused", "message": str(exception)},
+    }
+
+
 def test_actual_cli_install_returns_nonzero_for_a_failed_existing_gate(tmp_path):
     source, source_sha = git_repo(
         tmp_path / "source",

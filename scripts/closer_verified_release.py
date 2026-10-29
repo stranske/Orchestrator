@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "src" if (ROOT / "src").is_dir() else ROOT
 sys.path.insert(0, str(SOURCE_ROOT))
 
+from closer_release import ReleaseError  # noqa: E402
 from closer_release_preflight import (  # noqa: E402
     DEFAULT_PYTHON,
     DEFAULT_WORKERS,
@@ -85,6 +86,18 @@ def main(argv: list[str] | None = None) -> int:
     except PreflightError as exc:
         print(json.dumps(error_receipt(exc, time.monotonic() - started), sort_keys=True))
         return 2
+    except (ReleaseError, ValueError) as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "phase": "install",
+                    "error": {"code": "release_refused", "message": str(exc)},
+                },
+                sort_keys=True,
+            )
+        )
+        return 4
     return 0
 
 

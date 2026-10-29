@@ -325,6 +325,28 @@ def test_lock_contention_and_foreign_request_fields_refuse(tmp_path, monkeypatch
     assert restore.plan(request)["eligible"] is False
 
 
+def test_apply_refuses_replacement_changed_after_locked_plan_before_replace(tmp_path, monkeypatch):
+    request, wrapper, _, _, _ = _world(tmp_path, monkeypatch)
+    proposal = restore.plan(request)
+    original_write_once = restore._write_once
+
+    def write_intent_then_change_replacement(path, item):
+        original_write_once(path, item)
+        if path.name != "restore-intent.json":
+            return
+        request_item = json.loads(request.read_text())
+        backup_path = Path(request_item["backup"]["path"])
+        replacement = b"foreign replacement\n"
+        _write(backup_path, {"base64": base64.b64encode(replacement).decode()})
+        request_item["backup"] = _ref(backup_path)
+        _write(request, request_item)
+
+    monkeypatch.setattr(restore, "_write_once", write_intent_then_change_replacement)
+    with pytest.raises(restore.Refused, match="replacement_bytes_changed_before_replace"):
+        restore.apply(request, proposal["plan_sha256"])
+    assert wrapper.read_bytes() == b"temporary\n"
+
+
 def test_resigned_crossjoin_cleanup_and_successor_lane_refuse(tmp_path, monkeypatch):
     request, _, _, result, _ = _world(tmp_path, monkeypatch)
     item = json.loads(result.read_text())
