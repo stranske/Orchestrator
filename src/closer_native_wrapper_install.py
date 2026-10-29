@@ -237,10 +237,11 @@ def _prospective_rows(
 ) -> list[dict[str, Any]]:
     """Derive, rather than accept, the old/new writer closure.
 
-    Existing host-restore locks protect the old invocation, custody and any
-    dynamic release resources.  The two native observation roots and old state
-    lock protect the proof while it is consumed.  Only the new state lock is a
-    fresh coordination file.
+    The host-restore predecessor is only a renderer witness; it is not trusted
+    to name the current source custody.  Current manifests instead derive both
+    controller namespaces from their pinned controller configurations.  The
+    locks coordinate cooperative source writers; they are not an assertion of
+    atomic replacement against an arbitrary same-UID writer.
     """
     wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
     rows = host._locks(predecessor, wrapper)
@@ -262,11 +263,82 @@ def _prospective_rows(
             },
         ]
     )
+    for current_manifest, current_state, label in (
+        (reference["manifest"], Path(reference["state_path"]), "old"),
+        (manifest, state, "new"),
+    ):
+        rows.append(
+            {
+                "path": str(_current_custody_writer(current_manifest, current_state, label)),
+                "must_exist": True,
+            }
+        )
     merged: dict[str, bool] = {}
     for row in rows:
         path = str(host._path(row["path"]))
         merged[path] = merged.get(path, False) or bool(row["must_exist"])
     return [{"path": path, "must_exist": merged[path]} for path in sorted(merged)]
+
+
+def _current_custody_writer(manifest: dict[str, Any], state: Path, label: str) -> Path:
+    """Derive an actual controller writer fence from the current manifest.
+
+    A source-controlled manifest cannot omit its full controller identity and
+    fall back to unrelated historical restore locks.  This is deliberately a
+    lock-shape check, not controller admission or a native operation.
+    """
+    import closer_correction_controller as controller
+
+    try:
+        config = manifest["policy"]["correction_controller_installation"]["config"]
+        current = controller.ControllerConfig(**config)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise InstallHeld(f"{label} controller config is unavailable") from exc
+    _need(current.state_path == str(state), f"{label} controller state path differs")
+    custody = host._path(Path(str(state) + ".evidence") / current.namespace)
+    try:
+        info = custody.stat()
+    except OSError as exc:
+        raise InstallHeld(f"{label} controller custody is unavailable") from exc
+    _need(
+        stat.S_ISDIR(info.st_mode)
+        and info.st_uid == os.getuid()
+        and stat.S_IMODE(info.st_mode) == 0o700,
+        f"{label} controller custody is not private/owned",
+    )
+    writer = custody / "writer.lock"
+    try:
+        writer_info = os.lstat(writer)
+    except OSError as exc:
+        raise InstallHeld(f"{label} controller writer lock is unavailable") from exc
+    _need(
+        stat.S_ISREG(writer_info.st_mode)
+        and writer_info.st_uid == os.getuid()
+        and not writer.is_symlink(),
+        f"{label} controller writer lock is unsafe",
+    )
+    if not state.exists():
+        expected = {
+            "namespace.json",
+            "highwater-0000000000000000.json",
+            "writer.lock",
+        }
+        _need(set(os.listdir(custody)) == expected, f"{label} controller custody is not pristine")
+        try:
+            namespace = controller.decode(host._read(custody / "namespace.json")[1])
+            anchor = controller.decode(host._read(custody / "highwater-0000000000000000.json")[1])
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
+            raise InstallHeld(f"{label} controller custody metadata is unavailable") from exc
+        _need(
+            namespace
+            == {
+                "schema": "local-correction-controller-namespace/v1",
+                "config_sha256": controller.digest(current.source_binding()),
+            }
+            and anchor.get("revision") == 0,
+            f"{label} controller custody metadata differs",
+        )
+    return writer
 
 
 def _pristine_prospective_namespace(manifest: dict[str, Any], state: Path) -> None:
@@ -426,6 +498,15 @@ def apply_prospective(*args, expected_plan_sha256: str) -> dict[str, Any]:
                 stream.flush()
                 os.fchmod(stream.fileno(), RESTORED_MODE)
                 os.fsync(stream.fileno())
+            # Intent creation and temporary-file I/O are outside the wrapper's
+            # own inode. Re-read immediately before replacement so a
+            # cooperating source writer that acquired this same closure is
+            # never silently overwritten.
+            _need(
+                _sha(host._read(wrapper)[1]) == first["before_sha256"]
+                and stat.S_IMODE(wrapper.stat().st_mode) == RESTORED_MODE,
+                "wrapper changed before replacement",
+            )
             os.replace(tmp, wrapper)
             replaced = True
             directory = os.open(wrapper.parent, os.O_RDONLY)

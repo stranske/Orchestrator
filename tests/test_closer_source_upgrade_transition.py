@@ -29,15 +29,39 @@ import closer_native_wrapper_install as install
 import closer_pipeline as pipeline
 
 
+def test_source_upgrade_refuses_nonprivate_observation_root_before_key_creation(tmp_path):
+    root = tmp_path / "observations"
+    root.mkdir(mode=0o755)
+    root.chmod(0o755)
+    manifest = {"mechanism_contract": {"observation_root": str(root)}}
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="observation root unavailable"):
+        upgrade._provision_upgrade_key(manifest)
+    assert not (root / "supervisor.key").exists()
+
+
+@pytest.mark.parametrize("value", [None, [], 7, ""])
+def test_prepare_held_rejects_malformed_untrusted_manifest_reference(tmp_path, value):
+    seal = tmp_path / "source-upgrade-current-disposition.json"
+    seal.write_text(json.dumps({"record": {"new": {"manifest": value}}}))
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="upgrade seal invalid"):
+        upgrade.prepare_held(seal, confirm_plan_sha256="a" * 64)
+
+
 @pytest.mark.parametrize(
     "interference",
     [
         "none",
         "old_result",
+        "old_manifest",
         "seal_recipe",
+        "unsigned_seal",
+        "forged_known",
         "old_lock",
         "custody_lock",
         "pre_cas_retry",
+        "missing_key_recovery",
         "tampered_recovery",
         "post_cas_unknown",
     ],
@@ -409,8 +433,14 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     def apply_bound():
         return upgrade.apply(*inputs, expected_plan_sha256=plan["plan_sha256"])
 
+    assert not (new_observation / "supervisor.key").exists()
     original_write = upgrade.host._write_once
-    if interference in {"pre_cas_retry", "tampered_recovery", "post_cas_unknown"}:
+    if interference in {
+        "pre_cas_retry",
+        "missing_key_recovery",
+        "tampered_recovery",
+        "post_cas_unknown",
+    }:
         failed_name = (
             "source-upgrade-known.json"
             if interference == "post_cas_unknown"
@@ -444,12 +474,23 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         assert seal.exists() and not seal.with_name("source-upgrade-intent.json").exists()
         assert hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["before_sha256"]
         monkeypatch.setattr(upgrade.host, "_write_once", original_write)
+        if interference == "missing_key_recovery":
+            key = new_observation / "supervisor.key"
+            key.unlink()
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="signature differs"):
+                apply_bound()
+            assert not key.exists()
+            assert not new_state.exists()
+            assert (
+                hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["before_sha256"]
+            )
+            return
         if interference == "tampered_recovery":
             changed = json.loads(seal.read_bytes())
-            changed["held_recipe"]["worker_config"]["apply"] = False
+            changed["record"]["held_recipe"]["worker_config"]["apply"] = False
             seal.chmod(0o600)
             seal.write_text(json.dumps(changed))
-            with pytest.raises(upgrade.SourceUpgradeHeld, match="records differ"):
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="signature differs"):
                 apply_bound()
             assert not new_state.exists()
             assert (
@@ -458,6 +499,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
             return
     applied = apply_bound()
     assert applied["status"] == "installed"
+    assert (new_observation / "supervisor.key").is_file()
     assert wrapper.read_bytes() == install._render(install._guard_source(base), new, new_path)
     assert not new_state.exists()
 
@@ -471,14 +513,39 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
             upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
         assert not new_state.exists()
         return
+    if interference == "old_manifest":
+        old_path.write_bytes(old_path.read_bytes() + b" ")
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="old manifest changed"):
+            upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
+        assert not new_state.exists()
+        return
     if interference == "seal_recipe":
         seal = Path(plan["seal"])
         changed = json.loads(seal.read_bytes())
-        changed["held_recipe"]["worker_config"]["apply"] = False
+        changed["record"]["held_recipe"]["worker_config"]["apply"] = False
         seal.chmod(0o600)
         seal.write_text(json.dumps(changed))
-        with pytest.raises(upgrade.SourceUpgradeHeld, match="sealed plan body differs"):
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="signature differs"):
             upgrade.prepare_held(seal, confirm_plan_sha256=plan["plan_sha256"])
+        assert not new_state.exists()
+        return
+    if interference == "unsigned_seal":
+        seal = Path(plan["seal"])
+        envelope = json.loads(seal.read_bytes())
+        seal.chmod(0o600)
+        seal.write_text(json.dumps(envelope["record"], sort_keys=True))
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="upgrade seal invalid"):
+            upgrade.prepare_held(seal, confirm_plan_sha256=plan["plan_sha256"])
+        assert not new_state.exists()
+        return
+    if interference == "forged_known":
+        known = Path(plan["seal"]).with_name("source-upgrade-known.json")
+        changed = json.loads(known.read_bytes())
+        changed["record"]["status"] = "forged"
+        known.chmod(0o600)
+        known.write_text(json.dumps(changed, sort_keys=True))
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="known receipt signature differs"):
+            upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
         assert not new_state.exists()
         return
     if interference in {"old_lock", "custody_lock"}:

@@ -28,6 +28,15 @@ SCHEMA = "closer-native-source-upgrade/v1"
 # criterion stopped before Native ACT. A manifest that merely self-describes a
 # matching shape is not enough to establish that control-flow ordering.
 REVIEWED_OLD_CANDIDATE = "f858dc3857ad7a90461126abd945edc0d380d9b3"
+# Deliberately literal: the inspector is executed before any installed-release
+# fact can be trusted.  This is the clean reviewed f858 source file, not a
+# digest supplied by a release journal or the inspected generation.
+REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256 = (
+    "98775accf1ce81aead5c99eec4bf7e3e802774b2397440dd356bf9ff7649c966"
+)
+_SEAL_NAME = "source-upgrade-current-disposition.json"
+_INTENT_NAME = "source-upgrade-intent.json"
+_KNOWN_NAME = "source-upgrade-known.json"
 
 
 class SourceUpgradeHeld(RuntimeError):
@@ -75,6 +84,94 @@ def _exact_ref(value: object, label: str) -> tuple[Path, bytes, dict[str, Any]]:
     return path, raw, doc
 
 
+def _pinned_object(
+    path: str | Path, sha256: object, label: str
+) -> tuple[Path, bytes, dict[str, Any]]:
+    """Parse an old witness only after binding the exact bytes first."""
+    value, raw, doc = _object(path, label)
+    _need(isinstance(sha256, str) and _sha(raw) == sha256, label + " changed")
+    return value, raw, doc
+
+
+def _source_upgrade_root(manifest: dict[str, Any]) -> Path:
+    import closer_mechanisms as mechanisms
+
+    try:
+        # This is the mechanism's owned 0700 root check, not merely a
+        # canonical-path check. It must run before any key read or creation.
+        root = mechanisms._root(manifest)
+    except (KeyError, TypeError, OSError, ValueError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source observation root unavailable") from exc
+    return _canonical(root)
+
+
+def _upgrade_path(manifest: dict[str, Any], name: str) -> Path:
+    root = _source_upgrade_root(manifest)
+    path = _canonical(root / name)
+    _need(path.parent == root and path.name == name, "source upgrade record path differs")
+    return path
+
+
+def _signed_upgrade_record(manifest: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    """Sign a source-owned disposition with the existing observer key domain."""
+    import closer_mechanisms as mechanisms
+
+    root = _source_upgrade_root(manifest)
+    try:
+        # Deliberately never create a key: installation/qualification owns it.
+        key = mechanisms._key(root)
+    except (OSError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source signing key unavailable") from exc
+    return {"record": record, "signature": mechanisms._signature(record, key)}
+
+
+def _provision_upgrade_key(manifest: dict[str, Any]) -> None:
+    """Provision the current observer key only for a brand-new sealed route.
+
+    This is source-owned installation bookkeeping, not an admission, native
+    entry, or business authority.  Recovery never calls this helper: it must
+    authenticate the original signed records with the key that already exists.
+    """
+    import closer_mechanisms as mechanisms
+
+    try:
+        mechanisms._key(_source_upgrade_root(manifest), create=True)
+    except (OSError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source signing key unavailable") from exc
+
+
+def _read_signed_upgrade(
+    path: str | Path,
+    manifest: dict[str, Any],
+    *,
+    name: str,
+    label: str,
+    manifest_sha256: str,
+) -> tuple[Path, bytes, dict[str, Any]]:
+    """Read only a canonical, current-source signed upgrade record."""
+    import closer_mechanisms as mechanisms
+
+    expected = _upgrade_path(manifest, name)
+    value, raw, envelope = _object(path, label)
+    _need(value == expected, label + " path differs")
+    try:
+        record = mechanisms.verify_signed_record(_source_upgrade_root(manifest), envelope)
+    except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld(label + " signature differs") from exc
+    producer = _sha(Path(__file__).read_bytes())
+    _need(
+        record.get("producer_sha256") == producer
+        and manifest.get("modules", {}).get(Path(__file__).name) == producer,
+        label + " producer differs",
+    )
+    new = record.get("new")
+    _need(
+        isinstance(new, dict) and new.get("manifest_sha256") == manifest_sha256,
+        label + " manifest differs",
+    )
+    return value, raw, record
+
+
 def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
     """Require the precise early owner-criterion branch, not merely a failure."""
     if not isinstance(correction, dict):
@@ -93,6 +190,7 @@ def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
     _need(
         isinstance(accounting, list)
         and len(accounting) == 1
+        and isinstance(accounting[0], dict)
         and accounting[0].get("operation_id") is None
         and accounting[0].get("operation_status") is None,
         "source deferred accounting is not sole/null",
@@ -196,21 +294,54 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     physical_mirror = mirror.resolve()
     inspector = physical_mirror / "scripts/install_verified_snapshot.py"
     try:
+        inspector_raw = host._read(inspector)[1]
+    except (OSError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
+    _need(
+        _sha(inspector_raw) == REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256,
+        "installed generation inspector differs",
+    )
+    # Execute the already-pinned bytes, not the mutable pathname that supplied
+    # them.  The physical pathname remains __file__ for the inspector's own
+    # structural checks; the logical mirror remains the generation identity.
+    runner = (
+        "import sys\n"
+        "code=sys.stdin.buffer.read()\n"
+        "sys.argv=[sys.argv[1],*sys.argv[2:]]\n"
+        "exec(compile(code,sys.argv[0],'exec'),{'__name__':'__main__','__file__':sys.argv[0]})\n"
+    )
+    python = str(Path(sys.executable).resolve())
+    try:
         generation = subprocess.run(
             [
-                str(Path(sys.executable).resolve()),
+                python,
+                "-I",
+                "-B",
+                "-c",
+                runner,
                 str(inspector),
                 str(mirror),
                 "--generation-token",
             ],
             text=True,
+            input=inspector_raw.decode("utf-8"),
             capture_output=True,
             timeout=10,
             check=False,
         )
         digest = subprocess.run(
-            [str(Path(sys.executable).resolve()), str(inspector), str(mirror), "--digest"],
+            [
+                python,
+                "-I",
+                "-B",
+                "-c",
+                runner,
+                str(inspector),
+                str(physical_mirror),
+                "--digest",
+            ],
             text=True,
+            input=inspector_raw.decode("utf-8"),
             capture_output=True,
             timeout=10,
             check=False,
@@ -218,6 +349,14 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
     _need(generation.returncode == digest.returncode == 0, "installed generation inspector failed")
+    try:
+        inspector_after = host._read(inspector)[1]
+    except (OSError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
+    _need(
+        _sha(inspector_after) == REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256,
+        "installed generation inspector changed",
+    )
     _need(
         generation.stdout.strip() == record["installed_generation"]
         and digest.stdout.strip() == verified["snapshot_digest"],
@@ -231,20 +370,31 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         "snapshot_digest": verified["snapshot_digest"],
         "mirror": str(mirror),
         "physical_mirror": str(physical_mirror),
-        "python": str(Path(sys.executable).resolve()),
+        "python": python,
         "inspector": str(inspector),
-        "inspector_sha256": _sha(host._read(inspector)[1]),
+        "inspector_sha256": _sha(inspector_after),
     }
 
 
 def _completed_reference(
-    manifest_path: Path, state_path: str | Path, worker_id: str
+    manifest_path: Path,
+    state_path: str | Path,
+    worker_id: str,
+    *,
+    manifest_sha256: str | None = None,
+    state_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Read an actual terminal worker without importing no-start authority."""
     import closer_campaign as campaign
 
+    manifest_path = _canonical(manifest_path)
+    manifest_value, manifest_raw, manifest = _object(manifest_path, "old manifest")
+    if manifest_sha256 is not None:
+        _need(_sha(manifest_raw) == manifest_sha256, "old manifest changed")
     state = _canonical(state_path)
     _, state_raw, document = _object(state, "old campaign state")
+    if state_sha256 is not None:
+        _need(_sha(state_raw) == state_sha256, "old state changed")
     _need(
         document.get("phase") == "work"
         and document.get("hold") is None
@@ -274,8 +424,8 @@ def _completed_reference(
         "old completed worker is not exact OK",
     )
     return {
-        "manifest_path": str(manifest_path),
-        "manifest": _object(manifest_path, "old manifest")[2],
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
         "state_path": str(state),
         "state_sha256": _sha(state_raw),
         "state": document,
@@ -775,10 +925,7 @@ def plan(
         },
         "wrapper": wrapper,
         "locks": rows,
-        "seal": str(
-            Path(new["mechanism_contract"]["observation_root"])
-            / "source-upgrade-current-disposition.json"
-        ),
+        "seal": str(_upgrade_path(new, _SEAL_NAME)),
     }
     result["plan_sha256"] = _plan_sha(result)
     return result
@@ -816,15 +963,31 @@ def apply(
     with host._hold(first["locks"]):
         second = plan(*inputs)
         _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
-        seal = Path(first["seal"])
-        intent = seal.with_name("source-upgrade-intent.json")
+        new_path = Path(first["new"]["manifest"])
+        _, new_raw, new = _manifest(new_path)
+        _need(_sha(new_raw) == first["new"]["manifest_sha256"], "new manifest changed before CAS")
+        seal = _upgrade_path(new, _SEAL_NAME)
+        _need(str(seal) == first["seal"], "source upgrade seal path differs")
+        intent = _upgrade_path(new, _INTENT_NAME)
+        known_path = _upgrade_path(new, _KNOWN_NAME)
         _need(
-            not seal.with_name("source-upgrade-known.json").exists(),
+            not known_path.exists(),
             "source upgrade already known",
         )
         _need(not intent.exists() or seal.exists(), "intent has no pre-CAS seal")
+        # A fully fresh observation root has no supervisor key yet.  Once any
+        # upgrade witness exists, recovery must verify it with the original
+        # key rather than minting or replacing one.
+        if not seal.exists() and not intent.exists():
+            _provision_upgrade_key(new)
         if seal.exists():
-            _seal_path, _seal_raw, prior_seal = _object(seal, "pre-CAS source upgrade seal")
+            _seal_path, _seal_raw, prior_seal = _read_signed_upgrade(
+                seal,
+                new,
+                name=_SEAL_NAME,
+                label="pre-CAS source upgrade seal",
+                manifest_sha256=_sha(new_raw),
+            )
             _need(
                 prior_seal.get("stage") == "sealed_pre_cas"
                 and _plan_sha(prior_seal) == first["plan_sha256"]
@@ -832,8 +995,12 @@ def apply(
                 "pre-CAS source upgrade records differ",
             )
         if intent.exists():
-            _intent_path, _intent_raw, prior_intent = _object(
-                intent, "pre-CAS source upgrade intent"
+            _intent_path, _intent_raw, prior_intent = _read_signed_upgrade(
+                intent,
+                new,
+                name=_INTENT_NAME,
+                label="pre-CAS source upgrade intent",
+                manifest_sha256=_sha(new_raw),
             )
             _need(
                 prior_intent.get("stage") == "intent"
@@ -846,9 +1013,6 @@ def apply(
         sealed = {**first, "stage": "sealed_pre_cas", "at": time.time()}
         _need(_plan_sha(sealed) == first["plan_sha256"], "plan body differs before seal")
         wrapper = Path(first["wrapper"]["path"])
-        new_path = Path(first["new"]["manifest"])
-        _, new_raw, new = _manifest(new_path)
-        _need(_sha(new_raw) == first["new"]["manifest_sha256"], "new manifest changed before CAS")
         _need(
             _sha(host._read(wrapper)[1]) == first["wrapper"]["before_sha256"],
             "wrapper CAS preimage changed",
@@ -879,9 +1043,12 @@ def apply(
             # plan() reauthenticates the exact old wrapper and all facts above.
             # Partial or different existing records are never overwritten.
             if not seal.exists():
-                host._write_once(seal, sealed)
+                host._write_once(seal, _signed_upgrade_record(new, sealed))
             if not intent.exists():
-                host._write_once(intent, {**first, "stage": "intent", "at": time.time()})
+                host._write_once(
+                    intent,
+                    _signed_upgrade_record(new, {**first, "stage": "intent", "at": time.time()}),
+                )
             os.replace(tmp, wrapper)
             replaced = True
             directory = os.open(wrapper.parent, os.O_RDONLY)
@@ -910,8 +1077,11 @@ def apply(
             )
             phase = "known_receipt_write"
             host._write_once(
-                seal.with_name("source-upgrade-known.json"),
-                {**first, "stage": "cas_known", "status": "installed", "at": time.time()},
+                known_path,
+                _signed_upgrade_record(
+                    new,
+                    {**first, "stage": "cas_known", "status": "installed", "at": time.time()},
+                ),
             )
             return {**first, "status": "installed"}
         except Exception as exc:
@@ -941,7 +1111,29 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     import closer_native_observer as native
     import closer_native_readmission as readmission
 
-    seal, seal_raw, record = _object(seal_path, "source upgrade seal")
+    # The envelope itself is untrusted until its referenced current manifest
+    # validates.  It is used only to locate that manifest, then immediately
+    # re-read through the existing source closure validator and HMAC domain.
+    candidate_seal, _candidate_raw, candidate_envelope = _object(seal_path, "source upgrade seal")
+    candidate_record = candidate_envelope.get("record")
+    if not isinstance(candidate_record, dict):
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    candidate_new = candidate_record.get("new")
+    if not isinstance(candidate_new, dict):
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    candidate_manifest = candidate_new.get("manifest")
+    if not isinstance(candidate_manifest, str) or not candidate_manifest:
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    new_path = _canonical(candidate_manifest)
+    _, raw, manifest = _manifest(new_path)
+    manifest_sha = _sha(raw)
+    seal, seal_raw, record = _read_signed_upgrade(
+        candidate_seal,
+        manifest,
+        name=_SEAL_NAME,
+        label="source upgrade seal",
+        manifest_sha256=manifest_sha,
+    )
     _need(
         record.get("schema") == SCHEMA and record.get("stage") == "sealed_pre_cas",
         "upgrade seal invalid",
@@ -951,20 +1143,25 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         "held confirmation differs from sealed upgrade",
     )
     _need(_plan_sha(record) == confirm_plan_sha256, "sealed plan body differs from digest")
-    known = seal.with_name("source-upgrade-known.json")
+    _need(new_path == _canonical(record["new"]["manifest"]), "new manifest differs from seal")
+    known = _upgrade_path(manifest, _KNOWN_NAME)
     _need(known.exists(), "wrapper CAS is not known")
-    _known_path, _known_raw, known_record = _object(known, "source upgrade known receipt")
+    _known_path, _known_raw, known_record = _read_signed_upgrade(
+        known,
+        manifest,
+        name=_KNOWN_NAME,
+        label="source upgrade known receipt",
+        manifest_sha256=manifest_sha,
+    )
     _need(
         known_record.get("plan_sha256") == confirm_plan_sha256
         and _plan_sha(known_record) == confirm_plan_sha256
         and known_record.get("status") == "installed",
         "known receipt differs from sealed plan",
     )
-    new_path = _canonical(record["new"]["manifest"])
     destination = _canonical(record["new"]["state"])
     _need(not destination.exists(), "fresh held campaign already exists")
-    _, raw, manifest = _manifest(new_path)
-    _need(_sha(raw) == record["new"]["manifest_sha256"], "new manifest differs from seal")
+    _need(manifest_sha == record["new"]["manifest_sha256"], "new manifest differs from seal")
     release = _installed_release(record["new_release"]["path"], manifest["candidate_sha"])
     _need(release == record["new_release"], "new installed release changed")
     native.contract(manifest)  # current/new contract only, after CAS
@@ -974,17 +1171,22 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     )
     problems = campaign.qualify(manifest, new_path.parent)
     _need(not problems, "new source qualification failed")
+    old_manifest_path = _canonical(record["old"]["manifest"])
+    _old_manifest_path, _old_manifest_raw, old_manifest = _pinned_object(
+        old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
+    )
     old_state = _canonical(record["old"]["state"])
     old_result = _canonical(record["old"]["result"])
     _need(_sha(host._read(old_state)[1]) == record["old"]["state_sha256"], "old state changed")
     _need(_sha(host._read(old_result)[1]) == record["old"]["result_sha256"], "old result changed")
-    old_manifest = _object(record["old"]["manifest"], "old manifest")[2]
     _old_native_terminal(old_manifest)
     host._lane_absent()
     _completed_reference(
-        _canonical(record["old"]["manifest"]),
+        old_manifest_path,
         old_state,
         record["old"]["diagnostic"]["cohort"]["worker_id"],
+        manifest_sha256=record["old"]["manifest_sha256"],
+        state_sha256=record["old"]["state_sha256"],
     )
     inspection = _old_custody_quiet(old_manifest)
     _need(
@@ -1007,7 +1209,9 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         fresh = policy.validate_frontier(
             recipe["frontier"], targets=recipe["frontier"].get("targets")
         )
-        old_doc = _object(old_state, "old campaign state")[2]
+        _old_state_path, _old_state_raw, old_doc = _pinned_object(
+            old_state, record["old"]["state_sha256"], "old campaign state"
+        )
         old_frontier = policy.validate_frontier(old_doc["worker_config"]["finite_frontier"])
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceUpgradeHeld("fresh held frontier invalid") from exc
@@ -1033,6 +1237,13 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     # fence from the pre-CAS plan across the final evidence reread.
     rows = [row for row in sealed_locks if row.get("path") != str(destination) + ".lock"]
     with host._hold(rows):
+        _locked_manifest_path, _locked_manifest_raw, locked_old_manifest = _pinned_object(
+            old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
+        )
+        _need(locked_old_manifest == old_manifest, "old manifest changed under locks")
+        _locked_state_path, _locked_state_raw, old_doc = _pinned_object(
+            old_state, record["old"]["state_sha256"], "old campaign state"
+        )
         _need(
             _sha(host._read(old_state)[1]) == record["old"]["state_sha256"],
             "old state changed under locks",
@@ -1041,9 +1252,23 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             _sha(host._read(old_result)[1]) == record["old"]["result_sha256"],
             "old result changed under locks",
         )
-        _old_native_terminal(old_manifest)
+        _old_native_terminal(locked_old_manifest)
         host._lane_absent()
-        _need(_old_custody_quiet(old_manifest) == inspection, "old custody changed under locks")
+        _need(
+            _completed_reference(
+                old_manifest_path,
+                old_state,
+                record["old"]["diagnostic"]["cohort"]["worker_id"],
+                manifest_sha256=record["old"]["manifest_sha256"],
+                state_sha256=record["old"]["state_sha256"],
+            )["result_sha256"]
+            == record["old"]["result_sha256"],
+            "old result changed under locks",
+        )
+        _need(
+            _old_custody_quiet(locked_old_manifest) == inspection,
+            "old custody changed under locks",
+        )
         _need(
             _inert_new_custody(manifest, destination, inspection["highwater"]["anchor"])
             == record["new"]["custody"],
@@ -1051,7 +1276,8 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         )
         _need(
             fresh_read_native_index(
-                old_manifest["policy"]["correction_controller_installation"]["config"], inspection
+                locked_old_manifest["policy"]["correction_controller_installation"]["config"],
+                inspection,
             )
             == record["old"]["native_index"],
             "native index changed under locks",

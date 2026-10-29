@@ -39,6 +39,16 @@ manifest render from the same base. The old campaign/result/proof are only
 read and remain unchanged. The new native observation root must contain only
 its two pre-provisioned locks and the fresh campaign state must be absent.
 
+For a source-controlled prospective manifest, the installer derives both the
+old and new controller custody writer locks from each current manifest's
+`state_path`, repository id, and epoch. A legacy restoration predecessor's
+custody locks never substitute for those current fences. After recording its
+intent and flushing the replacement temporary file, the installer re-reads the
+wrapper preimage immediately before `rename`; a change made by a cooperating
+writer holding the same lock closure is refused and preserved. This is a
+cooperative Source locking contract, not a claim of atomic protection from an
+arbitrary same-UID writer that ignores those locks.
+
 Prospective installation only makes the pinned wrapper physically available.
 It does not qualify it, consume the no-start proof, create a campaign, or
 launch anything. Run the ordinary model-free qualification. The existing

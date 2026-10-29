@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
 import os
 import sys
@@ -2162,19 +2163,23 @@ def test_staged_prepare_runs_before_pending_ci_wait_selection(tmp_path, monkeypa
         },
         "manifest": {"packet_sha256": "e"},
     }
-    monkeypatch.setitem(
-        sys.modules,
-        "closer_evidence",
-        SimpleNamespace(
-            collect_evidence=lambda snap, api, retained_dir, **kwargs: packet,
-            collection_summary=closer_evidence.collection_summary,
-            validate_packet=lambda value: False,
-            _atomic_write=lambda path, data: (
-                Path(path).parent.mkdir(parents=True, exist_ok=True),
-                Path(path).write_bytes(data),
-            ),
+    # Keep the real module object so a cold recovery import sees every current
+    # public contract symbol, including REQUIRED_SECTIONS.  This test controls
+    # only collection behavior, not the evidence module's import surface.
+    monkeypatch.setattr(
+        closer_evidence, "collect_evidence", lambda snap, api, retained_dir, **kwargs: packet
+    )
+    monkeypatch.setattr(closer_evidence, "validate_packet", lambda value: False)
+    monkeypatch.setattr(
+        closer_evidence,
+        "_atomic_write",
+        lambda path, data: (
+            Path(path).parent.mkdir(parents=True, exist_ok=True),
+            Path(path).write_bytes(data),
         ),
     )
+    monkeypatch.delitem(sys.modules, "closer_evidence_recovery", raising=False)
+    importlib.import_module("closer_evidence_recovery")
 
     def run_pipeline(path, targets, **kwargs):
         seen["path"] = path
