@@ -261,6 +261,22 @@ def test_static_dynamic_lock_collision_keeps_existing_requirement(tmp_path, monk
     assert not collision.exists()
 
 
+def test_planned_static_lock_removal_refuses_without_recreating_or_restoring(tmp_path, monkeypatch):
+    request, wrapper, backup, _, _ = _world(tmp_path, monkeypatch)
+    proposal = restore.plan(request)
+    static = wrapper.parent / ".closer-public989-install.lock"
+    row = next(row for row in proposal["locks"] if row["path"] == str(static))
+    assert row["must_exist"] is True
+    static.unlink()
+    held = restore.plan(request)
+    assert held["eligible"] is False
+    assert held["reason"] == "mandatory_lock_missing"
+    with pytest.raises(restore.Refused, match="plan_changed"):
+        restore.apply(request, proposal["plan_sha256"])
+    assert not static.exists()
+    assert wrapper.read_bytes() != backup
+
+
 def test_release_lock_resources_are_derived_from_real_config(tmp_path, monkeypatch):
     request, wrapper, *_ = _world(tmp_path, monkeypatch)
     intent = json.loads(Path(json.loads(request.read_text())["swap_intent"]["path"]).read_text())

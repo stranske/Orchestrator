@@ -385,7 +385,10 @@ def _locks(plan: dict[str, Any], wrapper: Path) -> list[dict[str, Any]]:
         wrapper.parent / ".closer-public989-install.lock",
         Path.home() / ".codex/handoff/.lane-closer.lock.coord.lock",
     ]
-    rows = {str(_path(item)): False for item in static}
+    # These are the retained operation's existing coordination boundaries, not
+    # new restore-owned resources.  Their disappearance is a changed lock
+    # closure and must refuse rather than recreate a legacy lock with O_CREAT.
+    rows = {str(_path(item)): True for item in static}
     for item in _dynamic_locks(plan):
         rows[str(_path(item))] = True
     return [{"path": path, "must_exist": rows[path]} for path in sorted(rows)]
@@ -444,7 +447,10 @@ def plan(request_path: str | Path) -> dict[str, Any]:
         rows = _locks(retained, wrapper)
         for row in rows:
             if row["must_exist"]:
-                _read(row["path"], 1024 * 1024)
+                try:
+                    _read(row["path"], 1024 * 1024)
+                except FileNotFoundError as exc:
+                    raise Refused("mandatory_lock_missing") from exc
         witnesses = {
             name: {"path": str(_ref(request[name], name)[0]), "sha256": request[name]["sha256"]}
             for name in (
