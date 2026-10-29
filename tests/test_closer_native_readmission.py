@@ -569,7 +569,9 @@ def test_postwrite_resume_seals_exact_held_campaign_without_second_begin(monkeyp
     assert result["known"].endswith(".known.json") and len(fake.created) == 1
 
 
-def test_existing_intent_refuses_changed_frontier_or_noninitial_state(monkeypatch, tmp_path):
+def test_interrupted_preparation_refuses_noninitial_state(monkeypatch, tmp_path):
+    import closer_native_observer as native
+
     _old, _raw, _reference_value, manifest, cfg, fake = _reference(monkeypatch, tmp_path)
     fresh = _frontier("fresh")
     destination = tmp_path / "fresh.campaign.json"
@@ -577,24 +579,25 @@ def test_existing_intent_refuses_changed_frontier_or_noninitial_state(monkeypatc
         "manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh
     )
     inputs = ("manifest", "old-state", "0123456789ab", manifest, cfg, destination, fresh)
-    result = readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
-    assert result["authority"] is False
+    original = native._immutable
+
+    def fail_before_known(path, raw):
+        if path.name.endswith(".known.json"):
+            raise OSError("creation receipt unavailable")
+        return original(path, raw)
+
+    monkeypatch.setattr(native, "_immutable", fail_before_known)
+    with pytest.raises(OSError, match="creation receipt unavailable"):
+        readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    monkeypatch.setattr(native, "_immutable", original)
     # A created worker is never recoverable as a preparation, even if its intent matches.
     document = json.loads(destination.read_text())
     document["workers"] = [{"worker_id": "different", "state": "started"}]
     destination.write_text(json.dumps(document))
-    changed = _frontier("changed")
-    with pytest.raises(readmission.ReadmissionHeld):
-        readmission.apply_prospective(
-            "manifest",
-            "old-state",
-            "0123456789ab",
-            manifest,
-            cfg,
-            destination,
-            changed,
-            confirm_plan_sha256="not-the-old-plan",
-        )
+    before = destination.read_bytes()
+    with pytest.raises(readmission.ReadmissionHeld, match="not the exact untouched preparation"):
+        readmission.apply_prospective(*inputs, confirm_plan_sha256=planned["plan_sha256"])
+    assert destination.read_bytes() == before
     assert len(fake.created) == 1
 
 
