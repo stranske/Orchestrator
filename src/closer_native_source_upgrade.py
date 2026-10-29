@@ -9,6 +9,7 @@ later create one fresh held campaign after its own qualification.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -197,6 +198,52 @@ def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
     return inspection
 
 
+def fresh_read_native_index(config: dict[str, Any], inspection: dict[str, Any]) -> dict[str, Any]:
+    """Bounded GET-only proof that remote native index still is the old anchor."""
+    import closer_correction_controller as controller
+
+    anchor = inspection["highwater"]["anchor"]
+    repository = config.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise SourceUpgradeHeld("controller repository unavailable")
+
+    def get(endpoint: str) -> dict[str, Any]:
+        try:
+            call = subprocess.run(["gh", "api", endpoint], capture_output=True, text=True,
+                                  timeout=10, check=False)
+            _need(call.returncode == 0 and len(call.stdout) <= 1024 * 1024, "native index GET unavailable")
+            value = json.loads(call.stdout)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            raise SourceUpgradeHeld("native index GET unavailable") from exc
+        if not isinstance(value, dict):
+            raise SourceUpgradeHeld("native index GET response invalid")
+        return value
+
+    ref = get("repos/" + repository + "/git/ref/heads/" + controller.BRANCH)
+    _need(ref.get("object", {}).get("sha") == anchor["commit_sha"], "native index head changed")
+    contents = get("repos/" + repository + "/contents/" + controller.INDEX_PATH + "?ref=" + anchor["commit_sha"])
+    _need(contents.get("sha") == anchor["blob_sha"] and contents.get("encoding") == "base64",
+          "native index blob changed")
+    principal, repo = get("user"), get("repos/" + repository)
+    _need({key: principal.get(key) for key in ("id", "login", "type")} ==
+          {"id": config.get("writer_id"), "login": config.get("writer_login"), "type": config.get("writer_type")},
+          "native index principal changed")
+    _need(repo.get("id") == config.get("repository_id") and repo.get("full_name") == repository,
+          "native index repository changed")
+    try:
+        raw = base64.b64decode(str(contents.get("content", "")).replace("\n", ""), validate=True)
+        data = json.loads(raw)
+        _need(controller.validate_index(data, controller.ControllerConfig(**config)) == data,
+              "native index source validation failed")
+    except (ValueError, TypeError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("native index payload invalid") from exc
+    _need(controller.digest(data) == anchor["state_sha256"], "native index state changed")
+    _need(data.get("revision") == 0 and data.get("entries") == [], "native index not pristine")
+    return {"commit_sha": anchor["commit_sha"], "blob_sha": anchor["blob_sha"],
+            "state_sha256": anchor["state_sha256"], "principal": {key: principal[key] for key in ("id", "login", "type")},
+            "repository_id": repo["id"], "repository": repo["full_name"]}
+
+
 def _wrapper_plan(old_manifest: Path, old: dict[str, Any], new_manifest: Path, new: dict[str, Any], receipt: Path) -> dict[str, Any]:
     """Delegate rendering/CAS shape to the reviewed installer, before the CAS."""
     import closer_native_wrapper_install as install
@@ -224,6 +271,7 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
     reference = _completed_reference(old_path, old_state, worker_id)
     _old_native_terminal(old)
     custody = _old_custody_quiet(old)
+    index = fresh_read_native_index(old["policy"]["correction_controller_installation"]["config"], custody)
     interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
     diagnostic = _old_diagnostic(old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter)
     _need(diagnostic.get("target") == reference["worker"].get("target"), "old diagnostic target differs")
@@ -245,7 +293,7 @@ def plan(old_manifest: str | Path, old_state: str | Path, worker_id: str,
               "producer_sha256": _sha(Path(__file__).read_bytes()),
               "old": {"manifest": str(old_path), "manifest_sha256": _sha(old_raw), "state": reference["state_path"],
                       "state_sha256": reference["state_sha256"], "result": reference["result_path"], "result_sha256": reference["result_sha256"],
-                      "custody": custody, "diagnostic": diagnostic},
+                      "custody": custody, "native_index": index, "diagnostic": diagnostic},
               "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
               "wrapper": wrapper, "locks": rows,
               "seal": str(Path(new["mechanism_contract"]["observation_root"]) / "source-upgrade-current-disposition.json")}
@@ -347,6 +395,14 @@ def prepare_held(seal_path: str | Path, new_worker_config: dict[str, Any], front
     old_result = _canonical(record["old"]["result"])
     _need(_sha(host._read(old_state)[1]) == record["old"]["state_sha256"], "old state changed")
     _need(_sha(host._read(old_result)[1]) == record["old"]["result_sha256"], "old result changed")
+    old_manifest = _object(record["old"]["manifest"], "old manifest")[2]
+    inspection = _old_custody_quiet(old_manifest)
+    _need(
+        fresh_read_native_index(
+            old_manifest["policy"]["correction_controller_installation"]["config"], inspection
+        ) == record["old"]["native_index"],
+        "native index changed after source upgrade seal",
+    )
     cfg_path, _m, _raw, cfg = readmission._new_runtime(new_path, new_worker_config)
     _need(cfg_path == new_path, "new worker config runtime changed")
     try:

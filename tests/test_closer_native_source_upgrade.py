@@ -1,11 +1,14 @@
 """Regression tests for the completed=False, no-native-ACT upgrade boundary."""
 
+import base64
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import closer_correction_controller as controller
 import closer_native_source_upgrade as upgrade
 
 
@@ -61,3 +64,26 @@ def test_identity_rejects_principal_epoch_and_anchor_changes():
         new["policy"]["correction_controller_installation"]["config"][key] = "changed"
         with pytest.raises(upgrade.SourceUpgradeHeld, match="identity changed"):
             upgrade._same_identity(old, new)
+
+
+def test_fresh_index_is_get_only_and_rejects_principal_drift(monkeypatch):
+    config = {"state_path": "/private/tmp/state", "repository": "stranske/Orchestrator",
+              "repository_id": 1, "epoch": "e" * 64, "bootstrap_source_sha": "a" * 40,
+              "source_sha": "a" * 40, "writer_id": 7, "writer_login": "owner", "writer_type": "User",
+              "bootstrap_anchor_sha256": "b" * 64, "max_bytes": 1024, "max_entries": 4, "max_subjects": 4}
+    data = {"schema": controller.SCHEMA, "repository": config["repository"], "repository_id": 1,
+            "epoch": config["epoch"], "bootstrap_source_sha": config["bootstrap_source_sha"],
+            "revision": 0, "previous_sha256": None, "last_action": None, "entries": []}
+    raw = json.dumps(data, separators=(",", ":")).encode()
+    inspection = {"highwater": {"anchor": {"commit_sha": "c" * 40, "blob_sha": "blob",
+                                                "state_sha256": controller.digest(data)}}}
+    calls = []
+    replies = [{"object": {"sha": "c" * 40}}, {"sha": "blob", "encoding": "base64",
+               "content": base64.b64encode(raw).decode()}, {"id": 7, "login": "owner", "type": "User"},
+               {"id": 1, "full_name": "stranske/Orchestrator"}]
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(replies.pop(0)))
+    monkeypatch.setattr(upgrade.subprocess, "run", run)
+    assert upgrade.fresh_read_native_index(config, inspection)["commit_sha"] == "c" * 40
+    assert all(argv[:2] == ["gh", "api"] for argv in calls)

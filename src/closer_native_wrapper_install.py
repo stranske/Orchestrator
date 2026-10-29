@@ -200,10 +200,12 @@ def _restored_predecessor(
     """
     restored = _receipt(receipt_path)
     witnesses = restored.get("witnesses")
-    _need(isinstance(witnesses, dict), "host restoration witnesses missing")
+    if not isinstance(witnesses, dict):
+        raise InstallHeld("host restoration witnesses missing")
     _, swap_intent = host._json_ref(witnesses.get("swap_intent"), "restored_swap_intent")
     predecessor = swap_intent.get("plan")
-    _need(isinstance(predecessor, dict), "restoration predecessor plan missing")
+    if not isinstance(predecessor, dict):
+        raise InstallHeld("restoration predecessor plan missing")
     _need(predecessor.get("before_sha256") == RESTORED_SHA, "restoration predecessor differs")
     return restored, predecessor
 
@@ -211,7 +213,8 @@ def _restored_predecessor(
 def _archived_base(restored: dict[str, Any]) -> bytes:
     """Read the only permitted renderer base from the restore receipt witness."""
     witnesses = restored.get("witnesses")
-    _need(isinstance(witnesses, dict), "host restoration witnesses missing")
+    if not isinstance(witnesses, dict):
+        raise InstallHeld("host restoration witnesses missing")
     _, backup = host._json_ref(witnesses.get("backup"), "restored_backup")
     try:
         raw = base64.b64decode(backup.get("base64", ""), validate=True)
