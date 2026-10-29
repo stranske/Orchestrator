@@ -299,8 +299,33 @@ def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
         _need(old_config.get(key) == new_config.get(key), "source upgrade identity changed: " + key)
 
 
+def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -> dict[str, Any]:
+    """The sole lawful policy transformation for this reviewed source upgrade."""
+    expected = json.loads(json.dumps(old["policy"], sort_keys=True))
+    try:
+        config = expected["correction_controller_installation"]["config"]
+        config["source_sha"] = new["candidate_sha"]
+        config["state_path"] = str(new_state)
+        config["native_transport_source_sha256"] = new["modules"][
+            "closer_correction_native_effects.py"
+        ]
+        consumers = config.get("consumers", {})
+        for consumer in consumers.values():
+            bootstrap = consumer["native_bootstrap"]
+            bootstrap["private_root"] = str(new_state.parent.parent / "controller-private")
+            confinement = bootstrap["confinement"]
+            helper = _canonical(new["module_dir"]) / "closer_codex_confinement_probe.py"
+            confinement["helper_path"] = str(helper)
+            confinement["helper_sha256"] = new["modules"][helper.name]
+    except (KeyError, TypeError) as exc:
+        raise SourceUpgradeHeld("policy lacks reviewed rebase structure") from exc
+    _need(new.get("policy") == expected, "new policy changes fields outside lawful rebase")
+    return expected
+
+
 def _physical_recipe(
     old_cfg: dict[str, Any],
+    old_policy: dict[str, Any],
     old_state: Path,
     new: dict[str, Any],
     new_path: Path,
@@ -348,7 +373,7 @@ def _physical_recipe(
     cfg["finite_frontier"] = frontier
     cfg["assignment"] = str(new_state.parent / Path(old_cfg["assignment"]).name)
     cfg["dispatch_state"] = str(new_state.parent / Path(old_cfg["dispatch_state"]).name)
-    cfg["policy"] = new["policy"]
+    cfg["policy"] = _rebased_policy({"policy": old_policy}, new, new_state)
     cfg["coordinator_contract_pin"] = closer_pipeline.scoped_capability()
     _need(
         cfg.get("granularity", "round") == "round"
@@ -577,6 +602,7 @@ def plan(
         raise SourceUpgradeHeld("pre-CAS frontier invalid") from exc
     cfg = _physical_recipe(
         reference["state"]["worker_config"],
+        old["policy"],
         Path(reference["state_path"]),
         new,
         new_path,
