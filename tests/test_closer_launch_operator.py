@@ -15,7 +15,7 @@ def test_ledger_keeps_unobserved_business_stages_unknown(tmp_path):
     )
     terminal.write_text(json.dumps({"passed": True, "kind": "native-wrapper-invocation"}))
     ledger = operator.acceptance_ledger(campaign, result, terminal)
-    assert ledger["last_proven_boundary"] == {"stage": "ACTION A", "state": "proven"}
+    assert ledger["last_proven_boundary"] == {"stage": "ACTION A", "state": "observed"}
     assert [row["state"] for row in ledger["rows"][3:]] == ["UNKNOWN"] * 4
 
 
@@ -70,4 +70,7 @@ def test_finite_unavailable_requires_controller_reentry_not_native_relaunch(tmp_
     )
     gate = operator.campaign_gate(campaign, Path("/manifest"))
     assert gate["stage"] == "held"
-    assert gate["supported_source_path"].endswith("after_discovery")
+    assert gate["accepted_dispositions"] == [
+        "native-pre-dispatch-no-start/v2",
+        "native-retained-no-b-reconciliation/v1",
+    ]

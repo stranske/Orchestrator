@@ -46,10 +46,13 @@ def campaign_gate(campaign_path: Path, manifest_path: Path) -> dict[str, Any]:
     if unavailable or document.get("targets", {}).get("*round*") == "reconcile":
         return {
             "stage": "held",
-            "kind": "finite-cohort-reentry-required",
+            "kind": "finite-disposition-required",
             "workers": unavailable,
-            "reason": "finite unavailable is one attempt only; use completed-discovery controller demand to retire and admit a distinct frontier",
-            "supported_source_path": "closer_campaign.controller_demand_before_discovery/after_discovery",
+            "reason": "finite unavailable is one attempt only; completed-cohort retirement is inapplicable until a new authenticated disposition preserves the old result",
+            "accepted_dispositions": [
+                "native-pre-dispatch-no-start/v2",
+                "native-retained-no-b-reconciliation/v1",
+            ],
         }
     return {"stage": "ready", "kind": "finite-current-authority"}
 
@@ -98,17 +101,19 @@ def acceptance_ledger(
     detail = json.loads(result.get("detail", "{}")) if isinstance(result, dict) else {}
     execution = detail.get("native_execution") if isinstance(detail, dict) else {}
     phases = execution.get("phases") if isinstance(execution, dict) else {}
+    phase_a = phases.get("A") if isinstance(phases, dict) else None
+    phase_b = phases.get("B") if isinstance(phases, dict) else None
     rows = [
         {"stage": "goal", "state": "proven", "evidence": campaign.get("campaign_id")},
         {
             "stage": "ACTION A",
-            "state": "proven" if "A" in phases else "UNKNOWN",
-            "evidence": phases.get("A"),
+            "state": "observed" if isinstance(phase_a, dict) else "UNKNOWN",
+            "evidence": phase_a,
         },
         {
             "stage": "ACTION B",
-            "state": "proven" if "B" in phases else "UNKNOWN",
-            "evidence": phases.get("B"),
+            "state": "observed" if isinstance(phase_b, dict) else "UNKNOWN",
+            "evidence": phase_b,
         },
         {"stage": "coding", "state": "UNKNOWN", "evidence": None},
         {"stage": "publication", "state": "UNKNOWN", "evidence": None},
@@ -117,7 +122,7 @@ def acceptance_ledger(
     ]
     if isinstance(detail, dict) and detail.get("descendant_bundle"):
         rows[3] = {"stage": "coding", "state": "observed", "evidence": detail["descendant_bundle"]}
-    if isinstance(terminal, dict) and terminal.get("passed") is True:
+    if isinstance(terminal, dict):
         rows[2]["terminal_native_observation"] = terminal.get("kind")
     last = next((row for row in reversed(rows) if row["state"] != "UNKNOWN"), rows[0])
     return {

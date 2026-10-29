@@ -35,5 +35,6 @@ Missing coding, publication, verification, or acceptance evidence remains
 `UNKNOWN`; the ledger names the last proven boundary.
 
 For a finite frontier, an unavailable terminal worker is not retry authority.
-The plan holds and points to the existing completed-discovery controller-demand
-retirement/re-admission path, which requires a distinct fresh frontier.
+The plan holds until a prospective signed v2 no-start proof or a separately
+authenticated retained no-B reconciliation authorizes a distinct fresh frontier.
+Completed-cohort retirement is not a recovery path for this failed cohort.
