@@ -635,7 +635,7 @@ def publish_admission(manifest, manifest_path, state_path, doc):
             require_preparation_known(state_path, doc)
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
             raise mechanisms.MechanismError("native preparation creation is not sealed") from exc
-    if manifest["mechanism_contract"].get("controller_demand") and demand is None:
+    if manifest["mechanism_contract"].get("controller_demand") is not None and demand is None:
         raise mechanisms.MechanismError(
             "controlled native campaign requires admitted source demand"
         )
@@ -1506,7 +1506,8 @@ def wrapper_block(manifest_path, campaign_root, interpreter, launcher):
     ]
     return (
         MARKER + "\n"
-        'if [[ "$LANE" == "closer" && -f "$HOME/.codex/handoff/closer-native-handoff.enabled" ]]; then\n'
+        'if [[ "$LANE" == "closer" ]]; then\n'
+        '  [[ -f "$HOME/.codex/handoff/closer-native-handoff.enabled" ]] || exit 78\n'
         "  " + shlex.join(args) + "\n"
         '  exit "$?"\nfi\n' + END_MARKER + "\n"
     )

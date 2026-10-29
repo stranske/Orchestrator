@@ -166,9 +166,13 @@ def test_controlled_initialization_changes_only_atomic_begin_and_native_demand_g
         top, tree = _top_level_ast(raw)
         assert top == change["after_top_level_ast"]
         selected = change["changed_node"].split(".")[0]
-        assert {k: v for k, v in top.items() if k != selected} == {
-            k: v for k, v in change["before_top_level_ast"].items() if k != selected
+        changed_names = {selected, *change.get("additional_changed_top_level_ast", {})}
+        assert {k: v for k, v in top.items() if k not in changed_names} == {
+            k: v for k, v in change["before_top_level_ast"].items() if k not in changed_names
         }
+        for name, pair in change.get("additional_changed_top_level_ast", {}).items():
+            assert change["before_top_level_ast"][name] == pair["before"]
+            assert top[name] == pair["after"]
         if filename == "closer_campaign.py":
             cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Campaign")
             node = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "begin")

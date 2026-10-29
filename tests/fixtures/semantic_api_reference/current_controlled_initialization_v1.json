@@ -196,8 +196,14 @@
       "remaining_class_ast_sha256": "4d1b812c96ce7ac5e14e2f7a72a8bd4854cb1b6875bbb03037800d88a2d855e5"
     },
     "closer_native_observer.py": {
-      "after_file_sha256": "05b0fccf0dcb146c92cd5a078dfc7c520aeb2984ec821a66e139e17333e269c9",
-      "after_node_ast_sha256": "c8dd9fbbf94cc7124a3bc5bf5161b08aca3e3c1280e349e4bb9f6d2cf7141e15",
+      "additional_changed_top_level_ast": {
+        "wrapper_block": {
+          "after": "9bf01def9cd056db2764c3ee75c3e95342142e13d264b1a68c4ea6afdcb9389f",
+          "before": "81dcb4ebb370f98d26f743b1a46a589072cc31b59157542f29db99c06be646dd"
+        }
+      },
+      "after_file_sha256": "86864fc0b7e4605b2cd96bdad42379732057fb075d8dfab1817007184fd3caf9",
+      "after_node_ast_sha256": "b561ff9da0212b1e6f635aa953d2b83f58b141ee7b2804d8758f0be765b2bcbb",
       "after_top_level_ast": {
         "_accepted_frame_qualified_value": "0115461160a30e7324c01cdba1d0f9628555e69496be3232f50899a13f289c68",
         "_advance_coding_registry": "3d4689cbd42c7a09302f3a2c80655b77d3d1d4ed006629403e52562a9d26fb01",
@@ -276,7 +282,7 @@
         "prepare_coding_launch": "98ecbf4be2099186c6b4a2c84faba0efc5dc31b9fe3c2790df6a9dfda6381595",
         "private_test_assignment_source": "da1c512833a7cfa15b30b37a669f93e4dcd37540761a23f9212c79002663eb92",
         "private_test_wrapper_text": "e6c4b12d2c6485cc455e91c6b530ce944c3da726a8b9b5c606c1275300c89408",
-        "publish_admission": "c8dd9fbbf94cc7124a3bc5bf5161b08aca3e3c1280e349e4bb9f6d2cf7141e15",
+        "publish_admission": "b561ff9da0212b1e6f635aa953d2b83f58b141ee7b2804d8758f0be765b2bcbb",
         "publish_coding_admission": "cffd2a8d8ee1dce5cc65d0f07a058bc8efeef13e25dad58a224ff9f03e33677f",
         "qualification_problems": "da93b2919a4bab189a026d5456010bb7ebf29bc6d1853639efc4e2258fd2a9d8",
         "qualification_receipt_problems": "27998fd0fc6d614bd30a948c1453d8aecd996ee8c48a8bd5a54aec1022d9165b",
@@ -295,7 +301,7 @@
         "supervise_native": "a698f158085aaa512c92b0c79e2971dd354c553f5c150e7a3159964d8b4d7af2",
         "validate_admission": "6e2288fa65808f59e772a561c79a2472c2f453c26e3fa2d07a18e9f6869bfce6",
         "validate_coding_registry_transition": "dc5649a238e8b01962c823790cf8e628e20f64f2e6df30cc3dbb4b62bc8b853b",
-        "wrapper_block": "81dcb4ebb370f98d26f743b1a46a589072cc31b59157542f29db99c06be646dd"
+        "wrapper_block": "9bf01def9cd056db2764c3ee75c3e95342142e13d264b1a68c4ea6afdcb9389f"
       },
       "before_file_sha256": "6bcf564bc51ee99c63b414ee459d7430c01a9a096ab676106822c9a394dc8d15",
       "before_node_ast_sha256": "778ea9814b2ce6daa7d60acca305f7156e670a1240d955ef7ef989e0d1b1cbed",

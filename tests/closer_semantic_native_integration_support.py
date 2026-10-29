@@ -181,7 +181,7 @@ CONTROLLED_INITIALIZATION_MANIFEST = (
     / "fixtures/semantic_api_reference/current_controlled_initialization_v1.json"
 )
 CONTROLLED_INITIALIZATION_SHA256 = (
-    "7b01c326ce2717723a0f85abef1b4203c0159a236ae9ded3081bcbb4f8330ef9"
+    "c070e59b4fd2c9ee2ee7c2ee7b2c187e87aa02be3fc0df47398bf2af205bec35"
 )
 
 
@@ -193,6 +193,9 @@ def controlled_initialization_reference():
     assert {name: change["changed_node"] for name, change in value["files"].items()} == {
         "closer_campaign.py": "Campaign.begin",
         "closer_native_observer.py": "publish_admission",
+    }
+    assert set(value["files"]["closer_native_observer.py"]["additional_changed_top_level_ast"]) == {
+        "wrapper_block"
     }
     return value
 

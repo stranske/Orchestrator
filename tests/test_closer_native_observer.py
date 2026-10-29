@@ -101,7 +101,9 @@ def test_native_policy_is_distinct_and_pause_wins(host):
     assert native.policy_problem(manifest["policy"])
 
 
-@pytest.mark.parametrize("boundary", ["controlled_demand", "preparation_known"])
+@pytest.mark.parametrize(
+    "boundary", ["controlled_demand", "malformed_controlled_demand", "preparation_known"]
+)
 def test_unadmitted_campaign_refuses_before_global_assignment(host, monkeypatch, boundary):
     manifest, manifest_path, _wrapper = host
     root = Path(manifest["mechanism_contract"]["observation_root"])
@@ -137,6 +139,8 @@ def test_unadmitted_campaign_refuses_before_global_assignment(host, monkeypatch,
             "path": str(intent),
             "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
         }
+    elif boundary == "malformed_controlled_demand":
+        manifest["mechanism_contract"]["controller_demand"] = {}
     monkeypatch.setattr(native, "capacity_contract", lambda *_a, **_k: {"scoped": True})
     monkeypatch.setattr(native, "entry_active", lambda *_a: True)
     monkeypatch.setattr(
@@ -149,7 +153,7 @@ def test_unadmitted_campaign_refuses_before_global_assignment(host, monkeypatch,
     try:
         expected = (
             "requires admitted source demand"
-            if boundary == "controlled_demand"
+            if boundary != "preparation_known"
             else "preparation creation is not sealed"
         )
         with pytest.raises(mechanisms.MechanismError, match=expected):
@@ -157,6 +161,35 @@ def test_unadmitted_campaign_refuses_before_global_assignment(host, monkeypatch,
     finally:
         native._CURRENT_ENTRY.pop(str(root), None)
         native._CURRENT_ADMISSION.pop(str(root), None)
+
+
+@pytest.mark.parametrize(
+    "lane,opt_in,expected", [("closer", False, 78), ("closer", True, 0), ("implement", False, 0)]
+)
+def test_rendered_native_closer_never_falls_through_without_optin(tmp_path, lane, opt_in, expected):
+    import subprocess
+
+    home = tmp_path / "home"
+    handoff = home / ".codex/handoff"
+    handoff.mkdir(parents=True)
+    if opt_in:
+        (handoff / "closer-native-handoff.enabled").touch()
+    script = tmp_path / "wrapper.sh"
+    script.write_text(
+        '#!/bin/bash\nLANE="$1"\n'
+        + native.wrapper_block(tmp_path / "manifest", tmp_path, "/bin/echo", "/bin/echo")
+        + "echo LEGACY_REACHED\n"
+    )
+    result = subprocess.run(
+        ["/bin/bash", str(script), lane],
+        env={"HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == expected
+    assert ("LEGACY_REACHED" in result.stdout) is (lane != "closer")
+    assert ("native-entry" in result.stdout) is (lane == "closer" and opt_in)
 
 
 @pytest.mark.parametrize(
