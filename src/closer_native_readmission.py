@@ -258,15 +258,16 @@ def require_preparation_known(state_path, document, *, initial=False):
         token = _json(intent_raw, "preparation intent")
     except (OSError, RuntimeError, ValueError, TypeError) as exc:
         raise ReadmissionHeld("preparation runtime producer is unavailable") from exc
+    try:
+        plan_producer = _plan_producer_binding(token.get("plan"))
+    except ReadmissionHeld:
+        plan_producer = None
     if (
         token.get("schema") != "closer-native-readmission/v1"
         or token.get("stage") != "preparation_intent"
         or token.get("authority") is not False
         or any(token.get(key) != value for key, value in producer.items())
-        or not isinstance(token.get("plan"), dict)
-        or token["plan"].get("producer_sha256") != producer["producer_sha256"]
-        or token["plan"].get("new", {}).get("manifest") != producer["manifest"]
-        or token["plan"].get("new", {}).get("manifest_sha256") != producer["manifest_sha256"]
+        or plan_producer != producer
     ):
         raise ReadmissionHeld("preparation intent producer differs from current runtime")
     known_path = _known_path(intent)
@@ -456,15 +457,36 @@ def _plan(reference, new_manifest_path, new_manifest_raw, cfg, destination, fron
     return payload, _digest(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
 
 
+def _plan_producer_binding(plan):
+    """Read either reviewed plan shape without rewriting its signed bytes."""
+    if not isinstance(plan, dict):
+        raise ReadmissionHeld("preparation plan is malformed")
+    nested = plan.get("new")
+    if isinstance(nested, dict):
+        manifest = nested.get("manifest")
+        manifest_sha256 = nested.get("manifest_sha256")
+    else:
+        # Historical reconciliation plans predate the prospective ``new`` envelope.
+        # Preserve their flat canonical bytes; only normalize for this boundary check.
+        manifest = plan.get("new_manifest")
+        manifest_sha256 = plan.get("new_manifest_sha256")
+    return {
+        "producer_sha256": plan.get("producer_sha256"),
+        "manifest": manifest,
+        "manifest_sha256": manifest_sha256,
+    }
+
+
 def _intent_token(plan, plan_sha256):
     """The write-ahead record is exact-plan-only and has no effect authority."""
+    producer = _plan_producer_binding(plan)
+    if not all(isinstance(value, str) and value for value in producer.values()):
+        raise ReadmissionHeld("preparation plan has no producer binding")
     return {
         "schema": "closer-native-readmission/v1",
         "stage": "preparation_intent",
         "authority": False,
-        "producer_sha256": plan["producer_sha256"],
-        "manifest": plan["new"]["manifest"],
-        "manifest_sha256": plan["new"]["manifest_sha256"],
+        **producer,
         "plan": plan,
         "plan_sha256": plan_sha256,
     }
