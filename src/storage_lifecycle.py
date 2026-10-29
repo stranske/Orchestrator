@@ -83,6 +83,10 @@ OWNED_SAMPLE_CONTRACT = "owned-tree-sampled-allocation/v1"
 SAMPLE_INTERVAL_SECONDS = 30.0
 SAMPLE_SCAN_SECONDS = 1.0
 SAMPLE_MAX_ENTRIES = 100_000
+_CAPABILITY_TEMP_PREFIX = "capabilities.json."
+_CAPABILITY_TEMP_SUFFIX = ".tmp"
+_TEMPFILE_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+_STATE_INVENTORY_ATTEMPTS = 3
 
 
 # Reviewed engineering forecast, NOT an exclusive or mathematical peak bound.
@@ -718,30 +722,78 @@ def staging_bytes(
 
     # The state copier recurses through feedback irrespective of the directory
     # cap, and always brings the model catalog even when agent-runtime is large.
-    def state_bytes(root: Path) -> int:
+    def vanished_capability_temp(entry: Path) -> bool:
+        """Only the ledger writer's just-disappeared mkstemp sibling may retry."""
+        name = entry.name
+        if not name.startswith(_CAPABILITY_TEMP_PREFIX) or not name.endswith(
+            _CAPABILITY_TEMP_SUFFIX
+        ):
+            return False
+        token = name[len(_CAPABILITY_TEMP_PREFIX) : -len(_CAPABILITY_TEMP_SUFFIX)]
+        if len(token) != 8 or any(char not in _TEMPFILE_NAME_CHARS for char in token):
+            return False
+        try:
+            entry.lstat()
+        except FileNotFoundError:
+            return True
+        return False
+
+    def root_identity(root: Path) -> tuple[int, int]:
+        info = root.lstat()
+        if root.is_symlink() or not stat.S_ISDIR(info.st_mode):
+            raise StorageBlocked("state-copy root is not a physical directory")
+        return info.st_dev, info.st_ino
+
+    class RetryStateInventory(Exception):
+        pass
+
+    def state_bytes_once(root: Path) -> int:
         subtotal = 0
         for entry in root.iterdir():
-            if entry.name == ".storage-lifecycle" or entry == exclude:
-                continue
-            if (
-                exclude is not None
-                and exclude.resolve().is_relative_to(entry.resolve())
-                and entry.name != "feedback"
-            ):
-                raise StorageBlocked(
-                    "storage control nested in copied state; choose a separate control directory"
+            try:
+                if entry.name == ".storage-lifecycle" or entry == exclude:
+                    continue
+                if (
+                    exclude is not None
+                    and exclude.resolve().is_relative_to(entry.resolve())
+                    and entry.name != "feedback"
+                ):
+                    raise StorageBlocked(
+                        "storage control nested in copied state; choose a separate control directory"
+                    )
+                if entry.is_symlink():
+                    raise StorageBlocked("state-copy symlink needs an explicit copy footprint")
+                if entry.is_dir() and entry.name == "feedback":
+                    subtotal += state_bytes_once(entry)
+                    continue
+                value = footprint(
+                    entry, stop_after=maximum if entry.is_dir() else None, allocated_limit=True
                 )
-            if entry.is_symlink():
-                raise StorageBlocked("state-copy symlink needs an explicit copy footprint")
-            if entry.is_dir() and entry.name == "feedback":
-                subtotal += state_bytes(entry)
-                continue
-            value = footprint(
-                entry, stop_after=maximum if entry.is_dir() else None, allocated_limit=True
-            )
-            if not value["over_limit"]:
-                subtotal += copy_bytes(entry, reject_links=True)
+                if not value["over_limit"]:
+                    subtotal += copy_bytes(entry, reject_links=True)
+            except FileNotFoundError:
+                if vanished_capability_temp(entry):
+                    raise RetryStateInventory from None
+                raise
         return subtotal
+
+    def state_bytes(root: Path) -> int:
+        for attempt in range(_STATE_INVENTORY_ATTEMPTS):
+            identity = root_identity(root)
+            try:
+                subtotal = state_bytes_once(root)
+            except RetryStateInventory:
+                if root_identity(root) != identity:
+                    raise StorageBlocked("state-copy root changed during inventory") from None
+                if attempt + 1 < _STATE_INVENTORY_ATTEMPTS:
+                    continue
+                raise StorageBlocked(
+                    "atomic capability ledger replacement did not settle"
+                ) from None
+            if root_identity(root) != identity:
+                raise StorageBlocked("state-copy root changed during inventory")
+            return subtotal
+        raise AssertionError("bounded state inventory loop exhausted")
 
     for root in dict.fromkeys((runtime, state)):
         if root.is_dir():

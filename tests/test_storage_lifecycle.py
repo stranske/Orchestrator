@@ -170,6 +170,103 @@ def test_staging_estimate_omits_oversize_state_and_own_control_metadata(tmp_path
     assert storage.staging_bytes(source, runtime, runtime, 100) == before
 
 
+def _state_inventory_fixture(tmp_path):
+    source, runtime = tmp_path / "source", tmp_path / "runtime"
+    source.mkdir()
+    runtime.mkdir()
+    (source / "module.py").write_text("pass\n")
+    return source, runtime
+
+
+def test_staging_inventory_retries_vanished_atomic_capability_temp_and_recounts_root(
+    tmp_path, monkeypatch
+):
+    source, runtime = _state_inventory_fixture(tmp_path)
+    durable = runtime / "capabilities.json"
+    durable.write_bytes(b"old-ledger")
+    transient = runtime / "capabilities.json.7o2kyyja.tmp"
+    transient.write_bytes(b"replacement-ledger" * 200)
+    real_footprint = storage.footprint
+    raced = []
+
+    def replace_before_inventory(path, **kwargs):
+        if path == transient and not raced:
+            raced.append(path)
+            transient.unlink()
+            durable.write_bytes(b"replacement-ledger" * 200)
+        return real_footprint(path, **kwargs)
+
+    monkeypatch.setattr(storage, "footprint", replace_before_inventory)
+    observed = storage.staging_bytes(source, runtime, runtime, 1024**2)
+    monkeypatch.setattr(storage, "footprint", real_footprint)
+    expected = storage.staging_bytes(source, runtime, runtime, 1024**2)
+    assert raced == [transient]
+    assert observed == expected
+
+
+def test_staging_inventory_does_not_relax_missing_durable_capability_ledger(tmp_path, monkeypatch):
+    source, runtime = _state_inventory_fixture(tmp_path)
+    durable = runtime / "capabilities.json"
+    durable.write_bytes(b"ledger")
+    real_footprint = storage.footprint
+
+    def remove_durable(path, **kwargs):
+        if path == durable and durable.exists():
+            durable.unlink()
+        return real_footprint(path, **kwargs)
+
+    monkeypatch.setattr(storage, "footprint", remove_durable)
+    with pytest.raises(FileNotFoundError):
+        storage.staging_bytes(source, runtime, runtime, 1024**2)
+
+
+def test_staging_inventory_bounds_unsettled_atomic_temp_retries(tmp_path, monkeypatch):
+    source, runtime = _state_inventory_fixture(tmp_path)
+    transient = runtime / "capabilities.json.7o2kyyja.tmp"
+    transient.write_bytes(b"transient")
+    real_footprint = storage.footprint
+    real_iterdir = Path.iterdir
+    attempts = []
+
+    def restore_temp_for_each_full_inventory(path):
+        if path == runtime and not transient.exists():
+            transient.write_bytes(b"transient")
+        return real_iterdir(path)
+
+    def vanish_each_attempt(path, **kwargs):
+        if path.name.startswith("capabilities.json."):
+            attempts.append(path)
+            path.unlink(missing_ok=True)
+            raise FileNotFoundError(path)
+        return real_footprint(path, **kwargs)
+
+    monkeypatch.setattr(Path, "iterdir", restore_temp_for_each_full_inventory)
+    monkeypatch.setattr(storage, "footprint", vanish_each_attempt)
+    with pytest.raises(storage.StorageBlocked, match="did not settle"):
+        storage.staging_bytes(source, runtime, runtime, 1024**2)
+    assert len(attempts) == storage._STATE_INVENTORY_ATTEMPTS
+
+
+def test_staging_inventory_refuses_root_replacement_during_atomic_temp_retry(tmp_path, monkeypatch):
+    source, runtime = _state_inventory_fixture(tmp_path)
+    transient = runtime / "capabilities.json.7o2kyyja.tmp"
+    transient.write_bytes(b"transient")
+    real_footprint = storage.footprint
+    parked = tmp_path / "parked-runtime"
+
+    def replace_root(path, **kwargs):
+        if path == transient:
+            runtime.rename(parked)
+            runtime.mkdir()
+            raise FileNotFoundError(path)
+        return real_footprint(path, **kwargs)
+
+    monkeypatch.setattr(storage, "footprint", replace_root)
+    with pytest.raises(storage.StorageBlocked, match="root changed"):
+        storage.staging_bytes(source, runtime, runtime, 1024**2)
+    assert parked.is_dir() and runtime.is_dir()
+
+
 def test_unknown_state_copy_symlink_does_not_underestimate(tmp_path):
     source, runtime = tmp_path / "source", tmp_path / "runtime"
     source.mkdir()
