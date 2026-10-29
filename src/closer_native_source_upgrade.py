@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -555,6 +556,57 @@ def fresh_read_native_index(config: dict[str, Any], inspection: dict[str, Any]) 
     }
 
 
+def _inert_new_custody(
+    manifest: dict[str, Any], state: Path, anchor: dict[str, Any]
+) -> dict[str, Any]:
+    """Inspect only pre-provisioned metadata while the new campaign is absent.
+
+    The controller's full inspector intentionally requires an existing campaign.
+    This check grants no controller authority; normal admission uses that full
+    inspector after the producer has created and sealed the held campaign.
+    """
+    import closer_correction_controller as controller
+
+    config = controller.ControllerConfig(
+        **manifest["policy"]["correction_controller_installation"]["config"]
+    )
+    root = host._path(Path(str(state) + ".evidence") / config.namespace)
+    before = root.stat()
+    _need(
+        stat.S_ISDIR(before.st_mode)
+        and before.st_uid == os.getuid()
+        and stat.S_IMODE(before.st_mode) == 0o700,
+        "new inert custody is not private/owned",
+    )
+    expected = {
+        "namespace.json": controller.canonical(
+            {
+                "schema": "local-correction-controller-namespace/v1",
+                "config_sha256": controller.digest(config.source_binding()),
+            }
+        ),
+        "highwater-0000000000000000.json": controller.canonical(anchor),
+        "writer.lock": b"",
+    }
+    _need(set(os.listdir(root)) == set(expected), "new inert custody inventory differs")
+    files = {}
+    for name, raw in expected.items():
+        path, observed = host._read(root / name)
+        info = path.stat()
+        _need(observed == raw and not info.st_mode & 0o077, "new inert custody bytes/mode differ")
+        files[name] = {"sha256": _sha(raw), "device": info.st_dev, "inode": info.st_ino}
+    after = root.stat()
+    _need(
+        (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
+        and set(os.listdir(root)) == set(expected),
+        "new inert custody changed during inspection",
+    )
+    return {
+        "identity": {"custody_path": str(root), "device": before.st_dev, "inode": before.st_ino},
+        "files": files,
+    }
+
+
 def _wrapper_plan(
     old_manifest: Path, old: dict[str, Any], new_manifest: Path, new: dict[str, Any], receipt: Path
 ) -> dict[str, Any]:
@@ -655,6 +707,7 @@ def plan(
     )
     supplied = json.loads(json.dumps(new_worker_config, sort_keys=True))
     _need(supplied == cfg, "pre-CAS worker config is not strict old-to-new rebind")
+    new_custody = _inert_new_custody(new, state, custody["highwater"]["anchor"])
     _need(
         cfg.get("granularity", "round") == "round"
         and cfg.get("mechanism") == "native-handoff/v1"
@@ -678,6 +731,14 @@ def plan(
     wrapper = _wrapper_plan(old_path, old, new_path, new, receipt)
     _restored, predecessor = install._restored_predecessor(receipt)
     rows = install._prospective_rows(predecessor, reference, new, state)
+    # The restore predecessor may be historical attempt13 rather than this
+    # stopped worker. Its custody fence cannot stand in for either current
+    # controller namespace.
+    for inspection in (custody, new_custody):
+        writer = str(Path(inspection["identity"]["custody_path"]) / "writer.lock")
+        if not any(row["path"] == writer for row in rows):
+            rows.append({"path": writer, "must_exist": True})
+    rows.sort(key=lambda row: row["path"])
     result = {
         "schema": SCHEMA,
         "authority": False,
@@ -694,7 +755,12 @@ def plan(
             "native_index": index,
             "diagnostic": diagnostic,
         },
-        "new": {"manifest": str(new_path), "manifest_sha256": _sha(new_raw), "state": str(state)},
+        "new": {
+            "manifest": str(new_path),
+            "manifest_sha256": _sha(new_raw),
+            "state": str(state),
+            "custody": new_custody,
+        },
         "restore_receipt": {"path": str(receipt), "sha256": _sha(host._read(receipt)[1])},
         "new_release": release,
         "held_recipe": {
@@ -946,6 +1012,11 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         _old_native_terminal(old_manifest)
         host._lane_absent()
         _need(_old_custody_quiet(old_manifest) == inspection, "old custody changed under locks")
+        _need(
+            _inert_new_custody(manifest, destination, inspection["highwater"]["anchor"])
+            == record["new"]["custody"],
+            "new custody changed under locks",
+        )
         _need(
             fresh_read_native_index(
                 old_manifest["policy"]["correction_controller_installation"]["config"], inspection

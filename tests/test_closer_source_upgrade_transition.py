@@ -29,7 +29,9 @@ import closer_native_wrapper_install as install
 import closer_pipeline as pipeline
 
 
-@pytest.mark.parametrize("interference", ["none", "old_result", "seal_recipe", "old_lock"])
+@pytest.mark.parametrize(
+    "interference", ["none", "old_result", "seal_recipe", "old_lock", "custody_lock"]
+)
 def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_path, interference):
     old, old_path, wrapper = host
     modules = Path(old["module_dir"])
@@ -242,12 +244,30 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     new_config["native_transport_source_sha256"] = new["modules"][
         "closer_correction_native_effects.py"
     ]
+    new_custody = (
+        Path(str(new_state) + ".evidence") / controller.ControllerConfig(**new_config).namespace
+    )
+    new_custody.mkdir(parents=True, mode=0o700)
+    (new_custody / "writer.lock").touch(mode=0o600)
     bootstrap = new_config["consumers"]["native"]["native_bootstrap"]
     bootstrap["private_root"] = str(new_state.parent.parent / "controller-private")
     bootstrap["confinement"] = {
         "helper_path": str(Path(new["module_dir"]) / "closer_codex_confinement_probe.py"),
         "helper_sha256": new["modules"]["closer_codex_confinement_probe.py"],
     }
+    (new_custody / "namespace.json").write_bytes(
+        controller.canonical(
+            {
+                "schema": "local-correction-controller-namespace/v1",
+                "config_sha256": controller.digest(
+                    controller.ControllerConfig(**new_config).source_binding()
+                ),
+            }
+        )
+    )
+    (new_custody / "highwater-0000000000000000.json").write_bytes(controller.canonical(anchor))
+    for item in new_custody.iterdir():
+        item.chmod(0o600)
     new_path = new_state.parent / "source-upgrade.manifest.json"
     new["command"][new["command"].index("--manifest") + 1] = str(new_path)
     new["command_digest"] = campaign.sha256_json(new["command"])
@@ -272,11 +292,14 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
     (wrapper.parent / ".closer-public989-install.lock").touch()
     (Path.home() / ".codex/handoff/.lane-closer.lock.coord.lock").touch()
     swap = old_state.parent / "restored-swap.json"
+    historical_custody = tmp_path / "historical-custody"
+    historical_custody.mkdir(mode=0o700)
+    (historical_custody / "writer.lock").touch(mode=0o600)
     predecessor = {
         "before_sha256": install.RESTORED_SHA,
         "old_observation_root": old["mechanism_contract"]["observation_root"],
         "new_observation_root": new["mechanism_contract"]["observation_root"],
-        "custody_path": str(custody),
+        "custody_path": str(historical_custody),
         "old_campaign_root": str(old_state.parent),
         "new_campaign_root": str(new_state.parent),
         "old_manifest_path": str(old_path),
@@ -357,6 +380,9 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         frontier,
         old_state.parent / "release.json",
     )
+    lock_paths = {row["path"] for row in plan["locks"]}
+    assert str(custody / "writer.lock") in lock_paths
+    assert str(new_custody / "writer.lock") in lock_paths
     assert plan["authority"] is False and not new_state.exists()
     applied = upgrade.apply(
         old_path,
@@ -394,10 +420,15 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
             upgrade.prepare_held(seal, confirm_plan_sha256=plan["plan_sha256"])
         assert not new_state.exists()
         return
-    if interference == "old_lock":
+    if interference in {"old_lock", "custody_lock"}:
         import fcntl
 
-        with Path(str(old_state) + ".lock").open("r+b") as lock:
+        locked_path = (
+            Path(str(old_state) + ".lock")
+            if interference == "old_lock"
+            else custody / "writer.lock"
+        )
+        with locked_path.open("r+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             with pytest.raises(RuntimeError, match="lock_contended"):
                 upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
