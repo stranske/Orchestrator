@@ -51,3 +51,12 @@ uses the expected row digest under the ledger lock, then writes an immutable
 known receipt after durable receipt readback. It deliberately retains the root
 and its diagnostics. An interrupted or ambiguous reconciliation is not retried,
 reset, or repaired by editing ledger JSON.
+
+The storage forecast also handles an atomic capabilities-ledger replacement
+without treating its vanished temporary sibling as a lost durable input. A
+whole state inventory is retried at most three times, only for the exact
+`capabilities.json.<eight tempfile characters>.tmp` namespace after that path
+has disappeared and the physical root identity remains unchanged. Stable
+files are still counted, and other missing files, symlinks, or root replacement
+remain failures. This addresses a reproduced race; it does not identify the
+historical writer that produced a particular admission failure.
