@@ -94,11 +94,15 @@ def _pinned_object(
 
 
 def _source_upgrade_root(manifest: dict[str, Any]) -> Path:
+    import closer_mechanisms as mechanisms
+
     try:
-        root = _canonical(manifest["mechanism_contract"]["observation_root"])
-    except (KeyError, TypeError, OSError, ValueError) as exc:
+        # This is the mechanism's owned 0700 root check, not merely a
+        # canonical-path check. It must run before any key read or creation.
+        root = mechanisms._root(manifest)
+    except (KeyError, TypeError, OSError, ValueError, mechanisms.MechanismError) as exc:
         raise SourceUpgradeHeld("current source observation root unavailable") from exc
-    return root
+    return _canonical(root)
 
 
 def _upgrade_path(manifest: dict[str, Any], name: str) -> Path:
@@ -1117,7 +1121,10 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     candidate_new = candidate_record.get("new")
     if not isinstance(candidate_new, dict):
         raise SourceUpgradeHeld("upgrade seal invalid")
-    new_path = _canonical(candidate_new.get("manifest", ""))
+    candidate_manifest = candidate_new.get("manifest")
+    if not isinstance(candidate_manifest, str) or not candidate_manifest:
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    new_path = _canonical(candidate_manifest)
     _, raw, manifest = _manifest(new_path)
     manifest_sha = _sha(raw)
     seal, seal_raw, record = _read_signed_upgrade(

@@ -29,6 +29,26 @@ import closer_native_wrapper_install as install
 import closer_pipeline as pipeline
 
 
+def test_source_upgrade_refuses_nonprivate_observation_root_before_key_creation(tmp_path):
+    root = tmp_path / "observations"
+    root.mkdir(mode=0o755)
+    root.chmod(0o755)
+    manifest = {"mechanism_contract": {"observation_root": str(root)}}
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="observation root unavailable"):
+        upgrade._provision_upgrade_key(manifest)
+    assert not (root / "supervisor.key").exists()
+
+
+@pytest.mark.parametrize("value", [None, [], 7, ""])
+def test_prepare_held_rejects_malformed_untrusted_manifest_reference(tmp_path, value):
+    seal = tmp_path / "source-upgrade-current-disposition.json"
+    seal.write_text(json.dumps({"record": {"new": {"manifest": value}}}))
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="upgrade seal invalid"):
+        upgrade.prepare_held(seal, confirm_plan_sha256="a" * 64)
+
+
 @pytest.mark.parametrize(
     "interference",
     [
@@ -41,6 +61,7 @@ import closer_pipeline as pipeline
         "old_lock",
         "custody_lock",
         "pre_cas_retry",
+        "missing_key_recovery",
         "tampered_recovery",
         "post_cas_unknown",
     ],
@@ -414,7 +435,12 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
 
     assert not (new_observation / "supervisor.key").exists()
     original_write = upgrade.host._write_once
-    if interference in {"pre_cas_retry", "tampered_recovery", "post_cas_unknown"}:
+    if interference in {
+        "pre_cas_retry",
+        "missing_key_recovery",
+        "tampered_recovery",
+        "post_cas_unknown",
+    }:
         failed_name = (
             "source-upgrade-known.json"
             if interference == "post_cas_unknown"
@@ -448,6 +474,17 @@ def test_public_source_upgrade_plan_apply_and_known_held(host, monkeypatch, tmp_
         assert seal.exists() and not seal.with_name("source-upgrade-intent.json").exists()
         assert hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["before_sha256"]
         monkeypatch.setattr(upgrade.host, "_write_once", original_write)
+        if interference == "missing_key_recovery":
+            key = new_observation / "supervisor.key"
+            key.unlink()
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="signature differs"):
+                apply_bound()
+            assert not key.exists()
+            assert not new_state.exists()
+            assert (
+                hashlib.sha256(wrapper.read_bytes()).hexdigest() == plan["wrapper"]["before_sha256"]
+            )
+            return
         if interference == "tampered_recovery":
             changed = json.loads(seal.read_bytes())
             changed["record"]["held_recipe"]["worker_config"]["apply"] = False

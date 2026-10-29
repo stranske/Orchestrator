@@ -9,8 +9,8 @@ new business demand.
 
 Before changing the wrapper it validates immutable old state/result/cohort/round
 references, runs a bounded `-I -B` hash diagnostic under the old physical
-interpreter, seals the current disposition, and writes an immutable intent. Both
-the seal and the post-CAS known receipt are signed with the current
+interpreter, seals the current disposition, and writes an immutable intent. The
+seal, intent, and post-CAS known receipt are all signed with the current
 observation-root mechanism key; for a clean current observation root,
 `apply` provisions that existing mechanism-domain key only after its second
 locked plan validation and before the first seal is written. Recovery never
