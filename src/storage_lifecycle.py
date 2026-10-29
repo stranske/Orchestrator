@@ -778,8 +778,10 @@ def staging_bytes(
         return subtotal
 
     def state_bytes(root: Path) -> int:
+        identity = root_identity(root)
         for attempt in range(_STATE_INVENTORY_ATTEMPTS):
-            identity = root_identity(root)
+            if root_identity(root) != identity:
+                raise StorageBlocked("state-copy root changed between inventories")
             try:
                 subtotal = state_bytes_once(root)
             except RetryStateInventory:
