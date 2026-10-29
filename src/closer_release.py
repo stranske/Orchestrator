@@ -8,6 +8,7 @@ resume or roll back deliberately.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 import os
@@ -45,6 +46,10 @@ class ReleaseError(RuntimeError):
 
 class ReleaseConflict(ReleaseError):
     """The record is owned by another lane or has changed since it was read."""
+
+
+class ReleaseHeld(ReleaseError):
+    """Source installation is deferred while the canonical Closer lane is owned."""
 
 
 def _serialized(operation):
@@ -343,69 +348,81 @@ class ReleaseRecord:
                 exit_code=0,
             )
 
-        if state["stage"] == "verified":
-            state = self.transition(
-                "installing", lane_owner=lane_owner, expected_revision=state["revision"]
-            )
-        if state["stage"] != "installing":
-            raise ReleaseError(f"release cannot install from stage {state['stage']}")
+        # Native Closer owns the canonical lane.  Take its parent coordination
+        # flock before inspecting the lane, then retain it through publication
+        # and every readback so a new Closer cannot acquire between either.
+        # A held lane intentionally leaves this record VERIFIED, allowing a
+        # later call to resume this exact receipt without another verification.
+        with _closer_lane_installation_guard():
+            if state["stage"] == "verified":
+                state = self.transition(
+                    "installing", lane_owner=lane_owner, expected_revision=state["revision"]
+                )
+            if state["stage"] != "installing":
+                raise ReleaseError(f"release cannot install from stage {state['stage']}")
 
-        receipt = state.get("verification") or {}
-        snapshot = Path(receipt["snapshot_path"])
-        expected_digest = receipt["snapshot_digest"]
-        current = _run(
-            [str(python), str(installer), str(mirror), "--generation-token"],
-            env=_child_env(python),
-            timeout=timeout,
-        ).strip()
-        if current != state["incumbent_token"]:
+            receipt = state.get("verification") or {}
+            snapshot = Path(receipt["snapshot_path"])
+            expected_digest = receipt["snapshot_digest"]
+            current = _run(
+                [str(python), str(installer), str(mirror), "--generation-token"],
+                env=_child_env(python),
+                timeout=timeout,
+            ).strip()
+            if current != state["incumbent_token"]:
+                if (
+                    _installed_digest(
+                        python, installer, mirror, env=_child_env(python), timeout=timeout
+                    )
+                    == expected_digest
+                ):
+                    return self._record_installed(
+                        state, lane_owner, python, installer, mirror, timeout
+                    )
+                return self._install_failed(
+                    state, lane_owner, "incumbent generation changed before install"
+                )
+
+            installed = subprocess.run(
+                [
+                    str(python),
+                    str(installer),
+                    str(snapshot),
+                    str(mirror),
+                    "--expected-digest",
+                    expected_digest,
+                    "--expected-generation",
+                    state["incumbent_token"],
+                ],
+                env=_child_env(python),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
+                check=False,
+            )
+            if installed.returncode != 0:
+                if (
+                    _installed_digest(
+                        python, installer, mirror, env=_child_env(python), timeout=timeout
+                    )
+                    == expected_digest
+                ):
+                    return self._record_installed(
+                        state, lane_owner, python, installer, mirror, timeout
+                    )
+                return self._install_failed(
+                    state, lane_owner, f"installer failed with exit code {installed.returncode}"
+                )
             if (
                 _installed_digest(
                     python, installer, mirror, env=_child_env(python), timeout=timeout
                 )
-                == expected_digest
+                != expected_digest
             ):
-                return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
-            return self._install_failed(
-                state, lane_owner, "incumbent generation changed before install"
-            )
-
-        installed = subprocess.run(
-            [
-                str(python),
-                str(installer),
-                str(snapshot),
-                str(mirror),
-                "--expected-digest",
-                expected_digest,
-                "--expected-generation",
-                state["incumbent_token"],
-            ],
-            env=_child_env(python),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
-        )
-        if installed.returncode != 0:
-            if (
-                _installed_digest(
-                    python, installer, mirror, env=_child_env(python), timeout=timeout
+                return self._install_failed(
+                    state, lane_owner, "installed deployment digest readback failed"
                 )
-                == expected_digest
-            ):
-                return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
-            return self._install_failed(
-                state, lane_owner, f"installer failed with exit code {installed.returncode}"
-            )
-        if (
-            _installed_digest(python, installer, mirror, env=_child_env(python), timeout=timeout)
-            != expected_digest
-        ):
-            return self._install_failed(
-                state, lane_owner, "installed deployment digest readback failed"
-            )
-        return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
+            return self._record_installed(state, lane_owner, python, installer, mirror, timeout)
 
     def _verification_failed(
         self,
@@ -535,6 +552,39 @@ class _LockContext:
     def __exit__(self, *_exc):
         fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
         self.stream.close()
+
+
+@contextlib.contextmanager
+def _closer_lane_installation_guard():
+    """Serialize Source installation with the canonical native Closer lane.
+
+    This deliberately uses the native lease module's canonical parent-lock
+    protocol.  It neither creates nor releases the lane directory; any present
+    directory (including a symlink) remains an incumbent owner's evidence.
+    """
+    from closer_native_lease import _coord_path, _default_lane_dir, _handoff_root
+
+    handoff_root = _handoff_root(Path.home() / ".codex" / "handoff")
+    lane_dir = _default_lane_dir(handoff_root, "closer")
+    coord = _coord_path(lane_dir)
+    try:
+        coord.parent.mkdir(parents=True, exist_ok=True)
+        handle = coord.open("a+")
+    except OSError as exc:
+        raise ReleaseHeld("source installation held: closer lane coordination unavailable") from exc
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ReleaseHeld(
+                "source installation held: closer lane coordination lock contended"
+            ) from exc
+        if lane_dir.exists() or lane_dir.is_symlink():
+            raise ReleaseHeld("source installation held: current closer lane mutex present")
+        yield
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
 
 
 def _now() -> str:
