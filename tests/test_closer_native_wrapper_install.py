@@ -719,6 +719,83 @@ def test_prospective_refuses_contended_current_controller_writer(
         os.close(fd)
 
 
+@pytest.mark.parametrize(
+    "fault",
+    (
+        "custody_mode",
+        "writer_symlink",
+        "writer_directory",
+        "extra_file",
+        "missing_file",
+        "namespace_digest",
+        "highwater_revision",
+    ),
+)
+def test_prospective_refuses_invalid_current_custody_metadata(
+    capacity_host, monkeypatch, tmp_path, fault
+):
+    import closer_correction_controller as controller
+
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    config = json.loads(args[3].read_text())["policy"]["correction_controller_installation"][
+        "config"
+    ]
+    custody = Path(str(args[4]) + ".evidence") / (
+        f"correction-index-{config['repository_id']}-{config['epoch']}"
+    )
+    writer = custody / "writer.lock"
+    if fault == "custody_mode":
+        custody.chmod(0o755)
+    elif fault == "writer_symlink":
+        writer.unlink()
+        target = tmp_path / "foreign-writer.lock"
+        target.write_bytes(b"")
+        writer.symlink_to(target)
+    elif fault == "writer_directory":
+        writer.unlink()
+        writer.mkdir()
+    elif fault == "extra_file":
+        (custody / "foreign.json").write_text("{}")
+    elif fault == "missing_file":
+        (custody / "namespace.json").unlink()
+    elif fault == "namespace_digest":
+        (custody / "namespace.json").write_bytes(
+            controller.canonical(
+                {
+                    "schema": "local-correction-controller-namespace/v1",
+                    "config_sha256": "0" * 64,
+                }
+            )
+        )
+    else:
+        (custody / "highwater-0000000000000000.json").write_bytes(
+            controller.canonical({"revision": 1})
+        )
+    with pytest.raises(install.InstallHeld):
+        install.plan_prospective(*args)
+
+
+def test_prospective_apply_refuses_wrapper_mode_change_after_intent(
+    capacity_host, monkeypatch, tmp_path
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    wrapper = Path(proposal["wrapper"])
+    before = wrapper.read_bytes()
+    original_write_once = install.host._write_once
+
+    def write_intent_then_change_mode(path, value):
+        original_write_once(path, value)
+        if path.name == "wrapper-install-prospective-intent.json":
+            wrapper.chmod(0o700)
+
+    monkeypatch.setattr(install.host, "_write_once", write_intent_then_change_mode)
+    with pytest.raises(install.InstallHeld, match="wrapper changed before replacement"):
+        install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    assert wrapper.read_bytes() == before
+    assert wrapper.stat().st_mode & 0o777 == 0o700
+
+
 def test_prospective_cli_plan_and_apply_need_no_reconciliation(
     capacity_host, monkeypatch, tmp_path, capsys
 ):
