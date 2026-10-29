@@ -96,11 +96,15 @@ def acceptance_ledger(
     from closer_campaign import Campaign
 
     campaign = Campaign(campaign_path).read()
+    if not isinstance(campaign, dict):
+        raise ValueError("campaign is absent or unreadable")
     result = json.loads(result_path.read_text())
     terminal = json.loads(native_terminal.read_text())
     detail = json.loads(result.get("detail", "{}")) if isinstance(result, dict) else {}
     execution = detail.get("native_execution") if isinstance(detail, dict) else {}
     phases = execution.get("phases") if isinstance(execution, dict) else {}
+    if not isinstance(phases, dict):
+        phases = {}
     phase_a = phases.get("A") if isinstance(phases, dict) else None
     phase_b = phases.get("B") if isinstance(phases, dict) else None
     rows = [

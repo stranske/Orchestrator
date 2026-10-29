@@ -1,6 +1,6 @@
 # Closer verified-release preflight
 
-`scripts/closer_release.py` makes the host assumptions required by the existing
+`scripts/closer_verified_release.py` makes the host assumptions required by the existing
 `ReleaseRecord.verify_and_install` path explicit. It is not a launcher and it
 does not authorize native observation, provider work, scheduled work, or an
 acceptance decision.
@@ -18,13 +18,13 @@ ensures pytest-xdist's required `-n` option is available. Check the wrapper
 itself without touching a source, Core checkout, journal, or mirror:
 
 ```bash
-/opt/anaconda3/bin/python3 scripts/closer_release.py --selftest
+/opt/anaconda3/bin/python3 scripts/closer_verified_release.py --selftest
 ```
 
 Run the non-mutating check first:
 
 ```bash
-/opt/anaconda3/bin/python3 scripts/closer_release.py preflight \
+/opt/anaconda3/bin/python3 scripts/closer_verified_release.py preflight \
   --source /path/to/clean/orchestrator-source \
   --expected-source-sha SOURCE_SHA \
   --mirror /path/to/orchestrator-mirror \

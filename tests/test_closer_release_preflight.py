@@ -182,7 +182,7 @@ def test_cli_reports_a_machine_readable_non_authorizing_preflight_error(tmp_path
     result = subprocess.run(
         [
             sys.executable,
-            "scripts/closer_release.py",
+            "scripts/closer_verified_release.py",
             "preflight",
             "--source",
             str(source),
@@ -215,7 +215,7 @@ def test_cli_reports_a_machine_readable_non_authorizing_preflight_error(tmp_path
 def test_cli_install_returns_nonzero_when_existing_release_does_not_install(
     tmp_path, monkeypatch, capsys
 ):
-    script = Path(__file__).parents[1] / "scripts" / "closer_release.py"
+    script = Path(__file__).parents[1] / "scripts" / "closer_verified_release.py"
     spec = spec_from_file_location("closer_release_cli_test", script)
     assert spec and spec.loader
     cli = module_from_spec(spec)
@@ -292,7 +292,7 @@ def test_actual_cli_install_returns_nonzero_for_a_failed_existing_gate(tmp_path)
     result = subprocess.run(
         [
             sys.executable,
-            "scripts/closer_release.py",
+            "scripts/closer_verified_release.py",
             "install",
             "--source",
             str(source),
@@ -321,3 +321,27 @@ def test_actual_cli_install_returns_nonzero_for_a_failed_existing_gate(tmp_path)
     payload = json.loads(result.stdout)
     assert payload["error"]["code"] == "release_not_installed"
     assert json.loads((tmp_path / "release.json").read_text())["stage"] == "failed"
+
+
+def test_operator_script_cannot_shadow_release_record_module(tmp_path):
+    root = Path(__file__).parents[1]
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join((str(root / "scripts"), str(root / "src"))),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from closer_release import ReleaseRecord; print(ReleaseRecord.__module__)",
+        ],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "closer_release"

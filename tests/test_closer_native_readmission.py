@@ -19,6 +19,14 @@ def _frontier(frontier_id, targets=("target-1",)):
 
 
 def _reference(monkeypatch, tmp_path):
+    import closer_host_restore_contract as host
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(host.Path, "home", classmethod(lambda _cls: home))
+    coord = home / ".codex/handoff/.lane-closer.lock.coord.lock"
+    coord.parent.mkdir(parents=True)
+    coord.write_bytes(b"")
+    (tmp_path / "old-state.json.lock").write_bytes(b"")
     old_frontier = _frontier("old")
     raw = b'{"retained":"unavailable"}'
     old = {
@@ -45,12 +53,20 @@ def _reference(monkeypatch, tmp_path):
     root = tmp_path / "native-observation"
     root.mkdir()
     (root / proof["admission_nonce"]).mkdir()
+    for name in ("native-entry.lock", "native-supervisor.lock"):
+        (root / name).write_bytes(b"")
+    contract = {"campaign_root": str(tmp_path), "observation_root": str(root)}
+    reference["manifest"]["mechanism_contract"] = contract
     monkeypatch.setattr(native, "contract", lambda _manifest: (None, None, None, root))
-    new_manifest = {"package_digest": "d" * 64}
+    new_manifest = {"package_digest": "d" * 64, "mechanism_contract": contract}
     new_manifest_path = tmp_path / "new-manifest.json"
     new_manifest_path.write_text("{}")
     new_raw = b'{"new":true}'
-    cfg = {"runtime_manifest": str(new_manifest_path), "granularity": "round"}
+    cfg = {
+        "runtime_manifest": str(new_manifest_path),
+        "granularity": "round",
+        "mechanism": "native-handoff/v1",
+    }
     monkeypatch.setattr(
         readmission, "_new_runtime", lambda *_: (new_manifest_path, new_manifest, new_raw, cfg)
     )
