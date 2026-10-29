@@ -430,6 +430,11 @@ if [[ -n "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
 fi
 verify_args=()
 [[ -n "$floor_flag" ]] && verify_args+=("$floor_flag")
+if [[ -z "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" && -z "${VERIFY_BEFORE_SYNC_AGGREGATE:-}" ]]; then
+  # The storage supervisor retains staging on a failed local full verdict.  Keep only the
+  # redacted failure record there before verify.py's private JUnit directory disappears.
+  verify_args+=(--failure-evidence-out "$scratch/pytest-failure-evidence.json")
+fi
 if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" ]]; then
   verify_args+=(--pytest-shard "$VERIFY_BEFORE_SYNC_PYTEST_SHARD" --shard-output "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:?absolute evidence directory required}")
 fi
