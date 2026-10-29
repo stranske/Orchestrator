@@ -2,8 +2,8 @@
 """Thin operator interface for the existing pinned native closer path.
 
 Planning is read-only.  ``launch`` is explicit, re-runs the business-capacity
-diagnostic, and then invokes only the manifest's canonical ``native-entry``
-argv; it never swaps a wrapper, clears a campaign, or manufactures admission.
+diagnostic, and then invokes only the manifest's canonical closer wrapper; it
+never swaps a wrapper, clears a campaign, or manufactures admission.
 """
 
 from __future__ import annotations
@@ -24,6 +24,17 @@ def _load_manifest(path: Path):
     if not value.is_absolute() or value.is_symlink() or value.resolve() != value:
         raise ValueError("manifest must be a canonical absolute non-symlink path")
     return load_manifest(value)
+
+
+def _canonical_wrapper_argv(manifest: dict[str, Any]) -> list[str]:
+    """Return the only supported parent boundary for native closer entry."""
+    wrapper = manifest.get("mechanism_contract", {}).get("wrapper", {}).get("path")
+    if not isinstance(wrapper, str):
+        raise ValueError("native manifest has no canonical wrapper path")
+    path = Path(wrapper)
+    if not path.is_absolute() or path.is_symlink() or path.resolve() != path:
+        raise ValueError("native wrapper path is not canonical")
+    return ["/bin/bash", str(path), "closer"]
 
 
 def campaign_gate(campaign_path: Path, manifest_path: Path) -> dict[str, Any]:
@@ -82,7 +93,7 @@ def plan(
         "manifest": report.get("manifest"),
         "business_capacity": report,
         "campaign": {"path": str(campaign_path), **campaign},
-        "canonical_native_entry": native._entry_argv(manifest, manifest_path),
+        "canonical_wrapper_argv": _canonical_wrapper_argv(manifest),
         "launch_permitted_by_diagnostic": report.get("stage") == "ready"
         and campaign.get("stage") == "ready",
         "note": "The source-owned native entry re-observes locks, qualification, admission, and effects.",
@@ -180,9 +191,9 @@ def main(argv: list[str] | None = None) -> int:
     if not prepared["launch_permitted_by_diagnostic"]:
         print(json.dumps(prepared, sort_keys=True))
         return 75
-    # Do not wrap, replace, or augment the reviewed argv.  Native entry owns
-    # all fresh admission and actual-effect gates.
-    completed = subprocess.run(prepared["canonical_native_entry"], check=False)
+    # Do not bypass, replace, or augment the reviewed wrapper argv. Its native
+    # entry owns all fresh admission and actual-effect gates.
+    completed = subprocess.run(prepared["canonical_wrapper_argv"], check=False)
     prepared["native_entry_exit"] = completed.returncode
     print(json.dumps(prepared, sort_keys=True))
     return completed.returncode

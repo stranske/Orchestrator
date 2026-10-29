@@ -1,5 +1,8 @@
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 import closer_launch_operator as operator
 from closer_frontier_policy import action_identity, make_frontier
@@ -42,6 +45,56 @@ def test_launch_needs_matching_explicit_confirmation(monkeypatch, capsys):
     else:
         raise AssertionError("mismatched confirmation unexpectedly launched")
     assert "requires --confirm-run-id" in capsys.readouterr().err
+
+
+def test_launch_crosses_the_canonical_bash_wrapper_boundary(monkeypatch, capsys):
+    wrapper = "/private/tmp/canonical-cursor-lane.sh"
+    prepared = {
+        "launch_permitted_by_diagnostic": True,
+        "canonical_wrapper_argv": ["/bin/bash", wrapper, "closer"],
+    }
+    calls = []
+    monkeypatch.setattr(operator, "plan", lambda *_a, **_k: prepared)
+    monkeypatch.setattr(
+        operator.subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs))
+        or subprocess.CompletedProcess(argv, 17),
+    )
+    assert (
+        operator.main(
+            [
+                "launch",
+                "--manifest",
+                "/x",
+                "--campaign",
+                "/campaign",
+                "--run-id",
+                "r",
+                "--confirm-run-id",
+                "r",
+            ]
+        )
+        == 17
+    )
+    assert calls == [(["/bin/bash", wrapper, "closer"], {"check": False})]
+    assert json.loads(capsys.readouterr().out)["native_entry_exit"] == 17
+
+
+def test_canonical_wrapper_argv_rejects_relative_or_aliased_wrapper(tmp_path):
+    wrapper = tmp_path / "wrapper.sh"
+    wrapper.write_text("#!/bin/bash\n")
+    assert operator._canonical_wrapper_argv(
+        {"mechanism_contract": {"wrapper": {"path": str(wrapper)}}}
+    ) == [
+        "/bin/bash",
+        str(wrapper),
+        "closer",
+    ]
+    alias = tmp_path / "alias.sh"
+    alias.symlink_to(wrapper)
+    with pytest.raises(ValueError, match="canonical"):
+        operator._canonical_wrapper_argv({"mechanism_contract": {"wrapper": {"path": str(alias)}}})
 
 
 def test_finite_unavailable_requires_controller_reentry_not_native_relaunch(tmp_path):
