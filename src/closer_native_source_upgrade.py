@@ -160,9 +160,22 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         and isinstance(verification.get("snapshot_digest"), str),
         "new candidate is not fully installed/verified",
     )
+    snapshot = _canonical(verification["snapshot_path"])
+    inspector = Path.home() / ".codex/orchestrator-mirror/scripts/install_verified_snapshot.py"
+    try:
+        generation = subprocess.run([str(inspector), str(snapshot), "--generation-token"],
+                                    text=True, capture_output=True, timeout=10, check=False)
+        digest = subprocess.run([str(inspector), str(snapshot), "--digest"],
+                                text=True, capture_output=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
+    _need(generation.returncode == digest.returncode == 0, "installed generation inspector failed")
+    _need(generation.stdout.strip() == record["installed_generation"] and digest.stdout.strip() == verification["snapshot_digest"],
+          "installed generation/digest readback differs")
     return {"path": str(journal), "sha256": _sha(host._read(journal)[1]),
             "candidate_sha": candidate, "installed_generation": record["installed_generation"],
-            "snapshot_digest": cast(dict[str, Any], verification)["snapshot_digest"]}
+            "snapshot_digest": cast(dict[str, Any], verification)["snapshot_digest"],
+            "inspector": str(inspector), "inspector_sha256": _sha(host._read(inspector)[1])}
 
 
 def _completed_reference(manifest_path: Path, state_path: str | Path, worker_id: str) -> dict[str, Any]:
@@ -263,7 +276,7 @@ def fresh_read_native_index(config: dict[str, Any], inspection: dict[str, Any]) 
     _need({key: principal.get(key) for key in ("id", "login", "type")} ==
           {"id": config.get("writer_id"), "login": config.get("writer_login"), "type": config.get("writer_type")},
           "native index principal changed")
-    _need(repo.get("id") == config.get("repository_id") and repo.get("full_name") == repository,
+    _need(repo.get("id") == config.get("repository_id") and controller.native_repository_name(repo.get("full_name"), repository.lower()),
           "native index repository changed")
     try:
         raw = base64.b64decode(str(contents.get("content", "")).replace("\n", ""), validate=True)
