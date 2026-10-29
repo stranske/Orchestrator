@@ -628,6 +628,13 @@ def publish_admission(manifest, manifest_path, state_path, doc):
         return context
     directory = root / nonce
     demand = doc.get("demand_admission")
+    if doc.get("preparation_origin") is not None:
+        from closer_native_readmission import require_preparation_known
+
+        try:
+            require_preparation_known(state_path, doc)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+            raise mechanisms.MechanismError("native preparation creation is not sealed") from exc
     if manifest["mechanism_contract"].get("controller_demand") and demand is None:
         raise mechanisms.MechanismError(
             "controlled native campaign requires admitted source demand"

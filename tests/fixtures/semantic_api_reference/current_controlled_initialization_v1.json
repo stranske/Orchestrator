@@ -2,11 +2,11 @@
   "base_commit": "0a9b0f93909c82532add2d022e26e768df785839",
   "files": {
     "closer_campaign.py": {
-      "after_file_sha256": "29f3ac735e2381d0e9f5b7d6b6c88f3158b6ce9ea57836869b8e3ab45a6dc308",
-      "after_node_ast_sha256": "c0f6bbc42c8dc365842a83a249d723940ecf86c103302b8db38eb1cdd72017d8",
+      "after_file_sha256": "1248c0847380c485fbcc94256258bed6bf0210681c1bf7627a9871e4e471ce86",
+      "after_node_ast_sha256": "9e71eaae3750ed17e7995f62a8d5d46b8a627161260347b391e14b0755edb5fe",
       "after_top_level_ast": {
         "ActionSpec": "7d5213704d8b42f43d748755a850a7f374f19dffabd75f166c09e7de3c3c1dd3",
-        "Campaign": "7226072270d153080220d5f1ffb5d16f0667cbb3b4eb449bdbc570b2019a99b1",
+        "Campaign": "607a190af7d8a6e4a8c0e1d25edd1cfdad152665370f430a7eee3f5e419c98cf",
         "CampaignError": "2f411c7aabac07c032d5df5a2f08dcf2c38f3a382116c866660997e9d2523a21",
         "CoreAdapterMissing": "77d71ec77957d667d8dd015e5e561f3aa9be5c49bcedb0d81646a4daca2bbf14",
         "CoreOperationAdapter": "8ec445b365734b34d8ef66790baa7ddb4e42744d82c3c76f7c9106d15ba5a086",
@@ -196,8 +196,8 @@
       "remaining_class_ast_sha256": "4d1b812c96ce7ac5e14e2f7a72a8bd4854cb1b6875bbb03037800d88a2d855e5"
     },
     "closer_native_observer.py": {
-      "after_file_sha256": "d6347fb22b446a6cbcc6e70ef5a84290b16ab29c084be5a85b83e3ff504661ed",
-      "after_node_ast_sha256": "cbd644a8973fb903e55b8a168d305dd96213dde2445d86e9ad37241a5cbbd1c4",
+      "after_file_sha256": "05b0fccf0dcb146c92cd5a078dfc7c520aeb2984ec821a66e139e17333e269c9",
+      "after_node_ast_sha256": "c8dd9fbbf94cc7124a3bc5bf5161b08aca3e3c1280e349e4bb9f6d2cf7141e15",
       "after_top_level_ast": {
         "_accepted_frame_qualified_value": "0115461160a30e7324c01cdba1d0f9628555e69496be3232f50899a13f289c68",
         "_advance_coding_registry": "3d4689cbd42c7a09302f3a2c80655b77d3d1d4ed006629403e52562a9d26fb01",
@@ -276,7 +276,7 @@
         "prepare_coding_launch": "98ecbf4be2099186c6b4a2c84faba0efc5dc31b9fe3c2790df6a9dfda6381595",
         "private_test_assignment_source": "da1c512833a7cfa15b30b37a669f93e4dcd37540761a23f9212c79002663eb92",
         "private_test_wrapper_text": "e6c4b12d2c6485cc455e91c6b530ce944c3da726a8b9b5c606c1275300c89408",
-        "publish_admission": "cbd644a8973fb903e55b8a168d305dd96213dde2445d86e9ad37241a5cbbd1c4",
+        "publish_admission": "c8dd9fbbf94cc7124a3bc5bf5161b08aca3e3c1280e349e4bb9f6d2cf7141e15",
         "publish_coding_admission": "cffd2a8d8ee1dce5cc65d0f07a058bc8efeef13e25dad58a224ff9f03e33677f",
         "qualification_problems": "da93b2919a4bab189a026d5456010bb7ebf29bc6d1853639efc4e2258fd2a9d8",
         "qualification_receipt_problems": "27998fd0fc6d614bd30a948c1453d8aecd996ee8c48a8bd5a54aec1022d9165b",

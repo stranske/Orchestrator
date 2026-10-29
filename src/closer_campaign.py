@@ -213,6 +213,7 @@ class Campaign:
         _retirement: dict[str, Any] | None = None,
         _source_initialization: Mapping[str, Any] | None = None,
         _require_absent: bool = False,
+        _preparation_origin: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """Create the record, or resume the same campaign under the same owner.
 
@@ -224,6 +225,18 @@ class Campaign:
         ):
             raise ValueError("completed demand needs assignment, request and verified package")
         initialization = None
+        preparation_origin = None
+        if _preparation_origin is not None:
+            preparation_origin = dict(_preparation_origin)
+            if (
+                not _require_absent
+                or set(preparation_origin) != {"path", "sha256"}
+                or not isinstance(preparation_origin.get("path"), str)
+                or not Path(preparation_origin["path"]).is_absolute()
+                or not isinstance(preparation_origin.get("sha256"), str)
+                or not _DIGEST.fullmatch(preparation_origin["sha256"])
+            ):
+                raise ValueError("preparation origin requires create-only intent reference")
         if _source_initialization is not None:
             initialization = json.loads(json.dumps(_source_initialization))
             if (
@@ -274,6 +287,8 @@ class Campaign:
             "release_attempt": None,
             "created_at": _now(),
         }
+        if preparation_origin is not None:
+            fresh["preparation_origin"] = preparation_origin
         stream = self._locked()
         try:
             current = self._read_unlocked()

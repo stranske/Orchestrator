@@ -59,6 +59,19 @@ def campaign_gate(campaign_path: Path, manifest_path: Path) -> dict[str, Any]:
         return {"stage": "held", "reason": "campaign is absent or unreadable"}
     if not isinstance(document, dict):
         return {"stage": "held", "reason": "campaign is absent or unreadable"}
+    if document.get("hold"):
+        return {
+            "stage": "held",
+            "kind": "campaign-hold",
+            "reason": "campaign has an active hold",
+            "hold": document["hold"],
+        }
+    if document.get("phase") != "work":
+        return {
+            "stage": "held",
+            "kind": "campaign-phase",
+            "reason": "campaign is not in work phase",
+        }
     cfg = document.get("worker_config") or {}
     if cfg.get("runtime_manifest") != str(manifest_path):
         return {"stage": "held", "reason": "campaign does not bind this exact manifest"}

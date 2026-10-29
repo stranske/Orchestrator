@@ -157,6 +157,17 @@ def install_world(host, tmp_path, monkeypatch):
         directory = tmp_path / ("predecessor-" + name)
         directory.mkdir()
         predecessor_roots[name] = str(directory)
+    existing_locks = [
+        Path(predecessor_roots[key]) / leaf
+        for key in ("old_observation_root", "new_observation_root")
+        for leaf in ("native-entry.lock", "native-supervisor.lock")
+    ] + [
+        Path(predecessor_roots["custody_path"]) / "writer.lock",
+        wrapper.parent.parent / "handoff/.lane-closer.lock.coord.lock",
+    ]
+    for path in existing_locks:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600)
     predecessor = {
         **predecessor_roots,
         "wrapper": str(wrapper),

@@ -101,9 +101,8 @@ def test_native_policy_is_distinct_and_pause_wins(host):
     assert native.policy_problem(manifest["policy"])
 
 
-def test_controlled_campaign_without_typed_demand_refuses_before_global_assignment(
-    host, monkeypatch
-):
+@pytest.mark.parametrize("boundary", ["controlled_demand", "preparation_known"])
+def test_unadmitted_campaign_refuses_before_global_assignment(host, monkeypatch, boundary):
     manifest, manifest_path, _wrapper = host
     root = Path(manifest["mechanism_contract"]["observation_root"])
     nonce = "a" * 32
@@ -128,6 +127,16 @@ def test_controlled_campaign_without_typed_demand_refuses_before_global_assignme
             "apply": True,
         },
     }
+    if boundary == "preparation_known":
+        import hashlib
+
+        manifest["mechanism_contract"].pop("controller_demand")
+        intent = root / "preparation-intent.json"
+        intent.write_text("{}")
+        document["preparation_origin"] = {
+            "path": str(intent),
+            "sha256": hashlib.sha256(intent.read_bytes()).hexdigest(),
+        }
     monkeypatch.setattr(native, "capacity_contract", lambda *_a, **_k: {"scoped": True})
     monkeypatch.setattr(native, "entry_active", lambda *_a: True)
     monkeypatch.setattr(
@@ -138,7 +147,12 @@ def test_controlled_campaign_without_typed_demand_refuses_before_global_assignme
     native._CURRENT_ENTRY[str(root)] = nonce
     native._CURRENT_ADMISSION[str(root)] = {"nonce": nonce, "context": None}
     try:
-        with pytest.raises(mechanisms.MechanismError, match="requires admitted source demand"):
+        expected = (
+            "requires admitted source demand"
+            if boundary == "controlled_demand"
+            else "preparation creation is not sealed"
+        )
+        with pytest.raises(mechanisms.MechanismError, match=expected):
             native.publish_admission(manifest, manifest_path, state, document)
     finally:
         native._CURRENT_ENTRY.pop(str(root), None)

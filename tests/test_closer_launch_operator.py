@@ -139,6 +139,7 @@ def test_finite_unavailable_requires_controller_reentry_not_native_relaunch(tmp_
         json.dumps(
             {
                 "schema_version": 1,
+                "phase": "work",
                 "assignment_targets": ["acme/one#1"],
                 "worker_config": {"runtime_manifest": "/manifest", "finite_frontier": frontier},
                 "targets": {"*round*": "reconcile"},
@@ -187,6 +188,7 @@ def test_campaign_gate_reports_ready_generic_and_finite_current(tmp_path):
             json.dumps(
                 {
                     "schema_version": 1,
+                    "phase": "work",
                     "worker_config": worker_config,
                     "assignment_targets": ["acme/one#1"],
                     "targets": {"*round*": "pending"},
@@ -218,3 +220,32 @@ def test_campaign_gate_reports_ready_generic_and_finite_current(tmp_path):
         "stage": "ready",
         "kind": "finite-current-authority",
     }
+
+
+def test_campaign_gate_reports_source_initialization_hold_and_nonwork_phase(tmp_path):
+    from closer_campaign import Campaign
+
+    path = tmp_path / "held.campaign.json"
+    campaign = Campaign(path)
+    initial = {
+        "hold": {
+            "kind": "source_initialization",
+            "reason": "await typed demand",
+            "bootstrap_anchor_sha256": "a" * 64,
+        },
+        "correction_controller": {"config": {"state_path": str(path)}},
+    }
+    campaign.begin(
+        "new",
+        ["acme/one#1"],
+        owner="owner",
+        release_pin="b" * 64,
+        worker_config={"runtime_manifest": "/manifest"},
+        _source_initialization=initial,
+    )
+    before = path.read_bytes()
+    held = operator.campaign_gate(path, Path("/manifest"))
+    assert held["stage"] == "held" and held["hold"] == initial["hold"]
+    assert path.read_bytes() == before
+    campaign.update(lambda doc: doc.update(hold=None, phase="release"))
+    assert operator.campaign_gate(path, Path("/manifest"))["kind"] == "campaign-phase"

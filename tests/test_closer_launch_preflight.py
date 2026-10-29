@@ -3,7 +3,23 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import closer_launch_preflight as preflight
+
+
+@pytest.mark.parametrize("alias_kind", ["relative", "symlink"])
+def test_noncanonical_manifest_is_held_before_runtime_or_capacity_reads(tmp_path, alias_kind):
+    target = tmp_path / "manifest.json"
+    target.write_text("{}")
+    if alias_kind == "relative":
+        supplied = Path("relative-manifest.json")
+    else:
+        supplied = tmp_path / "manifest-alias.json"
+        supplied.symlink_to(target)
+    result = preflight.inspect(supplied)
+    assert result["stage"] == "held" and result["authority"] is False
+    assert result["reasons"] == ["closure: manifest path is not canonical"]
 
 
 def _patch_closed_scope(monkeypatch, tmp_path, *, report, strict_error=None, validate=True):
