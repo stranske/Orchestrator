@@ -274,6 +274,7 @@ def _completed_reference(
     )
     return {
         "manifest_path": str(manifest_path),
+        "manifest": _object(manifest_path, "old manifest")[2],
         "state_path": str(state),
         "state_sha256": _sha(state_raw),
         "state": document,

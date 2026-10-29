@@ -1,16 +1,19 @@
+# ruff: noqa: F811
 """Public source-upgrade composition over a pre-sealed native cohort fixture."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
+from test_closer_campaign_demand_integration import host, publisher  # noqa: F401
+from test_closer_completed_cohort_reuse import (  # noqa: F401
+    _completed_worker,
+    completed_native_world,
+)
 
 import closer_campaign as campaign
 import closer_native_source_upgrade as upgrade
-from test_closer_campaign_demand_integration import host, publisher
-from test_closer_completed_cohort_reuse import _completed_worker, completed_native_world
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +59,9 @@ def test_presealed_ci_cohort_has_real_terminal_lifecycle(completed_native_world)
     _campaign, result = _completed_worker(world)
     assert result["outcome"] == "ok"
     assert world.manifest["candidate_sha"] == upgrade.REVIEWED_OLD_CANDIDATE
-    assert world.manifest["mechanism_contract"]["controller_demand"]["worker_config"][
-        "request_timeout_seconds"
-    ] == 120
+    assert (
+        world.manifest["mechanism_contract"]["controller_demand"]["worker_config"][
+            "request_timeout_seconds"
+        ]
+        == 120
+    )

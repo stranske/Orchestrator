@@ -273,10 +273,10 @@ def _prospective_v2_world(capacity_host, monkeypatch, tmp_path):
     import copy
     import sys
 
-    import closer_frontier_policy as policy
+    from test_closer_native_frontier import finite_host
+
     import closer_mechanisms as mechanisms
     import closer_runtime_binding as binding
-    from test_closer_native_frontier import finite_host
 
     manifest, old_manifest, old_campaign, old_doc, _source, clock, _frontier = finite_host(
         capacity_host
@@ -441,7 +441,6 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
     manifest, old_manifest, old_state, worker_id, archived = _prospective_v2_world(
         capacity_host, monkeypatch, tmp_path
     )
-    old_root = Path(manifest["mechanism_contract"]["observation_root"])
     new_root = tmp_path / "new-observation"
     new_root.mkdir(mode=0o700)
     for name in ("native-entry.lock", "native-supervisor.lock"):
@@ -449,7 +448,7 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
     new_campaigns = tmp_path / "new-campaigns"
     new_campaigns.mkdir()
     new_state = new_campaigns / "fresh.campaign.json"
-    new_manifest = copy_manifest = json.loads(old_manifest.read_text())
+    copy_manifest = json.loads(old_manifest.read_text())
     copy_manifest["mechanism_contract"]["observation_root"] = str(new_root)
     copy_manifest["mechanism_contract"]["campaign_root"] = str(new_campaigns)
     copy_manifest["policy"]["correction_controller_installation"]["config"]["state_path"] = str(
@@ -511,7 +510,10 @@ def _prospective_install_inputs(capacity_host, monkeypatch, tmp_path):
         )
     )
     receipt = tmp_path / "restore-known.json"
-    ref = lambda path: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    def ref(path):
+        return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
     receipt.write_text(
         json.dumps(
             {
