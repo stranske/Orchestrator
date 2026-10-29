@@ -1544,6 +1544,7 @@ def _abort_reconciliation_plan(request_path: Path) -> JSON:
     owner_pid, child_pgid = row.get("owner_pid"), row.get("child_pgid")
     _dead_process(owner_pid, label="owner pid")
     _dead_process_group(child_pgid, label="child process group")
+    assert type(owner_pid) is int and type(child_pgid) is int
     records: dict[int, JSON] = {}
     for process in abort["processes"]:
         if not isinstance(process, dict) or set(process) != {"pid", "ppid", "pgid", "command"}:
