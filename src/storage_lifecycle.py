@@ -1411,7 +1411,7 @@ def _private_reconciliation_directory(state_dir: Path) -> Path:
     return directory
 
 
-def _create_private_json_once(path: Path, value: JSON) -> None:
+def _create_private_json_once(path: Path, value: JSON) -> str:
     raw = json.dumps(value, sort_keys=True).encode()
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -1429,6 +1429,7 @@ def _create_private_json_once(path: Path, value: JSON) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+    return _sha256_bytes(raw)
 
 
 def _stage_source_binding_path(directory: Path, job: str) -> Path:
@@ -2185,13 +2186,13 @@ def run_job(
             child_command=list(args.command),
             release_parent=_release_parent_snapshot(),
         )
-        _create_private_json_once(_stage_source_binding_path(manager.directory, job), stage_binding)
+        binding_sha256 = _create_private_json_once(
+            _stage_source_binding_path(manager.directory, job), stage_binding
+        )
         lifecycle_call(
             "bind",
             job,
-            stage_source_binding_sha256=_sha256_bytes(
-                json.dumps(stage_binding, sort_keys=True).encode()
-            ),
+            stage_source_binding_sha256=binding_sha256,
         )
         lowest = admitted["available_before"]
         warned = False

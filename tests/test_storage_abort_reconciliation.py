@@ -270,6 +270,19 @@ def test_plan_refuses_missing_or_mismatched_stage_source_binding(aborted):
         storage.plan_abort_reconciliation(aborted["request"])
 
 
+def test_plan_refuses_legacy_row_without_stage_binding_digest(aborted):
+    ledger_path = aborted["state"] / "reservations.json"
+    ledger = json.loads(ledger_path.read_text())
+    row = ledger["jobs"][aborted["job"]]
+    del row["stage_source_binding_sha256"]
+    _write(ledger_path, ledger)
+    request = json.loads(aborted["request"].read_text())
+    request["expected_row_sha256"] = storage._json_digest(row)
+    _write(aborted["request"], request)
+    with pytest.raises(storage.StorageBlocked, match="stage/source binding is missing"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
 def test_plan_refuses_stage_binding_that_no_longer_matches_row(aborted):
     _rewrite_stage_binding(
         aborted,
