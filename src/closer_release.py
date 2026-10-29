@@ -576,7 +576,9 @@ def _closer_lane_installation_guard():
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise ReleaseHeld("source installation held: closer lane coordination lock contended") from exc
+            raise ReleaseHeld(
+                "source installation held: closer lane coordination lock contended"
+            ) from exc
         if lane_dir.exists() or lane_dir.is_symlink():
             raise ReleaseHeld("source installation held: current closer lane mutex present")
         yield

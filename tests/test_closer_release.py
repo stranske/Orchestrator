@@ -289,6 +289,7 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None, python=None, inv
     monkeypatch.setenv("EXPECTED_STORAGE_LEDGER", shared)
     for name, value in (extra_env or {}).items():
         monkeypatch.setenv(name, value)
+
     def call():
         return journal.verify_and_install(
             candidate_sha=CANDIDATE if (extra_env or {}).get("WRONG_CANDIDATE") else candidate,
@@ -301,6 +302,7 @@ def make_fake_release(tmp_path, monkeypatch, *, extra_env=None, python=None, inv
             bash="/bin/bash",
             run_id="fake-run",
         )
+
     if not invoke:
         return journal, mirror, generation_state, call
     result = call()
@@ -432,9 +434,7 @@ def test_source_held_closer_lane_preserves_verified_receipt_and_resumes_without_
 
     # An interrupted install remains uncertain.  A subsequently-held native
     # lane must defer it as-is rather than manufacture an install failure.
-    journal.transition(
-        "installing", lane_owner="closer", expected_revision=held["revision"]
-    )
+    journal.transition("installing", lane_owner="closer", expected_revision=held["revision"])
     with pytest.raises(ReleaseHeld, match="source installation held"):
         call()
     assert journal.read()["stage"] == "installing"
