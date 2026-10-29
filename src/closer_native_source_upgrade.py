@@ -160,7 +160,8 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         and isinstance(verification.get("snapshot_digest"), str),
         "new candidate is not fully installed/verified",
     )
-    snapshot = _canonical(verification["snapshot_path"])
+    verified = cast(dict[str, Any], verification)
+    snapshot = _canonical(verified["snapshot_path"])
     inspector = Path.home() / ".codex/orchestrator-mirror/scripts/install_verified_snapshot.py"
     try:
         generation = subprocess.run([str(inspector), str(snapshot), "--generation-token"],
@@ -170,11 +171,11 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
     _need(generation.returncode == digest.returncode == 0, "installed generation inspector failed")
-    _need(generation.stdout.strip() == record["installed_generation"] and digest.stdout.strip() == verification["snapshot_digest"],
+    _need(generation.stdout.strip() == record["installed_generation"] and digest.stdout.strip() == verified["snapshot_digest"],
           "installed generation/digest readback differs")
     return {"path": str(journal), "sha256": _sha(host._read(journal)[1]),
             "candidate_sha": candidate, "installed_generation": record["installed_generation"],
-            "snapshot_digest": cast(dict[str, Any], verification)["snapshot_digest"],
+            "snapshot_digest": verified["snapshot_digest"],
             "inspector": str(inspector), "inspector_sha256": _sha(host._read(inspector)[1])}
 
 
