@@ -30,6 +30,22 @@ def _rebind_proof(case: dict) -> dict:
     return request
 
 
+def _rewrite_stage_binding(case: dict, mutate) -> None:
+    path = storage._stage_source_binding_path(case["state"], case["job"])
+    binding = json.loads(path.read_text())
+    mutate(binding)
+    body = {key: value for key, value in binding.items() if key != "sha256"}
+    binding["sha256"] = storage._json_digest(body)
+    _write(path, binding)
+    ledger_path = case["state"] / "reservations.json"
+    ledger = json.loads(ledger_path.read_text())
+    ledger["jobs"][case["job"]]["stage_source_binding_sha256"] = _sha(path)
+    _write(ledger_path, ledger)
+    request = json.loads(case["request"].read_text())
+    request["expected_row_sha256"] = storage._json_digest(ledger["jobs"][case["job"]])
+    _write(case["request"], request)
+
+
 def _hold_owner_lock(path: str, ready, release) -> None:
     import fcntl
 
@@ -49,7 +65,20 @@ def aborted(tmp_path, monkeypatch):
     root.mkdir(mode=0o700)
     token = "owner-token"
     job = "c1b375d724024492af362689382f2ca0"
-    source_command = "bash verify_before_sync.sh candidate"
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    verifier = source_root / "verify_before_sync.sh"
+    verifier.write_text("#!/bin/bash\n")
+    source_command = ["bash", str(verifier), "--identity", str(source_root)]
+    child_command = [
+        "bash",
+        str(verifier),
+        "--snapshot-out",
+        str(tmp_path / "snapshot"),
+        "--digest-out",
+        str(tmp_path / "digest"),
+        str(source_root),
+    ]
     _write(root / "owner.json", {"job": job, "token": token})
     manager = storage.Reservations(state, tmp_path, floor=0, free=lambda _: 10**9)
     manager.admit(job, "verify", 1, 1, owner_token=token, scope="one")
@@ -57,19 +86,33 @@ def aborted(tmp_path, monkeypatch):
         job,
         root=str(root),
         root_identity=list((root.stat().st_dev, root.stat().st_ino)),
-        source_identity="c6133aa7bd9f06fe299ef7cadc66b35440eaae71",
+        source_identity="1e32a1ef506bef4581615d5d53ef9552dcd3cffe",
         source_command=source_command,
         child_pgid=74260,
     )
     (state / f"{job}.owner").touch(mode=0o600)
+    row = json.loads((state / "reservations.json").read_text())["jobs"][job]
+    binding = storage._stage_source_binding(job=job, row=row, child_command=child_command)
+    storage._create_private_json_once(storage._stage_source_binding_path(state, job), binding)
+    manager.bind(
+        job,
+        stage_source_binding_sha256=storage._sha256_bytes(
+            json.dumps(binding, sort_keys=True).encode()
+        ),
+    )
     manager.staged(job, token)
     row = json.loads((state / "reservations.json").read_text())["jobs"][job]
     proof = tmp_path / "abort.json"
-    release_owner_command = f"release install --expected-source-sha {row['source_identity']}"
+    candidate = "c6133aa7bd9f06fe299ef7cadc66b35440eaae71"
+    release_owner_command = f"release install --expected-source-sha {candidate}"
+    owner_command = (
+        f"/opt/anaconda3/bin/python3 {tmp_path}/storage_lifecycle.py run " f"--source {source_root}"
+    )
+    child_proof_command = " ".join(child_command)
     _write(
         proof,
         {
-            "candidate": row["source_identity"],
+            "candidate": candidate,
             "signal": "SIGTERM",
             "processes": [
                 {
@@ -82,13 +125,13 @@ def aborted(tmp_path, monkeypatch):
                     "pid": row["owner_pid"],
                     "ppid": 7000,
                     "pgid": 7000,
-                    "command": source_command,
+                    "command": owner_command,
                 },
                 {
                     "pid": 74260,
                     "ppid": row["owner_pid"],
                     "pgid": 74260,
-                    "command": "bash verify_before_sync.sh candidate",
+                    "command": child_proof_command,
                 },
             ],
         },
@@ -97,7 +140,7 @@ def aborted(tmp_path, monkeypatch):
     _write(
         failed,
         {
-            "candidate_sha": row["source_identity"],
+            "candidate_sha": candidate,
             "incumbent_token": "generation-v1:incumbent",
             "installed_generation": None,
             "stage": "failed",
@@ -116,12 +159,10 @@ def aborted(tmp_path, monkeypatch):
             "expected_row_sha256": storage._json_digest(row),
             "abort_proof": {"path": str(proof), "sha256": _sha(proof)},
             "failed_release": {"path": str(failed), "sha256": _sha(failed)},
-            "candidate_sha": row["source_identity"],
+            "candidate_sha": candidate,
             "incumbent_token": "generation-v1:incumbent",
-            "owner_process_sha256": hashlib.sha256(source_command.encode()).hexdigest(),
-            "child_process_sha256": hashlib.sha256(
-                b"bash verify_before_sync.sh candidate"
-            ).hexdigest(),
+            "owner_process_sha256": hashlib.sha256(owner_command.encode()).hexdigest(),
+            "child_process_sha256": hashlib.sha256(child_proof_command.encode()).hexdigest(),
             "release_owner_process_sha256": hashlib.sha256(
                 release_owner_command.encode()
             ).hexdigest(),
@@ -185,6 +226,22 @@ def test_plan_refuses_changed_row(aborted):
         storage.plan_abort_reconciliation(aborted["request"])
 
 
+def test_plan_refuses_missing_or_mismatched_stage_source_binding(aborted):
+    path = storage._stage_source_binding_path(aborted["state"], aborted["job"])
+    path.unlink()
+    with pytest.raises(storage.StorageBlocked, match="stage/source binding"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_stage_binding_that_no_longer_matches_row(aborted):
+    _rewrite_stage_binding(
+        aborted,
+        lambda binding: binding.update(source_command=["bash", "/wrong", "--identity", "/wrong"]),
+    )
+    with pytest.raises(storage.StorageBlocked, match="stage/source binding differs"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
 def test_plan_refuses_live_pid(aborted, monkeypatch):
     monkeypatch.setattr(storage.os, "kill", lambda _pid, _signal: None)
     with pytest.raises(storage.StorageBlocked, match="still live"):
@@ -212,6 +269,45 @@ def test_plan_refuses_unjoined_or_duplicate_abort_process_records(aborted, mutat
     _write(aborted["proof"], proof)
     _rebind_proof(aborted)
     with pytest.raises(storage.StorageBlocked, match="process tree|duplicate"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_abort_proof_with_different_child_command(aborted):
+    proof = json.loads(aborted["proof"].read_text())
+    proof["processes"][2]["command"] += " --unexpected"
+    _write(aborted["proof"], proof)
+    _rebind_proof(aborted)
+    request = json.loads(aborted["request"].read_text())
+    request["child_process_sha256"] = hashlib.sha256(
+        proof["processes"][2]["command"].encode()
+    ).hexdigest()
+    _write(aborted["request"], request)
+    with pytest.raises(storage.StorageBlocked, match="source command differs"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+def test_plan_refuses_abort_proof_with_different_owner_source(aborted):
+    proof = json.loads(aborted["proof"].read_text())
+    proof["processes"][1]["command"] = proof["processes"][1]["command"].replace(
+        "--source ", "--source /wrong "
+    )
+    _write(aborted["proof"], proof)
+    _rebind_proof(aborted)
+    request = json.loads(aborted["request"].read_text())
+    request["owner_process_sha256"] = hashlib.sha256(
+        proof["processes"][1]["command"].encode()
+    ).hexdigest()
+    _write(aborted["request"], request)
+    with pytest.raises(storage.StorageBlocked, match="source command differs"):
+        storage.plan_abort_reconciliation(aborted["request"])
+
+
+@pytest.mark.parametrize("candidate", ["A" * 40, "g" * 40, "a" * 39, "a" * 41])
+def test_plan_refuses_noncanonical_candidate_sha(aborted, candidate):
+    request = json.loads(aborted["request"].read_text())
+    request["candidate_sha"] = candidate
+    _write(aborted["request"], request)
+    with pytest.raises(storage.StorageBlocked, match="invalid reconciliation request"):
         storage.plan_abort_reconciliation(aborted["request"])
 
 

@@ -16,6 +16,8 @@ import json
 import math
 import os
 import platform
+import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -1279,6 +1281,7 @@ ABORT_RECONCILIATION_SCHEMA = "storage-abort-reconciliation-request/v1"
 ABORT_RECONCILIATION_PLAN_SCHEMA = "storage-abort-reconciliation-plan/v1"
 ABORT_RECONCILIATION_RECEIPT_SCHEMA = "storage-abort-reconciliation-receipt/v1"
 ABORT_RECONCILIATION_EVIDENCE_LIMIT = 1024 * 1024
+STAGE_SOURCE_BINDING_SCHEMA = "storage-run-stage-source-binding/v1"
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -1427,6 +1430,88 @@ def _create_private_json_once(path: Path, value: JSON) -> None:
         os.close(directory)
 
 
+def _stage_source_binding_path(directory: Path, job: str) -> Path:
+    if not job.isalnum() or len(job) > 64:
+        raise StorageBlocked("invalid storage job identity")
+    return directory / f"{job}.stage-source.json"
+
+
+def _stage_source_binding(
+    *,
+    job: str,
+    row: JSON,
+    child_command: list[str],
+) -> JSON:
+    source_command = row.get("source_command")
+    if (
+        type(source_command) is not list
+        or len(source_command) != 4
+        or source_command[0] != "bash"
+        or source_command[2] != "--identity"
+        or not all(isinstance(value, str) and value for value in source_command)
+        or not isinstance(row.get("source_identity"), str)
+        or not row["source_identity"]
+        or not isinstance(row.get("root"), str)
+        or not isinstance(row.get("root_identity"), list)
+        or len(row["root_identity"]) != 2
+        or any(type(value) is not int for value in row["root_identity"])
+        or not isinstance(row.get("owner_token_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", row["owner_token_sha256"])
+        or type(row.get("owner_pid")) is not int
+        or type(row.get("child_pgid")) is not int
+        or not child_command
+        or not all(isinstance(value, str) and value for value in child_command)
+    ):
+        raise StorageBlocked("storage stage/source binding inputs differ")
+    body = {
+        "schema": STAGE_SOURCE_BINDING_SCHEMA,
+        "job": job,
+        "root": row["root"],
+        "root_identity": row["root_identity"],
+        "owner_token_sha256": row["owner_token_sha256"],
+        "owner_pid": row["owner_pid"],
+        "child_pgid": row["child_pgid"],
+        "source_identity": row["source_identity"],
+        "source_command": source_command,
+        "child_command": child_command,
+    }
+    return {**body, "sha256": _json_digest(body)}
+
+
+def _read_stage_source_binding(state_dir: Path, job: str, row: JSON) -> JSON:
+    expected = row.get("stage_source_binding_sha256")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise StorageBlocked("storage stage/source binding is missing")
+    _path, binding, digest = _read_private_json_once(
+        _stage_source_binding_path(state_dir, job), label="storage stage/source binding"
+    )
+    body = {key: value for key, value in binding.items() if key != "sha256"}
+    if (
+        digest != expected
+        or binding.get("sha256") != _json_digest(body)
+        or binding.get("schema") != STAGE_SOURCE_BINDING_SCHEMA
+        or binding.get("job") != job
+        or not isinstance(binding.get("source_identity"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", binding["source_identity"])
+        or any(
+            binding.get(key) != row.get(key)
+            for key in (
+                "root",
+                "root_identity",
+                "owner_token_sha256",
+                "owner_pid",
+                "child_pgid",
+                "source_identity",
+                "source_command",
+            )
+        )
+        or not isinstance(binding.get("child_command"), list)
+        or not all(isinstance(value, str) and value for value in binding["child_command"])
+    ):
+        raise StorageBlocked("storage stage/source binding differs from reservation")
+    return binding
+
+
 def _abort_reconciliation_request(request_path: Path) -> tuple[Path, JSON, str]:
     canonical_path, request, digest = _read_private_json_once(
         request_path, label="reconciliation request"
@@ -1456,7 +1541,7 @@ def _abort_reconciliation_request(request_path: Path) -> tuple[Path, JSON, str]:
         or not isinstance(request["expected_row_sha256"], str)
         or len(request["expected_row_sha256"]) != 64
         or not isinstance(request["candidate_sha"], str)
-        or len(request["candidate_sha"]) != 40
+        or re.fullmatch(r"[0-9a-f]{40}", request["candidate_sha"]) is None
         or not isinstance(request["incumbent_token"], str)
         or any(
             not isinstance(request[field], str)
@@ -1516,6 +1601,7 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         raise StorageBlocked("recorded storage reservation is unavailable") from error
     if not isinstance(row, dict) or _json_digest(row) != request["expected_row_sha256"]:
         raise StorageBlocked("recorded storage reservation changed")
+    stage_binding = _read_stage_source_binding(state_dir, request["job"], row)
     root = Path(row.get("root", ""))
     root_identity = row.get("root_identity")
     if (
@@ -1593,6 +1679,26 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         or child_record["ppid"] != owner_pid
     ):
         raise StorageBlocked("abort proof process tree does not match recorded ownership")
+    try:
+        owner_argv = shlex.split(owner_record["command"])
+        child_argv = shlex.split(child_record["command"])
+    except ValueError as error:
+        raise StorageBlocked("abort proof process command cannot be parsed") from error
+    source = stage_binding["source_command"][-1]
+    source_positions = [index for index, value in enumerate(owner_argv) if value == "--source"]
+    if (
+        len(source_positions) != 1
+        or source_positions[0] + 1 >= len(owner_argv)
+        or owner_argv[source_positions[0] + 1] != source
+        or not any(
+            Path(value).name == "storage_lifecycle.py"
+            and index + 1 < len(owner_argv)
+            and owner_argv[index + 1] == "run"
+            for index, value in enumerate(owner_argv)
+        )
+        or child_argv != stage_binding["child_command"]
+    ):
+        raise StorageBlocked("abort proof source command differs from sealed storage provenance")
     idle(root)
     receipt_path = state_dir / "receipts" / f"{request['job']}.json"
     if receipt_path.exists() or receipt_path.is_symlink():
@@ -1606,6 +1712,13 @@ def _abort_reconciliation_plan(request_path: Path, request: JSON, request_sha256
         "state_dir": str(state_dir.resolve()),
         "job": request["job"],
         "row_sha256": request["expected_row_sha256"],
+        "source_provenance": {
+            "binding_path": str(_stage_source_binding_path(state_dir, request["job"])),
+            "binding_sha256": stage_binding["sha256"],
+            "source_identity": stage_binding["source_identity"],
+            "source_command": stage_binding["source_command"],
+            "child_command": stage_binding["child_command"],
+        },
         "root": str(root),
         "root_identity": root_identity,
         "intent_path": str(intent_path),
@@ -1643,6 +1756,7 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             "plan_sha256": plan["sha256"],
             "caller": "original-human-task-reconciler",
             "action": "finish_terminal_retain_root",
+            "source_provenance": plan["source_provenance"],
         }
         intent_path = Path(plan["intent_path"])
         _create_private_json_once(intent_path, intent)
@@ -1657,6 +1771,7 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             "root_retained": True,
             "physical_reclaim_claimed": False,
             "calibration_updated": False,
+            "source_provenance": plan["source_provenance"],
         }
         manager.finish(
             request["job"],
@@ -1676,6 +1791,7 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
             "plan_sha256": plan["sha256"],
             "receipt": {"path": str(receipt_path), "sha256": receipt_sha256},
             "root_retained": True,
+            "source_provenance": plan["source_provenance"],
         }
         _create_private_json_once(Path(plan["known_path"]), known)
         return known
@@ -1931,6 +2047,21 @@ def run_job(
             start_new_session=True,
         )
         lifecycle_call("bind", job, child_pgid=child.pid)
+        with manager.locked(deadline=time.monotonic() + lifecycle_lock_timeout_seconds) as data:
+            row = dict(data["jobs"][job])
+        stage_binding = _stage_source_binding(
+            job=job,
+            row=row,
+            child_command=list(args.command),
+        )
+        _create_private_json_once(_stage_source_binding_path(manager.directory, job), stage_binding)
+        lifecycle_call(
+            "bind",
+            job,
+            stage_source_binding_sha256=_sha256_bytes(
+                json.dumps(stage_binding, sort_keys=True).encode()
+            ),
+        )
         lowest = admitted["available_before"]
         warned = False
         while child.poll() is None:
