@@ -1093,6 +1093,10 @@ def pre_dispatch_no_start_proof(manifest, cfg, candidate, *, record_boundary=Fal
             return None
         root = contract(manifest)[3]
         directory = root / context["nonce"]
+        if finite:
+            watermark = directory / "action-b-receipt-watermark.json"
+            if watermark.exists() or watermark.is_symlink():
+                return None
         handoff = _read(directory / ("worker-" + worker_id + ".json"))
         original = handoff["record"]
         if (

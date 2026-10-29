@@ -277,14 +277,16 @@ def _resolve_directory(value: Path | str, code: str) -> Path:
     path = Path(value).expanduser()
     if not path.is_dir():
         raise PreflightError(code, f"required directory does not exist: {path}")
-    return path.absolute()
+    return path.resolve()
 
 
 def _resolve_executable(value: Path | str) -> Path:
     path = Path(value).expanduser()
     if not path.is_file() or not os.access(path, os.X_OK):
         raise PreflightError("python_missing", f"selected Python is not executable: {path}")
-    return path.resolve()
+    # Resolving a venv's interpreter symlink here selects its base Python and
+    # discards the explicitly selected environment before the child probe.
+    return path.absolute()
 
 
 def _sha(value: str, code: str) -> str:

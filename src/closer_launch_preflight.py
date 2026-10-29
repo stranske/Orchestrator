@@ -42,9 +42,14 @@ def _refresh_selected_sheds(
 
 def _report_reasons(report: dict[str, Any], profile_ids: list[str]) -> list[str]:
     reasons: list[str] = []
-    profiles = report.get("profiles") if isinstance(report.get("profiles"), dict) else {}
-    agents = report.get("agents") if isinstance(report.get("agents"), dict) else {}
-    pools = report.get("pools") if isinstance(report.get("pools"), dict) else {}
+    profile_rows, agent_rows, pool_rows = (
+        report.get("profiles"),
+        report.get("agents"),
+        report.get("pools"),
+    )
+    profiles: dict[str, Any] = profile_rows if isinstance(profile_rows, dict) else {}
+    agents: dict[str, Any] = agent_rows if isinstance(agent_rows, dict) else {}
+    pools: dict[str, Any] = pool_rows if isinstance(pool_rows, dict) else {}
     for profile_id in profile_ids:
         profile = profiles.get(profile_id)
         if not isinstance(profile, dict) or profile.get("state") not in {"ok", "warn"}:
@@ -60,7 +65,7 @@ def _report_reasons(report: dict[str, Any], profile_ids: list[str]) -> list[str]
                 reasons.append(f"profile {profile_id} pool {pool_id} is not operationally usable")
                 continue
             agent = pool.get("agent")
-            row = agents.get(agent)
+            row = agents.get(agent) if isinstance(agent, str) else None
             if (
                 not isinstance(agent, str)
                 or not isinstance(row, dict)
@@ -107,6 +112,11 @@ def inspect(manifest_path: str | Path, *, refresh_capacity_owner: bool = False) 
     }
     try:
         manifest = load_manifest(manifest_file)
+        evaluator = Path(__file__).resolve()
+        evaluator_sha256 = _sha256(evaluator)
+        if manifest.get("modules", {}).get(evaluator.name) != evaluator_sha256:
+            raise ValueError("readiness evaluator is outside the pinned Runtime closure")
+        result["evaluator"] = {"path": str(evaluator), "sha256": evaluator_sha256}
         # contract verifies the supported wrapper/interpreter/root pins; loading
         # verifies every declared Runtime module before capacity is consulted.
         _contract, _wrapper, _interpreter, _root = native.contract(manifest)
@@ -133,12 +143,12 @@ def inspect(manifest_path: str | Path, *, refresh_capacity_owner: bool = False) 
         result["reasons"].append(f"qualification: {type(exc).__name__}: {exc}")
         return result
 
-    selected_agents = {
-        profile.get("agent")
-        for profile_id in profile_ids
-        if isinstance((profile := execution_profiles.get_profile(profile_id)), dict)
-    }
-    selected_agents.discard(None)
+    selected_agents: set[str] = set()
+    for profile_id in profile_ids:
+        profile = execution_profiles.get_profile(profile_id)
+        agent = profile.get("agent") if isinstance(profile, dict) else None
+        if isinstance(agent, str):
+            selected_agents.add(agent)
     if refresh_capacity_owner:
         try:
             result["shed_recovery"] = _refresh_selected_sheds(
@@ -185,21 +195,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
     if args.selftest:
-        from unittest.mock import patch
-
-        with patch(__name__ + ".inspect") as check:
-            check.return_value = {"stage": "ready", "authority": False}
-            assert inspect("/offline/manifest.json")["authority"] is False
+        report: dict[str, Any] = {
+            "profiles": {"profile": {"state": "ok", "capacity_pool_ids": ["pool"]}},
+            "pools": {"pool": {"state": "ok", "agent": "claude"}},
+            "agents": {"claude": {"state": "ok"}},
+        }
+        assert _report_reasons(report, ["profile"]) == []
+        report["agents"]["claude"]["state"] = "shed"
+        assert _report_reasons(report, ["profile"])
         return 0
     if args.manifest is None:
         parser.error("--manifest is required unless --selftest is used")
-    print(
-        json.dumps(
-            inspect(args.manifest, refresh_capacity_owner=args.refresh_capacity_owner),
-            sort_keys=True,
-        )
-    )
-    return 0
+    result = inspect(args.manifest, refresh_capacity_owner=args.refresh_capacity_owner)
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["stage"] == "ready" else 2
 
 
 if __name__ == "__main__":

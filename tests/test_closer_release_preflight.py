@@ -110,11 +110,11 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
     monkeypatch.setenv("CLOSER_CORE_PACKAGE", "/stale/core")
     config = fixture_config(tmp_path)
     checked, environment, receipt = preflight.checked_environment(config)
-    assert checked.python == Path(sys.executable).resolve()
+    assert checked.python == Path(sys.executable).absolute()
     assert receipt["child_python"]["executable"] == str(Path(sys.executable).resolve())
     assert receipt["child_python"]["fake_home"] is True
     assert environment["PATH"].split(":")[0] == str(Path(sys.executable).resolve().parent)
-    assert environment["PYTHON"] == str(Path(sys.executable).resolve())
+    assert environment["PYTHON"] == str(Path(sys.executable).absolute())
     assert environment["CLOSER_CORE_SOURCE"] == str(checked.core)
     assert environment["CLOSER_CORE_SOURCE_REVISION"] == checked.expected_core_sha
     assert environment["VERIFY_PYTEST_WORKERS"] == "1"
@@ -127,7 +127,7 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
 
 def test_virtualenv_invocation_path_is_preserved_and_child_keeps_venv_prefix(tmp_path):
     virtualenv = tmp_path / "venv"
-    venv.EnvBuilder(with_pip=False).create(virtualenv)
+    venv.EnvBuilder(with_pip=False, symlinks=True).create(virtualenv)
     selected = virtualenv / "bin" / "python"
     resolved = preflight._resolve_executable(selected)
     assert resolved == selected.absolute()

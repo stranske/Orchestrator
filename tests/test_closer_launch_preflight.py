@@ -1,5 +1,6 @@
 """The launch preflight is diagnostic-only and never probes providers itself."""
 
+import json
 from pathlib import Path
 
 import closer_launch_preflight as preflight
@@ -13,7 +14,12 @@ def _patch_closed_scope(monkeypatch, tmp_path, *, report, strict_error=None, val
 
     manifest_path = (tmp_path / "manifest.json").resolve()
     manifest_path.write_text("{}")
-    manifest = {"package_digest": "package"}
+    manifest = {
+        "package_digest": "package",
+        "modules": {
+            "closer_launch_preflight.py": preflight._sha256(Path(preflight.__file__).resolve())
+        },
+    }
     policy = {
         "owner": "native-owner",
         "profile_ids": ["profile"],
@@ -98,6 +104,22 @@ def test_control_plane_scope_never_becomes_business_ready(monkeypatch, tmp_path)
     result = preflight.inspect(path)
     assert result["stage"] == "held" and result["authority"] is False
     assert result["reasons"] == ["qualification: RuntimeError: role qualification unavailable"]
+
+
+def test_unpinned_evaluator_cannot_report_ready(monkeypatch, tmp_path):
+    import closer_campaign as campaign
+
+    path = _patch_closed_scope(monkeypatch, tmp_path, report=_ready_report())
+    monkeypatch.setattr(campaign, "load_manifest", lambda _path: {"modules": {}})
+    result = preflight.inspect(path)
+    assert result["stage"] == "held" and result["authority"] is False
+    assert "evaluator is outside the pinned Runtime closure" in result["reasons"][0]
+
+
+def test_held_cli_returns_nonzero_without_launching(tmp_path, capsys):
+    assert preflight.main(["--manifest", str((tmp_path / "missing.json").resolve())]) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["stage"] == "held" and report["authority"] is False
 
 
 def test_conditional_selected_recovery_can_make_a_new_read_ready(monkeypatch, tmp_path):

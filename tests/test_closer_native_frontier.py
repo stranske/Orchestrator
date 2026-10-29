@@ -349,6 +349,12 @@ def test_finite_pre_b_admission_drift_seals_v2_no_start_and_next_invocation_is_f
         assert native.pre_dispatch_no_start_proof(manifest, cfg, invalid) is None
     assert native.pre_dispatch_no_start_proof(manifest, cfg, proof, record_boundary=True) is None
 
+    watermark = Path(context["assignment"]["path"]).parent / "action-b-receipt-watermark.json"
+    watermark.write_text("{}")
+    assert native.pre_dispatch_no_start_proof(manifest, cfg, proof) is None
+    watermark.unlink()
+    assert native.pre_dispatch_no_start_proof(manifest, cfg, proof) == proof
+
     # A later invocation must publish a new report; sealing this refusal never
     # refreshes the old report or grants its old context new effect authority.
     monkeypatch.setattr(native, "validate_admission", original_validate)
