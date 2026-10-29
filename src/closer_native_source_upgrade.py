@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -189,18 +190,24 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         "new candidate is not fully installed/verified",
     )
     verified = cast(dict[str, Any], verification)
-    snapshot = _canonical(verified["snapshot_path"])
+    _canonical(verified["snapshot_path"])
+    mirror = (Path.home() / ".codex/orchestrator-mirror").resolve()
     inspector = Path.home() / ".codex/orchestrator-mirror/scripts/install_verified_snapshot.py"
     try:
         generation = subprocess.run(
-            [str(inspector), str(snapshot), "--generation-token"],
+            [
+                str(Path(sys.executable).resolve()),
+                str(inspector),
+                str(mirror),
+                "--generation-token",
+            ],
             text=True,
             capture_output=True,
             timeout=10,
             check=False,
         )
         digest = subprocess.run(
-            [str(inspector), str(snapshot), "--digest"],
+            [str(Path(sys.executable).resolve()), str(inspector), str(mirror), "--digest"],
             text=True,
             capture_output=True,
             timeout=10,
@@ -220,6 +227,8 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         "candidate_sha": candidate,
         "installed_generation": record["installed_generation"],
         "snapshot_digest": verified["snapshot_digest"],
+        "mirror": str(mirror),
+        "python": str(Path(sys.executable).resolve()),
         "inspector": str(inspector),
         "inspector_sha256": _sha(host._read(inspector)[1]),
     }
