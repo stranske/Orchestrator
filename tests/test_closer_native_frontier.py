@@ -333,6 +333,22 @@ def test_finite_pre_b_admission_drift_seals_v2_no_start_and_next_invocation_is_f
     assert proof["phases"]["B"]["started"] is False
     assert native.pre_dispatch_no_start_proof(manifest, cfg, proof) == proof
 
+    # The new proof family must not inherit a legacy deadline or accept altered
+    # finite scope, request windows, or claimed submission history.
+    for changed in ("schema", "frontier", "window", "submission"):
+        invalid = json.loads(json.dumps(proof))
+        if changed == "schema":
+            invalid["schema"] = "native-pre-dispatch-no-start/v1"
+            invalid["original_deadline"] = clock[0] + 120
+        elif changed == "frontier":
+            invalid["finite_frontier"]["owner"] = "foreign-owner"
+        elif changed == "window":
+            invalid["request_timeout_seconds"] += 1
+        else:
+            invalid["phases"]["B"]["started"] = True
+        assert native.pre_dispatch_no_start_proof(manifest, cfg, invalid) is None
+    assert native.pre_dispatch_no_start_proof(manifest, cfg, proof, record_boundary=True) is None
+
     # A later invocation must publish a new report; sealing this refusal never
     # refreshes the old report or grants its old context new effect authority.
     monkeypatch.setattr(native, "validate_admission", original_validate)
