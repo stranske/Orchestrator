@@ -17,8 +17,8 @@ def test_native_ownership_rejects_a_stale_clock(monkeypatch):
 
 
 def test_owner_refreshes_clock_before_native_ownership_observation(monkeypatch):
-    values = iter([100.0, 100.0, *([102.01] * 8)])
-    monkeypatch.setattr(owner.time, "time", lambda: next(values))
+    values = iter([100.0, 100.0])
+    monkeypatch.setattr(owner.time, "time", lambda: next(values, 102.01))
     monkeypatch.setattr(
         owner,
         "_current",
