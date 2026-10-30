@@ -1,0 +1,1001 @@
+#!/usr/bin/env python3
+"""Collect demand and prepare app-tool updates. Never edit automation settings."""
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import fcntl
+import hashlib
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import tempfile
+import time
+import tomllib
+from pathlib import Path
+
+import controller as inventory
+import accountability
+import maintenance_admission as maintenance
+import repo_campaigns
+
+ROOT = Path(__file__).resolve().parent
+STATE = ROOT / "demand-state.json"
+PLAN = ROOT / "demand-plan.json"
+APP_DB = Path("/Users/teacher/.codex/sqlite/codex-dev.db")
+LANES = {k: inventory.TARGETS[k] for k in ("opener", "closer", "orphan", "escalator", "maintenance")}
+PROFILES = {"opener": ("gpt-6.1-sol", "high"), "closer": ("gpt-6.1-sol", "medium"),
+            "orphan": ("gpt-6.1-sol", "high"), "escalator": ("gpt-6.1-sol", "medium"),
+            "maintenance": ("gpt-6.1-sol", "medium")}
+STALL_SECONDS = 3 * 3600
+STALE_OWNER_SECONDS = 2700  # 45-minute controller round budget
+ERROR_FREEZE_MAX_SECONDS = 3600
+ISSUE_QUERY = "query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount pageInfo{hasNextPage endCursor} nodes{... on Issue{url title number repository{nameWithOwner} author{login __typename} labels(first:30){nodes{name}} body createdAt updatedAt}}}}"
+QUERY = """query($q:String!,$after:String){search(query:$q,type:ISSUE,first:100,after:$after){issueCount pageInfo{hasNextPage endCursor} nodes{... on PullRequest{url title number repository{nameWithOwner} author{login __typename} headRefName headRefOid closingIssuesReferences(first:20){nodes{number repository{nameWithOwner}}} isDraft labels(first:30){nodes{name}} body createdAt updatedAt mergeStateStatus reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated}} commits(last:1){nodes{commit{committedDate tree{oid} statusCheckRollup{state contexts(first:100){pageInfo{hasNextPage} nodes{... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}}}}}"""
+
+
+def load(path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def save(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def app_settings():
+    with sqlite3.connect(f"file:{APP_DB}?mode=ro", uri=True) as db:
+        db.row_factory = sqlite3.Row
+        result = {}
+        for lane, path in LANES.items():
+            row = db.execute("SELECT status,rrule,model,reasoning_effort FROM automations WHERE id=?", (path.parent.name,)).fetchone()
+            if row is None:
+                raise RuntimeError("Missing app automation: " + path.parent.name)
+            result[lane] = dict(row)
+        return result
+
+
+def signals(pr):
+    threads = pr.get("reviewThreads") or {}
+    commits = ((pr.get("commits") or {}).get("nodes") or [])
+    commit = commits[-1].get("commit", {}) if commits else {}
+    rollup = commit.get("statusCheckRollup") or {}
+    contexts = rollup.get("contexts") or {}
+    nodes = contexts.get("nodes") or []
+    failed = any(n.get("conclusion") in {"FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"}
+                 or n.get("state") in {"FAILURE", "ERROR"} for n in nodes)
+    pending = any(n.get("status") in {"QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED"}
+                  or n.get("state") == "PENDING" for n in nodes)
+    active_threads = sum(not n.get("isResolved") and not n.get("isOutdated") for n in threads.get("nodes", []))
+    incomplete = bool((threads.get("pageInfo") or {}).get("hasNextPage") or (contexts.get("pageInfo") or {}).get("hasNextPage"))
+    return {"failed": failed, "pending": pending, "threads": active_threads,
+            "incomplete": incomplete, "check_state": rollup.get("state", "UNKNOWN"),
+            "pushed_at": commit.get("committedDate"),
+            "checks": sorted((n.get("name") or n.get("context") or "", n.get("status") or "", n.get("conclusion") or n.get("state") or "") for n in nodes)}
+
+
+def fingerprint(pr, sig):
+    # Ignore discussion timestamps: controller commentary must not manufacture new work.
+    value = [pr.get("headRefOid"), pr.get("isDraft"), sorted(inventory.labels(pr)),
+             pr.get("body"), pr.get("mergeStateStatus"), sig]
+    if pr.get("_continuity_verifier_material") is not None:
+        value.append(pr["_continuity_verifier_material"])
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def classify(pr, held, challenge, retry, now):
+    target = f"{inventory.repo(pr)}#{pr['number']}"
+    sig = signals(pr)
+    attention = bool(set(inventory.labels(pr)) & {"agent:needs-attention", "autofix:escalated"})
+    if target in held:
+        return "held", "Confirmed human gate or unexpired scoped blocker", sig
+    if target in challenge or target in retry:
+        return "escalator", "Challenge unverified human claim or recover expired blocker", sig
+    draft_hold = pr.get("isDraft") and re.search(r"keep this pr.*draft|hold:|keep.*draft and unmerged", pr.get("body", ""), re.I)
+    if draft_hold and not sig["threads"]:
+        return "held", "Explicit draft hold; source evaluation prerequisites remain with their owner", sig
+    if pr.get("isDraft") and not attention:
+        return "held", "Draft retained until readiness or attention changes", sig
+    if not inventory.is_release_pr(pr) and inventory.is_generated_or_durable_pr(pr):
+        return "held", "Durable generated publication", sig
+    lane = "maintenance" if inventory.maintenance_category(pr) or maintenance.repair_policy(target, maintenance.budget.summary()) else (
+        "orphan" if inventory.is_release_pr(pr) or not inventory.is_issue_linked_pr(pr) else "closer")
+    if sig["failed"] or sig["threads"] or sig["incomplete"] or attention or pr.get("mergeStateStatus") == "DIRTY":
+        return lane, ("Classify existing failures against this shipment; deliver unaffected work and hand off incidental findings; no automatic source repair" if lane == "maintenance" else "Repair failed checks, conflicts, review debt, or diagnose incomplete evidence"), sig
+    pushed = inventory.parse_iso(sig["pushed_at"] or "")
+    if pushed is not None and now - pushed < 7 * 60:
+        return "waiting", "Await exact-head review floor; Luna rechecks readiness", sig
+    if sig["pending"]:
+        return "waiting", "Await checks; Luna observes completion", sig
+    return lane, "Inspect exact-head gates and merge, close, or record a concrete blocker", sig
+
+
+def pr_owner(pr):
+    target = f"{inventory.repo(pr)}#{pr['number']}"
+    return "maintenance" if inventory.maintenance_category(pr) or maintenance.repair_policy(target, maintenance.budget.summary()) else (
+        "orphan" if inventory.is_release_pr(pr) or not inventory.is_issue_linked_pr(pr) else "closer")
+
+
+def issue_owner(item):
+    receiver = item.get('receiving_lane')
+    if receiver in {'opener', 'closer', 'orphan'}:
+        return receiver
+    return 'closer' if item.get('state') in {'linked-work', 'verifier-follow-up', 'lifecycle-cleanup'} else 'opener'
+
+
+def build_routes(prs, guard, state, terminal, now, held=set(), challenge=set(), retry=set(), running_lanes=None):
+    routes = {k: [] for k in LANES}
+    observations = {}
+    waits = []
+    ignored = []
+    prior = state.get("targets", {})
+    coverage = terminal.get("coverage_json") or {}
+    running_lanes = running_lanes or set()
+    if not isinstance(coverage, dict):
+        coverage = {}
+    for pr in prs:
+        target = f"{inventory.repo(pr)}#{pr['number']}"
+        lane, action, sig = classify(pr, held, challenge, retry, now)
+        fp = fingerprint(pr, sig)
+        old = prior.get(target, {})
+        since = old.get("unchanged_since", now) if old.get("fingerprint") == fp else now
+        row = {"target": target, "head": pr.get("headRefOid"), "fingerprint": fp,
+               "action": action, "due": inventory.iso_now(), "lane": lane,
+               "delivery_owner": pr_owner(pr), "execution_state": lane if lane in {'held', 'waiting'} else 'active',
+               "unchanged_since": since}
+        # A terminal result is evidence for this fingerprint, not a timer to repeat diagnosis.
+        result = coverage.get(target) or {}
+        diagnosed = old.get("diagnosed_fingerprint")
+        if result.get("head") == row["head"] and result.get("fingerprint") == fp and result.get("execution_error") is None:
+            diagnosed = fp
+        if terminal.get("selected_target") == target and terminal.get("execution_error") is None:
+            selected = (terminal.get("inventory_evidence") or {}).get("selected") or {}
+            if selected.get("head_sha") == row["head"] and terminal.get("completed_at_utc"):
+                completed = inventory.parse_iso(terminal["completed_at_utc"])
+                # Adopt only a result newer than our observation, or one explicitly fingerprinted.
+                if result.get("fingerprint") == fp or (old.get("fingerprint") == fp and completed and completed >= old.get("observed_at", now)):
+                    diagnosed = fp
+        # Productive recovery can create a real due follow-up; a missed due time
+        # must be eligible again even if the PR head has not moved yet.
+        due = inventory.parse_iso(result.get("due") or "")
+        if result.get("fingerprint") == fp and (
+            result.get("execution_error") or
+            (result.get("outcome_class") == "productive_recovery" and due is not None and now >= due)
+        ):
+            diagnosed = None
+        row["diagnosed_fingerprint"] = diagnosed
+        row["observed_at"] = now
+        observations[target] = row
+        if lane == "held" or (diagnosed == fp and result.get("park_until_material_change")):
+            row['execution_state'] = 'held'
+            ignored.append(row)
+            continue
+        if lane == "escalator":
+            if diagnosed != fp:
+                routes[lane].append(row)
+            else:
+                ignored.append(dict(row, action="Diagnosed unchanged blocker; await material evidence"))
+            continue
+        created = inventory.parse_iso(pr.get("createdAt") or "")
+        acquisition_over = created is not None and now - created >= 30 * 60
+        receipt = (state.get('lane_receipts') or {}).get(lane) or {}
+        stopped_at = inventory.parse_iso(receipt.get('at') or '')
+        owner_stopped = (lane in routes and lane not in running_lanes and
+                         receipt.get('outcome') == 'no_op' and stopped_at is not None and
+                         stopped_at >= since + STALL_SECONDS)
+        pending_stuck = lane == 'waiting' and sig['pending'] and now - since >= STALL_SECONDS
+        missed_recovery = (result.get('fingerprint') == fp and result.get('outcome_class') == 'productive_recovery'
+                           and result.get('action') and due is not None and now >= due and lane not in running_lanes)
+        if acquisition_over and diagnosed != fp and (missed_recovery or (now - since >= STALL_SECONDS and (owner_stopped or pending_stuck))):
+            routes["escalator"].append(dict(row, lane="escalator", ordinary_lane=lane,
+                eligibility_reason='missed_concrete_recovery_deadline' if missed_recovery else ('owner_reported_no_action_after_deadline' if owner_stopped else 'same_pending_checks_observed_for_three_hours'),
+                action=('Reconcile the missed concrete recovery: ' + result['action']) if missed_recovery else ("Recover the ordinary owner's documented no-action stall" if owner_stopped else "Diagnose the exact-head checks proven stuck pending for three hours")))
+        if lane == "waiting":
+            waits.append(row)
+        elif lane in routes:
+            routes[lane].append(row)
+        # Maintenance and its registered repairs keep the same source owner.
+    for item in guard.get("actionable_candidates", []):
+        lane = issue_owner(item)
+        routes[lane].append({"target": f"{item['repository']}#{item['number']}",
+            "action": item.get("next_automatic_action") or "Select the next bounded issue action",
+            "fingerprint": item.get("updatedAt"), "lane": lane})
+    for item in guard.get("challenge_due", []):
+        target = f"{item['repository']}#{item['number']}"
+        fp = item.get("updatedAt")
+        old = prior.get(target, {})
+        result = coverage.get(target, {})
+        diagnosed = old.get("diagnosed_fingerprint")
+        if result.get("fingerprint") == fp and not result.get("execution_error"):
+            diagnosed = fp
+        row = {"target": target, "fingerprint": fp, "lane": "escalator",
+               "action": item.get("next_automatic_action") or "Independently challenge the claimed human blocker",
+               "observed_at": now, "diagnosed_fingerprint": diagnosed}
+        observations[target] = row
+        if diagnosed != fp:
+            routes["escalator"].append(row)
+    # A scalar-only guard cannot prove absence of actionable candidates.
+    if guard.get("actionable_count", 0) and not guard.get("actionable_candidates"):
+        routes["opener"].append({"target": "opener-queue", "action": "Reconcile actionable liveness count", "lane": "opener"})
+    return routes, observations, waits, ignored
+
+
+def repair_budget_request(row, policy, node, control):
+    """Turn a denied repair into a bounded human decision, not a generic wait."""
+    parked = control.get('parked', {}).get(row['target'].lower(), {})
+    configured = maintenance.repair_objectives().get(policy['root'], {})
+    objective = configured.get('action') if configured.get('head') == (node or {}).get('headRefOid') else None
+    current_plan = parked.get('action_plan', {})
+    if node:
+        try:
+            actions = maintenance.validate_action_plan(current_plan, node)
+            objective = objective or '; '.join(a.get('description') or a['id'] for a in actions
+                                               if a['kind'] == 'engineering' and a['status'] == 'ready')
+        except (ValueError, TypeError, KeyError):
+            pass
+    objective = objective or row.get('repair_objective') or row['action']
+    request = dict(row, campaign=policy['campaign'], root=policy['root'],
+                   head=(node or {}).get('headRefOid'), objective=objective,
+                   requested_extra_attempts=0, requested_extra_minutes=0,
+                   prerequisite='Prove prior writer terminal; obtain valid new root permit before engineering',
+                   completion_criteria='Focused validation and current-head reviewer disposition; complete exact-head delivery gates and actual verifier receipt',
+                   human_action=f"Choose whether to retain the known-good component or omit the affected delivery for {policy['root']}: {objective} Further source repair is separate work, not an automatic extension.")
+    if node is None:
+        # A cached issue/alias is not evidence for another engineering allocation.
+        request.update(decision_kind='scope', requested_extra_attempts=0, requested_extra_minutes=0,
+            objective='Establish the remaining unmet acceptance criterion and current source PR/head',
+            human_action=f"Decide whether {row['target']} still requires source engineering under {policy['root']}: identify the remaining unmet acceptance criterion and current source PR/head, or explicitly narrow/stop the residual. No repair extension is proposed without that evidence.")
+    else:
+        request['decision_kind'] = 'delivery_scope'
+    binding = {key: request[key] for key in ('campaign', 'root', 'head', 'objective',
+                'requested_extra_attempts', 'requested_extra_minutes')}
+    request['request_id'] = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
+    return request
+
+
+def budget_alerts(decisions, state, now):
+    prepared = state.get('repair_budget_alerts', {})
+    for row in decisions:
+        previous = prepared.get(row['request_id'])
+        row['new_alert_due'] = previous is None or now - previous >= accountability.REMINDER_SECONDS
+    return decisions
+
+
+def maintenance_admissions(prs, routes, observations, waits, control, view, now):
+    """Apply the same source budget to every lane; successor PRs cannot reset it."""
+    nodes = {maintenance.identity(node): node for node in prs}
+    objectives = maintenance.repair_objectives()
+    decisions = []
+    maintenance_waiting = False
+    for lane in routes:
+        admitted = []
+        for row in routes[lane]:
+            target = row['target'].lower()
+            node = nodes.get(target)
+            policy = maintenance.repair_policy(target, view)
+            if policy and (policy.get('owner_directed_task') or {}).get('completed_at'):
+                waits.append(dict(row, execution_state='owner-task-complete',
+                    action='Named owner task completed; do not revive it or request budget'))
+                continue
+            if (policy and policy['campaign'] in control.get('retired_campaigns', {})
+                    and not policy.get('owner_directed_task')
+                    and not (node and inventory.maintenance_category(node))):
+                waits.append(dict(row, execution_state='closed-campaign',
+                    action='Closed sync campaign residual; retain repository owner, no maintenance repair or budget alert'))
+                continue
+            if policy:
+                row.update(work_category='sync-delivery-triage', campaign=policy['campaign'],
+                           root=policy['root'], budget_status=policy['status'],
+                           owner='Sol maintenance delivery worker',
+                           action='Assess concrete shipment impact from existing evidence; continue eligible delivery, hand off incidental findings, and do not launch source engineering without separate finite scope authorization')
+            if policy and policy.get('owner_directed_task'):
+                row.update(work_category='owner-directed-repair',
+                    owner='Established finite task owner; preserve exact live-writer ownership',
+                    action=policy['owner_directed_task']['objective'])
+            scoped = maintenance.action_eligibility(target, node, dict(control, _open_targets=list(nodes), _now=now), policy) if node else None
+            if scoped is not None:
+                maintenance_waiting = True  # scoped observation is not permission for a weekly inventory
+                row.update(scoped)
+                row['work_category'] = 'action-scoped-maintenance'
+                # A historical root objective cannot override a current action disposition.
+                for key in ('dependency', 'confidence', 'resumption_condition'):
+                    row.pop(key, None)
+            # Observation is controller-owned data reconciliation, never a generic
+            # coding-worker assignment. Metadata alone cannot sandbox an LLM.
+            if scoped is not None and scoped.get('eligible_actions') == ['observe']:
+                row.update(execution_state='controller-observation', lane='controller',
+                           observed_obligations=sorted(maintenance.observed_obligations(node)),
+                           check_evidence=signals(node)['checks'])
+                waits.append(row)
+                if row['target'] in observations: observations[row['target']].update(row)
+                continue
+            reason = None
+            if node and (lane == 'maintenance' or policy):
+                reason = maintenance.decision(target, node, nodes, signals(node), control, view, now)
+            elif policy and (policy['status'] == 'exhausted' or policy['active_permits']):
+                reason = ('Repair budget exhausted; human must narrow, stop, or explicitly extend ' + policy['campaign']) if policy['status'] == 'exhausted' else 'Existing admitted repair owner holds this root'
+            if reason:
+                if lane == 'maintenance' or policy:
+                    maintenance_waiting = True
+                waiting = dict(row, action=reason, execution_state='waiting')
+                waits.append(waiting)
+                if row['target'] in observations:
+                    observations[row['target']].update(action=reason, execution_state='waiting')
+                if policy and policy['status'] == 'exhausted' and not policy['active_permits']:
+                    decisions.append(repair_budget_request(dict(waiting, repair_objective=row['action']), policy, node, control))
+            else:
+                admitted.append(row)
+        routes[lane] = admitted
+    routes['maintenance'].sort(key=lambda row: row.get('priority', '0 - routine delivery'))
+    follow_up = maintenance.service_assignment(control, now)
+    # An overdue weekly timer cannot bypass the target-level parking decision.
+    # Explicit due workflow follow-ups retain their separate compare-and-ack path.
+    if (follow_up and not routes['maintenance'] and
+            not (follow_up['eligibility_reason'] == 'weekly_service_due' and maintenance_waiting)):
+        routes['maintenance'].append(follow_up)
+    return list({row['request_id']: row for row in decisions}.values())
+
+
+def repo_maintenance_admissions(routes, waits, control, view, writer, now, running_owners=None):
+    """Extend only the existing maintenance lane; native lanes retain ownership."""
+    result = repo_campaigns.controller_plan(ROOT / 'repo-campaigns.json', control, view, writer, now,
+        sync_critical_pending=bool(routes['maintenance'] or any(row.get('root') for row in waits)
+                                  or any(running_owners or {})), running_owners=running_owners,
+        policy_path=ROOT / 'repo-campaign-policy.json', intake_path=ROOT / 'owner-intake-hold.json')
+    routes['maintenance'].extend(result['assignments'])
+    return result
+
+
+def reconcile_ownership(prs, issues, guard, routes, observations, now):
+    """Give each delivery item a verified path; repair missing handoffs by target.
+
+    A linked open PR can cover an issue while its owner waits on checks or an
+    approved hold. A disposition without that PR or a receiving assignment
+    cannot cover it. Reconciliation is concrete work on a current delivery item,
+    independent of its age or deadline.
+    """
+    ownership, repairs = {}, []
+    assigned = {row['target']: (lane, row) for lane, rows in routes.items() for row in rows}
+    classified = {}
+    for key in ['candidates', 'dispositioned_candidates', 'linked_work', 'automation_retry',
+                'actionable_candidates', 'challenge_due', 'human_attention']:
+        for item in guard.get(key, []):
+            classified[f"{item['repository']}#{item['number']}"] = item
+    linked = {}
+    budget_view = maintenance.budget.summary()
+    issue_ids = {accountability.identity(node).lower(): accountability.identity(node) for node in issues}
+    for node in prs:
+        target = accountability.identity(node)
+        observed = observations[target]
+        ownership[target] = {'owner': observed['delivery_owner'], 'state': observed['execution_state'],
+                             'action': observed['action'], 'via': []}
+        for source in accountability.issue_links(node):
+            linked.setdefault(source, []).append(target)
+        policy = maintenance.repair_policy(target, budget_view)
+        if policy and policy['root'] in issue_ids and policy['root'] != target.lower():
+            source = issue_ids[policy['root']]
+            if target not in linked.setdefault(source, []):
+                linked[source].append(target)
+    for node in issues:
+        if not accountability.delivery_issue(node):
+            continue
+        target = accountability.identity(node)
+        item = classified.get(target, {})
+        if item.get('state') == 'human-input-required' or item in guard.get('human_attention', []):
+            owned = {'owner': 'opener', 'state': 'human-wait', 'via': [],
+                     'action': item.get('next_automatic_action') or 'Resume implementation after the confirmed input arrives',
+                     'resume_condition': item.get('human_action') or 'Supply the documented human input'}
+        elif target in linked and (target not in assigned or item.get('state') == 'linked-work'
+                                  or maintenance.repair_policy(target, budget_view)):
+            # Luna has already reconciled this PR in the complete inventory.
+            # A linked recheck timer cannot turn pending checks into Sol work.
+            if target in assigned:
+                lane, _ = assigned.pop(target)
+                routes[lane] = [row for row in routes[lane] if row['target'] != target]
+            via = linked[target]
+            states = [ownership[pr]['state'] for pr in via]
+            chosen = next((pr for pr in via if ownership[pr]['state'] == 'active'), via[0])
+            owned = {'owner': ownership[chosen]['owner'], 'state': 'active' if 'active' in states else (
+                     'waiting' if 'waiting' in states else ownership[chosen]['state']),
+                     'action': 'Follow the linked PR owner through merge, verification and source closure', 'via': via}
+        elif target in assigned:
+            lane, row = assigned[target]
+            owned = {'owner': lane, 'state': 'active', 'action': row['action'], 'via': []}
+        elif item.get('state') == 'automation-retry' and (
+                inventory.parse_iso((item.get('blocker') or {}).get('expires_at') or '') or 0) > now:
+            owned = {'owner': 'opener', 'state': 'retry-wait', 'via': [],
+                     'action': item['next_automatic_action'], 'resume_at': item['blocker']['expires_at']}
+        else:
+            lane = issue_owner(item)
+            reason = 'linked_issue_without_current_pr_coverage' if item.get('state') == 'linked-work' else 'delivery_issue_without_verified_owner'
+            action = item.get('next_automatic_action') or (
+                'Reconcile this open delivery issue: verify its supported owner, perform bounded remaining work '
+                'or safe closure, or record a confirmed human gate with a resumption condition')
+            row = {'target': target, 'lane': lane, 'action': action,
+                   'fingerprint': node.get('updatedAt'), 'eligibility_reason': reason}
+            routes[lane].append(row)
+            assigned[target] = (lane, row)
+            repairs.append(target)
+            owned = {'owner': lane, 'state': 'active', 'action': action, 'via': []}
+        ownership[target] = owned
+        observations[target] = {'target': target, 'lane': owned['owner'], 'delivery_owner': owned['owner'],
+                                'execution_state': owned['state'], 'fingerprint': node.get('updatedAt'),
+                                'action': owned['action'], 'observed_at': now}
+    return ownership, repairs
+
+
+def ownership_gaps(records, ownership, routes, observations):
+    assigned = {}
+    for lane, rows in routes.items():
+        for row in rows:
+            assigned.setdefault(row['target'], {})[lane] = row
+    def assignment_matches(target, owner):
+        lanes = assigned.get(target, {})
+        escalation = lanes.get('escalator') or {}
+        return owner in lanes or bool(escalation) and (
+            (observations.get(target) or {}).get('lane') == 'escalator'
+            or escalation.get('ordinary_lane') == owner)
+    gaps = []
+    for target, record in records.items():
+        row = ownership.get(target) or {}
+        state, owner = row.get('state'), row.get('owner')
+        via = row.get('via') or []
+        covered = owner in {*LANES, 'maintenance'} and bool(row.get('action'))
+        if state == 'active':
+            covered = covered and (assignment_matches(target, owner)
+                                  or bool(via) and all(pr in observations for pr in via)
+                                  and any(assignment_matches(pr, owner) for pr in via))
+        elif state in {'waiting', 'held', 'maintenance', 'controller-observation'}:
+            covered = covered and (bool(via) and all(pr in observations for pr in via)
+                                  or record['kind'] == 'pr' and target in observations
+                                  and observations[target].get('execution_state') == state
+                                  and observations[target].get('delivery_owner') == owner)
+        elif state == 'repair-wait':
+            policy = maintenance.repair_policy(target, maintenance.budget.summary())
+            covered = covered and bool(policy) and (policy['status'] == 'exhausted' or bool(policy['active_permits']))
+        elif state == 'human-wait':
+            covered = covered and bool(row.get('resume_condition'))
+        elif state == 'retry-wait':
+            covered = covered and inventory.parse_iso(row.get('resume_at') or '') is not None
+        else:
+            covered = False
+        if not covered:
+            gaps.append(target)
+    return sorted(gaps)
+
+
+def desired_settings(routes, actual, errors, running_owners=None):
+    # Owner correction 2026-10-16: restore demand-based starts. Pausing future
+    # starts does not cancel an incumbent or discard its existing assignment.
+    desired = {}
+    maintenance_owner = maintenance.existing_worker() if not errors else None
+    for lane in LANES:
+        model, effort = PROFILES[lane]
+        current = actual[lane]
+        rrule = current.get("rrule", inventory.RRULES[lane + "_active"])
+        if errors:
+            status = current['status']  # Incomplete discovery cannot prove idle.
+        else:
+            owners = (running_owners or {}).get(lane, [])
+            owner = (any(row.get('classification') != 'stale' for row in owners) or
+                     (lane == 'maintenance' and maintenance_owner))
+            status = 'ACTIVE' if routes[lane] and not owner else 'PAUSED'
+            # Owner closeout correction 2026-10-22: maintenance returns to
+            # enabled weekly service after delivery, rather than staying on
+            # the campaign recovery cadence. Preserve live/unknown owners.
+            if lane == 'maintenance' and not owner:
+                delivery_due = any(row.get('target') != 'weekly-sync-inventory'
+                                   for row in routes[lane])
+                status = 'ACTIVE'
+                rrule = inventory.RRULES['maintenance_active' if delivery_due
+                                        else 'maintenance_dormant']
+        desired[lane] = {"status": status,
+                         "rrule": rrule,
+                         "model": current.get("model", model),
+                         "reasoning_effort": current.get("reasoning_effort", effort)}
+    return desired
+
+
+def ownership_coverage_warnings(gaps):
+    """A missing owner is actionable, but does not invalidate the inventory."""
+    return (['Delivery ownership coverage missing: ' + ', '.join(gaps)] if gaps else [])
+
+
+def error_freeze(errors, state, now):
+    """Track a stable blocking-error set without letting it freeze lanes forever."""
+    error_set = sorted(set(errors))
+    previous = state.get('error_freeze', {})
+    first_seen = previous.get('first_seen') if previous.get('errors') == error_set else now
+    if not isinstance(first_seen, (int, float)):
+        first_seen = now
+    elapsed = max(0, int(now - first_seen))
+    return {'errors': error_set, 'first_seen': first_seen, 'elapsed_seconds': elapsed,
+            'lapsed': bool(error_set) and elapsed > ERROR_FREEZE_MAX_SECONDS}
+
+
+def error_freeze_message(freeze):
+    errors = freeze['errors']
+    if not errors:
+        return 'not active; errors=[]'
+    if freeze['lapsed']:
+        return f"lapsed after {freeze['elapsed_seconds']}s; errors={errors}"
+    return f"active for {freeze['elapsed_seconds']}s; errors={errors}"
+
+
+def frozen_lanes_message(freeze):
+    if not freeze['errors'] or freeze['lapsed']:
+        return 'lanes frozen by errors: 0 (drainable when: now)'
+    lapse_at = int(freeze['first_seen'] + ERROR_FREEZE_MAX_SECONDS)
+    return f'lanes frozen by errors: {len(LANES)} (drainable when: lapse at {lapse_at})'
+
+
+def thread_process_alive(thread_id):
+    """Return whether a live process command line names this Codex thread."""
+    try:
+        result = subprocess.run(['ps', '-axo', 'command'], check=False, capture_output=True,
+                                text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and any(thread_id in command for command in result.stdout.splitlines())
+
+
+def running_lane_owners(lanes, app_db=APP_DB, state_db=Path.home() / '.codex/state_5.sqlite', now=None):
+    """Read exact scheduled owners; do not infer ownership from legacy mutex PID/age."""
+    if not lanes:
+        return {}
+    result = {}
+    now = time.time() if now is None else now
+    with sqlite3.connect(Path(app_db).resolve().as_uri() + '?mode=ro', uri=True) as app:
+        rows = [(lane, row[0]) for lane in lanes for row in app.execute(
+            "SELECT thread_id FROM automation_runs WHERE automation_id=? AND status IN ('IN_PROGRESS','RUNNING')",
+            (LANES[lane].parent.name,))]
+    try:
+        state = sqlite3.connect(Path(state_db).resolve().as_uri() + '?mode=ro', uri=True)
+    except sqlite3.Error:
+        state = None
+    try:
+        for lane, thread in rows:
+            owner = {'automation_id': LANES[lane].parent.name, 'thread_id': thread,
+                     'turn_id': None, 'probe': 'UNKNOWN'}
+            result.setdefault(lane, []).append(owner)
+            try:
+                row = state.execute('SELECT rollout_path FROM threads WHERE id=?', (thread,)).fetchone() if state else None
+                if not row:
+                    raise ValueError('Exact automation thread rollout unavailable')
+                path = Path(row[0])
+                owner['rollout_path'] = str(path)
+                owner['rollout_age_seconds'] = max(0, now - path.stat().st_mtime)
+                with path.open('rb') as stream:
+                    header = json.loads(stream.readline())
+                    if header.get('type') != 'session_meta' or header.get('payload', {}).get('id') != thread:
+                        raise ValueError('Automation thread/rollout identity mismatch')
+                    size = stream.seek(0, 2)
+                    start = max(0, size - 512 * 1024)
+                    stream.seek(start)
+                    raw = stream.read()
+                if not raw.endswith(b'\n'):
+                    raise ValueError('Rollout tail is partially written')
+                records = raw.splitlines()[1:] if start else raw.splitlines()
+                terminal = False
+                for raw_line in records:
+                    event = json.loads(raw_line)
+                    payload = event.get('payload', {})
+                    if event.get('type') != 'event_msg':
+                        continue
+                    if payload.get('type') == 'task_started':
+                        owner['turn_id'] = payload.get('turn_id')
+                        terminal = False
+                    elif (payload.get('type') in ('task_complete', 'turn_aborted') and
+                          payload.get('turn_id') == owner['turn_id']):
+                        terminal = True
+                if not owner['turn_id']:
+                    raise ValueError('Exact active turn not found in bounded rollout tail')
+                if terminal:
+                    raise ValueError('App run still active but exact turn is terminal; await reconciliation')
+                owner.update(probe='HELD', reason='App automation run active and exact turn has no terminal event')
+            except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
+                owner['reason'] = str(exc)
+            owner['process_alive'] = thread_process_alive(thread)
+            if owner['probe'] == 'HELD':
+                owner['classification'] = 'live'
+                owner['liveness_reason'] = 'active_turn'
+            elif owner.get('rollout_age_seconds', float('inf')) <= STALE_OWNER_SECONDS:
+                owner['classification'] = 'live'
+                owner['liveness_reason'] = 'recent_rollout'
+            elif owner['process_alive']:
+                owner['classification'] = 'live'
+                owner['liveness_reason'] = 'thread_process'
+            else:
+                owner['classification'] = 'stale'
+                owner['stale_reason'] = owner.get('reason', 'No active turn, recent rollout, or thread process')
+    finally:
+        if state:
+            state.close()
+    return result
+
+
+def running_lanes():
+    with sqlite3.connect(f'file:{APP_DB}?mode=ro', uri=True) as db:
+        return {lane for lane, path in LANES.items() if db.execute(
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('IN_PROGRESS','RUNNING') LIMIT 1",
+            (path.parent.name,)).fetchone()}
+
+
+def write_operational_memory(plan):
+    # App automations preload this file; persist the corrected demand policy.
+    summary = {k: plan.get(k) for k in ['generated_at', 'errors', 'desired', 'accountability_count']}
+    summary['eligible_route_counts'] = {k: len(v) for k, v in plan['routes'].items()}
+    text = ('# Current demand controller contract\n\n'
+            'Owner correction 2026-10-16: restore demand-based scheduling. Workers without eligible work are PAUSED; eligible work reactivates starts when no equivalent live owner exists. '
+            'Incomplete discovery preserves actual settings and last complete assignments. A HELD or UNKNOWN owner suppresses duplicate scheduled starts without cancelling current work. '
+            'Preserve same-lane mutexes, item-scoped human gates, repository exclusions and existing cadence/model/notification preferences. '
+            'The seven-day human deadline remains independent of worker activation. '
+            'Use demand-plan.json for current eligibility and app-readback.json for persisted settings. '
+            'The plan below is proposed state until app readback verifies it. Historical notes are archived and are not policy.\n\n'
+            + json.dumps(summary, indent=2) + '\n')
+    (ROOT / 'memory.md').write_text(text)
+
+
+def update_args(lane, desired):
+    config = tomllib.loads(LANES[lane].read_text())
+    target = config.get("target") or {}
+    model = desired.get('model', config['model'])
+    effort = desired.get('reasoning_effort', config['reasoning_effort'])
+    return {"mode": "update", "id": config["id"], "kind": "cron", "name": config["name"],
+        "prompt": config["prompt"], "rrule": desired["rrule"], "status": desired["status"],
+        "model": model, "reasoningEffort": effort, "executionEnvironment": "local",
+        "projectId": target.get("project_id"), "notificationPolicy": config.get("notification_policy")}
+
+
+def relay_eligible(lane):
+    assignment = load(ROOT / (lane + "-assignment.json"), {})
+    generated = inventory.parse_iso(assignment.get("generated_at") or "")
+    return bool(generated and time.time() - generated <= 2 * 3600 and
+                assignment.get("targets") and not assignment.get("errors"))
+
+
+def collect():
+    inventory.RUN_DIR.mkdir(parents=True, exist_ok=True)
+    query = "user:stranske is:open archived:false -repo:stranske/Collab-Admin -repo:stranske/Collab-Deliverables"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        pr_future = pool.submit(inventory.gh_graphql, QUERY, query + " is:pr", inventory.RUN_DIR / "demand-prs.json")
+        issue_future = pool.submit(inventory.gh_graphql, ISSUE_QUERY, query + " is:issue", inventory.RUN_DIR / "demand-issues.json")
+        guard_future = pool.submit(inventory.run_json, ["/Users/teacher/.codex/bin/opener-liveness-guard.py", "--json"], 100)
+        prs, pr_error = pr_future.result()
+        issues, issue_error = issue_future.result()
+        guard, guard_error = guard_future.result()
+    errors = [e for e in [pr_error, issue_error, guard_error] if e]
+    if guard and guard.get("error_count"):
+        errors.append("Incomplete liveness inventory: " + str(guard.get("errors")))
+    if not prs or not prs.get("complete"):
+        errors.append("PR inventory incomplete")
+    if not issues or not issues.get("complete"):
+        errors.append("Issue inventory incomplete")
+    return prs, issues, guard, errors
+
+
+def followthrough_context(plan):
+    """Return the requested target's existing inventory evidence without another query."""
+    path = ROOT / 'followthrough-request.json'
+    if not path.exists():
+        return None
+    try:
+        request = json.loads(path.read_text())
+        target = request['target']
+        import followthrough_control
+        capacity = followthrough_control.capacity_context(request)
+        context = {key: request.get(key) for key in (
+            'status', 'target', 'expected_head', 'criteria', 'requested_at',
+            'review_due_at', 'capacity_review_due_at', 'capacity_collected_at', 'merge_sha', 'merged_at',
+            'cycle_reported_at', 'review_reported_at')}
+        matches = []
+        groups = [*plan.get('routes', {}).values(), plan.get('waiting', []), plan.get('held', [])]
+        for group in groups:
+            for row in group:
+                if row.get('target', '').casefold() == target.casefold():
+                    matches.append({key: row.get(key) for key in (
+                        'target', 'head', 'lane', 'delivery_owner', 'execution_state', 'action', 'due')})
+        context.update(capacity)
+        context['inventory_matches'] = matches
+        context['inventory_disposition'] = 'PRESENT' if matches else 'ABSENT_REQUIRES_STATE_READ'
+        context['errors'] = []
+        return context
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return {'errors': [f'Follow-through context unavailable: {exc}']}
+
+
+# pinned delivery-continuity hook
+import importlib.util as _continuity_import
+_CONTINUITY_PATH = '/Users/teacher/.codex/automations/reviewed-repo-automation-controller/delivery-continuity-a1720a1d8e922529db556ecd989792d5410e85d6ef627e385584f20b9b1cd40e.py'
+_CONTINUITY_SHA256 = 'a1720a1d8e922529db556ecd989792d5410e85d6ef627e385584f20b9b1cd40e'
+
+
+def _continuity_module():
+    path = Path(_CONTINUITY_PATH)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != _CONTINUITY_SHA256:
+        raise RuntimeError("delivery continuity source changed; retain canonical assignment")
+    spec = _continuity_import.spec_from_file_location("_pinned_delivery_continuity", path)
+    module = _continuity_import.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _continuity_held(state, reason):
+    original = state.get("delivery_continuity", {})
+    carry = dict(original) if isinstance(original, dict) else original
+    targets = state.get("targets", {})
+    targets = targets if isinstance(targets, dict) else {}
+    ownership_state = state.get("delivery_ownership", {})
+    ownership_state = ownership_state if isinstance(ownership_state, dict) else {}
+    if isinstance(carry, dict):
+        for target, row in targets.items():
+            if isinstance(row, dict) and row.get("head") and isinstance(row.get("delivery_owner"), str) and row.get("delivery_owner") in {"closer", "orphan", "maintenance"}:
+                carry.setdefault(target, {"target": target, "pr_target": row.get("pr_target"), "owner": row["delivery_owner"]})
+    rows, ownership = [], {}
+    for target, raw in (carry.items() if isinstance(carry, dict) else []):
+        old = raw if isinstance(raw, dict) else {}
+        known = ownership_state.get(target, {})
+        known = known if isinstance(known, dict) else {}
+        owner = old.get("owner")
+        if not isinstance(owner, str):
+            owner = known.get("owner")
+        if isinstance(target, str) and "#" in target and isinstance(owner, str) and owner in {"closer", "orphan", "maintenance"}:
+            rows.append({"target": target, "lane": owner, "delivery_owner": owner,
+                         "execution_state": "held", "action": "Continuity integrity wait: " + reason})
+            ownership[target] = {"owner": owner, "state": "held", "via": [], "action": rows[-1]["action"]}
+    return {"rows": rows, "ownership": ownership, "carry": carry}
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--event", choices=["issue-active"])
+    parser.add_argument("--source", default="manual")
+    parser.add_argument("--update-args", choices=list(LANES))
+    parser.add_argument("--verify", action="store_true")
+    parser.add_argument("--verify-and-observe", action="store_true")
+    parser.add_argument("--relay-eligible", choices=["opener", "closer"])
+    parser.add_argument("--record-human-alert", action="store_true")
+    args = parser.parse_args(argv)
+    if args.relay_eligible:
+        return 0 if relay_eligible(args.relay_eligible) else 1
+    if args.update_args:
+        plan = load(PLAN, {})
+        if time.time() - plan.get("created_at", 0) > 10 * 60:
+            raise RuntimeError("Plan expired; collect fresh evidence before updating")
+        print(json.dumps(update_args(args.update_args, plan["desired"][args.update_args])))
+        return 0
+    if args.verify or args.verify_and_observe:
+        plan = load(PLAN, {})
+        if set(plan.get('desired', {})) != set(LANES) or time.time() - plan.get('created_at', 0) > 10 * 60:
+            raise RuntimeError('Missing or expired five-lane plan; cannot claim activation verification')
+        actual = app_settings()
+        mismatches = {k: {"expected": v, "actual": actual[k]} for k, v in plan.get("desired", {}).items()
+                      if any(actual[k].get(field) != value for field, value in v.items())}
+        save(ROOT / "app-readback.json", {"verified_at": inventory.iso_now(), "actual": actual, "mismatches": mismatches})
+        if args.verify_and_observe:
+            import followthrough_observer
+            observation = followthrough_observer.observe()
+            compact = {'observed_at': observation['observed_at'], 'errors': observation['errors'],
+                       'lanes': {lane: {
+                           'actual_status': row['actual_status'],
+                           'pause_disposition': row['pause_disposition'],
+                           'run_start_count': row['run_start_count'],
+                           'activation_status': row['actual_activation_then_run']['status'],
+                           'completed_cycle_count': len(row['actual_activation_then_run'].get('completed_cycles', []))
+                       } for lane, row in observation['lanes'].items()}}
+            context = followthrough_context(plan)
+            print(json.dumps({'verified': not mismatches, 'mismatches': mismatches,
+                              'observation': compact, 'followthrough': context}))
+            return int(bool(mismatches or observation['errors'] or
+                            context and context.get('errors')))
+        print(json.dumps({"verified": not mismatches, "mismatches": mismatches, "actual": actual}))
+        return int(bool(mismatches))
+    with (ROOT / ".demand.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        state = load(STATE, {})
+        if args.record_human_alert:
+            plan = load(PLAN, {})
+            if time.time() - plan.get("created_at", 0) > 10 * 60:
+                raise RuntimeError("Alert plan expired")
+            alerts = [r for r in plan.get('human_deadline_due', []) if r.get('new_alert_due') and
+                      time.time() - ((state.get('accountability') or {}).get(r['target']) or {}).get('last_human_alert_at', 0) >= accountability.REMINDER_SECONDS]
+            for row in alerts:
+                entry = (state.get('accountability') or {}).get(row['target'])
+                if entry and entry.get('episode') == row['episode']:
+                    entry['last_human_alert_at'] = time.time()
+            repair_alerts = [r for r in plan.get('repair_budget_decisions', [])
+                             if r.get('new_alert_due') and (r['request_id'] not in state.get('repair_budget_alerts', {}) or
+                             time.time() - state['repair_budget_alerts'][r['request_id']] >= accountability.REMINDER_SECONDS)]
+            for row in repair_alerts:
+                state.setdefault('repair_budget_alerts', {})[row['request_id']] = time.time()
+            alerts.extend(repair_alerts)
+            if alerts:
+                save(ROOT / 'human-alert-latest.json', {'prepared_at': inventory.iso_now(), 'items': alerts,
+                    'instruction': 'Present these exact targets and human actions in the final controller response. This record is not proof of notification delivery.'})
+            save(STATE, state)
+            print(json.dumps({'prepared_human_alert_count': len(alerts), 'artifact': str(ROOT / 'human-alert-latest.json')}))
+            return 0
+        if args.event:
+            # Postrun records progress; schedule authority stays with the Luna controller.
+            state["last_progress_event"] = {"at": inventory.iso_now(), "source": args.source[:500]}
+            lane = re.search(r'\blane=(opener|closer)\b', args.source)
+            outcome = re.search(r'\boutcome=([a-z_]+)\b', args.source)
+            if lane and outcome:
+                state.setdefault('lane_receipts', {})[lane.group(1)] = {
+                    'at': inventory.iso_now(), 'outcome': outcome.group(1), 'source': args.source[:500]}
+            save(STATE, state)
+            print(json.dumps({"mode": "event", "recorded": True, "schedule_changes": 0}))
+            return 0
+        actual = app_settings()
+        prs, issues, guard, errors = collect()
+        warnings = []
+        now = time.time()
+        held, challenge, retry = inventory.scoped_blocker_states()
+        terminal = load(inventory.ROOT / "reviewed-repo-stall-escalator/memory.md", {})
+        running = running_lanes()
+        running_owners = running_lane_owners(running)
+        stale_lane_owners = {lane: [owner for owner in owners if owner.get('classification') == 'stale']
+                             for lane, owners in running_owners.items()}
+        stale_lane_owners = {lane: owners for lane, owners in stale_lane_owners.items() if owners}
+        live_running_owners = {lane: [owner for owner in owners if owner.get('classification') != 'stale']
+                               for lane, owners in running_owners.items()}
+        live_running_owners = {lane: owners for lane, owners in live_running_owners.items() if owners}
+        continuity = None
+        if not errors:
+            try:
+                continuity = _continuity_module().prepare_controller(
+                    __import__(__name__), state, prs, now, terminal, (held, challenge, retry))
+                warnings.extend("Delivery continuity " + failure["target"] + ": " + failure["reason"]
+                                for failure in continuity.get("failures", []))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as exc:
+                warnings.append("Delivery continuity held: " + str(exc))
+                continuity = _continuity_held(state, str(exc))
+        routes, observations, waits, ignored = build_routes(
+            (prs or {}).get("nodes", []), guard or {}, state, terminal, now, held, challenge, retry, running)
+        budget_decisions = []
+        ownership, ownership_repairs = {}, []
+        if not errors:
+            ownership, ownership_repairs = reconcile_ownership(
+                prs['nodes'], issues['nodes'], guard or {}, routes, observations, now)
+            try:
+                view = maintenance.budget.summary()
+                budget_decisions = maintenance_admissions(prs['nodes'], routes, observations, waits,
+                    maintenance.read_control(), view, now)
+                for row in waits:
+                    target = row['target']
+                    if target not in ownership:
+                        continue
+                    state_name = ('controller-observation' if row.get('execution_state') == 'controller-observation' else
+                                  'waiting' if target.lower() in {maintenance.identity(n) for n in prs['nodes']} else 'repair-wait')
+                    ownership[target].update(state=state_name, action=row['action'])
+                    observations[target].update(execution_state=state_name, action=row['action'])
+                for target, owned in ownership.items():
+                    via = owned.get('via') or []
+                    if via and all(ownership[p]['state'] != 'active' for p in via):
+                        owned.update(state=ownership[via[0]]['state'], action=ownership[via[0]]['action'])
+                        observations[target].update(execution_state=owned['state'], action=owned['action'])
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                errors.append('Maintenance admission unavailable: ' + str(exc))
+        if not errors and continuity is not None:
+            try:
+                _continuity_module().merge_plan(continuity, routes, observations, ownership, waits)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as exc:
+                warnings.append("Delivery continuity held: " + str(exc))
+                continuity = _continuity_held(state, str(exc))
+                for row in continuity["rows"]:
+                    if row["target"] not in observations:
+                        waits.append(row)
+                        observations[row["target"]] = row
+                        ownership[row["target"]] = continuity["ownership"][row["target"]]
+        records, recoveries, human_due, exclusions = accountability.evaluate(
+            (prs or {}).get('nodes', []), (issues or {}).get('nodes', []), guard or {},
+            state.get('accountability', {}), terminal.get('coverage_json') or {}, observations, now)
+        gaps = ownership_gaps(records, ownership, routes, observations) if not errors else []
+        warnings.extend(ownership_coverage_warnings(gaps))
+        if errors:
+            human_due = accountability.unknown_due(state.get('accountability', {}), now,
+                                                  state.get('last_complete_at'), errors)
+        # Annotate real work with deadline context. The ledger never invents
+        # Sol work from age, uncertainty, a draft, or a human-only hold.
+        for row in routes['escalator']:
+            record = records.get(row['target'])
+            if record:
+                row.update(accountability_episode=record['episode'], kind=record['kind'], human_due_at=record['human_due_at'])
+        routes['escalator'].sort(key=lambda r: (r.get('human_due_at', now + accountability.HUMAN_SECONDS), r['target']))
+        # Incomplete discovery never deactivates a lane or wakes Sol just to retry discovery.
+        repo_maintenance = {'assignments': [], 'errors': []}
+        if not errors:
+            try:
+                repo_maintenance = repo_maintenance_admissions(routes, waits,
+                    maintenance.read_control(), view, maintenance.existing_worker(), now, live_running_owners)
+            except (ValueError, OSError, KeyError, TypeError) as exc:
+                errors.append('Repo maintenance planning unavailable: ' + str(exc))
+        freeze = error_freeze(errors, state, now)
+        effective_errors = [] if freeze['lapsed'] else errors
+        desired = desired_settings(routes, actual, effective_errors, live_running_owners)
+        updates = [lane for lane in LANES if any(actual[lane].get(k) != v for k, v in desired[lane].items())]
+        plan = {"created_at": now, "generated_at": inventory.iso_now(), "errors": errors,
+                "warnings": warnings, "error_freeze": error_freeze_message(freeze),
+                "lanes_frozen_by_errors": frozen_lanes_message(freeze),
+                "desired": desired, "updates": updates, "routes": routes, "waiting": waits,
+                "held": ignored, "pr_count": (prs or {}).get("issueCount"),
+                "issue_count": (issues or {}).get('issueCount'),
+                "accountability_policy": {'recovery_hours': 3, 'human_after_days': 7, 'reminder_hours': 24},
+                "accountability_count": len(records), "deadline_exclusions": exclusions,
+                "human_deadline_due": human_due,
+                "human_deadline_notification_required": any(r['new_alert_due'] for r in human_due),
+                "guard_counts": {k: v for k, v in (guard or {}).items() if isinstance(v, (int, bool))},
+                "human_attention": (guard or {}).get("human_attention_samples", [])}
+        budget_alerts(budget_decisions, state, now)
+        plan['repo_maintenance'] = repo_maintenance
+        plan['repair_budget_decisions'] = budget_decisions
+        plan['repair_budget_notification_required'] = any(r['new_alert_due'] for r in budget_decisions)
+        plan['maintenance_running_owner'] = maintenance.existing_worker()
+        plan['running_lane_owners'] = live_running_owners
+        plan['stale_lane_owners'] = stale_lane_owners
+        plan.update(delivery_ownership=ownership if not errors else state.get('delivery_ownership', {}),
+                    ownership_complete=not errors, ownership_gap_targets=gaps,
+                    ownership_repaired_targets=ownership_repairs if not errors else [],
+                    ownership_snapshot_at=plan['generated_at'] if not errors else state.get('last_complete_at'))
+        save(PLAN, plan)
+        write_operational_memory(plan)
+        # Workers read their bounded assignment rather than repeat controller discovery.
+        if not errors:
+            for lane, rows in routes.items():
+                save(ROOT / (lane + "-assignment.json"), {"generated_at": plan["generated_at"],
+                    "model": desired[lane]["model"], "reasoning_effort": desired[lane]["reasoning_effort"],
+                    "targets": rows, "errors": errors})
+            if continuity is not None:
+                state["delivery_continuity"] = continuity["carry"]
+                state["delivery_continuity_failures"] = continuity.get(
+                    "failures", state.get("delivery_continuity_failures", []))
+            state["targets"] = observations
+            state['accountability'] = records
+            state['delivery_ownership'] = ownership
+            state["last_complete_at"] = plan["generated_at"]
+            state.pop('error_freeze', None)
+            save(STATE, state)
+        else:
+            state['error_freeze'] = {'errors': freeze['errors'], 'first_seen': freeze['first_seen']}
+            save(STATE, state)
+        compact = {k: plan[k] for k in ["generated_at", "errors", "warnings", "error_freeze",
+                   "lanes_frozen_by_errors", "updates", "desired", "pr_count", "guard_counts"]}
+        compact["route_counts"] = {k: len(v) for k, v in routes.items()}
+        compact["waiting_count"] = len(waits)
+        compact["held_count"] = len(ignored)
+        compact["plan_path"] = str(PLAN)
+        compact['accountability_count'] = len(records) if not errors else None
+        compact['human_deadline_overdue_count'] = len(human_due) if not errors else None
+        compact['human_deadline_notification_required'] = plan['human_deadline_notification_required']
+        compact['human_deadline_alert_path'] = str(PLAN)
+        compact['accountability_policy'] = plan['accountability_policy']
+        compact['ownership_complete'] = plan['ownership_complete']
+        compact['ownership_gap_count'] = len(gaps) if not errors else None
+        compact['ownership_repaired_targets'] = plan['ownership_repaired_targets']
+        compact['repair_budget_decisions'] = budget_decisions
+        compact['repair_budget_notification_required'] = plan['repair_budget_notification_required']
+        compact['maintenance_running_owner'] = plan['maintenance_running_owner']
+        compact['running_lane_owners'] = live_running_owners
+        compact['stale_lane_owners'] = stale_lane_owners
+        compact['running_lane_owner_count'] = sum(len(owners) for owners in live_running_owners.values())
+        compact['stale_lane_owner_count'] = sum(len(owners) for owners in stale_lane_owners.values())
+        print(json.dumps(compact), flush=True)
+        with (ROOT / "demand-ledger.jsonl").open("a") as stream:
+            stream.write(json.dumps(compact) + "\n")
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
