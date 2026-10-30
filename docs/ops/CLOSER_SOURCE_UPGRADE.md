@@ -83,3 +83,15 @@ That is still non-authoritative. A later, separate normal
 `closer_native_readmission.admit_initialized` call must validate the current
 source factory and typed demand before clearing the hold. It must not reuse old
 authority or invoke old native entry.
+## Manual historical-readback audit
+
+For the reviewed 17be predecessor, run
+`scripts/audit_closer_historical_readback.py` with explicit `--source` (the
+Source checkout's `src` directory), `--old-manifest`, `--old-state`, and physical
+`--interpreter` paths. It emits a JSON receipt for the authentic positive
+diagnostic and staged-child corrupted-data refusals, including missing,
+expired-at-admission, and different completion qualification records. The real
+validators remain active. Original evidence hashes must remain unchanged.
+
+This read-only local integration audit needs the retained case evidence; it is
+separate from portable CI tests and grants no runtime, worker, or effect authority.
