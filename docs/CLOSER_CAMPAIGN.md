@@ -25,6 +25,22 @@ declares `contract = closer-operation/v1`, state versions, and machine compatibi
 | Capacity | `select_route` | existing router + execution_profiles over an existing capacity JSON; Aider excluded, Gemini kept; stale/partial => hold; the dispatched agent/profile is the selected one |
 | Qualification | `qualify` | before ANY tick effect: valid manifest + modules, `promotion.json` accepted by `check_promotion`, state schema match, pinned Core loadable |
 
+## Standing publisher closure (prospective v2 contract)
+
+`closer-controller-demand/v2` may bind a separately captured publisher closure.
+Its `publisher_closure` records a canonical immutable root, entry module/function,
+per-module bytes and modes, plus digests of the actual Source capture-tool and
+snapshot-receipt files; the
+mutable controller data root remains an explicit contract field.  The campaign
+validates the closure before a tick or publisher call and rejects preloaded local
+publisher modules.  A v2 hook reaches the campaign before importing the mutable
+`demand_router`; the entrypoint is loaded only from the captured closure.
+
+After a successful publisher call, closure drift preserves that original result
+but holds demand admission/acceptance.  It never retroactively asserts that the
+already-observed call had no effects.  This is an opt-in compatibility path;
+existing v1 controller-demand manifests retain their current behavior.
+
 ## Outcomes
 `ok | unavailable | denied | unknown`. Offline (`ConnectionRefusedError`) is `unavailable`;
 `PermissionError` / exit 77 is `denied` and holds with the exact reason; a timeout, signal death, any

@@ -3968,11 +3968,15 @@ def _controller_demand_context(argv_root=None):
         "owner",
         "publisher_sha256",
     }
+    schema = contract.get("schema") if isinstance(contract, dict) else None
+    allowed = {"worker_config"}
+    if schema == "closer-controller-demand/v2":
+        required |= {"publisher_closure", "controller_data_root"}
     if (
         not isinstance(contract, dict)
         or not required <= contract.keys()
-        or set(contract) - required - {"worker_config"}
-        or contract.get("schema") != "closer-controller-demand/v1"
+        or set(contract) - required - allowed
+        or schema not in {"closer-controller-demand/v1", "closer-controller-demand/v2"}
     ):
         raise CampaignError("unsupported pinned controller demand contract")
     from closer_mechanisms import NATIVE, mechanism
@@ -3998,7 +4002,25 @@ def _controller_demand_context(argv_root=None):
     ):
         raise CampaignError("pinned demand publisher/campaign path differs from canonical state")
     publisher = controller_root / "demand_router.py"
-    if (
+    closure = None
+    if schema == "closer-controller-demand/v2":
+        data_root = Path(contract["controller_data_root"])
+        if data_root.resolve() != data_root or data_root != controller_root:
+            raise CampaignError("publisher mutable data root differs from controller root")
+        try:
+            from closer_publisher_closure import PublisherClosureError
+            from closer_publisher_closure import validate as validate_closure
+
+            closure = validate_closure(contract["publisher_closure"])
+        except (ImportError, PublisherClosureError, OSError, ValueError) as exc:
+            raise CampaignError(f"pinned publisher closure differs: {exc}") from exc
+        if (
+            not isinstance(contract.get("publisher_sha256"), str)
+            or not _DIGEST.fullmatch(contract["publisher_sha256"])
+            or contract["publisher_sha256"] != closure["modules"]["demand_router.py"]["sha256"]
+        ):
+            raise CampaignError("pinned demand publisher digest differs from captured closure")
+    if schema == "closer-controller-demand/v1" and (
         not isinstance(contract.get("publisher_sha256"), str)
         or not _DIGEST.fullmatch(contract["publisher_sha256"])
         or publisher.resolve() != publisher
@@ -4012,6 +4034,7 @@ def _controller_demand_context(argv_root=None):
         "manifest": manifest,
         "manifest_sha256": sha256_file(path),
         "contract": contract,
+        "publisher_closure": closure,
     }
 
 
@@ -4708,7 +4731,9 @@ def _pinned_demand_main(fallback, context):
     )
 
 
-def controller_entry(argv: list[str] | None, fallback: Callable[[list[str] | None], int]) -> int:
+def controller_entry(
+    argv: list[str] | None, fallback: Callable[[list[str] | None], int] | None
+) -> int:
     """Hook for the desktop controller's `main`. `closer-campaign ...` is ours; any other
     scheduled invocation first runs one bounded, never-raising tick, then the fallback."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -4718,16 +4743,27 @@ def controller_entry(argv: list[str] | None, fallback: Callable[[list[str] | Non
     try:
         demand_context = controller_demand_before_discovery()
         if demand_context is not None:
-            if not _pinned_demand_main(fallback, demand_context):
+            if demand_context["publisher_closure"] is not None:
+                from closer_publisher_closure import load_entrypoint
+
+                fallback, closure_after = load_entrypoint(demand_context["publisher_closure"])
+                demand_context["closure_after"] = closure_after
+            elif fallback is None or not _pinned_demand_main(fallback, demand_context):
                 raise CampaignError("controller fallback is not the pinned demand publisher main")
+        if fallback is None:
+            raise CampaignError("controller fallback is unavailable")
     except Exception as exc:  # the controller's own discovery must still run
         demand_context = None
         _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
+        if fallback is None:
+            return 0
     tick_safe()  # Existing-owned reconciliation remains separate from new demand.
     result = fallback(argv)
     if result == 0 and demand_context is not None:
         try:
-            if not _pinned_demand_main(fallback, demand_context):
+            if demand_context["publisher_closure"] is not None:
+                demand_context["closure_after"]()
+            elif not _pinned_demand_main(fallback, demand_context):
                 raise CampaignError("controller publisher executable code changed during discovery")
             _LAST_CONTROLLER_DEMAND_REPORT = controller_demand_after_discovery(demand_context)
         except Exception as exc:

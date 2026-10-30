@@ -79,6 +79,17 @@ def test_hook_currently_ticks_before_demand_refresh(monkeypatch):
     assert seen == ["tick", ("demand_refresh", ["--collect"])]
 
 
+def test_v2_closure_refusal_never_ticks_or_runs_mutable_fallback(monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "controller_demand_before_discovery",
+        lambda: {"publisher_closure": {}, "contract": {}},
+    )
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("closure refusal ticked"))
+    assert campaign.controller_entry(["--collect"], None) == 0
+    assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
+
+
 def test_tick_failure_keeps_existing_demand_path(tmp_path, monkeypatch):
     root = tmp_path / "closer-campaigns"
     root.mkdir()
@@ -111,6 +122,18 @@ def test_render_preserves_existing_controller_and_has_one_hook(tmp_path):
     assert rendered.count("return campaign.controller_entry(argv, demand_router.main)") == 1
     assert hook.render(rendered, str(tmp_path / "pin.json")) == rendered
     compile(rendered, "controller.preview.py", "exec")
+
+
+def test_v2_render_defers_mutable_router_import_until_campaign_refuses(tmp_path):
+    pin = tmp_path / "pin.json"
+    pin.write_text(
+        '{"mechanism_contract":{"controller_demand":{"schema":"closer-controller-demand/v2"}}}'
+    )
+    rendered = hook.render(SOURCE, str(pin))
+    assert "return campaign.controller_entry(argv, None)" in rendered
+    assert rendered.index("campaign = _load_pinned_closer_campaign()") < rendered.index(
+        "import demand_router"
+    )
 
 
 def test_existing_marker_does_not_repin_to_new_manifest(tmp_path):
