@@ -327,14 +327,16 @@ def test_invalid_expired_or_future_match_blocks_current_record(profile):
         )
 
 
-def test_reviewed_current_strong_record_has_exact_scope_and_preserves_old_row():
+def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry():
     import closer_dispatcher as dispatcher
     import execution_profiles
 
     old_id = "sonnet-current-role-qualification:3e7ba0521480a5d44d6a081e5a43b8895aeded9eba9080dbe8b8ebdca98fb009"
     current_id = "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2"
+    renewal_id = "sonnet-current-role-qualification:104bd7e5037fe1d01efb8511b7176c8a95b8705fc73ef6e0335e2de7ff639245"
     old = roles.ROLE_QUALIFICATIONS[old_id]
     current = roles.ROLE_QUALIFICATIONS[current_id]
+    renewal = roles.ROLE_QUALIFICATIONS[renewal_id]
     now = current["qualified_at"] + 1
 
     assert (
@@ -367,7 +369,23 @@ def test_reviewed_current_strong_record_has_exact_scope_and_preserves_old_row():
         },
     ]
     profile = execution_profiles.PROFILE_REGISTRY["claude-sonnet-5-5-high-v2"]
-    assert roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=now) == current
+    # This is the exact source-era registry.  A later reviewed observation is
+    # intentionally not projected into a historical qualification read.
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=now,
+            records={old_id: old, current_id: current},
+        )
+        == current
+    )
+    post_expiry = max(current["expires_at"] + 1, renewal["qualified_at"] + 1)
+    assert renewal["expires_at"] == renewal["qualified_at"] + 86400
+    assert (
+        roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=post_expiry)
+        == renewal
+    )
 
 
 def test_runtime_qualification_requires_the_same_supported_installed_build(profile, monkeypatch):
