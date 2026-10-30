@@ -46,6 +46,7 @@
       "tests/test_closer_observed_identity_admission.py",
       "tests/test_closer_operational_capacity.py",
       "tests/test_closer_ownership_pagination.py",
+      "tests/test_closer_correction_canary_ownership.py",
       "tests/test_closer_publication_native_envelope.py",
       "tests/test_closer_publication_unselected_act.py",
       "tests/test_closer_publication_verification.py",

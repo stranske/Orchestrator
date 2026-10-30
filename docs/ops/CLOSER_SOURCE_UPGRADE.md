@@ -95,3 +95,21 @@ validators remain active. Original evidence hashes must remain unchanged.
 
 This read-only local integration audit needs the retained case evidence; it is
 separate from portable CI tests and grants no runtime, worker, or effect authority.
+
+Use `--case ownership-budget` only for the separately pinned Source 8a
+predecessor. The default remains the literal historical clock case. Both modes
+validate their own immutable worker/result evidence and retain the existing
+signature, qualification, cleanup, no-effect, custody, and wrapper-CAS gates.
+
+The CSV canary has a separately pinned existing-delivery observation. It
+authenticates its original target, assigned corrective issue, reciprocal open
+delivery, native assignment and permission, and unchanged final observations.
+Other references remain closed or unselected/unknown; this route can never
+produce no-incumbent authority. Ordinary targets retain their original
+foreign-lineage and ambiguity holds.
+
+For the exact Source 8a predecessor, Source can project the coding consumer's
+GitHub owner from the mistaken execution-agent name to the pinned native
+controller principal. This changes only newly prepared metadata. The actual
+assignee and PR author must still be authenticated at observation and effect
+time. The old sealed manifest, admission, and consumer are never edited.

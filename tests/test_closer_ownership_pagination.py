@@ -47,27 +47,36 @@ def events(count, *, body_size=0):
 def test_large_complete_reply_is_split_without_projection_or_omission(monkeypatch):
     original = events(29, body_size=5000)
     assert len(ownership._raw(original)) > 131072
-    actual, calls = reader(monkeypatch, original, request_size=25)
+    actual, calls = reader(monkeypatch, original, request_size=15)
     assert actual.pages(ENDPOINT) == original
-    assert calls == [(25, 1), (25, 2)]
-    assert actual.bytes == sum(len(ownership._raw(page)) for page in (original[:25], original[25:]))
-    assert len(actual.refs) == 2 and all("per_page=25&page=" in ref for ref in actual.refs)
+    assert calls == [(15, 1), (15, 2)]
+    assert actual.bytes == sum(len(ownership._raw(page)) for page in (original[:15], original[15:]))
+    assert len(actual.refs) == 2 and all("per_page=15&page=" in ref for ref in actual.refs)
     assert ownership.MAX_REPLY_BYTES == 131072 and ownership.MAX_TOTAL_BYTES == 1048576
     assert ownership.MAX_CALLS == 32 and ownership.MAX_ITEMS == 400
 
 
 def test_short_last_page_preserves_original_event_envelope(monkeypatch):
-    original = events(399)
+    original = events(400)
     actual, calls = reader(monkeypatch, original)
     assert actual.pages(ENDPOINT) == original
-    assert len(calls) == 16 and calls[-1] == (25, 16)
+    assert len(calls) == 27 and calls[-1] == (15, 27)
 
 
-def test_full_final_page_holds_without_inventing_completeness(monkeypatch):
-    actual, calls = reader(monkeypatch, events(400))
-    with pytest.raises(ownership.OwnershipUnavailable, match="pagination incomplete"):
+@pytest.mark.parametrize("count", [401, 404, 405])
+def test_short_or_full_final_page_cannot_exceed_the_item_cap(monkeypatch, count):
+    actual, calls = reader(monkeypatch, events(count))
+    with pytest.raises(ownership.OwnershipUnavailable, match="item budget exhausted"):
         actual.pages(ENDPOINT)
-    assert len(calls) == 16 and actual.calls == 16
+    assert len(calls) == 27 and actual.calls == 27
+
+
+def test_page_walk_never_overshoots_the_shared_call_budget(monkeypatch):
+    actual, calls = reader(monkeypatch, events(400))
+    actual.calls = ownership.MAX_CALLS - 5
+    with pytest.raises(ownership.OwnershipUnavailable, match="call budget exhausted"):
+        actual.pages(ENDPOINT)
+    assert len(calls) == 5 and actual.calls == ownership.MAX_CALLS
 
 
 def test_overlap_across_small_pages_still_holds(monkeypatch):
@@ -80,7 +89,7 @@ def test_overlap_across_small_pages_still_holds(monkeypatch):
 
 @pytest.mark.parametrize("resource", ["reply", "total", "calls"])
 def test_smaller_pages_do_not_bypass_original_resource_caps(monkeypatch, resource):
-    original = events(26, body_size=6000 if resource == "reply" else 0)
+    original = events(26, body_size=9000 if resource == "reply" else 0)
     actual, calls = reader(monkeypatch, original)
     if resource == "total":
         actual.bytes = ownership.MAX_TOTAL_BYTES - 1
@@ -90,8 +99,60 @@ def test_smaller_pages_do_not_bypass_original_resource_caps(monkeypatch, resourc
         actual.pages(ENDPOINT)
     assert len(calls) == 1
     if resource == "reply":
-        assert actual.bytes == len(ownership._raw(original[:25])) > ownership.MAX_REPLY_BYTES
+        assert actual.bytes == len(ownership._raw(original[:15])) > ownership.MAX_REPLY_BYTES
         assert actual.refs == []
+
+
+def test_single_oversize_event_still_refuses(monkeypatch):
+    original = events(1, body_size=ownership.MAX_REPLY_BYTES)
+    actual, calls = reader(monkeypatch, original)
+    with pytest.raises(ownership.OwnershipUnavailable, match="response budget exhausted"):
+        actual.pages(ENDPOINT)
+    assert calls == [(15, 1)]
+    assert actual.bytes == len(ownership._raw(original)) > ownership.MAX_REPLY_BYTES
+    assert actual.refs == []
+
+
+def test_two_current_sized_native_timelines_retain_each_raw_event(monkeypatch):
+    target_endpoint = ENDPOINT
+    source_endpoint = "repos/stranske/orchestrator/issues/983/timeline"
+    raw_pages = {
+        target_endpoint: events(35, body_size=6000),
+        source_endpoint: events(23, body_size=6000),
+    }
+    monkeypatch.setattr(closer.gh_capacity, "throttle", lambda *_a, **_k: {"action": "allow"})
+    calls = []
+
+    def api(args, **_kwargs):
+        assert args[:3] == ["api", "--method", "GET"]
+        path, query = args[3].split("?")
+        fields = dict(item.split("=") for item in query.split("&"))
+        size, page = int(fields["per_page"]), int(fields["page"])
+        assert path in raw_pages and size == 15
+        calls.append((path, page))
+        rows = raw_pages[path]
+        return 0, copy.deepcopy(rows[(page - 1) * size : page * size])
+
+    actual = ownership._Reads(
+        closer.GitHub(deadline=time.time() + 60, api_fn=api), time.time() + 60
+    )
+    assert actual.pages(target_endpoint) == raw_pages[target_endpoint]
+    assert actual.pages(source_endpoint) == raw_pages[source_endpoint]
+    assert calls == [
+        (target_endpoint, 1),
+        (target_endpoint, 2),
+        (target_endpoint, 3),
+        (source_endpoint, 1),
+        (source_endpoint, 2),
+    ]
+    page_bytes = [
+        len(ownership._raw(rows[index : index + ownership.PAGE_SIZE]))
+        for rows in raw_pages.values()
+        for index in range(0, len(rows), ownership.PAGE_SIZE)
+    ]
+    assert actual.calls == 5
+    assert actual.bytes == sum(page_bytes) < ownership.MAX_TOTAL_BYTES
+    assert max(page_bytes) <= ownership.MAX_REPLY_BYTES
 
 
 def test_unknown_connected_events_are_not_silently_omitted(monkeypatch):

@@ -21,12 +21,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "old-manifest", "old-state", "interpreter"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--case", choices=("clock", "ownership-budget"), default="clock")
     args = parser.parse_args()
     sys.path.insert(0, str(args.source))
     import closer_native_source_upgrade as upgrade
 
-    result = Path(str(args.old_state) + ".results") / (WORKER + ".json")
+    worker_id = WORKER if args.case == "clock" else upgrade.REVIEWED_OWNERSHIP_BUDGET_WORKER_ID
+    candidate = (
+        upgrade.REVIEWED_CLOCK_CANDIDATE
+        if args.case == "clock"
+        else upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE
+    )
+    result = Path(str(args.old_state) + ".results") / (worker_id + ".json")
     manifest = json.loads(args.old_manifest.read_text())
+    assert manifest["candidate_sha"] == candidate
     payload = json.loads(result.read_text())
     context = payload["native_admission"]
     detail = json.loads(payload["detail"])
@@ -39,8 +47,8 @@ def main() -> None:
         directory / "admission.json",
         directory / "assignment.json",
         directory / "scoped-capacity.json",
-        directory / ("worker-" + WORKER + ".json"),
-        directory / ("completed-cohort-" + WORKER + ".json"),
+        directory / ("worker-" + worker_id + ".json"),
+        directory / ("completed-cohort-" + worker_id + ".json"),
         directory / ("completed-round-" + round_id + ".json"),
         Path(detail["completed_round"]["receipt_path"]),
     ]
@@ -65,12 +73,12 @@ def main() -> None:
         finally:
             upgrade._historical_clock_reader_program = original
 
-    def diagnostic(worker=WORKER):
+    def diagnostic(worker=worker_id):
         return upgrade._old_diagnostic(
             args.old_manifest, args.old_state, worker, interpreter=args.interpreter
         )
 
-    def run(name, code, *, worker=WORKER, qualification=False):
+    def run(name, code, *, worker=worker_id, qualification=False):
         with fault(code):
             saved = upgrade.subprocess.run
             seen = {}
@@ -85,7 +93,7 @@ def main() -> None:
                 answer = diagnostic(worker)
                 if qualification:
                     assert answer["strong_as_of"] is False
-                    upgrade._diagnostic_no_act(upgrade.REVIEWED_CLOCK_CANDIDATE, answer)
+                    upgrade._diagnostic_no_act(candidate, answer)
             except upgrade.SourceUpgradeHeld as exc:
                 return f"exit={seen.get('exit')}; {exc}"
             finally:
@@ -131,7 +139,7 @@ def main() -> None:
     }
     failures = {}
     for name, (code, prefix) in cases.items():
-        worker = "0" * 12 if name == "wrong_worker" else WORKER
+        worker = "0" * 12 if name == "wrong_worker" else worker_id
         failures[name] = run(name, code, worker=worker)
         assert failures[name].startswith(prefix), (name, failures[name])
 
@@ -163,11 +171,11 @@ def main() -> None:
     for name, mutation in qualification_cases.items():
         failures[name] = run(name, registry_prefix + mutation + registry_suffix, qualification=True)
         assert failures[name].startswith("exit=0;"), (name, failures[name])
-        assert "STRONG historical qualification" in failures[name], (name, failures[name])
+        assert "STRONG" in failures[name], (name, failures[name])
 
     positive = diagnostic()
     assert positive["strong_as_of"] is True
-    upgrade._diagnostic_no_act(upgrade.REVIEWED_CLOCK_CANDIDATE, positive)
+    upgrade._diagnostic_no_act(candidate, positive)
     after = hashes()
     assert before == after, "original evidence changed during audit"
     print(

@@ -137,6 +137,93 @@ def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
             )
 
 
+def ownership_budget_no_act():
+    correction = {
+        "status": "owned_unknown",
+        "reason": "native ownership response budget exhausted",
+        "remote_authenticated": False,
+        "retry_safe": False,
+        "act_authorized": False,
+        "source_closure_authorized": False,
+    }
+    accounting = {
+        "action": "wait",
+        "eligible": True,
+        "next_trigger": "retry_observation_next_round",
+        "observation_freshness": "fresh",
+        "operation_id": None,
+        "operation_status": None,
+        "reason": "observation_failed",
+        "requires_coordinator": False,
+        "revision": None,
+        "status": "deferred",
+        "target": "stranske/Orchestrator#984",
+    }
+    queue = {
+        "events": [],
+        "progress": [],
+        "integration_required": [],
+        "reasons": [],
+        "warnings": [],
+        "valid": True,
+        "stop_valid": True,
+        "continuation_required": True,
+        "accounting": [accounting],
+        "deferred": [dict(accounting)],
+    }
+    disposition = {
+        "workers": 1,
+        "coding_continuations": None,
+        "result_stages": ["act", "exception", "interpret", "prepare"],
+        "native_effect_contract": None,
+    }
+    return correction, queue, disposition
+
+
+def test_ownership_budget_no_act_is_literal_and_refuses_effect_or_wrong_stop():
+    correction, queue, disposition = ownership_budget_no_act()
+    upgrade._ownership_budget_no_act(correction, queue, strong_as_of=True, disposition=disposition)
+    for mutate in (
+        lambda value: value[0].update(act_authorized=True),
+        lambda value: value[0].update(reason="different stop"),
+        lambda value: value[1].update(events=[{"operation_id": "effect"}]),
+        lambda value: value[1]["accounting"][0].update(operation_id="effect"),
+        lambda value: value[1].update(deferred=[]),
+        lambda value: value[2].update(coding_continuations=[]),
+    ):
+        changed = [
+            json.loads(json.dumps(correction)),
+            json.loads(json.dumps(queue)),
+            json.loads(json.dumps(disposition)),
+        ]
+        mutate(changed)
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._ownership_budget_no_act(
+                changed[0], changed[1], strong_as_of=True, disposition=changed[2]
+            )
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._ownership_budget_no_act(
+            correction, queue, strong_as_of=False, disposition=disposition
+        )
+
+
+def test_ownership_budget_dispatch_is_exact_candidate_only():
+    correction, queue, disposition = ownership_budget_no_act()
+    fixture = {
+        "correction": correction,
+        "queue_receipt": queue,
+        "strong_as_of": True,
+        "ownership_budget_disposition": disposition,
+    }
+    upgrade._diagnostic_no_act(upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE, fixture)
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._diagnostic_no_act(upgrade.REVIEWED_CLOCK_CANDIDATE, fixture)
+    changed = dict(fixture)
+    changed["ownership_budget_disposition"] = None
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._diagnostic_no_act(upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE, changed)
+
+
 def test_clock_dispatch_requires_complete_clock_evidence_and_is_candidate_scoped():
     fixture = {
         "correction": {
@@ -203,6 +290,37 @@ def test_clock_predecessor_uses_only_its_own_module_and_descriptor_hashes(monkey
             upgrade._reviewed_old_metadata({**manifest, "candidate_sha": candidate}, raw)
 
 
+def test_ownership_budget_predecessor_uses_only_its_own_module_and_descriptor_hashes(
+    monkeypatch,
+):
+    modules = {"closer_campaign.py": "c" * 64}
+    descriptor = {
+        "candidate_sha": upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+        "modules": modules,
+        "package_digest": "d" * 64,
+        "state_versions": {"campaign": 1},
+    }
+    raw = json.dumps(descriptor, sort_keys=True).encode()
+    manifest = {**descriptor, "public_runtime_descriptor": "closer-runtime-package.json"}
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256",
+        hashlib.sha256(
+            json.dumps(modules, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256",
+        hashlib.sha256(raw).hexdigest(),
+    )
+    assert upgrade._reviewed_old_metadata(manifest, raw) == modules
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._reviewed_old_metadata(
+            {**manifest, "candidate_sha": upgrade.REVIEWED_CLOCK_CANDIDATE}, raw
+        )
+
+
 def test_historical_clock_reader_is_literal_facts_only_and_keeps_generic_readers_out():
     program = upgrade._historical_clock_reader_program()
     compile(program, "<historical-clock-reader>", "exec")
@@ -215,6 +333,35 @@ def test_historical_clock_reader_is_literal_facts_only_and_keeps_generic_readers
     assert "n.validate_admission(" not in program
     assert "n.completed_round_proof(" not in program
     assert "for_effects=True" not in program
+
+
+def test_historical_ownership_budget_reader_is_the_same_facts_only_reader_with_own_pins():
+    program = upgrade._historical_ownership_budget_reader_program()
+    compile(program, "<historical-ownership-budget-reader>", "exec")
+    assert repr(upgrade.REVIEWED_OWNERSHIP_BUDGET_WORKER_ID) in program
+    assert repr(upgrade.REVIEWED_OWNERSHIP_BUDGET_RESULT_SHA256) in program
+    assert repr(upgrade.REVIEWED_CLOCK_WORKER_ID) not in program
+    assert repr(upgrade.REVIEWED_CLOCK_RESULT_SHA256) not in program
+    assert "mech._signature" in program
+    assert "validate_stop" in program
+    assert "n.validate_admission(" not in program
+    assert "for_effects=True" not in program
+
+
+@pytest.mark.parametrize(
+    "mutated",
+    [
+        repr(upgrade.REVIEWED_CLOCK_WORKER_ID) * 2,
+        repr(upgrade.REVIEWED_CLOCK_RESULT_SHA256) * 2,
+    ],
+)
+def test_historical_ownership_budget_reader_refuses_nonunique_literal_substitutions(
+    monkeypatch, mutated
+):
+    monkeypatch.setattr(upgrade, "_historical_clock_reader_program", lambda: mutated)
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="historical clock reader"):
+        upgrade._historical_ownership_budget_reader_program()
 
 
 @pytest.mark.parametrize("case", ["wrong-worker", "extra-worker", "continuation"])

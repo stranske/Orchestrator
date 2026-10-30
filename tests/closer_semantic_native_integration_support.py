@@ -191,6 +191,15 @@ def integrated_native_source_reference():
     historical = historical_clock_readback_reference()
     assert original["closer_native_source_upgrade.py"] == historical["before_file_sha256"]
     original["closer_native_source_upgrade.py"] = historical["after_file_sha256"]
+    for filename, change in ownership_budget_reference()["files"].items():
+        if filename in original:
+            assert original[filename] == change["before_file_sha256"]
+        else:
+            assert filename in {
+                "closer_correction_ownership.py",
+                "closer_correction_canary_ownership.py",
+            }
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -246,6 +255,31 @@ def historical_clock_readback_reference():
         "REVIEWED_CLOCK_WORKER_ID",
         "REVIEWED_CLOCK_RESULT_SHA256",
     }
+    return value
+
+
+OWNERSHIP_BUDGET_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_ownership_budget_v1.json"
+)
+OWNERSHIP_BUDGET_SHA256 = "7c7291685fec2765a76a6601cb1750591748311470eb923e6bc45130f8fa4a66"
+
+
+def ownership_budget_reference():
+    """Append the reviewed owner observation and literal recovery successor."""
+    raw = OWNERSHIP_BUDGET_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == OWNERSHIP_BUDGET_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "ownership-budget-source-successor/v1"
+    assert value["base_commit"] == "8a4716f844fe002c6606b6bad4104c74be83d32c"
+    assert set(value["files"]) == {
+        "closer_native_source_upgrade.py",
+        "closer_correction_ownership.py",
+        "closer_correction_canary_ownership.py",
+    }
+    prior = historical_clock_readback_reference()
+    successor = value["files"]["closer_native_source_upgrade.py"]
+    assert prior["after_file_sha256"] == successor["before_file_sha256"]
+    assert prior["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
     return value
 
 

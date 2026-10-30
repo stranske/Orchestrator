@@ -57,6 +57,42 @@ REVIEWED_CLOCK_MODULES_SHA256 = "a74ae76eb426482d528e695926d12a53311081925e75c93
 REVIEWED_CLOCK_DESCRIPTOR_SHA256 = (
     "8deaf7d76cd0965f44f031521121d03f7f104147b99fc34bdbe0f71cc7fef5b2"
 )
+# The source8a CSV cohort reached its bound STRONG adjudication, then stopped
+# before ACT when the native ownership collector exhausted its bounded response
+# budget.  It is a separate exact predecessor: no general owned_unknown route
+# is eligible for migration.
+REVIEWED_OWNERSHIP_BUDGET_CANDIDATE = "8a4716f844fe002c6606b6bad4104c74be83d32c"
+REVIEWED_OWNERSHIP_BUDGET_WORKER_ID = "5483c1e719d7"
+REVIEWED_OWNERSHIP_BUDGET_RESULT_SHA256 = (
+    "8be4cd9e69839a7e58cf83577f90bc47ee2212e9c9285e77f960385ecd4dc44d"
+)
+REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256 = (
+    "5e08da1685bad96c649085ec32fa069ba8c61cadc14ff79fe8c53321bb7233ca"
+)
+REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256 = (
+    "6ca0c539632157b1315f9e5d941661b7dff1117ef99ff556c0b759b01cb549f6"
+)
+# This literal consumer is the only reviewed CSV continuation registration in
+# the source8a predecessor.  The predecessor's controller writer is the
+# GitHub principal for issue/PR ownership, while the original registration
+# named the local Codex executable.  A future current-source ownership helper
+# authenticates the issue assignee and PR author independently; this static
+# rebind merely prevents the copied registration from contradicting that
+# controller identity before that helper can run.
+REVIEWED_OWNERSHIP_BUDGET_REPOSITORY = "stranske/orchestrator"
+REVIEWED_OWNERSHIP_BUDGET_REPOSITORY_ID = 1342306972
+REVIEWED_OWNERSHIP_BUDGET_WRITER_ID = 23046322
+REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN = "stranske"
+REVIEWED_OWNERSHIP_BUDGET_WRITER_TYPE = "User"
+REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID = "test-csv-followup988-codex"
+REVIEWED_OWNERSHIP_BUDGET_PRE_REBIND_OWNER = "codex"
+REVIEWED_OWNERSHIP_BUDGET_ALLOWED_PATHS = [
+    "tests/fixtures/closer_real_csv_canary/v1/csv_export.py",
+    "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+]
+REVIEWED_OWNERSHIP_BUDGET_TRUSTED_CONTEXT_SHA256 = (
+    "73df9369a51ec4d515c1dfcabec4bb0ee657ce9f0d93161b53c458f34a543745"
+)
 # Deliberately literal: the inspector is executed before any installed-release
 # fact can be trusted.  This is the clean reviewed f858 source file, not a
 # digest supplied by a release journal or the inspected generation.
@@ -289,6 +325,74 @@ def _clock_no_act(
     )
 
 
+def _ownership_budget_no_act(
+    correction: dict[str, Any],
+    queue: dict[str, Any],
+    *,
+    strong_as_of: object,
+    disposition: object,
+) -> None:
+    """Accept only source8a's reviewed pre-ACT ownership-budget refusal."""
+    _need(
+        correction
+        == {
+            "status": "owned_unknown",
+            "reason": "native ownership response budget exhausted",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "ownership-budget disposition is not the isolated pre-ACT stop",
+    )
+    _need(
+        disposition
+        == {
+            "workers": 1,
+            "coding_continuations": None,
+            "result_stages": ["act", "exception", "interpret", "prepare"],
+            "native_effect_contract": None,
+        },
+        "ownership-budget disposition is not the isolated one-worker pre-ACT branch",
+    )
+    _need(strong_as_of is True, "ownership-budget disposition lacks bound STRONG qualification")
+    _need(isinstance(queue, dict), "ownership-budget ACT queue is not empty")
+    _need(
+        queue.get("events") == []
+        and queue.get("progress") == []
+        and queue.get("integration_required") == []
+        and queue.get("reasons") == []
+        and queue.get("warnings") == []
+        and queue.get("valid") is True
+        and queue.get("stop_valid") is True
+        and queue.get("continuation_required") is True,
+        "ownership-budget ACT queue contains an effect or invalid continuation",
+    )
+    accounting = queue.get("accounting")
+    deferred = queue.get("deferred")
+    _need(
+        isinstance(accounting, list)
+        and len(accounting) == 1
+        and deferred == accounting
+        and isinstance(accounting[0], dict)
+        and accounting[0]
+        == {
+            "action": "wait",
+            "eligible": True,
+            "next_trigger": "retry_observation_next_round",
+            "observation_freshness": "fresh",
+            "operation_id": None,
+            "operation_status": None,
+            "reason": "observation_failed",
+            "requires_coordinator": False,
+            "revision": None,
+            "status": "deferred",
+            "target": "stranske/Orchestrator#984",
+        },
+        "ownership-budget deferred accounting is not sole/null observation retry",
+    )
+
+
 def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
     """Keep retirement's incomplete-cohort refusal intact and separate."""
     _need(
@@ -376,7 +480,12 @@ def _diagnostic_no_act(candidate: str, diagnostic: dict[str, Any]) -> None:
         _capacity_no_act(diagnostic.get("capacity_disposition"))
     else:
         _need(
-            candidate in {REVIEWED_OLD_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
+            candidate
+            in {
+                REVIEWED_OLD_CANDIDATE,
+                REVIEWED_CLOCK_CANDIDATE,
+                REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+            },
             "unreviewed no-ACT predecessor",
         )
         correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
@@ -390,6 +499,13 @@ def _diagnostic_no_act(candidate: str, diagnostic: dict[str, Any]) -> None:
                 strong_as_of=diagnostic.get("strong_as_of"),
                 disposition=diagnostic.get("clock_disposition"),
             )
+        elif candidate == REVIEWED_OWNERSHIP_BUDGET_CANDIDATE:
+            _ownership_budget_no_act(
+                cast(dict[str, Any], correction),
+                cast(dict[str, Any], queue),
+                strong_as_of=diagnostic.get("strong_as_of"),
+                disposition=diagnostic.get("ownership_budget_disposition"),
+            )
         else:
             _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
 
@@ -399,7 +515,12 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
     modules = doc.get("modules")
     _need(
         doc.get("candidate_sha")
-        in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
+        in {
+            REVIEWED_OLD_CANDIDATE,
+            REVIEWED_CAPACITY_CANDIDATE,
+            REVIEWED_CLOCK_CANDIDATE,
+            REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+        },
         "old release is not reviewed no-ACT predecessor",
     )
     candidate = cast(str, doc.get("candidate_sha"))
@@ -407,11 +528,13 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
         REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_MODULES_SHA256,
         REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_MODULES_SHA256,
         REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_MODULES_SHA256,
+        REVIEWED_OWNERSHIP_BUDGET_CANDIDATE: REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256,
     }[candidate]
     expected_descriptor = {
         REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_DESCRIPTOR_SHA256,
         REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_DESCRIPTOR_SHA256,
         REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_DESCRIPTOR_SHA256,
+        REVIEWED_OWNERSHIP_BUDGET_CANDIDATE: REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256,
     }[candidate]
     _need(
         isinstance(modules, dict)
@@ -539,6 +662,24 @@ e={'worker_id':w,'result':{'path':str(result_path),'sha256':hashlib.sha256(resul
 """ % (REVIEWED_CLOCK_WORKER_ID, REVIEWED_CLOCK_RESULT_SHA256)
 
 
+def _historical_ownership_budget_reader_program() -> str:
+    """Reuse the sealed reader only for source8a's separately pinned witness."""
+    program = _historical_clock_reader_program()
+    old_worker = repr(REVIEWED_CLOCK_WORKER_ID)
+    old_result = repr(REVIEWED_CLOCK_RESULT_SHA256)
+    _need(
+        program.count(old_worker) == 1,
+        "historical clock reader worker pin differs",
+    )
+    _need(
+        program.count(old_result) == 1,
+        "historical clock reader result pin differs",
+    )
+    return program.replace(old_worker, repr(REVIEWED_OWNERSHIP_BUDGET_WORKER_ID), 1).replace(
+        old_result, repr(REVIEWED_OWNERSHIP_BUDGET_RESULT_SHA256), 1
+    )
+
+
 def _old_diagnostic(
     manifest: Path, state: Path, worker_id: str, *, interpreter: Path
 ) -> dict[str, Any]:
@@ -571,12 +712,13 @@ def _old_diagnostic(
         # cohort/proof validation still uses the original campaign path.
         "snapshot=stage/'old-campaign-snapshot.json'; d=c.Campaign(snapshot).read();\n"
         f"if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}: exec({_historical_clock_reader_program()!r})\n"
+        f"elif m['candidate_sha']=={REVIEWED_OWNERSHIP_BUDGET_CANDIDATE!r}: exec({_historical_ownership_budget_reader_program()!r})\n"
         "else:\n"
         " x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round'])\n"
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
-        "source_target=targets[0]; row=a['targets'][source_target]; results=row['results']; correction=None; queue=None; capacity=None; clock=None; strong_as_of=None\n"
+        "source_target=targets[0]; row=a['targets'][source_target]; results=row['results']; correction=None; queue=None; capacity=None; clock=None; ownership_budget=None; strong_as_of=None\n"
         f"if m['candidate_sha']=={REVIEWED_CAPACITY_CANDIDATE!r}:\n"
         " if len(d['workers'])!=1 or d.get('coding_continuations'): raise SystemExit(36)\n"
         " i=results['interpret']; ref=i['actual']['host_intake_ref']; ip=pathlib.Path(ref['path']); ir=ip.read_bytes()\n"
@@ -584,14 +726,16 @@ def _old_diagnostic(
         " capacity={'row_status':row.get('status'),'row_error':row.get('error'),'row_next_trigger':row.get('deferred_next_trigger'),'result_stages':sorted(results),'native_effect_contract':results['prepare']['native_effect_contract'],'exception':results['exception'],'interpretation':{'classification':i.get('classification'),'authority':i.get('authority'),'actual':i['actual'],'requested_agent':i['requested_agent'],'requested_profile':i['requested_profile']}}\n"
         "else:\n"
         " correction=results['exception']['correction']; queue=results['act']['queue_receipt']\n"
-        f" if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}:\n"
-        "  clock={'workers':len(d['workers']),'coding_continuations':d.get('coding_continuations'),'result_stages':sorted(results),'native_effect_contract':results['prepare'].get('native_effect_contract')}\n"
+        f" if m['candidate_sha'] in {{{REVIEWED_CLOCK_CANDIDATE!r},{REVIEWED_OWNERSHIP_BUDGET_CANDIDATE!r}}}:\n"
+        "  disposition={'workers':len(d['workers']),'coding_continuations':d.get('coding_continuations'),'result_stages':sorted(results),'native_effect_contract':results['prepare'].get('native_effect_contract')}\n"
+        f"  if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}: clock=disposition\n"
+        "  else: ownership_budget=disposition\n"
         "  import closer_dispatcher as cd, closer_role_qualification as roles, dispatcher as dispatch, execution_profiles as profiles\n"
         "  stage=results['exception']; prepare=results['prepare']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; basis=expected.get('basis'); prepared_snapshot=prepare.get('snapshot'); packet_ref=prepare.get('packet_ref'); prepared_basis={'target':prepared_snapshot.get('target'),'revision':prepare.get('revision'),'head':prepared_snapshot.get('head'),'base':prepared_snapshot.get('base'),'packet_sha256':packet_ref.get('sha256')} if isinstance(prepared_snapshot,dict) and isinstance(packet_ref,dict) else None; proved=cd._revalidate_controlled_proof(proof,run_id=actual['run_id'],basis=basis,receipt_root=dispatch.DISPATCH_LOG_DIR); receipt=cd._read_controlled_receipt(proof['provider_result_ref'],dispatch.DISPATCH_LOG_DIR); at=receipt['completed_at']; execution=detail['native_execution']['phases']['B']; profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at); admission_record=roles.qualified_record(profile,role,now=context['started_at']); identity=roles.profile_identity(profile)\n"
         "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id')==proved.get('run_id')==receipt.get('run_id') and expected.get('task_type')=='closer_exception' and isinstance(basis,dict) and isinstance(prepared_basis,dict) and all(basis.get(k)==prepared_basis.get(k) for k in ('target','revision','head','base','packet_sha256')) and basis.get('target')==source_target and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and execution['started_at']<=at<=execution['finished_at'] and record is not None and admission_record is not None and expected.get('profile_identity')==identity==record.get('profile_identity')==admission_record.get('profile_identity') and record.get('qualification_id')==admission_record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==cd._contract_digest(admission_record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and roles.execution_record_matches(admission_record,expected,checked_at=context['started_at']) and actual.get('exit')==0 and proved.get('exit')==0)\n"
         "verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets)\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'strong_as_of':strong_as_of,'capacity_disposition':capacity,'clock_disposition':clock,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'strong_as_of':strong_as_of,'capacity_disposition':capacity,'clock_disposition':clock,'ownership_budget_disposition':ownership_budget,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
     with tempfile.TemporaryDirectory(prefix="old-source-diagnostic-") as stage_name:
         stage = Path(stage_name)
@@ -912,6 +1056,72 @@ def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
         _need(old_config.get(key) == new_config.get(key), "source upgrade identity changed: " + key)
 
 
+def _ownership_budget_rebound_coding_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    """Return the sole reviewed source8a CSV owner correction, or a copy.
+
+    This is deliberately a pure policy projection.  It does not authenticate
+    GitHub identity and does not create a coding session; the current-source
+    ownership helper must still authenticate the issue and PR principals before
+    any effect.  Keeping the projection here lets the external preparer and
+    the policy-CAS calculation use identical, closed input validation.
+    """
+    try:
+        projected = json.loads(json.dumps(policy, sort_keys=True))
+        config = projected["correction_controller_installation"]["config"]
+    except (KeyError, TypeError) as exc:
+        raise SourceUpgradeHeld("policy lacks reviewed ownership-budget rebind structure") from exc
+    _need(isinstance(config, dict), "policy lacks reviewed ownership-budget rebind structure")
+    if config.get("source_sha") != REVIEWED_OWNERSHIP_BUDGET_CANDIDATE:
+        return projected
+    _need(
+        config.get("repository") == REVIEWED_OWNERSHIP_BUDGET_REPOSITORY
+        and config.get("repository_id") == REVIEWED_OWNERSHIP_BUDGET_REPOSITORY_ID
+        and config.get("writer_id") == REVIEWED_OWNERSHIP_BUDGET_WRITER_ID
+        and config.get("writer_login") == REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN
+        and config.get("writer_type") == REVIEWED_OWNERSHIP_BUDGET_WRITER_TYPE,
+        "ownership-budget controller GitHub identity differs",
+    )
+    consumers = config.get("consumers")
+    _need(
+        isinstance(consumers, dict) and set(consumers) == {REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID},
+        "ownership-budget coding consumer differs",
+    )
+    consumer = consumers[REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID]
+    _need(isinstance(consumer, dict), "ownership-budget coding consumer invalid")
+    _need(
+        consumer.get("runner") == "existing-local-controller"
+        and consumer.get("agent") == "codex"
+        and consumer.get("owner_login") == REVIEWED_OWNERSHIP_BUDGET_PRE_REBIND_OWNER,
+        "ownership-budget coding consumer owner differs",
+    )
+    try:
+        import closer_coding_publication as publication
+        import closer_coding_session_v2 as coding_session
+
+        coding_policy = coding_session.validate_policy(consumer[coding_session.POLICY_FIELD])
+        publication_policy = publication.validate_consumer_mode(
+            REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID, consumer
+        )
+    except (ImportError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("ownership-budget coding consumer policy invalid") from exc
+    _need(
+        coding_policy.get("consumer_id") == REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+        and coding_policy.get("agent") == "codex"
+        and consumer.get("profile_id") == coding_policy.get("profile_id")
+        and consumer.get("profile_sha256") == coding_policy.get("profile_sha256")
+        and publication_policy is not None
+        and publication_policy.get("schema") == "closer-owned-pr-publication-policy/v2"
+        and publication_policy.get("consumer_id") == REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+        and publication_policy.get("allowed_path_prefixes")
+        == REVIEWED_OWNERSHIP_BUDGET_ALLOWED_PATHS
+        and publication_policy.get("trusted_context_sha256")
+        == REVIEWED_OWNERSHIP_BUDGET_TRUSTED_CONTEXT_SHA256,
+        "ownership-budget coding publication scope differs",
+    )
+    consumer["owner_login"] = REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN
+    return projected
+
+
 def _derived_coding_capability(policy: dict[str, Any]) -> dict[str, str] | None:
     """Derive, never caller-select, the static coding capability.
 
@@ -967,7 +1177,7 @@ def _derived_coding_capability(policy: dict[str, Any]) -> dict[str, str] | None:
 
 def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -> dict[str, Any]:
     """The sole lawful policy transformation for this reviewed source upgrade."""
-    expected = json.loads(json.dumps(old["policy"], sort_keys=True))
+    expected = _ownership_budget_rebound_coding_policy(old["policy"])
     try:
         config = expected["correction_controller_installation"]["config"]
         config["source_sha"] = new["candidate_sha"]
@@ -1317,7 +1527,12 @@ def plan(
     new_path, new_raw, new = _manifest(new_manifest)
     _need(
         old.get("candidate_sha")
-        in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
+        in {
+            REVIEWED_OLD_CANDIDATE,
+            REVIEWED_CAPACITY_CANDIDATE,
+            REVIEWED_CLOCK_CANDIDATE,
+            REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+        },
         "old release is not reviewed no-ACT predecessor",
     )
     _need(

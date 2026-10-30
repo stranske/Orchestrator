@@ -15,9 +15,9 @@ from datetime import datetime, timezone
 
 import closer_correction_classification as contract
 
-PAGE_SIZE = 25
+PAGE_SIZE = 15
 MAX_ITEMS = 400
-MAX_PAGES = MAX_ITEMS // PAGE_SIZE
+MAX_PAGES = (MAX_ITEMS + PAGE_SIZE - 1) // PAGE_SIZE
 MAX_CALLS = 32
 MAX_REPLY_BYTES = 131072
 MAX_TOTAL_BYTES = 1048576
@@ -159,6 +159,7 @@ class _Reads:
                     "native connected lineage needs independent graph join",
                 )
                 identities.add(identity)
+                _need(len(found) < MAX_ITEMS, "native ownership item budget exhausted")
                 found.append(row)
             if len(rows) < PAGE_SIZE:
                 return found
@@ -385,6 +386,45 @@ def _owned_delivery_neighbor(reads, repo, candidate, owner, permission, neighbor
     _need(delivery_count == 1, "unique reciprocal owned delivery unavailable")
 
 
+def _observation(seed, incumbent, reads, observed, *, unselected=None):
+    repo = seed["target"]["repository"]
+    scope = {
+        "target": seed["target"],
+        "source_issue": seed["source_issue"],
+        "finding_evidence": seed["finding"]["evidence"],
+        "scope": seed["scope"],
+    }
+    effect = {
+        "schema": "closer-correction-effect/v1",
+        "repository": repo,
+        "event_id": seed["original_verifier"]["verification_event"]["event_id"],
+        "finding_evidence": seed["finding"]["evidence"],
+        "source_issue": seed["source_issue"],
+        "scope": seed["scope"],
+    }
+    wire = {
+        "schema": "closer-correction-ownership/v1",
+        "kind": "no_incumbent" if incumbent.get("kind") == "no_incumbent" else "existing",
+        "seed_effect_key": contract.digest(effect),
+        "source_scope_digest": contract.digest(scope),
+        "observed_at": datetime.fromtimestamp(observed, timezone.utc).isoformat(),
+        "evidence_refs": reads.refs,
+    }
+    if wire["kind"] == "existing":
+        wire["incumbent"] = incumbent
+    document = {
+        "ownership": wire,
+        "incumbent": incumbent,
+        "seed_sha256": contract.digest(seed),
+        "calls": reads.calls,
+        "bytes": reads.bytes,
+        "remote_authenticated": False,
+    }
+    if unselected is not None:
+        document["unselected_native_references"] = unselected
+    return NativeOwnership(_token=_TOKEN, document=document)
+
+
 def collect_ownership(*, github, seed, deadline, now=None):
     """Read complete bounded known-subject timelines and re-read them for races.
 
@@ -407,6 +447,32 @@ def collect_ownership(*, github, seed, deadline, now=None):
     _need(_issue(docs[1], source) == seed["source_issue"], "native source changed")
     timelines = [f"repos/{repo}/issues/{n}/timeline" for n in (pr, source)]
     rows = [reads.pages(p) for p in timelines]
+    if repo == "stranske/orchestrator" and str(pr) == "984" and str(source) == "983":
+        # This closed Source-owned canary identity can authenticate only its
+        # existing assigned delivery. Other references remain unselected facts;
+        # this branch never produces absence or authority for their work.
+        _need(
+            not docs[1]["assignees"]
+            and not any(
+                str(label.get("name", "") if isinstance(label, dict) else label)
+                .lower()
+                .startswith(("agent:", "agents:"))
+                for label in docs[1]["labels"]
+            ),
+            "source agent ownership unresolved",
+        )
+        from closer_correction_canary_ownership import collect_confirmed_existing
+
+        confirmed = collect_confirmed_existing(reads=reads, seed=seed, docs=docs, rows=rows)
+        # The fixed helper already re-read every original and selected subject;
+        # repeating those reads would spend the same finite observation budget.
+        return _observation(
+            seed,
+            confirmed["incumbent"],
+            reads,
+            observed,
+            unselected=confirmed["unselected_native_references"],
+        )
     neighbors = _related(rows[0] + rows[1], repo)
     _need(neighbors.get(pr) == (docs[0]["node_id"], True), "original PR lineage absent")
     neighbors.pop(pr)
@@ -497,38 +563,4 @@ def collect_ownership(*, github, seed, deadline, now=None):
         [reads.get(p) for p in paths] == docs and [reads.pages(p) for p in timelines] == rows,
         "native subjects changed during observation",
     )
-    scope = {
-        "target": seed["target"],
-        "source_issue": seed["source_issue"],
-        "finding_evidence": seed["finding"]["evidence"],
-        "scope": seed["scope"],
-    }
-    effect = {
-        "schema": "closer-correction-effect/v1",
-        "repository": repo,
-        "event_id": seed["original_verifier"]["verification_event"]["event_id"],
-        "finding_evidence": seed["finding"]["evidence"],
-        "source_issue": seed["source_issue"],
-        "scope": seed["scope"],
-    }
-    wire = {
-        "schema": "closer-correction-ownership/v1",
-        "kind": "no_incumbent" if incumbent.get("kind") == "no_incumbent" else "existing",
-        "seed_effect_key": contract.digest(effect),
-        "source_scope_digest": contract.digest(scope),
-        "observed_at": datetime.fromtimestamp(observed, timezone.utc).isoformat(),
-        "evidence_refs": reads.refs,
-    }
-    if wire["kind"] == "existing":
-        wire["incumbent"] = incumbent
-    return NativeOwnership(
-        _token=_TOKEN,
-        document={
-            "ownership": wire,
-            "incumbent": incumbent,
-            "seed_sha256": contract.digest(seed),
-            "calls": reads.calls,
-            "bytes": reads.bytes,
-            "remote_authenticated": False,
-        },
-    )
+    return _observation(seed, incumbent, reads, observed)
