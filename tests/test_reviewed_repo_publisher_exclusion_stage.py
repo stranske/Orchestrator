@@ -17,6 +17,26 @@ FIXTURE = Path(__file__).parent / "fixtures" / "reviewed_repo_publisher_exclusio
 HELPER_NAME = (
     "delivery-continuity-a1720a1d8e922529db556ecd989792d5410e85d6ef627e385584f20b9b1cd40e.py"
 )
+ACCOUNTABILITY_GUARD_IMPORT = """SPEC = importlib.util.spec_from_file_location("accountability_guard", "/Users/teacher/.codex/bin/opener-liveness-guard.py")
+guard_rules = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(guard_rules)
+"""
+ACCOUNTABILITY_GUARD_STUB = """class _FixtureGuard:
+    @staticmethod
+    def parse_timestamp(value):
+        return None
+
+    @staticmethod
+    def durable_holder_reason(_row):
+        return None
+
+    @staticmethod
+    def generated_reason(_row):
+        return None
+
+
+guard_rules = _FixtureGuard()
+"""
 
 
 def module(path: Path, name: str):
@@ -33,6 +53,12 @@ def captured_publisher(tmp_path: Path) -> Path:
     root.mkdir()
     for name in ("controller.py", "demand_router.py", "accountability.py"):
         shutil.copy2(FIXTURE / f"{name}.txt", root / name)
+    accountability = root / "accountability.py"
+    accountability_source = accountability.read_text()
+    assert accountability_source.count(ACCOUNTABILITY_GUARD_IMPORT) == 1
+    accountability.write_text(
+        accountability_source.replace(ACCOUNTABILITY_GUARD_IMPORT, ACCOUNTABILITY_GUARD_STUB)
+    )
     router = root / "demand_router.py"
     source = router.read_text()
     helper = Path(
