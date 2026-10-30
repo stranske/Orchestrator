@@ -403,8 +403,12 @@ def build_owner_request(
             strong_basis.get("request_id") == named["request_id"],
             "owner original STRONG named request differs",
         )
+        # The ownership reader's freshness boundary starts here, after the
+        # retained packet and qualified LOW/STRONG evidence have been checked.
+        # Reusing the builder-entry clock can turn otherwise valid bounded
+        # validation into a false stale-observation hold.
         observed = ownership.collect_ownership(
-            github=github, seed=seed, deadline=context["deadline"], now=clock
+            github=github, seed=seed, deadline=context["deadline"], now=time.time()
         ).document()
         fence()
         # Re-check queue custody and clock after bounded external observations.

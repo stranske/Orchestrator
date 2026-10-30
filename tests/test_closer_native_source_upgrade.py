@@ -45,6 +45,164 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
         upgrade._incomplete_cohort({"completed": True}, {"accepted": False})
 
 
+def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
+    fixture = {
+        "correction": {
+            "status": "owned_unknown",
+            "reason": "native observation clock is not current",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "queue": {
+            "events": [],
+            "progress": [],
+            "accounting": [
+                {
+                    "reason": "observation_failed",
+                    "next_trigger": "retry_observation_next_round",
+                    "operation_id": None,
+                    "operation_status": None,
+                }
+            ],
+        },
+    }
+    disposition = {
+        "workers": 1,
+        "coding_continuations": None,
+        "result_stages": ["act", "exception", "interpret", "prepare"],
+        "native_effect_contract": None,
+    }
+    upgrade._clock_no_act(
+        fixture["correction"], fixture["queue"], strong_as_of=True, disposition=disposition
+    )
+    for path, value in (
+        (("correction", "reason"), "different stop"),
+        (("correction", "act_authorized"), True),
+        (("queue", "events"), [{"operation_id": "effect"}]),
+        (("queue", "accounting"), [{"operation_id": "effect"}]),
+    ):
+        changed = json.loads(json.dumps(fixture))
+        changed[path[0]][path[1]] = value
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._clock_no_act(
+                changed["correction"],
+                changed["queue"],
+                strong_as_of=True,
+                disposition=disposition,
+            )
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._clock_no_act(
+            fixture["correction"], fixture["queue"], strong_as_of=False, disposition=disposition
+        )
+    for key, value in (
+        ("workers", 2),
+        ("coding_continuations", []),
+        ("result_stages", ["exception", "interpret", "prepare"]),
+        ("native_effect_contract", {"effect": "native"}),
+    ):
+        changed_disposition = dict(disposition)
+        changed_disposition[key] = value
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._clock_no_act(
+                fixture["correction"],
+                fixture["queue"],
+                strong_as_of=True,
+                disposition=changed_disposition,
+            )
+    progressed = json.loads(json.dumps(fixture))
+    progressed["queue"]["progress"] = [{"operation_id": "effect"}]
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._clock_no_act(
+            progressed["correction"],
+            progressed["queue"],
+            strong_as_of=True,
+            disposition=disposition,
+        )
+    for mutate in (
+        lambda value: value.update(strong_as_of=1),
+        lambda value: value["queue"]["accounting"].append(dict(value["queue"]["accounting"][0])),
+        lambda value: value["queue"]["accounting"][0].update(reason="wrong"),
+        lambda value: value["queue"]["accounting"][0].update(next_trigger="wrong"),
+    ):
+        changed = {"queue": json.loads(json.dumps(fixture["queue"])), "strong_as_of": True}
+        mutate(changed)
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._clock_no_act(
+                fixture["correction"],
+                changed["queue"],
+                strong_as_of=changed["strong_as_of"],
+                disposition=disposition,
+            )
+
+
+def test_clock_dispatch_requires_complete_clock_evidence_and_is_candidate_scoped():
+    fixture = {
+        "correction": {
+            "status": "owned_unknown",
+            "reason": "native observation clock is not current",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "queue_receipt": {
+            "events": [],
+            "progress": [],
+            "accounting": [
+                {
+                    "reason": "observation_failed",
+                    "next_trigger": "retry_observation_next_round",
+                    "operation_id": None,
+                    "operation_status": None,
+                }
+            ],
+        },
+        "clock_disposition": {
+            "workers": 1,
+            "coding_continuations": None,
+            "result_stages": ["act", "exception", "interpret", "prepare"],
+            "native_effect_contract": None,
+        },
+        "strong_as_of": True,
+    }
+    upgrade._diagnostic_no_act(upgrade.REVIEWED_CLOCK_CANDIDATE, fixture)
+    for key in ("strong_as_of", "clock_disposition"):
+        changed = dict(fixture)
+        changed[key] = None
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._diagnostic_no_act(upgrade.REVIEWED_CLOCK_CANDIDATE, changed)
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._diagnostic_no_act(upgrade.REVIEWED_OLD_CANDIDATE, fixture)
+
+
+def test_clock_predecessor_uses_only_its_own_module_and_descriptor_hashes(monkeypatch):
+    modules = {"closer_campaign.py": "a" * 64}
+    descriptor = {
+        "candidate_sha": upgrade.REVIEWED_CLOCK_CANDIDATE,
+        "modules": modules,
+        "package_digest": "b" * 64,
+        "state_versions": {"campaign": 1},
+    }
+    raw = json.dumps(descriptor, sort_keys=True).encode()
+    manifest = {**descriptor, "public_runtime_descriptor": "closer-runtime-package.json"}
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_CLOCK_MODULES_SHA256",
+        hashlib.sha256(
+            json.dumps(modules, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        upgrade, "REVIEWED_CLOCK_DESCRIPTOR_SHA256", hashlib.sha256(raw).hexdigest()
+    )
+    assert upgrade._reviewed_old_metadata(manifest, raw) == modules
+    for candidate in (upgrade.REVIEWED_OLD_CANDIDATE, upgrade.REVIEWED_CAPACITY_CANDIDATE):
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._reviewed_old_metadata({**manifest, "candidate_sha": candidate}, raw)
+
+
 def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
     tmp_path, monkeypatch
 ):
