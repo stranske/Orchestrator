@@ -1186,9 +1186,20 @@ def load_floor() -> dict:
     for "measured nothing" and "could not measure". The unreadable case now carries a marker key
     so callers can say which it is; it stays a dict so no caller breaks.
     """
-    if FLOOR.exists():
+    return load_floor_at(FLOOR)
+
+
+def load_floor_at(floor_path: pathlib.Path) -> dict:
+    """Read a named floor with the same unreadable-file distinction as ``load_floor``.
+
+    The release preflight measures a separate, clean candidate checkout before
+    asking the normal verifier to execute it.  Keeping this small reader here
+    prevents that preflight from treating a malformed candidate floor as an
+    absent one or from carrying a second floor-file interpretation.
+    """
+    if floor_path.exists():
         try:
-            return json.loads(FLOOR.read_text(encoding="utf-8"))
+            return json.loads(floor_path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return {FLOOR_UNREADABLE: True}
     return {}
