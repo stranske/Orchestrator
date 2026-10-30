@@ -261,7 +261,7 @@ def historical_clock_readback_reference():
 OWNERSHIP_BUDGET_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_ownership_budget_v1.json"
 )
-OWNERSHIP_BUDGET_SHA256 = "7c7291685fec2765a76a6601cb1750591748311470eb923e6bc45130f8fa4a66"
+OWNERSHIP_BUDGET_SHA256 = "a5aeb92411c14b48e48297350e93981da7e5f042fc52aa50d2a2b9fea3733eda"
 
 
 def ownership_budget_reference():

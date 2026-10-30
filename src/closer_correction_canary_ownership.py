@@ -57,11 +57,19 @@ def _crossrefs(rows):
     return found
 
 
-def _case_seed(seed, docs):
-    target = seed.get("target") or {}
-    source = seed.get("source_issue") or {}
-    verifier = (seed.get("original_verifier") or {}).get("verification_event") or {}
-    _need(
+def is_reviewed_seed(seed):
+    """Match the complete immutable fixture identity, never issue numbers alone."""
+    if not isinstance(seed, dict):
+        return False
+    target = seed.get("target")
+    source = seed.get("source_issue")
+    original = seed.get("original_verifier")
+    if not isinstance(original, dict):
+        return False
+    verifier = original.get("verification_event")
+    if not all(isinstance(value, dict) for value in (target, source, verifier)):
+        return False
+    return bool(
         target.get("repository", "").lower() == REPOSITORY
         and str(target.get("pr")) == TARGET_PR
         and target.get("head_sha") == TARGET_HEAD_SHA
@@ -75,9 +83,13 @@ def _case_seed(seed, docs):
         and verifier.get("repo", "").lower() == REPOSITORY
         and str(verifier.get("pr")) == TARGET_PR
         and verifier.get("head_sha") == TARGET_HEAD_SHA
-        and verifier.get("evaluated_sha") == TARGET_MERGE_SHA,
-        "canary ownership seed differs",
+        and verifier.get("evaluated_sha") == TARGET_MERGE_SHA
     )
+
+
+def _case_seed(seed, docs):
+    _need(is_reviewed_seed(seed), "canary ownership seed differs")
+    source = seed["source_issue"]
     _need(len(docs) == 2, "canary ownership documents missing")
     ownership._pull(docs[0], seed)
     _need(ownership._issue(docs[1], SOURCE_ISSUE) == source, "canary source changed")

@@ -447,7 +447,12 @@ def collect_ownership(*, github, seed, deadline, now=None):
     _need(_issue(docs[1], source) == seed["source_issue"], "native source changed")
     timelines = [f"repos/{repo}/issues/{n}/timeline" for n in (pr, source)]
     rows = [reads.pages(p) for p in timelines]
+    reviewed_canary = False
     if repo == "stranske/orchestrator" and str(pr) == "984" and str(source) == "983":
+        from closer_correction_canary_ownership import is_reviewed_seed
+
+        reviewed_canary = is_reviewed_seed(seed)
+    if reviewed_canary:
         # This closed Source-owned canary identity can authenticate only its
         # existing assigned delivery. Other references remain unselected facts;
         # this branch never produces absence or authority for their work.

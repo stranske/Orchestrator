@@ -3,14 +3,14 @@
   "files": {
     "closer_correction_canary_ownership.py": {
       "added_module": true,
-      "after_file_sha256": "7c6e714ee668895fdeb857f3e8244b2857e51a757e5e4cb1756593318908b631",
-      "after_module_ast_sha256": "512709dc22b4f6c8028491179d7e30731ad96df41af9bbc049e2c4a704474e03",
+      "after_file_sha256": "be99b506ab184dc116e5fad5579846e13b28c1026f5c744d2d105fc44f0a4bad",
+      "after_module_ast_sha256": "6dd2a7b1c9950894b5e4d79779cf921fe5dc2a833ecb3cc5803b8d394607b7d4",
       "before_file_sha256": null,
       "before_module_ast_sha256": null
     },
     "closer_correction_ownership.py": {
-      "after_file_sha256": "e3f2cb9bec361a9982116a6b7f5858c862bc4d7cf0a29fd362585fd6920284ba",
-      "after_module_ast_sha256": "6c2f3d07652bcfba8948a5ff64064d189c173f55fa25af1eb8dcca13fa193c27",
+      "after_file_sha256": "04c7d745039e2f410d7a6ced2fdd923aed1d9b40fd9074b1e75e693fb71af4df",
+      "after_module_ast_sha256": "96dda32dc81218b5664acd9c5858d890260b4006e2860d1f28cba94d6f72de92",
       "before_file_sha256": "fb167f32daa7b598208d6038eb01ed2b44cc6a0777bcd9ac7c78163f159883c8",
       "before_module_ast_sha256": "a7284ba4665eaa9bd792c2c1a7bfd00725d5105a7265537ab12866d4b21c7e12",
       "before_top_level_ast": {
@@ -47,7 +47,7 @@
           "before": null
         },
         "collect_ownership": {
-          "after": "47f2c2d68a1da35445ce4a54eb85e7be627f71297725e6252bd7fb93e2b03f13",
+          "after": "1ad95ecc0839207f15ac1d65c0e60e8b06fa15a46c2afadad77b1e3dac77b06f",
           "before": "89a14c63f271fb1930ef886dcdf0c72d59cdb756d8532480acdc99e12e4ace04"
         }
       },

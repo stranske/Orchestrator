@@ -332,6 +332,32 @@ def test_known_canary_returns_only_existing_988_and_keeps_unselected_unknown(mon
     assert len(reads.refs) == reads.calls
 
 
+@pytest.mark.parametrize(
+    "section,field",
+    [
+        ("target", "head_sha"),
+        ("target", "base_sha"),
+        ("target", "merge_sha"),
+        ("source_issue", "node_id"),
+        ("source_issue", "body_sha256"),
+        ("verification_event", "event_id"),
+    ],
+)
+def test_reviewed_route_requires_full_identity_not_shared_example_numbers(
+    monkeypatch, section, field
+):
+    _reads, seed, _docs, _rows, _paths, _calls = world(monkeypatch)
+    assert canary.is_reviewed_seed(seed)
+    changed = copy.deepcopy(seed)
+    target = (
+        changed["original_verifier"]["verification_event"]
+        if section == "verification_event"
+        else changed[section]
+    )
+    target[field] = "different"
+    assert not canary.is_reviewed_seed(changed)
+
+
 def test_collect_ownership_returns_standard_existing_incumbent_for_actual_seed_shape(monkeypatch):
     reads, seed, _, _, _, _ = world(monkeypatch)
     observed = ownership.collect_ownership(
