@@ -722,6 +722,34 @@ def test_prospective_plan_requires_current_old_state_lock(capacity_host, monkeyp
         install.plan_prospective(*args)
 
 
+@pytest.mark.parametrize("lock_name", ("native-entry.lock", "native-supervisor.lock"))
+def test_prospective_apply_refuses_contended_new_observation_lock(
+    capacity_host, monkeypatch, tmp_path, lock_name
+):
+    import fcntl
+
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    wrapper = Path(proposal["wrapper"])
+    before = wrapper.read_bytes()
+    receipt = Path(proposal["receipt"])
+    intent = receipt.with_name("wrapper-install-prospective-intent.json")
+    seal = receipt.with_name("wrapper-install-prospective-seal.json")
+    new_manifest = json.loads(Path(args[3]).read_text())
+    lock = Path(new_manifest["mechanism_contract"]["observation_root"]) / lock_name
+    fd = os.open(lock, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="lock_contended"):
+            install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert wrapper.read_bytes() == before
+    assert not intent.exists() and not receipt.exists() and not seal.exists()
+
+
 @pytest.mark.parametrize(
     ("artifact", "mutation"),
     [
