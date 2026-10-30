@@ -287,16 +287,26 @@ def test_render_preserves_existing_controller_and_has_one_hook(tmp_path):
     compile(rendered, "controller.preview.py", "exec")
 
 
-def test_v2_render_defers_mutable_router_import_until_campaign_refuses(tmp_path):
+def test_v2_render_never_runs_mutable_router_when_runtime_pin_refuses(tmp_path, monkeypatch):
     pin = tmp_path / "pin.json"
     pin.write_text(
         '{"mechanism_contract":{"controller_demand":{"schema":"closer-controller-demand/v2"}}}'
     )
     rendered = hook.render(SOURCE, str(pin))
     assert "return campaign.controller_entry(argv, None)" in rendered
-    assert rendered.index("campaign = _load_pinned_closer_campaign()") < rendered.index(
-        "import demand_router"
+    assert "import demand_router" not in rendered
+    import sys
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(
+        sys.modules,
+        "demand_router",
+        SimpleNamespace(main=lambda _: pytest.fail("mutable router ran after pin refusal")),
     )
+    namespace = {}
+    exec(compile(rendered, "controller.preview.py", "exec"), namespace)
+    assert namespace["_load_pinned_closer_campaign"]() is None
+    assert namespace["main"]([]) == 0
 
 
 def test_existing_marker_does_not_repin_to_new_manifest(tmp_path):

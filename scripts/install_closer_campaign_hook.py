@@ -4,8 +4,8 @@
 Never edits the installed automation: it reads --controller and writes --out only, for the
 coordinator to review and deploy. The rendered controller loads closer_campaign (and the
 modules it imports) from the paths and sha256 digests in --manifest, never by a plain
-`import` from the controller directory, and falls back to the unchanged demand_router
-path if any digest differs or a pinned module is already cached. Cached modules
+`import` from the controller directory. Legacy v1 hooks preserve their demand_router
+fallback; v2 publisher hooks stop if any runtime pin differs. Cached modules
 require a fresh controller process. Refuses unexpected or conflicting hook bindings.
 """
 
@@ -28,8 +28,7 @@ NEW = (
 NEW_CLOSURE = (
     "    campaign = _load_pinned_closer_campaign()\n"
     "    if campaign is None:\n"
-    "        import demand_router\n"
-    "        return demand_router.main(argv)\n"
+    "        return 0\n"
     "    return campaign.controller_entry(argv, None)\n"
 )
 MAIN_DEF = "def main(argv: list[str] | None = None) -> int:\n"
