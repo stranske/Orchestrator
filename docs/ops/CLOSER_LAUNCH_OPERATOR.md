@@ -35,6 +35,16 @@ acceptance evidence. Emit a conservative ledger instead:
 Missing coding, publication, verification, or acceptance evidence remains
 `UNKNOWN`; the ledger names the last proven boundary.
 
+The owned Codex stdio transport retains native command and file-change events
+as JSONL in the existing result output. Command records carry native thread,
+turn, and item identity, the command, exit status, and available native output;
+agent messages remain separate escaped text. The coding terminal's result
+digest and publication handoff bind this projection. Existing capture and
+retention limits still apply; malformed or oversized evidence is refused.
+Review the actual command records and published file bytes for required
+failure/pass sequences. A final agent message or successful process exit does
+not establish those task-specific results.
+
 For a finite frontier, an unavailable terminal worker is not retry authority.
 The plan holds until a prospective signed v2 no-start proof or a separately
 authenticated retained no-B reconciliation authorizes a distinct fresh frontier.

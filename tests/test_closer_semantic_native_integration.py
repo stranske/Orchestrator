@@ -15,6 +15,21 @@ def test_native_operational_and_latest_reader_sources_are_exact_reviewed0953():
         assert hashlib.sha256(source_path(filename).read_bytes()).hexdigest() == expected, filename
 
 
+def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_projection():
+    reviewed = support.native_command_evidence_reference()
+    for filename, change in reviewed["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        selected = next(
+            node for node in tree.body if getattr(node, "name", None) == change["changed_top_level"]
+        )
+        assert fingerprint(selected) == change["after_changed_top_level_ast_sha256"]
+        tree.body.remove(selected)
+        assert fingerprint(tree) == change["outside_changed_top_level_ast_sha256"]
+
+
 def _top_level_ast(raw):
     tree = ast.parse(raw)
     return {

@@ -868,7 +868,7 @@ def finish_turn_from_run(frame):
                     "owned_stdio_output_exhausted",
                 )
     s.child.wait(timeout=_io_live(s, allow_exit=True))
-    return parsed.text(), ""
+    return parsed.projection(), ""
 
 
 def counted_bytes(frame):

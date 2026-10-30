@@ -1,0 +1,26 @@
+{
+  "base_commit": "a9b85b503597fa29ec1c468208a7f1e512fe3598",
+  "files": {
+    "closer_codex_appserver_bootstrap.py": {
+      "after_changed_top_level_ast_sha256": "0c49b28133575912ca306273564f60eb70d14c9925b9ffbfef029e3a130f9b7e",
+      "after_file_sha256": "008fa0882e3b88102a3c17bab34eaa706d23281f82c243405ba5cf828eeb6ba1",
+      "after_module_ast_sha256": "000ae1fd5612067a2a800db4043c4a930fd546c5903f5dd389b8cb6ab425c5a3",
+      "before_changed_top_level_ast_sha256": "97773c5eac90a9ce9c3078689bc093bfd8db8d40019d8cab5a7523d301c03126",
+      "before_file_sha256": "f3fdd928479de409d799af1e8cd68f7f839382bbaf99fdfc9170368358413d38",
+      "before_module_ast_sha256": "48efff34177ebb40039a02cb37e490a485a2a24b81800526364ea1274fc35f02",
+      "changed_top_level": "TurnResponseData",
+      "outside_changed_top_level_ast_sha256": "b5ff0f7e8b37fd619cc04590ff10d19f89d3e539cd2ac978e046e3f85526f196"
+    },
+    "closer_codex_owned_stdio.py": {
+      "after_changed_top_level_ast_sha256": "2be3bb50bbbf173b58969051329b2a7f4696a8338ab673d0384487a04e90afd0",
+      "after_file_sha256": "080b009e5228a1a46b7d87ae7620a16de34888a6de8a4796729fa000cd35d0a9",
+      "after_module_ast_sha256": "6c176f8a298011085c4d0830df285e43eb4e493773c4057502d31c2306893da4",
+      "before_changed_top_level_ast_sha256": "e8f7028a1649617325b1b7b6b98ebcc5f08c724e5c62b19c9f47b4345353ee76",
+      "before_file_sha256": "388cb1cf63f0af1e2bf45b1177c79fd79c0d6c732098dad4ffd953ec17c2761d",
+      "before_module_ast_sha256": "d3512948f856d1df2153344540ec4697804fb71483a08378c13df13b357679e6",
+      "changed_top_level": "finish_turn_from_run",
+      "outside_changed_top_level_ast_sha256": "7400a61fe59241c0b718c8ba5d3f9533fc7d32e66ab9ff5a042de1784c4f253e"
+    }
+  },
+  "schema": "native-command-evidence-source-successor/v1"
+}
