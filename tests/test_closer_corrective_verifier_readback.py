@@ -262,7 +262,7 @@ def retained(monkeypatch, request):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as z:
             for name, raw in state.members.items():
-                z.writestr(name, raw)
+                z.writestr(zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0)), raw)
         raw = stream.getvalue()
         state.artifact["digest"] = "sha256:" + hashlib.sha256(raw).hexdigest()
         return raw
@@ -285,6 +285,13 @@ def test_mock_native_artifact_reader_joins_exact_receipt_attempt_source_and_term
         == value["manifest"]["material"]["required_evidence"][0]
     )
     assert all("POST" not in call for call in retained.calls)
+
+
+def test_mock_native_archive_bytes_do_not_change_with_wall_clock(retained, monkeypatch):
+    monkeypatch.setattr(zipfile.time, "localtime", lambda _seconds: (2001, 1, 1, 0, 0, 0, 0, 1, -1))
+    first = retained.archive()
+    monkeypatch.setattr(zipfile.time, "localtime", lambda _seconds: (2031, 1, 1, 0, 0, 0, 0, 1, -1))
+    assert retained.archive() == first
 
 
 @pytest.mark.parametrize(

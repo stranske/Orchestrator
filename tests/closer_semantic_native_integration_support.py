@@ -184,7 +184,35 @@ def integrated_native_source_reference():
     observer_successor = native["closer_native_observer.py"]
     assert original["closer_native_observer.py"] == observer_successor["before_file_sha256"]
     original["closer_native_observer.py"] = observer_successor["after_file_sha256"]
+    command_evidence = native_command_evidence_reference()
+    for filename, change in command_evidence["files"].items():
+        assert filename not in original
+        original[filename] = change["after_file_sha256"]
     return original
+
+
+NATIVE_COMMAND_EVIDENCE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_native_command_evidence_v1.json"
+)
+NATIVE_COMMAND_EVIDENCE_SHA256 = "3f454212c351bff30d29f19c07e75381541084d453d539056f189daea92b2f92"
+
+
+def native_command_evidence_reference():
+    """One current parser/projection successor; historical references stay immutable."""
+    raw = NATIVE_COMMAND_EVIDENCE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == NATIVE_COMMAND_EVIDENCE_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "native-command-evidence-source-successor/v1"
+    assert value["base_commit"] == "a9b85b503597fa29ec1c468208a7f1e512fe3598"
+    assert {
+        filename: change["changed_top_level"] for filename, change in value["files"].items()
+    } == {
+        "closer_codex_appserver_bootstrap.py": "TurnResponseData",
+        "closer_codex_owned_stdio.py": "finish_turn_from_run",
+        "closer_native_source_upgrade.py": "_rebased_policy",
+    }
+    return value
 
 
 CONTROLLED_INITIALIZATION_MANIFEST = (

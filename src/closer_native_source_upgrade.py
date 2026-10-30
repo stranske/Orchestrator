@@ -912,6 +912,13 @@ def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -
             helper = _canonical(new["module_dir"]) / "closer_codex_confinement_probe.py"
             confinement["helper_path"] = str(helper)
             confinement["helper_sha256"] = new["modules"][helper.name]
+            if consumer.get("reader_entrypoint") == "closer_codex_owned_stdio.SourceReader":
+                reader_sha256 = new["modules"].get("closer_codex_owned_stdio.py")
+                _need(
+                    isinstance(reader_sha256, str) and _DIGEST.fullmatch(reader_sha256),
+                    "owned stdio reader source unavailable",
+                )
+                consumer["reader_source_sha256"] = reader_sha256
     except (KeyError, TypeError) as exc:
         raise SourceUpgradeHeld("policy lacks reviewed rebase structure") from exc
     try:
