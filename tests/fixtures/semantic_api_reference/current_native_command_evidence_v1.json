@@ -12,14 +12,24 @@
       "outside_changed_top_level_ast_sha256": "b5ff0f7e8b37fd619cc04590ff10d19f89d3e539cd2ac978e046e3f85526f196"
     },
     "closer_codex_owned_stdio.py": {
-      "after_changed_top_level_ast_sha256": "2be3bb50bbbf173b58969051329b2a7f4696a8338ab673d0384487a04e90afd0",
-      "after_file_sha256": "080b009e5228a1a46b7d87ae7620a16de34888a6de8a4796729fa000cd35d0a9",
-      "after_module_ast_sha256": "6c176f8a298011085c4d0830df285e43eb4e493773c4057502d31c2306893da4",
+      "after_changed_top_level_ast_sha256": "6220a6f1b341023f1c3ce0454469643a9c2cfff978bead8c2db6b995d121d7f9",
+      "after_file_sha256": "d51389e12af322425df7b3588dd8878879008c2069a4dfbd60713ab8bbbb21d7",
+      "after_module_ast_sha256": "1b2bc671523963fd01b8b59752a789e24c424cf78a6abc31ade8dd60702c6d5a",
       "before_changed_top_level_ast_sha256": "e8f7028a1649617325b1b7b6b98ebcc5f08c724e5c62b19c9f47b4345353ee76",
       "before_file_sha256": "388cb1cf63f0af1e2bf45b1177c79fd79c0d6c732098dad4ffd953ec17c2761d",
       "before_module_ast_sha256": "d3512948f856d1df2153344540ec4697804fb71483a08378c13df13b357679e6",
       "changed_top_level": "finish_turn_from_run",
       "outside_changed_top_level_ast_sha256": "7400a61fe59241c0b718c8ba5d3f9533fc7d32e66ab9ff5a042de1784c4f253e"
+    },
+    "closer_native_source_upgrade.py": {
+      "after_changed_top_level_ast_sha256": "83e0008692e48642d8e2e02ac92136779793ce6780d73015a97f475e282a6532",
+      "after_file_sha256": "5308ea8e009be81f299793f722290b549a835f303a9e69c9b800a2f970e2359f",
+      "after_module_ast_sha256": "a5e25d9f407f625ed97eb2925eadc884e2ad6242ba7d44ba62f8d5624566fa67",
+      "before_changed_top_level_ast_sha256": "4cc8e7363129662cb07a313290b4121dce8e4475432cd2ed684ec5ed4c26e9a7",
+      "before_file_sha256": "7b3b5db03ffb1a141253e5d143bbfc5d5159e6952440038fb9cf0373efe84cc5",
+      "before_module_ast_sha256": "a0e0085f9035c3a1f2f24ae9c33f78aa58a330b1daab06df350013b66c7ca2fc",
+      "changed_top_level": "_rebased_policy",
+      "outside_changed_top_level_ast_sha256": "0095c6caf214172e27ee383a889cd45d72c5da7367ceeda03d3d5a6278668e25"
     }
   },
   "schema": "native-command-evidence-source-successor/v1"

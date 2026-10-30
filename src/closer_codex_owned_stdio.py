@@ -845,6 +845,10 @@ def finish_turn_from_run(frame):
             parsed.feed(raw)
         except ProtocolHeld:
             raise BootstrapHeld("native_turn_response_held") from None
+    try:
+        projection = parsed.projection()
+    except ProtocolHeld:
+        raise BootstrapHeld("native_turn_response_held") from None
     s.phase = "completed"
     s.child.stdin.close()
     s.child.stdin = None
@@ -868,7 +872,7 @@ def finish_turn_from_run(frame):
                     "owned_stdio_output_exhausted",
                 )
     s.child.wait(timeout=_io_live(s, allow_exit=True))
-    return parsed.projection(), ""
+    return projection, ""
 
 
 def counted_bytes(frame):

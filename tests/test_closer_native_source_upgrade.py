@@ -577,6 +577,82 @@ def test_lawful_policy_rebase_refuses_unreviewed_controller_policy_changes(tmp_p
             upgrade._rebased_policy({"policy": old_policy}, changed, new_state)
 
 
+def test_rebase_rebinds_only_owned_stdio_reader_to_current_runtime_digest(tmp_path):
+    module_dir = tmp_path / "runtime"
+    module_dir.mkdir()
+    helper = module_dir / "closer_codex_confinement_probe.py"
+    helper.write_text("# confinement probe\n")
+    old_reader_sha, new_reader_sha = "a" * 64, "d" * 64
+
+    def consumer(entrypoint, reader_sha256):
+        return {
+            "reader_entrypoint": entrypoint,
+            "reader_source_sha256": reader_sha256,
+            "native_bootstrap": {
+                "private_root": "/private/tmp/old-private",
+                "confinement": {
+                    "helper_path": "/private/tmp/old-probe.py",
+                    "helper_sha256": "c" * 64,
+                },
+            },
+        }
+
+    old_policy = {
+        "correction_controller_installation": {
+            "config": {
+                "source_sha": "a" * 40,
+                "state_path": "/private/tmp/old.campaign.json",
+                "native_transport_source_sha256": "b" * 64,
+                "consumers": {
+                    "owned": consumer("closer_codex_owned_stdio.SourceReader", old_reader_sha),
+                    "legacy": consumer(
+                        "closer_correction_controller.NativeConsumerReader", old_reader_sha
+                    ),
+                    "unknown": consumer("example.Reader", old_reader_sha),
+                },
+            }
+        }
+    }
+    new_state = tmp_path / "campaigns" / "fresh.campaign.json"
+    new_state.parent.mkdir()
+    expected = json.loads(json.dumps(old_policy))
+    config = expected["correction_controller_installation"]["config"]
+    config["source_sha"] = "e" * 40
+    config["state_path"] = str(new_state)
+    config["native_transport_source_sha256"] = "f" * 64
+    for value in config["consumers"].values():
+        value["native_bootstrap"]["private_root"] = str(
+            new_state.parent.parent / "controller-private"
+        )
+        value["native_bootstrap"]["confinement"] = {
+            "helper_path": str(helper),
+            "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+        }
+    config["consumers"]["owned"]["reader_source_sha256"] = new_reader_sha
+    new = {
+        "candidate_sha": "e" * 40,
+        "module_dir": str(module_dir),
+        "modules": {
+            "closer_correction_native_effects.py": "f" * 64,
+            helper.name: hashlib.sha256(helper.read_bytes()).hexdigest(),
+            "closer_codex_owned_stdio.py": new_reader_sha,
+        },
+        "policy": expected,
+    }
+    actual = upgrade._rebased_policy({"policy": old_policy}, new, new_state)
+    consumers = actual["correction_controller_installation"]["config"]["consumers"]
+    assert consumers["owned"]["reader_source_sha256"] == new_reader_sha
+    assert consumers["legacy"]["reader_source_sha256"] == old_reader_sha
+    assert consumers["unknown"]["reader_source_sha256"] == old_reader_sha
+    for bad in (None, "short", "D" * 64):
+        changed = json.loads(json.dumps(new))
+        changed["modules"]["closer_codex_owned_stdio.py"] = bad
+        with pytest.raises(
+            upgrade.SourceUpgradeHeld, match="owned stdio reader source unavailable"
+        ):
+            upgrade._rebased_policy({"policy": old_policy}, changed, new_state)
+
+
 @pytest.mark.parametrize(
     ("principal", "message"),
     [

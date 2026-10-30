@@ -195,7 +195,7 @@ NATIVE_COMMAND_EVIDENCE_MANIFEST = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_native_command_evidence_v1.json"
 )
-NATIVE_COMMAND_EVIDENCE_SHA256 = "11f09486082784bfa0e3ab0ebb88b41413fba2ef93a51caede1ac5199189232b"
+NATIVE_COMMAND_EVIDENCE_SHA256 = "3f454212c351bff30d29f19c07e75381541084d453d539056f189daea92b2f92"
 
 
 def native_command_evidence_reference():
@@ -210,6 +210,7 @@ def native_command_evidence_reference():
     } == {
         "closer_codex_appserver_bootstrap.py": "TurnResponseData",
         "closer_codex_owned_stdio.py": "finish_turn_from_run",
+        "closer_native_source_upgrade.py": "_rebased_policy",
     }
     return value
 

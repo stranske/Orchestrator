@@ -155,7 +155,10 @@ def test_native_agent_text_is_json_escaped_and_cannot_inject_projection_events()
     }
 
 
-def test_finish_turn_returns_projection_to_existing_codex_stream_consumer(monkeypatch):
+@pytest.mark.parametrize("projection_held", [False, True])
+def test_finish_turn_returns_projection_to_existing_codex_stream_consumer(
+    monkeypatch, projection_held
+):
     stdout_read, stdout_write = os.pipe()
     stderr_read, stderr_write = os.pipe()
     os.close(stdout_write)
@@ -179,7 +182,18 @@ def test_finish_turn_returns_projection_to_existing_codex_stream_consumer(monkey
     monkeypatch.setattr(owned, "_actual_session", lambda _frame: session)
     monkeypatch.setattr(owned, "_next_native_frame", lambda _session: next(frames))
     monkeypatch.setattr(owned, "_io_live", lambda *_args, **_kwargs: 1)
+    if projection_held:
+
+        def reject_projection(_parser):
+            raise ProtocolHeld("synthetic private projection detail")
+
+        monkeypatch.setattr(TurnResponseData, "projection", reject_projection)
     try:
+        if projection_held:
+            with pytest.raises(owned.BootstrapHeld, match="^native_turn_response_held$"):
+                owned.finish_turn_from_run(inspect.currentframe())
+            assert session.phase == "turn" and not child.stdin.closed
+            return
         output, stderr = owned.finish_turn_from_run(inspect.currentframe())
     finally:
         child.stdout.close()
