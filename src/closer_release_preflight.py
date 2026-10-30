@@ -269,20 +269,21 @@ def _collection_floor_preflight(config: ReleasePreflight, env: dict[str, str]) -
     floor-lag relaxation: a mismatch must be reconciled by main CI first.
     """
     floor = verify.load_floor_at(config.source / ".verify-floor.json")
+    if not isinstance(floor, dict):
+        raise PreflightError("floor_invalid", "candidate .verify-floor.json must contain an object")
     if floor.get(verify.FLOOR_UNREADABLE):
         raise PreflightError("floor_unreadable", "candidate .verify-floor.json is unreadable")
-    if "collected" not in floor:
+    if "collected" not in floor or "passed" not in floor:
         raise PreflightError(
             "floor_missing",
-            "candidate has no persisted collection floor; release requires a reconciled main floor",
+            "candidate has no persisted collection/pass floor; release requires a reconciled main floor",
         )
-    try:
-        expected = int(floor["collected"])
-    except (TypeError, ValueError) as exc:
+    expected, passed = floor["collected"], floor["passed"]
+    if type(expected) is not int or type(passed) is not int:
         raise PreflightError(
-            "floor_invalid", "candidate collection floor is not an integer"
-        ) from exc
-    if expected < 1:
+            "floor_invalid", "candidate collection and pass floors must be strict integers"
+        )
+    if expected < 1 or passed < 0:
         raise PreflightError("floor_invalid", "candidate collection floor must be positive")
 
     probe_env = dict(env)
@@ -337,7 +338,7 @@ def _collection_floor_preflight(config: ReleasePreflight, env: dict[str, str]) -
     # interpretation.  The pass floor is intentionally held at its recorded
     # value because this probe does not execute tests.
     problems = verify._floor_problems(  # noqa: SLF001 - canonical pure floor contract
-        floor, {"collected": collected, "passed": int(floor.get("passed", 0)), "skipped": 0}
+        floor, {"collected": collected, "passed": passed, "skipped": 0}
     )
     if problems:
         raise PreflightError(

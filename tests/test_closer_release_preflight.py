@@ -133,12 +133,53 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
 
 def test_collection_floor_preflight_accepts_an_exact_collection(tmp_path, monkeypatch):
     config = fixture_config(tmp_path)
+    calls = []
+
+    def collect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, "1 test collected in 0.01s\n", "")
+
     monkeypatch.setattr(
         preflight.subprocess,
         "run",
-        lambda *a, **kw: subprocess.CompletedProcess(a, 0, "1 test collected in 0.01s\n", ""),
+        collect,
     )
     assert preflight._collection_floor_preflight(config, {}) == {"collected": 1, "floor": 1}
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == [
+        str(config.python),
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    ]
+    assert kwargs["cwd"] == config.source
+    assert Path(kwargs["env"]["ORCH_STATE_DIR"]).name == "state"
+    assert Path(kwargs["env"]["ORCH_LOCAL_RUNTIME"]).name == "runtime"
+    assert (
+        Path(kwargs["env"]["ORCH_STATE_DIR"]).parent
+        == Path(kwargs["env"]["ORCH_LOCAL_RUNTIME"]).parent
+    )
+
+
+@pytest.mark.parametrize("value", [None, [], True, 1.5])
+def test_collection_floor_preflight_rejects_non_object_or_noninteger_floor_counters(
+    tmp_path, monkeypatch, value
+):
+    config = fixture_config(tmp_path)
+    floor = config.source / ".verify-floor.json"
+    floor.write_text(
+        json.dumps(value if value in (None, []) else {"collected": value, "passed": 1})
+    )
+    monkeypatch.setattr(
+        preflight.subprocess, "run", lambda *a, **kw: pytest.fail("must reject before collection")
+    )
+    with pytest.raises(preflight.PreflightError) as raised:
+        preflight._collection_floor_preflight(config, {})
+    assert raised.value.code == "floor_invalid"
 
 
 def test_collection_floor_preflight_refuses_a_persisted_floor_mismatch(tmp_path, monkeypatch):
