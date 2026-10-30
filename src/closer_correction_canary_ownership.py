@@ -343,6 +343,18 @@ def collect_confirmed_existing(*, reads, seed, docs, rows):
     )
     target_rows, source_rows = rows
     target_refs, source_refs = _crossrefs(target_rows), _crossrefs(source_rows)
+    for number in target_refs.keys() & source_refs.keys():
+        _need(target_refs[number] == source_refs[number], "ambiguous canary lineage")
+    context_refs = {
+        TARGET_PR: {"node_id": TARGET_NODE_ID, "is_pr": True},
+        SOURCE_ISSUE: {"node_id": SOURCE_NODE_ID, "is_pr": False},
+    }
+    for references in (target_refs, source_refs):
+        for number, expected in context_refs.items():
+            _need(
+                number not in references or references[number] == expected,
+                "canary context lineage differs",
+            )
     _need(
         target_refs.get(ISSUE) == {"node_id": ISSUE_NODE_ID, "is_pr": False}
         and target_refs.get(DELIVERY_PR) == {"node_id": DELIVERY_NODE_ID, "is_pr": True},

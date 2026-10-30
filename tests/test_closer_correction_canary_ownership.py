@@ -371,6 +371,61 @@ def test_collect_ownership_returns_standard_existing_incumbent_for_actual_seed_s
     assert observed["unselected_native_references"][-1]["kind"] == "unselected_unknown"
 
 
+@pytest.mark.parametrize("number", [canary.ISSUE, "999"])
+@pytest.mark.parametrize("damage", ["node", "type"])
+def test_conflicting_identity_between_native_timelines_holds_before_snapshot(
+    monkeypatch, number, damage
+):
+    reads, seed, docs, rows, _paths, calls = world(monkeypatch)
+    index = 1 if number == canary.ISSUE else 0
+    node = canary.ISSUE_NODE_ID if number == canary.ISSUE else "I_999"
+    rows[index].append(
+        cross(number, "conflicting-node" if damage == "node" else node, is_pr=damage == "type")
+    )
+    with pytest.raises(ownership.OwnershipUnavailable, match="ambiguous canary lineage"):
+        canary.collect_confirmed_existing(reads=reads, seed=seed, docs=docs, rows=rows)
+    assert calls == []
+
+
+@pytest.mark.parametrize("timeline", [0, 1])
+@pytest.mark.parametrize("number", [canary.TARGET_PR, canary.SOURCE_ISSUE])
+@pytest.mark.parametrize("damage", ["node", "type"])
+def test_context_identity_is_checked_before_removing_native_reference(
+    monkeypatch, timeline, number, damage
+):
+    reads, seed, docs, rows, _paths, calls = world(monkeypatch)
+    is_pr = number == canary.TARGET_PR
+    node = canary.TARGET_NODE_ID if is_pr else canary.SOURCE_NODE_ID
+    for row in rows:
+        row[:] = [event for event in row if str(event["source"]["issue"]["number"]) != number]
+    rows[timeline].append(
+        cross(
+            number,
+            "conflicting-node" if damage == "node" else node,
+            is_pr=not is_pr if damage == "type" else is_pr,
+        )
+    )
+    with pytest.raises(ownership.OwnershipUnavailable, match="canary context lineage differs"):
+        canary.collect_confirmed_existing(reads=reads, seed=seed, docs=docs, rows=rows)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("assignees", [{"login": "other", "id": 9}]), ("labels", [{"name": "agents:other"}])],
+)
+def test_original_source_ownership_guard_runs_in_complete_collector(monkeypatch, field, value):
+    reads, seed, _docs, _rows, paths, _calls = world(monkeypatch)
+    paths[f"repos/{canary.REPOSITORY}/issues/{canary.SOURCE_ISSUE}"][field] = value
+    with pytest.raises(ownership.OwnershipUnavailable, match="source agent ownership unresolved"):
+        ownership.collect_ownership(
+            github=closer.GitHub(deadline=time.time() + 60, api_fn=reads.github.api_fn),
+            seed=seed,
+            deadline=time.time() + 60,
+            now=time.time(),
+        )
+
+
 @pytest.mark.parametrize(
     "damage",
     [

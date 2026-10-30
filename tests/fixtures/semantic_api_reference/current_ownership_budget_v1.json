@@ -3,8 +3,8 @@
   "files": {
     "closer_correction_canary_ownership.py": {
       "added_module": true,
-      "after_file_sha256": "be99b506ab184dc116e5fad5579846e13b28c1026f5c744d2d105fc44f0a4bad",
-      "after_module_ast_sha256": "6dd2a7b1c9950894b5e4d79779cf921fe5dc2a833ecb3cc5803b8d394607b7d4",
+      "after_file_sha256": "b7af2081faa331b8f28e1695db6beae69e2c60c63c72cce33e3b67ed23cf9549",
+      "after_module_ast_sha256": "30fa907a36a1a09f77e8b5dafe526b4e8124a3d87c9e53d6506de5d75884f5c0",
       "before_file_sha256": null,
       "before_module_ast_sha256": null
     },
