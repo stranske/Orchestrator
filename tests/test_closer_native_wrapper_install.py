@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -664,6 +665,89 @@ def test_prospective_install_composes_real_v2_proof_and_preserves_old_bytes(
         match="(prior prospective install|no-start)",
     ):
         install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+
+
+def test_prospective_plan_ignores_retired_predecessor_lock_closure(
+    capacity_host, monkeypatch, tmp_path
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    receipt = json.loads(args[-1].read_text())
+    swap = json.loads(Path(receipt["witnesses"]["swap_intent"]["path"]).read_text())
+    predecessor = swap["plan"]
+    retired_roots = [
+        Path(predecessor[key])
+        for key in (
+            "old_observation_root",
+            "new_observation_root",
+            "old_campaign_root",
+            "new_campaign_root",
+            "custody_path",
+        )
+    ]
+    for root in retired_roots:
+        shutil.rmtree(root)
+
+    proposal = install.plan_prospective(*args)
+
+    assert proposal["eligible"] is True
+    assert all(
+        row["path"] not in {str(root) for root in retired_roots}
+        and not any(str(root) in row["path"] for root in retired_roots)
+        for row in proposal["locks"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("root_name", "reason"),
+    (("old", "mandatory lock missing"), ("new", "new native namespace is not pristine")),
+)
+def test_prospective_plan_requires_current_native_observation_fences(
+    capacity_host, monkeypatch, tmp_path, root_name, reason
+):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    manifest_path = args[0] if root_name == "old" else args[3]
+    manifest = json.loads(Path(manifest_path).read_text())
+    lock = Path(manifest["mechanism_contract"]["observation_root"]) / "native-entry.lock"
+    lock.unlink()
+
+    with pytest.raises(install.InstallHeld, match=reason):
+        install.plan_prospective(*args)
+
+
+def test_prospective_plan_requires_current_old_state_lock(capacity_host, monkeypatch, tmp_path):
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    Path(str(args[1]) + ".lock").unlink()
+
+    with pytest.raises(install.InstallHeld, match="mandatory lock missing"):
+        install.plan_prospective(*args)
+
+
+@pytest.mark.parametrize("lock_name", ("native-entry.lock", "native-supervisor.lock"))
+def test_prospective_apply_refuses_contended_new_observation_lock(
+    capacity_host, monkeypatch, tmp_path, lock_name
+):
+    import fcntl
+
+    args = _prospective_install_inputs(capacity_host, monkeypatch, tmp_path)
+    proposal = install.plan_prospective(*args)
+    wrapper = Path(proposal["wrapper"])
+    before = wrapper.read_bytes()
+    receipt = Path(proposal["receipt"])
+    intent = receipt.with_name("wrapper-install-prospective-intent.json")
+    seal = receipt.with_name("wrapper-install-prospective-seal.json")
+    new_manifest = json.loads(Path(args[3]).read_text())
+    lock = Path(new_manifest["mechanism_contract"]["observation_root"]) / lock_name
+    fd = os.open(lock, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(RuntimeError, match="lock_contended"):
+            install.apply_prospective(*args, expected_plan_sha256=proposal["plan_sha256"])
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+    assert wrapper.read_bytes() == before
+    assert not intent.exists() and not receipt.exists() and not seal.exists()
 
 
 @pytest.mark.parametrize(

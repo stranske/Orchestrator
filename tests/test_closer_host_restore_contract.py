@@ -261,6 +261,17 @@ def test_static_dynamic_lock_collision_keeps_existing_requirement(tmp_path, monk
     assert not collision.exists()
 
 
+def test_historical_restore_refuses_missing_campaign_root(tmp_path, monkeypatch):
+    request, *_ = _world(tmp_path, monkeypatch)
+    intent = json.loads(Path(json.loads(request.read_text())["swap_intent"]["path"]).read_text())
+    Path(intent["plan"]["old_campaign_root"]).rmdir()
+
+    held = restore.plan(request)
+
+    assert held["eligible"] is False
+    assert held["reason"] == "campaign_scan_invalid"
+
+
 def test_planned_static_lock_removal_refuses_without_recreating_or_restoring(tmp_path, monkeypatch):
     request, wrapper, backup, _, _ = _world(tmp_path, monkeypatch)
     proposal = restore.plan(request)
