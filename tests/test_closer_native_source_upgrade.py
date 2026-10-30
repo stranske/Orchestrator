@@ -57,6 +57,7 @@ def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
         },
         "queue": {
             "events": [],
+            "progress": [],
             "accounting": [
                 {
                     "reason": "observation_failed",
@@ -67,7 +68,15 @@ def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
             ],
         },
     }
-    upgrade._clock_no_act(fixture["correction"], fixture["queue"], strong_as_of=True)
+    disposition = {
+        "workers": 1,
+        "coding_continuations": None,
+        "result_stages": ["act", "exception", "interpret", "prepare"],
+        "native_effect_contract": None,
+    }
+    upgrade._clock_no_act(
+        fixture["correction"], fixture["queue"], strong_as_of=True, disposition=disposition
+    )
     for path, value in (
         (("correction", "reason"), "different stop"),
         (("correction", "act_authorized"), True),
@@ -77,9 +86,40 @@ def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
         changed = json.loads(json.dumps(fixture))
         changed[path[0]][path[1]] = value
         with pytest.raises(upgrade.SourceUpgradeHeld):
-            upgrade._clock_no_act(changed["correction"], changed["queue"], strong_as_of=True)
+            upgrade._clock_no_act(
+                changed["correction"],
+                changed["queue"],
+                strong_as_of=True,
+                disposition=disposition,
+            )
     with pytest.raises(upgrade.SourceUpgradeHeld):
-        upgrade._clock_no_act(fixture["correction"], fixture["queue"], strong_as_of=False)
+        upgrade._clock_no_act(
+            fixture["correction"], fixture["queue"], strong_as_of=False, disposition=disposition
+        )
+    for key, value in (
+        ("workers", 2),
+        ("coding_continuations", []),
+        ("result_stages", ["exception", "interpret", "prepare"]),
+        ("native_effect_contract", {"effect": "native"}),
+    ):
+        changed_disposition = dict(disposition)
+        changed_disposition[key] = value
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._clock_no_act(
+                fixture["correction"],
+                fixture["queue"],
+                strong_as_of=True,
+                disposition=changed_disposition,
+            )
+    progressed = json.loads(json.dumps(fixture))
+    progressed["queue"]["progress"] = [{"operation_id": "effect"}]
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._clock_no_act(
+            progressed["correction"],
+            progressed["queue"],
+            strong_as_of=True,
+            disposition=disposition,
+        )
 
 
 def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
