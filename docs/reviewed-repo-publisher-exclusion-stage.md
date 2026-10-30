@@ -11,6 +11,11 @@ generates a successor helper whose filename is its SHA-256, and renders matching
 `demand_router.py` and `accountability.py` payloads.  The recipe records every
 canonical preimage digest and mode, including the unchanged `controller.py`.
 
+The offline regression suite uses the immutable four-file capture in
+`tests/fixtures/reviewed_repo_publisher_exclusion/`; it copies those bytes into
+a temporary canonical layout and rewrites only the copied helper path.  Tests
+therefore never depend on, import, or execute the live local publisher.
+
 The staged behavior is fail-closed before any cached/dynamic API read or route:
 
 - cached targets and cached `pr_target` locators for `stranske/Collab-Admin`

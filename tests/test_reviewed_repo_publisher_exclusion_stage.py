@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-import os
 import shutil
 import sys
 import types
@@ -14,15 +13,9 @@ import pytest
 from scripts import apply_reviewed_repo_publisher_exclusion_stage as apply_stage
 from scripts import stage_reviewed_repo_publisher_exclusion as stage
 
-SOURCE = Path(
-    os.environ.get(
-        "REVIEWED_REPO_PUBLISHER_CAPTURE",
-        "/Users/teacher/.codex/automations/reviewed-repo-automation-controller",
-    )
-)
-pytestmark = pytest.mark.skipif(
-    not SOURCE.is_dir(),
-    reason="requires an explicit captured reviewed-repo publisher source; no live publisher is invoked",
+FIXTURE = Path(__file__).parent / "fixtures" / "reviewed_repo_publisher_exclusion"
+HELPER_NAME = (
+    "delivery-continuity-a1720a1d8e922529db556ecd989792d5410e85d6ef627e385584f20b9b1cd40e.py"
 )
 
 
@@ -35,10 +28,11 @@ def module(path: Path, name: str):
 
 
 def captured_publisher(tmp_path: Path) -> Path:
+    """Materialize only the reviewed static capture; never the live publisher."""
     root = tmp_path / "controller"
     root.mkdir()
     for name in ("controller.py", "demand_router.py", "accountability.py"):
-        shutil.copy2(SOURCE / name, root / name)
+        shutil.copy2(FIXTURE / f"{name}.txt", root / name)
     router = root / "demand_router.py"
     source = router.read_text()
     helper = Path(
@@ -48,8 +42,9 @@ def captured_publisher(tmp_path: Path) -> Path:
             if line.startswith("_CONTINUITY_PATH")
         )
     )
-    shutil.copy2(helper, root / helper.name)
-    router.write_text(source.replace(str(helper), str(root / helper.name)))
+    assert helper.name == HELPER_NAME
+    shutil.copy2(FIXTURE / f"{HELPER_NAME}.txt", root / HELPER_NAME)
+    router.write_text(source.replace(str(helper), str(root / HELPER_NAME)))
     return root
 
 
