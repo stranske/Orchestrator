@@ -351,6 +351,138 @@ def test_installed_release_refuses_inspector_mutation_during_execution(tmp_path,
     assert len(calls) == 2
 
 
+def _shared_digest_installed_release_fixture(tmp_path, monkeypatch, *, mutate_helper=False):
+    home = tmp_path / "home"
+    mirror = home / ".codex/orchestrator-mirror"
+    inspector = mirror / "scripts/install_verified_snapshot.py"
+    helper = mirror / "source_snapshot_digest.py"
+    inspector.parent.mkdir(parents=True)
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_text(
+        "def snapshot_digest(snapshot, *, installer_name):\n"
+        "    assert installer_name == 'install_verified_snapshot.py'\n"
+        "    return 'd' * 64\n"
+    )
+    inspector.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n"
+        "sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))\n"
+        "import source_snapshot_digest as shared\n"
+        "if Path(shared.__file__) != Path(__file__).resolve().parents[1] / 'source_snapshot_digest.py':\n"
+        " raise SystemExit(9)\n"
+        "if '--generation-token' in sys.argv:\n"
+        " if __import__('os').environ.get('MUTATE_HELPER') == '1':\n"
+        "  Path(__file__).resolve().parents[1].joinpath('source_snapshot_digest.py').write_text(\"VALUE = 'evil'\\n\")\n"
+        " print('generation-v1:fixture')\n"
+        "else:\n"
+        " print(shared.snapshot_digest(Path(sys.argv[1]), installer_name=Path(__file__).name))\n"
+    )
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    journal = tmp_path / "release.json"
+    journal.write_text("{}")
+
+    class Record:
+        def __init__(self, _path):
+            pass
+
+        def read(self):
+            return {
+                "stage": "installed",
+                "candidate_sha": "a" * 40,
+                "installed_generation": "generation-v1:fixture",
+                "verification": {
+                    "verified": True,
+                    "snapshot_digest": "d" * 64,
+                    "snapshot_path": str(snapshot),
+                },
+            }
+
+    calls = []
+    actual_run = upgrade.subprocess.run
+
+    def capture_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return actual_run(*args, **kwargs)
+
+    monkeypatch.setenv("HOME", str(home))
+    if mutate_helper:
+        monkeypatch.setenv("MUTATE_HELPER", "1")
+    monkeypatch.setattr(closer_release, "ReleaseRecord", Record)
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_SHARED_DIGEST_INSTALLER_SHA256",
+        hashlib.sha256(inspector.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_SHARED_DIGEST_HELPER_SHA256",
+        hashlib.sha256(helper.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(upgrade.subprocess, "run", capture_run)
+    return journal, inspector, helper, calls
+
+
+def test_installed_release_preloads_the_pinned_shared_digest_helper(tmp_path, monkeypatch):
+    journal, inspector, helper, calls = _shared_digest_installed_release_fixture(
+        tmp_path, monkeypatch
+    )
+
+    release = upgrade._installed_release(journal, "a" * 40)
+
+    assert release["digest_helper"] == str(helper)
+    assert release["digest_helper_sha256"] == hashlib.sha256(helper.read_bytes()).hexdigest()
+    assert helper.parent == inspector.parents[1]
+    assert not (helper.parent / "src").exists()
+    assert len(calls) == 2
+    for args, kwargs in calls:
+        command = args[0]
+        assert command[5:7] == [str(inspector), str(helper)]
+        payload = json.loads(kwargs["input"])
+        assert payload == {"helper": helper.read_text(), "inspector": inspector.read_text()}
+
+
+def test_installed_release_refuses_unpinned_shared_digest_helper_before_execution(
+    tmp_path, monkeypatch
+):
+    journal, _inspector, helper, calls = _shared_digest_installed_release_fixture(
+        tmp_path, monkeypatch
+    )
+    helper.write_text("def snapshot_digest(*args, **kwargs): return 'substituted'\n")
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="digest helper differs"):
+        upgrade._installed_release(journal, "a" * 40)
+    assert calls == []
+
+
+def test_installed_release_refuses_missing_shared_digest_helper_before_execution(
+    tmp_path, monkeypatch
+):
+    journal, _inspector, helper, calls = _shared_digest_installed_release_fixture(
+        tmp_path, monkeypatch
+    )
+    helper.unlink()
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="digest helper unavailable"):
+        upgrade._installed_release(journal, "a" * 40)
+    assert calls == []
+
+
+def test_installed_release_detects_shared_helper_mutation_after_captured_execution(
+    tmp_path, monkeypatch
+):
+    journal, _inspector, _helper, calls = _shared_digest_installed_release_fixture(
+        tmp_path, monkeypatch, mutate_helper=True
+    )
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="digest helper changed"):
+        upgrade._installed_release(journal, "a" * 40)
+    # The second invocation still used captured helper bytes; a mutable import
+    # would instead fail the digest readback with the substituted value.
+    assert len(calls) == 2
+
+
 def test_identity_rejects_principal_epoch_and_anchor_changes():
     old = {
         "policy": {
