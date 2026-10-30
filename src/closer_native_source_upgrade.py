@@ -52,7 +52,9 @@ REVIEWED_CAPACITY_DESCRIPTOR_SHA256 = (
 # source-upgrade candidate.
 REVIEWED_CLOCK_CANDIDATE = "17be674425c41f619f38325c4266c5983366094f"
 REVIEWED_CLOCK_MODULES_SHA256 = "a74ae76eb426482d528e695926d12a53311081925e75c939181fdbdb20508791"
-REVIEWED_CLOCK_DESCRIPTOR_SHA256 = "8deaf7d76cd0965f44f031521121d03f7f104147b99fc34bdbe0f71cc7fef5b2"
+REVIEWED_CLOCK_DESCRIPTOR_SHA256 = (
+    "8deaf7d76cd0965f44f031521121d03f7f104147b99fc34bdbe0f71cc7fef5b2"
+)
 # Deliberately literal: the inspector is executed before any installed-release
 # fact can be trusted.  This is the clean reviewed f858 source file, not a
 # digest supplied by a release journal or the inspected generation.
@@ -223,11 +225,14 @@ def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
     )
 
 
-def _clock_no_act(correction: dict[str, Any], queue: dict[str, Any], *, strong_as_of: object) -> None:
+def _clock_no_act(
+    correction: dict[str, Any], queue: dict[str, Any], *, strong_as_of: object
+) -> None:
     """Accept only the reviewed source17be pre-ACT clock refusal."""
     _need(isinstance(correction, dict), "clock disposition has no correction")
     _need(
-        correction == {
+        correction
+        == {
             "status": "owned_unknown",
             "reason": "native observation clock is not current",
             "remote_authenticated": False,
@@ -367,7 +372,7 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
         in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
         "old release is not reviewed no-ACT predecessor",
     )
-    candidate = doc.get("candidate_sha")
+    candidate = cast(str, doc.get("candidate_sha"))
     expected_modules = {
         REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_MODULES_SHA256,
         REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_MODULES_SHA256,
@@ -397,8 +402,7 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
     )
     _need(
         doc.get("public_runtime_descriptor") == "closer-runtime-package.json"
-        and _sha(descriptor_raw)
-        == expected_descriptor,
+        and _sha(descriptor_raw) == expected_descriptor,
         "old public descriptor is not the reviewed predecessor",
     )
     try:
@@ -482,9 +486,9 @@ def _old_diagnostic(
         "else:\n"
         " correction=results['exception']['correction']; queue=results['act']['queue_receipt']\n"
         f" if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}:\n"
-        "  import calendar,time, closer_dispatcher as cd, closer_role_qualification as roles, execution_profiles as profiles\n"
-        "  stage=results['exception']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; stamp=proof['observed']['finished']['os_started']; at=calendar.timegm(time.strptime(stamp,'%a %b %d %H:%M:%S %Y')); profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at)\n"
-        "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id') and expected.get('task_type')=='closer_exception' and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and record is not None and record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and actual.get('exit')==0)\n"
+        "  import closer_dispatcher as cd, closer_role_qualification as roles, dispatcher as dispatch, execution_profiles as profiles\n"
+        "  stage=results['exception']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; proved=cd._revalidate_controlled_proof(proof,run_id=actual['run_id'],basis=expected['basis'],receipt_root=dispatch.DISPATCH_LOG_DIR); receipt=cd._read_controlled_receipt(proof['provider_result_ref'],dispatch.DISPATCH_LOG_DIR); at=receipt['completed_at']; execution=detail['native_execution']['phases']['B']; profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at)\n"
+        "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id')==proved.get('run_id')==receipt.get('run_id') and expected.get('task_type')=='closer_exception' and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and execution['started_at']<=at<=execution['finished_at'] and record is not None and record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and actual.get('exit')==0 and proved.get('exit')==0)\n"
         "verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets)\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
         "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'strong_as_of':strong_as_of,'capacity_disposition':capacity,'stop':verdict},sort_keys=True,separators=(',',':')))\n"

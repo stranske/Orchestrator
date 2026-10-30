@@ -567,6 +567,7 @@
       "tests/test_closer_conservative_intake.py",
       "tests/test_closer_controller_state_portable.py",
       "tests/test_closer_correction_owner.py",
+    "tests/test_closer_correction_owner_clock.py",
       "tests/test_closer_correction_retained_ref.py",
       "tests/test_closer_dispatcher_routing_independence.py",
       "tests/test_closer_dispatcher_scoped_integration.py",
