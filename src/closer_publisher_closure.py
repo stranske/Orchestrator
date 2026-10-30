@@ -30,7 +30,7 @@ MODULES = (
     "maintenance_receiver.py",
 )
 DYNAMIC_HELPER = (
-    "delivery-continuity-a1720a1d8e922529db556ecd989792d5410e85d6ef627e385584f20b9b1cd40e.py"
+    "delivery-continuity-5202c248a71d5b45a324d7e98b1865a43f1b20fe56b6903330ae153a314394e2.py"
 )
 EXTERNAL_BINDINGS = (
     ("accountability_guard", "/Users/teacher/.codex/bin/opener-liveness-guard.py"),

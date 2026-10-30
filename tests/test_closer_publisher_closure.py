@@ -371,16 +371,22 @@ def test_package_verifier_rejects_unlisted_directory(tmp_path):
 
 def test_actual_controller_closure_is_capturable_without_running_a_publisher(tmp_path, monkeypatch):
     """Import the actual graph without executing the publisher entrypoint."""
-    source = Path("/Users/teacher/.codex/automations/reviewed-repo-automation-controller")
+    source = Path(
+        os.environ.get(
+            "CLOSER_PUBLISHER_TEST_SOURCE",
+            "/Users/teacher/.codex/automations/reviewed-repo-automation-controller",
+        )
+    )
     if not source.is_dir():
         pytest.skip("external publisher is unavailable in this checkout")
+    data_root = Path(os.environ.get("CLOSER_PUBLISHER_TEST_DATA_ROOT", str(source)))
     receipt, _snapshot = _minimal_verified_source(tmp_path)
     tool = MODULE_DIR / closure.CAPTURE_IMPLEMENTATION
     output = tmp_path / "capture"
     descriptor = closure.capture(
         source,
         output,
-        controller_data_root=source,
+        controller_data_root=data_root,
         source_snapshot_receipt=receipt,
         source_capture_tool=tool,
     )
@@ -396,7 +402,7 @@ def test_actual_controller_closure_is_capturable_without_running_a_publisher(tmp
     entry, _after = closure.load_entrypoint(descriptor)
     assert callable(entry)
     assert origins["demand_router"] == (
-        str(source / "demand_router.py"),
+        str(data_root / "demand_router.py"),
         str(output / "demand_router.py"),
     )
     assert "demand_router" not in sys.modules
