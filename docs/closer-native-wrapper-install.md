@@ -42,12 +42,14 @@ its two pre-provisioned locks and the fresh campaign state must be absent.
 For a source-controlled prospective manifest, the installer derives both the
 old and new controller custody writer locks from each current manifest's
 `state_path`, repository id, and epoch. A legacy restoration predecessor's
-custody locks never substitute for those current fences. After recording its
-intent and flushing the replacement temporary file, the installer re-reads the
-wrapper preimage immediately before `rename`; a change made by a cooperating
-writer holding the same lock closure is refused and preserved. This is a
-cooperative Source locking contract, not a claim of atomic protection from an
-arbitrary same-UID writer that ignores those locks.
+custody locks never substitute for those current fences. Its observation and
+campaign roots are renderer witnesses too: their retired lock closure is not a
+prospective lock requirement. After recording its intent and flushing the
+replacement temporary file, the installer re-reads the wrapper preimage
+immediately before `rename`; a change made by a cooperating writer holding the
+same lock closure is refused and preserved. This is a cooperative Source
+locking contract, not a claim of atomic protection from an arbitrary same-UID
+writer that ignores those locks.
 
 Prospective installation only performs the wrapper CAS. The supported recovery
 sequence is: prospective wrapper `plan|apply`; ordinary model-free

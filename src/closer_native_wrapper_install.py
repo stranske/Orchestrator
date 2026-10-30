@@ -266,7 +266,7 @@ def _archived_base(restored: dict[str, Any]) -> bytes:
 
 
 def _prospective_rows(
-    predecessor: dict[str, Any],
+    _predecessor: dict[str, Any],
     reference: dict[str, Any],
     manifest: dict[str, Any],
     state: Path,
@@ -280,7 +280,12 @@ def _prospective_rows(
     atomic replacement against an arbitrary same-UID writer.
     """
     wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
-    rows = host._locks(predecessor, wrapper)
+    # The predecessor authenticates only the archived wrapper preimage.  Its
+    # former observation and campaign namespaces are historical evidence, not
+    # current cooperative-writer resources: requiring their lock closure would
+    # make a retired predecessor block a prospective transition.  Keep every
+    # current-source fence below instead.
+    rows: list[dict[str, Any]] = []
     old_root = Path(reference["manifest"]["mechanism_contract"]["observation_root"])
     new_root = Path(manifest["mechanism_contract"]["observation_root"])
     rows.extend(
