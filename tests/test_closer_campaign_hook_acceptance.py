@@ -6,12 +6,16 @@ limitations so a green wiring result cannot be mistaken for current-demand admis
 
 from __future__ import annotations
 
+import copy
+import json
 from pathlib import Path
 
 import pytest
 from scripts import install_closer_campaign_hook as hook
 
 import closer_campaign as campaign
+
+pytest_plugins = ("test_closer_native_observer",)
 
 SOURCE = (
     "def main(argv: list[str] | None = None) -> int:\n"
@@ -38,6 +42,44 @@ def write_valid_non_native_pin(root):
     )
     campaign.write_manifest(pin, manifest)
     return pin
+
+
+def install_native_v2_demand_pin(host, tmp_path, monkeypatch, contract):
+    manifest, _manifest_path, _wrapper = host
+    manifest = copy.deepcopy(manifest)
+    root = Path(manifest["mechanism_contract"]["campaign_root"])
+    controller = tmp_path / "publisher"
+    controller.mkdir()
+    source = controller / "demand_router.py"
+    source.write_text("def main(argv=None):\n    return 0\n")
+    state_path = root / "standing.campaign.json"
+    base = {
+        "schema": "closer-controller-demand/v2",
+        "controller_root": str(controller),
+        "controller_data_root": str(controller),
+        "campaign_state": str(state_path),
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+        "publisher_sha256": "a" * 64,
+        "worker_config": {
+            "mechanism": "native-handoff/v1",
+            "policy": manifest["policy"],
+            "apply": True,
+            "coordinator_mode": "resource_scoped",
+            "granularity": "round",
+            "dispatch_state": str(root / "dispatch.json"),
+            "coordinator_contract_pin": __import__("closer_pipeline").scoped_capability(),
+            "assignment": str(controller / "closer-assignment.json"),
+        },
+    }
+    base.update(contract)
+    pin = root / "pin.manifest.json"
+    manifest["command"][manifest["command"].index("--manifest") + 1] = str(pin)
+    manifest["command_digest"] = campaign.sha256_json(manifest["command"])
+    manifest["mechanism_contract"]["controller_demand"] = base
+    campaign.write_manifest(pin, manifest)
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    return root, controller
 
 
 def test_missing_pin_never_calls_tick(tmp_path, monkeypatch):
@@ -79,25 +121,136 @@ def test_hook_currently_ticks_before_demand_refresh(monkeypatch):
     assert seen == ["tick", ("demand_refresh", ["--collect"])]
 
 
-def test_v2_closure_refusal_never_ticks_or_runs_mutable_fallback(monkeypatch):
-    monkeypatch.setattr(
-        campaign,
-        "controller_demand_before_discovery",
-        lambda: {"publisher_closure": {}, "contract": {}},
+def test_v2_malformed_contract_refuses_before_tick_or_old_fallback(host, tmp_path, monkeypatch):
+    install_native_v2_demand_pin(
+        host,
+        tmp_path,
+        monkeypatch,
+        {
+            "publisher_closure": {"schema": "closer-publisher-closure/v2"},
+            "unexpected_field": "forbidden",
+        },
     )
-    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("closure refusal ticked"))
-    assert campaign.controller_entry(["--collect"], None) == 0
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("v2 contract refusal ticked"))
+    assert campaign.controller_entry(["--collect"], lambda _: pytest.fail("fallback ran")) == 0
+    assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
+    assert (
+        "unsupported pinned controller demand contract"
+        in campaign._LAST_CONTROLLER_DEMAND_REPORT["reason"]
+    )
+
+
+def test_v2_invalid_closure_refuses_before_tick_or_old_fallback(host, tmp_path, monkeypatch):
+    controller = tmp_path / "publisher"
+    install_native_v2_demand_pin(
+        host,
+        tmp_path,
+        monkeypatch,
+        {
+            "publisher_closure": {
+                "schema": "closer-publisher-closure/v2",
+                "root": str(controller),
+                "controller_data_root": str(controller),
+                "entry_module": "demand_router.py",
+                "entry_function": "main",
+                "modules": {},
+                "dynamic_helpers": {},
+                "capture": {},
+                "external_bindings": {},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        campaign, "tick_safe", lambda: pytest.fail("invalid closure refusal ticked")
+    )
+    assert campaign.controller_entry(["--collect"], lambda _: pytest.fail("fallback ran")) == 0
+    assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
+    assert "pinned publisher closure differs" in campaign._LAST_CONTROLLER_DEMAND_REPORT["reason"]
+
+
+def test_v2_missing_contract_fields_refuses_without_unbound_local(host, tmp_path, monkeypatch):
+    manifest, _manifest_path, _wrapper = host
+    manifest = copy.deepcopy(manifest)
+    root = Path(manifest["mechanism_contract"]["campaign_root"])
+    pin = root / "pin.manifest.json"
+    manifest["command"][manifest["command"].index("--manifest") + 1] = str(pin)
+    manifest["command_digest"] = campaign.sha256_json(manifest["command"])
+    manifest["mechanism_contract"]["controller_demand"] = {
+        "schema": "closer-controller-demand/v2",
+    }
+    campaign.write_manifest(pin, manifest)
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("missing-field refusal ticked"))
+    assert campaign.controller_entry([], lambda _: 9) == 0
     assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
 
 
-def test_v2_closure_refusal_ignores_an_old_hook_fallback(monkeypatch):
-    monkeypatch.setattr(
-        campaign,
-        "controller_demand_before_discovery",
-        lambda: {"publisher_closure": {}, "contract": {}},
-    )
-    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("closure refusal ticked"))
+def test_v2_bad_module_digest_held_no_tick_or_fallback(host, tmp_path, monkeypatch):
+    root, _controller = install_native_v2_demand_pin(host, tmp_path, monkeypatch, {})
+    pin = root / "pin.manifest.json"
+    broken = json.loads(pin.read_text())
+    module_name = next(iter(broken["modules"]))
+    broken["modules"][module_name] = "0" * 64
+    pin.write_text(json.dumps(broken))
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("bad module ticked"))
     assert campaign.controller_entry(["--collect"], lambda _: pytest.fail("fallback ran")) == 0
+    assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
+
+
+def test_v1_demand_validation_preserves_tick_and_fallback(host, tmp_path, monkeypatch):
+    manifest, _manifest_path, _wrapper = host
+    manifest = copy.deepcopy(manifest)
+    root = Path(manifest["mechanism_contract"]["campaign_root"])
+    controller = tmp_path / "publisher"
+    controller.mkdir()
+    (controller / "demand_router.py").write_text("def main(argv=None):\n    return 0\n")
+    state_path = root / "standing.campaign.json"
+    pin = root / "pin.manifest.json"
+    manifest["command"][manifest["command"].index("--manifest") + 1] = str(pin)
+    manifest["command_digest"] = campaign.sha256_json(manifest["command"])
+    manifest["mechanism_contract"]["controller_demand"] = {
+        "schema": "closer-controller-demand/v1",
+        "controller_root": str(controller),
+        "campaign_state": str(state_path),
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+        "publisher_sha256": "b" * 64,
+    }
+    campaign.write_manifest(pin, manifest)
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    seen = []
+    monkeypatch.setattr(campaign, "tick_safe", lambda: seen.append("tick") or [])
+    assert campaign.controller_entry([], lambda argv: seen.append(("fallback", argv)) or 19) == 19
+    assert seen == ["tick", ("fallback", [])]
+    assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
+
+
+def test_no_pin_probes_manifest_once(tmp_path, monkeypatch):
+    root = tmp_path / "closer-campaigns"
+    root.mkdir()
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    probes = []
+    orig = campaign._controller_demand_pin_snapshot
+
+    def once(*args, **kwargs):
+        probes.append(1)
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(campaign, "_controller_demand_pin_snapshot", once)
+    monkeypatch.setattr(campaign, "tick_safe", lambda: [])
+    assert campaign.controller_entry([], lambda _: 0) == 0
+    assert probes == [1]
+
+
+def test_invalid_pin_json_held_with_none_hook_fallback(tmp_path, monkeypatch):
+    root = tmp_path / "closer-campaigns"
+    root.mkdir()
+    (root / "pin.manifest.json").write_text("{not-json")
+    monkeypatch.setenv("ORCH_CLOSER_CAMPAIGN_DIR", str(root))
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("parse error ticked"))
+    assert campaign.controller_entry([], None) == 0
+    assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
+    assert "unreadable" in campaign._LAST_CONTROLLER_DEMAND_REPORT["reason"]
 
 
 def test_tick_failure_keeps_existing_demand_path(tmp_path, monkeypatch):
