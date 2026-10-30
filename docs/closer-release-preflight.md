@@ -17,6 +17,13 @@ settings before it calls the verifier. This prevents an older Core binding and
 ensures pytest-xdist's required `-n` option is available. Check the wrapper
 itself without touching a source, Core checkout, journal, or mirror:
 
+Before the full verifier starts, preflight also runs pytest collection only in
+a private temporary state directory and requires its count to equal the
+candidate's persisted `.verify-floor.json` value. It never rewrites that file
+and does not accept a floor-lag waiver. If collection differs, let the normal
+main-CI `reconcile-floor` job publish its restricted bot commit, then restart
+from that exact main commit.
+
 ```bash
 /opt/anaconda3/bin/python3 scripts/closer_verified_release.py --selftest
 ```

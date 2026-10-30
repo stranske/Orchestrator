@@ -46,6 +46,8 @@ def fixture_config(tmp_path: Path, *, core: Path | None = None, python: Path | N
         {
             "scripts/verify_before_sync.sh": "#!/usr/bin/env bash\n",
             "scripts/install_verified_snapshot.py": "print('installer')\n",
+            ".verify-floor.json": json.dumps({"collected": 1, "passed": 1}),
+            "tests/test_fixture.py": "def test_fixture():\n    assert True\n",
         },
     )
     if core is None:
@@ -120,12 +122,90 @@ def test_preflight_pins_python3_for_fake_home_and_sets_release_bindings(tmp_path
     assert environment["VERIFY_PYTEST_WORKERS"] == "1"
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in environment
     assert "CLOSER_CORE_PACKAGE" not in environment
+    assert receipt["collection_floor"] == {"collected": 1, "floor": 1}
     assert "--numprocesses" in subprocess.check_output(
         [str(checked.python), "-m", "pytest", "--help", "--color=no"],
         env=environment,
         text=True,
         timeout=20,
     )
+
+
+def test_collection_floor_preflight_accepts_an_exact_collection(tmp_path, monkeypatch):
+    config = fixture_config(tmp_path)
+    calls = []
+
+    def collect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, "1 test collected in 0.01s\n", "")
+
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        collect,
+    )
+    assert preflight._collection_floor_preflight(config, {}) == {"collected": 1, "floor": 1}
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == [
+        str(config.python),
+        "-m",
+        "pytest",
+        "--collect-only",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    ]
+    assert kwargs["cwd"] == config.source
+    assert Path(kwargs["env"]["ORCH_STATE_DIR"]).name == "state"
+    assert Path(kwargs["env"]["ORCH_LOCAL_RUNTIME"]).name == "runtime"
+    assert (
+        Path(kwargs["env"]["ORCH_STATE_DIR"]).parent
+        == Path(kwargs["env"]["ORCH_LOCAL_RUNTIME"]).parent
+    )
+
+
+@pytest.mark.parametrize("value", [None, [], True, 1.5])
+def test_collection_floor_preflight_rejects_non_object_or_noninteger_floor_counters(
+    tmp_path, monkeypatch, value
+):
+    config = fixture_config(tmp_path)
+    floor = config.source / ".verify-floor.json"
+    floor.write_text(
+        json.dumps(value if value in (None, []) else {"collected": value, "passed": 1})
+    )
+    monkeypatch.setattr(
+        preflight.subprocess, "run", lambda *a, **kw: pytest.fail("must reject before collection")
+    )
+    with pytest.raises(preflight.PreflightError) as raised:
+        preflight._collection_floor_preflight(config, {})
+    assert raised.value.code == "floor_invalid"
+
+
+def test_collection_floor_preflight_refuses_a_persisted_floor_mismatch(tmp_path, monkeypatch):
+    config = fixture_config(tmp_path)
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 0, "2 tests collected in 0.01s\n", ""),
+    )
+    with pytest.raises(preflight.PreflightError) as raised:
+        preflight._collection_floor_preflight(config, {})
+    assert raised.value.code == "collection_floor_mismatch"
+    assert "normal main CI reconcile-floor job" in str(raised.value)
+
+
+def test_collection_floor_preflight_refuses_a_collection_error(tmp_path, monkeypatch):
+    config = fixture_config(tmp_path)
+    monkeypatch.setattr(
+        preflight.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(a, 2, "", "ImportError: missing dependency\n"),
+    )
+    with pytest.raises(preflight.PreflightError) as raised:
+        preflight._collection_floor_preflight(config, {})
+    assert raised.value.code == "collection_probe_failed"
+    assert "ImportError: missing dependency" in str(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -373,6 +453,8 @@ def test_actual_cli_install_returns_nonzero_for_a_failed_existing_gate(tmp_path)
                 "if '--generation-token' in sys.argv:\n"
                 " print('generation-v1:' + 'a' * 64)\n"
             ),
+            ".verify-floor.json": json.dumps({"collected": 1, "passed": 1}),
+            "tests/test_fixture.py": "def test_fixture():\n    assert True\n",
         },
     )
     (source / "scripts" / "verify_before_sync.sh").chmod(0o755)

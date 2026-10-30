@@ -18,12 +18,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import verify
 from closer_release import ReleaseRecord
 
 DEFAULT_PYTHON = Path("/opt/anaconda3/bin/python3")
 DEFAULT_WORKERS = 4
 _SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _PROBE_TIMEOUT = 20
+_COLLECTION_TIMEOUT = 300
+_COLLECTED_RE = re.compile(r"(\d+) tests? collected(?: in [^\n]+)?")
 
 
 class PreflightError(RuntimeError):
@@ -89,6 +92,7 @@ def checked_environment(
     child = _inspect_python(checked.python)
     env = _release_environment(checked)
     _check_xdist(checked.python, env)
+    collection = _collection_floor_preflight(checked, env)
     receipt = {
         "ok": True,
         "phase": "preflight",
@@ -101,6 +105,7 @@ def checked_environment(
         "child_python": child,
         "path_first": str(checked.python.parent),
         "workers": checked.workers,
+        "collection_floor": collection,
     }
     return checked, env, receipt
 
@@ -253,6 +258,101 @@ def _check_xdist(python: Path, env: dict[str, str]) -> None:
             "xdist_unavailable",
             f"selected Python pytest does not advertise pytest-xdist -n (status {result.returncode}): {result.stderr[-256:]}",
         )
+
+
+def _collection_floor_preflight(config: ReleasePreflight, env: dict[str, str]) -> dict[str, int]:
+    """Refuse an unreconciled candidate before the expensive verified release.
+
+    Collection is the machine-invariant part of the canonical floor contract;
+    execution, skips, selftests, and gates remain the existing full verifier's
+    responsibility.  This probe neither writes the floor nor accepts a PR-only
+    floor-lag relaxation: a mismatch must be reconciled by main CI first.
+    """
+    floor = verify.load_floor_at(config.source / ".verify-floor.json")
+    if not isinstance(floor, dict):
+        raise PreflightError("floor_invalid", "candidate .verify-floor.json must contain an object")
+    if floor.get(verify.FLOOR_UNREADABLE):
+        raise PreflightError("floor_unreadable", "candidate .verify-floor.json is unreadable")
+    if "collected" not in floor or "passed" not in floor:
+        raise PreflightError(
+            "floor_missing",
+            "candidate has no persisted collection/pass floor; release requires a reconciled main floor",
+        )
+    expected, passed = floor["collected"], floor["passed"]
+    if type(expected) is not int or type(passed) is not int:
+        raise PreflightError(
+            "floor_invalid", "candidate collection and pass floors must be strict integers"
+        )
+    if expected < 1 or passed < 0:
+        raise PreflightError("floor_invalid", "candidate collection floor must be positive")
+
+    probe_env = dict(env)
+    try:
+        with tempfile.TemporaryDirectory(prefix="closer-release-collection-") as probe_dir:
+            state = Path(probe_dir) / "state"
+            runtime = Path(probe_dir) / "runtime"
+            state.mkdir()
+            runtime.mkdir()
+            probe_env["ORCH_STATE_DIR"] = str(state)
+            probe_env["ORCH_LOCAL_RUNTIME"] = str(runtime)
+            result = subprocess.run(
+                [
+                    str(config.python),
+                    "-m",
+                    "pytest",
+                    "--collect-only",
+                    "-q",
+                    "-p",
+                    "no:cacheprovider",
+                ],
+                cwd=config.source,
+                env=probe_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=min(config.timeout, _COLLECTION_TIMEOUT),
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PreflightError(
+            "collection_probe_failed", f"pytest collection could not run: {exc}"
+        ) from exc
+
+    output = result.stdout + result.stderr
+    if result.returncode:
+        raise PreflightError(
+            "collection_probe_failed",
+            f"pytest collection failed (status {result.returncode}): {_collection_tail(output)}",
+        )
+    match = _COLLECTED_RE.search(output)
+    if match is None:
+        raise PreflightError(
+            "collection_probe_invalid",
+            f"pytest collection did not report a count: {_collection_tail(output)}",
+        )
+    collected = int(match.group(1))
+    if collected < 1:
+        raise PreflightError("collection_probe_invalid", "pytest collection reported zero tests")
+
+    # Reuse the verifier's equality rule rather than creating a preflight-only
+    # interpretation.  The pass floor is intentionally held at its recorded
+    # value because this probe does not execute tests.
+    problems = verify._floor_problems(  # noqa: SLF001 - canonical pure floor contract
+        floor, {"collected": collected, "passed": passed, "skipped": 0}
+    )
+    if problems:
+        raise PreflightError(
+            "collection_floor_mismatch",
+            f"{problems[0]}. Do not rewrite this candidate floor or use a lag waiver; allow the "
+            "normal main CI reconcile-floor job to publish its bot commit, then restart preflight "
+            "from that exact main commit.",
+        )
+    return {"collected": collected, "floor": expected}
+
+
+def _collection_tail(output: str) -> str:
+    """Keep collection diagnostics bounded and single-line in a JSON receipt."""
+    return " ".join(output.strip().split())[-512:] or "no pytest output"
 
 
 def _git_exact_clean(path: Path, expected: str, label: str) -> None:
