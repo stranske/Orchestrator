@@ -257,6 +257,7 @@
       "tests/test_closer_efficiency_metrics.py",
       "tests/test_closer_evidence.py",
       "tests/test_closer_finite_reentry.py",
+      "tests/test_closer_historical_qualification_readback.py",
       "tests/test_closer_hold_escalation.py",
       "tests/test_closer_merge_guard_refusal.py",
       "tests/test_closer_merge_successor_integration.py",
