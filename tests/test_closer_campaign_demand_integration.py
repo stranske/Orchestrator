@@ -11,8 +11,11 @@ from pathlib import Path
 
 import pytest
 from test_closer_native_observer import host as host
+from test_closer_publisher_closure import _pin as publisher_closure_pin
 
 import closer_campaign as campaign
+import closer_native_observer as native
+import closer_native_readmission as readmission
 
 _REAL_QUALIFY = campaign.qualify
 
@@ -64,6 +67,117 @@ def admit(obj, values):
         release_pin="a" * 64,
         worker_config={"granularity": "round"},
         **values,
+    )
+
+
+def _v2_native_manifest(tmp_path):
+    """A full captured v2 closure for the native pre-admission boundaries."""
+    root = tmp_path / "campaigns"
+    root.mkdir()
+    descriptor = publisher_closure_pin(tmp_path / "publisher-package", tmp_path)
+    state_path = root / "standing.campaign.json"
+    contract = {
+        "schema": "closer-controller-demand/v2",
+        "controller_root": descriptor["controller_data_root"],
+        "controller_data_root": descriptor["controller_data_root"],
+        "campaign_state": str(state_path),
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+        "publisher_sha256": descriptor["modules"]["demand_router.py"]["sha256"],
+        "publisher_closure": descriptor,
+    }
+    return {
+        "mechanism_contract": {"campaign_root": str(root), "controller_demand": contract},
+        "policy": {
+            "correction_controller_installation": {
+                "config": {
+                    "state_path": str(state_path),
+                    "bootstrap_anchor_sha256": "a" * 64,
+                }
+            }
+        },
+    }, state_path
+
+
+def test_v2_closure_passes_native_initialization_and_typed_assignment_reader(tmp_path):
+    manifest, state_path = _v2_native_manifest(tmp_path)
+    assert (
+        readmission._initialization(manifest, state_path)["hold"]["kind"] == "source_initialization"
+    )
+    raw = json.dumps({"generation": 1, "targets": [{"target": TARGET}]}, sort_keys=True).encode()
+    digest = hashlib.sha256(raw).hexdigest()
+    demand_dir = state_path.with_name(state_path.name + ".demand")
+    demand_dir.mkdir()
+    path = demand_dir / (digest + ".json")
+    path.write_bytes(raw)
+    reference = {
+        "schema": "closer-demand-assignment/v1",
+        "path": str(path),
+        "sha256": digest,
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+        "campaign_generation": 1,
+        "assignment_generation": 1,
+        "request_id": "b" * 64,
+    }
+    identity = {
+        "state": str(state_path),
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+        "generation": 1,
+    }
+    assert native._demand_assignment_bytes(manifest, reference, identity) == (path, raw)
+
+
+def test_v2_native_boundaries_refuse_tampered_closure_before_assignment_read(tmp_path):
+    manifest, state_path = _v2_native_manifest(tmp_path)
+    contract = manifest["mechanism_contract"]["controller_demand"]
+    contract["publisher_closure"] = copy.deepcopy(contract["publisher_closure"])
+    contract["publisher_closure"]["modules"]["demand_router.py"]["sha256"] = "0" * 64
+    with pytest.raises(readmission.ReadmissionHeld, match="v2 publisher closure"):
+        readmission._initialization(manifest, state_path)
+    reference = {
+        "schema": "closer-demand-assignment/v1",
+        "path": str(tmp_path / "must-not-read.json"),
+        "sha256": "c" * 64,
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+        "campaign_generation": 1,
+        "assignment_generation": 1,
+        "request_id": "b" * 64,
+    }
+    identity = {
+        "state": str(state_path),
+        "campaign_id": "standing-closer",
+        "owner": "existing-closer-owner",
+    }
+    with pytest.raises(native.mechanisms.MechanismError, match="v2 demand publisher closure"):
+        native._demand_assignment_bytes(manifest, reference, identity)
+
+
+def test_v1_native_initialization_remains_accepted(tmp_path):
+    state_path = tmp_path / "campaigns" / "standing.campaign.json"
+    state_path.parent.mkdir()
+    manifest = {
+        "mechanism_contract": {
+            "controller_demand": {
+                "schema": "closer-controller-demand/v1",
+                "campaign_state": str(state_path),
+                "campaign_id": "standing-closer",
+                "owner": "existing-closer-owner",
+            }
+        },
+        "policy": {
+            "correction_controller_installation": {
+                "config": {
+                    "state_path": str(state_path),
+                    "bootstrap_anchor_sha256": "a" * 64,
+                }
+            }
+        },
+    }
+    assert (
+        readmission._initialization(manifest, state_path)["hold"]["kind"] == "source_initialization"
     )
 
 

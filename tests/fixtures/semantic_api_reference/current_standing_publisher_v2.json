@@ -30,5 +30,31 @@
     "_controller_demand_v2_integrity_stop": "d00dac59131894046d90097e736d54e30dc2652c16033ac582cefeb283691a08",
     "_validated_manifest": "2011bbd4fc203152e2e60ec00bf207daea3bc974af33cdcc99970133eddd8bc8"
   },
-  "added_constant_ast_sha256": "70b068d84791005cc931edc905575b2250c2cc141b3785c4c31386395e1901a3"
+  "added_constant_ast_sha256": "70b068d84791005cc931edc905575b2250c2cc141b3785c4c31386395e1901a3",
+  "native_file_successors": {
+    "closer_native_readmission.py": {
+      "before_file_sha256": "a50ba90d1ba08376e479a11437b6674e4b5c9dfc1c2b96f8ebb2929b7053d1a9",
+      "after_file_sha256": "3d4732e967ea44e58e2c2269bd17e47647bf0f7b35dbb393f7610345f8f18f7f",
+      "before_module_ast_sha256": "04aff446ae40dab5390836eb5d4b4baad5e37ececfdb099830dbb2e3b8af6563",
+      "after_module_ast_sha256": "a4c3fc8928b0b826b3528127af9ca09228c5a2b3c58b23a88c2f82a14a043177",
+      "changed_function": {
+        "name": "_initialization",
+        "before": "c6be2d9a84b3d576e0b9260b5814ca2ae832ecadb5fd2d6ddc98b81bc618a9b7",
+        "after": "fb42e5f3c389043f490247590d6c588f53b9c05f5f2b5f1b37d79d5cbfbaea9b"
+      },
+      "outside_changed_function_ast_sha256": "b08bffa4dbfc38a6d453664c0049749c12e010390a8dedae27ec3e0e664e1267"
+    },
+    "closer_native_observer.py": {
+      "before_file_sha256": "86864fc0b7e4605b2cd96bdad42379732057fb075d8dfab1817007184fd3caf9",
+      "after_file_sha256": "88f77ab1748f384b3639e340d4af94c19725ab23e3593dcb157916c44858f698",
+      "before_module_ast_sha256": "e9c1b6f8664ad7074d1ca1da8a3b14b19f91967669885fd9e071066cb247e947",
+      "after_module_ast_sha256": "2147bae3d8bf751e94d667f87e3c6b64c6ca7da009c1cae3309117a12c2192d8",
+      "changed_function": {
+        "name": "_demand_assignment_bytes",
+        "before": "be8689957d491a627cc7b663efd237ccf4923be14965c4829cb53e3ef7fea0f8",
+        "after": "8c9e1d92be9c4355e1bdda8d3cbe1408f6a0b32eeeba1fa47870c958f0f9717f"
+      },
+      "outside_changed_function_ast_sha256": "88d36f5667e1c88f72de325eddaaca339a92bab7fc595ab411127d20dc87bc5b"
+    }
+  }
 }

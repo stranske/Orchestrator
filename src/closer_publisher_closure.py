@@ -382,6 +382,46 @@ def validate(value: Any) -> dict[str, Any]:
     }
 
 
+def validate_controller_demand_contract(value: Any) -> dict[str, Any]:
+    """Validate v2 demand fields binding mutable state to captured code."""
+    required = {
+        "schema",
+        "controller_root",
+        "controller_data_root",
+        "campaign_state",
+        "campaign_id",
+        "owner",
+        "publisher_sha256",
+        "publisher_closure",
+    }
+    if (
+        not isinstance(value, dict)
+        or value.get("schema") != "closer-controller-demand/v2"
+        or not required <= value.keys()
+        or set(value) - required - {"worker_config"}
+    ):
+        raise PublisherClosureError("unsupported v2 controller demand contract")
+    data_root = _canonical(value["controller_data_root"], "publisher mutable data root")
+    controller_root = _canonical(value["controller_root"], "publisher controller root")
+    if data_root != controller_root:
+        raise PublisherClosureError("publisher mutable data root differs from controller root")
+    if any(
+        not isinstance(value.get(key), str) or not value[key]
+        for key in ("campaign_state", "campaign_id", "owner")
+    ):
+        raise PublisherClosureError("v2 controller demand identity is invalid")
+    closure = validate(value["publisher_closure"])
+    if Path(closure["controller_data_root"]) != data_root:
+        raise PublisherClosureError("publisher closure data root differs from controller contract")
+    if (
+        not isinstance(value.get("publisher_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", value["publisher_sha256"])
+        or value["publisher_sha256"] != closure["modules"]["demand_router.py"]["sha256"]
+    ):
+        raise PublisherClosureError("publisher closure router pin differs from controller contract")
+    return closure
+
+
 def capture(
     source_root: Path,
     out: Path,

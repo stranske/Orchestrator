@@ -41,6 +41,9 @@ publisher modules.  A v2 hook reaches the campaign before importing the mutable
 If the v2 runtime loader or publisher validation refuses, the hook holds before
 any tick or mutable publisher fallback. Capture requires the reviewed exclusion
 successor `delivery-continuity-5202c248a71d5b45a324d7e98b1865a43f1b20fe56b6903330ae153a314394e2.py`.
+Native initialization and admitted-assignment reading validate that complete v2
+closure too; the assignment reader refuses a changed closure before opening the
+assignment snapshot. The existing v1 initialization path remains supported.
 
 The code and data roots must be disjoint. Declared dynamic dependencies carry
 exact module-name/source-path bindings and captured bytes, including the local

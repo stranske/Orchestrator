@@ -176,6 +176,14 @@ def integrated_native_source_reference():
     observer = controlled_initialization_reference()["files"]["closer_native_observer.py"]
     assert original["closer_native_observer.py"] == observer["before_file_sha256"]
     original["closer_native_observer.py"] = observer["after_file_sha256"]
+    native = publisher["native_file_successors"]
+    assert "closer_native_readmission.py" not in original
+    original["closer_native_readmission.py"] = native["closer_native_readmission.py"][
+        "after_file_sha256"
+    ]
+    observer_successor = native["closer_native_observer.py"]
+    assert original["closer_native_observer.py"] == observer_successor["before_file_sha256"]
+    original["closer_native_observer.py"] = observer_successor["after_file_sha256"]
     return original
 
 
@@ -206,7 +214,7 @@ def controlled_initialization_reference():
 STANDING_PUBLISHER_V2_MANIFEST = (
     Path(__file__).parent / "fixtures/semantic_api_reference/current_standing_publisher_v2.json"
 )
-STANDING_PUBLISHER_V2_SHA256 = "c90ad4b897b110c7b4ac6b96d75f1623ae48257d1c22873895828ea4bd98e722"
+STANDING_PUBLISHER_V2_SHA256 = "910da21b2b420841506bfebaa6c373eef7e2e869420f89a8ca0529dd51f4bf68"
 
 
 def standing_publisher_v2_reference():
@@ -227,6 +235,17 @@ def standing_publisher_v2_reference():
         "_controller_demand_selected_v2",
         "_controller_demand_v2_integrity_stop",
         "_validated_manifest",
+    }
+    assert set(value["native_file_successors"]) == {
+        "closer_native_readmission.py",
+        "closer_native_observer.py",
+    }
+    assert {
+        name: change["changed_function"]["name"]
+        for name, change in value["native_file_successors"].items()
+    } == {
+        "closer_native_readmission.py": "_initialization",
+        "closer_native_observer.py": "_demand_assignment_bytes",
     }
     return value
 
@@ -266,6 +285,20 @@ def assert_standing_publisher_v2_successor(source=None):
         )
     ]
     assert fingerprint(tree) == reviewed["outside_reviewed_changes_ast_sha256"]
+    for filename, successor in reviewed["native_file_successors"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == successor["after_module_ast_sha256"]
+        changed = successor["changed_function"]
+        node = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == changed["name"]
+        )
+        assert fingerprint(node) == changed["after"]
+        tree.body.remove(node)
+        assert fingerprint(tree) == successor["outside_changed_function_ast_sha256"]
 
 
 FINITE_NO_START_V2_MANIFEST = (

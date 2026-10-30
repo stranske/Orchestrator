@@ -527,8 +527,16 @@ def _demand_assignment_bytes(
         "assignment_generation",
         "request_id",
     }
+    schema = contract.get("schema")
+    if schema == "closer-controller-demand/v2":
+        try:
+            from closer_publisher_closure import validate_controller_demand_contract
+
+            validate_controller_demand_contract(contract)
+        except (ImportError, OSError, TypeError, ValueError) as exc:
+            raise mechanisms.MechanismError("typed v2 demand publisher closure differs") from exc
     if (
-        contract.get("schema") != "closer-controller-demand/v1"
+        schema not in {"closer-controller-demand/v1", "closer-controller-demand/v2"}
         or not isinstance(reference, dict)
         or set(reference) != keys
         or reference.get("schema") != "closer-demand-assignment/v1"

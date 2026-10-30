@@ -31,6 +31,13 @@ def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
         successor = support.controlled_initialization_reference()["files"].get(filename)
         if successor:
             assert change["after_file_sha256"] == successor["before_file_sha256"]
+            if filename == "closer_native_observer.py":
+                native = support.standing_publisher_v2_reference()["native_file_successors"][
+                    filename
+                ]
+                assert successor["after_file_sha256"] == native["before_file_sha256"]
+                assert hashlib.sha256(after).hexdigest() == native["after_file_sha256"]
+                continue
             assert hashlib.sha256(after).hexdigest() == successor["after_file_sha256"]
         else:
             assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
@@ -166,6 +173,12 @@ def test_controlled_initialization_changes_only_atomic_begin_and_native_demand_g
             assert (
                 change["after_file_sha256"] == successor["historical_receiver_before_file_sha256"]
             )
+            continue
+        if filename == "closer_native_observer.py":
+            successor = support.standing_publisher_v2_reference()["native_file_successors"][
+                filename
+            ]
+            assert change["after_file_sha256"] == successor["before_file_sha256"]
             continue
         raw = source_path(filename).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
