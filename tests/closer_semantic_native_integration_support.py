@@ -188,6 +188,9 @@ def integrated_native_source_reference():
     for filename, change in command_evidence["files"].items():
         assert filename not in original
         original[filename] = change["after_file_sha256"]
+    historical = historical_clock_readback_reference()
+    assert original["closer_native_source_upgrade.py"] == historical["before_file_sha256"]
+    original["closer_native_source_upgrade.py"] = historical["after_file_sha256"]
     return original
 
 
@@ -211,6 +214,37 @@ def native_command_evidence_reference():
         "closer_codex_appserver_bootstrap.py": "TurnResponseData",
         "closer_codex_owned_stdio.py": "finish_turn_from_run",
         "closer_native_source_upgrade.py": "_rebased_policy",
+    }
+    return value
+
+
+HISTORICAL_CLOCK_READBACK_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_historical_clock_readback_v1.json"
+)
+HISTORICAL_CLOCK_READBACK_SHA256 = (
+    "d6067c6e9226edb50c32b67266646a1a03cbea7ee270ca1f10495174e84d3fad"
+)
+
+
+def historical_clock_readback_reference():
+    """Append the literal no-ACT historical reader after the command-evidence pin."""
+    raw = HISTORICAL_CLOCK_READBACK_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == HISTORICAL_CLOCK_READBACK_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "historical-clock-readback-source-successor/v1"
+    assert value["base_commit"] == "9891d33018789b8c24e583c096ac84fe14aed825"
+    prior = native_command_evidence_reference()["files"]["closer_native_source_upgrade.py"]
+    assert value["before_file_sha256"] == prior["after_file_sha256"]
+    assert value["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(value["function_delta"]) == {
+        "_historical_clock_reader_program",
+        "_old_diagnostic",
+    }
+    assert value["function_delta"]["_historical_clock_reader_program"]["before"] is None
+    assert set(value["added_constant_ast"]) == {
+        "REVIEWED_CLOCK_WORKER_ID",
+        "REVIEWED_CLOCK_RESULT_SHA256",
     }
     return value
 

@@ -203,6 +203,20 @@ def test_clock_predecessor_uses_only_its_own_module_and_descriptor_hashes(monkey
             upgrade._reviewed_old_metadata({**manifest, "candidate_sha": candidate}, raw)
 
 
+def test_historical_clock_reader_is_literal_facts_only_and_keeps_generic_readers_out():
+    program = upgrade._historical_clock_reader_program()
+    compile(program, "<historical-clock-reader>", "exec")
+    assert repr(upgrade.REVIEWED_CLOCK_WORKER_ID) in program
+    assert repr(upgrade.REVIEWED_CLOCK_RESULT_SHA256) in program
+    assert "n.capacity_contract(m,control_plane_only=True)" in program
+    assert "execution.get('admission_started_at')!=started" in program
+    assert "mech._signature" in program
+    assert "validate_stop" in program
+    assert "n.validate_admission(" not in program
+    assert "n.completed_round_proof(" not in program
+    assert "for_effects=True" not in program
+
+
 def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
     tmp_path, monkeypatch
 ):

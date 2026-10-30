@@ -19,15 +19,56 @@ def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_
     reviewed = support.native_command_evidence_reference()
     for filename, change in reviewed["files"].items():
         raw = source_path(filename).read_bytes()
-        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        historical = (
+            support.historical_clock_readback_reference()
+            if filename == "closer_native_source_upgrade.py"
+            else None
+        )
+        if historical is not None:
+            # The historical reader is an append-only successor.  Retain this
+            # prior review's exact selected-method pin while its full-module
+            # successor boundary is checked by the dedicated test below.
+            assert change["after_file_sha256"] == historical["before_file_sha256"]
+            assert change["after_module_ast_sha256"] == historical["before_module_ast_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == historical["after_file_sha256"]
+        else:
+            assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
-        assert fingerprint(tree) == change["after_module_ast_sha256"]
         selected = next(
             node for node in tree.body if getattr(node, "name", None) == change["changed_top_level"]
         )
         assert fingerprint(selected) == change["after_changed_top_level_ast_sha256"]
-        tree.body.remove(selected)
-        assert fingerprint(tree) == change["outside_changed_top_level_ast_sha256"]
+        if historical is None:
+            assert fingerprint(tree) == change["after_module_ast_sha256"]
+            tree.body.remove(selected)
+            assert fingerprint(tree) == change["outside_changed_top_level_ast_sha256"]
+
+
+def test_historical_clock_readback_successor_is_append_only_and_exactly_scoped():
+    reviewed = support.historical_clock_readback_reference()
+    raw = source_path("closer_native_source_upgrade.py").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == reviewed["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == reviewed["after_module_ast_sha256"]
+    changed = reviewed["function_delta"]
+    for name, expected in changed.items():
+        nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+        assert len(nodes) == 1
+        assert fingerprint(nodes[0]) == expected["after"]
+        tree.body.remove(nodes[0])
+    constants = reviewed["added_constant_ast"]
+    selected = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+        for name, expected in constants.items():
+            if name in names:
+                assert fingerprint(node) == expected
+                selected.append(node)
+    assert len(selected) == len(constants)
+    tree.body = [node for node in tree.body if node not in selected]
+    assert fingerprint(tree) == reviewed["outside_reviewed_changes_ast_sha256"]
 
 
 def _top_level_ast(raw):

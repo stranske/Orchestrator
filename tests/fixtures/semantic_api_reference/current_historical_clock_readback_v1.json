@@ -1,0 +1,23 @@
+{
+  "added_constant_ast": {
+    "REVIEWED_CLOCK_RESULT_SHA256": "1c45e2138a101730ba58f7cdce9d885bcc3d6db432cd9b114e13fc6705cebfcf",
+    "REVIEWED_CLOCK_WORKER_ID": "f88f111f06391038955da2f524d01b8df81d50b44f319f38a0c5d3aa53f343d6"
+  },
+  "after_file_sha256": "0934e5389e8476a5c28ec378663800a1cf6eb71f48a6e8b1cf4f4a927a2a4146",
+  "after_module_ast_sha256": "dbd411247a903eef6e2800abcfc17809e8c9aab7f227b9f484ff0371bdc5d44d",
+  "base_commit": "9891d33018789b8c24e583c096ac84fe14aed825",
+  "before_file_sha256": "5308ea8e009be81f299793f722290b549a835f303a9e69c9b800a2f970e2359f",
+  "before_module_ast_sha256": "a5e25d9f407f625ed97eb2925eadc884e2ad6242ba7d44ba62f8d5624566fa67",
+  "function_delta": {
+    "_historical_clock_reader_program": {
+      "after": "4458d5ff1a74c860d27786b5a7158b576cf263f9a06674856f22ea9075763d9b",
+      "before": null
+    },
+    "_old_diagnostic": {
+      "after": "30824b526bd55e97930da31a6c3c22bd79350fc8c8cac8df86c2aaf00823d9b4",
+      "before": "23d46846cc517ff95bb7f135063d631f9b54978e6a4dfc6b401ad676c60fa18b"
+    }
+  },
+  "outside_reviewed_changes_ast_sha256": "65f83d60e04d4812e8e04b98c08b0c8493d7e5d4ed3ffdbd6da27a305dc89f38",
+  "schema": "historical-clock-readback-source-successor/v1"
+}
