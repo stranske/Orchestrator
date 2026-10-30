@@ -90,6 +90,16 @@ def test_v2_closure_refusal_never_ticks_or_runs_mutable_fallback(monkeypatch):
     assert campaign._LAST_CONTROLLER_DEMAND_REPORT["status"] == "held"
 
 
+def test_v2_closure_refusal_ignores_an_old_hook_fallback(monkeypatch):
+    monkeypatch.setattr(
+        campaign,
+        "controller_demand_before_discovery",
+        lambda: {"publisher_closure": {}, "contract": {}},
+    )
+    monkeypatch.setattr(campaign, "tick_safe", lambda: pytest.fail("closure refusal ticked"))
+    assert campaign.controller_entry(["--collect"], lambda _: pytest.fail("fallback ran")) == 0
+
+
 def test_tick_failure_keeps_existing_demand_path(tmp_path, monkeypatch):
     root = tmp_path / "closer-campaigns"
     root.mkdir()

@@ -29,12 +29,32 @@ declares `contract = closer-operation/v1`, state versions, and machine compatibi
 
 `closer-controller-demand/v2` may bind a separately captured publisher closure.
 Its `publisher_closure` records a canonical immutable root, entry module/function,
-per-module bytes and modes, plus digests of the actual Source capture-tool and
-snapshot-receipt files; the
+per-module bytes and modes, plus a verified Source release receipt binding
+(`source_snapshot_receipt`: receipt path/digest, candidate SHA, verified snapshot
+path/digest, source identity) and capture-tool binding
+(`source_capture_tool`: implementation member name and digests tied to the standing
+`closer_publisher_closure.py` loader); the
 mutable controller data root remains an explicit contract field.  The campaign
 validates the closure before a tick or publisher call and rejects preloaded local
 publisher modules.  A v2 hook reaches the campaign before importing the mutable
 `demand_router`; the entrypoint is loaded only from the captured closure.
+
+The code and data roots must be disjoint. Declared dynamic dependencies carry
+exact module-name/source-path bindings and captured bytes, including the local
+liveness guard, maintenance budget reader and dependency-owner lock helper.
+Module `__file__` preserves the declared data origin for compatibility;
+`__spec__.origin` and compiled filenames identify the captured code. Temporary
+import hooks and publisher module-cache entries are restored after each call.
+
+`scripts/closer_publisher_package.py create` requires the actual
+`closer_publisher_closure.py` implementation as its capture tool and a verified
+Source receipt containing that member. The pure, runtime-pinned
+`source_snapshot_digest.py` checks the complete snapshot; it never imports code
+from the supplied snapshot or a mutable checkout. Publication claims a new
+directory exclusively and retains `.publisher-incomplete` until all files and
+the final-root descriptor are flushed. Readers reject that marker, partial
+inventories and raced foreign destinations. A failed claim is preserved for
+operator reconciliation; an existing package is only verified and read.
 
 After a successful publisher call, closure drift preserves that original result
 but holds demand admission/acceptance.  It never retroactively asserts that the

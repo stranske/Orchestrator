@@ -73,6 +73,36 @@ def _digest(snapshot: Path) -> str:
     return result.stdout.strip()
 
 
+def test_runtime_digest_preserves_legacy_owned_entry_contract(tmp_path, monkeypatch):
+    import source_snapshot_digest as shared
+
+    snapshot = _snapshot(tmp_path)
+    (snapshot / "alias.py").symlink_to("module.py")
+    monkeypatch.setattr(installer, "_shared_snapshot_digest", None)
+    assert shared.owned_entries(snapshot) == installer.owned_entries(snapshot)
+    before = installer.snapshot_digest(snapshot)
+    assert shared.snapshot_digest(snapshot) == before
+    (snapshot / "module.py").chmod(0o600)
+    assert shared.snapshot_digest(snapshot) == installer.snapshot_digest(snapshot)
+    assert shared.snapshot_digest(snapshot) != before
+
+
+def test_runtime_and_legacy_digest_refuse_walk_errors(tmp_path, monkeypatch):
+    import source_snapshot_digest as shared
+
+    snapshot = _snapshot(tmp_path)
+
+    def unreadable_tree(path, *, followlinks, onerror):
+        onerror(PermissionError("injected unreadable source tree"))
+        return iter(())
+
+    monkeypatch.setattr(os, "walk", unreadable_tree)
+    monkeypatch.setattr(installer, "_shared_snapshot_digest", None)
+    for digest in (shared.snapshot_digest, installer.snapshot_digest):
+        with pytest.raises(PermissionError, match="unreadable source tree"):
+            digest(snapshot)
+
+
 def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     snapshot = _snapshot(tmp_path)
     mirror = tmp_path / "live mirror"

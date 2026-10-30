@@ -4014,6 +4014,8 @@ def _controller_demand_context(argv_root=None):
             closure = validate_closure(contract["publisher_closure"])
         except (ImportError, PublisherClosureError, OSError, ValueError) as exc:
             raise CampaignError(f"pinned publisher closure differs: {exc}") from exc
+        if Path(closure["controller_data_root"]) != data_root:
+            raise CampaignError("publisher closure data root differs from controller contract")
         if (
             not isinstance(contract.get("publisher_sha256"), str)
             or not _DIGEST.fullmatch(contract["publisher_sha256"])
@@ -4753,6 +4755,11 @@ def controller_entry(
         if fallback is None:
             raise CampaignError("controller fallback is unavailable")
     except Exception as exc:  # the controller's own discovery must still run
+        # A v2 pin was selected before loading.  Its refusal is a source-integrity
+        # stop, never permission to resume an ambient router supplied by an old hook.
+        if demand_context is not None and demand_context.get("publisher_closure") is not None:
+            _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
+            return 0
         demand_context = None
         _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
         if fallback is None:

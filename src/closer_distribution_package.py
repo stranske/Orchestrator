@@ -46,6 +46,7 @@ RUNTIME_PINNED_MODULES = module_closure(
         "closer_native_wrapper_install.py",
         "closer_native_source_upgrade.py",
         "closer_publisher_closure.py",
+        "source_snapshot_digest.py",
     ),
 )
 
