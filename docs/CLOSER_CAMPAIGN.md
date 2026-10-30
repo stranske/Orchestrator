@@ -38,6 +38,9 @@ mutable controller data root remains an explicit contract field.  The campaign
 validates the closure before a tick or publisher call and rejects preloaded local
 publisher modules.  A v2 hook reaches the campaign before importing the mutable
 `demand_router`; the entrypoint is loaded only from the captured closure.
+If the v2 runtime loader or publisher validation refuses, the hook holds before
+any tick or mutable publisher fallback. Capture requires the reviewed exclusion
+successor `delivery-continuity-5202c248a71d5b45a324d7e98b1865a43f1b20fe56b6903330ae153a314394e2.py`.
 
 The code and data roots must be disjoint. Declared dynamic dependencies carry
 exact module-name/source-path bindings and captured bytes, including the local
@@ -72,7 +75,8 @@ terminal without typed reconciliation evidence, so the target/action stays `unkn
 `scripts/install_closer_campaign_hook.py --controller C --manifest M --out O` renders a controller
 whose `main` loads `closer_campaign`, `closer_release` and `claims` from the manifest's paths after
 re-hashing every pinned module (a plain `import closer_campaign` from the controller directory is not
-used). Any mismatch falls back to the unchanged `demand_router.main`. On each existing scheduled run
+used). A v1 mismatch falls back to the unchanged `demand_router.main`; v2 holds
+without running that mutable publisher. On each existing scheduled run
 it calls `tick_safe()` (never raises; inert without `<ORCH_STATE_DIR>/closer-campaigns/pin.manifest.json`;
 `ORCH_CLOSER_CAMPAIGN_TICK=0` disables) and then the original path. Not deployed by this change.
 
