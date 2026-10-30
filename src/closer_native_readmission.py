@@ -184,9 +184,10 @@ def _initialization(manifest, destination):
     config = (manifest.get("policy", {}).get("correction_controller_installation") or {}).get(
         "config"
     )
+    schema = demand.get("schema") if isinstance(demand, dict) else None
     if (
         not isinstance(demand, dict)
-        or demand.get("schema") != "closer-controller-demand/v1"
+        or schema not in {"closer-controller-demand/v1", "closer-controller-demand/v2"}
         or demand.get("campaign_state") != str(destination)
         or any(
             not isinstance(demand.get(key), str) or not demand[key]
@@ -198,6 +199,13 @@ def _initialization(manifest, destination):
         or len(config["bootstrap_anchor_sha256"]) != 64
     ):
         raise ReadmissionHeld("controlled campaign bootstrap identity/config differs")
+    if schema == "closer-controller-demand/v2":
+        try:
+            from closer_publisher_closure import validate_controller_demand_contract
+
+            validate_controller_demand_contract(demand)
+        except (ImportError, OSError, TypeError, ValueError) as exc:
+            raise ReadmissionHeld("controlled v2 publisher closure differs") from exc
     return {
         "hold": {
             "kind": "source_initialization",

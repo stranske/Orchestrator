@@ -3426,8 +3426,7 @@ def check_harness_receipt(manifest: dict[str, Any], receipt: dict[str, Any]) -> 
 # --------------------------------------------------------- scheduled tick
 
 
-def load_manifest(path: str | Path) -> dict[str, Any]:
-    manifest = json.loads(Path(path).read_text())
+def _validated_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     problems = validate_manifest(manifest) + verify_modules(manifest)
     if problems:
         raise CampaignError("; ".join(problems))
@@ -3438,6 +3437,10 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     except RuntimeError as exc:
         raise CampaignError(str(exc)) from exc
     return manifest
+
+
+def load_manifest(path: str | Path) -> dict[str, Any]:
+    return _validated_manifest(json.loads(Path(path).read_text()))
 
 
 def _current_qualification_problems(
@@ -3946,7 +3949,11 @@ def _demand_read(path):
     return value, raw
 
 
-def _controller_demand_context(argv_root=None):
+_CONTROLLER_DEMAND_PIN_UNREAD = object()
+
+
+def _controller_demand_pin_snapshot(argv_root=None):
+    """Read pinned demand bytes once; defer manifest/module validation to context."""
     if os.environ.get("ORCH_CLOSER_CAMPAIGN_TICK", "1") == "0":
         return None
     state = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
@@ -3956,10 +3963,54 @@ def _controller_demand_context(argv_root=None):
     path = root / "pin.manifest.json"
     if not path.is_file():
         return None
-    manifest = load_manifest(path)
+    raw = path.read_bytes()
+    import hashlib
+
+    manifest_sha256 = hashlib.sha256(raw).hexdigest()
+    try:
+        manifest = json.loads(raw)
+    except ValueError as exc:
+        raise CampaignError(f"pinned manifest unreadable: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise CampaignError("pinned manifest must be an object")
     contract = (manifest.get("mechanism_contract") or {}).get("controller_demand")
     if contract is None:
         return None
+    schema = contract.get("schema") if isinstance(contract, dict) else None
+    return {
+        "root": root,
+        "manifest": manifest,
+        "manifest_path": path,
+        "manifest_sha256": manifest_sha256,
+        "contract": contract,
+        "schema": schema,
+    }
+
+
+def _controller_demand_selected_v2(pin_snapshot):
+    return pin_snapshot is not None and pin_snapshot.get("schema") == "closer-controller-demand/v2"
+
+
+def _controller_demand_v2_integrity_stop(pin_snapshot, demand_context):
+    """A selected v2 publisher pin must never tick or run an ambient hook fallback."""
+    if demand_context is not None and demand_context.get("publisher_closure") is not None:
+        return True
+    return _controller_demand_selected_v2(pin_snapshot)
+
+
+def _controller_demand_context(argv_root=None, *, pin_snapshot=_CONTROLLER_DEMAND_PIN_UNREAD):
+    if pin_snapshot is _CONTROLLER_DEMAND_PIN_UNREAD:
+        pin_snapshot = _controller_demand_pin_snapshot(argv_root)
+    if pin_snapshot is None:
+        return None
+    root = pin_snapshot["root"]
+    path = pin_snapshot["manifest_path"]
+    manifest = _validated_manifest(dict(pin_snapshot["manifest"]))
+    contract = pin_snapshot["contract"]
+    schema = pin_snapshot["schema"]
+    manifest_sha256 = pin_snapshot["manifest_sha256"]
+    if sha256_file(path) != manifest_sha256:
+        raise CampaignError("demand manifest changed during validation")
     required = {
         "schema",
         "controller_root",
@@ -3968,11 +4019,14 @@ def _controller_demand_context(argv_root=None):
         "owner",
         "publisher_sha256",
     }
+    allowed = {"worker_config"}
+    if schema == "closer-controller-demand/v2":
+        required |= {"publisher_closure", "controller_data_root"}
     if (
         not isinstance(contract, dict)
         or not required <= contract.keys()
-        or set(contract) - required - {"worker_config"}
-        or contract.get("schema") != "closer-controller-demand/v1"
+        or set(contract) - required - allowed
+        or schema not in {"closer-controller-demand/v1", "closer-controller-demand/v2"}
     ):
         raise CampaignError("unsupported pinned controller demand contract")
     from closer_mechanisms import NATIVE, mechanism
@@ -3998,7 +4052,27 @@ def _controller_demand_context(argv_root=None):
     ):
         raise CampaignError("pinned demand publisher/campaign path differs from canonical state")
     publisher = controller_root / "demand_router.py"
-    if (
+    closure = None
+    if schema == "closer-controller-demand/v2":
+        data_root = Path(contract["controller_data_root"])
+        if data_root.resolve() != data_root or data_root != controller_root:
+            raise CampaignError("publisher mutable data root differs from controller root")
+        try:
+            from closer_publisher_closure import PublisherClosureError
+            from closer_publisher_closure import validate as validate_closure
+
+            closure = validate_closure(contract["publisher_closure"])
+        except (ImportError, PublisherClosureError, OSError, ValueError) as exc:
+            raise CampaignError(f"pinned publisher closure differs: {exc}") from exc
+        if Path(closure["controller_data_root"]) != data_root:
+            raise CampaignError("publisher closure data root differs from controller contract")
+        if (
+            not isinstance(contract.get("publisher_sha256"), str)
+            or not _DIGEST.fullmatch(contract["publisher_sha256"])
+            or contract["publisher_sha256"] != closure["modules"]["demand_router.py"]["sha256"]
+        ):
+            raise CampaignError("pinned demand publisher digest differs from captured closure")
+    if schema == "closer-controller-demand/v1" and (
         not isinstance(contract.get("publisher_sha256"), str)
         or not _DIGEST.fullmatch(contract["publisher_sha256"])
         or publisher.resolve() != publisher
@@ -4010,14 +4084,17 @@ def _controller_demand_context(argv_root=None):
         "publisher": publisher,
         "manifest_path": path,
         "manifest": manifest,
-        "manifest_sha256": sha256_file(path),
+        "manifest_sha256": manifest_sha256,
         "contract": contract,
+        "publisher_closure": closure,
     }
 
 
-def controller_demand_before_discovery(argv_root=None):
+def controller_demand_before_discovery(
+    argv_root=None, *, pin_snapshot=_CONTROLLER_DEMAND_PIN_UNREAD
+):
     """Capture publisher identity before main; never claim its exit code proves discovery."""
-    context = _controller_demand_context(argv_root)
+    context = _controller_demand_context(argv_root, pin_snapshot=pin_snapshot)
     if context is None:
         return None
     path = Path(context["contract"]["controller_root"]) / "demand-plan.json"
@@ -4708,26 +4785,45 @@ def _pinned_demand_main(fallback, context):
     )
 
 
-def controller_entry(argv: list[str] | None, fallback: Callable[[list[str] | None], int]) -> int:
+def controller_entry(
+    argv: list[str] | None, fallback: Callable[[list[str] | None], int] | None
+) -> int:
     """Hook for the desktop controller's `main`. `closer-campaign ...` is ours; any other
     scheduled invocation first runs one bounded, never-raising tick, then the fallback."""
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["closer-campaign"]:
         return main(args[1:])
     global _LAST_CONTROLLER_DEMAND_REPORT
+    demand_context = None
+    pin_snapshot = None
     try:
-        demand_context = controller_demand_before_discovery()
+        pin_snapshot = _controller_demand_pin_snapshot()
+        demand_context = controller_demand_before_discovery(pin_snapshot=pin_snapshot)
         if demand_context is not None:
-            if not _pinned_demand_main(fallback, demand_context):
+            if demand_context["publisher_closure"] is not None:
+                from closer_publisher_closure import load_entrypoint
+
+                fallback, closure_after = load_entrypoint(demand_context["publisher_closure"])
+                demand_context["closure_after"] = closure_after
+            elif fallback is None or not _pinned_demand_main(fallback, demand_context):
                 raise CampaignError("controller fallback is not the pinned demand publisher main")
+        if fallback is None:
+            raise CampaignError("controller fallback is unavailable")
     except Exception as exc:  # the controller's own discovery must still run
+        if _controller_demand_v2_integrity_stop(pin_snapshot, demand_context):
+            _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
+            return 0
         demand_context = None
         _LAST_CONTROLLER_DEMAND_REPORT = {"status": "held", "reason": str(exc)}
+        if fallback is None:
+            return 0
     tick_safe()  # Existing-owned reconciliation remains separate from new demand.
     result = fallback(argv)
     if result == 0 and demand_context is not None:
         try:
-            if not _pinned_demand_main(fallback, demand_context):
+            if demand_context["publisher_closure"] is not None:
+                demand_context["closure_after"]()
+            elif not _pinned_demand_main(fallback, demand_context):
                 raise CampaignError("controller publisher executable code changed during discovery")
             _LAST_CONTROLLER_DEMAND_REPORT = controller_demand_after_discovery(demand_context)
         except Exception as exc:

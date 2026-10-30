@@ -42,7 +42,12 @@ def test_reviewed_191_module_descriptor_is_old_only():
         state_versions=old["state_versions"],
         supported_core=old["supported_core"],
     )
-    assert len(current["modules"]) == 192
+    assert len(current["modules"]) == 194
+    assert set(current["modules"]) - set(old["modules"]) == {
+        "closer_native_source_upgrade.py",
+        "closer_publisher_closure.py",
+        "source_snapshot_digest.py",
+    }
     assert not distribution.validate_public_runtime_descriptor(current)
     with pytest.raises(upgrade.SourceUpgradeHeld):
         upgrade._reviewed_old_metadata(_metadata(current), json.dumps(current).encode())

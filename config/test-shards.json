@@ -272,6 +272,7 @@
       "tests/test_closer_publication_handoff_first.py",
       "tests/test_closer_publication_io_campaign_digest.py",
       "tests/test_closer_publication_snapshot_seed.py",
+      "tests/test_closer_publisher_closure.py",
       "tests/test_closer_review_diagnostic_contracts.py",
       "tests/test_closer_review_major_regressions.py",
       "tests/test_closer_runtime_drain.py",

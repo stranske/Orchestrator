@@ -25,6 +25,48 @@ declares `contract = closer-operation/v1`, state versions, and machine compatibi
 | Capacity | `select_route` | existing router + execution_profiles over an existing capacity JSON; Aider excluded, Gemini kept; stale/partial => hold; the dispatched agent/profile is the selected one |
 | Qualification | `qualify` | before ANY tick effect: valid manifest + modules, `promotion.json` accepted by `check_promotion`, state schema match, pinned Core loadable |
 
+## Standing publisher closure (prospective v2 contract)
+
+`closer-controller-demand/v2` may bind a separately captured publisher closure.
+Its `publisher_closure` records a canonical immutable root, entry module/function,
+per-module bytes and modes, plus a verified Source release receipt binding
+(`source_snapshot_receipt`: receipt path/digest, candidate SHA, verified snapshot
+path/digest, source identity) and capture-tool binding
+(`source_capture_tool`: implementation member name and digests tied to the standing
+`closer_publisher_closure.py` loader); the
+mutable controller data root remains an explicit contract field.  The campaign
+validates the closure before a tick or publisher call and rejects preloaded local
+publisher modules.  A v2 hook reaches the campaign before importing the mutable
+`demand_router`; the entrypoint is loaded only from the captured closure.
+If the v2 runtime loader or publisher validation refuses, the hook holds before
+any tick or mutable publisher fallback. Capture requires the reviewed exclusion
+successor `delivery-continuity-5202c248a71d5b45a324d7e98b1865a43f1b20fe56b6903330ae153a314394e2.py`.
+Native initialization and admitted-assignment reading validate that complete v2
+closure too; the assignment reader refuses a changed closure before opening the
+assignment snapshot. The existing v1 initialization path remains supported.
+
+The code and data roots must be disjoint. Declared dynamic dependencies carry
+exact module-name/source-path bindings and captured bytes, including the local
+liveness guard, maintenance budget reader and dependency-owner lock helper.
+Module `__file__` preserves the declared data origin for compatibility;
+`__spec__.origin` and compiled filenames identify the captured code. Temporary
+import hooks and publisher module-cache entries are restored after each call.
+
+`scripts/closer_publisher_package.py create` requires the actual
+`closer_publisher_closure.py` implementation as its capture tool and a verified
+Source receipt containing that member. The pure, runtime-pinned
+`source_snapshot_digest.py` checks the complete snapshot; it never imports code
+from the supplied snapshot or a mutable checkout. Publication claims a new
+directory exclusively and retains `.publisher-incomplete` until all files and
+the final-root descriptor are flushed. Readers reject that marker, partial
+inventories and raced foreign destinations. A failed claim is preserved for
+operator reconciliation; an existing package is only verified and read.
+
+After a successful publisher call, closure drift preserves that original result
+but holds demand admission/acceptance.  It never retroactively asserts that the
+already-observed call had no effects.  This is an opt-in compatibility path;
+existing v1 controller-demand manifests retain their current behavior.
+
 ## Outcomes
 `ok | unavailable | denied | unknown`. Offline (`ConnectionRefusedError`) is `unavailable`;
 `PermissionError` / exit 77 is `denied` and holds with the exact reason; a timeout, signal death, any
@@ -36,7 +78,8 @@ terminal without typed reconciliation evidence, so the target/action stays `unkn
 `scripts/install_closer_campaign_hook.py --controller C --manifest M --out O` renders a controller
 whose `main` loads `closer_campaign`, `closer_release` and `claims` from the manifest's paths after
 re-hashing every pinned module (a plain `import closer_campaign` from the controller directory is not
-used). Any mismatch falls back to the unchanged `demand_router.main`. On each existing scheduled run
+used). A v1 mismatch falls back to the unchanged `demand_router.main`; v2 holds
+without running that mutable publisher. On each existing scheduled run
 it calls `tick_safe()` (never raises; inert without `<ORCH_STATE_DIR>/closer-campaigns/pin.manifest.json`;
 `ORCH_CLOSER_CAMPAIGN_TICK=0` disables) and then the original path. Not deployed by this change.
 
