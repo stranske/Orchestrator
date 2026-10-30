@@ -161,6 +161,12 @@ def test_finite_no_start_v2_successor_fixture_is_pinned(tmp_path, monkeypatch):
 
 def test_controlled_initialization_changes_only_atomic_begin_and_native_demand_guard():
     for filename, change in support.controlled_initialization_reference()["files"].items():
+        if filename == "closer_campaign.py":
+            successor = support.standing_publisher_v2_reference()
+            assert (
+                change["after_file_sha256"] == successor["historical_receiver_before_file_sha256"]
+            )
+            continue
         raw = source_path(filename).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         top, tree = _top_level_ast(raw)
@@ -197,6 +203,22 @@ def test_controlled_initialization_reference_is_pinned(tmp_path, monkeypatch):
         support.controlled_initialization_reference()
 
 
+def test_standing_publisher_v2_successor_is_exact_and_preserves_other_campaign_ast():
+    support.assert_standing_publisher_v2_successor()
+
+
+def test_standing_publisher_v2_successor_fixture_is_pinned(tmp_path, monkeypatch):
+    path = tmp_path / "standing-publisher-v2.json"
+    path.write_bytes(
+        support.STANDING_PUBLISHER_V2_MANIFEST.read_bytes().replace(
+            b'"load_manifest"', b'"unreviewed_function"', 1
+        )
+    )
+    monkeypatch.setattr(support, "STANDING_PUBLISHER_V2_MANIFEST", path)
+    with pytest.raises(AssertionError):
+        support.standing_publisher_v2_reference()
+
+
 def test_current_publication_admission_overlay_preserves_unreviewed_ast_families():
     import copy
 
@@ -216,6 +238,12 @@ def test_current_publication_admission_overlay_preserves_unreviewed_ast_families
         "closer_queue.py",
     }
     for filename, change in reviewed["protected_native_modules"].items():
+        if filename == "closer_campaign.py":
+            successor = support.standing_publisher_v2_reference()
+            assert (
+                change["after_file_sha256"] == successor["historical_receiver_before_file_sha256"]
+            )
+            continue
         top = functions(source_path(filename).read_text())
         before = change["before_top_level_ast"]
         changed = change["changed_top_level_ast"]

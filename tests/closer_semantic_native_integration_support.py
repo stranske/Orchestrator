@@ -165,6 +165,9 @@ def integrated_native_source_reference():
     for name, change in publication_admission_reference()["protected_native_modules"].items():
         assert original[name] == change["before_file_sha256"]
         original[name] = change["after_file_sha256"]
+    publisher = standing_publisher_v2_reference()
+    assert original["closer_campaign.py"] == publisher["historical_receiver_before_file_sha256"]
+    original["closer_campaign.py"] = publisher["after_file_sha256"]
     # Finite no-start v2 is an independently pinned successor.  Do not rewrite
     # 0953 or broaden the publication overlay to cover its two native methods.
     for name, change in finite_no_start_v2_reference()["files"].items():
@@ -198,6 +201,71 @@ def controlled_initialization_reference():
         "wrapper_block"
     }
     return value
+
+
+STANDING_PUBLISHER_V2_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_standing_publisher_v2.json"
+)
+STANDING_PUBLISHER_V2_SHA256 = "c90ad4b897b110c7b4ac6b96d75f1623ae48257d1c22873895828ea4bd98e722"
+
+
+def standing_publisher_v2_reference():
+    """One immutable source successor; historical receiver references stay intact."""
+    raw = STANDING_PUBLISHER_V2_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == STANDING_PUBLISHER_V2_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "standing-publisher-v2-source-successor/v1"
+    assert value["source_before_file_sha256"] == value["historical_receiver_before_file_sha256"]
+    assert set(value["changed_functions"]) == {
+        "_controller_demand_context",
+        "controller_demand_before_discovery",
+        "controller_entry",
+        "load_manifest",
+    }
+    assert set(value["added_functions"]) == {
+        "_controller_demand_pin_snapshot",
+        "_controller_demand_selected_v2",
+        "_controller_demand_v2_integrity_stop",
+        "_validated_manifest",
+    }
+    return value
+
+
+def assert_standing_publisher_v2_successor(source=None):
+    """Compare the whole campaign module outside the exact reviewed v2 delta."""
+    reviewed = standing_publisher_v2_reference()
+    raw = source_path("closer_campaign.py").read_bytes() if source is None else source
+    assert hashlib.sha256(raw).hexdigest() == reviewed["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == reviewed["after_module_ast_sha256"]
+    top = {
+        node.name: node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+    }
+    for name, change in reviewed["changed_functions"].items():
+        assert fingerprint(top[name]) == change["after"]
+    for name, expected in reviewed["added_functions"].items():
+        assert fingerprint(top[name]) == expected
+    pin = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_CONTROLLER_DEMAND_PIN_UNREAD"
+            for target in node.targets
+        )
+    )
+    assert fingerprint(pin) == reviewed["added_constant_ast_sha256"]
+    selected = set(reviewed["changed_functions"]) | set(reviewed["added_functions"])
+    tree.body = [
+        node
+        for node in tree.body
+        if not (
+            isinstance(node, (ast.FunctionDef, ast.ClassDef))
+            and node.name in selected
+            or node is pin
+        )
+    ]
+    assert fingerprint(tree) == reviewed["outside_reviewed_changes_ast_sha256"]
 
 
 FINITE_NO_START_V2_MANIFEST = (
