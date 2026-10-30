@@ -36,9 +36,10 @@ the current controller ownership.  Then invoke:
 ```
 
 The applier takes the existing controller `.demand.lock` non-blockingly and
-refuses a live writer.  It rechecks every regular, non-symlink preimage's
-SHA-256 and mode under that lock.  It publishes the new helper with exclusive
-create, then atomically replaces `accountability.py`, and replaces
+refuses a cooperating live writer.  This is a cooperative lock, not a claim to
+block arbitrary same-UID writers that ignore it.  It rechecks every regular,
+non-symlink preimage's SHA-256 and mode under that lock.  It publishes the new
+helper with exclusive create, then atomically replaces `accountability.py`, and replaces
 `demand_router.py` last.  Each write is fsynced, and a preimage mismatch or an
 existing successor helper is a hold—not a retry or overwrite.
 

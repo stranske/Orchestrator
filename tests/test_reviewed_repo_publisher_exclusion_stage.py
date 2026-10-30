@@ -202,3 +202,47 @@ def test_apply_refuses_changed_preimage_without_overwriting(tmp_path):
         apply_stage.apply(output)
     assert target.read_text() == "concurrent owner bytes\n"
     assert not (root / recipe["operations"][0]["target"]).exists()
+
+
+def test_payload_uses_one_verified_read_when_bytes_swap_after_capture(tmp_path, monkeypatch):
+    output, recipe = staged(tmp_path)
+    operation = recipe["operations"][0]
+    payload = output / "payload" / operation["payload"]
+    original = payload.read_bytes()
+    reads = []
+    read_bytes = Path.read_bytes
+
+    def swapped(self):
+        if self == payload:
+            reads.append(self)
+            return original if len(reads) == 1 else b"attacker replacement"
+        return read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", swapped)
+    assert (
+        apply_stage._payload(output, operation["payload"], operation["sha256"], operation["mode"])
+        == original
+    )
+    assert reads == [payload]
+
+
+def test_apply_refuses_preimage_mutated_while_temp_router_bytes_are_prepared(tmp_path, monkeypatch):
+    output, recipe = staged(tmp_path)
+    root = Path(recipe["controller_root"])
+    router = root / "demand_router.py"
+    controller = root / "controller.py"
+    router_before = router.read_bytes()
+    chmod = apply_stage.os.chmod
+
+    def mutate_controller_during_router_temp(path, value):
+        chmod(path, value)
+        if Path(path).name.startswith(".demand_router.py."):
+            controller.write_text("concurrent controller owner bytes\n")
+
+    monkeypatch.setattr(apply_stage.os, "chmod", mutate_controller_during_router_temp)
+    with pytest.raises(apply_stage.ApplyHeld, match="canonical preimage changed"):
+        apply_stage.apply(output)
+    # Accountability may already be the intentionally published predecessor,
+    # but router remains at its canonical preimage because it is always last.
+    assert router.read_bytes() == router_before
+    assert controller.read_text() == "concurrent controller owner bytes\n"

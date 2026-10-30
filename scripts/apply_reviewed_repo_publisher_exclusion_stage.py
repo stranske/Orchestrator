@@ -4,7 +4,9 @@
 This is deliberately inert until invoked with ``--apply``.  The staged recipe
 is create-only for the new content-addressed helper and CAS-only for every
 existing file.  It holds the publisher's existing ``.demand.lock`` throughout,
-so a live controller writer causes a refusal rather than a replacement race.
+so a cooperating live controller writer causes a refusal rather than a
+replacement race.  The lock does not claim to constrain arbitrary same-UID
+writers that ignore it; the preimage CAS checks still refuse observed drift.
 """
 
 from __future__ import annotations
@@ -46,9 +48,10 @@ def _payload(stage: Path, name: str, expected_digest: str, expected_mode: int) -
     path = stage / "payload" / name
     if path.name != name or not path.is_file() or path.is_symlink():
         raise ApplyHeld(f"invalid staged payload: {name}")
-    if digest(path) != expected_digest or file_mode(path) != expected_mode:
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_digest or file_mode(path) != expected_mode:
         raise ApplyHeld(f"staged payload changed: {name}")
-    return path.read_bytes()
+    return raw
 
 
 def _fsync_parent(path: Path) -> None:
@@ -74,7 +77,13 @@ def _create_only(path: Path, raw: bytes, expected_mode: int) -> None:
     _fsync_parent(path)
 
 
-def _replace_cas(path: Path, raw: bytes, expected: dict[str, Any], expected_mode: int) -> None:
+def _replace_cas(
+    path: Path,
+    raw: bytes,
+    expected: dict[str, Any],
+    expected_mode: int,
+    before_replace,
+) -> None:
     _verify(path, expected)
     descriptor, name = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
     temporary = Path(name)
@@ -84,10 +93,22 @@ def _replace_cas(path: Path, raw: bytes, expected: dict[str, Any], expected_mode
             stream.flush()
             os.fsync(stream.fileno())
         os.chmod(temporary, expected_mode)
+        # A concurrent or non-cooperating writer can change the canonical
+        # file while the replacement bytes are being prepared.  Do not publish
+        # the temporary file across that changed preimage.
+        _verify(path, expected)
+        before_replace()
         os.replace(temporary, path)
         _fsync_parent(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _verify_unmodified(preimages: dict[str, Any], applied: set[str]) -> None:
+    """Recheck every protected source that has not been intentionally replaced."""
+    for name, expected in preimages.items():
+        if name not in applied:
+            _verify(Path(expected["path"]), expected)
 
 
 def apply(stage: Path) -> dict[str, Any]:
@@ -104,9 +125,8 @@ def apply(stage: Path) -> dict[str, Any]:
         except BlockingIOError as exc:
             raise ApplyHeld("active controller writer holds .demand.lock") from exc
         preimages = recipe.get("preimages") or {}
-        for name, expected in preimages.items():
-            _verify(Path(expected["path"]), expected)
-        applied = []
+        _verify_unmodified(preimages, set())
+        applied: list[str] = []
         for operation in recipe.get("operations") or []:
             target = root / operation["target"]
             if target.name != operation["target"]:
@@ -115,7 +135,13 @@ def apply(stage: Path) -> dict[str, Any]:
             if operation["kind"] == "create_only":
                 _create_only(target, raw, operation["mode"])
             elif operation["kind"] == "replace_cas":
-                _replace_cas(target, raw, preimages[operation["target"]], operation["mode"])
+                _replace_cas(
+                    target,
+                    raw,
+                    preimages[operation["target"]],
+                    operation["mode"],
+                    lambda: _verify_unmodified(preimages, set(applied)),
+                )
             else:
                 raise ApplyHeld("unknown apply operation")
             if digest(target) != operation["sha256"] or file_mode(target) != operation["mode"]:
