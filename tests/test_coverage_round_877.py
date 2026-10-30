@@ -145,3 +145,101 @@ def test_ledger_evidence_readers_ignore_other_runs_and_malformed_records(tmp_pat
     ]
     assert ledger_reconcile._signal_death_rc({"rc": 143}) == 143
     assert ledger_reconcile._signal_death_rc({"rc": 999}) is None
+
+
+def test_admission_defensive_branches_and_report_rendering(tmp_path, monkeypatch):
+    """Malformed declarations and optional evidence stay visible without escaping the gate."""
+    monkeypatch.setattr(
+        admission,
+        "WAIVERS",
+        {
+            "no-reason": {"expires": 0},
+            "too-long": {"reason": "temporary", "expires": 200 * 86400},
+        },
+    )
+    monkeypatch.setattr(admission, "_now", lambda: 0)
+    assert admission.waiver_problems() == [
+        "no-reason: no reason",
+        "no-reason: no expiry",
+        "too-long: expiry is 200d out, beyond the 90d limit — that is a permanent exemption wearing a deadline",
+    ]
+    assert admission._python_symbol_defined("x = 1", "x")
+    assert admission._python_symbol_defined("x: int = 1", "x")
+    assert not admission._python_symbol_defined("def broken(:\n", "x")
+    assert not admission._python_symbol_defined("def x(): pass", "x.child")
+    monkeypatch.setattr(
+        admission.capabilities,
+        "production_heartbeat",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+    admission._capability_heartbeat("test")
+
+    rep = {
+        "admitted": 0,
+        "total": 1,
+        "enforced_total": 1,
+        "enforced_failing": ["cap"],
+        "legacy_debt": ["cap"],
+        "rows": [
+            {
+                "capability_id": "cap",
+                "missing": ["caller_exists"],
+                "enforced": True,
+                "blocking": ["caller_exists"],
+                "checks": {"caller_exists": {"detail": "missing"}},
+            }
+        ],
+        "findability": {
+            "failing": ["cap"],
+            "total": 1,
+            "by_cause": {"unbound": ["cap"]},
+            "blocking": ["cap"],
+            "deferred": [],
+            "drainable": ["cap"],
+            "bound_unconsulted_surfaces": ["surface"],
+            "consult_sites_drifted": [{"surface": "s", "why": "w", "caller": "c"}],
+            "consult_sites_unverified": [{"surface": "u"}],
+            "not_checked": "external evidence",
+        },
+        "consumers": {
+            "total": 1,
+            "by_class": {
+                name: ([] if name != "not_acting" else ["cap"])
+                for name in admission.CONSUMER_CLASSES
+            },
+            "blocking": ["cap"],
+            "deferred": [],
+            "drainable": ["cap"],
+            "drained": False,
+        },
+        "commitments": {
+            "clean": False,
+            "dangling_citations": [{"file": "a.py", "line": 1, "record": "missing.md"}],
+            "overdue_without_record": [
+                {"file": "a.py", "line": 2, "var": "ORCH_X", "date": "2026-01-01"}
+            ],
+        },
+    }
+    rendered = admission.format_report(rep)
+    for expected in ("ENFORCED FAILURES", "DRIFT s: w (c)", "NOT ACTING", "DANGLING", "OVERDUE"):
+        assert expected in rendered
+
+
+def test_ledger_helper_fallbacks_are_fail_closed(tmp_path, monkeypatch):
+    """Missing, malformed, and foreign log data must never be credited to a run."""
+    missing = tmp_path / "missing.ndjson"
+    assert ledger_reconcile._read_ledger(missing) == ([], [])
+    assert ledger_reconcile._usage_from_obj({"total_tokens": "12"}) == (12, 0)
+    assert ledger_reconcile._usage_from_obj({"usage": "bad"}) == (0, 0)
+    assert ledger_reconcile._number(-1) is None
+    assert ledger_reconcile._number("bad") is None
+    assert ledger_reconcile._log_usage(None, "run") == (0, 0)
+    assert ledger_reconcile._log_cost_usd(None, "run") == 0.0
+    log = tmp_path / "mixed.log"
+    log.write_text("=== 2026-10-22T01:00:00Z run_id=other ===\n{}\n")
+    assert ledger_reconcile._log_segment(log, "run") == []
+    assert ledger_reconcile._log_writers({str(log): {"other"}}, log, "run") is None
+    monkeypatch.setattr(
+        ledger_reconcile, "_read_ledger", lambda _: (_ for _ in ()).throw(OSError("nope"))
+    )
+    assert ledger_reconcile._completion_writers(log, "run") is None
