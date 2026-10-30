@@ -7,6 +7,7 @@ import hashlib
 
 import pytest
 
+import closer_coding_git_environment as git_environment
 import closer_coding_session_runtime as coding_runtime
 import closer_coding_session_v2 as coding_session
 import closer_correction_controller as controller
@@ -94,6 +95,7 @@ def _policy(consumers):
 def _ownership_budget_consumer():
     consumer_id = upgrade.REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
     consumer = _consumer(consumer_id)
+    consumer["native_bootstrap"]["home"] = "/private/tmp/old-home"
     consumer.pop("publication_v1")
     consumer["publication_v2"] = {
         "schema": "closer-owned-pr-publication-policy/v2",
@@ -116,7 +118,17 @@ def _ownership_budget_consumer():
             "max_total_bytes": 128 * 1024 * 1024,
             "max_inventory_bytes": 1024 * 1024,
         },
+        "git_environment_v1": {
+            "schema": "closer-publication-private-git-environment/v1",
+            "home": git_environment.ORIGINAL_GIT_HOME,
+            "config_sha256": git_environment.ORIGINAL_CONFIG_SHA256,
+        },
     }
+    consumer["account_sha256"] = git_environment.REVIEWED_ACCOUNT_SHA256
+    consumer["native_bootstrap"].update(
+        gh_path=git_environment.REVIEWED_GH_PATH,
+        gh_sha256=git_environment.REVIEWED_GH_SHA256,
+    )
     return consumer
 
 
@@ -156,12 +168,27 @@ def test_no_capability_is_fabricated_when_factory_prerequisites_are_incomplete(d
     assert upgrade._derived_coding_capability(_policy(consumers)) is None
 
 
-def test_rebased_policy_allows_only_the_derived_static_capability(tmp_path):
+@pytest.mark.parametrize(
+    ("consumers", "capability"),
+    [
+        ({}, None),
+        (
+            {"different-codex-consumer": _consumer("different-codex-consumer")},
+            {
+                "schema": "closer-coding-worker-capability/v1",
+                "consumer_id": "different-codex-consumer",
+            },
+        ),
+    ],
+)
+def test_rebased_policy_preserves_other_predecessor_consumer_shapes(
+    tmp_path, consumers, capability
+):
     module_dir = tmp_path / "runtime"
     module_dir.mkdir()
     helper = module_dir / "closer_codex_confinement_probe.py"
     helper.write_text("# probe\n")
-    old_policy = _policy({"test-csv-followup988-codex": _consumer()})
+    old_policy = _policy(consumers)
     new_state = tmp_path / "campaigns" / "fresh.campaign.json"
     new_state.parent.mkdir()
     expected = copy.deepcopy(old_policy)
@@ -169,16 +196,15 @@ def test_rebased_policy_allows_only_the_derived_static_capability(tmp_path):
     config["source_sha"] = "d" * 40
     config["state_path"] = str(new_state)
     config["native_transport_source_sha256"] = "e" * 64
-    bootstrap = config["consumers"]["test-csv-followup988-codex"]["native_bootstrap"]
-    bootstrap["private_root"] = str(new_state.parent.parent / "controller-private")
-    bootstrap["confinement"] = {
-        "helper_path": str(helper),
-        "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
-    }
-    expected["correction_coding_worker"] = {
-        "schema": "closer-coding-worker-capability/v1",
-        "consumer_id": "test-csv-followup988-codex",
-    }
+    for consumer in config["consumers"].values():
+        bootstrap = consumer["native_bootstrap"]
+        bootstrap["private_root"] = str(new_state.parent.parent / "controller-private")
+        bootstrap["confinement"] = {
+            "helper_path": str(helper),
+            "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
+        }
+    if capability is not None:
+        expected["correction_coding_worker"] = capability
     new = {
         "candidate_sha": "d" * 40,
         "module_dir": str(module_dir),
@@ -190,10 +216,11 @@ def test_rebased_policy_allows_only_the_derived_static_capability(tmp_path):
     }
 
     assert upgrade._rebased_policy({"policy": old_policy}, new, new_state) == expected
-    changed = copy.deepcopy(new)
-    changed["policy"]["correction_coding_worker"]["consumer_id"] = "different"
-    with pytest.raises(upgrade.SourceUpgradeHeld, match="outside lawful rebase"):
-        upgrade._rebased_policy({"policy": old_policy}, changed, new_state)
+    if capability is not None:
+        changed = copy.deepcopy(new)
+        changed["policy"]["correction_coding_worker"]["consumer_id"] = "different"
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="outside lawful rebase"):
+            upgrade._rebased_policy({"policy": old_policy}, changed, new_state)
 
 
 def test_ownership_budget_rebinds_only_reviewed_csv_consumer_to_controller_writer():
@@ -219,7 +246,19 @@ def test_rebased_policy_uses_same_ownership_budget_projection_as_preparer(tmp_pa
     old_policy = _ownership_budget_policy()
     new_state = tmp_path / "campaigns" / "fresh.campaign.json"
     new_state.parent.mkdir()
+    private_environment_root = (
+        new_state.parent.parent / "controller-private" / "publication-environment"
+    )
+    private_environment_root.parent.mkdir(mode=0o700)
     expected = upgrade._ownership_budget_rebound_coding_policy(old_policy)
+    projection = git_environment.rebase_private_git_environment(
+        expected,
+        old_source_sha=upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+        consumer_id=upgrade.REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID,
+        private_root=private_environment_root,
+        gh_path=git_environment.REVIEWED_GH_PATH,
+    )
+    expected = copy.deepcopy(projection)
     config = expected["correction_controller_installation"]["config"]
     config["source_sha"] = "d" * 40
     config["state_path"] = str(new_state)
@@ -246,7 +285,43 @@ def test_rebased_policy_uses_same_ownership_budget_projection_as_preparer(tmp_pa
         "policy": expected,
     }
 
-    assert upgrade._rebased_policy({"policy": old_policy}, new, new_state) == expected
+    actual = upgrade._rebased_policy({"policy": old_policy}, new, new_state)
+    assert actual == expected
+    provisioned = git_environment.provision_private_git_environment(
+        actual,
+        consumer_id=upgrade.REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID,
+        private_root=private_environment_root,
+    )
+    assert provisioned["credential_authenticated"] is False
+    assert provisioned["execution_authority"] is False
+    assert (
+        git_environment.rebase_private_git_environment(
+            upgrade._ownership_budget_rebound_coding_policy(old_policy),
+            old_source_sha=upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+            consumer_id=upgrade.REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID,
+            private_root=private_environment_root,
+            gh_path=git_environment.REVIEWED_GH_PATH,
+        )
+        == projection
+    )
+
+
+def test_rebased_policy_refuses_changed_reviewed_git_environment(tmp_path):
+    policy = _ownership_budget_policy()
+    policy["correction_controller_installation"]["config"]["consumers"][
+        upgrade.REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+    ]["publication_v2"]["git_environment_v1"]["config_sha256"] = ("a" * 64)
+    new_state = tmp_path / "campaigns" / "fresh.campaign.json"
+    new_state.parent.mkdir()
+    new = {
+        "candidate_sha": "d" * 40,
+        "module_dir": str(tmp_path),
+        "modules": {"closer_correction_native_effects.py": "e" * 64},
+        "policy": {},
+    }
+
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="Git-environment"):
+        upgrade._rebased_policy({"policy": policy}, new, new_state)
 
 
 @pytest.mark.parametrize(

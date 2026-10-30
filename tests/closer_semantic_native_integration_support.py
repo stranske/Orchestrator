@@ -200,6 +200,12 @@ def integrated_native_source_reference():
                 "closer_correction_canary_ownership.py",
             }
         original[filename] = change["after_file_sha256"]
+    for filename, change in private_git_environment_reference()["files"].items():
+        if filename in original:
+            assert original[filename] == change["before_file_sha256"]
+        else:
+            assert filename == "closer_coding_git_environment.py"
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -280,6 +286,33 @@ def ownership_budget_reference():
     successor = value["files"]["closer_native_source_upgrade.py"]
     assert prior["after_file_sha256"] == successor["before_file_sha256"]
     assert prior["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
+    return value
+
+
+PRIVATE_GIT_ENVIRONMENT_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_private_git_environment_v1.json"
+)
+PRIVATE_GIT_ENVIRONMENT_SHA256 = "894cf3fc1c577a3d0a5a435b52826b06e6dfd771bb2173c41ce8ed3a55400908"
+
+
+def private_git_environment_reference():
+    """Append the closed Git-environment data producer; retain every prior review."""
+    raw = PRIVATE_GIT_ENVIRONMENT_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PRIVATE_GIT_ENVIRONMENT_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "private-git-environment-source-successor/v1"
+    assert value["base_commit"] == "c8c2c33e0e8516985604d384455d1a7030cd6d3b"
+    assert set(value["files"]) == {
+        "closer_native_source_upgrade.py",
+        "closer_coding_git_environment.py",
+    }
+    before = ownership_budget_reference()["files"]["closer_native_source_upgrade.py"]
+    current = value["files"]["closer_native_source_upgrade.py"]
+    assert current["before_file_sha256"] == before["after_file_sha256"]
+    assert current["before_module_ast_sha256"] == before["after_module_ast_sha256"]
+    assert set(current["function_delta"]) == {"_rebased_policy"}
+    assert current["constant_delta"] == {}
     return value
 
 
