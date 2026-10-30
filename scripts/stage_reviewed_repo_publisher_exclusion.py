@@ -267,7 +267,12 @@ def excluded_node(node):
 
 
 def filtered_mapping(value):
-    return {target: row for target, row in (value or {}).items() if not excluded_target(target)}
+    return {
+        target: row
+        for target, row in (value or {}).items()
+        if not excluded_target(target)
+        and not (isinstance(row, dict) and excluded_target(row.get("pr_target")))
+    }
 """,
         "accountability exclusion helpers",
     )

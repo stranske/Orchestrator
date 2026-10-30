@@ -104,6 +104,7 @@
       "tests/test_rejected_role_capability_edges.py",
       "tests/test_renewal_requires_acting.py",
       "tests/test_repeat_verification_reentry.py",
+      "tests/test_reviewed_repo_publisher_exclusion_stage.py",
       "tests/test_review_loop_reporting.py",
       "tests/test_role_prompt_batch.py",
       "tests/test_route_weights_export_comparative.py",

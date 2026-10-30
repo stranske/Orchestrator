@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import os
 import shutil
 import sys
 import types
@@ -13,7 +14,16 @@ import pytest
 from scripts import apply_reviewed_repo_publisher_exclusion_stage as apply_stage
 from scripts import stage_reviewed_repo_publisher_exclusion as stage
 
-SOURCE = Path("/Users/teacher/.codex/automations/reviewed-repo-automation-controller")
+SOURCE = Path(
+    os.environ.get(
+        "REVIEWED_REPO_PUBLISHER_CAPTURE",
+        "/Users/teacher/.codex/automations/reviewed-repo-automation-controller",
+    )
+)
+pytestmark = pytest.mark.skipif(
+    not SOURCE.is_dir(),
+    reason="requires an explicit captured reviewed-repo publisher source; no live publisher is invoked",
+)
 
 
 def module(path: Path, name: str):
@@ -139,6 +149,12 @@ def test_successor_filters_excluded_parent_references_and_unknown_due(tmp_path):
         ["inventory incomplete"],
     )
     assert [row["target"] for row in due] == ["stranske/Workflows#3"]
+    assert accountability.filtered_mapping(
+        {
+            "stranske/Workflows#3": {"pr_target": "stranske/Collab-Admin#4"},
+            "stranske/Workflows#4": {"pr_target": "stranske/Workflows#5"},
+        }
+    ) == {"stranske/Workflows#4": {"pr_target": "stranske/Workflows#5"}}
 
 
 def test_router_payload_filters_excluded_nodes_and_guard_rows(tmp_path, monkeypatch):
