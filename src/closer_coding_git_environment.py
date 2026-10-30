@@ -250,8 +250,9 @@ def rebase_private_git_environment(
     return projected
 
 
-def _mkdir_new(path: Path) -> None:
+def _mkdir_new(path: Path, created: list[Path]) -> None:
     os.mkdir(path, 0o700)
+    created.append(path)
     metadata = path.stat(follow_symlinks=False)
     _need(
         stat.S_ISDIR(metadata.st_mode)
@@ -299,17 +300,13 @@ def provision_private_git_environment(
     created: list[Path] = []
     config_path: Path | None = None
     try:
-        _mkdir_new(root)
-        created.append(root)
+        _mkdir_new(root, created)
         home = root / "git-home"
-        _mkdir_new(home)
-        created.append(home)
+        _mkdir_new(home, created)
         config_dir = home / ".config"
-        _mkdir_new(config_dir)
-        created.append(config_dir)
+        _mkdir_new(config_dir, created)
         git_dir = config_dir / "git"
-        _mkdir_new(git_dir)
-        created.append(git_dir)
+        _mkdir_new(git_dir, created)
         config_path = home / ".gitconfig"
         _write_new(config_path, expected_raw)
         import closer_coding_publication as publication

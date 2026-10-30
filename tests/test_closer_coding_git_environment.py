@@ -364,6 +364,38 @@ def test_provision_refuses_nonsticky_world_writable_ancestor(tmp_path):
         os.chmod(ancestor, original_mode)
 
 
+@pytest.mark.parametrize("relative", [".", "git-home", "git-home/.config", "git-home/.config/git"])
+def test_provision_removes_created_directory_when_immediate_validation_holds(
+    tmp_path, monkeypatch, relative
+):
+    policy, root, gh = _policy(tmp_path)
+    projected = environment.rebase_private_git_environment(
+        policy,
+        old_source_sha=environment.REVIEWED_SOURCE_SHA,
+        consumer_id=environment.REVIEWED_CONSUMER_ID,
+        private_root=root,
+        gh_path=gh,
+    )
+    original_mkdir = os.mkdir
+    failing_directory = root / relative
+
+    def create_with_invalid_mode(path, mode=0o777, *, dir_fd=None):
+        original_mkdir(path, mode, dir_fd=dir_fd)
+        if Path(path) == failing_directory:
+            os.chmod(path, 0o755)
+
+    monkeypatch.setattr(environment.os, "mkdir", create_with_invalid_mode)
+    with pytest.raises(environment.GitEnvironmentHeld, match="fresh private Git directory differs"):
+        environment.provision_private_git_environment(
+            projected,
+            consumer_id=environment.REVIEWED_CONSUMER_ID,
+            private_root=root,
+        )
+    assert not root.exists()
+    assert root.parent.is_dir()
+    assert stat.S_IMODE(root.parent.stat().st_mode) == 0o700
+
+
 def test_provision_removes_its_partial_tree_when_publication_validation_holds(
     tmp_path, monkeypatch
 ):

@@ -3,8 +3,8 @@
   "files": {
     "closer_coding_git_environment.py": {
       "added_module": true,
-      "after_file_sha256": "aae160e4ab2de8ccff968fbb524891a8a8a2635636dd9898c05b9067dc6bf61f",
-      "after_module_ast_sha256": "c2ca8b49e9ea6ec233d5e68b659826412c22d908ab07749c6c4dd48d24ab6416",
+      "after_file_sha256": "38e429488916763fc7587d143e26c919f916054383bb061c0fdaa657f40584c4",
+      "after_module_ast_sha256": "348d70d1bb6c536805ace5dfa244a845109eb018293d83b0bda320ac3a6c5255",
       "before_file_sha256": null,
       "before_module_ast_sha256": null
     },

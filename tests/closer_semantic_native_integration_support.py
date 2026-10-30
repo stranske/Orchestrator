@@ -293,7 +293,7 @@ PRIVATE_GIT_ENVIRONMENT_MANIFEST = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_private_git_environment_v1.json"
 )
-PRIVATE_GIT_ENVIRONMENT_SHA256 = "894cf3fc1c577a3d0a5a435b52826b06e6dfd771bb2173c41ce8ed3a55400908"
+PRIVATE_GIT_ENVIRONMENT_SHA256 = "0a5bc920464eb5b4e997689cf4d208685a013aac7791f3b39f8832f78f4acb62"
 
 
 def private_git_environment_reference():
