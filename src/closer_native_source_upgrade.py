@@ -51,6 +51,8 @@ REVIEWED_CAPACITY_DESCRIPTOR_SHA256 = (
 # stop, and it must never turn an arbitrary owned_unknown/OK result into a
 # source-upgrade candidate.
 REVIEWED_CLOCK_CANDIDATE = "17be674425c41f619f38325c4266c5983366094f"
+REVIEWED_CLOCK_WORKER_ID = "59dfb3c05e55"
+REVIEWED_CLOCK_RESULT_SHA256 = "3d308ef44bbc979ed2a83b4578f4f334f793dd9b2600c73cea20fb3e00b1d30e"
 REVIEWED_CLOCK_MODULES_SHA256 = "a74ae76eb426482d528e695926d12a53311081925e75c939181fdbdb20508791"
 REVIEWED_CLOCK_DESCRIPTOR_SHA256 = (
     "8deaf7d76cd0965f44f031521121d03f7f104147b99fc34bdbe0f71cc7fef5b2"
@@ -471,6 +473,72 @@ def _old_module_bytes(doc: dict[str, Any]) -> tuple[bytes, dict[str, bytes]]:
         raise SourceUpgradeHeld("old runtime closure unavailable") from exc
 
 
+def _historical_clock_reader_program() -> str:
+    """Return the literal, facts-only 17be cohort reader for the staged old closure."""
+    return r"""import copy,hmac,math,os,re
+import closer_mechanisms as mech
+import closer_pipeline as pipeline
+from closer_dispatcher import targets_from_assignment
+if w != %r or len(d['workers']) != 1 or d.get('coding_continuations') is not None: raise SystemExit(38)
+x=next(x for x in d['workers'] if x['worker_id']==w)
+result_path=c.result_path(s,w); result_raw=c._cohort_read(result_path,c.COHORT_RECORD_LIMIT,[128*1024*1024])
+if hashlib.sha256(result_raw).hexdigest()!=%r: raise SystemExit(58)
+result=json.loads(result_raw); context=result['native_admission']
+policy=n.capacity_contract(m,control_plane_only=True); root=n.contract(m)[3]; nonce=context.get('nonce'); directory=root/nonce if isinstance(nonce,str) else None
+if not policy or not isinstance(directory,pathlib.Path) or not re.fullmatch(r'[0-9a-f]{32}',nonce) or directory.is_symlink() or directory.resolve()!=directory: raise SystemExit(39)
+signed=n._read(directory/'admission.json'); admission_record={'binding':n.binding(m),'context':context}
+if signed.get('record')!=admission_record or not hmac.compare_digest(signed.get('signature',''),mech._signature(admission_record,mech._key(root))): raise SystemExit(40)
+started=context.get('started_at')
+if context.get('schema')!='native-invocation-admission/v2' or type(started) not in (int,float) or not math.isfinite(started) or started < 0: raise SystemExit(41)
+for key,name in (('assignment','assignment.json'),('report','scoped-capacity.json')):
+ pin=context.get(key); path=directory/name
+ if not isinstance(pin,dict) or pin.get('path')!=str(path) or path.is_symlink() or n._hash(path)!=pin.get('sha256'): raise SystemExit(42)
+from closer_frontier_policy import validate_frontier
+frontier=validate_frontier(context.get('finite_frontier'),targets=targets_from_assignment(pathlib.Path(context['assignment']['path'])))
+if policy.get('schema')!='native-scoped-capacity/v2' or frontier!=context.get('finite_frontier') or frontier.get('owner')!=context.get('campaign',{}).get('owner') or context.get('request_timeout_seconds')!=policy.get('request_timeout_seconds') or 'original_deadline' in context or d['worker_config'].get('finite_frontier')!=frontier or d['worker_config'].get('request_timeout_seconds')!=context.get('request_timeout_seconds'): raise SystemExit(54)
+if 'demand_assignment' in context:
+ demand_source,demand_raw=n._demand_assignment_bytes(m,context['demand_assignment'],context['campaign'],continuations=context.get('demand_continuations',[]),finite_frontier=frontier)
+ if context['assignment'].get('source_path')!=str(demand_source) or hashlib.sha256(demand_raw).hexdigest()!=context['assignment'].get('sha256'): raise SystemExit(55)
+elif context['assignment'].get('source_path')!=str(n.private_test_assignment_source(m)): raise SystemExit(56)
+workspace=context.get('workspace_config')
+if workspace is not None:
+ path=directory/'workspaces.json'
+ if not isinstance(workspace,dict) or set(workspace)!={'path','sha256','source_path'} or workspace.get('path')!=str(path) or path.is_symlink() or hashlib.sha256(n._bounded_bytes(path,1024*1024)).hexdigest()!=workspace.get('sha256') or not isinstance(workspace.get('source_path'),str) or not pathlib.Path(workspace['source_path']).is_absolute(): raise SystemExit(57)
+manifest_path=pathlib.Path(context.get('runtime_manifest',''))
+historical_manifest=c.load_manifest(manifest_path)
+if manifest_path.resolve()!=manifest_path or n._hash(manifest_path)!=context.get('runtime_manifest_sha256') or historical_manifest.get('package_digest')!=d.get('release_pin') or (d['worker_config'].get('runtime_manifest') is not None and str(pathlib.Path(d['worker_config']['runtime_manifest']).resolve())!=context['runtime_manifest']): raise SystemExit(43)
+original={**d,'generation':context.get('campaign',{}).get('generation')}
+if result.get('worker_id')!=w or result.get('target')!=c.ROUND_UNIT or result.get('mechanism')!='native-handoff/v1' or result.get('outcome')!=x.get('outcome') or x.get('state')!='terminal' or x.get('outcome')!='ok' or 'coding_continuation' in context or context.get('demand_assignment')!=d.get('demand_assignment') or context.get('demand_continuations',[])!=d.get('demand_continuations',[]) or context.get('campaign')!=n._campaign_identity(s,original) or d.get('release_pin')!=m.get('package_digest'): raise SystemExit(44)
+fields={'state':str(s),'target':x['target'],'owner':d['owner'],'generation':str(context['campaign']['generation']),'result':str(pathlib.Path(str(s)+'.results')/(w+'.json')),'runtime-manifest':context['runtime_manifest'],'mechanism':mech.NATIVE}
+handoff=n._read(directory/('worker-'+w+'.json')); handoff_record=handoff.get('record')
+if not isinstance(handoff_record,dict) or handoff_record.get('binding')!=n.binding(m) or handoff_record.get('admission')!=context or handoff_record.get('fields')!=fields or not hmac.compare_digest(handoff.get('signature',''),mech._signature(handoff_record,mech._key(root))): raise SystemExit(45)
+cfg=copy.deepcopy(d['worker_config']); cfg['assignment']=context['assignment']['path']; cfg['capacity_json']=cfg['capacity_report']=context['report']['path']; cfg['native_admission']=context; cfg['native_worker']=fields
+if workspace is not None: cfg['workspaces']={key:workspace[key] for key in ('path','sha256')}
+else: cfg.pop('workspaces',None)
+detail=json.loads(result['detail']); terminal_path=directory/('completed-cohort-'+w+'.json'); terminal,terminal_raw=c._signed_cohort_record(detail.get('cohort_terminal'),terminal_path,root,[128*1024*1024])
+if terminal.get('schema')!='closer-terminal-cohort-worker/v1' or terminal.get('binding')!=n.binding(m) or terminal.get('admission')!=context or terminal.get('campaign')!=context['campaign'] or terminal.get('worker')!=fields or terminal.get('worker_id')!=w or terminal.get('outcome')!='ok' or terminal.get('completed') is not False or terminal.get('native_execution')!=detail.get('native_execution') or terminal.get('completed_round')!=detail.get('completed_round') or terminal.get('proof')!=detail.get('proof') or terminal.get('descendant_bundle')!=detail.get('descendant_bundle'): raise SystemExit(46)
+execution=c._completion_cleanup(cfg,terminal,'ok')
+if execution.get('admission_started_at')!=started: raise SystemExit(47)
+candidate=detail.get('completed_round'); round_id=candidate.get('round_id') if isinstance(candidate,dict) else None
+if not isinstance(round_id,str) or not re.fullmatch(r'[0-9a-f]{16,64}',round_id): raise SystemExit(48)
+state=pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'); proof_root=z.scoped_root(state); receipt_path=proof_root/'rounds'/(round_id+'.json')
+if receipt_path.is_symlink() or receipt_path.resolve()!=receipt_path or candidate.get('receipt_path')!=str(receipt_path): raise SystemExit(49)
+round_raw=n._bounded_bytes(receipt_path,32*1024*1024); round_sha=hashlib.sha256(round_raw).hexdigest(); aggregate=json.loads(round_raw); frontier=context.get('finite_frontier')
+if candidate.get('receipt_sha256',round_sha)!=round_sha or aggregate.get('finite_frontier')!=frontier or candidate.get('finite_frontier')!=frontier: raise SystemExit(50)
+targets=targets_from_assignment(pathlib.Path(cfg['assignment'])); verdict=z.validate_stop(state,round_id,targets)
+if verdict.get('round_id')!=round_id or verdict.get('receipt_sha256')!=round_sha or verdict.get('scoped_completion_valid') is not True or verdict.get('admitted_domain_valid') is not True or verdict.get('admitted_domain_reasons') or set(verdict.get('run_ids',{}))!=set(targets) or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(51)
+rows={}
+for target,run_id in verdict['run_ids'].items():
+ shard=pipeline._load(z.shard_dir(proof_root,target)/'state.json'); row=shard['frontiers'][frontier['frontier_id']]['items'][target]
+ if aggregate['targets'][target]!=row or aggregate['run_ids'][target]!=run_id: raise SystemExit(52)
+ rows[target]=mech.digest(row)
+p={'schema':'native-completed-round/v1','round_id':round_id,'receipt_path':str(receipt_path),'receipt_sha256':round_sha,'run_ids':verdict['run_ids'],'row_sha256':rows,'assignment_sha256':context['assignment']['sha256'],'admission_nonce':nonce,'boundary_global_stop_valid':True,'accepted':False,'finite_frontier':frontier}
+boundary=n._read(directory/('completed-round-'+round_id+'.json')); boundary_record={'binding':n.binding(m),'proof':p}
+if boundary.get('record')!=boundary_record or not hmac.compare_digest(boundary.get('signature',''),mech._signature(boundary_record,mech._key(root))) or candidate!=p or p!=detail.get('completed_round'): raise SystemExit(53)
+e={'worker_id':w,'result':{'path':str(result_path),'sha256':hashlib.sha256(result_raw).hexdigest()},'result_bytes':result_raw.decode('utf-8'),'terminal':detail['cohort_terminal'],'terminal_bytes':terminal_raw.decode('utf-8')}
+""" % (REVIEWED_CLOCK_WORKER_ID, REVIEWED_CLOCK_RESULT_SHA256)
+
+
 def _old_diagnostic(
     manifest: Path, state: Path, worker_id: str, *, interpreter: Path
 ) -> dict[str, Any]:
@@ -501,7 +569,10 @@ def _old_diagnostic(
         # apply() already holds the real campaign lock. The old reader may
         # take its own lock only on this private byte-identical snapshot;
         # cohort/proof validation still uses the original campaign path.
-        "snapshot=stage/'old-campaign-snapshot.json'; d=c.Campaign(snapshot).read(); x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round']);\n"
+        "snapshot=stage/'old-campaign-snapshot.json'; d=c.Campaign(snapshot).read();\n"
+        f"if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}: exec({_historical_clock_reader_program()!r})\n"
+        "else:\n"
+        " x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round'])\n"
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
@@ -516,8 +587,8 @@ def _old_diagnostic(
         f" if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}:\n"
         "  clock={'workers':len(d['workers']),'coding_continuations':d.get('coding_continuations'),'result_stages':sorted(results),'native_effect_contract':results['prepare'].get('native_effect_contract')}\n"
         "  import closer_dispatcher as cd, closer_role_qualification as roles, dispatcher as dispatch, execution_profiles as profiles\n"
-        "  stage=results['exception']; prepare=results['prepare']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; basis=expected.get('basis'); prepared_snapshot=prepare.get('snapshot'); packet_ref=prepare.get('packet_ref'); prepared_basis={'target':prepared_snapshot.get('target'),'revision':prepare.get('revision'),'head':prepared_snapshot.get('head'),'base':prepared_snapshot.get('base'),'packet_sha256':packet_ref.get('sha256')} if isinstance(prepared_snapshot,dict) and isinstance(packet_ref,dict) else None; proved=cd._revalidate_controlled_proof(proof,run_id=actual['run_id'],basis=basis,receipt_root=dispatch.DISPATCH_LOG_DIR); receipt=cd._read_controlled_receipt(proof['provider_result_ref'],dispatch.DISPATCH_LOG_DIR); at=receipt['completed_at']; execution=detail['native_execution']['phases']['B']; profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at); identity=roles.profile_identity(profile)\n"
-        "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id')==proved.get('run_id')==receipt.get('run_id') and expected.get('task_type')=='closer_exception' and isinstance(basis,dict) and isinstance(prepared_basis,dict) and all(basis.get(k)==prepared_basis.get(k) for k in ('target','revision','head','base','packet_sha256')) and basis.get('target')==source_target and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and execution['started_at']<=at<=execution['finished_at'] and record is not None and expected.get('profile_identity')==identity==record.get('profile_identity') and record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and actual.get('exit')==0 and proved.get('exit')==0)\n"
+        "  stage=results['exception']; prepare=results['prepare']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; basis=expected.get('basis'); prepared_snapshot=prepare.get('snapshot'); packet_ref=prepare.get('packet_ref'); prepared_basis={'target':prepared_snapshot.get('target'),'revision':prepare.get('revision'),'head':prepared_snapshot.get('head'),'base':prepared_snapshot.get('base'),'packet_sha256':packet_ref.get('sha256')} if isinstance(prepared_snapshot,dict) and isinstance(packet_ref,dict) else None; proved=cd._revalidate_controlled_proof(proof,run_id=actual['run_id'],basis=basis,receipt_root=dispatch.DISPATCH_LOG_DIR); receipt=cd._read_controlled_receipt(proof['provider_result_ref'],dispatch.DISPATCH_LOG_DIR); at=receipt['completed_at']; execution=detail['native_execution']['phases']['B']; profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at); admission_record=roles.qualified_record(profile,role,now=context['started_at']); identity=roles.profile_identity(profile)\n"
+        "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id')==proved.get('run_id')==receipt.get('run_id') and expected.get('task_type')=='closer_exception' and isinstance(basis,dict) and isinstance(prepared_basis,dict) and all(basis.get(k)==prepared_basis.get(k) for k in ('target','revision','head','base','packet_sha256')) and basis.get('target')==source_target and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and execution['started_at']<=at<=execution['finished_at'] and record is not None and admission_record is not None and expected.get('profile_identity')==identity==record.get('profile_identity')==admission_record.get('profile_identity') and record.get('qualification_id')==admission_record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==cd._contract_digest(admission_record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and roles.execution_record_matches(admission_record,expected,checked_at=context['started_at']) and actual.get('exit')==0 and proved.get('exit')==0)\n"
         "verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets)\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
         "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'strong_as_of':strong_as_of,'capacity_disposition':capacity,'clock_disposition':clock,'stop':verdict},sort_keys=True,separators=(',',':')))\n"

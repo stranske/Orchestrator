@@ -203,6 +203,69 @@ def test_clock_predecessor_uses_only_its_own_module_and_descriptor_hashes(monkey
             upgrade._reviewed_old_metadata({**manifest, "candidate_sha": candidate}, raw)
 
 
+def test_historical_clock_reader_is_literal_facts_only_and_keeps_generic_readers_out():
+    program = upgrade._historical_clock_reader_program()
+    compile(program, "<historical-clock-reader>", "exec")
+    assert repr(upgrade.REVIEWED_CLOCK_WORKER_ID) in program
+    assert repr(upgrade.REVIEWED_CLOCK_RESULT_SHA256) in program
+    assert "n.capacity_contract(m,control_plane_only=True)" in program
+    assert "execution.get('admission_started_at')!=started" in program
+    assert "mech._signature" in program
+    assert "validate_stop" in program
+    assert "n.validate_admission(" not in program
+    assert "n.completed_round_proof(" not in program
+    assert "for_effects=True" not in program
+
+
+@pytest.mark.parametrize("case", ["wrong-worker", "extra-worker", "continuation"])
+def test_historical_clock_reader_refuses_other_custody_before_evidence_io(tmp_path, case):
+    import closer_campaign as campaign
+
+    worker = upgrade.REVIEWED_CLOCK_WORKER_ID
+    state = {"workers": [{"worker_id": worker}]}
+    if case == "wrong-worker":
+        worker = "0" * 12
+    elif case == "extra-worker":
+        state["workers"].append({"worker_id": "0" * 12})
+    else:
+        state["coding_continuations"] = []
+    namespace = {
+        "w": worker,
+        "d": state,
+        "c": campaign,
+        "s": tmp_path / "absent-campaign.json",
+    }
+    with pytest.raises(SystemExit) as caught:
+        exec(upgrade._historical_clock_reader_program(), namespace)
+    assert caught.value.code == 38
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("raw", [b"not JSON", b'{"native_admission":{}}'])
+def test_historical_clock_reader_pins_result_bytes_before_decoding(tmp_path, raw):
+    import closer_campaign as campaign
+
+    worker = upgrade.REVIEWED_CLOCK_WORKER_ID
+    state_path = tmp_path / "old-campaign.json"
+    result_path = campaign.result_path(state_path, worker)
+    result_path.parent.mkdir()
+    result_path.write_bytes(raw)
+    namespace = {
+        "w": worker,
+        "d": {"workers": [{"worker_id": worker}]},
+        "c": campaign,
+        "s": state_path,
+        "hashlib": hashlib,
+        "json": json,
+    }
+    # Real bounded cohort reads run here. Invalid JSON must be rejected by its
+    # literal byte pin before parsing or consulting any authority-bearing data.
+    with pytest.raises(SystemExit) as caught:
+        exec(upgrade._historical_clock_reader_program(), namespace)
+    assert caught.value.code == 58
+    assert result_path.read_bytes() == raw
+
+
 def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
     tmp_path, monkeypatch
 ):
