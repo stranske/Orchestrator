@@ -51,6 +51,16 @@ REVIEWED_CAPACITY_DESCRIPTOR_SHA256 = (
 REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256 = (
     "98775accf1ce81aead5c99eec4bf7e3e802774b2397440dd356bf9ff7649c966"
 )
+# The source-publisher closure release delegates its snapshot digest to this
+# pure helper.  Its installer deliberately adds the mirror to sys.path, so a
+# pin on the installer alone would still let a mutable helper affect the
+# pre-release readback.  These are reviewed Source bytes, never journal facts.
+REVIEWED_SHARED_DIGEST_INSTALLER_SHA256 = (
+    "8cdb2241df0a7fba7cac5736c1ce18663801a6b407c0e02f7f7c1f10e7e7adb6"
+)
+REVIEWED_SHARED_DIGEST_HELPER_SHA256 = (
+    "0fe7e3d60e333cb8cc7bb974705e09254a2d5ada503a6493ae60cc4537b34968"
+)
 _SEAL_NAME = "source-upgrade-current-disposition.json"
 _INTENT_NAME = "source-upgrade-intent.json"
 _KNOWN_NAME = "source-upgrade-known.json"
@@ -526,19 +536,60 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         inspector_raw = host._read(inspector)[1]
     except (OSError, RuntimeError) as exc:
         raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
-    _need(
-        _sha(inspector_raw) == REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256,
-        "installed generation inspector differs",
-    )
+    inspector_sha256 = _sha(inspector_raw)
+    helper: Path | None = None
+    helper_raw: bytes | None = None
+    if inspector_sha256 == REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256:
+        expected_inspector_sha256 = REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256
+        runner_input: str = inspector_raw.decode("utf-8")
+        runner = (
+            "import sys\n"
+            "code=sys.stdin.buffer.read()\n"
+            "sys.argv=[sys.argv[1],*sys.argv[2:]]\n"
+            "exec(compile(code,sys.argv[0],'exec'),{'__name__':'__main__','__file__':sys.argv[0]})\n"
+        )
+        runner_prefix = [str(inspector)]
+    elif inspector_sha256 == REVIEWED_SHARED_DIGEST_INSTALLER_SHA256:
+        expected_inspector_sha256 = REVIEWED_SHARED_DIGEST_INSTALLER_SHA256
+        # Verified snapshots flatten source modules into the installed mirror;
+        # this is intentionally not the Source checkout's ``src/`` path.
+        helper = physical_mirror / "source_snapshot_digest.py"
+        try:
+            helper_raw = host._read(helper)[1]
+        except (OSError, RuntimeError) as exc:
+            raise SourceUpgradeHeld("installed generation digest helper unavailable") from exc
+        _need(
+            _sha(helper_raw) == REVIEWED_SHARED_DIGEST_HELPER_SHA256,
+            "installed generation digest helper differs",
+        )
+        # Preload only the captured, literal-pinned helper before executing the
+        # captured installer.  Its own sys.path changes then cannot select
+        # mutable mirror bytes for this import.
+        runner_input = json.dumps(
+            {
+                "helper": helper_raw.decode("utf-8"),
+                "inspector": inspector_raw.decode("utf-8"),
+            },
+            sort_keys=True,
+        )
+        runner = (
+            "import json,sys,types\n"
+            "payload=json.loads(sys.stdin.buffer.read())\n"
+            "helper=types.ModuleType('source_snapshot_digest')\n"
+            "helper.__file__=sys.argv[2]\n"
+            "helper.__package__=''\n"
+            "sys.modules['source_snapshot_digest']=helper\n"
+            "exec(compile(payload['helper'],sys.argv[2],'exec'),helper.__dict__)\n"
+            "code=payload['inspector']\n"
+            "sys.argv=[sys.argv[1],*sys.argv[3:]]\n"
+            "exec(compile(code,sys.argv[0],'exec'),{'__name__':'__main__','__file__':sys.argv[0]})\n"
+        )
+        runner_prefix = [str(inspector), str(helper)]
+    else:
+        raise SourceUpgradeHeld("installed generation inspector differs")
     # Execute the already-pinned bytes, not the mutable pathname that supplied
     # them.  The physical pathname remains __file__ for the inspector's own
     # structural checks; the logical mirror remains the generation identity.
-    runner = (
-        "import sys\n"
-        "code=sys.stdin.buffer.read()\n"
-        "sys.argv=[sys.argv[1],*sys.argv[2:]]\n"
-        "exec(compile(code,sys.argv[0],'exec'),{'__name__':'__main__','__file__':sys.argv[0]})\n"
-    )
     python = str(Path(sys.executable).resolve())
     try:
         generation = subprocess.run(
@@ -548,12 +599,12 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
                 "-B",
                 "-c",
                 runner,
-                str(inspector),
+                *runner_prefix,
                 str(mirror),
                 "--generation-token",
             ],
             text=True,
-            input=inspector_raw.decode("utf-8"),
+            input=runner_input,
             capture_output=True,
             timeout=10,
             check=False,
@@ -565,12 +616,12 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
                 "-B",
                 "-c",
                 runner,
-                str(inspector),
+                *runner_prefix,
                 str(physical_mirror),
                 "--digest",
             ],
             text=True,
-            input=inspector_raw.decode("utf-8"),
+            input=runner_input,
             capture_output=True,
             timeout=10,
             check=False,
@@ -583,9 +634,18 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     except (OSError, RuntimeError) as exc:
         raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
     _need(
-        _sha(inspector_after) == REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256,
+        _sha(inspector_after) == expected_inspector_sha256,
         "installed generation inspector changed",
     )
+    if helper is not None and helper_raw is not None:
+        try:
+            helper_after = host._read(helper)[1]
+        except (OSError, RuntimeError) as exc:
+            raise SourceUpgradeHeld("installed generation digest helper unavailable") from exc
+        _need(
+            _sha(helper_after) == REVIEWED_SHARED_DIGEST_HELPER_SHA256,
+            "installed generation digest helper changed",
+        )
     _need(
         generation.stdout.strip() == record["installed_generation"]
         and digest.stdout.strip() == verified["snapshot_digest"],
@@ -602,6 +662,8 @@ def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
         "python": python,
         "inspector": str(inspector),
         "inspector_sha256": _sha(inspector_after),
+        "digest_helper": str(helper) if helper is not None else None,
+        "digest_helper_sha256": _sha(helper_raw) if helper_raw is not None else None,
     }
 
 
