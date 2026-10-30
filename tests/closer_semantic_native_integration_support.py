@@ -234,10 +234,51 @@ def strong_role_enrollment_reference():
     return value["role_module"]
 
 
+STRONG_ROLE_RENEWAL_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_strong_role_renewal_v1.json"
+)
+STRONG_ROLE_RENEWAL_SHA256 = "a6bd1e6913f6c725a395eef7faa4bd20f630cc55749abc6dffa99daffab6abbc"
+
+
+def strong_role_renewal_reference():
+    raw = STRONG_ROLE_RENEWAL_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == STRONG_ROLE_RENEWAL_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "closer-strong-role-renewal-overlay/v1"
+    assert set(value) == {"schema", "scope", "actual_report_ref", "quality_ref", "role_module"}
+    return value
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    renewal = strong_role_renewal_reference()
+    renewal_role = renewal["role_module"]
+    if hashlib.sha256(raw).hexdigest() == renewal_role["after_file_sha256"]:
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == renewal_role["after_module_ast_sha256"]
+        registry = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "ROLE_QUALIFICATIONS"
+        )
+        assert fingerprint(registry) == renewal_role["after_registry_ast_sha256"]
+        pairs = list(zip(registry.value.keys, registry.value.values))
+        key, record = next(
+            pair
+            for pair in pairs
+            if isinstance(pair[0], ast.Constant)
+            and pair[0].value == renewal_role["new_qualification_id"]
+        )
+        assert fingerprint(record) == renewal_role["new_record_ast_sha256"]
+        registry.value.keys.remove(key)
+        registry.value.values.remove(record)
+        assert fingerprint(registry) == renewal_role["before_registry_ast_sha256"]
+        assert fingerprint(tree) == renewal_role["before_module_ast_sha256"]
+        return
     enrollment = strong_role_enrollment_reference()
     if hashlib.sha256(raw).hexdigest() == enrollment["after_file_sha256"]:
         tree = ast.parse(raw)
