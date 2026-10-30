@@ -250,7 +250,7 @@ def test_merged_information_state_is_rechecked(neighborhood):
         observe(rows, seed, race=race)
 
 
-@pytest.mark.parametrize("events,held", [(30, False), (100, True)])
+@pytest.mark.parametrize("events,held", [(29, False), (30, True), (100, True)])
 def test_multi_page_incumbent_keeps_original_finite_call_budget(neighborhood, events, held):
     rows, seed = neighborhood
     for number in (984, 983, 988):

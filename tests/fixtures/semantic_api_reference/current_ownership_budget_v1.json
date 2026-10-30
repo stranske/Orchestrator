@@ -1,0 +1,197 @@
+{
+  "base_commit": "8a4716f844fe002c6606b6bad4104c74be83d32c",
+  "files": {
+    "closer_correction_canary_ownership.py": {
+      "added_module": true,
+      "after_file_sha256": "b7af2081faa331b8f28e1695db6beae69e2c60c63c72cce33e3b67ed23cf9549",
+      "after_module_ast_sha256": "30fa907a36a1a09f77e8b5dafe526b4e8124a3d87c9e53d6506de5d75884f5c0",
+      "before_file_sha256": null,
+      "before_module_ast_sha256": null
+    },
+    "closer_correction_ownership.py": {
+      "after_file_sha256": "04c7d745039e2f410d7a6ced2fdd923aed1d9b40fd9074b1e75e693fb71af4df",
+      "after_module_ast_sha256": "96dda32dc81218b5664acd9c5858d890260b4006e2860d1f28cba94d6f72de92",
+      "before_file_sha256": "fb167f32daa7b598208d6038eb01ed2b44cc6a0777bcd9ac7c78163f159883c8",
+      "before_module_ast_sha256": "a7284ba4665eaa9bd792c2c1a7bfd00725d5105a7265537ab12866d4b21c7e12",
+      "before_top_level_ast": {
+        "NativeOwnership": "9ffa7a40a689d09ebf0e711dab35c562807f3011d05a463b3952e90ee9579f97",
+        "OwnershipUnavailable": "8103658c47ff6845c1494a1b6bcebc572cdac88931a3db863f8a2359a2121653",
+        "_Reads": "c6f98d113096f4000fe056d3e4c2898069315316e136c848b19c79fe462d9a13",
+        "_cross_projection": "91a31a4d55f6864cc7834727ee6e98904be2d9892422a3c3461623b0761d6451",
+        "_instant": "1e854d892a46873704568ddbbad048b2a1f0964dd583c0114aa7745e5eabddf4",
+        "_issue": "fb6a0406348498ff1f0c47aed5121ea82b4c0ae8c12c480101f2a98a745b0a65",
+        "_need": "5dad3861ecefb9887c5b4552d836665f4cbf6bfe0e14156bd33a4a7277bd1941",
+        "_owned_delivery_neighbor": "3f67a829f433700be17e62b5d2acdaa1e24592de5027ec26d508267a324f515e",
+        "_pull": "71d89bf89afe2c08922959a087d835c8ad7da66beab1eb42eff2fc530c20644d",
+        "_raw": "f8785f3a07d5fac3f8bf1deae3042953e08c96997d50a1c383accc203a625781",
+        "_related": "5c27532dc7d20aa2b2ec445d32ba0fefdfff38861e753c88dbe29c67f7ebf38b",
+        "collect_ownership": "89a14c63f271fb1930ef886dcdf0c72d59cdb756d8532480acdc99e12e4ace04"
+      },
+      "constant_delta": {
+        "MAX_PAGES": {
+          "after": "903d9860689acb685a5a520ac67556d2153676888dd1fc3fefed6c56bd021dc7",
+          "before": "d001399fe0b5bdf7914af80abfd3d12c02107fc7acdacca08e1a28fd4a3f6bd5"
+        },
+        "PAGE_SIZE": {
+          "after": "c9e127a4c030b78d90827928251ad0eccc78f26f2cdfd98ec107a83492f543f6",
+          "before": "a9e02a079751308e15603d4dcd9aafb5f71e4a7783a62edbc72991071088b739"
+        }
+      },
+      "function_delta": {
+        "_Reads": {
+          "after": "e6969e2b1e8530e424d5ca4cdc52445bdc33f4f1683a617c8362df5a2e018815",
+          "before": "c6f98d113096f4000fe056d3e4c2898069315316e136c848b19c79fe462d9a13"
+        },
+        "_observation": {
+          "after": "7a8ab2602843df50465b18d424b7c07eeaa0dea20b1120c6ec43e03b6c177c29",
+          "before": null
+        },
+        "collect_ownership": {
+          "after": "1ad95ecc0839207f15ac1d65c0e60e8b06fa15a46c2afadad77b1e3dac77b06f",
+          "before": "89a14c63f271fb1930ef886dcdf0c72d59cdb756d8532480acdc99e12e4ace04"
+        }
+      },
+      "outside_reviewed_changes_ast_sha256": "818a50ffc12512b4ee10ad78fdde39fba59d8ba0bcb5d613e896f630fa6696a7"
+    },
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "5effb736dacd754c1224a0435bdda891698f404afd656417c187c4d045a8ceb3",
+      "after_module_ast_sha256": "8150641266fe7d2818f55b7214992c7b7ee5aa50a752fd2be688099b8215c123",
+      "before_file_sha256": "0934e5389e8476a5c28ec378663800a1cf6eb71f48a6e8b1cf4f4a927a2a4146",
+      "before_module_ast_sha256": "dbd411247a903eef6e2800abcfc17809e8c9aab7f227b9f484ff0371bdc5d44d",
+      "before_top_level_ast": {
+        "SourceUpgradeHeld": "e9929bed7dbf6f40d55f2bc63e5f06b64ce1f302430ec1e01ea3e5111778c2dd",
+        "_canonical": "c392bd952a3da85042849544a4adfc4425d955447e59ef996039d1bea48b6940",
+        "_capacity_no_act": "75de143e0bb5a2e8894000383394bd70f15655c10077dd50edc778c405d07e30",
+        "_clock_no_act": "f5083ccd26473acaf25cc322d9bd73b36a790d3a6251183fc140286fd03fc69d",
+        "_completed_reference": "506858ff1f86c17c2d504e3e8abe64959951dcd517f0978f41f5bd3de02b3525",
+        "_derived_coding_capability": "d21b92ab9fcd5356e3ab361a3282288d8fcf6ff9750570cd17f8be3d11e131a0",
+        "_diagnostic_no_act": "cbab88cc82391f17715cfeb813a16859f1eb32788fee96ff544fe95badb6de19",
+        "_exact_ref": "330be3739865eec6b203791084c8f966b001b4b333916f3b907021fb1bb3206a",
+        "_historical_clock_reader_program": "4458d5ff1a74c860d27786b5a7158b576cf263f9a06674856f22ea9075763d9b",
+        "_incomplete_cohort": "a6b12071d5acd9288e01edc9ad5adcf2b0fb167b562ab23d7bd78a32f6c7995c",
+        "_inert_new_custody": "73e21a4711fff90ccc14e76bef2282810174091c0c613c1f223e3b89b6416f3a",
+        "_installed_release": "17d79c7360af4947e6e5c21030e9c15d509f06467ee4861611a7b5667ba7453f",
+        "_manifest": "f9c407de8e347f56f9933336890dc5d8a7b4074e32aa79fd0deeb557bf9ca6e4",
+        "_need": "477d77385fb60b020bd552cf92dce786bb24d6fb162c17917e977282f7deef60",
+        "_no_act": "28e372da5018d1e92e1a192ff94416fade74b966b98b648dd047fa3c1022b263",
+        "_object": "76091a6c03efdcdd14fa7eea3410ce22d3b496f180eac0c41cbb083daed86cb7",
+        "_old_custody_quiet": "3806da22f71441da77e2364e69976d8462171f36d0d1a2ccd831dc31183299ec",
+        "_old_diagnostic": "30824b526bd55e97930da31a6c3c22bd79350fc8c8cac8df86c2aaf00823d9b4",
+        "_old_module_bytes": "c7dad9d02bcc96250185108aeb7cf970ecf92383d621f3217a3b0c428c097d22",
+        "_old_native_terminal": "d60a0a84c4713c39e84592b2763c776be76a279fd156b691642c49ed6beea537",
+        "_physical_recipe": "3e5401f246b5b62f42fefd701fdf9677492f2d24b57d636900bc485d65bbd107",
+        "_pinned_object": "4b22d958a6c2c9018e8b2aea4772c22db6f165f3af9f58c37c5e52d52896fa87",
+        "_plan_sha": "0c5d1c8d2b2ba296e50d3c4b1b1e4583e8caeaba0f7033559158bfa1c05bffef",
+        "_provision_upgrade_key": "51c980f57920246ea98c482a2601b66387a7a3a8f3a7be7ae5af4dc333479711",
+        "_read_signed_upgrade": "82ad191ab309a157055e6adc678bd60a2c9f80c9e016ba3046f10d3f7ca1c044",
+        "_rebased_policy": "83e0008692e48642d8e2e02ac92136779793ce6780d73015a97f475e282a6532",
+        "_reviewed_old_metadata": "2af6f34bec75ece759a23a745ecc0ef7205f2b5c8866ed90f710cab1b852126d",
+        "_same_identity": "3604b5ec2420c148dfc5bb26f0a89dd721af471739fe426dfdcb57d6ef02d606",
+        "_sha": "359cf39582e02c462577c968161e0e79ae62ecb435444146069fa1501ce89fd8",
+        "_signed_upgrade_record": "187326b2108983bb16701fb5d7a1bac66af179f04eed438781523432a5c4b2fd",
+        "_source_upgrade_root": "07a30761aff95c50695d4b1f4dab79d8fdc71f59172d7990b272b947fe1e1053",
+        "_upgrade_path": "b33bdd23144b872dc5ad9ebb13dc49d62bea80a7082f770a402a8a1873adb76e",
+        "_wrapper_plan": "06308d13c7b1f33c3a2212300c9ab55ec73a78de80c32cd5e9c5a2d099145bf1",
+        "apply": "9f8d5d9f5f5a7e724182ed3c1e5ee4837798a0d7d08ee570f95daf7ea5ac269c",
+        "fresh_read_native_index": "bca9fbb1a8e1d1bd86636592e5f98184f946efdfeb95dd7f3c4716130f93c945",
+        "plan": "677cb94e2fad09eeb455433bab150f5cf11113e9bdd4dd0b23b7cfca6291e5e7",
+        "prepare_held": "5c90a8c14e47d385630299c56371b7c164282baefa0c6fdfd8130cbd50755be4"
+      },
+      "constant_delta": {
+        "REVIEWED_OWNERSHIP_BUDGET_ALLOWED_PATHS": {
+          "after": "72beb855206b2c2469d864ce7ae2433a9856bb8ce4237d71c01238095147bc1e",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_CANDIDATE": {
+          "after": "5fa9b94e413dc80ac54054bdc17ace7abfbf7a83cfcf30c466107f63ee4d2ebf",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID": {
+          "after": "a1c8a6d56a70aaf974c62580e8aa02397e83e9ebc1b9af1461dd1b5810e6e03f",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256": {
+          "after": "d7ab7162b72d2513248ad8efe38f3f9249b8cb4d03a91a5dd41fbe6cf747184f",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256": {
+          "after": "746256b4b611f0a4345d0a6a2514f9f059b9c018797e2929756c567c96be579a",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_PRE_REBIND_OWNER": {
+          "after": "ba9183199ad09a571de7e663af63b26f85c564cea88ed18245f27bef5c2c00fc",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_REPOSITORY": {
+          "after": "d9548e71812e1fe55f00e28a75f5d01d9061b4946743b128a6fc92c598e436c8",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_REPOSITORY_ID": {
+          "after": "9a2a47dcb95dbc476eb2e8919f5109beda59de01f9be5d0350e312a0d926b112",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_RESULT_SHA256": {
+          "after": "d658730cda50c76a2157359130f8d55be3a154c2619e76e82c78cefad22cf1b0",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_TRUSTED_CONTEXT_SHA256": {
+          "after": "2d7691a61fe84bac08537c119791d8ecea730ceb9fa2ef75c76e42153216dada",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_WORKER_ID": {
+          "after": "c1fd3dc8027a4bee58e9e3e53760e28a9d8074ae41652ab70c2b223e8dce369e",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_WRITER_ID": {
+          "after": "e984fe831dab75d5a47ff5c03d7e4a0c0093f972456158a96377cc4895558dfa",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN": {
+          "after": "d596957715c51cf27c310cb86f09bdf7a777b8624456d1d11dfe9796c0e2ab53",
+          "before": null
+        },
+        "REVIEWED_OWNERSHIP_BUDGET_WRITER_TYPE": {
+          "after": "56b97c8e417ebd20f2b2fe3f156be1a0a6fc2e258243a5c2b1da04ea916de4b7",
+          "before": null
+        }
+      },
+      "function_delta": {
+        "_diagnostic_no_act": {
+          "after": "a42f70a07f2e442edf0e99807aacff2e2d22a5be1ec4f766931512f5b118baea",
+          "before": "cbab88cc82391f17715cfeb813a16859f1eb32788fee96ff544fe95badb6de19"
+        },
+        "_historical_ownership_budget_reader_program": {
+          "after": "7c7c54a6a4f4dce49aae805e6bcf9c8f39b653fb26d48c91f9e83246779a1374",
+          "before": null
+        },
+        "_old_diagnostic": {
+          "after": "161e3fd55d964553f9ee027a2a598338ded9236d9e974dc7e9cf5050fc045968",
+          "before": "30824b526bd55e97930da31a6c3c22bd79350fc8c8cac8df86c2aaf00823d9b4"
+        },
+        "_ownership_budget_no_act": {
+          "after": "5b06b94c7acae5af4fbdf7a6fe9ce0c15644df02bd0535907ebb7ab8822d3c15",
+          "before": null
+        },
+        "_ownership_budget_rebound_coding_policy": {
+          "after": "2360bc2e59c0718ace73b69925ed47e6376e028878a73905e586cd16603844a9",
+          "before": null
+        },
+        "_rebased_policy": {
+          "after": "0487ed46bc1323677568ca0d4c431847ce64696cce7d69160b9265dfc561ac10",
+          "before": "83e0008692e48642d8e2e02ac92136779793ce6780d73015a97f475e282a6532"
+        },
+        "_reviewed_old_metadata": {
+          "after": "07b5eacd1ae091d1cfbfe986384b31d621847d722b54642c3f26dabfb3acec62",
+          "before": "2af6f34bec75ece759a23a745ecc0ef7205f2b5c8866ed90f710cab1b852126d"
+        },
+        "plan": {
+          "after": "e1500a8c9006f9b2ad76d124bbeca6769ea502986825e8c82172137e6c9ec691",
+          "before": "677cb94e2fad09eeb455433bab150f5cf11113e9bdd4dd0b23b7cfca6291e5e7"
+        }
+      },
+      "outside_reviewed_changes_ast_sha256": "da25a56f8d37cda09b93945be1b5f6c65bf09ab3126b031f48d0a2bb9103f3b6"
+    }
+  },
+  "schema": "ownership-budget-source-successor/v1",
+  "scope": "fixed raw-page batching; authenticated existing CSV delivery; exact no-ACT predecessor migration and consumer owner metadata"
+}
