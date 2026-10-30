@@ -45,6 +45,14 @@ REVIEWED_CAPACITY_MODULES_SHA256 = (
 REVIEWED_CAPACITY_DESCRIPTOR_SHA256 = (
     "d785039a57ef32c7ea7e2f72f349802b75658ebba1b40917c856c9ab5a3c1f58"
 )
+# The source17be CSV canary stopped after its bound STRONG adjudication but
+# before ownership collection.  It is deliberately a separate literal branch:
+# it is neither the generic f858 owner-criterion stop nor the 4e8 capacity
+# stop, and it must never turn an arbitrary owned_unknown/OK result into a
+# source-upgrade candidate.
+REVIEWED_CLOCK_CANDIDATE = "17be674425c41f619f38325c4266c5983366094f"
+REVIEWED_CLOCK_MODULES_SHA256 = "a74ae76eb426482d528e695926d12a53311081925e75c939181fdbdb20508791"
+REVIEWED_CLOCK_DESCRIPTOR_SHA256 = "8deaf7d76cd0965f44f031521121d03f7f104147b99fc34bdbe0f71cc7fef5b2"
 # Deliberately literal: the inspector is executed before any installed-release
 # fact can be trusted.  This is the clean reviewed f858 source file, not a
 # digest supplied by a release journal or the inspected generation.
@@ -215,6 +223,38 @@ def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
     )
 
 
+def _clock_no_act(correction: dict[str, Any], queue: dict[str, Any], *, strong_as_of: object) -> None:
+    """Accept only the reviewed source17be pre-ACT clock refusal."""
+    _need(isinstance(correction, dict), "clock disposition has no correction")
+    _need(
+        correction == {
+            "status": "owned_unknown",
+            "reason": "native observation clock is not current",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "clock disposition is not the isolated ownership observation stop",
+    )
+    _need(isinstance(queue, dict) and queue.get("events") == [], "clock ACT queue is not empty")
+    _need(
+        strong_as_of is True,
+        "clock disposition lacks successful bound STRONG historical qualification",
+    )
+    accounting = queue.get("accounting")
+    _need(
+        isinstance(accounting, list)
+        and len(accounting) == 1
+        and isinstance(accounting[0], dict)
+        and accounting[0].get("reason") == "observation_failed"
+        and accounting[0].get("next_trigger") == "retry_observation_next_round"
+        and accounting[0].get("operation_id") is None
+        and accounting[0].get("operation_status") is None,
+        "clock deferred accounting is not sole/null observation retry",
+    )
+
+
 def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
     """Keep retirement's incomplete-cohort refusal intact and separate."""
     _need(
@@ -301,22 +341,43 @@ def _diagnostic_no_act(candidate: str, diagnostic: dict[str, Any]) -> None:
     if candidate == REVIEWED_CAPACITY_CANDIDATE:
         _capacity_no_act(diagnostic.get("capacity_disposition"))
     else:
-        _need(candidate == REVIEWED_OLD_CANDIDATE, "unreviewed no-ACT predecessor")
+        _need(
+            candidate in {REVIEWED_OLD_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
+            "unreviewed no-ACT predecessor",
+        )
         correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
         _need(
             isinstance(correction, dict) and isinstance(queue, dict), "old diagnostic shape invalid"
         )
-        _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
+        if candidate == REVIEWED_CLOCK_CANDIDATE:
+            _clock_no_act(
+                cast(dict[str, Any], correction),
+                cast(dict[str, Any], queue),
+                strong_as_of=diagnostic.get("strong_as_of"),
+            )
+        else:
+            _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
 
 
 def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[str, str]:
     """Validate literal pre-import f858 identity metadata without filesystem effects."""
     modules = doc.get("modules")
     _need(
-        doc.get("candidate_sha") in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE},
+        doc.get("candidate_sha")
+        in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
         "old release is not reviewed no-ACT predecessor",
     )
-    capacity = doc.get("candidate_sha") == REVIEWED_CAPACITY_CANDIDATE
+    candidate = doc.get("candidate_sha")
+    expected_modules = {
+        REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_MODULES_SHA256,
+        REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_MODULES_SHA256,
+        REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_MODULES_SHA256,
+    }[candidate]
+    expected_descriptor = {
+        REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_DESCRIPTOR_SHA256,
+        REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_DESCRIPTOR_SHA256,
+        REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_DESCRIPTOR_SHA256,
+    }[candidate]
     _need(
         isinstance(modules, dict)
         and bool(modules)
@@ -331,13 +392,13 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
     )
     _need(
         _sha(json.dumps(modules, sort_keys=True, separators=(",", ":")).encode())
-        == (REVIEWED_CAPACITY_MODULES_SHA256 if capacity else REVIEWED_OLD_MODULES_SHA256),
+        == expected_modules,
         "old manifest closure is not the reviewed predecessor",
     )
     _need(
         doc.get("public_runtime_descriptor") == "closer-runtime-package.json"
         and _sha(descriptor_raw)
-        == (REVIEWED_CAPACITY_DESCRIPTOR_SHA256 if capacity else REVIEWED_OLD_DESCRIPTOR_SHA256),
+        == expected_descriptor,
         "old public descriptor is not the reviewed predecessor",
     )
     try:
@@ -412,7 +473,7 @@ def _old_diagnostic(
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
-        "source_target=targets[0]; row=a['targets'][source_target]; results=row['results']; correction=None; queue=None; capacity=None\n"
+        "source_target=targets[0]; row=a['targets'][source_target]; results=row['results']; correction=None; queue=None; capacity=None; strong_as_of=None\n"
         f"if m['candidate_sha']=={REVIEWED_CAPACITY_CANDIDATE!r}:\n"
         " if len(d['workers'])!=1 or d.get('coding_continuations'): raise SystemExit(36)\n"
         " i=results['interpret']; ref=i['actual']['host_intake_ref']; ip=pathlib.Path(ref['path']); ir=ip.read_bytes()\n"
@@ -420,9 +481,13 @@ def _old_diagnostic(
         " capacity={'row_status':row.get('status'),'row_error':row.get('error'),'row_next_trigger':row.get('deferred_next_trigger'),'result_stages':sorted(results),'native_effect_contract':results['prepare']['native_effect_contract'],'exception':results['exception'],'interpretation':{'classification':i.get('classification'),'authority':i.get('authority'),'actual':i['actual'],'requested_agent':i['requested_agent'],'requested_profile':i['requested_profile']}}\n"
         "else:\n"
         " correction=results['exception']['correction']; queue=results['act']['queue_receipt']\n"
+        f" if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}:\n"
+        "  import calendar,time, closer_dispatcher as cd, closer_role_qualification as roles, execution_profiles as profiles\n"
+        "  stage=results['exception']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; stamp=proof['observed']['finished']['os_started']; at=calendar.timegm(time.strptime(stamp,'%a %b %d %H:%M:%S %Y')); profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at)\n"
+        "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id') and expected.get('task_type')=='closer_exception' and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and record is not None and record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and actual.get('exit')==0)\n"
         "verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets)\n"
         "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
-        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'capacity_disposition':capacity,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'strong_as_of':strong_as_of,'capacity_disposition':capacity,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
     )
     with tempfile.TemporaryDirectory(prefix="old-source-diagnostic-") as stage_name:
         stage = Path(stage_name)
@@ -1088,7 +1153,8 @@ def plan(
     old_path, old_raw, old = _manifest(old_manifest, old=True)
     new_path, new_raw, new = _manifest(new_manifest)
     _need(
-        old.get("candidate_sha") in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE},
+        old.get("candidate_sha")
+        in {REVIEWED_OLD_CANDIDATE, REVIEWED_CAPACITY_CANDIDATE, REVIEWED_CLOCK_CANDIDATE},
         "old release is not reviewed no-ACT predecessor",
     )
     _need(

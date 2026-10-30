@@ -45,6 +45,43 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
         upgrade._incomplete_cohort({"completed": True}, {"accepted": False})
 
 
+def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
+    fixture = {
+        "correction": {
+            "status": "owned_unknown",
+            "reason": "native observation clock is not current",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "queue": {
+            "events": [],
+            "accounting": [
+                {
+                    "reason": "observation_failed",
+                    "next_trigger": "retry_observation_next_round",
+                    "operation_id": None,
+                    "operation_status": None,
+                }
+            ],
+        },
+    }
+    upgrade._clock_no_act(fixture["correction"], fixture["queue"], strong_as_of=True)
+    for path, value in (
+        (("correction", "reason"), "different stop"),
+        (("correction", "act_authorized"), True),
+        (("queue", "events"), [{"operation_id": "effect"}]),
+        (("queue", "accounting"), [{"operation_id": "effect"}]),
+    ):
+        changed = json.loads(json.dumps(fixture))
+        changed[path[0]][path[1]] = value
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._clock_no_act(changed["correction"], changed["queue"], strong_as_of=True)
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._clock_no_act(fixture["correction"], fixture["queue"], strong_as_of=False)
+
+
 def test_old_diagnostic_refuses_a_non_source_module_closure_before_subprocess(
     tmp_path, monkeypatch
 ):
