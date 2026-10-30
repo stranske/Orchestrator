@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +15,21 @@ import closer_coding_session_v2 as coding_session
 import closer_correction_controller as controller
 import closer_native_source_upgrade as upgrade
 import execution_profiles
+
+
+@pytest.fixture
+def portable_gh(monkeypatch):
+    """Use a real local GH helper only for this portable unit policy."""
+    located = shutil.which("gh")
+    assert located is not None, "portable Git-environment test requires installed gh"
+    helper = Path(located).resolve(strict=True)
+    monkeypatch.setattr(git_environment, "REVIEWED_GH_PATH", str(helper))
+    monkeypatch.setattr(
+        git_environment,
+        "REVIEWED_GH_SHA256",
+        hashlib.sha256(helper.read_bytes()).hexdigest(),
+    )
+    return helper
 
 
 def _budget():
@@ -238,7 +255,7 @@ def test_ownership_budget_rebinds_only_reviewed_csv_consumer_to_controller_write
     } == {key: value for key, value in original[consumer_id].items() if key != "owner_login"}
 
 
-def test_rebased_policy_uses_same_ownership_budget_projection_as_preparer(tmp_path):
+def test_rebased_policy_uses_same_ownership_budget_projection_as_preparer(tmp_path, portable_gh):
     module_dir = tmp_path / "runtime"
     module_dir.mkdir()
     helper = module_dir / "closer_codex_confinement_probe.py"

@@ -14,6 +14,19 @@ import closer_coding_publication as publication
 import closer_coding_session_v2 as coding_session
 
 
+@pytest.fixture
+def portable_gh(monkeypatch):
+    """Bind test-only policy selectors to the real local GH helper."""
+    located = shutil.which("gh")
+    assert located is not None, "portable Git-environment test requires installed gh"
+    helper = Path(located).resolve(strict=True)
+    monkeypatch.setattr(environment, "REVIEWED_GH_PATH", str(helper))
+    monkeypatch.setattr(
+        environment, "REVIEWED_GH_SHA256", hashlib.sha256(helper.read_bytes()).hexdigest()
+    )
+    return helper
+
+
 def _policy(tmp_path, *, base=None):
     gh = Path(environment.REVIEWED_GH_PATH)
     git = Path(shutil.which("git")).resolve(strict=True)
@@ -187,7 +200,7 @@ def test_projection_refuses_unreviewed_or_aliased_inputs(tmp_path, mutator):
         )
 
 
-def test_provision_is_fresh_closed_and_inert(tmp_path):
+def test_provision_is_fresh_closed_and_inert(tmp_path, portable_gh):
     policy, root, gh = _policy(tmp_path)
     projected = environment.rebase_private_git_environment(
         policy,
@@ -310,7 +323,7 @@ def test_projection_refuses_non_dedicated_private_root(tmp_path):
         )
 
 
-def test_provision_accepts_root_owned_sticky_temporary_ancestor(tmp_path):
+def test_provision_accepts_root_owned_sticky_temporary_ancestor(tmp_path, portable_gh):
     temporary_root = Path("/tmp").resolve(strict=True)
     metadata = temporary_root.stat(follow_symlinks=False)
     if metadata.st_uid != 0 or not stat.S_IMODE(metadata.st_mode) & stat.S_ISVTX:
