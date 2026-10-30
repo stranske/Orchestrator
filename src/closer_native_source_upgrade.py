@@ -1180,6 +1180,33 @@ def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -
     expected = _ownership_budget_rebound_coding_policy(old["policy"])
     try:
         config = expected["correction_controller_installation"]["config"]
+        if (
+            old["policy"]["correction_controller_installation"]["config"].get("source_sha")
+            == REVIEWED_OWNERSHIP_BUDGET_CANDIDATE
+        ):
+            consumer_id = REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+            private_environment_root = (
+                new_state.parent.parent / "controller-private" / "publication-environment"
+            )
+            consumer = config["consumers"][consumer_id]
+            bootstrap = consumer["native_bootstrap"]
+            try:
+                import closer_coding_git_environment as git_environment
+            except ImportError as exc:
+                raise SourceUpgradeHeld("reviewed Git-environment rebase unavailable") from exc
+
+            try:
+                expected = git_environment.rebase_private_git_environment(
+                    expected,
+                    old_source_sha=REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+                    consumer_id=consumer_id,
+                    private_root=private_environment_root,
+                    gh_path=bootstrap["gh_path"],
+                )
+            except git_environment.GitEnvironmentHeld as exc:
+                raise SourceUpgradeHeld("policy lacks reviewed Git-environment rebase") from exc
+
+            config = expected["correction_controller_installation"]["config"]
         config["source_sha"] = new["candidate_sha"]
         config["state_path"] = str(new_state)
         config["native_transport_source_sha256"] = new["modules"][

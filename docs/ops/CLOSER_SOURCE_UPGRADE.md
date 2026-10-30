@@ -113,3 +113,18 @@ GitHub owner from the mistaken execution-agent name to the pinned native
 controller principal. This changes only newly prepared metadata. The actual
 assignee and PR author must still be authenticated at observation and effect
 time. The old sealed manifest, admission, and consumer are never edited.
+
+That same literal predecessor can also replace its missing temporary private
+Git environment with fresh, Source-defined configuration data. The pure
+`closer_coding_git_environment.rebase_private_git_environment` projection runs
+after owner correction and changes only the Git-home path and config digest.
+All other predecessors retain their original policy behavior.
+
+Before sealing the new manifest, the authorized Runtime preparer calls
+`provision_private_git_environment` once beneath the new owned `0700`
+`controller-private/publication-environment` directory. It creates only the
+closed private Git-home/config tree and records an inert preparation receipt.
+Re-deriving the policy after preparation must produce the same result. The
+receipt explicitly authenticates no credentials and grants no execution
+authority; native publication still independently validates the helper route,
+principal, assignee, PR author, hooks, allowed files, budgets, and current writer.

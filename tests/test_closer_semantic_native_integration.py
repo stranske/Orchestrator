@@ -15,6 +15,28 @@ def test_native_operational_and_latest_reader_sources_are_exact_reviewed0953():
         assert hashlib.sha256(source_path(filename).read_bytes()).hexdigest() == expected, filename
 
 
+def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_module():
+    reviewed = support.private_git_environment_reference()
+    for filename, change in reviewed["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        if change.get("added_module"):
+            assert filename == "closer_coding_git_environment.py"
+            assert change["before_file_sha256"] is None
+            continue
+        assert filename == "closer_native_source_upgrade.py"
+        assert set(change["function_delta"]) == {"_rebased_policy"}
+        assert change["constant_delta"] == {}
+        for name, delta in change["function_delta"].items():
+            nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+            assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+            assert change["before_top_level_ast"][name] == delta["before"]
+            tree.body.remove(nodes[0])
+        assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+
 def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_projection():
     reviewed = support.native_command_evidence_reference()
     for filename, change in reviewed["files"].items():
@@ -31,8 +53,10 @@ def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_
             assert change["after_file_sha256"] == historical["before_file_sha256"]
             assert change["after_module_ast_sha256"] == historical["before_module_ast_sha256"]
             successor = support.ownership_budget_reference()["files"][filename]
+            latest = support.private_git_environment_reference()["files"][filename]
             assert historical["after_file_sha256"] == successor["before_file_sha256"]
-            assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+            assert successor["after_file_sha256"] == latest["before_file_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == latest["after_file_sha256"]
             assert (
                 successor["before_top_level_ast"][change["changed_top_level"]]
                 == change["after_changed_top_level_ast_sha256"]
@@ -44,7 +68,7 @@ def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_
             node for node in tree.body if getattr(node, "name", None) == change["changed_top_level"]
         )
         expected = (
-            successor["function_delta"][change["changed_top_level"]]["after"]
+            latest["function_delta"][change["changed_top_level"]]["after"]
             if historical is not None
             else change["after_changed_top_level_ast_sha256"]
         )
@@ -61,7 +85,9 @@ def test_historical_clock_readback_successor_is_append_only_and_exactly_scoped()
     assert reviewed["after_file_sha256"] == successor["before_file_sha256"]
     assert reviewed["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
     raw = source_path("closer_native_source_upgrade.py").read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+    latest = support.private_git_environment_reference()["files"]["closer_native_source_upgrade.py"]
+    assert successor["after_file_sha256"] == latest["before_file_sha256"]
+    assert hashlib.sha256(raw).hexdigest() == latest["after_file_sha256"]
     tree = ast.parse(raw)
     changed = reviewed["function_delta"]
     for name, expected in changed.items():
@@ -100,9 +126,13 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
     }
     for filename, change in reviewed["files"].items():
         raw = source_path(filename).read_bytes()
-        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        latest = support.private_git_environment_reference()["files"].get(filename)
+        if latest is not None:
+            assert change["after_file_sha256"] == latest["before_file_sha256"]
+        current = latest or change
+        assert hashlib.sha256(raw).hexdigest() == current["after_file_sha256"]
         tree = ast.parse(raw)
-        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        assert fingerprint(tree) == current["after_module_ast_sha256"]
         if change.get("added_module"):
             assert filename == "closer_correction_canary_ownership.py"
             assert change["before_file_sha256"] is None
@@ -111,7 +141,8 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
         removed = []
         for name, delta in change["function_delta"].items():
             nodes = [node for node in tree.body if getattr(node, "name", None) == name]
-            assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+            expected = (latest or {}).get("function_delta", {}).get(name, delta)["after"]
+            assert len(nodes) == 1 and fingerprint(nodes[0]) == expected
             assert change["before_top_level_ast"].get(name) == delta["before"]
             removed.extend(nodes)
         for name, delta in change["constant_delta"].items():

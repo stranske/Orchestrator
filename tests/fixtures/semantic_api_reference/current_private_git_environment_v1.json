@@ -1,0 +1,70 @@
+{
+  "base_commit": "c8c2c33e0e8516985604d384455d1a7030cd6d3b",
+  "files": {
+    "closer_coding_git_environment.py": {
+      "added_module": true,
+      "after_file_sha256": "38e429488916763fc7587d143e26c919f916054383bb061c0fdaa657f40584c4",
+      "after_module_ast_sha256": "348d70d1bb6c536805ace5dfa244a845109eb018293d83b0bda320ac3a6c5255",
+      "before_file_sha256": null,
+      "before_module_ast_sha256": null
+    },
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "7358980e037960aaeac56da966952f76007f1d6271e2ba0be3cef54ca07af4ac",
+      "after_module_ast_sha256": "efc6c78a8b53ad8e05293da25db259dc4c2d0e51b0ab14f713882bbae43d1050",
+      "before_file_sha256": "5effb736dacd754c1224a0435bdda891698f404afd656417c187c4d045a8ceb3",
+      "before_module_ast_sha256": "8150641266fe7d2818f55b7214992c7b7ee5aa50a752fd2be688099b8215c123",
+      "before_top_level_ast": {
+        "SourceUpgradeHeld": "e9929bed7dbf6f40d55f2bc63e5f06b64ce1f302430ec1e01ea3e5111778c2dd",
+        "_canonical": "c392bd952a3da85042849544a4adfc4425d955447e59ef996039d1bea48b6940",
+        "_capacity_no_act": "75de143e0bb5a2e8894000383394bd70f15655c10077dd50edc778c405d07e30",
+        "_clock_no_act": "f5083ccd26473acaf25cc322d9bd73b36a790d3a6251183fc140286fd03fc69d",
+        "_completed_reference": "506858ff1f86c17c2d504e3e8abe64959951dcd517f0978f41f5bd3de02b3525",
+        "_derived_coding_capability": "d21b92ab9fcd5356e3ab361a3282288d8fcf6ff9750570cd17f8be3d11e131a0",
+        "_diagnostic_no_act": "a42f70a07f2e442edf0e99807aacff2e2d22a5be1ec4f766931512f5b118baea",
+        "_exact_ref": "330be3739865eec6b203791084c8f966b001b4b333916f3b907021fb1bb3206a",
+        "_historical_clock_reader_program": "4458d5ff1a74c860d27786b5a7158b576cf263f9a06674856f22ea9075763d9b",
+        "_historical_ownership_budget_reader_program": "7c7c54a6a4f4dce49aae805e6bcf9c8f39b653fb26d48c91f9e83246779a1374",
+        "_incomplete_cohort": "a6b12071d5acd9288e01edc9ad5adcf2b0fb167b562ab23d7bd78a32f6c7995c",
+        "_inert_new_custody": "73e21a4711fff90ccc14e76bef2282810174091c0c613c1f223e3b89b6416f3a",
+        "_installed_release": "17d79c7360af4947e6e5c21030e9c15d509f06467ee4861611a7b5667ba7453f",
+        "_manifest": "f9c407de8e347f56f9933336890dc5d8a7b4074e32aa79fd0deeb557bf9ca6e4",
+        "_need": "477d77385fb60b020bd552cf92dce786bb24d6fb162c17917e977282f7deef60",
+        "_no_act": "28e372da5018d1e92e1a192ff94416fade74b966b98b648dd047fa3c1022b263",
+        "_object": "76091a6c03efdcdd14fa7eea3410ce22d3b496f180eac0c41cbb083daed86cb7",
+        "_old_custody_quiet": "3806da22f71441da77e2364e69976d8462171f36d0d1a2ccd831dc31183299ec",
+        "_old_diagnostic": "161e3fd55d964553f9ee027a2a598338ded9236d9e974dc7e9cf5050fc045968",
+        "_old_module_bytes": "c7dad9d02bcc96250185108aeb7cf970ecf92383d621f3217a3b0c428c097d22",
+        "_old_native_terminal": "d60a0a84c4713c39e84592b2763c776be76a279fd156b691642c49ed6beea537",
+        "_ownership_budget_no_act": "5b06b94c7acae5af4fbdf7a6fe9ce0c15644df02bd0535907ebb7ab8822d3c15",
+        "_ownership_budget_rebound_coding_policy": "2360bc2e59c0718ace73b69925ed47e6376e028878a73905e586cd16603844a9",
+        "_physical_recipe": "3e5401f246b5b62f42fefd701fdf9677492f2d24b57d636900bc485d65bbd107",
+        "_pinned_object": "4b22d958a6c2c9018e8b2aea4772c22db6f165f3af9f58c37c5e52d52896fa87",
+        "_plan_sha": "0c5d1c8d2b2ba296e50d3c4b1b1e4583e8caeaba0f7033559158bfa1c05bffef",
+        "_provision_upgrade_key": "51c980f57920246ea98c482a2601b66387a7a3a8f3a7be7ae5af4dc333479711",
+        "_read_signed_upgrade": "82ad191ab309a157055e6adc678bd60a2c9f80c9e016ba3046f10d3f7ca1c044",
+        "_rebased_policy": "0487ed46bc1323677568ca0d4c431847ce64696cce7d69160b9265dfc561ac10",
+        "_reviewed_old_metadata": "07b5eacd1ae091d1cfbfe986384b31d621847d722b54642c3f26dabfb3acec62",
+        "_same_identity": "3604b5ec2420c148dfc5bb26f0a89dd721af471739fe426dfdcb57d6ef02d606",
+        "_sha": "359cf39582e02c462577c968161e0e79ae62ecb435444146069fa1501ce89fd8",
+        "_signed_upgrade_record": "187326b2108983bb16701fb5d7a1bac66af179f04eed438781523432a5c4b2fd",
+        "_source_upgrade_root": "07a30761aff95c50695d4b1f4dab79d8fdc71f59172d7990b272b947fe1e1053",
+        "_upgrade_path": "b33bdd23144b872dc5ad9ebb13dc49d62bea80a7082f770a402a8a1873adb76e",
+        "_wrapper_plan": "06308d13c7b1f33c3a2212300c9ab55ec73a78de80c32cd5e9c5a2d099145bf1",
+        "apply": "9f8d5d9f5f5a7e724182ed3c1e5ee4837798a0d7d08ee570f95daf7ea5ac269c",
+        "fresh_read_native_index": "bca9fbb1a8e1d1bd86636592e5f98184f946efdfeb95dd7f3c4716130f93c945",
+        "plan": "e1500a8c9006f9b2ad76d124bbeca6769ea502986825e8c82172137e6c9ec691",
+        "prepare_held": "5c90a8c14e47d385630299c56371b7c164282baefa0c6fdfd8130cbd50755be4"
+      },
+      "constant_delta": {},
+      "function_delta": {
+        "_rebased_policy": {
+          "after": "98665915a1df45bfc381e6d336bb9ee44f24b84f497315ef38052b831fd3414f",
+          "before": "0487ed46bc1323677568ca0d4c431847ce64696cce7d69160b9265dfc561ac10"
+        }
+      },
+      "outside_reviewed_changes_ast_sha256": "b3996cfc9c8f11c36c3faf4fb9b4c99f07570dcaebfbb4dad8d7b5205df108e9"
+    }
+  },
+  "schema": "private-git-environment-source-successor/v1",
+  "scope": "exact old8a consumer Git-home rebind and fresh inert private environment; native publication authority unchanged"
+}
