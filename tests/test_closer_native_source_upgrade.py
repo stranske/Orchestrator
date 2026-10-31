@@ -630,7 +630,9 @@ def _assert_pagination_prepare_held_rereads(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(upgrade, "_old_module_bytes", lambda _: calls.append("modules"))
     monkeypatch.setattr(
-        upgrade, "_pagination_reference", lambda *_: (calls.append("pagination") or reference)
+        upgrade,
+        "_sealed_pagination_reference",
+        lambda *_: (calls.append("pagination") or reference),
     )
     monkeypatch.setattr(
         upgrade,

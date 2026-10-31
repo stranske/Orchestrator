@@ -507,7 +507,7 @@ PAGINATION_HELD_SUCCESSOR_MANIFEST = (
     / "fixtures/semantic_api_reference/current_pagination_held_successor_v1.json"
 )
 PAGINATION_HELD_SUCCESSOR_SHA256 = (
-    "6d87c540bc9b01f5605e4b27071089f650854fe8cb988a52b7eb13cb70da37a3"
+    "70239ef79a0f443879004d94c7c5dc31a671d87c16c7938ae6102a708040272d"
 )
 
 
@@ -523,7 +523,7 @@ def pagination_held_successor_reference():
     assert change["before_file_sha256"] == prior["after_file_sha256"]
     assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
     assert set(value["files"]) == {"closer_native_source_upgrade.py"}
-    assert set(change["function_delta"]) == {"prepare_held"}
+    assert set(change["function_delta"]) == {"_sealed_pagination_reference", "prepare_held"}
     assert change["constant_delta"] == {}
     return value
 
