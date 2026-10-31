@@ -90,6 +90,44 @@ REVIEWED_SEED_ASSESSMENT_MODULES_SHA256 = (
 REVIEWED_SEED_ASSESSMENT_DESCRIPTOR_SHA256 = (
     "2ccb3a98cf59015ec4405ae311183472bfe6ada4d09798dcf7981e69441dbfa4"
 )
+# This predecessor is deliberately unlike the completed no-ACT cohort above.
+# Its original operation is still UNKNOWN; the only authority here is to carry
+# an immutable, proven pre-instruction failure into a *new held* campaign.
+REVIEWED_PAGINATION_CANDIDATE = "d4ca8c8cf144d51d7b8b67a5beb1935e4c66a694"
+REVIEWED_PAGINATION_MANIFEST_SHA256 = (
+    "9b4e6067ca40c96f59a7c3459e353c25d9825377d3e3f1a709a99abe375ea48a"
+)
+REVIEWED_PAGINATION_MODULES_SHA256 = (
+    "1abf1fa4c901ea00bf8b60650630722ba449fd2b849b47a478efdc7173287a9c"
+)
+REVIEWED_PAGINATION_DESCRIPTOR_SHA256 = (
+    "e264c0623bb838f9c13a4db2b19593ed98e69504c159c16020eb07ec2a5b9ee3"
+)
+REVIEWED_PAGINATION_WORKER_ID = "0f450560fbcf"
+REVIEWED_PAGINATION_NONCE = "ba10a43ca9fe4682b6b1aaa3b7318d44"
+REVIEWED_PAGINATION_RESULT_SHA256 = (
+    "9b0d25c4ed56925fb49e3683d4a52285d2696cd843cb4758549ffcea50ba73da"
+)
+REVIEWED_PAGINATION_COHORT_SHA256 = (
+    "dd5d00625a1d36d8e0362919d6392b72495075c33448e43b78e0b20935467ea8"
+)
+REVIEWED_PAGINATION_ROUND_ID = "a7d4627e9c3a8f712ecbbb0c25ee5ee0"
+REVIEWED_PAGINATION_ROUND_SHA256 = (
+    "1b3eaced9cb6578569b089484ff245b0c6cec2a30c75d999aae8f95be60a2fd0"
+)
+REVIEWED_PAGINATION_TARGET_STATE_SHA256 = (
+    "4d15088bc40853c5f6848447c1a303719f68a3f88af91bed50f70c38aeaf1fdc"
+)
+REVIEWED_PAGINATION_ACTION_SHA256 = (
+    "9247f487b4c717eabe3de90ba5d16cfe1b9603accdf9eb6a8ee5b9a138738a76"
+)
+REVIEWED_PAGINATION_OPERATION_ID = "bbac752de4c0a614edc16cca9f241ce7"
+REVIEWED_PAGINATION_EFFECTS_SHA256 = (
+    "a11c6f91b462c22225465337f4fb4b028a86b69bd81914b8cb30f7df78ebbc4f"
+)
+REVIEWED_PAGINATION_OWNERSHIP_SHA256 = (
+    "04c7d745039e2f410d7a6ced2fdd923aed1d9b40fd9074b1e75e693fb71af4df"
+)
 # This literal consumer is the only reviewed CSV continuation registration in
 # the source8a predecessor.  The predecessor's controller writer is the
 # GitHub principal for issue/PR ownership, while the original registration
@@ -578,6 +616,7 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
             REVIEWED_CLOCK_CANDIDATE,
             REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
             REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+            REVIEWED_PAGINATION_CANDIDATE,
         },
         "old release is not reviewed no-ACT predecessor",
     )
@@ -588,6 +627,7 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
         REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_MODULES_SHA256,
         REVIEWED_OWNERSHIP_BUDGET_CANDIDATE: REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256,
         REVIEWED_SEED_ASSESSMENT_CANDIDATE: REVIEWED_SEED_ASSESSMENT_MODULES_SHA256,
+        REVIEWED_PAGINATION_CANDIDATE: REVIEWED_PAGINATION_MODULES_SHA256,
     }[candidate]
     expected_descriptor = {
         REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_DESCRIPTOR_SHA256,
@@ -595,6 +635,7 @@ def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[s
         REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_DESCRIPTOR_SHA256,
         REVIEWED_OWNERSHIP_BUDGET_CANDIDATE: REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256,
         REVIEWED_SEED_ASSESSMENT_CANDIDATE: REVIEWED_SEED_ASSESSMENT_DESCRIPTOR_SHA256,
+        REVIEWED_PAGINATION_CANDIDATE: REVIEWED_PAGINATION_DESCRIPTOR_SHA256,
     }[candidate]
     _need(
         isinstance(modules, dict)
@@ -774,7 +815,13 @@ def _old_diagnostic(
         f"if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}: exec({_historical_clock_reader_program()!r})\n"
         f"elif m['candidate_sha']=={REVIEWED_OWNERSHIP_BUDGET_CANDIDATE!r}: exec({_historical_ownership_budget_reader_program()!r})\n"
         "else:\n"
-        " x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024]); p=n.completed_round_proof(m,cfg,detail['completed_round'])\n"
+        " x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024])\n"
+        f" if m['candidate_sha']=={REVIEWED_PAGINATION_CANDIDATE!r}:\n"
+        "  import closer_runtime_binding as rb\n"
+        "  proof=detail.get('proof')\n"
+        "  if rb.scoped_continuation_proof(cfg,proof)!=proof: raise SystemExit(59)\n"
+        "  print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'pagination_scoped_continuation':True},sort_keys=True,separators=(',',':'))); raise SystemExit(0)\n"
+        " p=n.completed_round_proof(m,cfg,detail['completed_round'])\n"
         "if not isinstance(p,dict): raise SystemExit(34)\n"
         "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
         "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
@@ -1121,6 +1168,271 @@ def _seed_assessment_reference(
     return reference
 
 
+def _pagination_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Capture d4ca's terminal UNKNOWN witness without recasting it as OK."""
+    import closer_campaign as campaign
+
+    _need(worker_id == REVIEWED_PAGINATION_WORKER_ID, "pagination worker differs")
+    manifest_value, manifest_raw, manifest = _object(manifest_path, "old manifest")
+    _need(
+        manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
+        and _sha(manifest_raw) == REVIEWED_PAGINATION_MANIFEST_SHA256,
+        "pagination manifest differs",
+    )
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "pagination campaign is not retained reconcile state",
+    )
+    workers = document.get("workers")
+    _need(isinstance(workers, list), "pagination worker list missing")
+    workers = cast(list[Any], workers)
+    worker = next(
+        (row for row in workers if isinstance(row, dict) and row.get("worker_id") == worker_id),
+        None,
+    )
+    _need(isinstance(worker, dict), "pagination worker missing")
+    worker = cast(dict[str, Any], worker)
+    _need(
+        worker.get("state") == "terminal" and worker.get("outcome") == "scoped_continuation",
+        "pagination worker is not retained scoped continuation",
+    )
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    result = cast(dict[str, Any], result)
+    _need(
+        _sha(result_raw) == REVIEWED_PAGINATION_RESULT_SHA256
+        and result.get("worker_id") == worker_id
+        and result.get("target") == worker.get("target") == campaign.ROUND_UNIT
+        and result.get("outcome") == "scoped_continuation",
+        "pagination result differs",
+    )
+    # Reuse the original campaign's signed cohort/handoff and result-admission
+    # reader.  Unlike a file-hash comparison this revalidates the signed
+    # terminal producer record, exact native handoff, and original admission.
+    try:
+        evidence, original_cfg, detail, terminal = campaign._cohort_worker_evidence(
+            state, document, worker, manifest, [128 * 1024 * 1024]
+        )
+        import closer_runtime_binding as binding
+
+        _need(
+            evidence.get("result", {}).get("sha256") == REVIEWED_PAGINATION_RESULT_SHA256
+            and isinstance(detail, dict)
+            and isinstance(terminal, dict)
+            and detail.get("cohort_terminal", {}).get("sha256") == REVIEWED_PAGINATION_COHORT_SHA256
+            and binding.scoped_continuation_proof(original_cfg, detail.get("proof"))
+            == detail.get("proof"),
+            "pagination signed cohort or scoped continuation differs",
+        )
+    except (KeyError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("pagination original admission unavailable") from exc
+    return {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "original_config": original_cfg,
+        "detail": detail,
+        "terminal": terminal,
+    }
+
+
+def _pagination_preinstruction_diagnostic(reference: dict[str, Any]) -> dict[str, Any]:
+    """Prove d4ca's pinned local rejection; retain, never retire, its operation."""
+    manifest = cast(dict[str, Any], reference["manifest"])
+    result = cast(dict[str, Any], reference["result"])
+    detail = reference.get("detail")
+    _need(isinstance(detail, dict), "pagination result detail invalid")
+    detail = cast(dict[str, Any], detail)
+    execution = detail.get("native_execution")
+    proof = detail.get("proof")
+    cohort = reference.get("terminal")
+    _need(
+        isinstance(execution, dict) and isinstance(proof, dict) and isinstance(cohort, dict),
+        "pagination terminal proof invalid",
+    )
+    execution = cast(dict[str, Any], execution)
+    proof = cast(dict[str, Any], proof)
+    cohort = cast(dict[str, Any], cohort)
+    _need(
+        execution.get("admission_nonce") == REVIEWED_PAGINATION_NONCE
+        and execution.get("phases", {}).get("A", {}).get("exit_code") == 0
+        and execution.get("phases", {}).get("B", {}).get("exit_code") == 78
+        and execution.get("phases", {}).get("C", {}).get("exit_code") == 65
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("exact_token_matched")
+        is True
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("released") is True,
+        "pagination native cleanup differs",
+    )
+    _need(
+        cohort.get("outcome") == "scoped_continuation"
+        and cohort.get("completed") is False
+        and proof.get("schema") == "native-scoped-continuation/v1"
+        and proof.get("accepted") is False
+        and proof.get("domain_outcome") == "quarantined"
+        and proof.get("global_stop_valid") is False
+        and proof.get("round_id") == REVIEWED_PAGINATION_ROUND_ID
+        and proof.get("receipt_sha256") == REVIEWED_PAGINATION_ROUND_SHA256,
+        "pagination scoped continuation proof differs",
+    )
+    item = proof.get("quarantined_admitted_items")
+    _need(
+        isinstance(item, list) and len(item) == 1 and isinstance(item[0], dict),
+        "pagination quarantined item differs",
+    )
+    item = cast(list[Any], item)
+    quarantined = cast(dict[str, Any], item[0])
+    target_path = _canonical(cast(str, quarantined.get("source_path")))
+    target_raw = host._read(target_path)[1]
+    _need(
+        _sha(target_raw) == REVIEWED_PAGINATION_TARGET_STATE_SHA256,
+        "pagination target state differs",
+    )
+    target_doc = json.loads(target_raw)
+    action_path = (
+        target_path.parent
+        / "state.actions"
+        / "2b35bacc11232a5dd5ca270d97d2f850243f6a72f641fa18b991e28c6fb5b5af.json"
+    )
+    action_raw = host._read(action_path)[1]
+    _need(
+        _sha(action_raw) == REVIEWED_PAGINATION_ACTION_SHA256, "pagination action witness differs"
+    )
+    action = json.loads(action_raw)
+
+    def find_operation(value: object) -> list[dict[str, Any]]:
+        if isinstance(value, dict):
+            found = [value] if value.get("id") == REVIEWED_PAGINATION_OPERATION_ID else []
+            for child in value.values():
+                found.extend(find_operation(child))
+            return found
+        if isinstance(value, list):
+            return [row for child in value for row in find_operation(child)]
+        return []
+
+    operations = find_operation(action)
+    _need(len(operations) == 1, "pagination original operation missing or ambiguous")
+    operation = operations[0]
+    result_frame = operation.get("result")
+    _need(
+        operation.get("status") == "uncertain"
+        and operation.get("attempts") == 1
+        and isinstance(result_frame, dict)
+        and result_frame.get("act_authorized") is False
+        and result_frame.get("source_closure_authorized") is False
+        and result_frame.get("retry_safe") is False
+        and result_frame.get("outcome_uncertain") is True
+        and result_frame.get("failure_diagnostic")
+        == {
+            "code": "unclassified_error",
+            "exception": "ControllerUnknown",
+            "stage": "source_selection",
+        },
+        "pagination source-selection frame differs",
+    )
+    # Bind the earlier, successful bounded strong adjudication.  It is not an
+    # authorization for the uncertain operation; it merely proves the exact
+    # source-selection call chain began from the retained qualified result.
+    try:
+        import closer_dispatcher as dispatcher_reader
+        import closer_role_qualification as roles
+        import dispatcher
+        import execution_profiles
+
+        admission = result["native_admission"]
+        frontier = admission["finite_frontier"]
+        target = frontier["targets"][0]
+        _need(
+            quarantined["target"].casefold() == target.casefold(), "pagination proof target differs"
+        )
+        row = target_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+        exception = row["results"]["exception"]
+        actual = exception["actual"]
+        controlled = actual["_closer_controlled_proof"]
+        expected = controlled["expected"]
+        basis = expected["basis"]
+        prepared = row["results"]["prepare"]
+        snapshot, packet = prepared["snapshot"], prepared["packet_ref"]
+        prepared_basis = {
+            "target": snapshot["target"],
+            "revision": prepared["revision"],
+            "head": snapshot["head"],
+            "base": snapshot["base"],
+            "packet_sha256": packet["sha256"],
+        }
+        proved = dispatcher_reader._revalidate_controlled_proof(
+            controlled,
+            run_id=actual["run_id"],
+            basis=basis,
+            receipt_root=dispatcher.DISPATCH_LOG_DIR,
+        )
+        receipt = dispatcher_reader._read_controlled_receipt(
+            controlled["provider_result_ref"], dispatcher.DISPATCH_LOG_DIR
+        )
+        at = receipt["completed_at"]
+        profile = execution_profiles.get_profile(expected["profile_id"])
+        role = roles.TASK_ROLES["closer_exception"]
+        current_record = roles.qualified_record(profile, role, now=at)
+        admission_record = roles.qualified_record(profile, role, now=admission["started_at"])
+        strong = bool(
+            actual.get("run_id")
+            == controlled.get("run_id")
+            == proved.get("run_id")
+            == receipt.get("run_id")
+            and expected.get("task_type") == "closer_exception"
+            and all(basis.get(k) == prepared_basis.get(k) for k in prepared_basis)
+            and basis.get("target") == target
+            and actual.get("exit") == proved.get("exit") == 0
+            and current_record is not None
+            and admission_record is not None
+            and roles.execution_record_matches(current_record, expected, checked_at=at)
+            and roles.execution_record_matches(
+                admission_record, expected, checked_at=admission["started_at"]
+            )
+        )
+    except (KeyError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("pagination original strong qualification unavailable") from exc
+    _need(strong, "pagination original strong qualification differs")
+    module_dir = _canonical(manifest["module_dir"])
+    ownership = module_dir / "closer_correction_ownership.py"
+    ownership_raw = host._read(ownership)[1]
+    _need(
+        _sha(ownership_raw) == REVIEWED_PAGINATION_OWNERSHIP_SHA256
+        and manifest.get("modules", {}).get("closer_correction_ownership.py")
+        == REVIEWED_PAGINATION_OWNERSHIP_SHA256
+        and b"PAGE_SIZE = 15" in ownership_raw
+        and b"?per_page={PAGE_SIZE}&page={page}" in ownership_raw,
+        "pagination ownership closure differs",
+    )
+    effects = module_dir / "closer_correction_native_effects.py"
+    effects_raw = host._read(effects)[1]
+    _need(
+        _sha(effects_raw) == REVIEWED_PAGINATION_EFFECTS_SHA256
+        and manifest.get("modules", {}).get("closer_correction_native_effects.py")
+        == REVIEWED_PAGINATION_EFFECTS_SHA256
+        and b"per_page=100&page=" in effects_raw
+        and b"per_page=100&page=[1-4]" in effects_raw,
+        "pagination native transport closure differs",
+    )
+    return {
+        "schema": "pagination-preinstruction-diagnostic/v1",
+        "original_operation": "uncertain",
+        "pre_instruction_proven": True,
+        "strong_as_of": True,
+    }
+
+
 def _failed_before_pipeline_reference(
     manifest_path: Path, state_path: str | Path, worker_id: str
 ) -> dict[str, Any]:
@@ -1158,6 +1470,8 @@ def _old_reference(
         return _failed_before_pipeline_reference(manifest_path, state_path, worker_id), True
     if manifest.get("candidate_sha") == REVIEWED_SEED_ASSESSMENT_CANDIDATE:
         return _seed_assessment_reference(manifest_path, state_path, worker_id), False
+    if manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+        return _pagination_reference(manifest_path, state_path, worker_id), False
     return _completed_reference(manifest_path, state_path, worker_id), False
 
 
@@ -1699,6 +2013,7 @@ def plan(
             REVIEWED_CLOCK_CANDIDATE,
             REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
             REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+            REVIEWED_PAGINATION_CANDIDATE,
             "dd8d71119b92e15ff85836cc44ad40e20207ac6f",
         },
         "old release is not reviewed no-ACT predecessor",
@@ -1713,6 +2028,7 @@ def plan(
         "new manifest does not pin executing source-upgrade boundary",
     )
     reference, failed_before_pipeline = _old_reference(old_path, old_state, worker_id)
+    pagination_preinstruction = old.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
     if failed_before_pipeline:
         _need(
             _sha(old_raw) == reference["manifest_sha256"] and old == reference["manifest"],
@@ -1735,6 +2051,21 @@ def plan(
             "terminal_sha256": reference["terminal_sha256"],
             "handoff_sha256": reference["handoff_sha256"],
         }
+    elif pagination_preinstruction:
+        # This validates an old-source closure and an immutable failure frame,
+        # but intentionally leaves its uncertain operation and reservations in
+        # place. It is not a completion proof and cannot authorize a replay.
+        interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
+        historical = _old_diagnostic(
+            old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
+        )
+        _need(
+            historical.get("pagination_scoped_continuation") is True
+            and historical.get("state_sha256") == reference["state_sha256"]
+            and historical.get("result", {}).get("sha256") == REVIEWED_PAGINATION_RESULT_SHA256,
+            "pagination old-source diagnostic differs",
+        )
+        diagnostic = _pagination_preinstruction_diagnostic(reference)
     else:
         interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
         diagnostic = _old_diagnostic(
