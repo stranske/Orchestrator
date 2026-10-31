@@ -437,7 +437,7 @@ SEED_ASSESSMENT_UPGRADE_MANIFEST = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_seed_assessment_upgrade_v1.json"
 )
-SEED_ASSESSMENT_UPGRADE_SHA256 = "9be9b106a96972eff6fee16d3cc3b0afb5024a161eb6dcaea4793f42f280028c"
+SEED_ASSESSMENT_UPGRADE_SHA256 = "bf7b3a1bc299bee8bc7e4989deaae24ca1692ade0806ddc2ef940a534c34da19"
 
 
 def seed_assessment_upgrade_reference():

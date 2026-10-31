@@ -1806,7 +1806,9 @@ def read_for_existing_root(backend, target, snapshot, operation, pipeline_contex
     )
     repository, separator, number = target.rpartition("#")
     _need(
-        separator and repository == controller.config.repository and number.isdecimal(),
+        separator
+        and repository.lower() == controller.config.repository.lower()
+        and number.isdecimal(),
         "publication target differs",
     )
     with controller.fenced(operation) as custody:

@@ -1,5 +1,6 @@
 """Pure mocked reader joins and actual custody/refusal controls, never a Root grant."""
 
+import contextlib
 import copy
 import hashlib
 import os
@@ -238,6 +239,56 @@ def test_real_discovery_call_accepts_repository_case_only(tmp_path, monkeypatch,
     else:
         with pytest.raises(pub.PublicationHeld, match="publication observation subject differs"):
             verification.observe_existing_root(backend, target, {})
+
+
+@pytest.mark.parametrize(
+    "target,allowed",
+    [("Acme/Repo#9", True), ("acme/repo#9", True), ("other/repo#9", False)],
+)
+def test_admitted_reader_call_accepts_repository_case_only(tmp_path, monkeypatch, target, allowed):
+    import closer_campaign as campaign
+    import closer_dispatcher as dispatcher
+    import closer_publication_verification as verification
+    import closer_queue as queue
+    import closer_source_installation as installed
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(b"{}")
+    installation = SimpleNamespace(
+        config={"repository": "acme/repo"},
+        manifest_path=str(manifest_path),
+        manifest_sha256=hashlib.sha256(b"{}").hexdigest(),
+    )
+    monkeypatch.setattr(installed, "source_installation_for", lambda _: installation)
+    monkeypatch.setattr(io, "_consumer_source", lambda _: None)
+    monkeypatch.setattr(io, "_reader_frame", lambda *_: None)
+    monkeypatch.setattr(campaign, "load_manifest", lambda _: {})
+    monkeypatch.setattr(ctl, "ControllerConfig", lambda **value: SimpleNamespace(**value))
+    custody_path = tmp_path / "custody"
+    custody_path.mkdir()
+
+    @contextlib.contextmanager
+    def custody():
+        fd = os.open(custody_path, os.O_RDONLY)
+        try:
+            yield SimpleNamespace(fd=fd)
+        finally:
+            os.close(fd)
+
+    monkeypatch.setattr(
+        ctl,
+        "IndexController",
+        lambda config, **_: SimpleNamespace(config=config, fenced=lambda _: custody()),
+    )
+    backend = object.__new__(dispatcher.Closer)
+    backend.runtime_binding = object()
+    operation = {"status": "submitted", "id": "inert-current", "deadline": 5}
+    with queue._callback_invocation(target, operation, lambda: 0):
+        if allowed:
+            assert verification.attach_existing_root(backend, target, {}, operation, {}) is None
+        else:
+            with pytest.raises(pub.PublicationHeld, match="publication target differs"):
+                verification.attach_existing_root(backend, target, {}, operation, {})
 
 
 def test_copied_json_outside_original_callback_cannot_issue_reader(monkeypatch):
