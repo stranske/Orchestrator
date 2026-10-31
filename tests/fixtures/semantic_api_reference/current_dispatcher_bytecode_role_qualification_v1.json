@@ -11,9 +11,9 @@
   },
   "role_module": {
     "before_file_sha256": "68f79998784dd73aa07010e0c99ad14540971856eb1ecc03aab2de946cb84e34",
-    "after_file_sha256": "2a5f6b562c2901cf40733205a87181d763daffb5784a2124e78a14794b10d521",
+    "after_file_sha256": "741622740e5558a8b9415d52b3a51f6825a73da9fe8b2814ca645981f1949696",
     "before_module_ast_sha256": "35e87ea2b365ddaaf0964401ffbbacbff0c007846ea17d97e11b656cfc883806",
-    "after_module_ast_sha256": "183c8221f2875c7e08975efef542fbea46c0cb83d1a6a998a23a3e34500374cd",
+    "after_module_ast_sha256": "fcb554b54dde4c1304d1dd3607ec43b0ff30dceacbdcc97e4ec61fbd142e7410",
     "before_registry_ast_sha256": "fc800b511e6ed2cc1094b2aa7b20ea9dbf9e14bbc691da3872ab7dac27bf392c",
     "after_registry_ast_sha256": "6ed9dc26ddae7823f719791f83822a40ac6becdc87d5da0e1a4df358728a3c21",
     "new_qualification_id": "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9",
@@ -27,7 +27,7 @@
       },
       "_superseded_active_records": {
         "before": null,
-        "after": "a50d865cc68faf74e0e4094fa37f9ac25249283e03ee6645d537bd4afdcf2599"
+        "after": "13b896d3f104e56587df0728d5b225d6e0bdc2a5b040d43e28ecf88899f0ea5c"
       }
     }
   }

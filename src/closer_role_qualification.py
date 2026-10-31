@@ -712,8 +712,11 @@ def _superseded_active_records(
                     == []
                 )
                 candidates.append(predecessor_id)
-            if valid and all(key in active_by_id for key in candidates):
-                excluded.update(candidates)
+            if valid:
+                # The relation pins every predecessor as historical evidence,
+                # but only a still-live predecessor contributes ambiguity.
+                # An earlier expiry must not resurrect a later overlapping row.
+                excluded.update(key for key in candidates if key in active_by_id)
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
     return [(key, record) for key, record in active if key not in excluded]

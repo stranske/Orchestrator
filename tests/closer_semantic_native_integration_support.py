@@ -665,7 +665,7 @@ DISPATCHER_BYTECODE_ROLE_QUALIFICATION_MANIFEST = (
     / "fixtures/semantic_api_reference/current_dispatcher_bytecode_role_qualification_v1.json"
 )
 DISPATCHER_BYTECODE_ROLE_QUALIFICATION_SHA256 = (
-    "0f48a781a6f3a023d843e2e25fe5260064509110d573a31d78c69d132b0e87e8"
+    "c061057e09b67f8ed18f17239f7212056de079230e959cbcd1d0dce6dd53a8f9"
 )
 
 

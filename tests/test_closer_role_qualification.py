@@ -417,6 +417,22 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         checked_at=latest["qualified_at"] + 1,
     )
     assert support == {"limits": latest["execution_limits"], "admission": None}
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=renewal["expires_at"] + 1,
+        )
+        == latest
+    )
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=prior_latest["expires_at"] + 1,
+        )
+        == latest
+    )
 
 
 def test_reviewed_supersession_holds_foreign_tied_or_changed_overlap(profile):
