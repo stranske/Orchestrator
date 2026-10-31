@@ -505,6 +505,33 @@ def test_seed_assessment_predecessor_uses_only_its_own_module_and_descriptor_has
         )
 
 
+def test_pagination_predecessor_uses_only_its_own_module_and_descriptor_hashes(monkeypatch):
+    modules = {"closer_campaign.py": "1" * 64}
+    descriptor = {
+        "candidate_sha": upgrade.REVIEWED_PAGINATION_CANDIDATE,
+        "modules": modules,
+        "package_digest": "2" * 64,
+        "state_versions": {"campaign": 1},
+    }
+    raw = json.dumps(descriptor, sort_keys=True).encode()
+    manifest = {**descriptor, "public_runtime_descriptor": "closer-runtime-package.json"}
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_PAGINATION_MODULES_SHA256",
+        hashlib.sha256(
+            json.dumps(modules, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        upgrade, "REVIEWED_PAGINATION_DESCRIPTOR_SHA256", hashlib.sha256(raw).hexdigest()
+    )
+    assert upgrade._reviewed_old_metadata(manifest, raw) == modules
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._reviewed_old_metadata(
+            {**manifest, "candidate_sha": upgrade.REVIEWED_SEED_ASSESSMENT_CANDIDATE}, raw
+        )
+
+
 def test_historical_clock_reader_is_literal_facts_only_and_keeps_generic_readers_out():
     program = upgrade._historical_clock_reader_program()
     compile(program, "<historical-clock-reader>", "exec")

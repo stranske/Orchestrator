@@ -1449,7 +1449,8 @@ class NativeHTTPTransport:
                 r"/(?:git/ref/heads/closer-correction-state|git/commits/[a-f0-9]{40}"
                 r"|contents/\.github/closer-correction/index\.json\?ref=[a-f0-9]{40}"
                 r"|pulls/[1-9][0-9]*|issues/[1-9][0-9]*|issues/comments/[1-9][0-9]*"
-                r"|issues/[1-9][0-9]*/(?:timeline|events)\?per_page=100&page=[1-4]"
+                r"|issues/[1-9][0-9]*/(?:timeline|events)\?(?:per_page=100&page=[1-4]"
+                r"|per_page=15&page=(?:[1-9]|1[0-9]|2[0-7]))"
                 r"|collaborators/[A-Za-z0-9_.%\[\]-]+/permission)",
                 suffix,
             )

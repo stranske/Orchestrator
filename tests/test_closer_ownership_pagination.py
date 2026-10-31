@@ -5,8 +5,12 @@ import time
 
 import pytest
 
+import closer_correction_controller as controller_source
+import closer_correction_maintenance as maintenance
+import closer_correction_native_effects as native_effects
 import closer_correction_ownership as ownership
 import closer_dispatcher as closer
+import closer_queue as queue
 
 ENDPOINT = "repos/stranske/orchestrator/issues/984/timeline"
 
@@ -44,6 +48,66 @@ def events(count, *, body_size=0):
     ]
 
 
+def native_transport(monkeypatch):
+    """Exercise ownership's generated read through the installed allowlist."""
+    config = controller_source.ControllerConfig(
+        state_path="/private/tmp/controller.json",
+        repository="stranske/orchestrator",
+        repository_id=1,
+        epoch="a" * 64,
+        bootstrap_source_sha="b" * 40,
+        source_sha="c" * 40,
+        writer_id=1,
+        writer_login="owner",
+        writer_type="User",
+        bootstrap_anchor_sha256="d" * 64,
+        max_bytes=1024,
+        max_entries=1,
+        max_subjects=1,
+    )
+    installation = object()
+    controller = controller_source.IndexController(
+        config, request=lambda *_args: None, installation=installation
+    )
+    transport = native_effects.NativeHTTPTransport(installation)
+    transport.bind(controller)
+    operation = {"action": "disposition", "deadline": time.time() + 60}
+    monkeypatch.setattr(controller, "_source_installation", lambda: installation)
+    monkeypatch.setattr(controller, "_native_effect_source", lambda: object())
+    monkeypatch.setattr(controller, "_require_writer", lambda *_args: None)
+    monkeypatch.setattr(maintenance, "guard_index_transport", lambda *_args: None)
+    monkeypatch.setattr(
+        queue._callback_threads, "invocation", {"operation": operation}, raising=False
+    )
+    calls = []
+
+    class GitHub:
+        def __init__(self, *, deadline):
+            assert deadline == operation["deadline"]
+
+        def api(self, path, *, method, fields):
+            calls.append((method, path, fields))
+            return []
+
+    return transport, calls, GitHub
+
+
+def ownership_reader_through_native_transport(monkeypatch, transport, github):
+    monkeypatch.setattr(
+        closer.gh_capacity, "throttle", lambda *_args, **_kwargs: {"action": "allow"}
+    )
+
+    def source_reader(args, **_kwargs):
+        assert args[:3] == ["api", "--method", "GET"]
+        return 0, transport.request("GET", "/" + args[3], None, {"maxRetries": 0, "timeout": 15000})
+
+    reader = ownership._Reads(
+        closer.GitHub(deadline=time.time() + 60, api_fn=source_reader), time.time() + 60
+    )
+    monkeypatch.setattr(closer, "GitHub", github)
+    return reader
+
+
 def test_large_complete_reply_is_split_without_projection_or_omission(monkeypatch):
     original = events(29, body_size=5000)
     assert len(ownership._raw(original)) > 131072
@@ -54,6 +118,61 @@ def test_large_complete_reply_is_split_without_projection_or_omission(monkeypatc
     assert len(actual.refs) == 2 and all("per_page=15&page=" in ref for ref in actual.refs)
     assert ownership.MAX_REPLY_BYTES == 131072 and ownership.MAX_TOTAL_BYTES == 1048576
     assert ownership.MAX_CALLS == 32 and ownership.MAX_ITEMS == 400
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [ENDPOINT, "repos/stranske/orchestrator/issues/984/events"],
+)
+def test_ownership_page_generation_reaches_native_transport_allowlist(monkeypatch, endpoint):
+    transport, calls, github = native_transport(monkeypatch)
+    reader = ownership_reader_through_native_transport(monkeypatch, transport, github)
+
+    assert reader.pages(endpoint) == []
+    assert calls == [("GET", endpoint + "?per_page=15&page=1", None)]
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "/issues/984/timeline?per_page=15&page=0",
+        "/issues/984/timeline?per_page=15&page=28",
+        "/issues/984/events?per_page=16&page=1",
+        "/issues/984/events?per_page=100&page=5",
+        "/issues/984/timeline?per_page=15&page=1&extra=1",
+    ],
+)
+def test_native_transport_refuses_ownership_page_queries_outside_exact_bounds(monkeypatch, suffix):
+    transport, calls, github = native_transport(monkeypatch)
+    monkeypatch.setattr(closer, "GitHub", github)
+
+    with pytest.raises(controller_source.ControllerUnknown, match="unsupported read or mutation"):
+        transport.request(
+            "GET",
+            "/repos/stranske/orchestrator" + suffix,
+            None,
+            {"maxRetries": 0, "timeout": 15000},
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("suffix", ["timeline", "events"])
+def test_native_transport_preserves_parent_snapshot_page_contract(monkeypatch, suffix):
+    transport, calls, github = native_transport(monkeypatch)
+    monkeypatch.setattr(closer, "GitHub", github)
+
+    assert (
+        transport.request(
+            "GET",
+            f"/repos/stranske/orchestrator/issues/984/{suffix}?per_page=100&page=4",
+            None,
+            {"maxRetries": 0, "timeout": 15000},
+        )
+        == []
+    )
+    assert calls == [
+        ("GET", f"repos/stranske/orchestrator/issues/984/{suffix}?per_page=100&page=4", None)
+    ]
 
 
 def test_short_last_page_preserves_original_event_envelope(monkeypatch):
