@@ -266,11 +266,12 @@ def build_request(*, original_request, seed_bundle, source_body, raw_findings, r
         _exact(assessment, "mode provider model model2 canonical")
         and isinstance(assessment["mode"], str)
         and assessment["mode"] in {"evaluate", "compare"}
-        and _text(assessment["provider"])
         and all(
             isinstance(assessment[k], str) and len(assessment[k]) <= 4096
-            for k in ("model", "model2")
+            for k in ("provider", "model", "model2")
         )
+        and (assessment["mode"] != "compare" or assessment["provider"] == "")
+        and (assessment["mode"] != "evaluate" or assessment["model2"] == "")
         and assessment["canonical"] is True,
         "seed_assessment_identity_invalid",
     )

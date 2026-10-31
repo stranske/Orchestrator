@@ -1,6 +1,9 @@
 """Pure mocked reader joins and actual custody/refusal controls, never a Root grant."""
 
+import contextlib
 import copy
+import hashlib
+import os
 import sys
 from types import SimpleNamespace
 
@@ -183,7 +186,9 @@ def test_source_custody_scan_returns_only_exact_subject(custody):
     name = "publication-result-" + sha + ".json"
     custody.create(name, value)
     assert io._result_for_subject(custody, "acme/repo", "9") == (name, sha, value)
+    assert io._result_for_subject(custody, "Acme/Repo", "9") == (name, sha, value)
     assert io._result_for_subject(custody, "acme/repo", "8") is None
+    assert io._result_for_subject(custody, "other/repo", "9") is None
     other = {**value, "different": True}
     custody.create("publication-result-" + pub.digest(other) + ".json", other)
     with pytest.raises(pub.PublicationHeld, match="multiple"):
@@ -194,6 +199,96 @@ def test_scan_rejects_hash_corruption(custody):
     custody.create("publication-result-" + "a" * 64 + ".json", {"bad": "digest"})
     with pytest.raises(pub.PublicationHeld, match="custody changed"):
         io._result_for_subject(custody, "acme/repo", "9")
+
+
+@pytest.mark.parametrize(
+    "target,allowed",
+    [("Acme/Repo#9", True), ("acme/repo#9", True), ("other/repo#9", False)],
+)
+def test_real_discovery_call_accepts_repository_case_only(tmp_path, monkeypatch, target, allowed):
+    import closer_campaign as campaign
+    import closer_dispatcher as dispatcher
+    import closer_publication_verification as verification
+    import closer_source_installation as installed
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(b"{}")
+    installation = SimpleNamespace(
+        config={"repository": "acme/repo"},
+        manifest_path=str(manifest_path),
+        manifest_sha256=hashlib.sha256(b"{}").hexdigest(),
+    )
+    monkeypatch.setattr(installed, "source_installation_for", lambda _: installation)
+    monkeypatch.setattr(io, "_consumer_source", lambda _: None)
+    monkeypatch.setattr(campaign, "load_manifest", lambda _: {})
+    monkeypatch.setattr(ctl, "ControllerConfig", lambda **value: SimpleNamespace(**value))
+    custody_path = tmp_path / "custody"
+    custody_path.mkdir()
+
+    def custody(_):
+        fd = os.open(custody_path, os.O_RDONLY)
+        return SimpleNamespace(fd=fd, close=lambda: os.close(fd))
+
+    monkeypatch.setattr(ctl, "_Custody", custody)
+    backend = object.__new__(dispatcher.Closer)
+    backend.runtime_binding = object()
+    observation = {"target": target, "action": "wait"}
+    backend.observe = lambda _: observation
+    if allowed:
+        assert verification.observe_existing_root(backend, target, {}) is observation
+    else:
+        with pytest.raises(pub.PublicationHeld, match="publication observation subject differs"):
+            verification.observe_existing_root(backend, target, {})
+
+
+@pytest.mark.parametrize(
+    "target,allowed",
+    [("Acme/Repo#9", True), ("acme/repo#9", True), ("other/repo#9", False)],
+)
+def test_admitted_reader_call_accepts_repository_case_only(tmp_path, monkeypatch, target, allowed):
+    import closer_campaign as campaign
+    import closer_dispatcher as dispatcher
+    import closer_publication_verification as verification
+    import closer_queue as queue
+    import closer_source_installation as installed
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_bytes(b"{}")
+    installation = SimpleNamespace(
+        config={"repository": "acme/repo"},
+        manifest_path=str(manifest_path),
+        manifest_sha256=hashlib.sha256(b"{}").hexdigest(),
+    )
+    monkeypatch.setattr(installed, "source_installation_for", lambda _: installation)
+    monkeypatch.setattr(io, "_consumer_source", lambda _: None)
+    monkeypatch.setattr(io, "_reader_frame", lambda *_: None)
+    monkeypatch.setattr(campaign, "load_manifest", lambda _: {})
+    monkeypatch.setattr(ctl, "ControllerConfig", lambda **value: SimpleNamespace(**value))
+    custody_path = tmp_path / "custody"
+    custody_path.mkdir()
+
+    @contextlib.contextmanager
+    def custody():
+        fd = os.open(custody_path, os.O_RDONLY)
+        try:
+            yield SimpleNamespace(fd=fd)
+        finally:
+            os.close(fd)
+
+    monkeypatch.setattr(
+        ctl,
+        "IndexController",
+        lambda config, **_: SimpleNamespace(config=config, fenced=lambda _: custody()),
+    )
+    backend = object.__new__(dispatcher.Closer)
+    backend.runtime_binding = object()
+    operation = {"status": "submitted", "id": "inert-current", "deadline": 5}
+    with queue._callback_invocation(target, operation, lambda: 0):
+        if allowed:
+            assert verification.attach_existing_root(backend, target, {}, operation, {}) is None
+        else:
+            with pytest.raises(pub.PublicationHeld, match="publication target differs"):
+                verification.attach_existing_root(backend, target, {}, operation, {})
 
 
 def test_copied_json_outside_original_callback_cannot_issue_reader(monkeypatch):
