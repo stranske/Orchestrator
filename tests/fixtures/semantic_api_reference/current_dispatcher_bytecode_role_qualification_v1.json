@@ -11,12 +11,24 @@
   },
   "role_module": {
     "before_file_sha256": "68f79998784dd73aa07010e0c99ad14540971856eb1ecc03aab2de946cb84e34",
-    "after_file_sha256": "a89c625a3151b7f128901ea6784012d31bebdf9c7a441a890219427c3d9911d8",
+    "after_file_sha256": "2a5f6b562c2901cf40733205a87181d763daffb5784a2124e78a14794b10d521",
     "before_module_ast_sha256": "35e87ea2b365ddaaf0964401ffbbacbff0c007846ea17d97e11b656cfc883806",
-    "after_module_ast_sha256": "3b53eed56c04a80a374bd1a47bde7a06c32486c9e0c00a1b8a97567440ba7c0f",
+    "after_module_ast_sha256": "183c8221f2875c7e08975efef542fbea46c0cb83d1a6a998a23a3e34500374cd",
     "before_registry_ast_sha256": "fc800b511e6ed2cc1094b2aa7b20ea9dbf9e14bbc691da3872ab7dac27bf392c",
     "after_registry_ast_sha256": "6ed9dc26ddae7823f719791f83822a40ac6becdc87d5da0e1a4df358728a3c21",
     "new_qualification_id": "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9",
-    "new_record_ast_sha256": "732b1703d62d98413aa31cbde292660e98e3d23f06551bf162705e04541b6e10"
+    "new_record_ast_sha256": "732b1703d62d98413aa31cbde292660e98e3d23f06551bf162705e04541b6e10",
+    "supersession_table_ast_sha256": "c479cc9ac23d1a453c3578670f1601f78b50f8fe1f55016aaf32ff8137a681c7",
+    "outside_reviewed_changes_ast_sha256": "92826cf48942d6db7190d5bb5e8b8330b6f472300eff9b2d9f5c3e369d23f271",
+    "function_delta": {
+      "_selected_record": {
+        "before": "0e4629997de612c74a89d8cedb43810c8a8bbaa065d918501b77e1bfdc392ed2",
+        "after": "4dbd4a131cadbc6d0e1b71c0b81a3430c24996b16ca99a7e139141af68b29646"
+      },
+      "_superseded_active_records": {
+        "before": null,
+        "after": "a50d865cc68faf74e0e4094fa37f9ac25249283e03ee6645d537bd4afdcf2599"
+      }
+    }
   }
 }

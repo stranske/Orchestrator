@@ -395,6 +395,81 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=post_expiry)
         == latest
     )
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=latest["qualified_at"] + 1,
+        )
+        == latest
+    )
+    selected_now = roles.qualified_record(
+        profile,
+        roles.STRONG_CRITERION_ADJUDICATION,
+        now=latest["qualified_at"] + 1,
+    )
+    assert selected_now == latest
+    support = roles.execution_source_support(
+        selected_now,
+        selected_now["profile_identity"],
+        dispatcher._controlled_model_contract("closer_exception"),
+        task_type="closer_exception",
+        checked_at=latest["qualified_at"] + 1,
+    )
+    assert support == {"limits": latest["execution_limits"], "admission": None}
+
+
+def test_reviewed_supersession_holds_foreign_tied_or_changed_overlap(profile):
+    predecessor_id = "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+    successor_id = "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9"
+    predecessor = deepcopy(roles.ROLE_QUALIFICATIONS[predecessor_id])
+    successor = deepcopy(roles.ROLE_QUALIFICATIONS[successor_id])
+    now = successor["qualified_at"] + 1
+    baseline = {predecessor_id: predecessor, successor_id: successor}
+    assert (
+        roles.qualified_record(
+            profile, roles.STRONG_CRITERION_ADJUDICATION, now=now, records=baseline
+        )
+        is None
+    )
+
+    original = deepcopy(roles.ROLE_QUALIFICATION_SUPERSEDES)
+    try:
+        roles.ROLE_QUALIFICATION_SUPERSEDES.clear()
+        assert (
+            roles.qualified_record(
+                profile, roles.STRONG_CRITERION_ADJUDICATION, now=now, records=baseline
+            )
+            is None
+        )
+        roles.ROLE_QUALIFICATION_SUPERSEDES.update(original)
+
+        changed = deepcopy(roles.ROLE_QUALIFICATIONS)
+        changed[predecessor_id]["evidence_refs"] = []
+        assert (
+            roles.qualified_record(
+                profile, roles.STRONG_CRITERION_ADJUDICATION, now=now, records=changed
+            )
+            is None
+        )
+
+        tied_id = "foreign-overlap"
+        tied = deepcopy(successor)
+        tied["qualification_id"] = tied_id
+        tied["qualified_at"] = successor["qualified_at"]
+        tied["expires_at"] = successor["expires_at"]
+        assert (
+            roles.qualified_record(
+                profile,
+                roles.STRONG_CRITERION_ADJUDICATION,
+                now=now,
+                records={**roles.ROLE_QUALIFICATIONS, tied_id: tied},
+            )
+            is None
+        )
+    finally:
+        roles.ROLE_QUALIFICATION_SUPERSEDES.clear()
+        roles.ROLE_QUALIFICATION_SUPERSEDES.update(original)
 
 
 def test_runtime_qualification_requires_the_same_supported_installed_build(profile, monkeypatch):

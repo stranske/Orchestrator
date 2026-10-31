@@ -665,7 +665,7 @@ DISPATCHER_BYTECODE_ROLE_QUALIFICATION_MANIFEST = (
     / "fixtures/semantic_api_reference/current_dispatcher_bytecode_role_qualification_v1.json"
 )
 DISPATCHER_BYTECODE_ROLE_QUALIFICATION_SHA256 = (
-    "cfa156ebcb238f71d9cec17803a10fbbe551263732c5f3217afae97382881aea"
+    "0f48a781a6f3a023d843e2e25fe5260064509110d573a31d78c69d132b0e87e8"
 )
 
 
@@ -706,7 +706,23 @@ def assert_reviewed_role_registry_successor(source=None):
         registry.value.keys.remove(key)
         registry.value.values.remove(record)
         assert fingerprint(registry) == bootstrap["before_registry_ast_sha256"]
-        assert fingerprint(tree) == bootstrap["before_module_ast_sha256"]
+        table = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "ROLE_QUALIFICATION_SUPERSEDES"
+                for target in node.targets
+            )
+        )
+        assert fingerprint(table) == bootstrap["supersession_table_ast_sha256"]
+        selected = [table]
+        for name, delta in bootstrap["function_delta"].items():
+            node = next(node for node in tree.body if getattr(node, "name", None) == name)
+            assert fingerprint(node) == delta["after"]
+            selected.append(node)
+        tree.body = [node for node in tree.body if node not in selected]
+        assert fingerprint(tree) == bootstrap["outside_reviewed_changes_ast_sha256"]
         return
     initial = initial_b_role_qualification_reference()
     initial_role = initial["role_module"]

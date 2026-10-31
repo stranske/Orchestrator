@@ -522,6 +522,22 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
         ],
     },
 }
+# This is a reviewed selection relation, not a rewritten qualification.  The
+# reported times and immutable evidence rows above remain the original facts.
+# It exists only because the fresh dispatcher-bootstrap observation occurred
+# while two exact earlier rows were still live; without this closed relation,
+# the selector correctly holds all three as ambiguous.
+ROLE_QUALIFICATION_SUPERSEDES = {
+    "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9": {
+        "schema": "closer-role-qualification-supersession/v1",
+        "effective_at": 1793414542.671662,
+        "successor_sha256": "fddbde3c8eef7fae782533747f89b2ece0b424a512370a52eaea6ac827cbeff2",
+        "predecessors": {
+            "sonnet-current-role-qualification:104bd7e5037fe1d01efb8511b7176c8a95b8705fc73ef6e0335e2de7ff639245": "9c64c33203f1c57560dcaacc9e15f0b6a0d6e8d6e81ec8ca9731f513b685fa05",
+            "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89": "64f06a3b003714853ac0330fb5d8dbb5061bc109b4cd62d68c981eafb3c6a320",
+        },
+    }
+}
 _LOGGER = logging.getLogger(__name__)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _IDENTITY_TEXT = (
@@ -641,6 +657,68 @@ def _evidence_problems(record: Mapping[str, Any], role: str) -> list[str]:
     return problems
 
 
+def _superseded_active_records(
+    profile: Mapping[str, Any],
+    role: str,
+    current: float,
+    source: Mapping[str, Any],
+    active: list[tuple[str, Mapping[str, Any]]],
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """Remove only fully pinned, same-identity reviewed predecessors.
+
+    A malformed, partial, foreign, or tied relation never selects a successor:
+    it leaves the active rows intact so the caller holds on ambiguity.
+    """
+    active_by_id = dict(active)
+    excluded: set[str] = set()
+    for successor_id, successor in active:
+        relation = ROLE_QUALIFICATION_SUPERSEDES.get(successor_id)
+        if not isinstance(relation, Mapping):
+            continue
+        predecessors = relation.get("predecessors")
+        if not isinstance(predecessors, Mapping):
+            continue
+        try:
+            valid = (
+                set(relation) == {"schema", "effective_at", "successor_sha256", "predecessors"}
+                and relation["schema"] == "closer-role-qualification-supersession/v1"
+                and _finite(relation["effective_at"])
+                and relation["effective_at"] == successor["qualified_at"]
+                and relation["effective_at"] <= current
+                and relation["successor_sha256"] == _source_digest(successor)
+                and len(predecessors) >= 1
+                and qualification_problems(
+                    profile, role, now=successor["qualified_at"], records={successor_id: successor}
+                )
+                == []
+            )
+            candidates = []
+            for predecessor_id, digest in predecessors.items():
+                predecessor = source.get(predecessor_id)
+                valid = valid and (
+                    _text(predecessor_id)
+                    and isinstance(digest, str)
+                    and _SHA256.fullmatch(digest) is not None
+                    and isinstance(predecessor, Mapping)
+                    and predecessor.get("role") == successor.get("role") == role
+                    and predecessor.get("profile_identity") == successor.get("profile_identity")
+                    and _source_digest(predecessor) == digest
+                    and qualification_problems(
+                        profile,
+                        role,
+                        now=predecessor["qualified_at"],
+                        records={predecessor_id: predecessor},
+                    )
+                    == []
+                )
+                candidates.append(predecessor_id)
+            if valid and all(key in active_by_id for key in candidates):
+                excluded.update(candidates)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+    return [(key, record) for key, record in active if key not in excluded]
+
+
 def _selected_record(
     profile: Mapping[str, Any], role: str, current: float, source: Mapping[str, Any]
 ) -> tuple[str, Mapping[str, Any]] | None:
@@ -670,6 +748,8 @@ def _selected_record(
             active.append((key, record))
             continue
         return None
+    if len(active) > 1:
+        active = _superseded_active_records(profile, role, current, source, active)
     return active[0] if len(active) == 1 else None
 
 
