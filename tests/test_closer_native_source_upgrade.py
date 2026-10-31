@@ -45,6 +45,71 @@ def test_completed_false_no_act_fixture_is_the_only_accepted_disposition():
         upgrade._incomplete_cohort({"completed": True}, {"accepted": False})
 
 
+def test_failed_before_pipeline_reference_is_literal_and_never_uses_completed_route(
+    tmp_path, monkeypatch
+):
+    manifest = tmp_path / "pin.manifest.json"
+    state = tmp_path / "campaign.json"
+    manifest.write_text(json.dumps({"candidate_sha": "dd8d71119b92e15ff85836cc44ad40e20207ac6f"}))
+    state.write_text("{}")
+    manifest_value = json.loads(manifest.read_text())
+    manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    expected = {
+        "authority": False,
+        "accepted": False,
+        "retry_authority": False,
+        "outcome": "unknown",
+        "manifest": manifest_value,
+        "manifest_sha256": manifest_sha256,
+        "worker": {"worker_id": "fa4c00f5e8c6"},
+    }
+    called = {}
+
+    def read(actual_manifest, actual_state, worker):
+        called.update(manifest=actual_manifest, state=actual_state, worker=worker)
+        return expected
+
+    monkeypatch.setitem(
+        sys.modules,
+        "closer_failed_predecessor_readback",
+        SimpleNamespace(read_dd8_fa4_failed_before_pipeline=read),
+    )
+    monkeypatch.setattr(upgrade, "_completed_reference", lambda *_args: pytest.fail("wrong route"))
+    actual, failed = upgrade._old_reference(manifest, state, "fa4c00f5e8c6")
+    assert failed is True and actual is expected
+    assert called == {"manifest": manifest, "state": state, "worker": "fa4c00f5e8c6"}
+
+
+def test_failed_before_pipeline_reference_refuses_authority_or_wrong_worker(tmp_path, monkeypatch):
+    manifest = tmp_path / "pin.manifest.json"
+    state = tmp_path / "campaign.json"
+    manifest.write_text(json.dumps({"candidate_sha": "dd8d71119b92e15ff85836cc44ad40e20207ac6f"}))
+    state.write_text("{}")
+    manifest_value = json.loads(manifest.read_text())
+    manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    for changed in (
+        {"authority": True},
+        {"worker": {"worker_id": "different-worker"}},
+    ):
+        reference = {
+            "authority": False,
+            "accepted": False,
+            "retry_authority": False,
+            "outcome": "unknown",
+            "manifest": manifest_value,
+            "manifest_sha256": manifest_sha256,
+            "worker": {"worker_id": "fa4c00f5e8c6"},
+        }
+        reference.update(changed)
+        monkeypatch.setitem(
+            sys.modules,
+            "closer_failed_predecessor_readback",
+            SimpleNamespace(read_dd8_fa4_failed_before_pipeline=lambda *_args: reference),
+        )
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="failed-before-pipeline"):
+            upgrade._old_reference(manifest, state, "fa4c00f5e8c6")
+
+
 def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():
     fixture = {
         "correction": {

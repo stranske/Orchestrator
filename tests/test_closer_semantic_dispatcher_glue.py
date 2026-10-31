@@ -108,9 +108,11 @@ def test_dispatcher_ast_only_reserved_semantic_hunks_and_exact_one_act_merge():
     assert {
         name: value
         for name, value in old["top_level_ast"].items()
-        if name != "_run_staged_pipeline"
+        if name not in {"_run_staged_pipeline", "_initial_dispatch_held", "main"}
     } == {
-        name: fingerprint(node) for name, node in new_top.items() if name != "_run_staged_pipeline"
+        name: fingerprint(node)
+        for name, node in new_top.items()
+        if name not in {"_run_staged_pipeline", "_initial_dispatch_held", "main"}
     }
 
     def nested(top):

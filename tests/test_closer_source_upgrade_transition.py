@@ -589,7 +589,7 @@ def test_public_source_upgrade_plan_apply_and_known_held(
     assert campaign.qualify(new, new_path.parent) == []
     if interference == "old_result":
         result_path.write_bytes(result_path.read_bytes() + b" ")
-        with pytest.raises(upgrade.SourceUpgradeHeld, match="old result changed"):
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="old (result|predecessor) changed"):
             upgrade.prepare_held(plan["seal"], confirm_plan_sha256=plan["plan_sha256"])
         assert not new_state.exists()
         return

@@ -391,6 +391,22 @@ def test_real_packager_relocates_actual_runtime_core_and_launcher(bundle, tmp_pa
     manifest_path = moved / "host-manifest.json"
     package.write_host_manifest(manifest_path, host)
     env = {**os.environ, "PYTHONPATH": "", "HANDOFF_DIR": str(tmp_path / "handoff")}
+    # Match the failed native-B child: it invokes the physical dispatcher
+    # without ``-B`` and with no inherited bytecode suppression.  Bootstrap
+    # must protect the sealed Runtime before its canonical self-import.
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    dispatcher_help = subprocess.run(
+        [sys.executable, str(moved / "closer_dispatcher.py"), "--help"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert dispatcher_help.returncode == 0, dispatcher_help.stdout + dispatcher_help.stderr
+    assert not list(moved.rglob("*.pyc"))
+    # The physical child must leave the exact public descriptor closure
+    # loadable; this is the same validation that rejected the failed canary.
+    assert cc.load_manifest(manifest_path) == host
     # Actual Core CLI and actual Runtime/Launcher entrypoints. No helper scripts echo success.
     core = subprocess.run(
         [sys.executable, str(core_moved / "scripts/closer_runtime.py"), "--help"],

@@ -324,6 +324,219 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    # Fresh qualification-only observation against the current dispatcher closure.
+    # The earlier records remain immutable historical evidence.
+    "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89": {
+        "schema": "closer-role-qualification/v1",
+        "status": "qualified",
+        "qualification_id": "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89",
+        "role": "strong_criterion_adjudication",
+        "profile_identity": {
+            "profile_id": "claude-sonnet-5-5-high-v2",
+            "agent": "claude",
+            "provider": "anthropic",
+            "requested_model": "claude-sonnet-5-5",
+            "reasoning_effort": "high",
+            "permission_mode": "workspace-write",
+            "adapter_version": "claude-cli-profile-v2",
+            "prompt_version": "orchestrator-prompt-v1",
+            "lifecycle_status": "active",
+            "transport_support": ["experiment", "local", "offload"],
+            "capacity_pool_ids": ["claude-subscription"],
+            "requires_explicit_selection": True,
+        },
+        "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
+        "qualified_at": 1793409839.364306,
+        "expires_at": 1793496239.364306,
+        "transport": "offload",
+        "named_criterion_only": True,
+        "confinement": {
+            "data_only": True,
+            "tools": False,
+            "mcp": False,
+            "hooks": False,
+            "project_context": False,
+            "adapter_build_sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+        },
+        "execution_limits": {
+            "schema": "closer-data-only-limits/v1",
+            "role": "strong_criterion_adjudication",
+            "model_contract_sha256": "d78018220041ac17165dec79b98f67dec29945d7b55c115551d64948509c4f7d",
+            "max_prompt_bytes": 65536,
+            "max_final_bytes": 16384,
+            "max_native_result_bytes": 65536,
+            "max_output_tokens": 4096,
+            "max_turns": 1,
+            "timeout_seconds": 60,
+        },
+        "production_model_contract": {
+            "schema": "closer-production-model-contract/v1",
+            "role": "strong_criterion_adjudication",
+            "sources": {
+                "closer_dispatcher.py": "1367d696c19aaa1b3b3931b452a8c719ece9b6d25d5ec245b373a745c19b6ac1",
+                "dispatcher.py": "220f34ca499e83db81405245d1cf56b21f3bb7b16ca0c8bf55ba66bd8bbd4854",
+                "adapters.py": "4156636c6251e480d2f7bd22dced52fd344028f65e4931b5018127b75f77fbeb",
+                "closer_data_only_execution.py": "68c9dbac68bcf6ee98b403130b3b008f4412c9f8c8eccf8c2b85021038ad14f2",
+                "closer_claude_role_admission.py": "7aaccbdb1a42b8fdec775b27a11199fc572093af80f8c860a909ed56fe1897ae",
+                "transport_saved_result.py": "468697f68fb973c5a37ea7dcbd1226508664935ad997662a90718fbc5087996d",
+                "transport_qualification.py": "b54e9e8d529647615650b9d999eec6a943cb53416fd30f73fce13ad7ad6aedc1",
+                "closer_model_contracts.py": "d0e95012d1cb48e8d275bf1ba3221ed9d931ede48da2321cb1a36bd769a66d62",
+                "closer_role_selection.py": "ee7b429db1e0f48afccfc50ebc2de4e9eb05ada2b64e9bea3998df6dd84ce651",
+                "closer_semantic_assessment.py": "922b5a684a4cb6e2c5f051a8ecde8ae779fc9a07962dcb926e501d45ebef870d",
+                "router.py": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
+                "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",
+                "closer_adjudication_policy.py": "9ecc5df250160104104c561b6bcfbbb35921891e0cbec6cf0f098a924feb15e1",
+                "closer_disposition.py": "a726f59d1376dacb9b78117bbc7071bd67f7c1c3412e885c9fd9c721c309ca9c",
+                "closer_evidence.py": "96bca7b0d0939d77cfcab7c4fe21af4945fa5d0aaff71b67bd14199635ab54a4",
+                "closer_mechanical_source.py": "af61c2722c4794717eddf36e8986d725978285167d220d2b86c063f25a8bfc67",
+                "closer_mechanical_catalog.py": "86e732b5f9611dbd70b7bdb28011cf189b5ac8ca8b19af9de07542eeb2520b78",
+                "closer_mechanical_executor.py": "21a753583dc734278bd2cd5709a70b181898bb759fbd4e56baa54db15549d7f0",
+                "closer_local_tool_confinement.py": "5152c424069a58d6cf4f93ce43cf2a2c22d81a38e3ffb0cd03d21b179c40365f",
+                "config/closer_role_selection.json": "266263f0a44319b08400fb7f3c1a7e93004b338f0548ea2b70e859332777afbf",
+            },
+            "model_contract": {
+                "request_schema": "closer-criterion-request/v2",
+                "response_schema": "closer-criterion-response/v1",
+                "prompt_builder": "closer_execution_contracts.build_adjudication_prompt",
+                "response_validator": "closer_execution_contracts.validate_adjudication_response",
+                "merge": "closer_execution_contracts.merge_selected_response",
+                "max_prompt_bytes": 65536,
+                "retained_io_required": True,
+                "acceptance_authority": False,
+                "evidence_policy": "closer-adjudication-evidence/v2",
+                "prompt_version": "closer-adjudication-prompt/v2",
+                "controller_action_policy": "closer-adjudication-action-policy/v1",
+            },
+            "authority": False,
+            "contract_sha256": "d78018220041ac17165dec79b98f67dec29945d7b55c115551d64948509c4f7d",
+        },
+        "evidence_refs": [
+            {
+                "reference": "/Users/teacher/.codex/handoff/dispatch-logs/sonnet-role-qualification/4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89.result.json",
+                "sha256": "22f6dc36219d68698e1122f9ee235da7bf13abd7002a69257c57acdb8495fa48",
+            },
+            {
+                "reference": "/Users/teacher/Library/CloudStorage/Dropbox/My Mac (TRS "
+                "MacBook)/Documents/Codex/2026-10-25/task-4/sonnet-high-v2-strong-scoped-evidence-record-v1.json",
+                "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+            },
+        ],
+    },
+    # Fresh, qualification-only observation of the dispatcher bootstrap that
+    # suppresses bytecode before the physical sealed-Runtime self-import.
+    # Earlier records remain immutable historical evidence.
+    "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9": {
+        "schema": "closer-role-qualification/v1",
+        "status": "qualified",
+        "qualification_id": "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9",
+        "role": "strong_criterion_adjudication",
+        "profile_identity": {
+            "profile_id": "claude-sonnet-5-5-high-v2",
+            "agent": "claude",
+            "provider": "anthropic",
+            "requested_model": "claude-sonnet-5-5",
+            "reasoning_effort": "high",
+            "permission_mode": "workspace-write",
+            "adapter_version": "claude-cli-profile-v2",
+            "prompt_version": "orchestrator-prompt-v1",
+            "lifecycle_status": "active",
+            "transport_support": ["experiment", "local", "offload"],
+            "capacity_pool_ids": ["claude-subscription"],
+            "requires_explicit_selection": True,
+        },
+        "profile_identity_sha256": "c6ea6091c54feec59a7405a17795236d7362aa19290d8b11cd77333271076bcd",
+        "qualified_at": 1793414542.671662,
+        "expires_at": 1793500942.671662,
+        "transport": "offload",
+        "named_criterion_only": True,
+        "confinement": {
+            "data_only": True,
+            "tools": False,
+            "mcp": False,
+            "hooks": False,
+            "project_context": False,
+            "adapter_build_sha256": "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937",
+        },
+        "execution_limits": {
+            "schema": "closer-data-only-limits/v1",
+            "role": "strong_criterion_adjudication",
+            "model_contract_sha256": "264d7ad6fad590c9d33fae722b43dd74a3de4d6490c7856b876471ae1a3f60a2",
+            "max_prompt_bytes": 65536,
+            "max_final_bytes": 16384,
+            "max_native_result_bytes": 65536,
+            "max_output_tokens": 4096,
+            "max_turns": 1,
+            "timeout_seconds": 60,
+        },
+        "production_model_contract": {
+            "schema": "closer-production-model-contract/v1",
+            "role": "strong_criterion_adjudication",
+            "sources": {
+                "closer_dispatcher.py": "324922795a0c03fd4b1ba408b85c482fba1a27a97f9351506b3518d3ac5b45a4",
+                "dispatcher.py": "220f34ca499e83db81405245d1cf56b21f3bb7b16ca0c8bf55ba66bd8bbd4854",
+                "adapters.py": "4156636c6251e480d2f7bd22dced52fd344028f65e4931b5018127b75f77fbeb",
+                "closer_data_only_execution.py": "68c9dbac68bcf6ee98b403130b3b008f4412c9f8c8eccf8c2b85021038ad14f2",
+                "closer_claude_role_admission.py": "7aaccbdb1a42b8fdec775b27a11199fc572093af80f8c860a909ed56fe1897ae",
+                "transport_saved_result.py": "468697f68fb973c5a37ea7dcbd1226508664935ad997662a90718fbc5087996d",
+                "transport_qualification.py": "b54e9e8d529647615650b9d999eec6a943cb53416fd30f73fce13ad7ad6aedc1",
+                "closer_model_contracts.py": "d0e95012d1cb48e8d275bf1ba3221ed9d931ede48da2321cb1a36bd769a66d62",
+                "closer_role_selection.py": "ee7b429db1e0f48afccfc50ebc2de4e9eb05ada2b64e9bea3998df6dd84ce651",
+                "closer_semantic_assessment.py": "922b5a684a4cb6e2c5f051a8ecde8ae779fc9a07962dcb926e501d45ebef870d",
+                "router.py": "7702a4d6d79d9c5ff13c10d90fa3d3b0c28b15884ed959be84abd228b037c01b",
+                "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",
+                "closer_adjudication_policy.py": "9ecc5df250160104104c561b6bcfbbb35921891e0cbec6cf0f098a924feb15e1",
+                "closer_disposition.py": "a726f59d1376dacb9b78117bbc7071bd67f7c1c3412e885c9fd9c721c309ca9c",
+                "closer_evidence.py": "96bca7b0d0939d77cfcab7c4fe21af4945fa5d0aaff71b67bd14199635ab54a4",
+                "closer_mechanical_source.py": "af61c2722c4794717eddf36e8986d725978285167d220d2b86c063f25a8bfc67",
+                "closer_mechanical_catalog.py": "86e732b5f9611dbd70b7bdb28011cf189b5ac8ca8b19af9de07542eeb2520b78",
+                "closer_mechanical_executor.py": "21a753583dc734278bd2cd5709a70b181898bb759fbd4e56baa54db15549d7f0",
+                "closer_local_tool_confinement.py": "5152c424069a58d6cf4f93ce43cf2a2c22d81a38e3ffb0cd03d21b179c40365f",
+                "config/closer_role_selection.json": "266263f0a44319b08400fb7f3c1a7e93004b338f0548ea2b70e859332777afbf",
+            },
+            "model_contract": {
+                "request_schema": "closer-criterion-request/v2",
+                "response_schema": "closer-criterion-response/v1",
+                "prompt_builder": "closer_execution_contracts.build_adjudication_prompt",
+                "response_validator": "closer_execution_contracts.validate_adjudication_response",
+                "merge": "closer_execution_contracts.merge_selected_response",
+                "max_prompt_bytes": 65536,
+                "retained_io_required": True,
+                "acceptance_authority": False,
+                "evidence_policy": "closer-adjudication-evidence/v2",
+                "prompt_version": "closer-adjudication-prompt/v2",
+                "controller_action_policy": "closer-adjudication-action-policy/v1",
+            },
+            "authority": False,
+            "contract_sha256": "264d7ad6fad590c9d33fae722b43dd74a3de4d6490c7856b876471ae1a3f60a2",
+        },
+        "evidence_refs": [
+            {
+                "reference": "/Users/teacher/.codex/handoff/dispatch-logs/sonnet-role-qualification/5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9.result.json",
+                "sha256": "7aa25e51b0554feaf116d46f21dd3c24834c627a0895ac5b25cb6f690a48fced",
+            },
+            {
+                "reference": "/Users/teacher/Library/CloudStorage/Dropbox/My Mac (TRS "
+                "MacBook)/Documents/Codex/2026-10-25/task-4/sonnet-high-v2-strong-scoped-evidence-record-v1.json",
+                "sha256": "7cb79862271c926351461d7fb1de13b789f753e523345acede096dd70d88c3e0",
+            },
+        ],
+    },
+}
+# This is a reviewed selection relation, not a rewritten qualification.  The
+# reported times and immutable evidence rows above remain the original facts.
+# It exists only because the fresh dispatcher-bootstrap observation occurred
+# while two exact earlier rows were still live; without this closed relation,
+# the selector correctly holds all three as ambiguous.
+ROLE_QUALIFICATION_SUPERSEDES = {
+    "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9": {
+        "schema": "closer-role-qualification-supersession/v1",
+        "effective_at": 1793414542.671662,
+        "successor_sha256": "fddbde3c8eef7fae782533747f89b2ece0b424a512370a52eaea6ac827cbeff2",
+        "predecessors": {
+            "sonnet-current-role-qualification:104bd7e5037fe1d01efb8511b7176c8a95b8705fc73ef6e0335e2de7ff639245": "9c64c33203f1c57560dcaacc9e15f0b6a0d6e8d6e81ec8ca9731f513b685fa05",
+            "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89": "64f06a3b003714853ac0330fb5d8dbb5061bc109b4cd62d68c981eafb3c6a320",
+        },
+    }
 }
 _LOGGER = logging.getLogger(__name__)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -444,6 +657,71 @@ def _evidence_problems(record: Mapping[str, Any], role: str) -> list[str]:
     return problems
 
 
+def _superseded_active_records(
+    profile: Mapping[str, Any],
+    role: str,
+    current: float,
+    source: Mapping[str, Any],
+    active: list[tuple[str, Mapping[str, Any]]],
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """Remove only fully pinned, same-identity reviewed predecessors.
+
+    A malformed, partial, foreign, or tied relation never selects a successor:
+    it leaves the active rows intact so the caller holds on ambiguity.
+    """
+    active_by_id = dict(active)
+    excluded: set[str] = set()
+    for successor_id, successor in active:
+        relation = ROLE_QUALIFICATION_SUPERSEDES.get(successor_id)
+        if not isinstance(relation, Mapping):
+            continue
+        predecessors = relation.get("predecessors")
+        if not isinstance(predecessors, Mapping):
+            continue
+        try:
+            valid = (
+                set(relation) == {"schema", "effective_at", "successor_sha256", "predecessors"}
+                and relation["schema"] == "closer-role-qualification-supersession/v1"
+                and _finite(relation["effective_at"])
+                and relation["effective_at"] == successor["qualified_at"]
+                and relation["effective_at"] <= current
+                and relation["successor_sha256"] == _source_digest(successor)
+                and len(predecessors) >= 1
+                and qualification_problems(
+                    profile, role, now=successor["qualified_at"], records={successor_id: successor}
+                )
+                == []
+            )
+            candidates = []
+            for predecessor_id, digest in predecessors.items():
+                predecessor = source.get(predecessor_id)
+                valid = valid and (
+                    _text(predecessor_id)
+                    and isinstance(digest, str)
+                    and _SHA256.fullmatch(digest) is not None
+                    and isinstance(predecessor, Mapping)
+                    and predecessor.get("role") == successor.get("role") == role
+                    and predecessor.get("profile_identity") == successor.get("profile_identity")
+                    and _source_digest(predecessor) == digest
+                    and qualification_problems(
+                        profile,
+                        role,
+                        now=predecessor["qualified_at"],
+                        records={predecessor_id: predecessor},
+                    )
+                    == []
+                )
+                candidates.append(predecessor_id)
+            if valid:
+                # The relation pins every predecessor as historical evidence,
+                # but only a still-live predecessor contributes ambiguity.
+                # An earlier expiry must not resurrect a later overlapping row.
+                excluded.update(key for key in candidates if key in active_by_id)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+    return [(key, record) for key, record in active if key not in excluded]
+
+
 def _selected_record(
     profile: Mapping[str, Any], role: str, current: float, source: Mapping[str, Any]
 ) -> tuple[str, Mapping[str, Any]] | None:
@@ -473,6 +751,8 @@ def _selected_record(
             active.append((key, record))
             continue
         return None
+    if len(active) > 1:
+        active = _superseded_active_records(profile, role, current, source, active)
     return active[0] if len(active) == 1 else None
 
 

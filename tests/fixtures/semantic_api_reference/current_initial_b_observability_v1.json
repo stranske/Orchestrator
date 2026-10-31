@@ -1,0 +1,72 @@
+{
+  "base_commit": "dd8d71119b92e15ff85836cc44ad40e20207ac6f",
+  "files": {
+    "closer_dispatcher.py": {
+      "after_file_sha256": "1367d696c19aaa1b3b3931b452a8c719ece9b6d25d5ec245b373a745c19b6ac1",
+      "after_module_ast_sha256": "ca97abca6bb910c9f9f5c8f94368fc853ea27b275bb0b95b84370799d3053600",
+      "before_file_sha256": "d78b8d6642b64b94d366544a1515a5ffcd463bf6d101d04251fcaab8ac304256",
+      "before_module_ast_sha256": "3a5140d6765797f9247dc23b034435d3f6be7dd477605a4884d3a7a4df94d98c",
+      "function_delta": {
+        "_initial_dispatch_held": {
+          "after": "1a1e8838cc50875b55a1eaa61e5e8af6dad8df77eacb131292233b6a6087f9d1",
+          "before": null
+        },
+        "main": {
+          "after": "3d7f0c7b02fe2ca728a52eb74fb7c5507647b437d15be351ddfdf21e2afea1da",
+          "before": "b565eab0059da2114b8360776a4849eb78af0dbe933c029deab31d10e9bd93b7"
+        }
+      },
+      "historical_reversal": {
+        "main_prefix_after": "    try:\n        with closer_resources.coordination_admission(\n            pipeline_path, targets, mode=args.coordinator_mode\n        ) as admission:\n            args._coordination_admission = admission\n            return _main_admitted(args, p, assignment_rows, targets)\n",
+        "main_prefix_before": "    with closer_resources.coordination_admission(\n        pipeline_path, targets, mode=args.coordinator_mode\n    ) as admission:\n        args._coordination_admission = admission\n        return _main_admitted(args, p, assignment_rows, targets)\n",
+        "main_suffix_after": "    except Exception as error:\n        held = _initial_dispatch_held(args, error)\n        if held is None:\n            raise\n        print(json.dumps(held, sort_keys=True))\n        return 78\n"
+      },
+      "outside_reviewed_changes_ast_sha256": "d9c510d7ebeab3c4e0022b6111900a63d761dca9eb8a0e73b54c83bddaf79e7a"
+    },
+    "closer_native_observer.py": {
+      "after_file_sha256": "86801bc7ae533de0833ef608117faf44ba7a614008b016b4bdab19de00014212",
+      "after_module_ast_sha256": "4cbab2f308e576ea88f60e41eb49d6beaa91aec709020e1c66fbdaaeb96faaad",
+      "before_file_sha256": "88f77ab1748f384b3639e340d4af94c19725ab23e3593dcb157916c44858f698",
+      "before_module_ast_sha256": "2147bae3d8bf751e94d667f87e3c6b64c6ca7da009c1cae3309117a12c2192d8",
+      "function_delta": {
+        "_initial_dispatch_held_diagnostic": {
+          "after": "4311a691b5dad0cdbcc1034f98df42b78a3a8d605248b345b286cfbaa4e9cc61",
+          "before": null
+        },
+        "initial_b_observation_summary": {
+          "after": "55ec3d22bf1569d72fa7a2275ba0d10d05070c3e3a7a286b4f8dd30ba6b65c78",
+          "before": null
+        },
+        "record_initial_b_observation": {
+          "after": "f3b641b43c3c5a426b9a56eeebf8d6bee18da2b17cb7c433be0adbbd1db6c7d6",
+          "before": null
+        }
+      },
+      "outside_reviewed_changes_ast_sha256": "2147bae3d8bf751e94d667f87e3c6b64c6ca7da009c1cae3309117a12c2192d8"
+    },
+    "closer_public_qualification_input.py": {
+      "added_module": true,
+      "after_file_sha256": "d26bc3c2598be18326d01f1af37e8ac90b01ed8631f2c77db9cdab442fd509db",
+      "after_module_ast_sha256": "49137fa8e0442e033998ffcae195536ee3015a08ed370f48c61f1f27d6c5b832",
+      "before_file_sha256": null,
+      "before_module_ast_sha256": null,
+      "function_delta": {},
+      "outside_reviewed_changes_ast_sha256": "49137fa8e0442e033998ffcae195536ee3015a08ed370f48c61f1f27d6c5b832"
+    },
+    "closer_runtime_binding.py": {
+      "after_file_sha256": "2ae9c34c98e6f97d39b597661b7164fc636f30a6db0f2990b3f8d5020f00fb5e",
+      "after_module_ast_sha256": "b0b5fa0397dc364e19a74cff13b8b8a97e0efb74c617ec57f13c94a77b581400",
+      "before_file_sha256": "cc4d3c66d2d855dc3912e72fcfcaf80dfccd7dd93441c599c720c6abbcd9539c",
+      "before_module_ast_sha256": "1c57fff3bf7ee5476aa0321c424b0a087a87b99dbac1e8a02d6cc1c05caf2b4b",
+      "function_delta": {
+        "_observed_correction_b": {
+          "after": "aa0fe292e259965d66795bd4879c8cd7c3c7a14448abf7adab40e1dc2a5a584e",
+          "before": "091fa7be36bbb0e5ccae31ef0bb0b6fd4b9d3043a53f9ba55ad8ded22256c097"
+        }
+      },
+      "outside_reviewed_changes_ast_sha256": "732e486e3d8e3779b860a930c38a690efc7077c81a6254d694bf9a591245dbb5"
+    }
+  },
+  "schema": "initial-b-observability-source-successor/v1",
+  "scope": "typed redacted generic initial-B observation plus one closed public qualification-input collector; no provider, enrollment, terminal or pipeline authority"
+}

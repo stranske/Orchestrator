@@ -1,0 +1,27 @@
+{
+  "base_commit": "dd8d71119b92e15ff85836cc44ad40e20207ac6f",
+  "files": {
+    "closer_failed_predecessor_readback.py": {
+      "added_module": true,
+      "after_file_sha256": "9d42ae17c62220665c5a5f3f289b14c2c13d01fb33ee16cd007cac9f41b90fac",
+      "after_module_ast_sha256": "29abf09ad54a4ba5b39a65154267b484ed7d7f89fa21d04e8845232d60162965",
+      "before_file_sha256": null,
+      "before_module_ast_sha256": null
+    },
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "54b3fc7e03715a68dc1c40d19c8e9850fc1532de2b4ed9bb373b021b205970ab",
+      "after_module_ast_sha256": "4d2dfd02ac06331d88d5c0aa64265b06e9bc9febfdae04cfff27e691d322026c",
+      "before_file_sha256": "7358980e037960aaeac56da966952f76007f1d6271e2ba0be3cef54ca07af4ac",
+      "before_module_ast_sha256": "efc6c78a8b53ad8e05293da25db259dc4c2d0e51b0ab14f713882bbae43d1050",
+      "function_delta": {
+        "_failed_before_pipeline_reference": {"before": null, "after": "54a3a4102a0fecde2862df4b06e8fd20ed0847e623a67d265ba17ac28dc9ce1c"},
+        "_old_reference": {"before": null, "after": "29e971ea03b7b02594f8d4b32c5243eccce5574bd90e673c89a5f56cf8499790"},
+        "plan": {"before": "e1500a8c9006f9b2ad76d124bbeca6769ea502986825e8c82172137e6c9ec691", "after": "48288fdcafb51ed5a1b56f551d50857982f278f9f12d55b17baf15446bf4737a"},
+        "prepare_held": {"before": "5c90a8c14e47d385630299c56371b7c164282baefa0c6fdfd8130cbd50755be4", "after": "a70c8c2edf0112c2c8af08832dcdced0f5be73bedc1d993a0451203f9cf80143"}
+      },
+      "outside_reviewed_changes_ast_sha256": "3c61b4c9daff6eae92b6ef749ed30631bce01069ba86d0c40230998b5c5a0a46"
+    }
+  },
+  "schema": "failed-before-pipeline-source-upgrade-successor/v1",
+  "scope": "literal dd8/fa4 evidence-only containment readback; preserve active UNKNOWN state and reject every generic predecessor route"
+}

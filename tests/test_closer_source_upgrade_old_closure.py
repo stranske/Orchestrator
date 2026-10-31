@@ -42,11 +42,12 @@ def test_reviewed_191_module_descriptor_is_old_only():
         state_versions=old["state_versions"],
         supported_core=old["supported_core"],
     )
-    assert len(current["modules"]) == 196
+    assert len(current["modules"]) == 197
     assert "closer_correction_canary_ownership.py" in current["modules"]
     assert set(current["modules"]) - set(old["modules"]) == {
         "closer_coding_git_environment.py",
         "closer_correction_canary_ownership.py",
+        "closer_failed_predecessor_readback.py",
         "closer_native_source_upgrade.py",
         "closer_publisher_closure.py",
         "source_snapshot_digest.py",
