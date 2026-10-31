@@ -62,6 +62,54 @@ def _pipeline_state_path(state_path, *, shadow=False):
     return Path(str(state_path) + suffix)
 
 
+def _initial_dispatch_held(args, error):
+    """Project a safe pre-pipeline refusal without exposing child exception text.
+
+    This is deliberately unavailable once a pipeline path or its scoped root
+    exists: after that boundary an exception can follow a writing action and
+    must retain the existing UNKNOWN handling rather than claim a safe hold.
+    """
+    if args.command != "run" or not args.pipeline or args.shadow or args.coding_worker:
+        return None
+    try:
+        import closer_resources
+
+        pipeline_path = _pipeline_state_path(args.state)
+        if pipeline_path.exists() or closer_resources.scoped_root(pipeline_path).exists():
+            return None
+    except OSError:
+        return None
+    code = (
+        "permission_denied"
+        if isinstance(error, PermissionError)
+        else (
+            "file_missing"
+            if isinstance(error, FileNotFoundError)
+            else (
+                "invalid_source_data"
+                if isinstance(error, (ValueError, TypeError, KeyError))
+                else (
+                    "os_error"
+                    if isinstance(error, OSError)
+                    else (
+                        "source_refusal"
+                        if isinstance(error, RuntimeError)
+                        else "unexpected_source_error"
+                    )
+                )
+            )
+        )
+    )
+    return {
+        "schema": "closer-initial-dispatch-held/v1",
+        "status": "held",
+        "reason": "initial_dispatch_pre_pipeline_refused",
+        "diagnostic": {"stage": "initial_dispatch_pre_pipeline", "code": code},
+        "execution_authorized": False,
+        "retry_authorized": False,
+    }
+
+
 def _accept_owned_transport(_observation):
     """Acknowledge the exact child owned by dispatcher.offload supervision."""
     import closer_resources
@@ -10713,11 +10761,18 @@ def main(argv=None):
     import closer_resources
 
     pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
-    with closer_resources.coordination_admission(
-        pipeline_path, targets, mode=args.coordinator_mode
-    ) as admission:
-        args._coordination_admission = admission
-        return _main_admitted(args, p, assignment_rows, targets)
+    try:
+        with closer_resources.coordination_admission(
+            pipeline_path, targets, mode=args.coordinator_mode
+        ) as admission:
+            args._coordination_admission = admission
+            return _main_admitted(args, p, assignment_rows, targets)
+    except Exception as error:
+        held = _initial_dispatch_held(args, error)
+        if held is None:
+            raise
+        print(json.dumps(held, sort_keys=True))
+        return 78
 
 
 def _run_merge_verification_successors(args, backend, result, targets):

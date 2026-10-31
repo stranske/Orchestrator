@@ -249,6 +249,7 @@
       "tests/test_closer_cleanup_refusal_diagnostics.py",
       "tests/test_closer_closed_source_admission.py",
       "tests/test_closer_coding_b_diagnostic_custody.py",
+      "tests/test_closer_public_qualification_input.py",
       "tests/test_closer_coding_private_inline_queue.py",
       "tests/test_closer_coding_root_validation_dedup.py",
       "tests/test_closer_controller_reader_portable.py",

@@ -22,6 +22,17 @@ ORIGINAL = copy.deepcopy(next(iter(roles.ROLE_QUALIFICATIONS.values())))
 ORIGINAL_SHA = "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
 INSIDE = ORIGINAL["qualified_at"] + 60
 assert ORIGINAL["qualified_at"] < INSIDE < ORIGINAL["expires_at"]
+HISTORICAL_DESCRIPTOR = copy.deepcopy(
+    roles.ROLE_QUALIFICATIONS[
+        "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2"
+    ]["production_model_contract"]
+)
+CURRENT = copy.deepcopy(
+    roles.ROLE_QUALIFICATIONS[
+        "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+    ]
+)
+CURRENT_INSIDE = CURRENT["qualified_at"] + 60
 
 
 def support(
@@ -31,7 +42,7 @@ def support(
     return roles.execution_source_support(
         record,
         record["profile_identity"] if identity is None else identity,
-        closer._controlled_model_contract(task) if descriptor is None else descriptor,
+        HISTORICAL_DESCRIPTOR if descriptor is None else descriptor,
         task_type=task,
         checked_at=INSIDE if checked_at is None else checked_at,
     )
@@ -127,7 +138,7 @@ def test_unreviewed_source_profile_or_lifetime_never_gets_admission(change):
 
 
 def test_mode_or_source_witness_forgery_is_rejected():
-    descriptor = closer._controlled_model_contract("closer_exception")
+    descriptor = HISTORICAL_DESCRIPTOR
     result = support(descriptor=descriptor)
     expected = {
         "profile_identity": ORIGINAL["profile_identity"],
@@ -192,11 +203,11 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
 
     def problems_at_observation(profile, role, *, now=None, records=None):
         qualification_clock_calls.append("qualification")
-        return original_problems(profile, role, now=INSIDE, records=records)
+        return original_problems(profile, role, now=CURRENT_INSIDE, records=records)
 
     def support_at_observation(*args, **kwargs):
         qualification_clock_calls.append("source_admission")
-        return original_support(*args, **{**kwargs, "checked_at": INSIDE})
+        return original_support(*args, **{**kwargs, "checked_at": CURRENT_INSIDE})
 
     monkeypatch.setattr(roles, "qualification_problems", problems_at_observation)
     monkeypatch.setattr(roles, "execution_source_support", support_at_observation)
@@ -204,11 +215,11 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
 
     def record_at_observation(profile, role, **kwargs):
         kwargs.pop("now", None)
-        return original_record(profile, role, now=INSIDE, **kwargs)
+        return original_record(profile, role, now=CURRENT_INSIDE, **kwargs)
 
     monkeypatch.setattr(roles, "qualified_record", record_at_observation)
     monkeypatch.setattr(
-        roles, "ROLE_QUALIFICATIONS", {ORIGINAL["qualification_id"]: copy.deepcopy(ORIGINAL)}
+        roles, "ROLE_QUALIFICATIONS", {CURRENT["qualification_id"]: copy.deepcopy(CURRENT)}
     )
     assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     original_factory = invitation.InertCaller
@@ -218,14 +229,14 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
         caller = original_factory(*args, **kwargs)
         callers.append(caller)
         monkeypatch.setattr(
-            roles, "ROLE_QUALIFICATIONS", {ORIGINAL["qualification_id"]: copy.deepcopy(ORIGINAL)}
+            roles, "ROLE_QUALIFICATIONS", {CURRENT["qualification_id"]: copy.deepcopy(CURRENT)}
         )
         # Explicit hardware/bootstrap fixture; proof/result validators untouched.
         monkeypatch.setattr(
             roles,
             "is_runtime_qualified",
             lambda p, r, **kw: roles.qualified_record(p, r, **kw) is not None
-            and p["profile_id"] == ORIGINAL["profile_identity"]["profile_id"],
+            and p["profile_id"] == CURRENT["profile_identity"]["profile_id"],
         )
         return caller
 
@@ -246,14 +257,11 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
     assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     proof = captured[0]["_closer_controlled_proof"]
     expected = proof["expected"]
-    assert expected["qualification_record_sha256"] == ORIGINAL_SHA
+    assert expected["qualification_record_sha256"] == closer._contract_digest(CURRENT)
     assert expected["production_model_contract"] == closer._controlled_model_contract(
         "closer_exception"
     )
-    assert (
-        expected["qualification_source_admission"]["historical_contract_sha256"]
-        == ORIGINAL["production_model_contract"]["contract_sha256"]
-    )
+    assert "qualification_source_admission" not in expected
     assert expected.get("qualification_only") is not True
     retained = closer._revalidate_controlled_proof(
         proof,
@@ -273,9 +281,9 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
             basis=old["expected"]["basis"],
             receipt_root=dispatcher.DISPATCH_LOG_DIR,
         )
-    assert (
-        closer._contract_digest(roles.ROLE_QUALIFICATIONS[ORIGINAL["qualification_id"]])
-        == ORIGINAL_SHA
+    assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
+    assert closer._contract_digest(roles.ROLE_QUALIFICATIONS[CURRENT["qualification_id"]]) == (
+        closer._contract_digest(CURRENT)
     )
 
 

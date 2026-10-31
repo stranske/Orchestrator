@@ -64,24 +64,21 @@ def test_content_addressed_evidence_has_no_personal_paths():
 
 def test_record_insertion_preserves_observed_model_contract():
     descriptor = closer._controlled_model_contract("closer_exception")
-    observed = _record()["production_model_contract"]
+    record = q.ROLE_QUALIFICATIONS[
+        "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+    ]
+    observed = record["production_model_contract"]
     assert (
         observed["contract_sha256"]
-        == "1cb727375e9fa27344d89e02a7dbcd1881b613d2045a14fab5e02a30530ee293"
+        == "d78018220041ac17165dec79b98f67dec29945d7b55c115551d64948509c4f7d"
     )
-    assert (
-        closer._contract_digest(_record())
-        == "837713af72c5a701bd1b50757458632597aaf8f482ef2f2109811b101d402482"
-    )
-    # A reviewed source admission is distinct from the unchanged physical row.
     support = q.execution_source_support(
-        _record(),
-        _record()["profile_identity"],
+        record,
+        record["profile_identity"],
         descriptor,
         task_type="closer_exception",
-        checked_at=_record()["qualified_at"] + 1,
+        checked_at=record["qualified_at"] + 1,
     )
-    assert support["admission"]["historical_contract_sha256"] == observed["contract_sha256"]
-    assert support["admission"]["execution_contract_sha256"] == descriptor["contract_sha256"]
-    assert support["admission"]["physical_qualification_performed"] is False
+    assert support["limits"] == record["execution_limits"]
+    assert support["admission"] is None
     assert "closer_role_qualification.py" not in descriptor["sources"]

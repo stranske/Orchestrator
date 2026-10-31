@@ -2535,6 +2535,58 @@ def _coding_held_diagnostic(stdout):
         return fallback
 
 
+def _initial_dispatch_held_diagnostic(stdout):
+    """Accept only the fixed generic pre-pipeline source refusal frame."""
+    fallback = {"stage": "initial_b_output", "code": "no_typed_held_frame"}
+    if type(stdout) is not str or len(stdout.encode("utf-8")) > 4096:
+        return fallback
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate diagnostic field")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(stdout, object_pairs_hook=unique)
+        if (
+            type(value) is not dict
+            or set(value)
+            != {
+                "schema",
+                "status",
+                "reason",
+                "diagnostic",
+                "execution_authorized",
+                "retry_authorized",
+            }
+            or value["schema"] != "closer-initial-dispatch-held/v1"
+            or value["status"] != "held"
+            or value["reason"] != "initial_dispatch_pre_pipeline_refused"
+            or value["execution_authorized"] is not False
+            or value["retry_authorized"] is not False
+            or type(value["diagnostic"]) is not dict
+            or value["diagnostic"]
+            not in (
+                {"stage": "initial_dispatch_pre_pipeline", "code": "permission_denied"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "file_missing"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "invalid_source_data"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "os_error"},
+                {"stage": "initial_dispatch_pre_pipeline", "code": "source_refusal"},
+                {
+                    "stage": "initial_dispatch_pre_pipeline",
+                    "code": "unexpected_source_error",
+                },
+            )
+        ):
+            return fallback
+        return dict(value["diagnostic"])
+    except (ValueError, TypeError, KeyError, UnicodeError):
+        return fallback
+
+
 def coding_b_error_diagnostic(error, *, stage):
     """Fixed secondary categories; no paths, exception messages or user output."""
     if stage not in {"coding_b_observation", "coding_b_delivery"}:
@@ -2575,6 +2627,26 @@ def coding_b_observation_summary(done, witness):
     }
 
 
+def initial_b_observation_summary(done, witness):
+    """Bounded generic initial-B projection; raw child streams are never retained."""
+    if (
+        type(done.returncode) is not int
+        or not -128 <= done.returncode <= 255
+        or any(
+            type(value) is not str or len(value.encode("utf-8")) > 32 * 1024 * 1024
+            for value in (done.stdout, done.stderr)
+        )
+    ):
+        raise mechanisms.MechanismError("bounded initial B observation required")
+    return {
+        "exit_code": done.returncode,
+        "cleanup_terminal": witness.get("finished", {}).get("cleanup_terminal") is True,
+        "diagnostic": _initial_dispatch_held_diagnostic(done.stdout),
+        "execution_authorized": False,
+        "acceptance_authorized": False,
+    }
+
+
 def record_coding_b_observation(cfg, done, witness):
     """Separate signed transport diagnostic; never delivery, terminal or C authority."""
     import closer_runtime_binding as runtime
@@ -2608,6 +2680,43 @@ def record_coding_b_observation(cfg, done, witness):
         "provider_completion_asserted": False,
     }
     reference = witness["retain"]("coding-b-observation-" + witness["worker_id"] + ".json", record)
+    return {**summary, "reference": reference}
+
+
+def record_initial_b_observation(cfg, done, witness):
+    """Retain generic initial-B metadata only after its actual owned cleanup."""
+    import closer_runtime_binding as runtime
+
+    caller = inspect.currentframe().f_back
+    if (
+        caller.f_code is not runtime._observed_correction_b.__code__
+        or caller.f_globals is not runtime.__dict__
+        or caller.f_locals.get("cfg") is not cfg
+        or caller.f_locals.get("done") is not done
+        or caller.f_locals.get("witness") is not witness
+        or witness.get("finished", {}).get("cleanup_terminal") is not True
+        or cfg.get("coding_continuation") is not None
+    ):
+        raise mechanisms.MechanismError("actual source initial B observation required")
+    summary = initial_b_observation_summary(done, witness)
+    record = {
+        "schema": "closer-native-initial-b-observation/v1",
+        "worker_id": witness["worker_id"],
+        "native_b_start": witness["start"],
+        "worker_config_sha256": mechanisms.digest(cfg),
+        "process": {
+            key: witness["finished"][key] for key in ("pid", "process_group", "os_started")
+        },
+        **summary,
+        "stdout_bytes": len(done.stdout.encode("utf-8")),
+        "stderr_bytes": len(done.stderr.encode("utf-8")),
+        "stdout_sha256": hashlib.sha256(done.stdout.encode("utf-8")).hexdigest(),
+        "stderr_sha256": hashlib.sha256(done.stderr.encode("utf-8")).hexdigest(),
+        "domain_completed": False,
+        "global_stop_valid": False,
+        "provider_completion_asserted": False,
+    }
+    reference = witness["retain"]("initial-b-observation-" + witness["worker_id"] + ".json", record)
     return {**summary, "reference": reference}
 
 

@@ -37,6 +37,26 @@ def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_modu
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
 
+def test_initial_b_observability_successor_is_exact_and_has_no_unreviewed_ast_delta():
+    reviewed = support.initial_b_observability_reference()
+    for filename, change in reviewed["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        if change.get("added_module"):
+            assert filename == "closer_public_qualification_input.py"
+            assert change["before_file_sha256"] is None
+            continue
+        selected = []
+        for name, delta in change["function_delta"].items():
+            nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+            assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+            selected.extend(nodes)
+        tree.body = [node for node in tree.body if node not in selected]
+        assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+
 def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_projection():
     reviewed = support.native_command_evidence_reference()
     for filename, change in reviewed["files"].items():
@@ -180,6 +200,7 @@ def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
     for filename, change in reviewed["files"].items():
         after = source_path(filename).read_bytes()
         successor = support.controlled_initialization_reference()["files"].get(filename)
+        later = support.initial_b_observability_reference()["files"].get(filename)
         if successor:
             assert change["after_file_sha256"] == successor["before_file_sha256"]
             if filename == "closer_native_observer.py":
@@ -187,16 +208,31 @@ def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
                     filename
                 ]
                 assert successor["after_file_sha256"] == native["before_file_sha256"]
-                assert hashlib.sha256(after).hexdigest() == native["after_file_sha256"]
+                later = support.initial_b_observability_reference()["files"][filename]
+                assert native["after_file_sha256"] == later["before_file_sha256"]
+                assert hashlib.sha256(after).hexdigest() == later["after_file_sha256"]
+                continue
+            if later is not None:
+                assert change["after_file_sha256"] == later["before_file_sha256"]
+                assert hashlib.sha256(after).hexdigest() == later["after_file_sha256"]
                 continue
             assert hashlib.sha256(after).hexdigest() == successor["after_file_sha256"]
         else:
-            assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
+            if later is not None:
+                assert change["after_file_sha256"] == later["before_file_sha256"]
+                assert hashlib.sha256(after).hexdigest() == later["after_file_sha256"]
+            else:
+                assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
         before_top = change["before_top_level_ast"]
         after_top, after_tree = _top_level_ast(after)
         if successor:
             assert after_top == successor["after_top_level_ast"]
             after_top = successor["before_top_level_ast"]
+        elif later is not None:
+            # The later successor's dedicated whole-module test pins this
+            # changed top-level method; this historical fixture has no source
+            # text from which to reconstruct its previous map.
+            continue
         assert (
             hashlib.sha256(
                 json.dumps(before_top, sort_keys=True, separators=(",", ":")).encode()

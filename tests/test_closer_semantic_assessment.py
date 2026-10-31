@@ -358,7 +358,15 @@ def test_unmodified_host_security_strong_and_parser_ast_and_only_reserved_dispat
             "closer_model_contracts.py",
             {"render_classification_prompt", "classification_contract_descriptor"},
         ),
-        ("closer_dispatcher.py", {"_controlled_model_contract", "_run_staged_pipeline"}),
+        (
+            "closer_dispatcher.py",
+            {
+                "_controlled_model_contract",
+                "_run_staged_pipeline",
+                "_initial_dispatch_held",
+                "main",
+            },
+        ),
     ):
         old = reference(base)["files"][filename]["top_level_ast"]
         new = leaves(source_path(filename).read_text())

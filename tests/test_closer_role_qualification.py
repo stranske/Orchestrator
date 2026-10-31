@@ -334,9 +334,11 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
     old_id = "sonnet-current-role-qualification:3e7ba0521480a5d44d6a081e5a43b8895aeded9eba9080dbe8b8ebdca98fb009"
     current_id = "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2"
     renewal_id = "sonnet-current-role-qualification:104bd7e5037fe1d01efb8511b7176c8a95b8705fc73ef6e0335e2de7ff639245"
+    latest_id = "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
     old = roles.ROLE_QUALIFICATIONS[old_id]
     current = roles.ROLE_QUALIFICATIONS[current_id]
     renewal = roles.ROLE_QUALIFICATIONS[renewal_id]
+    latest = roles.ROLE_QUALIFICATIONS[latest_id]
     now = current["qualified_at"] + 1
 
     assert (
@@ -355,7 +357,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         current["production_model_contract"]["contract_sha256"]
         == current["execution_limits"]["model_contract_sha256"]
     )
-    assert current["production_model_contract"] == dispatcher._controlled_model_contract(
+    assert latest["production_model_contract"] == dispatcher._controlled_model_contract(
         "closer_exception"
     )
     assert current["evidence_refs"] == [
@@ -380,11 +382,12 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         )
         == current
     )
-    post_expiry = max(current["expires_at"] + 1, renewal["qualified_at"] + 1)
+    post_expiry = max(renewal["expires_at"] + 1, latest["qualified_at"] + 1)
     assert renewal["expires_at"] == renewal["qualified_at"] + 86400
+    assert latest["expires_at"] == latest["qualified_at"] + 86400
     assert (
         roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=post_expiry)
-        == renewal
+        == latest
     )
 
 
