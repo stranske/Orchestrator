@@ -216,6 +216,11 @@ def integrated_native_source_reference():
     upgrade = failed["closer_native_source_upgrade.py"]
     assert original["closer_native_source_upgrade.py"] == upgrade["before_file_sha256"]
     original["closer_native_source_upgrade.py"] = upgrade["after_file_sha256"]
+    seed_assessment = seed_assessment_upgrade_reference()["files"][
+        "closer_native_source_upgrade.py"
+    ]
+    assert original["closer_native_source_upgrade.py"] == seed_assessment["before_file_sha256"]
+    original["closer_native_source_upgrade.py"] = seed_assessment["after_file_sha256"]
     assert "closer_failed_predecessor_readback.py" not in original
     original["closer_failed_predecessor_readback.py"] = failed[
         "closer_failed_predecessor_readback.py"
@@ -425,6 +430,45 @@ def failed_predecessor_upgrade_reference():
     change = value["files"]["closer_native_source_upgrade.py"]
     assert change["before_file_sha256"] == prior["after_file_sha256"]
     assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    return value
+
+
+SEED_ASSESSMENT_UPGRADE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_seed_assessment_upgrade_v1.json"
+)
+SEED_ASSESSMENT_UPGRADE_SHA256 = "9be9b106a96972eff6fee16d3cc3b0afb5024a161eb6dcaea4793f42f280028c"
+
+
+def seed_assessment_upgrade_reference():
+    """Append the literal source701d seed-identity no-ACT successor."""
+    raw = SEED_ASSESSMENT_UPGRADE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == SEED_ASSESSMENT_UPGRADE_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "seed-assessment-source-upgrade-successor/v1"
+    assert value["base_commit"] == "701d55df99694c16cdcd5b4c3d657b3ab419bd53"
+    change = value["files"]["closer_native_source_upgrade.py"]
+    prior = failed_predecessor_upgrade_reference()["files"]["closer_native_source_upgrade.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(change["function_delta"]) == {
+        "_diagnostic_no_act",
+        "_old_diagnostic",
+        "_old_reference",
+        "_reviewed_old_metadata",
+        "_seed_assessment_no_act",
+        "_seed_assessment_reference",
+        "plan",
+    }
+    assert set(change["constant_delta"]) == {
+        "REVIEWED_SEED_ASSESSMENT_CANDIDATE",
+        "REVIEWED_SEED_ASSESSMENT_DESCRIPTOR_SHA256",
+        "REVIEWED_SEED_ASSESSMENT_MODULES_SHA256",
+        "REVIEWED_SEED_ASSESSMENT_RESULT_SHA256",
+        "REVIEWED_SEED_ASSESSMENT_ROUND_ID",
+        "REVIEWED_SEED_ASSESSMENT_ROUND_SHA256",
+        "REVIEWED_SEED_ASSESSMENT_WORKER_ID",
+    }
     return value
 
 
