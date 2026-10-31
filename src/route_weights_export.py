@@ -50,6 +50,8 @@ EXPLORATION_WINDOW_END = "20261117"
 EXPLORATION_WINDOW_EXTENDED_END = "20261215"
 EXPLORATION_WINDOW_MIN_PER_POLICY = 30
 EXPLORATION_WINDOW_START = "2026-10-17"
+# Hosted repos lack GEMINI_API_KEY; Gemini remains available for local routing.
+HOSTED_UNRUNNABLE_AGENTS = {"gemini"}
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -554,7 +556,12 @@ def _exploration_block(
     # The public export balances arms by week, without consulting the local
     # supervised-window deficits (which could change the arm within a week).
     mode = exploration_collection.choose_mode({}, now=timestamp)
-    eligible = router.KEEPALIVE_AGENTS - router.RESERVE_AGENTS - router.BACKUP_AGENTS
+    eligible = (
+        router.KEEPALIVE_AGENTS
+        - router.RESERVE_AGENTS
+        - router.BACKUP_AGENTS
+        - HOSTED_UNRUNNABLE_AGENTS
+    )
     capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
     challengers: dict[str, str | None] = {}
     for task_type in CONSUMER_TASK_TYPES:
@@ -1271,6 +1278,7 @@ def main() -> int:
         print(f"route_weights_export: capability heartbeat failed: {exc}", file=sys.stderr)
     target = state_dir / "route-weights-export.json"
     changed = write_document(target, document)
+    print(f"hosted-unrunnable agents excluded: {', '.join(sorted(HOSTED_UNRUNNABLE_AGENTS))}")
     print(f"{'wrote' if changed else 'unchanged'} {target}")
     if args.publish:
         if os.environ.get("ORCH_ROUTE_WEIGHTS_PUBLISH") != "1":
