@@ -289,6 +289,96 @@ def test_ownership_budget_dispatch_is_exact_candidate_only():
         upgrade._diagnostic_no_act(upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE, changed)
 
 
+def seed_assessment_no_act():
+    correction, queue, disposition = ownership_budget_no_act()
+    correction["reason"] = "seed_assessment_identity_invalid"
+    return correction, queue, disposition
+
+
+def test_seed_assessment_no_act_is_literal_and_refuses_effect_or_other_identity():
+    correction, queue, disposition = seed_assessment_no_act()
+    upgrade._seed_assessment_no_act(
+        correction, queue, strong_as_of=True, disposition=disposition
+    )
+    for mutate in (
+        lambda value: value[0].update(reason="different"),
+        lambda value: value[0].update(act_authorized=True),
+        lambda value: value[1].update(events=[{"operation_id": "effect"}]),
+        lambda value: value[1]["accounting"][0].update(operation_status="started"),
+        lambda value: value[2].update(native_effect_contract={"effect": "native"}),
+    ):
+        changed = [
+            json.loads(json.dumps(correction)),
+            json.loads(json.dumps(queue)),
+            json.loads(json.dumps(disposition)),
+        ]
+        mutate(changed)
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._seed_assessment_no_act(
+                changed[0], changed[1], strong_as_of=True, disposition=changed[2]
+            )
+
+
+def test_seed_assessment_dispatch_requires_its_literal_candidate():
+    correction, queue, disposition = seed_assessment_no_act()
+    fixture = {
+        "correction": correction,
+        "queue_receipt": queue,
+        "strong_as_of": True,
+        "seed_assessment_disposition": disposition,
+    }
+    upgrade._diagnostic_no_act(upgrade.REVIEWED_SEED_ASSESSMENT_CANDIDATE, fixture)
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._diagnostic_no_act(upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE, fixture)
+
+
+def test_seed_assessment_reference_pins_worker_and_result(monkeypatch):
+    good = {
+        "manifest": {"candidate_sha": upgrade.REVIEWED_SEED_ASSESSMENT_CANDIDATE},
+        "result_sha256": upgrade.REVIEWED_SEED_ASSESSMENT_RESULT_SHA256,
+        "result": {
+            "detail": json.dumps(
+                {
+                    "completed_round": {
+                        "round_id": upgrade.REVIEWED_SEED_ASSESSMENT_ROUND_ID,
+                        "receipt_sha256": upgrade.REVIEWED_SEED_ASSESSMENT_ROUND_SHA256,
+                    }
+                }
+            )
+        },
+    }
+    monkeypatch.setattr(upgrade, "_completed_reference", lambda *_args: good)
+    assert (
+        upgrade._seed_assessment_reference(
+            Path("/private/old-manifest.json"),
+            "/private/old-state.json",
+            upgrade.REVIEWED_SEED_ASSESSMENT_WORKER_ID,
+        )
+        is good
+    )
+    for worker, result_sha256 in (
+        ("0" * 12, upgrade.REVIEWED_SEED_ASSESSMENT_RESULT_SHA256),
+        (upgrade.REVIEWED_SEED_ASSESSMENT_WORKER_ID, "0" * 64),
+    ):
+        changed = {**good, "result_sha256": result_sha256}
+        monkeypatch.setattr(upgrade, "_completed_reference", lambda *_args: changed)
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._seed_assessment_reference(
+                Path("/private/old-manifest.json"), "/private/old-state.json", worker
+            )
+    changed = json.loads(json.dumps(good))
+    changed["result"]["detail"] = json.dumps(
+        {"completed_round": {"round_id": "0" * 32, "receipt_sha256": "0" * 64}}
+    )
+    monkeypatch.setattr(upgrade, "_completed_reference", lambda *_args: changed)
+    with pytest.raises(upgrade.SourceUpgradeHeld, match="completed-round"):
+        upgrade._seed_assessment_reference(
+            Path("/private/old-manifest.json"),
+            "/private/old-state.json",
+            upgrade.REVIEWED_SEED_ASSESSMENT_WORKER_ID,
+        )
+
+
 def test_clock_dispatch_requires_complete_clock_evidence_and_is_candidate_scoped():
     fixture = {
         "correction": {
@@ -383,6 +473,37 @@ def test_ownership_budget_predecessor_uses_only_its_own_module_and_descriptor_ha
     with pytest.raises(upgrade.SourceUpgradeHeld):
         upgrade._reviewed_old_metadata(
             {**manifest, "candidate_sha": upgrade.REVIEWED_CLOCK_CANDIDATE}, raw
+        )
+
+
+def test_seed_assessment_predecessor_uses_only_its_own_module_and_descriptor_hashes(
+    monkeypatch,
+):
+    modules = {"closer_campaign.py": "e" * 64}
+    descriptor = {
+        "candidate_sha": upgrade.REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+        "modules": modules,
+        "package_digest": "f" * 64,
+        "state_versions": {"campaign": 1},
+    }
+    raw = json.dumps(descriptor, sort_keys=True).encode()
+    manifest = {**descriptor, "public_runtime_descriptor": "closer-runtime-package.json"}
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_SEED_ASSESSMENT_MODULES_SHA256",
+        hashlib.sha256(
+            json.dumps(modules, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    )
+    monkeypatch.setattr(
+        upgrade,
+        "REVIEWED_SEED_ASSESSMENT_DESCRIPTOR_SHA256",
+        hashlib.sha256(raw).hexdigest(),
+    )
+    assert upgrade._reviewed_old_metadata(manifest, raw) == modules
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._reviewed_old_metadata(
+            {**manifest, "candidate_sha": upgrade.REVIEWED_OWNERSHIP_BUDGET_CANDIDATE}, raw
         )
 
 

@@ -172,6 +172,40 @@ def test_complete_selected_request_prompt_and_response_are_bound_not_authority(i
     )
 
 
+def test_canonical_compare_seed_identity_with_empty_provider_is_admitted(inputs):
+    inputs["seed_bundle"]["assessment_identity"] = {
+        "mode": "compare",
+        "provider": "",
+        "model": "gpt-5.6-terra",
+        "model2": "claude-opus-5-5",
+        "canonical": True,
+    }
+    seal(inputs["seed_bundle"], "bundle_sha256")
+
+    request = contract.build_request(**inputs)
+
+    assert request["raw_seed_bundle"]["assessment_identity"] == inputs["seed_bundle"][
+        "assessment_identity"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mode", "provider", "model2"),
+    [
+        ("compare", "injected-provider", "claude-opus-5-5"),
+        ("evaluate", "synthetic", "injected-model"),
+    ],
+)
+def test_noncanonical_seed_assessment_identity_is_refused(inputs, mode, provider, model2):
+    inputs["seed_bundle"]["assessment_identity"].update(
+        mode=mode, provider=provider, model2=model2
+    )
+    seal(inputs["seed_bundle"], "bundle_sha256")
+
+    with pytest.raises(contract.ContractError, match="seed_assessment_identity_invalid"):
+        contract.build_request(**inputs)
+
+
 @pytest.mark.parametrize("risk", contract.RISK_CLASSES)
 def test_all_risk_classes_are_explicit_semantics_not_relevance(inputs, risk):
     request = contract.build_request(**inputs)
