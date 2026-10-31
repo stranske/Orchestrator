@@ -221,6 +221,9 @@ def integrated_native_source_reference():
     ]
     assert original["closer_native_source_upgrade.py"] == seed_assessment["before_file_sha256"]
     original["closer_native_source_upgrade.py"] = seed_assessment["after_file_sha256"]
+    for filename, change in pagination_successor_reference()["files"].items():
+        assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
     assert "closer_failed_predecessor_readback.py" not in original
     original["closer_failed_predecessor_readback.py"] = failed[
         "closer_failed_predecessor_readback.py"
@@ -468,6 +471,30 @@ def seed_assessment_upgrade_reference():
         "REVIEWED_SEED_ASSESSMENT_ROUND_ID",
         "REVIEWED_SEED_ASSESSMENT_ROUND_SHA256",
         "REVIEWED_SEED_ASSESSMENT_WORKER_ID",
+    }
+    return value
+
+
+PAGINATION_SUCCESSOR_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_pagination_successor_v1.json"
+)
+PAGINATION_SUCCESSOR_SHA256 = "821a36517651348577466399e2015ccfcac4f3a7c23237f8c1e9f67c44735de6"
+
+
+def pagination_successor_reference():
+    """Append the literal d4ca pagination repair after source701d's pin."""
+    raw = PAGINATION_SUCCESSOR_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PAGINATION_SUCCESSOR_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "pagination-source-successor/v1"
+    assert value["base_commit"] == "d4ca8c8cf144d51d7b8b67a5beb1935e4c66a694"
+    upgrade = value["files"]["closer_native_source_upgrade.py"]
+    prior = seed_assessment_upgrade_reference()["files"]["closer_native_source_upgrade.py"]
+    assert upgrade["before_file_sha256"] == prior["after_file_sha256"]
+    assert upgrade["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(value["files"]) == {
+        "closer_correction_native_effects.py",
+        "closer_native_source_upgrade.py",
     }
     return value
 
