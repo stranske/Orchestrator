@@ -985,6 +985,9 @@ def scoped_capacity_reference():
 
 def before_scoped_capacity_source(source):
     """Undo only exact reviewed capacity bytes before applying older audits."""
+    bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
+    if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
+        source = before_dispatcher_bytecode_bootstrap(source)
     initial = initial_b_observability_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == initial["after_file_sha256"]:
         source = before_initial_b_observability_dispatcher(source)
