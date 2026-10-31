@@ -29,7 +29,7 @@ HISTORICAL_DESCRIPTOR = copy.deepcopy(
 )
 CURRENT = copy.deepcopy(
     roles.ROLE_QUALIFICATIONS[
-        "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+        "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9"
     ]
 )
 CURRENT_INSIDE = CURRENT["qualified_at"] + 60

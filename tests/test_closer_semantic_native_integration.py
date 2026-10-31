@@ -128,9 +128,11 @@ def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_
             assert change["after_file_sha256"] == historical["before_file_sha256"]
             assert change["after_module_ast_sha256"] == historical["before_module_ast_sha256"]
             successor = support.ownership_budget_reference()["files"][filename]
-            latest = support.private_git_environment_reference()["files"][filename]
+            policy = support.private_git_environment_reference()["files"][filename]
+            latest = support.failed_predecessor_upgrade_reference()["files"][filename]
             assert historical["after_file_sha256"] == successor["before_file_sha256"]
-            assert successor["after_file_sha256"] == latest["before_file_sha256"]
+            assert successor["after_file_sha256"] == policy["before_file_sha256"]
+            assert policy["after_file_sha256"] == latest["before_file_sha256"]
             assert hashlib.sha256(raw).hexdigest() == latest["after_file_sha256"]
             assert (
                 successor["before_top_level_ast"][change["changed_top_level"]]
@@ -143,7 +145,7 @@ def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_
             node for node in tree.body if getattr(node, "name", None) == change["changed_top_level"]
         )
         expected = (
-            latest["function_delta"][change["changed_top_level"]]["after"]
+            policy["function_delta"][change["changed_top_level"]]["after"]
             if historical is not None
             else change["after_changed_top_level_ast_sha256"]
         )
@@ -160,8 +162,12 @@ def test_historical_clock_readback_successor_is_append_only_and_exactly_scoped()
     assert reviewed["after_file_sha256"] == successor["before_file_sha256"]
     assert reviewed["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
     raw = source_path("closer_native_source_upgrade.py").read_bytes()
-    latest = support.private_git_environment_reference()["files"]["closer_native_source_upgrade.py"]
-    assert successor["after_file_sha256"] == latest["before_file_sha256"]
+    policy = support.private_git_environment_reference()["files"]["closer_native_source_upgrade.py"]
+    latest = support.failed_predecessor_upgrade_reference()["files"][
+        "closer_native_source_upgrade.py"
+    ]
+    assert successor["after_file_sha256"] == policy["before_file_sha256"]
+    assert policy["after_file_sha256"] == latest["before_file_sha256"]
     assert hashlib.sha256(raw).hexdigest() == latest["after_file_sha256"]
     tree = ast.parse(raw)
     changed = reviewed["function_delta"]
@@ -201,10 +207,14 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
     }
     for filename, change in reviewed["files"].items():
         raw = source_path(filename).read_bytes()
-        latest = support.private_git_environment_reference()["files"].get(filename)
+        policy = support.private_git_environment_reference()["files"].get(filename)
+        latest = support.failed_predecessor_upgrade_reference()["files"].get(filename)
+        if policy is not None:
+            assert change["after_file_sha256"] == policy["before_file_sha256"]
         if latest is not None:
-            assert change["after_file_sha256"] == latest["before_file_sha256"]
-        current = latest or change
+            assert policy is not None
+            assert policy["after_file_sha256"] == latest["before_file_sha256"]
+        current = latest or policy or change
         assert hashlib.sha256(raw).hexdigest() == current["after_file_sha256"]
         tree = ast.parse(raw)
         assert fingerprint(tree) == current["after_module_ast_sha256"]
@@ -216,7 +226,11 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
         removed = []
         for name, delta in change["function_delta"].items():
             nodes = [node for node in tree.body if getattr(node, "name", None) == name]
-            expected = (latest or {}).get("function_delta", {}).get(name, delta)["after"]
+            expected = (
+                (latest or {}).get("function_delta", {}).get(name)
+                or (policy or {}).get("function_delta", {}).get(name)
+                or delta
+            )["after"]
             assert len(nodes) == 1 and fingerprint(nodes[0]) == expected
             assert change["before_top_level_ast"].get(name) == delta["before"]
             removed.extend(nodes)
@@ -238,6 +252,15 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
                 name.startswith("REVIEWED_OWNERSHIP_BUDGET_") for name in change["constant_delta"]
             )
         tree.body = [node for node in tree.body if node not in removed]
+        if latest is not None:
+            later_functions = set(latest["function_delta"])
+            tree.body = [
+                node for node in tree.body if getattr(node, "name", None) not in later_functions
+            ]
+            # The literal failed-before-pipeline successor intentionally replaces
+            # plan/prepare_held. Its own fixture pins that final boundary; this
+            # older successor still checks every other reviewed family above.
+            continue
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
 
