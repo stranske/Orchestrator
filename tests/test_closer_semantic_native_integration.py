@@ -19,6 +19,15 @@ def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_modu
     reviewed = support.private_git_environment_reference()
     for filename, change in reviewed["files"].items():
         raw = source_path(filename).read_bytes()
+        successor = (
+            support.failed_predecessor_upgrade_reference()["files"].get(filename)
+            if filename == "closer_native_source_upgrade.py"
+            else None
+        )
+        if successor is not None:
+            assert change["after_file_sha256"] == successor["before_file_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+            continue
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
         assert fingerprint(tree) == change["after_module_ast_sha256"]
@@ -37,10 +46,38 @@ def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_modu
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
 
+def test_failed_predecessor_upgrade_successor_is_literal_and_top_level_scoped():
+    reviewed = support.failed_predecessor_upgrade_reference()
+    for filename, change in reviewed["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        if change.get("added_module"):
+            assert filename == "closer_failed_predecessor_readback.py"
+            continue
+        selected = []
+        for name, delta in change["function_delta"].items():
+            nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+            assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+            selected.extend(nodes)
+        tree.body = [node for node in tree.body if node not in selected]
+        assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+
 def test_initial_b_observability_successor_is_exact_and_has_no_unreviewed_ast_delta():
     reviewed = support.initial_b_observability_reference()
     for filename, change in reviewed["files"].items():
         raw = source_path(filename).read_bytes()
+        later = (
+            support.dispatcher_bytecode_bootstrap_reference()["files"].get(filename)
+            if filename == "closer_dispatcher.py"
+            else None
+        )
+        if later is not None:
+            assert change["after_file_sha256"] == later["before_file_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == later["after_file_sha256"]
+            continue
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
         assert fingerprint(tree) == change["after_module_ast_sha256"]
@@ -55,6 +92,24 @@ def test_initial_b_observability_successor_is_exact_and_has_no_unreviewed_ast_de
             selected.extend(nodes)
         tree.body = [node for node in tree.body if node not in selected]
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+
+def test_dispatcher_bytecode_bootstrap_successor_is_exact_and_top_level_scoped():
+    change = support.dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
+    raw = source_path("closer_dispatcher.py").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == change["after_module_ast_sha256"]
+    selected = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and ast.unparse(node.test) == "__name__ == '__main__'"
+    )
+    assert fingerprint(selected) == change["changed_top_level_after_ast_sha256"]
+    tree.body.remove(selected)
+    assert fingerprint(tree) == change["outside_changed_top_level_ast_sha256"]
 
 
 def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_projection():

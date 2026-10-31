@@ -212,6 +212,14 @@ def integrated_native_source_reference():
         else:
             assert filename == "closer_coding_git_environment.py"
         original[filename] = change["after_file_sha256"]
+    failed = failed_predecessor_upgrade_reference()["files"]
+    upgrade = failed["closer_native_source_upgrade.py"]
+    assert original["closer_native_source_upgrade.py"] == upgrade["before_file_sha256"]
+    original["closer_native_source_upgrade.py"] = upgrade["after_file_sha256"]
+    assert "closer_failed_predecessor_readback.py" not in original
+    original["closer_failed_predecessor_readback.py"] = failed[
+        "closer_failed_predecessor_readback.py"
+    ]["after_file_sha256"]
     for filename, change in initial_b_observability_reference()["files"].items():
         if change.get("added_module"):
             assert filename not in original
@@ -223,6 +231,9 @@ def integrated_native_source_reference():
             else:
                 assert filename == "closer_dispatcher.py"
         original[filename] = change["after_file_sha256"]
+    bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
+    assert original["closer_dispatcher.py"] == bootstrap["before_file_sha256"]
+    original["closer_dispatcher.py"] = bootstrap["after_file_sha256"]
     return original
 
 
@@ -369,8 +380,70 @@ def initial_b_observability_reference():
     return value
 
 
+DISPATCHER_BYTECODE_BOOTSTRAP_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_dispatcher_bytecode_bootstrap_v1.json"
+)
+DISPATCHER_BYTECODE_BOOTSTRAP_SHA256 = (
+    "27c5fee4f9e9848da06c3c79024b1e91eb2cb4ad77a1207e01afc37e8e1452f0"
+)
+
+
+def dispatcher_bytecode_bootstrap_reference():
+    """Append physical-entry bytecode suppression after initial-B custody."""
+    raw = DISPATCHER_BYTECODE_BOOTSTRAP_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == DISPATCHER_BYTECODE_BOOTSTRAP_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "dispatcher-bytecode-bootstrap-source-successor/v1"
+    change = value["files"]["closer_dispatcher.py"]
+    prior = initial_b_observability_reference()["files"]["closer_dispatcher.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    return value
+
+
+FAILED_PREDECESSOR_UPGRADE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_failed_predecessor_upgrade_v1.json"
+)
+FAILED_PREDECESSOR_UPGRADE_SHA256 = (
+    "c039b9ba7d0c5a84bf525b797885edddbcba31bb383c8fcabb0a52ab3bcc5b37"
+)
+
+
+def failed_predecessor_upgrade_reference():
+    """Append literal failed-before-pipeline containment to the upgrade boundary."""
+    raw = FAILED_PREDECESSOR_UPGRADE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == FAILED_PREDECESSOR_UPGRADE_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "failed-before-pipeline-source-upgrade-successor/v1"
+    assert set(value["files"]) == {
+        "closer_native_source_upgrade.py",
+        "closer_failed_predecessor_readback.py",
+    }
+    prior = private_git_environment_reference()["files"]["closer_native_source_upgrade.py"]
+    change = value["files"]["closer_native_source_upgrade.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    return value
+
+
+def before_dispatcher_bytecode_bootstrap(source):
+    """Undo only the exact sealed-runtime bootstrap successor for old audits."""
+    change = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
+    assert hashlib.sha256(source.encode()).hexdigest() == change["after_file_sha256"]
+    reversal = change["historical_reversal"]
+    assert source.count(reversal["after_fragment"]) == 1
+    source = source.replace(reversal["after_fragment"], reversal["before_fragment"], 1)
+    assert hashlib.sha256(source.encode()).hexdigest() == change["before_file_sha256"]
+    return source
+
+
 def before_initial_b_observability_dispatcher(source):
     """Reverse only the exact reviewed initial-B dispatcher successor for old audits."""
+    bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
+    if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
+        source = before_dispatcher_bytecode_bootstrap(source)
     change = initial_b_observability_reference()["files"]["closer_dispatcher.py"]
     assert hashlib.sha256(source.encode()).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(source)
@@ -587,10 +660,54 @@ def initial_b_role_qualification_reference():
     return value
 
 
+DISPATCHER_BYTECODE_ROLE_QUALIFICATION_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_dispatcher_bytecode_role_qualification_v1.json"
+)
+DISPATCHER_BYTECODE_ROLE_QUALIFICATION_SHA256 = (
+    "cfa156ebcb238f71d9cec17803a10fbbe551263732c5f3217afae97382881aea"
+)
+
+
+def dispatcher_bytecode_role_qualification_reference():
+    """Append the fresh, exact dispatcher-bootstrap qualification row."""
+    raw = DISPATCHER_BYTECODE_ROLE_QUALIFICATION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == DISPATCHER_BYTECODE_ROLE_QUALIFICATION_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "closer-dispatcher-bytecode-role-qualification-overlay/v1"
+    assert set(value) == {"schema", "scope", "actual_report_ref", "quality_ref", "role_module"}
+    return value
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    bootstrap = dispatcher_bytecode_role_qualification_reference()["role_module"]
+    if hashlib.sha256(raw).hexdigest() == bootstrap["after_file_sha256"]:
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == bootstrap["after_module_ast_sha256"]
+        registry = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "ROLE_QUALIFICATIONS"
+        )
+        assert fingerprint(registry) == bootstrap["after_registry_ast_sha256"]
+        pairs = list(zip(registry.value.keys, registry.value.values))
+        key, record = next(
+            pair
+            for pair in pairs
+            if isinstance(pair[0], ast.Constant)
+            and pair[0].value == bootstrap["new_qualification_id"]
+        )
+        assert fingerprint(record) == bootstrap["new_record_ast_sha256"]
+        registry.value.keys.remove(key)
+        registry.value.values.remove(record)
+        assert fingerprint(registry) == bootstrap["before_registry_ast_sha256"]
+        assert fingerprint(tree) == bootstrap["before_module_ast_sha256"]
+        return
     initial = initial_b_role_qualification_reference()
     initial_role = initial["role_module"]
     if hashlib.sha256(raw).hexdigest() == initial_role["after_file_sha256"]:

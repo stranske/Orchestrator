@@ -11,6 +11,13 @@ from __future__ import annotations
 # Native readers require the canonical class and callback namespace. Delegate
 # before defining a second set of classes or process-local state as __main__.
 if __name__ == "__main__":
+    # A sealed Runtime must remain byte-for-byte closed while this physical
+    # entrypoint imports its canonical module.  This has to precede that
+    # self-import: a later campaign-level setting cannot prevent CPython from
+    # already creating ``closer_dispatcher`` bytecode beside the pinned tree.
+    import sys as _bootstrap_sys
+
+    _bootstrap_sys.dont_write_bytecode = True
     from closer_dispatcher import main as _canonical_main
 
     raise SystemExit(_canonical_main())

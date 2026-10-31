@@ -334,10 +334,12 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
     old_id = "sonnet-current-role-qualification:3e7ba0521480a5d44d6a081e5a43b8895aeded9eba9080dbe8b8ebdca98fb009"
     current_id = "sonnet-current-role-qualification:c256f1adb15405e8aa82e2baab729c38f1a0edb9994c529079e99ec3d56358f2"
     renewal_id = "sonnet-current-role-qualification:104bd7e5037fe1d01efb8511b7176c8a95b8705fc73ef6e0335e2de7ff639245"
-    latest_id = "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+    prior_latest_id = "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+    latest_id = "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9"
     old = roles.ROLE_QUALIFICATIONS[old_id]
     current = roles.ROLE_QUALIFICATIONS[current_id]
     renewal = roles.ROLE_QUALIFICATIONS[renewal_id]
+    prior_latest = roles.ROLE_QUALIFICATIONS[prior_latest_id]
     latest = roles.ROLE_QUALIFICATIONS[latest_id]
     now = current["qualified_at"] + 1
 
@@ -356,6 +358,9 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
     assert (
         current["production_model_contract"]["contract_sha256"]
         == current["execution_limits"]["model_contract_sha256"]
+    )
+    assert prior_latest["production_model_contract"]["contract_sha256"] == (
+        "d78018220041ac17165dec79b98f67dec29945d7b55c115551d64948509c4f7d"
     )
     assert latest["production_model_contract"] == dispatcher._controlled_model_contract(
         "closer_exception"
@@ -382,8 +387,9 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         )
         == current
     )
-    post_expiry = max(renewal["expires_at"] + 1, latest["qualified_at"] + 1)
+    post_expiry = max(prior_latest["expires_at"] + 1, latest["qualified_at"] + 1)
     assert renewal["expires_at"] == renewal["qualified_at"] + 86400
+    assert prior_latest["expires_at"] == prior_latest["qualified_at"] + 86400
     assert latest["expires_at"] == latest["qualified_at"] + 86400
     assert (
         roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=post_expiry)

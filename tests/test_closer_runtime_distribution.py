@@ -1,5 +1,8 @@
 """Public Runtime packages remain pinned and preserve an incumbent installation."""
 
+import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -113,6 +116,42 @@ def test_launcher_refuses_unsealed_code_before_loading_runtime(tmp_path, extra):
     added.write_bytes(b"unsealed code must never load")
     problems = launcher.pin_problems(manifest, own_path=str(root / "closer_launcher.py"))
     assert "Runtime tree contains undeclared executable code" in problems
+
+
+def test_physical_dispatcher_entry_does_not_create_bytecode_in_sealed_runtime(tmp_path):
+    """The native B child starts this exact physical entrypoint without ``-B``."""
+    public = descriptor()
+    runtime = tmp_path / "sealed-runtime"
+    package.materialize_runtime_tree(Path(campaign.__file__).parent, runtime, public)
+    core = tmp_path / "core"
+    core.mkdir()
+    core_descriptor = {
+        "owner": "Workflows",
+        "contract": campaign.CONTRACT,
+        "core_version": "1",
+        "package_digest": "a" * 64,
+    }
+    (core / "closer-core-package.json").write_text(json.dumps(core_descriptor))
+    manifest = package.host_binding_from_public(
+        public,
+        install_root=runtime,
+        core_binding={**core_descriptor, "package_root": str(core)},
+        python=sys.executable,
+    )
+    manifest_path = runtime / "host-manifest.json"
+    package.write_host_manifest(manifest_path, manifest)
+    env = {**os.environ, "PYTHONPATH": ""}
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    completed = subprocess.run(
+        [sys.executable, str(runtime / "closer_dispatcher.py"), "--help"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not list(runtime.rglob("*.pyc"))
+    assert campaign.load_manifest(manifest_path) == manifest
 
 
 def test_actual_runtime_export_carries_source_bound_flat_selection_policy(tmp_path):

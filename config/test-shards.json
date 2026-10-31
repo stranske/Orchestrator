@@ -154,6 +154,7 @@
       "tests/test_closer_native_local_validation_dedup.py",
       "tests/test_closer_native_pending_ci_wait.py",
       "tests/test_closer_native_source_upgrade.py",
+      "tests/test_closer_failed_predecessor_readback.py",
       "tests/test_closer_native_stage_resources.py",
       "tests/test_closer_pipeline_callback_budget.py",
       "tests/test_closer_pipeline_native_lanes.py",

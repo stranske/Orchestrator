@@ -65,12 +65,12 @@ def test_content_addressed_evidence_has_no_personal_paths():
 def test_record_insertion_preserves_observed_model_contract():
     descriptor = closer._controlled_model_contract("closer_exception")
     record = q.ROLE_QUALIFICATIONS[
-        "sonnet-current-role-qualification:4bb25aaa8f76ab3b0997e7ffb6d757d3ffa541a04ad39a0cf3fbde3b5a21de89"
+        "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9"
     ]
     observed = record["production_model_contract"]
     assert (
         observed["contract_sha256"]
-        == "d78018220041ac17165dec79b98f67dec29945d7b55c115551d64948509c4f7d"
+        == "264d7ad6fad590c9d33fae722b43dd74a3de4d6490c7856b876471ae1a3f60a2"
     )
     support = q.execution_source_support(
         record,

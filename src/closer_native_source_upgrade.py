@@ -1030,6 +1030,44 @@ def _completed_reference(
     }
 
 
+def _failed_before_pipeline_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Read only the one reviewed UNKNOWN cohort that never created a pipeline.
+
+    This route is intentionally separate from ``_completed_reference``: the
+    old campaign remains active/UNKNOWN and no completed-round proof is
+    manufactured. The imported reader owns every literal witness pin,
+    including the contamination that makes the generic old-closure reader
+    correctly refuse this historical Runtime.
+    """
+    try:
+        import closer_failed_predecessor_readback as failed
+
+        reference = failed.read_dd8_fa4_failed_before_pipeline(manifest_path, state_path, worker_id)
+    except (ImportError, OSError, TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("failed-before-pipeline predecessor unavailable") from exc
+    _need(
+        reference.get("authority") is False
+        and reference.get("accepted") is False
+        and reference.get("retry_authority") is False
+        and reference.get("outcome") == "unknown"
+        and reference.get("worker", {}).get("worker_id") == worker_id,
+        "failed-before-pipeline predecessor differs",
+    )
+    return reference
+
+
+def _old_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> tuple[dict[str, Any], bool]:
+    """Choose the exact failed witness or the unchanged completed route."""
+    _value, _raw, manifest = _object(manifest_path, "old manifest")
+    if manifest.get("candidate_sha") == "dd8d71119b92e15ff85836cc44ad40e20207ac6f":
+        return _failed_before_pipeline_reference(manifest_path, state_path, worker_id), True
+    return _completed_reference(manifest_path, state_path, worker_id), False
+
+
 def _old_native_terminal(manifest: dict[str, Any]) -> None:
     root = _canonical(manifest["mechanism_contract"]["observation_root"])
     _path, _raw, active = _object(root / "native-active.json", "old native active record")
@@ -1550,7 +1588,15 @@ def plan(
     """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
     import closer_native_wrapper_install as install
 
-    old_path, old_raw, old = _manifest(old_manifest, old=True)
+    candidate_path, old_raw, candidate_old = _object(old_manifest, "old manifest")
+    failed_before_pipeline = (
+        candidate_old.get("candidate_sha") == "dd8d71119b92e15ff85836cc44ad40e20207ac6f"
+    )
+    if failed_before_pipeline:
+        old_path, old = candidate_path, candidate_old
+    else:
+        old_path, _validated_old_raw, old = _manifest(old_manifest, old=True)
+        _need(_validated_old_raw == old_raw, "old manifest changed during validation")
     new_path, new_raw, new = _manifest(new_manifest)
     _need(
         old.get("candidate_sha")
@@ -1559,6 +1605,7 @@ def plan(
             REVIEWED_CAPACITY_CANDIDATE,
             REVIEWED_CLOCK_CANDIDATE,
             REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+            "dd8d71119b92e15ff85836cc44ad40e20207ac6f",
         },
         "old release is not reviewed no-ACT predecessor",
     )
@@ -1571,33 +1618,49 @@ def plan(
         new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),
         "new manifest does not pin executing source-upgrade boundary",
     )
+    reference, failed_before_pipeline = _old_reference(old_path, old_state, worker_id)
+    if failed_before_pipeline:
+        _need(
+            _sha(old_raw) == reference["manifest_sha256"] and old == reference["manifest"],
+            "failed-before-pipeline old manifest changed during reader validation",
+        )
     _same_identity(old, new)
-    reference = _completed_reference(old_path, old_state, worker_id)
     _old_native_terminal(old)
     host._lane_absent()
     custody = _old_custody_quiet(old)
     index = fresh_read_native_index(
         old["policy"]["correction_controller_installation"]["config"], custody
     )
-    interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
-    diagnostic = _old_diagnostic(
-        old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
-    )
-    _need(
-        diagnostic.get("state_sha256") == reference["state_sha256"],
-        "old diagnostic campaign differs from captured reference",
-    )
-    _need(
-        diagnostic.get("worker_target") == reference["worker"].get("target")
-        and diagnostic.get("source_target")
-        in reference["state"]["worker_config"]["finite_frontier"]["targets"],
-        "old diagnostic scopes differ",
-    )
-    cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
-    if not all(isinstance(value, dict) for value in (cohort, completed)):
-        raise SourceUpgradeHeld("old diagnostic shape invalid")
-    _diagnostic_no_act(old["candidate_sha"], diagnostic)
-    _incomplete_cohort(cast(dict[str, Any], cohort), cast(dict[str, Any], completed))
+    if failed_before_pipeline:
+        diagnostic = {
+            "schema": "failed-before-pipeline-readback/v1",
+            "authority": False,
+            "accepted": False,
+            "retry_authority": False,
+            "result_sha256": reference["result_sha256"],
+            "terminal_sha256": reference["terminal_sha256"],
+            "handoff_sha256": reference["handoff_sha256"],
+        }
+    else:
+        interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
+        diagnostic = _old_diagnostic(
+            old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
+        )
+        _need(
+            diagnostic.get("state_sha256") == reference["state_sha256"],
+            "old diagnostic campaign differs from captured reference",
+        )
+        _need(
+            diagnostic.get("worker_target") == reference["worker"].get("target")
+            and diagnostic.get("source_target")
+            in reference["state"]["worker_config"]["finite_frontier"]["targets"],
+            "old diagnostic scopes differ",
+        )
+        cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
+        if not all(isinstance(value, dict) for value in (cohort, completed)):
+            raise SourceUpgradeHeld("old diagnostic shape invalid")
+        _diagnostic_no_act(old["candidate_sha"], diagnostic)
+        _incomplete_cohort(cast(dict[str, Any], cohort), cast(dict[str, Any], completed))
     state = _canonical(new_state)
     _need(
         not state.exists()
@@ -1675,6 +1738,8 @@ def plan(
             "custody": custody,
             "native_index": index,
             "diagnostic": diagnostic,
+            "failed_before_pipeline": failed_before_pipeline,
+            "worker_id": worker_id,
         },
         "new": {
             "manifest": str(new_path),
@@ -1946,20 +2011,31 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     _old_manifest_path, _old_manifest_raw, old_manifest = _pinned_object(
         old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
     )
-    _old_module_bytes(old_manifest)
     old_state = _canonical(record["old"]["state"])
     old_result = _canonical(record["old"]["result"])
-    _need(_sha(host._read(old_state)[1]) == record["old"]["state_sha256"], "old state changed")
-    _need(_sha(host._read(old_result)[1]) == record["old"]["result_sha256"], "old result changed")
+    old_worker_id = record["old"].get("worker_id")
+    _need(isinstance(old_worker_id, str), "sealed old worker unavailable")
+    failed_before_pipeline = record["old"].get("failed_before_pipeline") is True
+    if failed_before_pipeline:
+        old_reference = _failed_before_pipeline_reference(
+            old_manifest_path, old_state, old_worker_id
+        )
+    else:
+        _old_module_bytes(old_manifest)
+        old_reference = _completed_reference(
+            old_manifest_path,
+            old_state,
+            old_worker_id,
+            manifest_sha256=record["old"]["manifest_sha256"],
+            state_sha256=record["old"]["state_sha256"],
+        )
+    _need(
+        old_reference["result_sha256"] == record["old"]["result_sha256"]
+        and old_reference["state_sha256"] == record["old"]["state_sha256"],
+        "old predecessor changed",
+    )
     _old_native_terminal(old_manifest)
     host._lane_absent()
-    _completed_reference(
-        old_manifest_path,
-        old_state,
-        record["old"]["diagnostic"]["cohort"]["worker_id"],
-        manifest_sha256=record["old"]["manifest_sha256"],
-        state_sha256=record["old"]["state_sha256"],
-    )
     inspection = _old_custody_quiet(old_manifest)
     _need(
         fresh_read_native_index(
@@ -2013,31 +2089,29 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
         )
         _need(locked_old_manifest == old_manifest, "old manifest changed under locks")
-        _old_module_bytes(locked_old_manifest)
         _locked_state_path, _locked_state_raw, old_doc = _pinned_object(
             old_state, record["old"]["state_sha256"], "old campaign state"
         )
+        if failed_before_pipeline:
+            locked_reference = _failed_before_pipeline_reference(
+                old_manifest_path, old_state, old_worker_id
+            )
+        else:
+            _old_module_bytes(locked_old_manifest)
+            locked_reference = _completed_reference(
+                old_manifest_path,
+                old_state,
+                old_worker_id,
+                manifest_sha256=record["old"]["manifest_sha256"],
+                state_sha256=record["old"]["state_sha256"],
+            )
         _need(
-            _sha(host._read(old_state)[1]) == record["old"]["state_sha256"],
-            "old state changed under locks",
-        )
-        _need(
-            _sha(host._read(old_result)[1]) == record["old"]["result_sha256"],
-            "old result changed under locks",
+            locked_reference["result_sha256"] == record["old"]["result_sha256"]
+            and locked_reference["state_sha256"] == record["old"]["state_sha256"],
+            "old predecessor changed under locks",
         )
         _old_native_terminal(locked_old_manifest)
         host._lane_absent()
-        _need(
-            _completed_reference(
-                old_manifest_path,
-                old_state,
-                record["old"]["diagnostic"]["cohort"]["worker_id"],
-                manifest_sha256=record["old"]["manifest_sha256"],
-                state_sha256=record["old"]["state_sha256"],
-            )["result_sha256"]
-            == record["old"]["result_sha256"],
-            "old result changed under locks",
-        )
         _need(
             _old_custody_quiet(locked_old_manifest) == inspection,
             "old custody changed under locks",
@@ -2059,7 +2133,7 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         reference = {
             "state_path": str(old_state),
             "state_sha256": record["old"]["state_sha256"],
-            "worker": record["old"]["diagnostic"].get("cohort", {}),
+            "worker": locked_reference["worker"],
             "result_path": str(old_result),
             "result_sha256": record["old"]["result_sha256"],
             # This is a sealed no-ACT disposition reference, never a fabricated
