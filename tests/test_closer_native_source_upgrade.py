@@ -297,9 +297,7 @@ def seed_assessment_no_act():
 
 def test_seed_assessment_no_act_is_literal_and_refuses_effect_or_other_identity():
     correction, queue, disposition = seed_assessment_no_act()
-    upgrade._seed_assessment_no_act(
-        correction, queue, strong_as_of=True, disposition=disposition
-    )
+    upgrade._seed_assessment_no_act(correction, queue, strong_as_of=True, disposition=disposition)
     for mutate in (
         lambda value: value[0].update(reason="different"),
         lambda value: value[0].update(act_authorized=True),

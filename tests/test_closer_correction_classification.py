@@ -184,9 +184,10 @@ def test_canonical_compare_seed_identity_with_empty_provider_is_admitted(inputs)
 
     request = contract.build_request(**inputs)
 
-    assert request["raw_seed_bundle"]["assessment_identity"] == inputs["seed_bundle"][
-        "assessment_identity"
-    ]
+    assert (
+        request["raw_seed_bundle"]["assessment_identity"]
+        == inputs["seed_bundle"]["assessment_identity"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -197,9 +198,7 @@ def test_canonical_compare_seed_identity_with_empty_provider_is_admitted(inputs)
     ],
 )
 def test_noncanonical_seed_assessment_identity_is_refused(inputs, mode, provider, model2):
-    inputs["seed_bundle"]["assessment_identity"].update(
-        mode=mode, provider=provider, model2=model2
-    )
+    inputs["seed_bundle"]["assessment_identity"].update(mode=mode, provider=provider, model2=model2)
     seal(inputs["seed_bundle"], "bundle_sha256")
 
     with pytest.raises(contract.ContractError, match="seed_assessment_identity_invalid"):
