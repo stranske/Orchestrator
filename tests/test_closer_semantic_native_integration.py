@@ -28,9 +28,11 @@ def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_modu
             assert change["after_file_sha256"] == successor["before_file_sha256"]
             latest = support.seed_assessment_upgrade_reference()["files"][filename]
             pagination = support.pagination_successor_reference()["files"][filename]
+            held = support.pagination_held_successor_reference()["files"][filename]
             assert successor["after_file_sha256"] == latest["before_file_sha256"]
             assert latest["after_file_sha256"] == pagination["before_file_sha256"]
-            assert hashlib.sha256(raw).hexdigest() == pagination["after_file_sha256"]
+            assert pagination["after_file_sha256"] == held["before_file_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == held["after_file_sha256"]
             continue
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
@@ -63,7 +65,11 @@ def test_failed_predecessor_upgrade_successor_is_literal_and_top_level_scoped():
             assert change["after_file_sha256"] == successor["before_file_sha256"]
             assert change["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
             pagination = support.pagination_successor_reference()["files"].get(filename)
-            assert hashlib.sha256(raw).hexdigest() == (pagination or successor)["after_file_sha256"]
+            held = support.pagination_held_successor_reference()["files"].get(filename)
+            assert (
+                hashlib.sha256(raw).hexdigest()
+                == (held or pagination or successor)["after_file_sha256"]
+            )
             continue
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
@@ -147,12 +153,14 @@ def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_
             failed = support.failed_predecessor_upgrade_reference()["files"][filename]
             latest = support.seed_assessment_upgrade_reference()["files"][filename]
             pagination = support.pagination_successor_reference()["files"][filename]
+            held = support.pagination_held_successor_reference()["files"][filename]
             assert historical["after_file_sha256"] == successor["before_file_sha256"]
             assert successor["after_file_sha256"] == policy["before_file_sha256"]
             assert policy["after_file_sha256"] == failed["before_file_sha256"]
             assert failed["after_file_sha256"] == latest["before_file_sha256"]
             assert latest["after_file_sha256"] == pagination["before_file_sha256"]
-            assert hashlib.sha256(raw).hexdigest() == pagination["after_file_sha256"]
+            assert pagination["after_file_sha256"] == held["before_file_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == held["after_file_sha256"]
             assert (
                 successor["before_top_level_ast"][change["changed_top_level"]]
                 == change["after_changed_top_level_ast_sha256"]
@@ -189,11 +197,13 @@ def test_historical_clock_readback_successor_is_append_only_and_exactly_scoped()
     pagination = support.pagination_successor_reference()["files"][
         "closer_native_source_upgrade.py"
     ]
+    held = support.pagination_held_successor_reference()["files"]["closer_native_source_upgrade.py"]
     assert successor["after_file_sha256"] == policy["before_file_sha256"]
     assert policy["after_file_sha256"] == failed["before_file_sha256"]
     assert failed["after_file_sha256"] == latest["before_file_sha256"]
     assert latest["after_file_sha256"] == pagination["before_file_sha256"]
-    assert hashlib.sha256(raw).hexdigest() == pagination["after_file_sha256"]
+    assert pagination["after_file_sha256"] == held["before_file_sha256"]
+    assert hashlib.sha256(raw).hexdigest() == held["after_file_sha256"]
     tree = ast.parse(raw)
     changed = reviewed["function_delta"]
     for name, expected in changed.items():
@@ -237,11 +247,13 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
             failed = support.failed_predecessor_upgrade_reference()["files"][filename]
             seed = support.seed_assessment_upgrade_reference()["files"][filename]
             pagination = support.pagination_successor_reference()["files"][filename]
+            held = support.pagination_held_successor_reference()["files"][filename]
             assert change["after_file_sha256"] == policy["before_file_sha256"]
             assert policy["after_file_sha256"] == failed["before_file_sha256"]
             assert failed["after_file_sha256"] == seed["before_file_sha256"]
             assert seed["after_file_sha256"] == pagination["before_file_sha256"]
-            assert hashlib.sha256(raw).hexdigest() == pagination["after_file_sha256"]
+            assert pagination["after_file_sha256"] == held["before_file_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == held["after_file_sha256"]
             continue
         policy = support.private_git_environment_reference()["files"].get(filename)
         failed = support.failed_predecessor_upgrade_reference()["files"].get(filename)
@@ -307,16 +319,24 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
 def test_seed_assessment_upgrade_successor_is_literal_and_top_level_scoped():
     change = support.seed_assessment_upgrade_reference()["files"]["closer_native_source_upgrade.py"]
     successor = support.pagination_successor_reference()["files"]["closer_native_source_upgrade.py"]
+    held = support.pagination_held_successor_reference()["files"]["closer_native_source_upgrade.py"]
     raw = source_path("closer_native_source_upgrade.py").read_bytes()
     assert change["after_file_sha256"] == successor["before_file_sha256"]
     assert change["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
-    assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+    assert successor["after_file_sha256"] == held["before_file_sha256"]
+    assert hashlib.sha256(raw).hexdigest() == held["after_file_sha256"]
 
 
 def test_pagination_successor_is_literal_and_top_level_scoped():
     reviewed = support.pagination_successor_reference()
     for filename, change in reviewed["files"].items():
         raw = source_path(filename).read_bytes()
+        if filename == "closer_native_source_upgrade.py":
+            held = support.pagination_held_successor_reference()["files"][filename]
+            assert change["after_file_sha256"] == held["before_file_sha256"]
+            assert change["after_module_ast_sha256"] == held["before_module_ast_sha256"]
+            assert hashlib.sha256(raw).hexdigest() == held["after_file_sha256"]
+            continue
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
         assert fingerprint(tree) == change["after_module_ast_sha256"]
@@ -338,6 +358,21 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
             selected.extend(nodes)
         tree.body = [node for node in tree.body if node not in selected]
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+    change = support.pagination_held_successor_reference()["files"][
+        "closer_native_source_upgrade.py"
+    ]
+    raw = source_path("closer_native_source_upgrade.py").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == change["after_module_ast_sha256"]
+    selected = []
+    for name, delta in change["function_delta"].items():
+        nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+        assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+        selected.extend(nodes)
+    tree.body = [node for node in tree.body if node not in selected]
+    assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
 
 def _top_level_ast(raw):

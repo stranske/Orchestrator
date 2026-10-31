@@ -224,6 +224,9 @@ def integrated_native_source_reference():
     for filename, change in pagination_successor_reference()["files"].items():
         assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
+    for filename, change in pagination_held_successor_reference()["files"].items():
+        assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
     assert "closer_failed_predecessor_readback.py" not in original
     original["closer_failed_predecessor_readback.py"] = failed[
         "closer_failed_predecessor_readback.py"
@@ -496,6 +499,32 @@ def pagination_successor_reference():
         "closer_correction_native_effects.py",
         "closer_native_source_upgrade.py",
     }
+    return value
+
+
+PAGINATION_HELD_SUCCESSOR_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_pagination_held_successor_v1.json"
+)
+PAGINATION_HELD_SUCCESSOR_SHA256 = (
+    "6d87c540bc9b01f5605e4b27071089f650854fe8cb988a52b7eb13cb70da37a3"
+)
+
+
+def pagination_held_successor_reference():
+    """Append the literal prepare-held d4ca selector correction."""
+    raw = PAGINATION_HELD_SUCCESSOR_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PAGINATION_HELD_SUCCESSOR_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "pagination-held-source-successor/v1"
+    assert value["base_commit"] == "f01d376d77006d6923c3d6554a95be09d4cc0491"
+    change = value["files"]["closer_native_source_upgrade.py"]
+    prior = pagination_successor_reference()["files"]["closer_native_source_upgrade.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(value["files"]) == {"closer_native_source_upgrade.py"}
+    assert set(change["function_delta"]) == {"prepare_held"}
+    assert change["constant_delta"] == {}
     return value
 
 

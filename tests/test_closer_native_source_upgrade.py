@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -505,7 +506,9 @@ def test_seed_assessment_predecessor_uses_only_its_own_module_and_descriptor_has
         )
 
 
-def test_pagination_predecessor_uses_only_its_own_module_and_descriptor_hashes(monkeypatch):
+def test_pagination_predecessor_uses_only_its_own_module_and_descriptor_hashes(
+    tmp_path, monkeypatch
+):
     modules = {"closer_campaign.py": "1" * 64}
     descriptor = {
         "candidate_sha": upgrade.REVIEWED_PAGINATION_CANDIDATE,
@@ -530,6 +533,137 @@ def test_pagination_predecessor_uses_only_its_own_module_and_descriptor_hashes(m
         upgrade._reviewed_old_metadata(
             {**manifest, "candidate_sha": upgrade.REVIEWED_SEED_ASSESSMENT_CANDIDATE}, raw
         )
+    _assert_pagination_prepare_held_rereads(tmp_path, monkeypatch)
+
+
+def _assert_pagination_prepare_held_rereads(tmp_path, monkeypatch):
+    """Exercise both public preparation rereads, stopping before creation."""
+    import closer_campaign as campaign
+    import closer_frontier_policy as policy
+    import closer_native_observer as native
+    import closer_native_readmission as readmission
+
+    def document(name, value):
+        path = tmp_path / name
+        path.write_text(json.dumps(value))
+        return path
+
+    frontier = {"targets": ["stranske/Orchestrator#984"]}
+    cfg = {"finite_frontier": frontier}
+    old_manifest = {
+        "candidate_sha": upgrade.REVIEWED_PAGINATION_CANDIDATE,
+        "policy": {"correction_controller_installation": {"config": {}}},
+    }
+    old_path = document("old-manifest.json", old_manifest)
+    old_state = document("old-state.json", {"worker_config": cfg})
+    old_result = document("old-result.json", {"outcome": "scoped_continuation"})
+    new_path = document("new-manifest.json", {"candidate_sha": "new"})
+    raw = new_path.read_bytes()
+    manifest = json.loads(raw)
+    wrapper = document("wrapper", {})
+    destination = tmp_path / "fresh-campaign.json"
+    seal = tmp_path / "seal.json"
+    known = document("known.json", {})
+    digest = "a" * 64
+
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def canonical_sha(value):
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    reference = {
+        "worker": {"state": "terminal", "outcome": "scoped_continuation"},
+        "result_sha256": sha(old_result),
+        "state_sha256": sha(old_state),
+    }
+    record = {
+        "schema": upgrade.SCHEMA,
+        "stage": "sealed_pre_cas",
+        "plan_sha256": digest,
+        "new": {
+            "manifest": str(new_path),
+            "manifest_sha256": sha(new_path),
+            "state": str(destination),
+            "custody": {},
+        },
+        "old": {
+            "manifest": str(old_path),
+            "manifest_sha256": sha(old_path),
+            "state": str(old_state),
+            "state_sha256": sha(old_state),
+            "result": str(old_result),
+            "result_sha256": sha(old_result),
+            "worker_id": upgrade.REVIEWED_PAGINATION_WORKER_ID,
+            "failed_before_pipeline": False,
+            "native_index": {},
+            "diagnostic": {},
+        },
+        "new_release": {"path": "release.json"},
+        "wrapper": {"path": str(wrapper), "after_sha256": sha(wrapper)},
+        "held_recipe": {
+            "worker_config": cfg,
+            "frontier": frontier,
+            "worker_config_sha256": canonical_sha(cfg),
+            "frontier_sha256": canonical_sha(frontier),
+        },
+        "locks": [],
+    }
+    seal.write_text(json.dumps({"record": record}))
+    monkeypatch.setattr(upgrade, "_manifest", lambda _: (new_path, raw, manifest))
+    monkeypatch.setattr(
+        upgrade,
+        "_read_signed_upgrade",
+        lambda path, *_a, **kw: (
+            path,
+            b"sealed",
+            {**record, **({"status": "installed"} if kw["name"] == upgrade._KNOWN_NAME else {})},
+        ),
+    )
+    monkeypatch.setattr(upgrade, "_plan_sha", lambda _: digest)
+    monkeypatch.setattr(upgrade, "_upgrade_path", lambda *_: known)
+    monkeypatch.setattr(upgrade, "_installed_release", lambda *_: record["new_release"])
+    monkeypatch.setattr(native, "contract", lambda *_: None)
+    monkeypatch.setattr(campaign, "qualify", lambda *_: [])
+    calls = []
+    monkeypatch.setattr(upgrade, "_old_module_bytes", lambda _: calls.append("modules"))
+    monkeypatch.setattr(
+        upgrade, "_pagination_reference", lambda *_: (calls.append("pagination") or reference)
+    )
+    monkeypatch.setattr(
+        upgrade,
+        "_completed_reference",
+        lambda *_a, **_kw: pytest.fail(
+            "scoped pagination predecessor must not use the completed reader"
+        ),
+    )
+    monkeypatch.setattr(upgrade, "_old_native_terminal", lambda *_: None)
+    monkeypatch.setattr(upgrade.host, "_lane_absent", lambda: None)
+    inspection = {"highwater": {"anchor": {}}}
+    monkeypatch.setattr(upgrade, "_old_custody_quiet", lambda *_: inspection)
+    monkeypatch.setattr(upgrade, "fresh_read_native_index", lambda *_: {})
+    monkeypatch.setattr(readmission, "_new_runtime", lambda *_: (new_path, manifest, raw, cfg))
+    monkeypatch.setattr(policy, "validate_frontier", lambda value, **_: value)
+    monkeypatch.setattr(readmission, "_guard_fresh", lambda *_: None)
+    monkeypatch.setattr(upgrade.host, "_hold", lambda *_: nullcontext())
+    monkeypatch.setattr(upgrade, "_inert_new_custody", lambda *_: {})
+    monkeypatch.setattr(readmission, "_plan", lambda *_: ({}, digest))
+    monkeypatch.setattr(readmission, "_intent_token", lambda *_: "token")
+
+    class BeforeCreation(Exception):
+        pass
+
+    def stop_before_creation(*_):
+        assert calls == ["modules", "pagination", "modules", "pagination"]
+        raise BeforeCreation
+
+    monkeypatch.setattr(readmission, "_recover_or_create", stop_before_creation)
+    with pytest.raises(BeforeCreation):
+        upgrade.prepare_held(seal, confirm_plan_sha256=digest)
+    assert not destination.exists()
+    assert not seal.with_name("source-upgrade-held-consumed.json").exists()
 
 
 def test_historical_clock_reader_is_literal_facts_only_and_keeps_generic_readers_out():

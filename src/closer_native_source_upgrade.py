@@ -2447,13 +2447,16 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         )
     else:
         _old_module_bytes(old_manifest)
-        old_reference = _completed_reference(
-            old_manifest_path,
-            old_state,
-            old_worker_id,
-            manifest_sha256=record["old"]["manifest_sha256"],
-            state_sha256=record["old"]["state_sha256"],
-        )
+        if old_manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+            old_reference = _pagination_reference(old_manifest_path, old_state, old_worker_id)
+        else:
+            old_reference = _completed_reference(
+                old_manifest_path,
+                old_state,
+                old_worker_id,
+                manifest_sha256=record["old"]["manifest_sha256"],
+                state_sha256=record["old"]["state_sha256"],
+            )
     _need(
         old_reference["result_sha256"] == record["old"]["result_sha256"]
         and old_reference["state_sha256"] == record["old"]["state_sha256"],
@@ -2523,13 +2526,18 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             )
         else:
             _old_module_bytes(locked_old_manifest)
-            locked_reference = _completed_reference(
-                old_manifest_path,
-                old_state,
-                old_worker_id,
-                manifest_sha256=record["old"]["manifest_sha256"],
-                state_sha256=record["old"]["state_sha256"],
-            )
+            if locked_old_manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+                locked_reference = _pagination_reference(
+                    old_manifest_path, old_state, old_worker_id
+                )
+            else:
+                locked_reference = _completed_reference(
+                    old_manifest_path,
+                    old_state,
+                    old_worker_id,
+                    manifest_sha256=record["old"]["manifest_sha256"],
+                    state_sha256=record["old"]["state_sha256"],
+                )
         _need(
             locked_reference["result_sha256"] == record["old"]["result_sha256"]
             and locked_reference["state_sha256"] == record["old"]["state_sha256"],
