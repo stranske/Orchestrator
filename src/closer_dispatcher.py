@@ -69,6 +69,15 @@ def _pipeline_state_path(state_path, *, shadow=False):
     return Path(str(state_path) + suffix)
 
 
+def _finite_timestamp(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    stamp = float(value)
+    if not math.isfinite(stamp):
+        return None
+    return stamp
+
+
 def _newest_pipeline_run(pipeline_path: Path) -> tuple[str | None, float]:
     import closer_pipeline as cp
 
@@ -82,11 +91,14 @@ def _newest_pipeline_run(pipeline_path: Path) -> tuple[str | None, float]:
     best_id = None
     best_created = -1.0
     for run_id, run in runs.items():
-        if isinstance(run, dict):
-            created = float(run.get("created", 0))
-            if created > best_created:
-                best_created = created
-                best_id = run_id
+        if not isinstance(run, dict):
+            continue
+        created = _finite_timestamp(run.get("created"))
+        if created is None:
+            continue
+        if created > best_created:
+            best_created = created
+            best_id = run_id
     return best_id, best_created
 
 
@@ -103,12 +115,19 @@ def _scoped_round_summaries(root: Path) -> list[tuple[str, float, dict[str, str]
         except (OSError, ValueError):
             continue
         round_id = receipt.get("round_id")
-        if not isinstance(round_id, str):
+        if (
+            receipt.get("schema") != "closer-pipeline-receipt/v1"
+            or receipt.get("mode") != "resource_scoped"
+            or not isinstance(round_id, str)
+            or round_id != path.stem
+        ):
             continue
-        finished = float(receipt.get("finished_at", 0))
+        finished = _finite_timestamp(receipt.get("finished_at"))
+        if finished is None:
+            continue
         run_ids = receipt.get("run_ids")
         if not isinstance(run_ids, dict):
-            run_ids = {}
+            continue
         summaries.append(
             (round_id, finished, {k: v for k, v in run_ids.items() if isinstance(v, str)})
         )
@@ -130,6 +149,31 @@ def _newest_scoped_round(root: Path) -> tuple[str | None, float]:
         return None, 0.0
     round_id, finished, _run_ids = max(summaries, key=lambda row: row[1])
     return round_id, finished
+
+
+def _scoped_root_is_stale(
+    pipeline_path: Path, scoped_root_path: Path
+) -> tuple[bool, str | None, float, str | None]:
+    """Stale when the scoped root holds no round for the current pipeline run.
+
+    A newer scoped round whose shard run ids do not match the retained top-level
+    ledger run must still require ``--round-id``; only a scoped round that
+    predates the newest pipeline run (or an empty scoped root beside a live
+    pipeline) may fall through to the pipeline validator.
+    """
+    newest_run_id, newest_run_created = _newest_pipeline_run(pipeline_path)
+    newest_scoped_id, newest_scoped_finished = _newest_scoped_round(scoped_root_path)
+    if not pipeline_path.is_file():
+        return False, newest_scoped_id, newest_scoped_finished, newest_run_id
+    if newest_run_id is None:
+        # Empty ledger (or unloadable created stamps handled by the caller) has
+        # no current scoped binding; prefer the pipeline validator.
+        return True, newest_scoped_id, newest_scoped_finished, newest_run_id
+    if _scoped_round_for_pipeline_run(scoped_root_path, newest_run_id) is not None:
+        return False, newest_scoped_id, newest_scoped_finished, newest_run_id
+    if newest_scoped_id is not None and newest_scoped_finished >= newest_run_created:
+        return False, newest_scoped_id, newest_scoped_finished, newest_run_id
+    return True, newest_scoped_id, newest_scoped_finished, newest_run_id
 
 
 def _initial_dispatch_held(args, error):
@@ -10743,10 +10787,23 @@ def main(argv=None):
         if scoped_root_path.exists():
             import closer_pipeline as cp
 
-            newest_run_id, _newest_run_created = _newest_pipeline_run(pipeline_path)
-            current_round_id = _scoped_round_for_pipeline_run(scoped_root_path, newest_run_id)
-            if pipeline_path.is_file() and current_round_id is None:
-                newest_scoped_id, newest_scoped_finished = _newest_scoped_round(scoped_root_path)
+            stale, newest_scoped_id, newest_scoped_finished, newest_run_id = _scoped_root_is_stale(
+                pipeline_path, scoped_root_path
+            )
+            if pipeline_path.is_file() and newest_run_id is None:
+                try:
+                    runs = cp._load(pipeline_path).get("runs")
+                except (OSError, ValueError):
+                    runs = None
+                if isinstance(runs, dict) and runs:
+                    result = {
+                        "valid": False,
+                        "stop_valid": False,
+                        "reasons": ["invalid_pipeline_run_created"],
+                    }
+                    print(json.dumps(result, sort_keys=True))
+                    return 78
+            if stale:
                 result = cp.validate_stop(pipeline_path, assignment_targets=targets)
                 result = {
                     **result,
@@ -10758,7 +10815,8 @@ def main(argv=None):
                     result["newest_scoped_round_finished_at"] = newest_scoped_finished
                 print(json.dumps(result, sort_keys=True))
                 return 0 if result.get("valid") else 78
-            named_round_id = current_round_id or _newest_scoped_round(scoped_root_path)[0]
+            current_round_id = _scoped_round_for_pipeline_run(scoped_root_path, newest_run_id)
+            named_round_id = current_round_id or newest_scoped_id
             result = {
                 "valid": False,
                 "stop_valid": False,

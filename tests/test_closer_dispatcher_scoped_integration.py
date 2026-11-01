@@ -641,6 +641,35 @@ def test_quota_capacity_snapshot_blocks_both_shared_pool_aliases(tmp_path, monke
     assert value == profile_id and actual == selected
 
 
+def _write_scoped_receipt(root, *, round_id, run_id, finished_at, target="o/r#1"):
+    resources.write_round_receipt(
+        root,
+        {
+            "schema": "closer-pipeline-receipt/v1",
+            "mode": "resource_scoped",
+            "round_id": round_id,
+            "run_ids": {target: run_id},
+            "shards": {target: resources.shard_dir(root, target).name},
+            "deadline": finished_at + 500.0,
+            "elapsed_seconds": 1.0,
+            "finished_at": finished_at,
+            "assignment": [target],
+            "carry_targets": [],
+            "targets": {target: {"status": "completed"}},
+            "scoped": {
+                "contract": resources.CONTRACT_SCHEMA,
+                "layout": resources.LAYOUT,
+                "fenced_targets": [],
+                "lease_wait_seconds": {},
+                "max_lease_wait_seconds": 0.0,
+                "completed": [target],
+                "unknown_reservations": {},
+                "unknown_reservations_drainable": 0,
+            },
+        },
+    )
+
+
 def test_validate_stop_without_round_id_uses_pipeline_validator_when_scoped_root_is_stale(
     tmp_path,
 ):
@@ -666,31 +695,8 @@ def test_validate_stop_without_round_id_uses_pipeline_validator_when_scoped_root
     )
     root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
     stale_round = "b" * 32
-    resources.write_round_receipt(
-        root,
-        {
-            "schema": "closer-pipeline-receipt/v1",
-            "mode": "resource_scoped",
-            "round_id": stale_round,
-            "run_ids": {"o/r#1": "older-pipeline-run"},
-            "shards": {"o/r#1": resources.shard_dir(root, "o/r#1").name},
-            "deadline": 1500.0,
-            "elapsed_seconds": 1.0,
-            "finished_at": 1000.0,
-            "assignment": ["o/r#1"],
-            "carry_targets": [],
-            "targets": {"o/r#1": {"status": "completed"}},
-            "scoped": {
-                "contract": resources.CONTRACT_SCHEMA,
-                "layout": resources.LAYOUT,
-                "fenced_targets": [],
-                "lease_wait_seconds": {},
-                "max_lease_wait_seconds": 0.0,
-                "completed": ["o/r#1"],
-                "unknown_reservations": {},
-                "unknown_reservations_drainable": 0,
-            },
-        },
+    _write_scoped_receipt(
+        root, round_id=stale_round, run_id="older-pipeline-run", finished_at=1000.0
     )
     result = subprocess.run(
         [
@@ -705,10 +711,66 @@ def test_validate_stop_without_round_id_uses_pipeline_validator_when_scoped_root
         text=True,
     )
     verdict = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert verdict.get("valid") is True
+    assert verdict.get("stop_valid") is True
+    assert verdict.get("run_id") == current_run
     assert "scoped_round_id_required" not in verdict.get("reasons", [])
     assert verdict.get("scoped_root_stale") is True
     assert verdict.get("newest_scoped_round_id") == stale_round
     assert verdict.get("validator") == "closer_pipeline.validate_stop"
+
+
+def test_validate_stop_without_round_id_requires_id_when_scoped_round_is_newer_than_pipeline(
+    tmp_path,
+):
+    """Legacy ledger run retained after a newer scoped round must not fall through."""
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    legacy_run = "legacy-pipeline-run"
+    pipeline._save(
+        pipeline_path,
+        {
+            "schema": pipeline.SCHEMA,
+            "runs": {
+                legacy_run: {
+                    "created": 1000.0,
+                    "deadline": 1500.0,
+                    "assignment": ["o/r#1"],
+                    "targets": {"o/r#1": {"status": "completed", "stage": "act"}},
+                }
+            },
+            "carry": {},
+        },
+    )
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    current_scoped = "c" * 32
+    _write_scoped_receipt(
+        root,
+        round_id=current_scoped,
+        run_id="shard-run-not-in-ledger",
+        finished_at=2000.0,
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert result.returncode == 78
+    assert verdict.get("valid") is False
+    assert "scoped_round_id_required" in verdict.get("reasons", [])
+    assert verdict.get("required_round_id") == current_scoped
+    assert "scoped_root_stale" not in verdict
 
 
 def test_incompatible_contract_fences_legacy_even_for_disjoint_target(tmp_path):
