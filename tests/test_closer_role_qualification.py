@@ -362,8 +362,12 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
     assert prior_latest["production_model_contract"]["contract_sha256"] == (
         "d78018220041ac17165dec79b98f67dec29945d7b55c115551d64948509c4f7d"
     )
-    assert latest["production_model_contract"] == dispatcher._controlled_model_contract(
-        "closer_exception"
+    assert latest["production_model_contract"]["contract_sha256"] == (
+        "264d7ad6fad590c9d33fae722b43dd74a3de4d6490c7856b876471ae1a3f60a2"
+    )
+    bridge_id = "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
+    assert roles.ROLE_QUALIFICATIONS[bridge_id]["production_model_contract"] == (
+        dispatcher._controlled_model_contract("closer_exception")
     )
     assert current["evidence_refs"] == [
         {
@@ -424,7 +428,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
     support = roles.execution_source_support(
         selected_now,
         selected_now["profile_identity"],
-        dispatcher._controlled_model_contract("closer_exception"),
+        selected_now["production_model_contract"],
         task_type="closer_exception",
         checked_at=latest["qualified_at"] + 1,
     )

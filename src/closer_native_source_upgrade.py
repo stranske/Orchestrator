@@ -3028,6 +3028,11 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         and old_reference["state_sha256"] == record["old"]["state_sha256"],
         "old predecessor changed",
     )
+    if generic_pre_effect:
+        _need(
+            old_reference.get("forensic") == record["old"].get("diagnostic"),
+            "generic pre-effect forensic evidence changed",
+        )
     (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old_manifest)
     host._lane_absent()
     inspection = _old_custody_quiet(old_manifest)
@@ -3113,6 +3118,11 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             and locked_reference["state_sha256"] == record["old"]["state_sha256"],
             "old predecessor changed under locks",
         )
+        if generic_pre_effect:
+            _need(
+                locked_reference.get("forensic") == record["old"].get("diagnostic"),
+                "generic pre-effect forensic evidence changed under locks",
+            )
         (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(
             locked_old_manifest
         )

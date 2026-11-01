@@ -33,6 +33,20 @@ class CapacityError(ValueError):
     pass
 
 
+class _AdmittedCapacityReport(dict):
+    """A report whose path, bytes, and signed native admission are rechecked on use."""
+
+    _admitted_path: str
+    _admitted_sha256: str
+
+
+def _admitted_report(report: dict, *, path: Path, sha256: str) -> dict:
+    value = _AdmittedCapacityReport(report)
+    value._admitted_path = str(path)
+    value._admitted_sha256 = sha256
+    return value
+
+
 def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -111,7 +125,7 @@ def _operational_inputs_match(inputs, profile_ids) -> bool:
         return False
 
 
-def evaluate(config: dict, *, now: float | None = None) -> dict:
+def _evaluate(config: dict, *, now: float | None = None, admitted_profile_ids=None) -> dict:
     now = time.time() if now is None else now
     deadline = config.get("original_deadline")
     if config.get("schema") != SCHEMA or not _number(deadline) or not now < deadline <= now + 900:
@@ -119,7 +133,7 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
     owner = config.get("owner")
     if not isinstance(owner, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", owner):
         raise CapacityError("explicit publication owner required")
-    requested = config.get("profile_ids")
+    requested = config.get("profile_ids") if admitted_profile_ids is None else admitted_profile_ids
     control_plane_only = config.get("control_plane_only", False)
     if type(control_plane_only) is not bool:
         raise CapacityError("control-plane qualification must be explicit")
@@ -155,7 +169,10 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
         raise CapacityError("producer is outside pinned Runtime closure")
     agents: dict[str, Any] = {}
     inputs: dict[str, str | None] = {}
-    for agent in (() if control_plane_only else AGENTS):
+    observed_agents = (
+        () if control_plane_only else (selected_agents if admitted_profile_ids else AGENTS)
+    )
+    for agent in observed_agents:
         marker_path = shed_dir / agent
         if marker_path.is_symlink():
             raise CapacityError("shed marker symlink refused")
@@ -277,6 +294,11 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
     )
 
 
+def evaluate(config: dict, *, now: float | None = None) -> dict:
+    """Produce a complete current report for strict generic consumers."""
+    return _evaluate(config, now=now)
+
+
 def _report_snapshot_valid(report: dict, *, now: float) -> bool:
     """Validate the immutable report snapshot apart from host inputs that may refresh."""
     if not isinstance(report, dict):
@@ -362,21 +384,27 @@ def validate_admitted_report(
             return all(state == "shed" for state in original_states) and validate_report(
                 report, now=now
             )
-        current = evaluate(
+        admitted_profile_ids = [
+            profile_id
+            for profile_id, state in zip(report["profile_ids"], original_states, strict=True)
+            if state in {"ok", "warn"}
+        ]
+        current = _evaluate(
             {
                 "schema": SCHEMA,
                 "owner": policy["owner"],
                 "original_deadline": report["original_deadline"],
-                "profile_ids": report["profile_ids"],
+                "profile_ids": admitted_profile_ids,
                 "bounded_trial_agents": policy["bounded_trial_agents"],
                 "runtime_manifest": runtime_manifest,
                 "runtime_manifest_sha256": runtime_manifest_sha256,
             },
             now=now,
+            admitted_profile_ids=admitted_profile_ids,
         )
         selected = {
             execution_profiles.get_profile(profile_id)["agent"]
-            for profile_id in report["profile_ids"]
+            for profile_id in admitted_profile_ids
         }
         return all(current["agents"][agent]["state"] in {"ok", "warn"} for agent in selected)
     except (CapacityError, KeyError, OSError, TypeError, ValueError):
@@ -428,7 +456,15 @@ def declared_profile_ids(report: dict) -> tuple[str, ...] | None:
     if not isinstance(report, dict) or report.get("schema") != SCHEMA:
         return None
     try:
-        if not validate_report(report, now=time.time()):
+        if isinstance(report, _AdmittedCapacityReport):
+            try:
+                import closer_native_observer as native
+
+                if not native.revalidate_admitted_capacity_report(report):
+                    return ()
+            except (KeyError, TypeError, ValueError, OSError, OverflowError):
+                return ()
+        elif not validate_report(report, now=time.time()):
             return ()
     except (KeyError, TypeError, ValueError, OSError, OverflowError):
         return ()

@@ -135,7 +135,9 @@ def test_initial_b_observability_successor_is_exact_and_has_no_unreviewed_ast_de
 
 def test_dispatcher_bytecode_bootstrap_successor_is_exact_and_top_level_scoped():
     change = support.dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
-    raw = source_path("closer_dispatcher.py").read_bytes()
+    raw = support.before_capacity_pre_effect_recovery_source(
+        source_path("closer_dispatcher.py").read_bytes(), "closer_dispatcher.py"
+    )
     assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(raw)
     assert fingerprint(tree) == change["after_module_ast_sha256"]

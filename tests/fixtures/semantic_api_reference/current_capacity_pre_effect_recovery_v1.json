@@ -1,13 +1,49 @@
 {
   "base_commit": "f9f14efe899f66daa0f10be191999bd75fbdc746",
   "files": {
+    "closer_dispatcher.py": {
+      "after_file_sha256": "23f70fc7b2f248c57514784a5025082e853fac1a1ae1b65c3b97ba14fd56d906",
+      "after_module_ast_sha256": "b1f335524672f6c00e327160c6929cdb4a93527f1a26082ec20cb7b41348196d",
+      "before_file_sha256": "324922795a0c03fd4b1ba408b85c482fba1a27a97f9351506b3518d3ac5b45a4",
+      "before_module_ast_sha256": "220c31150335704842bcb3fa6ec0425e0b63c64c47bb79526c47801b68d9bd38",
+      "constant_delta": {},
+      "function_delta": {
+        "_fresh_capacity_report": {
+          "after": "f6699902e014d09475ed9b0ad89707cf415817241bfa14a2ac8a9508f701fe1d",
+          "before": "8bf360950b36f48c73e955504bdb7b6a7903f8cd4b05686a97e55a3ca030c9ed"
+        }
+      },
+      "historical_reversal": [
+        {
+          "after_fragment": "    )\n    try:\n        report = json.loads(report_path.read_text())\n        if explicit:\n            from closer_native_observer import admitted_capacity_report\n            from closer_operational_capacity import validate_report\n\n            if not report_path.is_absolute() or report_path.is_symlink():\n                return None\n            if (report_path.parent / \"admission.json\").exists():\n                report = admitted_capacity_report(report_path)\n            elif not validate_report(report, now=time.time()):\n                return None\n        age = time.time() - float(report[\"generated_at\"])\n        if age < -30 or age > 1800:\n            return None\n",
+          "before_fragment": "    )\n    try:\n        report = json.loads(report_path.read_text())\n        if explicit:\n            from closer_operational_capacity import validate_report\n\n            if (\n                not report_path.is_absolute()\n                or report_path.is_symlink()\n                or not validate_report(report, now=time.time())\n            ):\n                return None\n        age = time.time() - float(report[\"generated_at\"])\n        if age < -30 or age > 1800:\n            return None\n"
+        },
+        {
+          "after_fragment": "            or any(not isinstance(row, dict) for row in report[\"agents\"].values())\n        ):\n            return None\n        return report\n    except (OSError, RuntimeError, ValueError, KeyError, TypeError, OverflowError):\n        return None\n\n\n_EXCEPTION_ELIGIBLE_AGENTS = (\"codex\", \"claude\", \"gemini\", \"cursor\", \"vibe\", \"muse\")\n",
+          "before_fragment": "            or any(not isinstance(row, dict) for row in report[\"agents\"].values())\n        ):\n            return None\n        return report\n    except (OSError, ValueError, KeyError, TypeError, OverflowError):\n        return None\n\n\n_EXCEPTION_ELIGIBLE_AGENTS = (\"codex\", \"claude\", \"gemini\", \"cursor\", \"vibe\", \"muse\")\n"
+        }
+      ],
+      "outside_reviewed_changes_ast_sha256": "fe83c3ff1799319dd1042235a963ade6c7167ec3db4e1223b42933a5dca31246"
+    },
     "closer_native_observer.py": {
-      "after_file_sha256": "6d39c34127cc58fc8a2bf555da949608ab0116461d4cf0426d39ce86344c9baa",
-      "after_module_ast_sha256": "f6303e335d3798ca3a7a42b1a8ecd098ce5ed88cb6f7b3fa8f7ea1b0ed93da03",
+      "after_file_sha256": "167f772dde4679c4c30108918ff81399c69eab6b5a2b4113594b7a73d8c1fb7d",
+      "after_module_ast_sha256": "ec8e04aa1eaa9e9c63f945368d720640cd7dc9fd828c890555858f4b52a2f231",
       "before_file_sha256": "86801bc7ae533de0833ef608117faf44ba7a614008b016b4bdab19de00014212",
       "before_module_ast_sha256": "4cbab2f308e576ea88f60e41eb49d6beaa91aec709020e1c66fbdaaeb96faaad",
       "constant_delta": {},
       "function_delta": {
+        "_verified_admitted_capacity_report": {
+          "after": "57e904c66aab23b0c71793cfbdf959028058ee329b9b6ba76ff2314b3e2fa749",
+          "before": null
+        },
+        "admitted_capacity_report": {
+          "after": "a88b4d8ce93f8c266e10ddbc406706eb0379f9a042e3a5ff6a0a16764e6eec1b",
+          "before": null
+        },
+        "revalidate_admitted_capacity_report": {
+          "after": "8b5683d6cf787e538a73dad120dc3d661d381de3227db8b01245732abe3c72a3",
+          "before": null
+        },
         "validate_admission": {
           "after": "3564aa70f76969927d4bf49d95c482eead65a12af1092fe2770bd31a99633ba3",
           "before": "6e2288fa65808f59e772a561c79a2472c2f453c26e3fa2d07a18e9f6869bfce6"
@@ -15,15 +51,15 @@
       },
       "historical_reversal": [
         {
-          "after_fragment": "        or _hash(manifest_path) != context[\"runtime_manifest_sha256\"]\n    ):\n        raise mechanisms.MechanismError(\"native admission manifest bytes differ\")\n    capacity_report = _read(directory / \"scoped-capacity.json\")\n    model_policy = None\n    if capacity_report.get(\"control_plane_only\") is not True:\n        model_policy = capacity_contract(\n            manifest\n        )  # Model qualification retains the strict registry contract.\n    if for_effects:\n        capacity_valid = (\n            scoped.validate_report(capacity_report, now=time.time())\n            if model_policy is None\n            else scoped.validate_admitted_report(\n                capacity_report,\n                now=time.time(),\n                policy=model_policy,\n                runtime_manifest=context[\"runtime_manifest\"],\n                runtime_manifest_sha256=context[\"runtime_manifest_sha256\"],\n            )\n        )\n        if (not finite and not time.time() < deadline) or not capacity_valid:\n            raise mechanisms.MechanismError(\n                \"native admission expired or operational inputs changed\"\n            )\n    return context\n\n\ndef admission_config(manifest, cfg, context, *, for_effects=True):\n",
-          "before_fragment": "        or _hash(manifest_path) != context[\"runtime_manifest_sha256\"]\n    ):\n        raise mechanisms.MechanismError(\"native admission manifest bytes differ\")\n    capacity_report = _read(directory / \"scoped-capacity.json\")\n    if capacity_report.get(\"control_plane_only\") is not True:\n        capacity_contract(manifest)  # Model qualification retains the strict registry contract.\n    if for_effects and (\n        (not finite and not time.time() < deadline)\n        or not scoped.validate_report(_read(directory / \"scoped-capacity.json\"), now=time.time())\n    ):\n        raise mechanisms.MechanismError(\"native admission expired or operational inputs changed\")\n    return context\n\n\ndef admission_config(manifest, cfg, context, *, for_effects=True):\n"
+          "after_fragment": "        or _hash(manifest_path) != context[\"runtime_manifest_sha256\"]\n    ):\n        raise mechanisms.MechanismError(\"native admission manifest bytes differ\")\n    capacity_report = _read(directory / \"scoped-capacity.json\")\n    model_policy = None\n    if capacity_report.get(\"control_plane_only\") is not True:\n        model_policy = capacity_contract(\n            manifest\n        )  # Model qualification retains the strict registry contract.\n    if for_effects:\n        capacity_valid = (\n            scoped.validate_report(capacity_report, now=time.time())\n            if model_policy is None\n            else scoped.validate_admitted_report(\n                capacity_report,\n                now=time.time(),\n                policy=model_policy,\n                runtime_manifest=context[\"runtime_manifest\"],\n                runtime_manifest_sha256=context[\"runtime_manifest_sha256\"],\n            )\n        )\n        if (not finite and not time.time() < deadline) or not capacity_valid:\n            raise mechanisms.MechanismError(\n                \"native admission expired or operational inputs changed\"\n            )\n    return context\n\n\ndef _verified_admitted_capacity_report(path):\n    \"\"\"Re-read one scoped report through its exact signed native admission.\"\"\"\n    import closer_campaign as campaign\n\n    report_path = Path(path)\n    if (\n        not report_path.is_absolute()\n        or report_path.resolve() != report_path\n        or report_path.is_symlink()\n        or report_path.name != \"scoped-capacity.json\"\n    ):\n        raise mechanisms.MechanismError(\"native admitted capacity path differs\")\n    raw = _bounded_bytes(report_path, 128 * 1024)\n    report = json.loads(raw)\n    if not isinstance(report, dict):\n        raise mechanisms.MechanismError(\"native admitted capacity report differs\")\n    signed = _read(report_path.parent / \"admission.json\")\n    record = signed.get(\"record\")\n    context = record.get(\"context\") if isinstance(record, dict) else None\n    if not isinstance(context, dict):\n        raise mechanisms.MechanismError(\"native admitted capacity context differs\")\n    manifest_path = Path(context.get(\"runtime_manifest\", \"\"))\n    if (\n        not manifest_path.is_absolute()\n        or manifest_path.resolve() != manifest_path\n        or manifest_path.is_symlink()\n        or _hash(manifest_path) != context.get(\"runtime_manifest_sha256\")\n        or context.get(\"report\")\n        != {\"path\": str(report_path), \"sha256\": hashlib.sha256(raw).hexdigest()}\n    ):\n        raise mechanisms.MechanismError(\"native admitted capacity binding differs\")\n    manifest = campaign.load_manifest(manifest_path)\n    validate_admission(manifest, context, for_effects=True)\n    campaign_identity = context.get(\"campaign\")\n    if not isinstance(campaign_identity, dict):\n        raise mechanisms.MechanismError(\"native admitted capacity campaign differs\")\n    campaign_state = Path(campaign_identity.get(\"state\", \"\"))\n    if (\n        not campaign_state.is_absolute()\n        or campaign_state.resolve() != campaign_state\n        or campaign_state.is_symlink()\n    ):\n        raise mechanisms.MechanismError(\"native admitted capacity campaign differs\")\n    document = campaign.Campaign(campaign_state).read()\n    if campaign_identity != _campaign_identity(campaign_state, document):\n        raise mechanisms.MechanismError(\"native admitted capacity campaign differs\")\n    config = document.get(\"worker_config\")\n    if not isinstance(config, dict):\n        raise mechanisms.MechanismError(\"native admitted capacity campaign differs\")\n    admission_config(manifest, config, context, for_effects=True)\n    if _bounded_bytes(report_path, 128 * 1024) != raw:\n        raise mechanisms.MechanismError(\"native admitted capacity report changed\")\n    return report, hashlib.sha256(raw).hexdigest()\n\n\ndef admitted_capacity_report(path):\n    \"\"\"Return a same-process marker only after complete admission revalidation.\"\"\"\n    import closer_operational_capacity as scoped\n\n    report, digest = _verified_admitted_capacity_report(path)\n    return scoped._admitted_report(report, path=Path(path), sha256=digest)\n\n\ndef revalidate_admitted_capacity_report(report):\n    \"\"\"Reject a copied, mutated, or no-longer-authenticated marker.\"\"\"\n    import closer_operational_capacity as scoped\n\n    if not isinstance(report, scoped._AdmittedCapacityReport):\n        return False\n    try:\n        path = Path(report._admitted_path)\n        current, digest = _verified_admitted_capacity_report(path)\n        return digest == report._admitted_sha256 and current == dict(report)\n    except (AttributeError, KeyError, OSError, TypeError, ValueError, mechanisms.MechanismError):\n        return False\n\n\ndef admission_config(manifest, cfg, context, *, for_effects=True):\n    \"\"\"Derive only this worker's immutable cfg; never rewrite campaign history.\"\"\"\n",
+          "before_fragment": "        or _hash(manifest_path) != context[\"runtime_manifest_sha256\"]\n    ):\n        raise mechanisms.MechanismError(\"native admission manifest bytes differ\")\n    capacity_report = _read(directory / \"scoped-capacity.json\")\n    if capacity_report.get(\"control_plane_only\") is not True:\n        capacity_contract(manifest)  # Model qualification retains the strict registry contract.\n    if for_effects and (\n        (not finite and not time.time() < deadline)\n        or not scoped.validate_report(_read(directory / \"scoped-capacity.json\"), now=time.time())\n    ):\n        raise mechanisms.MechanismError(\"native admission expired or operational inputs changed\")\n    return context\n\n\ndef admission_config(manifest, cfg, context, *, for_effects=True):\n    \"\"\"Derive only this worker's immutable cfg; never rewrite campaign history.\"\"\"\n"
         }
       ],
       "outside_reviewed_changes_ast_sha256": "0bb3e03d46496f29e3aed4f1c05af50cbe92659abd4bf9fb82c1b815b35409cd"
     },
     "closer_native_source_upgrade.py": {
-      "after_file_sha256": "7efd269ac40fb2abf723cab639df9ecf436ba170d3655c8f08292b9c851e80ba",
-      "after_module_ast_sha256": "b5b3c6f408a619e4c216b9f47995446a111a83bf36f9501fc9fcbbcee92ed7fd",
+      "after_file_sha256": "9205598db0a14656472af89d299b75d5af7dd94d69bf665720b7542cf3fb9091",
+      "after_module_ast_sha256": "0c9db85ffcb231a9bc22528ee8332daf06a6c757ef06545bb7b0d611079fd537",
       "before_file_sha256": "8fe811de13cae4e540fe1ea9780509c805962925de1f181a8438d5da321793cc",
       "before_module_ast_sha256": "b574063c7c4cc14fdc898c4e5dd150dd302037bc4e546931424f4e01a9ef1e44",
       "constant_delta": {},
@@ -45,7 +81,7 @@
           "before": "7dca8c5a8620b1ee0720fe5ff331abc24dd33a647168d55d838d22ed040f8046"
         },
         "prepare_held": {
-          "after": "8386ec5c724381fc86de1d14e66d3b8694c95ae0572018173b13c0aececac324",
+          "after": "a6fb74815e61cec4f7ebc40e3c2d7e75bf5dc3ef78133bc34c81b99e7d41255f",
           "before": "71012df1565d3514fd2515d2b716a7fb2bd243029857ea4ea051822d3c324d6a"
         }
       },
@@ -83,7 +119,7 @@
           "before_fragment": "    old_result = _canonical(record[\"old\"][\"result\"])\n    old_worker_id = record[\"old\"].get(\"worker_id\")\n    _need(isinstance(old_worker_id, str), \"sealed old worker unavailable\")\n    failed_before_pipeline = record[\"old\"].get(\"failed_before_pipeline\") is True\n    if failed_before_pipeline:\n        old_reference = _failed_before_pipeline_reference(\n            old_manifest_path, old_state, old_worker_id\n        )\n    else:\n"
         },
         {
-          "after_fragment": "        old_reference[\"result_sha256\"] == record[\"old\"][\"result_sha256\"]\n        and old_reference[\"state_sha256\"] == record[\"old\"][\"state_sha256\"],\n        \"old predecessor changed\",\n    )\n    (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old_manifest)\n    host._lane_absent()\n    inspection = _old_custody_quiet(old_manifest)\n    _need(\n        fresh_read_native_index(\n",
+          "after_fragment": "        old_reference[\"result_sha256\"] == record[\"old\"][\"result_sha256\"]\n        and old_reference[\"state_sha256\"] == record[\"old\"][\"state_sha256\"],\n        \"old predecessor changed\",\n    )\n    if generic_pre_effect:\n        _need(\n            old_reference.get(\"forensic\") == record[\"old\"].get(\"diagnostic\"),\n            \"generic pre-effect forensic evidence changed\",\n        )\n    (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old_manifest)\n    host._lane_absent()\n    inspection = _old_custody_quiet(old_manifest)\n    _need(\n        fresh_read_native_index(\n",
           "before_fragment": "        old_reference[\"result_sha256\"] == record[\"old\"][\"result_sha256\"]\n        and old_reference[\"state_sha256\"] == record[\"old\"][\"state_sha256\"],\n        \"old predecessor changed\",\n    )\n    _old_native_terminal(old_manifest)\n    host._lane_absent()\n    inspection = _old_custody_quiet(old_manifest)\n    _need(\n        fresh_read_native_index(\n"
         },
         {
@@ -91,25 +127,45 @@
           "before_fragment": "        _need(locked_old_manifest == old_manifest, \"old manifest changed under locks\")\n        _locked_state_path, _locked_state_raw, old_doc = _pinned_object(\n            old_state, record[\"old\"][\"state_sha256\"], \"old campaign state\"\n        )\n        if failed_before_pipeline:\n            locked_reference = _failed_before_pipeline_reference(\n                old_manifest_path, old_state, old_worker_id\n            )\n        else:\n"
         },
         {
-          "after_fragment": "            locked_reference[\"result_sha256\"] == record[\"old\"][\"result_sha256\"]\n            and locked_reference[\"state_sha256\"] == record[\"old\"][\"state_sha256\"],\n            \"old predecessor changed under locks\",\n        )\n        (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(\n            locked_old_manifest\n        )\n        host._lane_absent()\n        _need(\n            _old_custody_quiet(locked_old_manifest) == inspection,\n            \"old custody changed under locks\",\n",
+          "after_fragment": "            locked_reference[\"result_sha256\"] == record[\"old\"][\"result_sha256\"]\n            and locked_reference[\"state_sha256\"] == record[\"old\"][\"state_sha256\"],\n            \"old predecessor changed under locks\",\n        )\n        if generic_pre_effect:\n            _need(\n                locked_reference.get(\"forensic\") == record[\"old\"].get(\"diagnostic\"),\n                \"generic pre-effect forensic evidence changed under locks\",\n            )\n        (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(\n            locked_old_manifest\n        )\n        host._lane_absent()\n        _need(\n            _old_custody_quiet(locked_old_manifest) == inspection,\n            \"old custody changed under locks\",\n",
           "before_fragment": "            locked_reference[\"result_sha256\"] == record[\"old\"][\"result_sha256\"]\n            and locked_reference[\"state_sha256\"] == record[\"old\"][\"state_sha256\"],\n            \"old predecessor changed under locks\",\n        )\n        _old_native_terminal(locked_old_manifest)\n        host._lane_absent()\n        _need(\n            _old_custody_quiet(locked_old_manifest) == inspection,\n            \"old custody changed under locks\",\n"
         }
       ],
       "outside_reviewed_changes_ast_sha256": "2adbec40abb64448d4c6ad3d83f4a3267904ae14af6ef6b48c88df09f4023ed1"
     },
     "closer_operational_capacity.py": {
-      "after_file_sha256": "70251ad95969b1e42ad8bc6754caa74b72ad29c1408c4d5f6c44da343a814358",
-      "after_module_ast_sha256": "3530aa1681ae70cec65ee110e58db804d66ade16239806db4758bc957f4d8e49",
+      "after_file_sha256": "4fb01f07492ad8aa7ad24144e0a6e72d036fb2a3c637535a8f4605e95a81b24b",
+      "after_module_ast_sha256": "685993fa59e267ec2eaf8a2dff22f0352a307afef778ab2e3be9a52d87a84c94",
       "before_file_sha256": "0a863466e7186b01b46b2c26dc857fcb30bc78387d64e7834af65df353949214",
       "before_module_ast_sha256": "a3d67cc3903dd09cf9147e901352969d5b0303375688f27afc570786fd8ce627",
       "constant_delta": {},
       "function_delta": {
+        "_AdmittedCapacityReport": {
+          "after": "e82b34b7527f18b472db8d6e37d87f3bc9b92abee60aa89ee5d7c5cf76d5dbba",
+          "before": null
+        },
+        "_admitted_report": {
+          "after": "0b80a8aed60e89c0fd8c5cdcbe4753a9425253f27bceb0175d1ce9e3950ec4ab",
+          "before": null
+        },
+        "_evaluate": {
+          "after": "18926bfbe04f2c283789e5c53d1445de058abd2c587b0ac0dc9e34a8eca7dd9c",
+          "before": null
+        },
         "_report_snapshot_valid": {
           "after": "bb9e9c81e229acf174e595d75cfb1c008df2ccb65900d506a5e25557d960c3ca",
           "before": null
         },
+        "declared_profile_ids": {
+          "after": "873c4693e9bf9f8bab9b89300f96a84d200ab05bdfed05ed3657ada98d997518",
+          "before": "20c18ba023f5fbd0fbe19fc3d628e57afd818c2165ead5a84bd56825d693700f"
+        },
+        "evaluate": {
+          "after": "d68612319177d822796d64adb7522746f4c83d38e7aa6d077df2ef23c8afc27e",
+          "before": "2d59a4d9b7b691e91482472e007202b37e1ffe529678df5b7896939daff091a1"
+        },
         "validate_admitted_report": {
-          "after": "278ec56d72441f697a9460cdf28b579c9db01236cb5c376db5991ff09eb8c210",
+          "after": "7f449441e11deb402afadcf2525a5bde6f8ae364b8e17a79db79f5d54df37fe2",
           "before": null
         },
         "validate_report": {
@@ -119,7 +175,19 @@
       },
       "historical_reversal": [
         {
-          "after_fragment": "        **projection,\n    )\n\n\ndef _report_snapshot_valid(report: dict, *, now: float) -> bool:\n    \"\"\"Validate the immutable report snapshot apart from host inputs that may refresh.\"\"\"\n    if not isinstance(report, dict):\n        return False\n    deadline = report.get(\"original_deadline\")\n    return bool(\n",
+          "after_fragment": "\n\nclass CapacityError(ValueError):\n    pass\n\n\nclass _AdmittedCapacityReport(dict):\n    \"\"\"A report whose path, bytes, and signed native admission are rechecked on use.\"\"\"\n\n    _admitted_path: str\n    _admitted_sha256: str\n\n\ndef _admitted_report(report: dict, *, path: Path, sha256: str) -> dict:\n    value = _AdmittedCapacityReport(report)\n    value._admitted_path = str(path)\n    value._admitted_sha256 = sha256\n    return value\n\n\ndef _sha(raw: bytes) -> str:\n    return hashlib.sha256(raw).hexdigest()\n",
+          "before_fragment": "\n\nclass CapacityError(ValueError):\n    pass\n\n\ndef _sha(raw: bytes) -> str:\n    return hashlib.sha256(raw).hexdigest()\n"
+        },
+        {
+          "after_fragment": "    except (OSError, ValueError):\n        return False\n\n\ndef _evaluate(config: dict, *, now: float | None = None, admitted_profile_ids=None) -> dict:\n    now = time.time() if now is None else now\n    deadline = config.get(\"original_deadline\")\n    if config.get(\"schema\") != SCHEMA or not _number(deadline) or not now < deadline <= now + 900:\n        raise CapacityError(\"original bounded round deadline required (maximum 900 seconds)\")\n    owner = config.get(\"owner\")\n    if not isinstance(owner, str) or not re.fullmatch(r\"[A-Za-z0-9_-]{8,100}\", owner):\n        raise CapacityError(\"explicit publication owner required\")\n    requested = config.get(\"profile_ids\") if admitted_profile_ids is None else admitted_profile_ids\n    control_plane_only = config.get(\"control_plane_only\", False)\n    if type(control_plane_only) is not bool:\n        raise CapacityError(\"control-plane qualification must be explicit\")\n    if (\n",
+          "before_fragment": "    except (OSError, ValueError):\n        return False\n\n\ndef evaluate(config: dict, *, now: float | None = None) -> dict:\n    now = time.time() if now is None else now\n    deadline = config.get(\"original_deadline\")\n    if config.get(\"schema\") != SCHEMA or not _number(deadline) or not now < deadline <= now + 900:\n        raise CapacityError(\"original bounded round deadline required (maximum 900 seconds)\")\n    owner = config.get(\"owner\")\n    if not isinstance(owner, str) or not re.fullmatch(r\"[A-Za-z0-9_-]{8,100}\", owner):\n        raise CapacityError(\"explicit publication owner required\")\n    requested = config.get(\"profile_ids\")\n    control_plane_only = config.get(\"control_plane_only\", False)\n    if type(control_plane_only) is not bool:\n        raise CapacityError(\"control-plane qualification must be explicit\")\n    if (\n"
+        },
+        {
+          "after_fragment": "    if expected != _sha(Path(__file__).read_bytes()):\n        raise CapacityError(\"producer is outside pinned Runtime closure\")\n    agents: dict[str, Any] = {}\n    inputs: dict[str, str | None] = {}\n    observed_agents = (\n        () if control_plane_only else (selected_agents if admitted_profile_ids else AGENTS)\n    )\n    for agent in observed_agents:\n        marker_path = shed_dir / agent\n        if marker_path.is_symlink():\n            raise CapacityError(\"shed marker symlink refused\")\n        before = _raw(marker_path)\n",
+          "before_fragment": "    if expected != _sha(Path(__file__).read_bytes()):\n        raise CapacityError(\"producer is outside pinned Runtime closure\")\n    agents: dict[str, Any] = {}\n    inputs: dict[str, str | None] = {}\n    for agent in (() if control_plane_only else AGENTS):\n        marker_path = shed_dir / agent\n        if marker_path.is_symlink():\n            raise CapacityError(\"shed marker symlink refused\")\n        before = _raw(marker_path)\n"
+        },
+        {
+          "after_fragment": "        **projection,\n    )\n\n\ndef evaluate(config: dict, *, now: float | None = None) -> dict:\n    \"\"\"Produce a complete current report for strict generic consumers.\"\"\"\n    return _evaluate(config, now=now)\n\n\ndef _report_snapshot_valid(report: dict, *, now: float) -> bool:\n    \"\"\"Validate the immutable report snapshot apart from host inputs that may refresh.\"\"\"\n    if not isinstance(report, dict):\n        return False\n    deadline = report.get(\"original_deadline\")\n    return bool(\n",
           "before_fragment": "        **projection,\n    )\n\n\ndef validate_report(report: dict, *, now: float) -> bool:\n    if not isinstance(report, dict):\n        return False\n    deadline = report.get(\"original_deadline\")\n    return bool(\n"
         },
         {
@@ -127,11 +195,15 @@
           "before_fragment": "        )\n        and len(set(report[\"profile_ids\"])) == len(report[\"profile_ids\"])\n        and set(report[\"profile_ids\"]) == set(report.get(\"profiles\", {}))\n        and all(execution_profiles.get_profile(key) for key in report[\"profile_ids\"])\n        and (\n            (\n                report.get(\"control_plane_only\") is True\n                and report.get(\"input_sha256\") == {}\n"
         },
         {
-          "after_fragment": "                and _operational_inputs_match(report.get(\"input_sha256\"), report[\"profile_ids\"])\n            )\n        )\n    )\n\n\ndef validate_admitted_report(\n    report: dict,\n    *,\n    now: float,\n    policy: dict,\n    runtime_manifest: str,\n    runtime_manifest_sha256: str,\n) -> bool:\n    \"\"\"Recheck an admitted model scope against current bounded provider facts.\n\n    A signed admission keeps its original report bytes and scope.  A routine\n    poll refresh must not invalidate that snapshot solely by changing a hash,\n    but a newly observed hold, exhaustion, denial, or unusable metric remains\n    fail-closed before work may continue.\n    \"\"\"\n    if (\n        not _report_snapshot_valid(report, now=now)\n        or report.get(\"control_plane_only\", False) is not False\n        or not isinstance(policy, dict)\n        or report.get(\"owner\") != policy.get(\"owner\")\n        or report.get(\"profile_ids\") != policy.get(\"profile_ids\")\n        or report.get(\"runtime_manifest_sha256\") != runtime_manifest_sha256\n    ):\n        return False\n    try:\n        original_states = [\n            report[\"profiles\"][profile_id][\"state\"] for profile_id in report[\"profile_ids\"]\n        ]\n        if not all(isinstance(state, str) for state in original_states):\n            return False\n        # An already quota-shed signed scope has no model admission to refresh.\n        # Keep its existing byte-for-byte host-input fence; it can never acquire\n        # a model merely because a later observation is more favorable.\n        if all(state not in {\"ok\", \"warn\"} for state in original_states):\n            return all(state == \"shed\" for state in original_states) and validate_report(\n                report, now=now\n            )\n        current = evaluate(\n            {\n                \"schema\": SCHEMA,\n                \"owner\": policy[\"owner\"],\n                \"original_deadline\": report[\"original_deadline\"],\n                \"profile_ids\": report[\"profile_ids\"],\n                \"bounded_trial_agents\": policy[\"bounded_trial_agents\"],\n                \"runtime_manifest\": runtime_manifest,\n                \"runtime_manifest_sha256\": runtime_manifest_sha256,\n            },\n            now=now,\n        )\n        selected = {\n            execution_profiles.get_profile(profile_id)[\"agent\"]\n            for profile_id in report[\"profile_ids\"]\n        }\n        return all(current[\"agents\"][agent][\"state\"] in {\"ok\", \"warn\"} for agent in selected)\n    except (CapacityError, KeyError, OSError, TypeError, ValueError):\n        return False\n\n\ndef publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:\n    \"\"\"Distinct output only; lock+owner+CAS prevent competing scoped producers.\"\"\"\n",
+          "after_fragment": "                and _operational_inputs_match(report.get(\"input_sha256\"), report[\"profile_ids\"])\n            )\n        )\n    )\n\n\ndef validate_admitted_report(\n    report: dict,\n    *,\n    now: float,\n    policy: dict,\n    runtime_manifest: str,\n    runtime_manifest_sha256: str,\n) -> bool:\n    \"\"\"Recheck an admitted model scope against current bounded provider facts.\n\n    A signed admission keeps its original report bytes and scope.  A routine\n    poll refresh must not invalidate that snapshot solely by changing a hash,\n    but a newly observed hold, exhaustion, denial, or unusable metric remains\n    fail-closed before work may continue.\n    \"\"\"\n    if (\n        not _report_snapshot_valid(report, now=now)\n        or report.get(\"control_plane_only\", False) is not False\n        or not isinstance(policy, dict)\n        or report.get(\"owner\") != policy.get(\"owner\")\n        or report.get(\"profile_ids\") != policy.get(\"profile_ids\")\n        or report.get(\"runtime_manifest_sha256\") != runtime_manifest_sha256\n    ):\n        return False\n    try:\n        original_states = [\n            report[\"profiles\"][profile_id][\"state\"] for profile_id in report[\"profile_ids\"]\n        ]\n        if not all(isinstance(state, str) for state in original_states):\n            return False\n        # An already quota-shed signed scope has no model admission to refresh.\n        # Keep its existing byte-for-byte host-input fence; it can never acquire\n        # a model merely because a later observation is more favorable.\n        if all(state not in {\"ok\", \"warn\"} for state in original_states):\n            return all(state == \"shed\" for state in original_states) and validate_report(\n                report, now=now\n            )\n        admitted_profile_ids = [\n            profile_id\n            for profile_id, state in zip(report[\"profile_ids\"], original_states, strict=True)\n            if state in {\"ok\", \"warn\"}\n        ]\n        current = _evaluate(\n            {\n                \"schema\": SCHEMA,\n                \"owner\": policy[\"owner\"],\n                \"original_deadline\": report[\"original_deadline\"],\n                \"profile_ids\": admitted_profile_ids,\n                \"bounded_trial_agents\": policy[\"bounded_trial_agents\"],\n                \"runtime_manifest\": runtime_manifest,\n                \"runtime_manifest_sha256\": runtime_manifest_sha256,\n            },\n            now=now,\n            admitted_profile_ids=admitted_profile_ids,\n        )\n        selected = {\n            execution_profiles.get_profile(profile_id)[\"agent\"]\n            for profile_id in admitted_profile_ids\n        }\n        return all(current[\"agents\"][agent][\"state\"] in {\"ok\", \"warn\"} for agent in selected)\n    except (CapacityError, KeyError, OSError, TypeError, ValueError):\n        return False\n\n\ndef publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:\n    \"\"\"Distinct output only; lock+owner+CAS prevent competing scoped producers.\"\"\"\n",
           "before_fragment": "                and _operational_inputs_match(report.get(\"input_sha256\"), report[\"profile_ids\"])\n            )\n        )\n    )\n\n\ndef publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:\n    \"\"\"Distinct output only; lock+owner+CAS prevent competing scoped producers.\"\"\"\n"
+        },
+        {
+          "after_fragment": "    \"\"\"\n    if not isinstance(report, dict) or report.get(\"schema\") != SCHEMA:\n        return None\n    try:\n        if isinstance(report, _AdmittedCapacityReport):\n            try:\n                import closer_native_observer as native\n\n                if not native.revalidate_admitted_capacity_report(report):\n                    return ()\n            except (KeyError, TypeError, ValueError, OSError, OverflowError):\n                return ()\n        elif not validate_report(report, now=time.time()):\n            return ()\n    except (KeyError, TypeError, ValueError, OSError, OverflowError):\n        return ()\n    return tuple(report[\"profile_ids\"])\n",
+          "before_fragment": "    \"\"\"\n    if not isinstance(report, dict) or report.get(\"schema\") != SCHEMA:\n        return None\n    try:\n        if not validate_report(report, now=time.time()):\n            return ()\n    except (KeyError, TypeError, ValueError, OSError, OverflowError):\n        return ()\n    return tuple(report[\"profile_ids\"])\n"
         }
       ],
-      "outside_reviewed_changes_ast_sha256": "94affc8d43ea8c03a5e1911842a9cc0bd520e6e8b8e69f4df71c69ba8460040a"
+      "outside_reviewed_changes_ast_sha256": "2fce530523ee4fcef2140e4738b37049254e5530e299c5c95e2300f988856f7f"
     }
   },
   "schema": "native-capacity-pre-effect-recovery-successor/v1",

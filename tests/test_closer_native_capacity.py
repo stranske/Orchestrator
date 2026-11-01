@@ -99,7 +99,9 @@ def publish(fixture):
     return native.publish_admission(manifest, path, obj.path, doc)
 
 
-def test_two_normal_invocations_preserve_old_assignment_report_and_original_window(capacity_host):
+def test_two_normal_invocations_preserve_old_assignment_report_and_original_window(
+    capacity_host, monkeypatch
+):
     manifest, path, obj, doc, source, clock, invocation = capacity_host
     poll = Path.home() / ".codex/orchestrator/usage-poll/claude-usage.json"
     poll.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +142,11 @@ def test_two_normal_invocations_preserve_old_assignment_report_and_original_wind
     # A new, still-allowed poll must not revoke this exact signed admission.
     assert not scoped.validate_report(native._read(paths[1]), now=clock[0])
     assert native.validate_admission(manifest, first, for_effects=True) == first
+    monkeypatch.setenv("CLOSER_CAPACITY_REPORT", first["report"]["path"])
+    consumed = closer_dispatcher._fresh_capacity_report()
+    assert consumed is not None
+    assert scoped.declared_profile_ids(consumed) == ("claude-sonnet-5-5-low",)
+    assert closer_dispatcher._pipeline_capacity()["low"] == 1
     exhausted = json.loads(poll.read_text())
     exhausted["weekly"]["used_percent"] = 100
     poll.write_text(json.dumps(exhausted))
