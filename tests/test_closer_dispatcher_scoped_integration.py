@@ -148,6 +148,8 @@ def test_actual_cli_named_stop_and_no_legacy_fallback(tmp_path):
         verdict = json.loads(result.stdout)
         assert result.returncode == 78 and not verdict["valid"]
         assert expected in verdict["reasons"][0]
+        if not round_args:
+            assert verdict["required_round_id"] == receipt["round_id"]
     valid = subprocess.run(
         [sys.executable, str(CLI), *receipt["action_c"]["validate_stop_args"]],
         capture_output=True,
@@ -637,6 +639,76 @@ def test_quota_capacity_snapshot_blocks_both_shared_pool_aliases(tmp_path, monke
         deadline=time.time() + 3,
     )
     assert value == profile_id and actual == selected
+
+
+def test_validate_stop_without_round_id_uses_pipeline_validator_when_scoped_root_is_stale(
+    tmp_path,
+):
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    current_run = "current-pipeline-run"
+    pipeline._save(
+        pipeline_path,
+        {
+            "schema": pipeline.SCHEMA,
+            "runs": {
+                current_run: {
+                    "created": 2000.0,
+                    "deadline": 2500.0,
+                    "assignment": ["o/r#1"],
+                    "targets": {"o/r#1": {"status": "completed", "stage": "act"}},
+                }
+            },
+            "carry": {},
+        },
+    )
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    stale_round = "b" * 32
+    resources.write_round_receipt(
+        root,
+        {
+            "schema": "closer-pipeline-receipt/v1",
+            "mode": "resource_scoped",
+            "round_id": stale_round,
+            "run_ids": {"o/r#1": "older-pipeline-run"},
+            "shards": {"o/r#1": resources.shard_dir(root, "o/r#1").name},
+            "deadline": 1500.0,
+            "elapsed_seconds": 1.0,
+            "finished_at": 1000.0,
+            "assignment": ["o/r#1"],
+            "carry_targets": [],
+            "targets": {"o/r#1": {"status": "completed"}},
+            "scoped": {
+                "contract": resources.CONTRACT_SCHEMA,
+                "layout": resources.LAYOUT,
+                "fenced_targets": [],
+                "lease_wait_seconds": {},
+                "max_lease_wait_seconds": 0.0,
+                "completed": ["o/r#1"],
+                "unknown_reservations": {},
+                "unknown_reservations_drainable": 0,
+            },
+        },
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert "scoped_round_id_required" not in verdict.get("reasons", [])
+    assert verdict.get("scoped_root_stale") is True
+    assert verdict.get("newest_scoped_round_id") == stale_round
+    assert verdict.get("validator") == "closer_pipeline.validate_stop"
 
 
 def test_incompatible_contract_fences_legacy_even_for_disjoint_target(tmp_path):

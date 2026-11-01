@@ -69,6 +69,67 @@ def _pipeline_state_path(state_path, *, shadow=False):
     return Path(str(state_path) + suffix)
 
 
+def _newest_pipeline_run(pipeline_path: Path) -> tuple[str | None, float]:
+    import closer_pipeline as cp
+
+    try:
+        state = cp._load(pipeline_path)
+    except (OSError, ValueError):
+        return None, 0.0
+    runs = state.get("runs")
+    if not isinstance(runs, dict) or not runs:
+        return None, 0.0
+    best_id = None
+    best_created = -1.0
+    for run_id, run in runs.items():
+        if isinstance(run, dict):
+            created = float(run.get("created", 0))
+            if created > best_created:
+                best_created = created
+                best_id = run_id
+    return best_id, best_created
+
+
+def _scoped_round_summaries(root: Path) -> list[tuple[str, float, dict[str, str]]]:
+    import closer_resources as cr
+
+    rounds_dir = root / "rounds"
+    if not rounds_dir.is_dir():
+        return []
+    summaries: list[tuple[str, float, dict[str, str]]] = []
+    for path in sorted(rounds_dir.glob("*.json")):
+        try:
+            receipt, _ = cr.read_round_receipt(path)
+        except (OSError, ValueError):
+            continue
+        round_id = receipt.get("round_id")
+        if not isinstance(round_id, str):
+            continue
+        finished = float(receipt.get("finished_at", 0))
+        run_ids = receipt.get("run_ids")
+        if not isinstance(run_ids, dict):
+            run_ids = {}
+        summaries.append((round_id, finished, {k: v for k, v in run_ids.items() if isinstance(v, str)}))
+    return summaries
+
+
+def _scoped_round_for_pipeline_run(root: Path, pipeline_run_id: str | None) -> str | None:
+    if not pipeline_run_id:
+        return None
+    for round_id, _finished, run_ids in _scoped_round_summaries(root):
+        if pipeline_run_id in run_ids.values():
+            return round_id
+    return None
+
+
+def _newest_scoped_round(root: Path) -> tuple[str | None, float]:
+    summaries = _scoped_round_summaries(root)
+    if not summaries:
+        return None, 0.0
+    round_id, finished, _run_ids = max(summaries, key=lambda row: row[1])
+    return round_id, finished
+
+
 def _initial_dispatch_held(args, error):
     """Project a safe pre-pipeline refusal without exposing child exception text.
 
@@ -10670,16 +10731,40 @@ def main(argv=None):
         pipeline_path = _pipeline_state_path(args.state, shadow=args.shadow)
         import closer_resources
 
-        if args.round_id or closer_resources.scoped_root(pipeline_path).exists():
+        scoped_root_path = closer_resources.scoped_root(pipeline_path)
+        if args.round_id:
             import closer_pipeline
 
-            result = (
-                closer_pipeline.validate_stop_scoped(pipeline_path, args.round_id, targets)
-                if args.round_id
-                else {"valid": False, "stop_valid": False, "reasons": ["scoped_round_id_required"]}
-            )
+            result = closer_pipeline.validate_stop_scoped(pipeline_path, args.round_id, targets)
             print(json.dumps(result, sort_keys=True))
             return 0 if result.get("valid") else 78
+        if scoped_root_path.exists():
+            import closer_pipeline as cp
+
+            newest_run_id, _newest_run_created = _newest_pipeline_run(pipeline_path)
+            current_round_id = _scoped_round_for_pipeline_run(scoped_root_path, newest_run_id)
+            if pipeline_path.is_file() and current_round_id is None:
+                newest_scoped_id, newest_scoped_finished = _newest_scoped_round(scoped_root_path)
+                result = cp.validate_stop(pipeline_path, assignment_targets=targets)
+                result = {
+                    **result,
+                    "scoped_root_stale": True,
+                    "validator": "closer_pipeline.validate_stop",
+                    "newest_scoped_round_id": newest_scoped_id,
+                }
+                if newest_scoped_id is not None:
+                    result["newest_scoped_round_finished_at"] = newest_scoped_finished
+                print(json.dumps(result, sort_keys=True))
+                return 0 if result.get("valid") else 78
+            named_round_id = current_round_id or _newest_scoped_round(scoped_root_path)[0]
+            result = {
+                "valid": False,
+                "stop_valid": False,
+                "reasons": ["scoped_round_id_required"],
+                "required_round_id": named_round_id,
+            }
+            print(json.dumps(result, sort_keys=True))
+            return 78
         if pipeline_path.is_file():
             import closer_pipeline
 
