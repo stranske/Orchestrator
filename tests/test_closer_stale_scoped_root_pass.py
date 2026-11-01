@@ -9,16 +9,86 @@ from pathlib import Path
 
 import closer_stale_scoped_root_pass as grade
 
+MERGED_AT = 1793621234.0
+CHECK_AT = MERGED_AT + 24 * 60 * 60
+CHECK_DATE = "2026-11-03T12:07:14+00:00"
+
 MODULE = Path(__file__).resolve().parents[1] / "src" / "closer_stale_scoped_root_pass.py"
+
+
+def test_missing_merge_timestamp_stays_pending_even_after_old_calendar_deadline():
+    receipt = {"authority": True, "reason": "ok"}
+    for result in (
+        grade.stale_scoped_root_pass_number(receipt, now=CHECK_AT + 86400),
+        grade.grade_receipts([receipt, receipt], now=CHECK_AT + 86400),
+        grade.grade_receipts([], now=CHECK_AT + 86400),
+    ):
+        assert result["status"] == "pending"
+        assert result["check_date"] is None
+        assert result["check_at"] is None
+
+
+def test_merge_time_sets_exact_twenty_four_hour_boundary():
+    # A delayed merge must move the check, including its time of day.
+    merged_at = MERGED_AT + 7 * 86400
+    check_at = merged_at + 86400
+    receipt = {"authority": True, "reason": "ok"}
+    before = grade.stale_scoped_root_pass_number(receipt, now=check_at - 0.25, merged_at=merged_at)
+    at = grade.stale_scoped_root_pass_number(receipt, now=check_at, merged_at=merged_at)
+    assert before["status"] == "pending"
+    assert at["status"] == "pass"
+    assert at["check_at"] == check_at
+    assert at["merged_at"] == merged_at
+    assert at["check_date"] == "2026-11-10T12:07:14+00:00"
+
+
+def test_nonfinite_timestamps_cannot_bypass_check_gate():
+    for merged_at in (True, -1, float("nan"), float("inf"), -float("inf"), 1e300):
+        try:
+            grade.stale_scoped_root_pass_number(
+                {"authority": True}, now=CHECK_AT, merged_at=merged_at
+            )
+        except ValueError as exc:
+            assert "merged_at" in str(exc)
+        else:
+            raise AssertionError(f"invalid merge timestamp accepted: {merged_at}")
+    for now in (float("nan"), float("inf"), -float("inf")):
+        try:
+            grade.grade_receipts([{"authority": True}], now=now, merged_at=MERGED_AT)
+        except ValueError as exc:
+            assert "now" in str(exc)
+        else:
+            raise AssertionError(f"invalid current timestamp accepted: {now}")
+
+
+def test_cli_pending_without_merge_and_refuses_invalid_timestamp(tmp_path):
+    path = tmp_path / "receipt.json"
+    path.write_text(json.dumps({"authority": True}), encoding="utf-8")
+    for extra, expected_status, expected_code in (
+        ([], "pending", 0),
+        (["--merged-at", "nan"], "refused", 78),
+        (["--merged-at", "inf"], "refused", 78),
+        (["--merged-at", "1e300"], "refused", 78),
+        (["--merged-at", str(MERGED_AT), "--now", "nan"], "refused", 78),
+    ):
+        result = subprocess.run(
+            [sys.executable, str(MODULE), str(path), "--now", str(CHECK_AT), *extra],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == expected_code, result.stderr
+        assert json.loads(result.stdout)["status"] == expected_status
 
 
 def test_stale_scoped_root_pass_pending_before_check_date():
     pending = grade.stale_scoped_root_pass_number(
         {"authority": True, "reason": "ok"},
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS - 1,
+        now=CHECK_AT - 1,
+        merged_at=MERGED_AT,
     )
     assert pending["status"] == "pending"
-    assert pending["check_date"] == grade.STALE_SCOPED_ROOT_PASS_CHECK_LABEL
+    assert pending["check_date"] == CHECK_DATE
     assert pending["issue"] == 1050
     assert pending["next_break_issue"] is None
 
@@ -31,7 +101,8 @@ def test_stale_scoped_root_pass_authority_true_passes():
             "blocking_reservations": 11,
             "drainable_reservations": 0,
         },
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
     )
     assert passed["status"] == "pass"
     assert passed["grade_reason"] == "authority true"
@@ -41,7 +112,8 @@ def test_stale_scoped_root_pass_authority_true_passes():
 def test_stale_scoped_root_pass_fails_while_prior_stop_latched():
     failed = grade.stale_scoped_root_pass_number(
         {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
     )
     assert failed["status"] == "fail"
     assert "prior_run_has_no_valid_stop" in failed["grade_reason"]
@@ -55,7 +127,8 @@ def test_stale_scoped_root_pass_other_reason_passes_when_drain_not_stuck():
             "blocking_reservations": 0,
             "drainable_reservations": 0,
         },
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
     )
     assert passed["status"] == "pass"
     assert passed["next_break_issue"] is None
@@ -69,7 +142,8 @@ def test_stale_scoped_root_pass_records_reservation_drain_as_next_break():
             "blocking_reservations": 11,
             "drainable_reservations": 0,
         },
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
     )
     assert nxt["status"] == "next_break"
     assert nxt["next_break_issue"] == 1049
@@ -88,7 +162,7 @@ def test_stale_scoped_root_pass_unmeasured_without_reason():
         {"authority": False, "reason": 12},
     ):
         row = grade.stale_scoped_root_pass_number(
-            receipt, now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS
+            receipt, now=CHECK_AT, merged_at=MERGED_AT
         )
         assert row["status"] == "unmeasured", receipt
 
@@ -102,7 +176,8 @@ def test_stale_scoped_root_pass_ignores_bool_reservation_counts():
             "blocking_reservations": True,
             "drainable_reservations": False,
         },
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
     )
     assert passed["status"] == "pass"
     assert passed["next_break_issue"] is None
@@ -114,7 +189,8 @@ def test_grade_receipts_at_least_one_pass_wins_over_older_failures():
             {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
             {"authority": True, "reason": grade.PRIOR_STOP_LATCH_REASON},
         ],
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
         sources=["old.json", "new.json"],
     )
     assert aggregate["status"] == "pass"
@@ -135,7 +211,8 @@ def test_grade_receipts_next_break_beats_still_latched():
                 "drainable_reservations": 0,
             },
         ],
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
         sources=["latched.json", "drain.json"],
     )
     assert aggregate["status"] == "next_break"
@@ -149,14 +226,15 @@ def test_grade_receipts_all_latched_fails():
             {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
             {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
         ],
-        now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS,
+        now=CHECK_AT,
+        merged_at=MERGED_AT,
     )
     assert aggregate["status"] == "fail"
     assert "all 2 receipt(s) still latched" in aggregate["grade_reason"]
 
 
 def test_grade_receipts_empty_set_unmeasured_after_check_date():
-    empty = grade.grade_receipts([], now=grade.STALE_SCOPED_ROOT_PASS_CHECK_TS)
+    empty = grade.grade_receipts([], now=CHECK_AT, merged_at=MERGED_AT)
     assert empty["status"] == "unmeasured"
     assert empty["receipt_count"] == 0
 
@@ -175,7 +253,9 @@ def test_cli_grades_directory_with_at_least_one_pass(tmp_path):
             str(MODULE),
             str(tmp_path),
             "--now",
-            str(grade.STALE_SCOPED_ROOT_PASS_CHECK_TS),
+            str(CHECK_AT),
+            "--merged-at",
+            str(MERGED_AT),
         ],
         capture_output=True,
         text=True,
@@ -200,7 +280,9 @@ def test_cli_single_receipt_fail_exits_one(tmp_path):
             str(MODULE),
             str(path),
             "--now",
-            str(grade.STALE_SCOPED_ROOT_PASS_CHECK_TS),
+            str(CHECK_AT),
+            "--merged-at",
+            str(MERGED_AT),
         ],
         capture_output=True,
         text=True,

@@ -22,15 +22,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-# Provisional calendar date for merge+24h once #1051 lands on 2026-11-01/02.
-# Revise the label if merge slips past that window.
-STALE_SCOPED_ROOT_PASS_CHECK_TS = int(datetime(2026, 11, 3, tzinfo=timezone.utc).timestamp())
-STALE_SCOPED_ROOT_PASS_CHECK_LABEL = "2026-11-03"
+PASS_CHECK_DELAY_SECONDS = 24 * 60 * 60
 
 PRIOR_STOP_LATCH_REASON = "prior_run_has_no_valid_stop"
 NEXT_BREAK_ISSUE = 1049
@@ -59,20 +57,40 @@ def _reservation_drain_stuck(receipt: Mapping[str, Any]) -> bool:
     return blocking is not None and drainable is not None and blocking > 0 and drainable == 0
 
 
-def stale_scoped_root_pass_number(receipt: Mapping[str, Any] | None, *, now: float | None = None):
+def stale_scoped_root_pass_number(
+    receipt: Mapping[str, Any] | None,
+    *,
+    now: float | None = None,
+    merged_at: float | None = None,
+):
     """Grade a closer coordinator receipt for the #1050 stale-root stop latch.
 
     Does not certify that the receipt came from a post-merge live closer round;
     the owner supplies that provenance when checking merge + 24 h.
+    Without the actual merge timestamp, the grade remains pending.
     """
     import time
 
     stamp = time.time() if now is None else float(now)
+    if not math.isfinite(stamp):
+        raise ValueError("now must be a finite Unix timestamp")
+    check_at = None
+    check_date = None
+    if merged_at is not None:
+        if isinstance(merged_at, bool) or not math.isfinite(merged_at) or merged_at < 0:
+            raise ValueError("merged_at must be a finite nonnegative Unix timestamp")
+        check_at = merged_at + PASS_CHECK_DELAY_SECONDS
+        try:
+            check_date = datetime.fromtimestamp(check_at, timezone.utc).isoformat()
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ValueError("merged_at is outside the supported date range") from exc
     row = receipt if isinstance(receipt, Mapping) else {}
     authority = row.get("authority")
     reason = row.get("reason")
     result = {
-        "check_date": STALE_SCOPED_ROOT_PASS_CHECK_LABEL,
+        "check_date": check_date,
+        "check_at": check_at,
+        "merged_at": merged_at,
         "scope": "receipt_conditions_only",
         "issue": 1050,
         "authority": authority,
@@ -80,10 +98,13 @@ def stale_scoped_root_pass_number(receipt: Mapping[str, Any] | None, *, now: flo
         "blocking_reservations": row.get("blocking_reservations"),
         "drainable_reservations": row.get("drainable_reservations"),
         "status": "pending",
-        "grade_reason": f"check date {STALE_SCOPED_ROOT_PASS_CHECK_LABEL} not reached",
+        "grade_reason": "actual merge timestamp not supplied",
         "next_break_issue": None,
     }
-    if stamp < STALE_SCOPED_ROOT_PASS_CHECK_TS:
+    if check_at is None:
+        return result
+    if stamp < check_at:
+        result["grade_reason"] = f"check date {check_date} not reached"
         return result
 
     if authority is True:
@@ -124,6 +145,7 @@ def grade_receipts(
     receipts: Sequence[Mapping[str, Any] | None],
     *,
     now: float | None = None,
+    merged_at: float | None = None,
     sources: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Grade many coordinator receipts; #1050 passes when at least one clears.
@@ -134,14 +156,14 @@ def grade_receipts(
     """
     graded: list[dict[str, Any]] = []
     for index, receipt in enumerate(receipts):
-        row = stale_scoped_root_pass_number(receipt, now=now)
+        row = stale_scoped_root_pass_number(receipt, now=now, merged_at=merged_at)
         source = None
         if sources is not None and index < len(sources):
             source = sources[index]
         graded.append({"source": source, "grade": row})
 
     if not graded:
-        empty = stale_scoped_root_pass_number(None, now=now)
+        empty = stale_scoped_root_pass_number(None, now=now, merged_at=merged_at)
         empty = dict(empty)
         empty.update(
             scope="receipt_set_at_least_one",
@@ -217,6 +239,12 @@ def main(argv: list[str] | None = None) -> int:
         help="receipt JSON file(s) and/or directories of *.json receipts",
     )
     parser.add_argument(
+        "--merged-at",
+        type=float,
+        default=None,
+        help="actual merge Unix timestamp; grading stays pending until merge + 24 hours",
+    )
+    parser.add_argument(
         "--now",
         type=float,
         default=None,
@@ -225,15 +253,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         receipts, sources = load_receipts_from_paths(args.paths)
+        if len(receipts) == 1:
+            result = stale_scoped_root_pass_number(
+                receipts[0], now=args.now, merged_at=args.merged_at
+            )
+            result = dict(result)
+            result["source"] = sources[0]
+        else:
+            result = grade_receipts(
+                receipts, now=args.now, sources=sources, merged_at=args.merged_at
+            )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "refused", "reason": str(exc)}, sort_keys=True))
         return 78
-    if len(receipts) == 1:
-        result = stale_scoped_root_pass_number(receipts[0], now=args.now)
-        result = dict(result)
-        result["source"] = sources[0]
-    else:
-        result = grade_receipts(receipts, now=args.now, sources=sources)
     print(json.dumps(result, sort_keys=True))
     status = result.get("status")
     if status == "pass":
