@@ -65,8 +65,14 @@ def test_content_addressed_evidence_has_no_personal_paths():
 def test_record_insertion_preserves_observed_model_contract():
     descriptor = closer._controlled_model_contract("closer_exception")
     record = q.ROLE_QUALIFICATIONS[
-        "sonnet-current-role-qualification:5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9"
+        "sonnet-current-role-qualification:3684a85ab6fbd09214c56898b42ee63ac6246d6ea741f615310f0c54b5c90cfe"
     ]
+    profile = execution_profiles.get_profile(record["profile_identity"]["profile_id"])
+    assert (
+        q.qualified_record(profile, q.STRONG_CRITERION_ADJUDICATION, now=record["qualified_at"] + 1)
+        == record
+    )
+    assert not q.is_qualified(profile, q.STRONG_CRITERION_ADJUDICATION, now=record["expires_at"])
     observed = record["production_model_contract"]
     assert (
         observed["contract_sha256"]

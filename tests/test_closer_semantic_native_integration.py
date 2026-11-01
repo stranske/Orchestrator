@@ -10,6 +10,22 @@ import pytest
 from closer_semantic_audit_support import fingerprint, functions, source_path
 
 
+def _historical_pagination_source(filename):
+    """Retain old source-union assertions behind an exact reversible successor."""
+    raw = source_path(filename).read_bytes()
+    if filename != "closer_native_source_upgrade.py":
+        return raw
+    change = support.pagination_historical_role_reference()["files"][filename]
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    for reversal in change["historical_reversal"]:
+        before = reversal["before_fragment"].encode()
+        after = reversal["after_fragment"].encode()
+        assert raw.count(after) == 1
+        raw = raw.replace(after, before, 1)
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def test_native_operational_and_latest_reader_sources_are_exact_reviewed0953():
     for filename, expected in support.integrated_native_source_reference().items():
         assert hashlib.sha256(source_path(filename).read_bytes()).hexdigest() == expected, filename
@@ -18,7 +34,7 @@ def test_native_operational_and_latest_reader_sources_are_exact_reviewed0953():
 def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_module():
     reviewed = support.private_git_environment_reference()
     for filename, change in reviewed["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         successor = (
             support.failed_predecessor_upgrade_reference()["files"].get(filename)
             if filename == "closer_native_source_upgrade.py"
@@ -55,7 +71,7 @@ def test_private_git_successor_changes_only_reviewed_rebase_and_inert_added_modu
 def test_failed_predecessor_upgrade_successor_is_literal_and_top_level_scoped():
     reviewed = support.failed_predecessor_upgrade_reference()
     for filename, change in reviewed["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         successor = (
             support.seed_assessment_upgrade_reference()["files"].get(filename)
             if filename == "closer_native_source_upgrade.py"
@@ -89,7 +105,7 @@ def test_failed_predecessor_upgrade_successor_is_literal_and_top_level_scoped():
 def test_initial_b_observability_successor_is_exact_and_has_no_unreviewed_ast_delta():
     reviewed = support.initial_b_observability_reference()
     for filename, change in reviewed["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         later = (
             support.dispatcher_bytecode_bootstrap_reference()["files"].get(filename)
             if filename == "closer_dispatcher.py"
@@ -136,7 +152,7 @@ def test_dispatcher_bytecode_bootstrap_successor_is_exact_and_top_level_scoped()
 def test_native_command_evidence_successor_changes_only_the_reviewed_parser_and_projection():
     reviewed = support.native_command_evidence_reference()
     for filename, change in reviewed["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         historical = (
             support.historical_clock_readback_reference()
             if filename == "closer_native_source_upgrade.py"
@@ -188,7 +204,7 @@ def test_historical_clock_readback_successor_is_append_only_and_exactly_scoped()
     successor = support.ownership_budget_reference()["files"]["closer_native_source_upgrade.py"]
     assert reviewed["after_file_sha256"] == successor["before_file_sha256"]
     assert reviewed["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
-    raw = source_path("closer_native_source_upgrade.py").read_bytes()
+    raw = _historical_pagination_source("closer_native_source_upgrade.py")
     policy = support.private_git_environment_reference()["files"]["closer_native_source_upgrade.py"]
     failed = support.failed_predecessor_upgrade_reference()["files"][
         "closer_native_source_upgrade.py"
@@ -241,7 +257,7 @@ def test_ownership_budget_successor_preserves_every_unreviewed_ast_family():
         "closer_correction_ownership.py": {"_Reads", "_observation", "collect_ownership"},
     }
     for filename, change in reviewed["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         if filename == "closer_native_source_upgrade.py":
             policy = support.private_git_environment_reference()["files"][filename]
             failed = support.failed_predecessor_upgrade_reference()["files"][filename]
@@ -320,7 +336,7 @@ def test_seed_assessment_upgrade_successor_is_literal_and_top_level_scoped():
     change = support.seed_assessment_upgrade_reference()["files"]["closer_native_source_upgrade.py"]
     successor = support.pagination_successor_reference()["files"]["closer_native_source_upgrade.py"]
     held = support.pagination_held_successor_reference()["files"]["closer_native_source_upgrade.py"]
-    raw = source_path("closer_native_source_upgrade.py").read_bytes()
+    raw = _historical_pagination_source("closer_native_source_upgrade.py")
     assert change["after_file_sha256"] == successor["before_file_sha256"]
     assert change["after_module_ast_sha256"] == successor["before_module_ast_sha256"]
     assert successor["after_file_sha256"] == held["before_file_sha256"]
@@ -330,7 +346,7 @@ def test_seed_assessment_upgrade_successor_is_literal_and_top_level_scoped():
 def test_pagination_successor_is_literal_and_top_level_scoped():
     reviewed = support.pagination_successor_reference()
     for filename, change in reviewed["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         if filename == "closer_native_source_upgrade.py":
             held = support.pagination_held_successor_reference()["files"][filename]
             assert change["after_file_sha256"] == held["before_file_sha256"]
@@ -360,6 +376,23 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
     change = support.pagination_held_successor_reference()["files"][
+        "closer_native_source_upgrade.py"
+    ]
+    raw = _historical_pagination_source("closer_native_source_upgrade.py")
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == change["after_module_ast_sha256"]
+    selected = []
+    for name, delta in change["function_delta"].items():
+        nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+        assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+        selected.extend(nodes)
+    tree.body = [node for node in tree.body if node not in selected]
+    assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+    # Attest the physical successor separately; historical checks above retain
+    # their exact original source bytes, rather than changing old reference pins.
+    change = support.pagination_historical_role_reference()["files"][
         "closer_native_source_upgrade.py"
     ]
     raw = source_path("closer_native_source_upgrade.py").read_bytes()
@@ -556,7 +589,7 @@ def test_controlled_initialization_changes_only_atomic_begin_and_native_demand_g
             ]
             assert change["after_file_sha256"] == successor["before_file_sha256"]
             continue
-        raw = source_path(filename).read_bytes()
+        raw = _historical_pagination_source(filename)
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         top, tree = _top_level_ast(raw)
         assert top == change["after_top_level_ast"]

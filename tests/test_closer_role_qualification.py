@@ -387,12 +387,22 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         )
         == current
     )
+    historical_registry = {
+        key: record
+        for key, record in roles.ROLE_QUALIFICATIONS.items()
+        if record["qualified_at"] <= latest["qualified_at"]
+    }
     post_expiry = max(prior_latest["expires_at"] + 1, latest["qualified_at"] + 1)
     assert renewal["expires_at"] == renewal["qualified_at"] + 86400
     assert prior_latest["expires_at"] == prior_latest["qualified_at"] + 86400
     assert latest["expires_at"] == latest["qualified_at"] + 86400
     assert (
-        roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=post_expiry)
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=post_expiry,
+            records=historical_registry,
+        )
         == latest
     )
     assert (
@@ -400,6 +410,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
             profile,
             roles.STRONG_CRITERION_ADJUDICATION,
             now=latest["qualified_at"] + 1,
+            records=historical_registry,
         )
         == latest
     )
@@ -407,6 +418,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         profile,
         roles.STRONG_CRITERION_ADJUDICATION,
         now=latest["qualified_at"] + 1,
+        records=historical_registry,
     )
     assert selected_now == latest
     support = roles.execution_source_support(
@@ -422,6 +434,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
             profile,
             roles.STRONG_CRITERION_ADJUDICATION,
             now=renewal["expires_at"] + 1,
+            records=historical_registry,
         )
         == latest
     )
@@ -430,6 +443,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
             profile,
             roles.STRONG_CRITERION_ADJUDICATION,
             now=prior_latest["expires_at"] + 1,
+            records=historical_registry,
         )
         == latest
     )
