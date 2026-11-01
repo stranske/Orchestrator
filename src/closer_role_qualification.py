@@ -642,7 +642,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
             "max_output_tokens": 4096,
             "max_prompt_bytes": 65536,
             "max_turns": 1,
-            "model_contract_sha256": "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23",
+            "model_contract_sha256": "bc66f8183ab6d29c4e1f050b49d75239203876fcac0e50a9b2deba44c9d273d6",
             "role": "strong_criterion_adjudication",
             "schema": "closer-data-only-limits/v1",
             "timeout_seconds": 60,
@@ -651,7 +651,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
         "named_criterion_only": True,
         "production_model_contract": {
             "authority": False,
-            "contract_sha256": "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23",
+            "contract_sha256": "bc66f8183ab6d29c4e1f050b49d75239203876fcac0e50a9b2deba44c9d273d6",
             "model_contract": {
                 "acceptance_authority": False,
                 "controller_action_policy": "closer-adjudication-action-policy/v1",
@@ -672,7 +672,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
                 "closer_adjudication_policy.py": "9ecc5df250160104104c561b6bcfbbb35921891e0cbec6cf0f098a924feb15e1",
                 "closer_claude_role_admission.py": "7aaccbdb1a42b8fdec775b27a11199fc572093af80f8c860a909ed56fe1897ae",
                 "closer_data_only_execution.py": "68c9dbac68bcf6ee98b403130b3b008f4412c9f8c8eccf8c2b85021038ad14f2",
-                "closer_dispatcher.py": "23f70fc7b2f248c57514784a5025082e853fac1a1ae1b65c3b97ba14fd56d906",
+                "closer_dispatcher.py": "4c4133c9ee903160c5611f88997c3472c8e1b33921465e7bc95f35d1b4d7cad8",
                 "closer_disposition.py": "a726f59d1376dacb9b78117bbc7071bd67f7c1c3412e885c9fd9c721c309ca9c",
                 "closer_evidence.py": "96bca7b0d0939d77cfcab7c4fe21af4945fa5d0aaff71b67bd14199635ab54a4",
                 "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",

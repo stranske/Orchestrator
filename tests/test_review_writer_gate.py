@@ -77,6 +77,27 @@ def test_skipped_push_is_terminal():
     ]
 
 
+def test_skipped_implementation_child_is_terminal():
+    parent = {"id": 9, "run_attempt": 1, "status": "completed"}
+    skipped_job = {
+        "name": "Run Muse",
+        "status": "completed",
+        "conclusion": "skipped",
+        "steps": [],
+    }
+    assert gate.writer_terminality(
+        "o/r", 106, api(rows([reserve()], [skipped_job], parent=parent))
+    )["terminal"]
+    assert gate.writer_terminality("o/r", 106, api(rows([reserve()], [], parent=parent)))[
+        "terminal"
+    ]
+    assert not gate.writer_terminality(
+        "o/r",
+        106,
+        api(rows([reserve()], [job(status="queued", conclusion=None)], parent=parent)),
+    )["terminal"]
+
+
 def test_attempt_identity_mismatch_blocks():
     data = rows([reserve()])
     data["repos/stranske/Workflows/actions/runs/9/attempts/1"] = {"id": 8, "run_attempt": 1}

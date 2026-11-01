@@ -1,0 +1,30 @@
+{
+  "base_commit": "58618d8a24f8661a97fc0310303cff7ab2415f79",
+  "bridged_qualification_id": "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a",
+  "current_model_contract_sha256": "bc66f8183ab6d29c4e1f050b49d75239203876fcac0e50a9b2deba44c9d273d6",
+  "role_module": {
+    "after_file_sha256": "38715862158728f3752d7b0af457fa285c7f79c1a426e792142dc646d9f00d40",
+    "after_module_ast_sha256": "7588b0621138e781e0a35969d4e47732c63681976544aa86831ad24c4e1d7cc5",
+    "assignment_delta": {
+      "ROLE_QUALIFICATIONS": {
+        "after_ast_sha256": "87dc8f5e4d2100506576032c82d6bf18e379d48c6e93c0f239ee8912145bebd3",
+        "before_ast_sha256": "2c72ae2e281d1e820e2767b8e8b674215ebf1e65b7e5efe31e4ac7b2737a570d",
+        "bridged_record_after_ast_sha256": "c9a7187a7aefbf91d3ca4c87d0c672a989108725b21fb6ac565163df337ec0e6",
+        "bridged_record_before_ast_sha256": "25dc02787d384e2793adb4cf7a705a8a8b65828702072e8bf25bd57428e85695"
+      }
+    },
+    "before_file_sha256": "98c108b75e7af622dbe5a84bc47a6e0ad9f9e01ca939e885aab9ea22871c7d69",
+    "before_module_ast_sha256": "0456fec41b09c3c7aced6007aee1c687cc9d054956dd7cf848fc1b6b90546a73",
+    "historical_reversal": [
+      {
+        "after_fragment": "bc66f8183ab6d29c4e1f050b49d75239203876fcac0e50a9b2deba44c9d273d6",
+        "before_fragment": "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23"
+      },
+      {
+        "after_fragment": "4c4133c9ee903160c5611f88997c3472c8e1b33921465e7bc95f35d1b4d7cad8",
+        "before_fragment": "23f70fc7b2f248c57514784a5025082e853fac1a1ae1b65c3b97ba14fd56d906"
+      }
+    ]
+  },
+  "schema": "reservation-drain-bridge-role-successor/v1"
+}

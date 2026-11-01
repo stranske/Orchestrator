@@ -5372,6 +5372,17 @@ def _pin_pass_number_before_check_date(monkeypatch):
     return real
 
 
+def _pin_pass2_number_before_check_date(monkeypatch):
+    """Keep #1049 pass2 pending on main() receipts; return the real grader."""
+    real = adapter.reservation_drain_pass2_number
+
+    def _pending(receipt, *, now=None):
+        return real(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS - 1)
+
+    monkeypatch.setattr(adapter, "reservation_drain_pass2_number", _pending)
+    return real
+
+
 def test_reservation_drain_pass_number_pending_before_check_date():
     """#898 pass number stays pending before 2026-10-30 while grading reservation half."""
     cleared = adapter.reservation_drain_pass_number(
@@ -5742,6 +5753,293 @@ def test_pipeline_receipt_grades_pass_number_without_budget_admission(
     assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
     assert receipt["reservation_drain_pass"]["status"] == "pending"
     assert grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)["status"] == "pass"
+
+
+def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, monkeypatch):
+    import closer_resources
+
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(_terminal_queue_state(tmp_path)))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline_path.write_text(json.dumps(closer_pipeline._empty()))
+    root = closer_resources.scoped_root(pipeline_path)
+    targets = [TARGET, "stranske/example#2", "stranske/example#3"]
+    for index, target in enumerate(targets):
+        directory = root / "reservations" / f"intent-{index}"
+        directory.mkdir(parents=True)
+        intent = {
+            "at": time.time(),
+            "key": f"key-{index}",
+            "owner": "legacy:dead",
+            "state": "unknown",
+            "target": target,
+        }
+        (directory / "legacy-intent.json").write_text(json.dumps(intent))
+    monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 0.0)
+    zero_budget = adapter._expired_admission_diagnostics(pipeline_path)
+    assert zero_budget["unmeasured_reservations"] == 3
+    assert zero_budget["drainable_reservations"] == 0
+    assert zero_budget["deadlock"] is False
+
+    monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 120.0)
+    observe_calls = {"count": 0}
+
+    def counting_plan(state_path, *, target, observe=None):
+        observe_calls["count"] += 1
+        return {
+            "schema": closer_resources.TERMINAL_RECONCILIATION_SCHEMA,
+            "eligible": False,
+            "advertisements": [],
+            "reasons": ["native_writer_not_terminal:synthetic"],
+            "acceptance_authority": False,
+            "global_stop_authority": False,
+            "effect_retry_authority": False,
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", counting_plan)
+    monkeypatch.setattr(
+        adapter,
+        "GitHub",
+        lambda *, deadline: SimpleNamespace(
+            snapshot=lambda _target: {"revision": "rev-1", "kind": "pr", "state": "MERGED"}
+        ),
+    )
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 3
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 3
+
+
+def test_terminal_plan_cache_does_not_latch_live_owner_refusal(tmp_path, monkeypatch):
+    """Local owner_still_alive plans must not be reused after the owner exits."""
+    import closer_resources as resources
+
+    path, _root = _dead_owner_reservations(tmp_path)
+    core = next(tmp_path.rglob("intent.json"))
+    live = json.loads(core.read_text())
+    live["owner"] = f"{os.getpid()}:123:original"
+    resources._atomic_write(core, live)
+    monkeypatch.setattr(
+        adapter,
+        "GitHub",
+        lambda *, deadline: SimpleNamespace(
+            snapshot=lambda _target: {"revision": "rev-owner", "kind": "pr", "state": "MERGED"}
+        ),
+    )
+    real_plan = resources.plan_terminal_reconciliation
+    plans = []
+
+    def counting_plan(state_path, *, target, observe=None):
+        plans.append(target)
+        return real_plan(state_path, target=target, observe=observe)
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", counting_plan)
+    first = adapter._expired_admission_diagnostics(path)
+    assert first["drainable_reservations"] == 0
+    assert first["reservation_reason_counts"]["owner_still_alive"] == 2
+    assert plans  # live owner still forces a fresh plan call
+    live_calls = len(plans)
+
+    dead = json.loads(core.read_text())
+    dead["owner"] = "99999999:123:original"
+    resources._atomic_write(core, dead)
+    monkeypatch.setattr(resources, "_terminal_remote_observation", _terminal_observation)
+    second = adapter._expired_admission_diagnostics(path)
+    assert len(plans) > live_calls
+    assert second["drainable_reservations"] == second["blocking_reservations"] == 2
+    assert second["deadlock"] is False
+
+
+def test_reservation_drain_pass2_number_pending_before_check_date():
+    """#1049 pass2 stays pending before its check date and does not edit pass1."""
+    cleared = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 11, "drainable_reservations": 11, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS - 1,
+    )
+    assert cleared["status"] == "pending"
+    assert cleared["check_date"] == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    assert cleared["reservation_cleared"] is True
+    failed = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 11, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert failed["status"] == "fail"
+    assert failed["check_date"] == "2026-10-30"
+
+
+def test_reservation_drain_pass2_number_requires_authority_after_check_date():
+    """#1049 pass2: latch clears only with authority true after the check date."""
+    no_authority = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 0, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert no_authority["status"] == "fail"
+    assert no_authority["reservation_cleared"] is True
+    assert "authority" in no_authority["reason"]
+    latch = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 2, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert latch["status"] == "fail"
+    assert latch["reservation_cleared"] is False
+    passed = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 2, "drainable_reservations": 2, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert passed["status"] == "pass"
+    assert passed["check_date"] == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    assert passed["reason"] == "reservation latch cleared with authority"
+    # Failed #898 pass1 row stays fail; pass2 is a separate receipt field.
+    failed_pass1 = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 11, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert failed_pass1["status"] == "fail"
+    assert failed_pass1["check_date"] == "2026-10-30"
+
+
+def test_admitted_pipeline_receipt_grades_pass2_cleared_with_authority(
+    tmp_path, monkeypatch, capsys
+):
+    """#1049 AC: --pipeline receipt with authority true clears pass2 on check date."""
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "completed"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted-pass2",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    _pin_pass_number_before_check_date(monkeypatch)
+    grade2 = _pin_pass2_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == 0 or (
+        receipt["drainable_reservations"] == receipt["blocking_reservations"]
+    )
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass2"]["status"] == "pending"
+    assert (
+        receipt["reservation_drain_pass2"]["check_date"]
+        == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    )
+    assert receipt["reservation_drain_pass2"]["authority"] is True
+    # Failed 2026-10-30 pass1 row remains present and independently graded.
+    assert receipt["reservation_drain_pass"]["check_date"] == "2026-10-30"
+    after_check = grade2(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS)
+    assert after_check["status"] == "pass"
+    assert after_check["reason"] == "reservation latch cleared with authority"
+
+
+def test_admitted_pipeline_receipt_grades_pass2_drainable_equals_blocking(
+    tmp_path, monkeypatch, capsys
+):
+    """#1049 AC OR-branch: authority true + drainable==blocking grades pass2 pass."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    key = "pr:" + TARGET.lower()
+    directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": TARGET.lower(),
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted-pass2-drainable",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda _target: "rev-pass2")
+    _pin_pass_number_before_check_date(monkeypatch)
+    grade2 = _pin_pass2_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 1
+    assert receipt["reservation_drain_pass2"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass2"]["status"] == "pending"
+    graded = grade2(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS)
+    assert graded["status"] == "pass"
+    assert graded["authority"] is True
+    assert graded["reason"] == "reservation latch cleared with authority"
 
 
 def test_core_reserve_records_process_group(tmp_path):
