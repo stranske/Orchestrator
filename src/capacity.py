@@ -157,6 +157,75 @@ def _env_float_or_none(name: str):
 #   COMPUTE lever on a compute-metered seat (router/adapters proposal still open from the 2026-08-01
 #   recheck). No auth-flag change on any CLI this cycle.
 #   See ~/.claude/.../memory/orchestrator_local_build.md.
+# 2026-11-01: all seats re-verified. Again NO cap-VALUE changes (the soft caps / plan_limit below are
+#   local placeholders; still nothing published to swap in). NB the 2026-10-01 cycle's stamp never
+#   reached git (this header read 2026-09-01 in the clone AND the mirror; its findings survive only in
+#   the memory file) — a disk-only edit of a git-canonical file evaporates, so this stamp is COMMITTED.
+#   - gemini = Antigravity AI Pro. MODEL LINEUP CHANGED 2026-10-12..15: Gemini 3.1 Pro, 3.6 and 3.7
+#              Flash were withdrawn from individual plans (Free/Plus/Pro/Ultra; Enterprise keeps them).
+#              Live `agy models` now offers gemini-3.8-flash-{low,medium,high}, gemini-4-argon-{low,
+#              medium,high} and third-party claude-opus-5-5-*/claude-sonnet-5-5-*/gpt-oss-120b-medium.
+#              adapters.MODEL_TIERS was already re-pinned (#616/#618, 2026-10-15/16): cheap/mid = 3.8
+#              Flash, full = Argon High. THE QUOTA SHAPE CHANGED WITH IT: Google (2026-10-15) gives AI
+#              Pro a SEPARATE WEEKLY-ONLY Argon quota on top of the 5h-refreshing Flash quota; the
+#              plans page still says baseline quota is "refreshed every five hours until the weekly
+#              limit is reached" and publishes NO numbers. window="5h+weekly" below therefore stays
+#              right for the SEAT, but the `full` rung now drains a weekly-only bucket: an Argon 429
+#              sheds the WHOLE seat for up to 7 days (observed this cycle: shed until 2026-11-07 "the
+#              provider's stated reset") while the Flash rungs' 5h bucket may be untouched.
+#              PROPOSAL (not applied): shed per bucket (argon vs flash) so cheap/mid stay routable
+#              through an Argon weekly lockout. AI credits still overage-only (Never/Always setting).
+#              Paid tiers now named Pro $19.99 / Ultra 5x $99.99 / Ultra 20x $199.99 (cosmetic).
+#              [antigravity.google/docs/plans; `agy models`; 429-shed authoritative]
+#   - cursor = PLAN LINEUP REPLACED 2026-10-12 ("The X Subscription", sold with Grok + X Premium): new
+#              plans Plus $8 / Premium $30 (4x) / Super $100 (15x) / Ultra $200 (50x) draw ONE pool
+#              that refreshes WEEKLY, and third-party models (Claude/GPT/Gemini) are NOT covered — API
+#              list price from the first request, paid from prepaid credit. THIS seat is LEGACY Pro+
+#              $60: cursor.com/docs/account/pricing/legacy-cursor-plans says legacy plans "keep working
+#              as they are", with TWO MONTHLY pools ("Cursor Models" = Grok 4.5-4.7 + Composer 2.5;
+#              "Other Models" = third-party at API price), no end date, and switching is "optional and
+#              permanent". So window="monthly" + account "cursor-pro-plus" below stay correct; the page
+#              no longer states Pro+ = 3x Pro (only "more of each pool than Pro"). Composer 2.5 is
+#              $0.50/M in, $0.20 cache read, $2.50/M out (Fast $3/$15) — unchanged, so Auto+Composer
+#              stays the cheap lane. `cursor-agent status` prints "Not logged in" on this box, but the
+#              lane authenticates with CURSOR_API_KEY (cursor-lane.sh) and `cursor-agent models` under
+#              that key lists auto + composer-2.5 → lane READY. If the owner ever switches plans this
+#              seat must be re-modeled (weekly window, no third-party cover). [cursor.com/pricing,
+#              cursor.com/docs/account/pricing, .../legacy-cursor-plans]
+#   - codex  = ChatGPT Pro. Pro tiers now $100 / $200 / $500 (Ultrafast only on $500); Plus $20. The
+#              learn.chatgpt.com pricing page still says "Pro plans currently have no five-hour limit"
+#              (model-extracted tail; the help-center articles 403 automated fetchers) → the weekly cap
+#              remains the only binding limit on this seat and window="5h" is kept for the 2026-09-01
+#              reason. Credits purchasable past the limit; Fast mode bills 2.5x, Ultrafast 8x included
+#              usage. GPT-5.5 retired from Codex-with-ChatGPT 2026-10-14. [learn.chatgpt.com/docs/pricing]
+#   - claude = Max $100 (5x Pro, 5h + weekly + a separate Fable weekly at 50% of weekly). The $200 tier
+#              is now sold as "Ultra" (10x Pro weekly, NO 5h limit for verified accounts, $200 API
+#              credit); the Max 20x label is gone from the pricing page. A "wrap-up allowance" is
+#              rolling out (an in-flight turn may finish past a 5h limit, charged to weekly). No dated
+#              limit change since the 2026-09-14 permanent +25%. [support.claude.com 11049741 +
+#              11145838; claude.com/pricing]
+#   - vibe   = Mistral Vibe Pro $14.99 (student $5.99; Team $24.99/user, $50 min) UNCHANGED: "all-day
+#              coding in the CLI, IDE, or on web", fair-use, PAYG overflow "at API rate". NEW on the
+#              pricing page: a Pro-card bullet "$15 /mo in API credits" (a second card shows $25.5) —
+#              card attribution is ambiguous in the markup, so UNVERIFIED; if real, Pro now partly
+#              covers API calls and the aider note above ("Pro does NOT cover API calls") is stale.
+#              Only published number: Flash answers 150/day on Pro. [mistral.ai/pricing]
+#   - aider  = Codestral $0.30/$0.90 per 1M (cached input $0.03), 256K ctx — UNCHANGED per third-party
+#              rate cards (mistral.ai/pricing no longer lists Codestral at all). LANE STILL DOWN:
+#              aider-venv absent and no `aider` on PATH (flagged 2026-10-01, unchanged) while this file
+#              reports aider `ok` (plan 0/2000) — a false-OK no probe here can catch, because
+#              `_unresolvable_tier` needs a model catalog and aider has none. Decision still open:
+#              rebuild the venv or retire aider from router.BACKUP_AGENTS and say so in ORCHESTRATOR.md.
+#   CLI versions this cycle: agy 1.4.12 (was 1.2.14), cursor-agent 2026.10.22-27dcf5f (was
+#   2026.09.28), vibe 2.15.0 (unchanged), codex-cli 0.160.0 (was 0.158.0), claude 2.1.296 (was
+#   2.1.177), ccusage 20.0.11 (unchanged), aider ABSENT. agy 1.4.x keeps every headless flag (-p,
+#   --output-format json|stream-json, --dangerously-skip-permissions, --json-schema, --mode, --sandbox,
+#   --input-format stream-json); --effort now spans low|medium|high|xhigh|max; NEW `finished_reason`
+#   field in json/stream-json results (print_timeout|interrupted|error, absent on a normal finish) —
+#   adapters could use it to tell a truncated offload from a complete one (PROPOSAL, not applied);
+#   1.4.11 adds a Gemini-subscription vs Pay-As-You-Go billing choice at Google Cloud sign-in — keep
+#   the subscription path, PAYG would bill silently. No auth-flag change on any other CLI. No
+#   re-tiering warranted beyond the gemini per-bucket shed proposal above.
 AGENTS = {
     # block_token_limit (optional): projected-tokens ceiling for the active 5h block. Unset =>
     # the seat is OK (usable) and 429-shed is the authoritative limiter; set it (env, from your
