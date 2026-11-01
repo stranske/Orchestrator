@@ -151,6 +151,73 @@ def test_stale_scoped_root_pass_records_reservation_drain_as_next_break():
     assert "drainable 0" in nxt["grade_reason"]
 
 
+def test_partial_reservation_drain_remains_the_next_break():
+    for drainable in (1, 5, 10):
+        result = grade.stale_scoped_root_pass_number(
+            {
+                "authority": False,
+                "reason": "admission_deadline_expired",
+                "blocking_reservations": 11,
+                "drainable_reservations": drainable,
+            },
+            now=CHECK_AT,
+            merged_at=MERGED_AT,
+        )
+        assert result["status"] == "next_break", result
+        assert result["next_break_issue"] == 1049
+        assert f"blocking 11 with drainable {drainable}" in result["grade_reason"]
+
+
+def test_fully_drainable_reservations_allow_stop_latch_clearance():
+    for blocking, drainable in ((0, 0), (11, 11)):
+        result = grade.stale_scoped_root_pass_number(
+            {
+                "authority": False,
+                "reason": "legacy_window_expired_fresh_admission",
+                "blocking_reservations": blocking,
+                "drainable_reservations": drainable,
+            },
+            now=CHECK_AT,
+            merged_at=MERGED_AT,
+        )
+        assert result["status"] == "pass", result
+        assert result["next_break_issue"] is None
+
+
+def test_cli_partial_drain_does_not_claim_a_passing_receipt_set(tmp_path):
+    receipts = (
+        {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
+        {
+            "authority": False,
+            "reason": "admission_deadline_expired",
+            "blocking_reservations": 11,
+            "drainable_reservations": 5,
+        },
+    )
+    for index, receipt in enumerate(receipts):
+        (tmp_path / f"receipt-{index}.json").write_text(json.dumps(receipt), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE),
+            str(tmp_path),
+            "--now",
+            str(CHECK_AT),
+            "--merged-at",
+            str(MERGED_AT),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "next_break"
+    assert payload["next_break_issue"] == 1049
+    assert payload["receipt_count"] == 2
+    assert payload["winning_source"].endswith("receipt-1.json")
+
+
 def test_stale_scoped_root_pass_unmeasured_without_reason():
     for receipt in (
         None,

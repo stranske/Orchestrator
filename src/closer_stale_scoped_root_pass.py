@@ -11,7 +11,8 @@ reservation-drain latch named by #1049.
 
 Next break (not #1050 completion): ``reason`` has left
 ``prior_run_has_no_valid_stop`` but ``blocking_reservations > 0`` with
-``drainable_reservations == 0`` — the successor latch already tracked as #1049.
+``drainable_reservations != blocking_reservations`` — the successor latch already
+tracked as #1049. Partial drainability is still blocked by the runtime gate.
 
 Multi-receipt grade (#1050 AC): after the check date, **at least one** receipt
 that passes (or surfaces the next-break drain latch) clears the stop-latch
@@ -54,7 +55,7 @@ def _nonneg_int(value: Any) -> int | None:
 def _reservation_drain_stuck(receipt: Mapping[str, Any]) -> bool:
     blocking = _nonneg_int(receipt.get("blocking_reservations"))
     drainable = _nonneg_int(receipt.get("drainable_reservations"))
-    return blocking is not None and drainable is not None and blocking > 0 and drainable == 0
+    return blocking is not None and drainable is not None and blocking > 0 and drainable != blocking
 
 
 def stale_scoped_root_pass_number(
