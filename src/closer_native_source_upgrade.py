@@ -955,14 +955,19 @@ def _generic_pre_effect_manifest(path: str | Path) -> tuple[Path, bytes, dict[st
     ):
         # This exact prior reader also failed before instruction publication.
         # Its completed-assessment deadline can expire during the live ACT.
-        prior_invitation_reader = (
+        prior_invitation_producer = modules.get(
+            "closer_correction_source_record.py"
+        ) == "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575" and (
             name == "closer_correction_source_record.py"
-            and modules.get(name)
-            == "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575"
+            or (
+                name == "closer_correction_native_effects.py"
+                and modules.get(name)
+                == "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76"
+            )
         )
         _need(
             modules.get(name) == _sha(host._read(Path(__file__).with_name(name))[1])
-            or prior_invitation_reader,
+            or prior_invitation_producer,
             "old source-selection producer semantics differ",
         )
     return value, raw, doc

@@ -235,7 +235,7 @@ def _payload(request, phase, finding_text, *, raw_findings=_LEGACY_INSTRUCTION):
     return payload
 
 
-def _remaining(request, operation):
+def _remaining(request, operation, *, controller=None):
     declared = datetime.fromisoformat(
         request["original_operation"]["deadline"].replace("Z", "+00:00")
     )
@@ -250,7 +250,20 @@ def _remaining(request, operation):
         and operation["attempts"] == 1,
         "original native effect limits unavailable",
     )
-    seconds = min(declared.timestamp(), deadline) - time.time()
+    effect_deadline = min(declared.timestamp(), deadline)
+    if controller is not None:
+        import closer_correction_source_record as source
+
+        selected_deadline = source._invitation_effect_deadline(controller, request, operation)
+        if selected_deadline is not None:
+            _need(
+                type(selected_deadline) in (int, float)
+                and math.isfinite(selected_deadline)
+                and selected_deadline <= deadline,
+                "current invitation effect deadline unavailable",
+            )
+            effect_deadline = selected_deadline
+    seconds = effect_deadline - time.time()
     _need(seconds >= 2, "original native effect deadline expired")
     return min(15, int(seconds))
 
@@ -382,7 +395,7 @@ def _transport_post(
             finished_callback=finished,
             observation=observation,
             cwd=None,
-            timeout=_remaining(intent["request"], operation),
+            timeout=_remaining(intent["request"], operation, controller=controller),
             output_limit=MAX_RESPONSE,
             stdin=stream,
         )
@@ -567,7 +580,7 @@ def _enrolled(controller, custody, operation, key):
         "native original PR source identity changed",
     )
     _native_writer(controller, operation)
-    _remaining(request, operation)
+    _remaining(request, operation, controller=controller)
     _fresh_ownership(controller, operation, request)
     finding = next(
         (r for r in record["materializer"]["raw_findings"] if r["id"] == request["finding"]["id"]),
@@ -1212,7 +1225,7 @@ def publish_first_instruction_locked(controller, custody, operation, selection):
             "seed_selector": facts["seed_selector"],
             "source_before": source_before,
         }
-        _remaining(request, operation)
+        _remaining(request, operation, controller=controller)
         _native_writer(controller, operation)
         _fresh_ownership(controller, operation, request)
         _source_selection(controller, operation)
@@ -1778,7 +1791,7 @@ def create_source_issue_locked(controller, custody, operation, selection):
             },
         }
         stage = "issue_remaining_before_post"
-        _remaining(request, operation)
+        _remaining(request, operation, controller=controller)
         stage = "issue_post"
         attempted = True
         response, original = _perform_post(controller, custody, operation, intent, plan["payload"])

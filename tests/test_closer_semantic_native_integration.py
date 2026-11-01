@@ -433,14 +433,54 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
     assert fingerprint(tree) == successor["outside_reviewed_changes_ast_sha256"]
 
     for filename, change in support.completed_invitation_read_source_reference()["files"].items():
-        raw = source_path(filename).read_bytes()
-        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
-        assert (
-            hashlib.sha256(
-                support.before_completed_invitation_read_source(raw, filename)
-            ).hexdigest()
-            == change["before_file_sha256"]
-        )
+        after_raw = source_path(filename).read_bytes()
+        before_raw = support.before_completed_invitation_read_source(after_raw, filename)
+        assert hashlib.sha256(after_raw).hexdigest() == change["after_file_sha256"]
+        assert hashlib.sha256(before_raw).hexdigest() == change["before_file_sha256"]
+        before_tree, after_tree = ast.parse(before_raw), ast.parse(after_raw)
+        assert fingerprint(before_tree) == change["before_module_ast_sha256"]
+        assert fingerprint(after_tree) == change["after_module_ast_sha256"]
+        before_top = {
+            node.name: node
+            for node in before_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+        }
+        after_top = {
+            node.name: node
+            for node in after_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+        }
+        removed_before, removed_after = [], []
+        for name, delta in change["function_delta"].items():
+            assert (fingerprint(before_top[name]) if name in before_top else None) == delta[
+                "before"
+            ]
+            assert (fingerprint(after_top[name]) if name in after_top else None) == delta["after"]
+            removed_before.extend([before_top[name]] if name in before_top else [])
+            removed_after.extend([after_top[name]] if name in after_top else [])
+        for name, delta in change["constant_delta"].items():
+            before_nodes = [
+                n
+                for n in before_tree.body
+                if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)
+            ]
+            after_nodes = [
+                n
+                for n in after_tree.body
+                if isinstance(n, ast.Assign)
+                and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)
+            ]
+            assert len(before_nodes) <= 1 and len(after_nodes) <= 1
+            assert (fingerprint(before_nodes[0]) if before_nodes else None) == delta["before"]
+            assert (fingerprint(after_nodes[0]) if after_nodes else None) == delta["after"]
+            removed_before.extend(before_nodes)
+            removed_after.extend(after_nodes)
+        before_tree.body = [node for node in before_tree.body if node not in removed_before]
+        after_tree.body = [node for node in after_tree.body if node not in removed_after]
+        assert fingerprint(before_tree) == change["before_outside_reviewed_changes_ast_sha256"]
+        assert fingerprint(after_tree) == change["after_outside_reviewed_changes_ast_sha256"]
+        assert fingerprint(before_tree) == fingerprint(after_tree)
 
     for filename, change in support.capacity_pre_effect_recovery_reference()["files"].items():
         raw = source_path(filename).read_bytes()

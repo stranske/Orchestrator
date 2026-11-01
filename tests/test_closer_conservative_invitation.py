@@ -3,7 +3,10 @@
 import copy
 import hashlib
 import json
+import os
+import threading
 import time
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,13 +18,16 @@ from test_closer_conservative_intake import world as world
 
 import closer_conservative_intake as intake
 import closer_correction_bridge as bridge
+import closer_correction_controller as controller_source
 import closer_correction_enrollment_terminal as enrollment
 import closer_correction_maintenance as maintenance
+import closer_correction_native_effects as native_effects
 import closer_correction_ownership as ownership
 import closer_correction_source_record as source_record
 import closer_dispatcher as closer
 import closer_execution_contracts as contracts
 import closer_pipeline as pipeline
+import closer_queue as queue
 import closer_resources as resources
 import dispatcher
 from closer_frontier_policy import action_identity, make_frontier
@@ -373,7 +379,6 @@ def test_one_actual_inert_strong_and_cold_invitation_readback(
         with source_record._invitation_reader_scope(live_context, installation):
             pass
     record_for_candidate, intent_for_candidate = copy.deepcopy(record), copy.deepcopy(values[5])
-    record_for_candidate["owner_semantics_sha256"] = "synthetic-digest"
 
     def local_facts(_context, _ref):
         assert (
@@ -416,7 +421,6 @@ def test_one_actual_inert_strong_and_cold_invitation_readback(
         )
 
     original = intent_for_candidate["original_request"]
-    monkeypatch.setattr(source_record, "_local_facts", local_facts)
     monkeypatch.setattr(
         source_record,
         "_qualified_owner_projection",
@@ -429,11 +433,119 @@ def test_one_actual_inert_strong_and_cold_invitation_readback(
             {},
         ),
     )
-    monkeypatch.setattr(bridge, "_owner_semantic_digest", lambda *_args: "synthetic-digest")
+    monkeypatch.setattr(
+        bridge,
+        "_owner_semantic_digest",
+        lambda *_args: record["owner_semantics_sha256"],
+    )
+    original_deadline = datetime.fromisoformat(
+        original["original_operation"]["deadline"].replace("Z", "+00:00")
+    ).timestamp()
+    monkeypatch.setattr(source_record, "time", SimpleNamespace(time=lambda: original_deadline + 1))
+    real_candidate = source_record.candidate_for_original_act(
+        context=live_context, installation=installation
+    )
+    assert type(real_candidate) is source_record.SourceCandidate
+    monkeypatch.setattr(source_record, "_local_facts", local_facts)
     candidate = source_record.candidate_for_original_act(
         context=live_context, installation=installation
     )
     assert type(candidate) is source_record.SourceCandidate
+
+    # The completed provider proof remains historical evidence; its expired
+    # assessment deadline must not shorten this sealed, still-live ACT's POST
+    # transport window. The resolver is real; this fixture supplies only the
+    # already-controlled live frame/seal boundary rather than an effect.
+    monkeypatch.setattr(source_record, "time", time)
+    native_config = controller_source.ControllerConfig(
+        state_path=str(tmp_path / "controller.json"),
+        repository="stranske/orchestrator",
+        repository_id=1,
+        epoch="a" * 64,
+        bootstrap_source_sha="b" * 40,
+        source_sha="c" * 40,
+        writer_id=1,
+        writer_login="owner",
+        writer_type="User",
+        bootstrap_anchor_sha256="d" * 64,
+        max_bytes=1024,
+        max_entries=1,
+        max_subjects=1,
+    )
+    native_controller = controller_source.IndexController(
+        native_config, request=lambda *_args: None, installation=installation
+    )
+    now = time.time()
+    live_context["deadline"] = now + 20
+    live_row["stage_deadline"] = live_context["deadline"]
+    operation = {
+        "id": "sealed-invitation-effect",
+        "status": "submitted",
+        "action": "disposition",
+        "deadline": now + 10,
+        "attempts": 1,
+        "finite_frontier": live_context["finite_frontier"],
+        "revision": live_context["revision"],
+    }
+    monkeypatch.setattr(native_controller, "live", lambda actual: actual == operation)
+    monkeypatch.setattr(
+        queue._callback_threads,
+        "invocation",
+        {
+            "pid": os.getpid(),
+            "thread": threading.get_ident(),
+            "target": target,
+            "operation": operation,
+            "state_path": live_context["action_state_path"],
+            "now": time.time,
+        },
+        raising=False,
+    )
+    expired_request = copy.deepcopy(original)
+    expired_request["original_operation"]["deadline"] = datetime.fromtimestamp(
+        now - 1, timezone.utc
+    ).isoformat()
+
+    def sealed_selection(context, request_sha256):
+        seal = source_record._SelectionSeal(operation)
+        value = source_record.SourceSelection(
+            candidate._record_ref_json,
+            source_record._json(context),
+            installation,
+            _issuer=seal,
+        )
+        seal.owner = weakref.ref(value)
+        seal.controller = weakref.ref(native_controller)
+        seal.invitation_request_sha256 = request_sha256
+        return value
+
+    selection = sealed_selection(
+        live_context,
+        hashlib.sha256(queue._canonical_bytes(expired_request)).hexdigest(),
+    )
+    native_controller._writer_context.native_selection = selection
+    bounded = native_effects._remaining(expired_request, operation, controller=native_controller)
+    assert 2 <= bounded <= 10
+    with pytest.raises(ValueError, match="deadline expired"):
+        native_effects._remaining(expired_request, operation)
+    with pytest.raises(source_record.SourceRecordUnavailable, match="request differs"):
+        native_effects._remaining(
+            {**expired_request, "finding": {}}, operation, controller=native_controller
+        )
+    native_controller._writer_context.native_selection = object()
+    with pytest.raises(source_record.SourceRecordUnavailable, match="active invitation"):
+        native_effects._remaining(expired_request, operation, controller=native_controller)
+    native_controller._writer_context.native_selection = sealed_selection(live_context, None)
+    with pytest.raises(ValueError, match="deadline expired"):
+        native_effects._remaining(expired_request, operation, controller=native_controller)
+    expired_selection = sealed_selection(
+        {**live_context, "deadline": now - 1},
+        hashlib.sha256(queue._canonical_bytes(expired_request)).hexdigest(),
+    )
+    native_controller._writer_context.native_selection = expired_selection
+    with pytest.raises(source_record.SourceRecordUnavailable, match="current ACT expired"):
+        native_effects._remaining(expired_request, operation, controller=native_controller)
+    del native_controller._writer_context.native_selection
     expired_context = {**live_context, "deadline": time.time() - 1}
     with pytest.raises(source_record.SourceRecordUnavailable, match="current ACT expired"):
         source_record.candidate_for_original_act(context=expired_context, installation=installation)

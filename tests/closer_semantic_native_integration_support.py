@@ -665,7 +665,7 @@ COMPLETED_INVITATION_READ_SOURCE_MANIFEST = (
     / "fixtures/semantic_api_reference/current_completed_invitation_read_source_v1.json"
 )
 COMPLETED_INVITATION_READ_SOURCE_SHA256 = (
-    "8a4c14dcf6b9829421067acc070fa189cb06754e4a82f7bee664cbb98b1ca849"
+    "8a12d6f12bcbde8cf869e1362fb3d8d1e3cceb7654efbd2aff5ea43fe369bbe1"
 )
 
 

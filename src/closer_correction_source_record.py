@@ -661,6 +661,8 @@ class _SelectionSeal:
         self.pid = os.getpid()
         self.thread = threading.get_ident()
         self.operation_sha256 = hashlib.sha256(closer_queue._canonical_bytes(operation)).hexdigest()
+        self.controller = None
+        self.invitation_request_sha256 = None
 
 
 @dataclass(frozen=True)
@@ -1353,6 +1355,11 @@ def _facts(selection, controller, operation):
     controller_source.seed_selector(seed_selector, controller.config.repository)
     _current_act(context, operation, installation)
     controller.live(operation)
+    seal.controller = weakref.ref(controller)
+    if record["schema"] == INVITATION_SCHEMA:
+        seal.invitation_request_sha256 = hashlib.sha256(
+            closer_queue._canonical_bytes(original)
+        ).hexdigest()
     return {
         "request": original,
         "raw_findings": intent["inputs"]["raw_findings"],
@@ -1401,6 +1408,59 @@ def _candidate_context(candidate):
 def validate_for_native_effect(selection, controller, operation):
     """Fixed source API; no passed validator, JSON flag or selfhash grants effects."""
     return _facts(selection, controller, operation)
+
+
+def _invitation_effect_deadline(controller, request, operation):
+    """Return the live bound only for this sealed invitation selection.
+
+    An original invitation's assessment cutoff authenticates the completed
+    provider proof, not a later POST.  This private bridge therefore never
+    accepts a request flag or generic record: it requires the exact live
+    selection that already completed the full source/ownership validation.
+    """
+    import math
+
+    import closer_correction_controller as controller_source
+    import closer_queue
+
+    writer = getattr(controller, "_writer_context", None)
+    selection = getattr(writer, "native_selection", None)
+    if selection is None:
+        return None
+    seal = selection._issuer if type(selection) is SourceSelection else None
+    _need(
+        type(controller) is controller_source.IndexController
+        and type(seal) is _SelectionSeal
+        and seal.owner is not None
+        and seal.owner() is selection
+        and seal.pid == os.getpid()
+        and seal.thread == threading.get_ident()
+        and seal.controller is not None
+        and seal.controller() is controller
+        and seal.operation_sha256
+        == hashlib.sha256(closer_queue._canonical_bytes(operation)).hexdigest(),
+        "active invitation source selection differs",
+    )
+    if seal.invitation_request_sha256 is None:
+        return None
+    _need(
+        type(request) is dict
+        and hashlib.sha256(closer_queue._canonical_bytes(request)).hexdigest()
+        == seal.invitation_request_sha256,
+        "active invitation source request differs",
+    )
+    context = json.loads(selection._pipeline_context_json)
+    current_deadline, operation_deadline = context["deadline"], operation.get("deadline")
+    _need(
+        type(current_deadline) in (int, float)
+        and type(operation_deadline) in (int, float)
+        and math.isfinite(current_deadline)
+        and math.isfinite(operation_deadline),
+        "current invitation effect deadline unavailable",
+    )
+    controller.live(operation)
+    _current_act(context, operation, selection._installation)
+    return min(current_deadline, operation_deadline)
 
 
 # Diagnostic vocabulary only. These fields never grant execution or replay.

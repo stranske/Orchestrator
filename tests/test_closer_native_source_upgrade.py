@@ -156,7 +156,22 @@ def _assert_prior_source_record_producer_closure(tmp_path, monkeypatch):
         modules[name] = hashlib.sha256(prior).hexdigest()
         save()
         upgrade._generic_pre_effect_manifest(manifest)
-        for name in ("closer_correction_source_record.py", "closer_correction_controller.py"):
+        name = "closer_correction_native_effects.py"
+        prior_effects = support.before_completed_invitation_read_source(
+            (root / name).read_bytes(), name
+        )
+        assert hashlib.sha256(prior_effects).hexdigest() == (
+            "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76"
+        )
+        (root / name).write_bytes(prior_effects)
+        modules[name] = hashlib.sha256(prior_effects).hexdigest()
+        save()
+        upgrade._generic_pre_effect_manifest(manifest)
+        for name in (
+            "closer_correction_source_record.py",
+            "closer_correction_native_effects.py",
+            "closer_correction_controller.py",
+        ):
             changed = b"unreviewed producer"
             (root / name).write_bytes(changed)
             modules[name] = hashlib.sha256(changed).hexdigest()
