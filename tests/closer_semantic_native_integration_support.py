@@ -42,6 +42,12 @@ def current_receiver_reference():
     assert current["native_top_level_ast"]["main"] == main["before"]
     current["top_level_ast"]["main"] = main["after"]
     current["native_top_level_ast"]["main"] = main["after"]
+    stale_root = validate_stop_stale_scoped_root_reference()["files"]["closer_dispatcher.py"]
+    stale_main = stale_root["function_delta"]["main"]
+    assert current["top_level_ast"]["main"] == stale_main["before"]
+    assert current["native_top_level_ast"]["main"] == stale_main["before"]
+    current["top_level_ast"]["main"] = stale_main["after"]
+    current["native_top_level_ast"]["main"] = stale_main["after"]
     return current
 
 
@@ -256,6 +262,10 @@ def integrated_native_source_reference():
             )
         else:
             assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
+    for filename, change in validate_stop_stale_scoped_root_reference()["files"].items():
+        assert filename == "closer_dispatcher.py"
+        assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
     for filename, change in source_pre_effect_readmission_reference()["files"].items():
         assert original[filename] == change["before_file_sha256"]
@@ -687,8 +697,57 @@ def before_completed_invitation_read_source(raw, filename):
     return raw
 
 
+def validate_stop_stale_scoped_root_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_validate_stop_stale_scoped_root_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "553ff4f8e1b6a2edd0c97e6d5d05539658a9658fa8aaf6d1874fdadf474d324d"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "native-validate-stop-stale-scoped-root-successor/v1"
+    assert value["base_commit"] == "f9f14efe899f66daa0f10be191999bd75fbdc746"
+    assert {name: set(change["function_delta"]) for name, change in value["files"].items()} == {
+        "closer_dispatcher.py": {
+            "_finite_timestamp",
+            "_newest_pipeline_run",
+            "_newest_scoped_round",
+            "_normalized_assignment",
+            "_scoped_root_is_stale",
+            "_scoped_round_for_pipeline_run",
+            "_scoped_round_summaries",
+            "main",
+        }
+    }
+    assert all(change["constant_delta"] == {} for change in value["files"].values())
+    assert (
+        value["files"]["closer_dispatcher.py"]["before_file_sha256"]
+        == capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"][
+            "after_file_sha256"
+        ]
+    )
+    return value
+
+
+def before_validate_stop_stale_scoped_root_source(raw, filename):
+    """Undo only the exact live validate-stop tip; any other bytes pass through unchanged."""
+    change = validate_stop_stale_scoped_root_reference()["files"].get(filename)
+    if change is None or hashlib.sha256(raw).hexdigest() != change["after_file_sha256"]:
+        return raw
+    for reversal in change["historical_reversal"]:
+        before, after = reversal["before_fragment"].encode(), reversal["after_fragment"].encode()
+        assert raw.count(after) == 1
+        raw = raw.replace(after, before, 1)
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def before_capacity_pre_effect_recovery_source(raw, filename):
     """Keep historical assertions exact beneath separately attested successors."""
+    raw = before_validate_stop_stale_scoped_root_source(raw, filename)
     raw = before_completed_invitation_read_source(raw, filename)
     raw = before_source_pre_effect_readmission_source(raw, filename)
     change = capacity_pre_effect_recovery_reference()["files"].get(filename)
@@ -705,6 +764,9 @@ def before_capacity_pre_effect_recovery_source(raw, filename):
 
 def before_dispatcher_bytecode_bootstrap(source):
     """Undo only the exact sealed-runtime bootstrap successor for old audits."""
+    source = before_validate_stop_stale_scoped_root_source(
+        source.encode(), "closer_dispatcher.py"
+    ).decode()
     capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
         source = before_capacity_pre_effect_recovery_source(
@@ -721,6 +783,9 @@ def before_dispatcher_bytecode_bootstrap(source):
 
 def before_initial_b_observability_dispatcher(source):
     """Reverse only the exact reviewed initial-B dispatcher successor for old audits."""
+    source = before_validate_stop_stale_scoped_root_source(
+        source.encode(), "closer_dispatcher.py"
+    ).decode()
     capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
         source = before_capacity_pre_effect_recovery_source(
@@ -1035,10 +1100,75 @@ def assert_capacity_bridge_role_successor(raw):
     assert fingerprint(tree) == change["before_module_ast_sha256"]
 
 
+def validate_stop_role_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_validate_stop_stale_scoped_root_role_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "7f7d6734feffa27c6e8796873f510f3b4da9adce9885d85756e1ed172722df0f"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "closer-validate-stop-stale-scoped-root-role-successor/v1"
+    assert value["base_commit"] == "f9f14efe899f66daa0f10be191999bd75fbdc746"
+    assert (
+        value["role_module"]["before_file_sha256"]
+        == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
+    )
+    assert (
+        value["role_module"]["before_module_ast_sha256"]
+        == capacity_bridge_role_reference()["role_module"]["after_module_ast_sha256"]
+    )
+    assert set(value["role_module"]["assignment_delta"]) == {
+        "ROLE_QUALIFICATIONS",
+        "ROLE_QUALIFICATION_SUPERSEDES",
+    }
+    return value
+
+
+def assert_validate_stop_role_successor(raw):
+    reference = validate_stop_role_reference()
+    change = reference["role_module"]
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == change["after_module_ast_sha256"]
+    for symbol, delta in change["assignment_delta"].items():
+        node = next(
+            n
+            for n in tree.body
+            if (isinstance(n, ast.AnnAssign) and getattr(n.target, "id", None) == symbol)
+            or (
+                isinstance(n, ast.Assign)
+                and any(getattr(t, "id", None) == symbol for t in n.targets)
+            )
+        )
+        assert fingerprint(node) == delta["after_ast_sha256"]
+        indices = [
+            i
+            for i, key in enumerate(node.value.keys)
+            if isinstance(key, ast.Constant) and key.value == reference["new_qualification_id"]
+        ]
+        assert len(indices) == 1
+        index = indices[0]
+        assert fingerprint(node.value.values[index]) == delta["added_value_ast_sha256"]
+        node.value.keys.pop(index)
+        node.value.values.pop(index)
+        assert fingerprint(node) == delta["before_ast_sha256"]
+    assert fingerprint(tree) == change["before_module_ast_sha256"]
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    if (
+        hashlib.sha256(raw).hexdigest()
+        == validate_stop_role_reference()["role_module"]["after_file_sha256"]
+    ):
+        assert_validate_stop_role_successor(raw)
+        return
     if (
         hashlib.sha256(raw).hexdigest()
         == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
@@ -1375,6 +1505,9 @@ def scoped_capacity_reference():
 
 def before_scoped_capacity_source(source):
     """Undo only exact reviewed capacity bytes before applying older audits."""
+    source = before_validate_stop_stale_scoped_root_source(
+        source.encode(), "closer_dispatcher.py"
+    ).decode()
     source = before_capacity_pre_effect_recovery_source(
         source.encode(), "closer_dispatcher.py"
     ).decode()
