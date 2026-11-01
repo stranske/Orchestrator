@@ -5744,6 +5744,61 @@ def test_pipeline_receipt_grades_pass_number_without_budget_admission(
     assert grade(receipt, now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS)["status"] == "pass"
 
 
+def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, monkeypatch):
+    import closer_resources
+
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(_terminal_queue_state(tmp_path)))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline_path.write_text(json.dumps(closer_pipeline._empty()))
+    root = closer_resources.scoped_root(pipeline_path)
+    targets = [TARGET, "stranske/example#2", "stranske/example#3"]
+    for index, target in enumerate(targets):
+        directory = root / "reservations" / f"intent-{index}"
+        directory.mkdir(parents=True)
+        intent = {
+            "at": time.time(),
+            "key": f"key-{index}",
+            "owner": "legacy:dead",
+            "state": "unknown",
+            "target": target,
+        }
+        (directory / "legacy-intent.json").write_text(json.dumps(intent))
+    monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 0.0)
+    zero_budget = adapter._expired_admission_diagnostics(pipeline_path)
+    assert zero_budget["unmeasured_reservations"] == 3
+    assert zero_budget["drainable_reservations"] == 0
+    assert zero_budget["deadlock"] is False
+
+    monkeypatch.setattr(adapter, "ADMISSION_DIAGNOSTICS_BUDGET_SECONDS", 120.0)
+    observe_calls = {"count": 0}
+
+    def counting_plan(state_path, *, target, observe=None):
+        observe_calls["count"] += 1
+        return {
+            "schema": closer_resources.TERMINAL_RECONCILIATION_SCHEMA,
+            "eligible": False,
+            "advertisements": [],
+            "reasons": ["native_writer_not_terminal:synthetic"],
+            "acceptance_authority": False,
+            "global_stop_authority": False,
+            "effect_retry_authority": False,
+        }
+
+    monkeypatch.setattr(closer_resources, "plan_terminal_reconciliation", counting_plan)
+    monkeypatch.setattr(
+        adapter,
+        "GitHub",
+        lambda *, deadline: SimpleNamespace(
+            snapshot=lambda _target: {"revision": "rev-1", "kind": "pr", "state": "MERGED"}
+        ),
+    )
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 3
+    adapter._expired_admission_diagnostics(pipeline_path)
+    assert observe_calls["count"] == 3
+
+
 def test_core_reserve_records_process_group(tmp_path):
     import closer_resources as resources
 

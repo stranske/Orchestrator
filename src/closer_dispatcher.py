@@ -55,6 +55,9 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 # (blocking 0 or drainable==blocking) with authority true. Check date 2026-10-30.
 RESERVATION_DRAIN_PASS_CHECK_TS = int(datetime(2026, 10, 30, tzinfo=timezone.utc).timestamp())
 RESERVATION_DRAIN_PASS_CHECK_LABEL = "2026-10-30"
+# #1049 pass number: same latch rule as #898, checked three days after merge.
+RESERVATION_DRAIN_PASS2_CHECK_TS = int(datetime(2026, 11, 4, tzinfo=timezone.utc).timestamp())
+RESERVATION_DRAIN_PASS2_CHECK_LABEL = "2026-11-04"
 PIPELINE_ADMISSION_PASS_CHECK_TS = int(datetime(2026, 11, 3, tzinfo=timezone.utc).timestamp())
 PIPELINE_ADMISSION_PASS_CHECK_LABEL = "2026-11-03"
 # A terminal reconciliation plan performs live GitHub reads under its own 120-second
@@ -11507,6 +11510,7 @@ def _main_admitted(args, p, assignment_rows, targets):
                 result["reservation_diagnostics_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
             # Grade the #898 pass number from the printed receipt itself.
             result["reservation_drain_pass"] = reservation_drain_pass_number(result)
+            result["reservation_drain_pass2"] = reservation_drain_pass2_number(result)
         print(json.dumps(result, sort_keys=True))
         return 0 if validation.get("valid") is True else 78
     if not args.apply:
@@ -11722,6 +11726,105 @@ def reservation_drain_pass_number(receipt, *, now=None):
     return result
 
 
+def reservation_drain_pass2_number(receipt, *, now=None):
+    """#1049 pass number: same latch rule as #898 on the post-fix check date."""
+    stamp = time.time() if now is None else float(now)
+    blocking = receipt.get("blocking_reservations")
+    drainable = receipt.get("drainable_reservations")
+    authority = receipt.get("authority")
+    reservation_cleared = (
+        isinstance(blocking, int)
+        and isinstance(drainable, int)
+        and not isinstance(blocking, bool)
+        and not isinstance(drainable, bool)
+        and (blocking == 0 or drainable == blocking)
+    )
+    result = {
+        "check_date": RESERVATION_DRAIN_PASS2_CHECK_LABEL,
+        "blocking_reservations": blocking,
+        "drainable_reservations": drainable,
+        "authority": authority,
+        "reservation_cleared": reservation_cleared,
+        "status": "pending",
+        "reason": f"check date {RESERVATION_DRAIN_PASS2_CHECK_LABEL} not reached",
+    }
+    if stamp < RESERVATION_DRAIN_PASS2_CHECK_TS:
+        return result
+    if not isinstance(blocking, int) or isinstance(blocking, bool):
+        result["status"] = "unmeasured"
+        result["reason"] = "blocking_reservations unread"
+        return result
+    if not isinstance(drainable, int) or isinstance(drainable, bool):
+        result["status"] = "unmeasured"
+        result["reason"] = "drainable_reservations unread"
+        return result
+    if not reservation_cleared:
+        result["status"] = "fail"
+        result["reason"] = f"blocking {blocking} with drainable {drainable}"
+        return result
+    if authority is not True:
+        result["status"] = "fail"
+        result["reason"] = f"authority {authority!r} is not true"
+        return result
+    result["status"] = "pass"
+    result["reason"] = "reservation latch cleared with authority"
+    return result
+
+
+def _admission_terminal_plan_cache_path(pipeline_path):
+    return Path(str(pipeline_path) + ".coordination") / "admission_terminal_plan_cache.json"
+
+
+def _load_admission_terminal_plan_cache(pipeline_path):
+    path = _admission_terminal_plan_cache_path(pipeline_path)
+    try:
+        if path.is_file():
+            payload = json.loads(path.read_text())
+            if isinstance(payload, dict):
+                return payload
+    except (OSError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def _save_admission_terminal_plan_cache(pipeline_path, cache):
+    path = _admission_terminal_plan_cache_path(pipeline_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(cache, sort_keys=True, indent=2) + "\n")
+    temp.replace(path)
+
+
+def _terminal_plan_cache_key(target, revision):
+    return f"{target}:{revision}"
+
+
+def _cached_terminal_plan(pipeline_path, target, cache, observe_calls):
+    import closer_resources
+
+    revision = None
+    try:
+        snapshot = GitHub(deadline=time.time() + 30).snapshot(target)
+        revision = snapshot.get("revision") if isinstance(snapshot, dict) else None
+    except (OSError, RuntimeError, TypeError, ValueError):
+        revision = None
+    if revision and revision != "unknown":
+        key = _terminal_plan_cache_key(target, revision)
+        cached = cache.get(key)
+        if isinstance(cached, dict) and cached.get("plan") is not None:
+            return cached["plan"], key
+    observe_calls["count"] = observe_calls.get("count", 0) + 1
+    plan = closer_resources.plan_terminal_reconciliation(pipeline_path, target=target)
+    if revision and revision != "unknown":
+        cache[_terminal_plan_cache_key(target, revision)] = {
+            "target": target,
+            "snapshot_revision": revision,
+            "plan": plan,
+        }
+        _save_admission_terminal_plan_cache(pipeline_path, cache)
+    return plan, None
+
+
 def _expired_admission_diagnostics(pipeline_path):
     """Explain retained resource advertisements without adopting or releasing them.
 
@@ -11739,7 +11842,10 @@ def _expired_admission_diagnostics(pipeline_path):
     drainable = set()
     plans = {}
     terminal_plans = {}
+    terminal_plan_cache = _load_admission_terminal_plan_cache(pipeline_path)
+    observe_calls = {}
     reason_counts = {}
+    unmeasured = []
     for base in closer_resources._reservation_bases(root):
         for directory in sorted(base.iterdir()) if base.is_dir() else []:
             for filename in ("intent.json", "legacy-intent.json"):
@@ -11766,6 +11872,7 @@ def _expired_admission_diagnostics(pipeline_path):
                         plan = plans.get(key)
                         if plan is None:
                             reasons = ["diagnostic_budget_exhausted"]
+                            unmeasured.append(str(path))
                         else:
                             eligible = plan.get("eligible") is True and any(
                                 row.get("path") == str(path)
@@ -11781,14 +11888,15 @@ def _expired_admission_diagnostics(pipeline_path):
                         target = intent.get("target")
                         if target not in terminal_plans:
                             if time.monotonic() < diagnostic_deadline:
-                                terminal_plans[target] = (
-                                    closer_resources.plan_terminal_reconciliation(
-                                        pipeline_path, target=target
-                                    )
+                                terminal_plans[target], _cache_hit = _cached_terminal_plan(
+                                    pipeline_path, target, terminal_plan_cache, observe_calls
                                 )
+                            else:
+                                terminal_plans[target] = None
                         terminal_plan = terminal_plans.get(target)
                         if terminal_plan is None:
                             reasons = ["diagnostic_budget_exhausted"]
+                            unmeasured.append(str(path))
                         else:
                             if terminal_plan.get("eligible") is True:
                                 eligible = any(
@@ -11822,10 +11930,15 @@ def _expired_admission_diagnostics(pipeline_path):
                     diagnostics.append(
                         {"path": str(path), "drainable": False, "reasons": [str(exc)]}
                     )
+    unmeasured_set = set(unmeasured)
+    blocking = max(0, len(unknown) - len(unmeasured_set))
+    unmeasured_count = len(unmeasured_set)
     return {
-        "blocking_reservations": len(unknown),
+        "blocking_reservations": blocking,
         "drainable_reservations": len(drainable),
-        "deadlock": bool(unknown) and not drainable,
+        "unmeasured_reservations": unmeasured_count,
+        "unmeasured_reservation_paths": sorted(unmeasured_set),
+        "deadlock": bool(unknown) and not drainable and not unmeasured_count,
         "reservation_recovery": diagnostics,
         "reservation_reason_counts": dict(sorted(reason_counts.items())),
     }
