@@ -2738,6 +2738,34 @@ def run_decomposer_agent(
     }
 
 
+# Owner decision 2026-10-31: a 7-day live trial of Gemini Flash-high (the router's mid tier) on
+# triage against Argon (gemini's full tier), read from the feedback DB by role-triage outcomes.
+# The trial is ON only while this file names a window containing now; a missing, unreadable or
+# expired file means no trial, so it can never outlive its window. Arms alternate by UTC hour, and
+# each run records its resolved model, so the readout splits arms by runs.model.
+TRIAGE_FLASH_TRIAL_PATH = Path(
+    os.environ.get("ORCH_TRIAGE_FLASH_TRIAL")
+    or Path.home() / ".codex" / "orchestrator" / "trials" / "role-triage-flash.json"
+)
+
+
+def triage_trial_mode(
+    backend: str | None, *, path: Path | None = None, now: float | None = None
+) -> str | None:
+    """The dispatch mode the triage trial assigns this gemini run, or None for the role's own mode."""
+    if backend != "gemini":
+        return None
+    try:
+        spec = json.loads((path or TRIAGE_FLASH_TRIAL_PATH).read_text(encoding="utf-8"))
+        start, end = float(spec["start_ts"]), float(spec["end_ts"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    now = time.time() if now is None else now
+    if not start <= now < end:
+        return None
+    return "mid" if int(now // 3600) % 2 == 0 else None
+
+
 def run_triage_agent(
     *,
     backlog_items: list[dict],
@@ -2789,6 +2817,7 @@ def run_triage_agent(
     backend_run_id: str | None = None
     backend_error_detail: str | None = None
     backend_model: str | None = None
+    dispatched_mode = role.mode
 
     if proposal_json is not None:
         proposal = proposal_json
@@ -2798,7 +2827,10 @@ def run_triage_agent(
         else:
             _role_capability_event("triage", "invocation", metadata={"backend": backend_name})
             # NO SUBJECT: triage ranks a batch of items, so no one work item is this run's subject.
-            res = dispatcher.offload(backend_name, prompt, cwd=cwd, mode=role.mode, timeout=timeout)
+            dispatched_mode = triage_trial_mode(backend_name) or role.mode
+            res = dispatcher.offload(
+                backend_name, prompt, cwd=cwd, mode=dispatched_mode, timeout=timeout
+            )
             backend_run_id = res.get("run_id")
             backend_model = res.get("model")
             raw_output = res.get("output", "")
@@ -2839,7 +2871,7 @@ def run_triage_agent(
                 "triage",
                 f"triage:{len(visible_items)}-items",
                 backend_name,
-                reasoning_level=role.mode,
+                reasoning_level=dispatched_mode,
                 backend_run_id=backend_run_id,
                 action=action_summary,
                 decision_source=decision_source,
