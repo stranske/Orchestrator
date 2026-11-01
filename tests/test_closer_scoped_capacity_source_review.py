@@ -9,7 +9,9 @@ import pytest
 def test_exact_capacity_successor_rejects_unreviewed_code_and_fixture_changes(
     tmp_path, monkeypatch
 ):
-    source = support.source_path("closer_dispatcher.py").read_text()
+    source = support.before_capacity_pre_effect_recovery_source(
+        support.source_path("closer_dispatcher.py").read_bytes(), "closer_dispatcher.py"
+    ).decode()
     reviewed = support.scoped_capacity_reference()
     restored = support.before_scoped_capacity_source(source)
     assert (

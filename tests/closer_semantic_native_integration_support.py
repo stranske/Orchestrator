@@ -626,9 +626,11 @@ def before_capacity_pre_effect_recovery_source(raw, filename):
 
 def before_dispatcher_bytecode_bootstrap(source):
     """Undo only the exact sealed-runtime bootstrap successor for old audits."""
-    source = before_capacity_pre_effect_recovery_source(
-        source.encode(), "closer_dispatcher.py"
-    ).decode()
+    capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
+    if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
+        source = before_capacity_pre_effect_recovery_source(
+            source.encode(), "closer_dispatcher.py"
+        ).decode()
     change = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     assert hashlib.sha256(source.encode()).hexdigest() == change["after_file_sha256"]
     reversal = change["historical_reversal"]
@@ -640,9 +642,11 @@ def before_dispatcher_bytecode_bootstrap(source):
 
 def before_initial_b_observability_dispatcher(source):
     """Reverse only the exact reviewed initial-B dispatcher successor for old audits."""
-    source = before_capacity_pre_effect_recovery_source(
-        source.encode(), "closer_dispatcher.py"
-    ).decode()
+    capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
+    if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
+        source = before_capacity_pre_effect_recovery_source(
+            source.encode(), "closer_dispatcher.py"
+        ).decode()
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
         source = before_dispatcher_bytecode_bootstrap(source)
@@ -1292,6 +1296,9 @@ def scoped_capacity_reference():
 
 def before_scoped_capacity_source(source):
     """Undo only exact reviewed capacity bytes before applying older audits."""
+    source = before_capacity_pre_effect_recovery_source(
+        source.encode(), "closer_dispatcher.py"
+    ).decode()
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
         source = before_dispatcher_bytecode_bootstrap(source)
