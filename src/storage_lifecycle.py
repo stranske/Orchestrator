@@ -1930,6 +1930,32 @@ def apply_abort_reconciliation(request_path: Path, *, expected_plan_sha256: str)
 
 INTERRUPTED_RELEASE_PLAN_SCHEMA = "storage-interrupted-release-plan/v1"
 INTERRUPTED_RELEASE_RECEIPT_SCHEMA = "storage-interrupted-release-receipt/v1"
+INTERRUPTED_RELEASE_LOCK_TIMEOUT_SECONDS = 5.0
+
+
+def _owner_marker_binds(directory: Path, job: str, row: JSON) -> bool:
+    try:
+        _, owner, _ = _read_private_json_once(directory / "owner.json", label="owned root marker")
+    except StorageBlocked:
+        return False
+    token = owner.get("token") if isinstance(owner, dict) else None
+    return (
+        isinstance(owner, dict)
+        and owner.get("job") == job
+        and isinstance(token, str)
+        and hashlib.sha256(token.encode()).hexdigest() == row.get("owner_token_sha256")
+    )
+
+
+def _source_check(binding: JSON) -> str:
+    """unchanged / changed / uninspectable: the same identity check run_job makes before retiring."""
+    command = binding.get("source_command")
+    if not isinstance(command, list) or not all(isinstance(part, str) for part in command):
+        return "uninspectable"
+    try:
+        return "unchanged" if identity(command) == binding.get("source_identity") else "changed"
+    except (OSError, subprocess.SubprocessError):
+        return "uninspectable"
 
 
 def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
@@ -1979,9 +2005,20 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
     ):
         raise StorageBlocked("recorded owned root is invalid")
     quarantine = root.with_name(root.name + ".retiring")
+    prior_retirement = False
     if quarantine.exists() or quarantine.is_symlink():
-        raise StorageBlocked("existing retirement attempt; reconcile without replay")
+        # Only OUR earlier retirement (its own owner marker, this job, this token, no root left)
+        # may be completed here; anything else is someone else's attempt and is never replayed.
+        if (
+            quarantine.is_symlink()
+            or root.exists()
+            or root.is_symlink()
+            or not _owner_marker_binds(quarantine, job, row)
+        ):
+            raise StorageBlocked("existing retirement attempt; reconcile without replay")
+        prior_retirement = True
     root_present = root.exists() or root.is_symlink()
+    source_check = "not_needed"
     if root_present:
         info = root.lstat()
         if (
@@ -2001,6 +2038,19 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
         ):
             raise StorageBlocked("owned root marker does not bind the reservation")
         idle(root)
+        # A changed or unreadable source means the root may hold the only copy of what was being
+        # verified: release the charge, keep the evidence (as run_job does on source drift).
+        source_check = _source_check(binding)
+    if not root_present:
+        action = (
+            "finish_terminal_after_prior_retirement"
+            if prior_retirement
+            else "finish_terminal_root_absent"
+        )
+    elif source_check == "unchanged":
+        action = "retire_root_finish_terminal"
+    else:
+        action = "finish_terminal_retain_root"
     body = {
         "schema": INTERRUPTED_RELEASE_PLAN_SCHEMA,
         "state_dir": str(state_dir.resolve()),
@@ -2011,8 +2061,10 @@ def _interrupted_release_plan(state_dir: Path, job: str) -> JSON:
         "root": str(root),
         "root_identity": root_identity,
         "root_present": root_present,
+        "prior_retirement": prior_retirement,
+        "source_check": source_check,
         "receipt_path": str(receipt_path),
-        "action": "retire_root_finish_terminal" if root_present else "finish_terminal_root_absent",
+        "action": action,
     }
     return {**body, "sha256": _json_digest(body)}
 
@@ -2027,18 +2079,25 @@ def _apply_interrupted_release_locked(state_dir: Path, job: str, plan: JSON) -> 
     footprint: JSON = {}
     preserved: list[str] = []
     root = Path(plan["root"])
-    if plan["root_present"]:
+    action = plan["action"]
+    if action == "retire_root_finish_terminal":
         _, owner, _ = _read_private_json_once(root / "owner.json", label="owned root marker")
         preserved = retire(
             root, tuple(plan["root_identity"]), owner["token"], idle, measurement=footprint
         )
+        status = "released_with_permission_remnants" if preserved else "released"
+    else:
+        status = {
+            "finish_terminal_retain_root": "released_root_retained",
+            "finish_terminal_root_absent": "released_root_absent",
+            "finish_terminal_after_prior_retirement": "released_after_prior_retirement",
+        }[action]
     receipt = {
         "schema": INTERRUPTED_RELEASE_RECEIPT_SCHEMA,
-        "status": (
-            ("released_with_permission_remnants" if preserved else "released")
-            if plan["root_present"]
-            else "released_root_absent"
-        ),
+        "status": status,
+        "action": action,
+        "source_check": plan["source_check"],
+        "root_retained": action == "finish_terminal_retain_root",
         "verified": False,
         "plan_sha256": plan["sha256"],
         "root_present_at_plan": plan["root_present"],
@@ -2048,7 +2107,12 @@ def _apply_interrupted_release_locked(state_dir: Path, job: str, plan: JSON) -> 
         "observation": "interrupted before its verify ended; no exit code was ever returned to the parent",
     }
     Reservations(state_dir, root.parent, floor=0).finish(
-        job, receipt, terminal=True, expected_row_sha256=plan["row_sha256"], calibrate=False
+        job,
+        receipt,
+        terminal=True,
+        deadline=time.monotonic() + INTERRUPTED_RELEASE_LOCK_TIMEOUT_SECONDS,
+        expected_row_sha256=plan["row_sha256"],
+        calibrate=False,
     )
     return {
         "job": job,
@@ -2075,12 +2139,12 @@ def release_interrupted(state_dir: Path, *, apply: bool) -> JSON:
     The drain for reservations nothing else can finish. It reports the blocking quantity (staged
     reservations and their charged bytes) beside the drainable one, so a stuck charge is visible.
     """
-    try:
-        _, ledger, _ = _read_private_json_once(
-            state_dir / "reservations.json", label="reservation ledger"
-        )
-    except StorageBlocked:
+    ledger_path = state_dir / "reservations.json"
+    if not ledger_path.exists() and not ledger_path.is_symlink():
+        # Only a genuinely absent ledger is empty; any other refusal propagates, so the caller
+        # reports the charge as unknown rather than as zero.
         return {"staged": 0, "charged_bytes": 0, "released": [], "releasable": [], "held": []}
+    _, ledger, _ = _read_private_json_once(ledger_path, label="reservation ledger")
     jobs = {job: row for job, row in (ledger.get("jobs") or {}).items() if isinstance(row, dict)}
     staged = sorted(job for job, row in jobs.items() if row.get("status") == "staged")
     report: JSON = {
@@ -2100,7 +2164,7 @@ def release_interrupted(state_dir: Path, *, apply: bool) -> JSON:
                     )
                 else:
                     report["releasable"].append({"job": job, "plan_sha256": plan["sha256"]})
-        except (StorageBlocked, OSError) as error:
+        except (StorageBlocked, OSError, subprocess.SubprocessError) as error:
             report["held"].append({"job": job, "reason": str(error) or type(error).__name__})
     return report
 

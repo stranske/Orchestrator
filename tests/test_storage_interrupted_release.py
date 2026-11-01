@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,10 @@ def interrupted(tmp_path, monkeypatch):
     monkeypatch.setattr(storage.os, "killpg", kill)
     probed: list[Path] = []
     monkeypatch.setattr(storage, "idle", lambda observed: probed.append(observed))
+    # The source still reads as the identity the run sealed, unless a test says otherwise.
+    monkeypatch.setattr(
+        storage, "identity", lambda command: "41183a3daba92aec6dae4989b01100dc9d5ea5db"
+    )
     owner_pid = json.loads((state / "reservations.json").read_text())["jobs"][JOB]["owner_pid"]
     return {"state": state, "root": root, "live": live, "probed": probed, "owner_pid": owner_pid}
 
@@ -94,9 +99,9 @@ def test_sweep_reports_then_releases_the_interrupted_reservation_and_retires_its
     report = storage.release_interrupted(interrupted["state"], apply=False)
     assert report["staged"] == 1 and report["charged_bytes"] == 1
     assert [r["job"] for r in report["releasable"]] == [JOB] and report["held"] == []
-    assert JOB in _ledger(interrupted) and interrupted["root"].is_dir(), (
-        "a dry sweep changes nothing"
-    )
+    assert (
+        JOB in _ledger(interrupted) and interrupted["root"].is_dir()
+    ), "a dry sweep changes nothing"
 
     report = storage.release_interrupted(interrupted["state"], apply=True)
     assert [r["job"] for r in report["released"]] == [JOB] and report["held"] == []
@@ -104,11 +109,12 @@ def test_sweep_reports_then_releases_the_interrupted_reservation_and_retires_its
     assert not interrupted["root"].exists()
     receipt = json.loads((interrupted["state"] / "receipts" / f"{JOB}.json").read_text())
     assert receipt["status"] == "released" and receipt["verified"] is False
+    assert receipt["source_check"] == "unchanged" and receipt["root_retained"] is False
     assert receipt["calibration_updated"] is False
     assert receipt["terminal_owned_footprint"]["entries"] >= 3
-    assert interrupted["root"] in interrupted["probed"], (
-        "the independent ps/lsof probe ran on the root"
-    )
+    assert (
+        interrupted["root"] in interrupted["probed"]
+    ), "the independent ps/lsof probe ran on the root"
     again = storage.release_interrupted(interrupted["state"], apply=True)
     assert again == {"staged": 0, "charged_bytes": 0, "released": [], "releasable": [], "held": []}
 
@@ -207,3 +213,88 @@ def test_no_ledger_is_an_empty_report(tmp_path):
         "releasable": [],
         "held": [],
     }
+
+
+@pytest.mark.parametrize(
+    "identity, check",
+    [
+        (lambda command: "0" * 40, "changed"),
+        (
+            lambda command: (_ for _ in ()).throw(subprocess.CalledProcessError(1, command)),
+            "uninspectable",
+        ),
+        (
+            lambda command: (_ for _ in ()).throw(subprocess.TimeoutExpired(command, 30)),
+            "uninspectable",
+        ),
+    ],
+)
+def test_a_changed_or_unreadable_source_releases_the_charge_but_keeps_the_root(
+    interrupted, monkeypatch, identity, check
+):
+    monkeypatch.setattr(storage, "identity", identity)
+    plan = storage.plan_interrupted_release(interrupted["state"], JOB)
+    assert plan["action"] == "finish_terminal_retain_root" and plan["source_check"] == check
+    report = storage.release_interrupted(interrupted["state"], apply=True)
+    assert report["released"][0]["status"] == "released_root_retained"
+    assert JOB not in _ledger(interrupted)
+    assert (interrupted["root"] / "staging" / "bulk.bin").exists(), "the evidence stays"
+    receipt = json.loads((interrupted["state"] / "receipts" / f"{JOB}.json").read_text())
+    assert receipt["root_retained"] is True and receipt["source_check"] == check
+
+
+def test_lock_contention_holds_the_row_and_the_next_sweep_finishes_it(interrupted, monkeypatch):
+    real_finish = storage.Reservations.finish
+    calls = []
+
+    def contended(self, job, receipt, **kw):
+        calls.append(kw.get("deadline"))
+        if len(calls) == 1:
+            raise storage.StorageLockWait("ledger lock busy")
+        return real_finish(self, job, receipt, **kw)
+
+    monkeypatch.setattr(storage.Reservations, "finish", contended)
+    first = storage.release_interrupted(interrupted["state"], apply=True)
+    assert first["released"] == [] and first["held"][0]["job"] == JOB
+    assert "storage_lock_wait" in first["held"][0]["reason"]
+    assert calls[0] is not None, "finish is given a finite lock deadline"
+    assert JOB in _ledger(interrupted) and not interrupted["root"].exists()
+    second = storage.release_interrupted(interrupted["state"], apply=True)
+    assert second["released"][0]["status"] == "released_root_absent" and JOB not in _ledger(
+        interrupted
+    )
+
+
+def test_our_own_interrupted_retirement_is_completed_not_replayed(interrupted):
+    quarantine = interrupted["root"].with_name(interrupted["root"].name + ".retiring")
+    interrupted["root"].rename(quarantine)
+    plan = storage.plan_interrupted_release(interrupted["state"], JOB)
+    assert plan["action"] == "finish_terminal_after_prior_retirement"
+    report = storage.release_interrupted(interrupted["state"], apply=True)
+    assert report["released"][0]["status"] == "released_after_prior_retirement"
+    assert quarantine.exists(), "the earlier attempt's remnants are not touched"
+
+
+def test_a_corrupt_ledger_is_an_error_not_an_empty_report(interrupted):
+    _write_text = interrupted["state"] / "reservations.json"
+    _write_text.write_text("{not json")
+    with pytest.raises(storage.StorageBlocked):
+        storage.release_interrupted(interrupted["state"], apply=False)
+
+
+def test_a_failing_probe_holds_that_job_and_the_sweep_continues(interrupted, monkeypatch):
+    def broken(_root):
+        raise subprocess.CalledProcessError(1, ["ps"])
+
+    monkeypatch.setattr(storage, "idle", broken)
+    report = storage.release_interrupted(interrupted["state"], apply=True)
+    assert report["released"] == [] and report["held"][0]["job"] == JOB
+
+
+def test_a_quarantine_that_is_not_ours_is_never_completed(interrupted):
+    quarantine = interrupted["root"].with_name(interrupted["root"].name + ".retiring")
+    interrupted["root"].rename(quarantine)
+    _write(quarantine / "owner.json", {"job": JOB, "token": "someone-else"})
+    report = storage.release_interrupted(interrupted["state"], apply=True)
+    assert report["released"] == [] and "existing retirement attempt" in report["held"][0]["reason"]
+    assert JOB in _ledger(interrupted)

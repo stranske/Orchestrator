@@ -248,9 +248,17 @@ hold, else it holds the row and prints why:
 - the root's device/inode matches the row and its owner marker's token hashes to the row's;
 - the independent `ps`/`lsof` probe (`idle`) finds no process or open file in the root.
 
-It then retires the root through the same `retire()` a normal run uses (permission-denied
-entries are preserved, never forced) and finishes the row terminally with
-`calibrate=False`. A root that is already gone is released without deleting anything.
+Before deleting, it re-runs the sealed identity command, the same check `run_job`
+makes. If the source still matches, it retires the root through the same `retire()` a
+normal run uses (permission-denied entries are preserved, never forced). If the source
+changed or cannot be inspected, the root may hold the only copy of what was being
+verified, so the charge is released and the root is kept (`released_root_retained`).
+The decision is part of the hash-bound plan and the receipt. A root that is already gone
+is released without deleting anything, and a quarantine carrying this job's own owner
+marker (a retirement whose `finish` was interrupted) is completed, never replayed.
+Finishing takes the ledger lock with a 5-second deadline, so contention holds the row
+for the next sweep instead of stalling the verify. A missing ledger reports zero; an
+unreadable one is an error, so the charge is never reported as zero when it is unknown.
 
 ```sh
 python3 -B src/storage_lifecycle.py release-interrupted --state-dir DIR            # report: staged, charged bytes, releasable, held
