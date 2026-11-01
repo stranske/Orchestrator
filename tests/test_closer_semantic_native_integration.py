@@ -414,8 +414,25 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
     tree.body = [node for node in tree.body if node not in selected]
     assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
+    successor = support.source_pre_effect_readmission_reference()["files"][
+        "closer_native_source_upgrade.py"
+    ]
+    raw = source_path("closer_native_source_upgrade.py").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == successor["after_module_ast_sha256"]
+    selected = []
+    for name, delta in successor["function_delta"].items():
+        nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+        assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+        selected.extend(nodes)
+    tree.body = [node for node in tree.body if node not in selected]
+    assert fingerprint(tree) == successor["outside_reviewed_changes_ast_sha256"]
+
     for filename, change in support.capacity_pre_effect_recovery_reference()["files"].items():
         raw = source_path(filename).read_bytes()
+        if filename == "closer_native_source_upgrade.py":
+            raw = support.before_source_pre_effect_readmission_source(raw, filename)
         assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
         tree = ast.parse(raw)
         assert fingerprint(tree) == change["after_module_ast_sha256"]

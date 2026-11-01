@@ -257,6 +257,9 @@ def integrated_native_source_reference():
         else:
             assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
+    for filename, change in source_pre_effect_readmission_reference()["files"].items():
+        assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -610,8 +613,50 @@ def capacity_pre_effect_recovery_reference():
     return value
 
 
+SOURCE_PRE_EFFECT_READMISSION_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_source_pre_effect_readmission_v1.json"
+)
+SOURCE_PRE_EFFECT_READMISSION_SHA256 = (
+    "b2a6eb009cd8d0cf12343d99554dac619528abbdfe287437579c919b49c5e3f3"
+)
+
+
+def source_pre_effect_readmission_reference():
+    """Append the generic pre-effect same-candidate readmission successor."""
+    raw = SOURCE_PRE_EFFECT_READMISSION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == SOURCE_PRE_EFFECT_READMISSION_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "source-pre-effect-readmission-successor/v1"
+    assert value["base_commit"] == "87360c8a4b7f"
+    change = value["files"]["closer_native_source_upgrade.py"]
+    prior = capacity_pre_effect_recovery_reference()["files"]["closer_native_source_upgrade.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(value["files"]) == {"closer_native_source_upgrade.py"}
+    assert set(change["function_delta"]) == {"plan"}
+    assert change["constant_delta"] == {}
+    return value
+
+
+def before_source_pre_effect_readmission_source(raw, filename):
+    """Restore the exact capacity-recovery source for that historical successor."""
+    successor = source_pre_effect_readmission_reference()["files"].get(filename)
+    if successor is not None and hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]:
+        for reversal in successor["historical_reversal"]:
+            before, after = (
+                reversal["before_fragment"].encode(),
+                reversal["after_fragment"].encode(),
+            )
+            assert raw.count(after) == 1
+            raw = raw.replace(after, before, 1)
+        assert hashlib.sha256(raw).hexdigest() == successor["before_file_sha256"]
+    return raw
+
+
 def before_capacity_pre_effect_recovery_source(raw, filename):
-    """Keep historical assertions exact beneath the separately attested successor."""
+    """Keep historical assertions exact beneath separately attested successors."""
+    raw = before_source_pre_effect_readmission_source(raw, filename)
     change = capacity_pre_effect_recovery_reference()["files"].get(filename)
     if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
         return raw
