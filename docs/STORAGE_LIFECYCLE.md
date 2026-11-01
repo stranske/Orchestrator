@@ -211,8 +211,10 @@ source-owned triage before later retirement; they are not recursively archived o
 copied into new runs. The receipt keeps the original wrapper exit code. A cleanup failure/interruption records
 the exact remnant and keeps it for inspection, without blind replay. After
 positive no-writer proof, failed deletion creates no fictitious future allocation:
-the remnant is already counted by actual free bytes. An interrupted supervisor or
-uncertain descendant instead retains its reservation and directory.
+the remnant is already counted by actual free bytes. An uncertain descendant instead
+retains its reservation and directory. An interrupted supervisor does too, until
+`release-interrupted` (below) can prove its run never finished and nothing is still
+using its root.
 
 ## Accounting and recovery
 
@@ -226,6 +228,40 @@ materialize. Neither allocation totals, clone counts nor unlink counts are treat
 as reclaimed space: every completion records a fresh `statvfs` measurement.
 Shared-volume growth measurements can include concurrent activity and are labeled
 accordingly. APFS sharing can make a large directory yield little physical space.
+
+### Interrupted runs: `release-interrupted` (2026-11-01)
+
+Before 2026-11-01 nothing could finish a `staged` reservation whose supervisor was
+killed: abort reconciliation accepts only an aborted *install* with its failed-release
+journal, so an interrupted pre-sync verify stayed charged with no drain. One such row
+held 0.76 GB of admission and 8.2 GB of staging after a sync was stopped by hand.
+
+`run_job` writes a non-terminal `finish` (row `uncertain`, receipt saved) as soon as its
+child exits and before it returns any exit code. A row that is still `staged` with no
+receipt therefore belongs to a supervisor that never saw its child finish and never told
+its parent to install. `release-interrupted` releases such a row only when all of these
+hold, else it holds the row and prints why:
+
+- the recorded owner PID, child PGID, sealed release parent PID and PGID are all dead;
+- no receipt exists for the job, and no `.retiring` quarantine exists for its root;
+- the sealed stage/source binding still matches the row;
+- the root's device/inode matches the row and its owner marker's token hashes to the row's;
+- the independent `ps`/`lsof` probe (`idle`) finds no process or open file in the root.
+
+It then retires the root through the same `retire()` a normal run uses (permission-denied
+entries are preserved, never forced) and finishes the row terminally with
+`calibrate=False`. A root that is already gone is released without deleting anything.
+
+```sh
+python3 -B src/storage_lifecycle.py release-interrupted --state-dir DIR            # report: staged, charged bytes, releasable, held
+python3 -B src/storage_lifecycle.py release-interrupted --state-dir DIR --apply    # release every provable row
+python3 -B src/storage_lifecycle.py release-interrupted --state-dir DIR --job JOB  # one plan; then --apply --expected-plan-sha256
+```
+
+`verify_before_sync.sh` runs the `--apply` sweep before each admission, so an interrupted
+run's charge drains on the next verify instead of refusing it. This is an automatic
+recovery action, deliberately: the evidence it requires is the same standard abort
+reconciliation uses, and a reservation without a drain is a latch.
 
 On an uncertain receipt, inspect the named original/retiring path, owner identity,
 child group and open-file evidence before a separately authorized recovery action.

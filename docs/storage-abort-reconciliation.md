@@ -1,7 +1,9 @@
 # Storage abort reconciliation
 
 `storage_lifecycle.py reconcile-abort` is a one-use recovery surface for an
-interrupted verifier that was proven stopped before installation. It does not
+interrupted verifier that was proven stopped before installation. For an interrupted run
+that never reached a receipt (any parent, including a pre-sync verify), use the automatic
+`release-interrupted` drain described in `docs/STORAGE_LIFECYCLE.md` instead. It does not
 retry verification, install a source, delete the owned root, claim recovered
 bytes, update calibration, or mark a release as passing.
 
