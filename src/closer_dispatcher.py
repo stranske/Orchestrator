@@ -78,7 +78,17 @@ def _finite_timestamp(value) -> float | None:
     return stamp
 
 
-def _newest_pipeline_run(pipeline_path: Path) -> tuple[str | None, float]:
+def _normalized_assignment(targets) -> list[str] | None:
+    """Mirror closer_pipeline.validate_stop assignment matching (sorted list or None)."""
+    if targets is None:
+        return None
+    try:
+        return sorted(targets)
+    except TypeError:
+        return []
+
+
+def _newest_pipeline_run(pipeline_path: Path, assignment_targets=None) -> tuple[str | None, float]:
     import closer_pipeline as cp
 
     try:
@@ -88,10 +98,13 @@ def _newest_pipeline_run(pipeline_path: Path) -> tuple[str | None, float]:
     runs = state.get("runs")
     if not isinstance(runs, dict) or not runs:
         return None, 0.0
+    wanted = _normalized_assignment(assignment_targets)
     best_id = None
     best_created = -1.0
     for run_id, run in runs.items():
         if not isinstance(run, dict):
+            continue
+        if wanted is not None and run.get("assignment") != wanted:
             continue
         created = _finite_timestamp(run.get("created"))
         if created is None:
@@ -102,12 +115,15 @@ def _newest_pipeline_run(pipeline_path: Path) -> tuple[str | None, float]:
     return best_id, best_created
 
 
-def _scoped_round_summaries(root: Path) -> list[tuple[str, float, dict[str, str]]]:
+def _scoped_round_summaries(
+    root: Path, assignment_targets=None
+) -> list[tuple[str, float, dict[str, str]]]:
     import closer_resources as cr
 
     rounds_dir = root / "rounds"
     if not rounds_dir.is_dir():
         return []
+    wanted = _normalized_assignment(assignment_targets)
     summaries: list[tuple[str, float, dict[str, str]]] = []
     for path in sorted(rounds_dir.glob("*.json")):
         try:
@@ -128,23 +144,31 @@ def _scoped_round_summaries(root: Path) -> list[tuple[str, float, dict[str, str]
         run_ids = receipt.get("run_ids")
         if not isinstance(run_ids, dict):
             continue
+        if wanted is not None:
+            receipt_assignment = receipt.get("assignment")
+            if not isinstance(receipt_assignment, list) or sorted(receipt_assignment) != wanted:
+                continue
         summaries.append(
             (round_id, finished, {k: v for k, v in run_ids.items() if isinstance(v, str)})
         )
     return summaries
 
 
-def _scoped_round_for_pipeline_run(root: Path, pipeline_run_id: str | None) -> str | None:
+def _scoped_round_for_pipeline_run(
+    root: Path, pipeline_run_id: str | None, assignment_targets=None
+) -> str | None:
     if not pipeline_run_id:
         return None
-    for round_id, _finished, run_ids in _scoped_round_summaries(root):
+    for round_id, _finished, run_ids in _scoped_round_summaries(
+        root, assignment_targets=assignment_targets
+    ):
         if pipeline_run_id in run_ids.values():
             return round_id
     return None
 
 
-def _newest_scoped_round(root: Path) -> tuple[str | None, float]:
-    summaries = _scoped_round_summaries(root)
+def _newest_scoped_round(root: Path, assignment_targets=None) -> tuple[str | None, float]:
+    summaries = _scoped_round_summaries(root, assignment_targets=assignment_targets)
     if not summaries:
         return None, 0.0
     round_id, finished, _run_ids = max(summaries, key=lambda row: row[1])
@@ -152,7 +176,7 @@ def _newest_scoped_round(root: Path) -> tuple[str | None, float]:
 
 
 def _scoped_root_is_stale(
-    pipeline_path: Path, scoped_root_path: Path
+    pipeline_path: Path, scoped_root_path: Path, assignment_targets=None
 ) -> tuple[bool, str | None, float, str | None]:
     """Stale when the scoped root holds no round for the current pipeline run.
 
@@ -160,16 +184,29 @@ def _scoped_root_is_stale(
     ledger run must still require ``--round-id``; only a scoped round that
     predates the newest pipeline run (or an empty scoped root beside a live
     pipeline) may fall through to the pipeline validator.
+
+    When ``assignment_targets`` is supplied, freshness is judged only against
+    pipeline runs and scoped receipts for that assignment — an unrelated newer
+    run must not force a stale fallback for the requested assignment.
     """
-    newest_run_id, newest_run_created = _newest_pipeline_run(pipeline_path)
-    newest_scoped_id, newest_scoped_finished = _newest_scoped_round(scoped_root_path)
+    newest_run_id, newest_run_created = _newest_pipeline_run(
+        pipeline_path, assignment_targets=assignment_targets
+    )
+    newest_scoped_id, newest_scoped_finished = _newest_scoped_round(
+        scoped_root_path, assignment_targets=assignment_targets
+    )
     if not pipeline_path.is_file():
         return False, newest_scoped_id, newest_scoped_finished, newest_run_id
     if newest_run_id is None:
         # Empty ledger (or unloadable created stamps handled by the caller) has
         # no current scoped binding; prefer the pipeline validator.
         return True, newest_scoped_id, newest_scoped_finished, newest_run_id
-    if _scoped_round_for_pipeline_run(scoped_root_path, newest_run_id) is not None:
+    if (
+        _scoped_round_for_pipeline_run(
+            scoped_root_path, newest_run_id, assignment_targets=assignment_targets
+        )
+        is not None
+    ):
         return False, newest_scoped_id, newest_scoped_finished, newest_run_id
     if newest_scoped_id is not None and newest_scoped_finished >= newest_run_created:
         return False, newest_scoped_id, newest_scoped_finished, newest_run_id
@@ -10788,7 +10825,7 @@ def main(argv=None):
             import closer_pipeline as cp
 
             stale, newest_scoped_id, newest_scoped_finished, newest_run_id = _scoped_root_is_stale(
-                pipeline_path, scoped_root_path
+                pipeline_path, scoped_root_path, assignment_targets=targets
             )
             if pipeline_path.is_file() and newest_run_id is None:
                 try:
@@ -10796,13 +10833,24 @@ def main(argv=None):
                 except (OSError, ValueError):
                     runs = None
                 if isinstance(runs, dict) and runs:
-                    result = {
-                        "valid": False,
-                        "stop_valid": False,
-                        "reasons": ["invalid_pipeline_run_created"],
-                    }
-                    print(json.dumps(result, sort_keys=True))
-                    return 78
+                    # Distinguish "no run matches this assignment" (fall through
+                    # as stale) from "matching runs exist but none have a usable
+                    # created stamp" (structured invalid).
+                    wanted = _normalized_assignment(targets)
+                    matching = [
+                        run
+                        for run in runs.values()
+                        if isinstance(run, dict)
+                        and (wanted is None or run.get("assignment") == wanted)
+                    ]
+                    if matching:
+                        result = {
+                            "valid": False,
+                            "stop_valid": False,
+                            "reasons": ["invalid_pipeline_run_created"],
+                        }
+                        print(json.dumps(result, sort_keys=True))
+                        return 78
             if stale:
                 result = cp.validate_stop(pipeline_path, assignment_targets=targets)
                 result = {
@@ -10815,7 +10863,9 @@ def main(argv=None):
                     result["newest_scoped_round_finished_at"] = newest_scoped_finished
                 print(json.dumps(result, sort_keys=True))
                 return 0 if result.get("valid") else 78
-            current_round_id = _scoped_round_for_pipeline_run(scoped_root_path, newest_run_id)
+            current_round_id = _scoped_round_for_pipeline_run(
+                scoped_root_path, newest_run_id, assignment_targets=targets
+            )
             named_round_id = current_round_id or newest_scoped_id
             result = {
                 "valid": False,

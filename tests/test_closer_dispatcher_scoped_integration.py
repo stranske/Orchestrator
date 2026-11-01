@@ -773,6 +773,78 @@ def test_validate_stop_without_round_id_requires_id_when_scoped_round_is_newer_t
     assert "scoped_root_stale" not in verdict
 
 
+def test_validate_stop_freshness_uses_requested_assignment_not_unrelated_newer_run(
+    tmp_path,
+):
+    """An unrelated newer pipeline run must not force stale fallback for this assignment."""
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    requested = "o/r#1"
+    other = "other/repo#2"
+    pipeline._save(
+        pipeline_path,
+        {
+            "schema": pipeline.SCHEMA,
+            "runs": {
+                "requested-assignment-run": {
+                    "created": 1000.0,
+                    "deadline": 1500.0,
+                    "assignment": [requested],
+                    "targets": {requested: {"status": "completed", "stage": "act"}},
+                },
+                "unrelated-newer-run": {
+                    "created": 3000.0,
+                    "deadline": 3500.0,
+                    "assignment": [other],
+                    "targets": {other: {"status": "completed", "stage": "act"}},
+                },
+            },
+            "carry": {},
+        },
+    )
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    current_scoped = "d" * 32
+    _write_scoped_receipt(
+        root,
+        round_id=current_scoped,
+        run_id="shard-run-for-requested",
+        finished_at=2000.0,
+        target=requested,
+    )
+    # Unrelated newer scoped receipt must not be selected as required_round_id either.
+    _write_scoped_receipt(
+        root,
+        round_id="e" * 32,
+        run_id="shard-run-for-other",
+        finished_at=4000.0,
+        target=other,
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": requested}]}))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+            "--assignment",
+            str(assignment),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert result.returncode == 78, result.stderr
+    assert verdict.get("valid") is False
+    assert "scoped_round_id_required" in verdict.get("reasons", [])
+    assert verdict.get("required_round_id") == current_scoped
+    assert "scoped_root_stale" not in verdict
+
+
 def test_incompatible_contract_fences_legacy_even_for_disjoint_target(tmp_path):
     root = resources.open_root(tmp_path / "s", pipeline_schema="closer-pipeline/v1")
     path = root / "contract.json"
