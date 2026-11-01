@@ -260,6 +260,12 @@ def integrated_native_source_reference():
     for filename, change in source_pre_effect_readmission_reference()["files"].items():
         assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
+    for filename, change in completed_invitation_read_source_reference()["files"].items():
+        if filename in original:
+            assert original[filename] == change["before_file_sha256"]
+        else:
+            assert filename == "closer_correction_source_record.py"
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -654,8 +660,36 @@ def before_source_pre_effect_readmission_source(raw, filename):
     return raw
 
 
+COMPLETED_INVITATION_READ_SOURCE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_completed_invitation_read_source_v1.json"
+)
+COMPLETED_INVITATION_READ_SOURCE_SHA256 = (
+    "8a12d6f12bcbde8cf869e1362fb3d8d1e3cceb7654efbd2aff5ea43fe369bbe1"
+)
+
+
+def completed_invitation_read_source_reference():
+    raw = COMPLETED_INVITATION_READ_SOURCE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == COMPLETED_INVITATION_READ_SOURCE_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "completed-invitation-read-source-successor/v1"
+    return value
+
+
+def before_completed_invitation_read_source(raw, filename):
+    change = completed_invitation_read_source_reference()["files"].get(filename)
+    if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
+        return raw
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    raw = change["before_source_utf8"].encode()
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def before_capacity_pre_effect_recovery_source(raw, filename):
     """Keep historical assertions exact beneath separately attested successors."""
+    raw = before_completed_invitation_read_source(raw, filename)
     raw = before_source_pre_effect_readmission_source(raw, filename)
     change = capacity_pre_effect_recovery_reference()["files"].get(filename)
     if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
