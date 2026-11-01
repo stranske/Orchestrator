@@ -705,7 +705,7 @@ def validate_stop_stale_scoped_root_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "408a38c32208ac622505be9b7652b87dd18030e9b8d21a52fd06b5a7ff206fd2"
+        == "aa2167b641e13279b4d97be7a81367e4d70de1b9798c439d26e776530b0683bb"
     )
     value = json.loads(raw)
     assert value["schema"] == "native-validate-stop-stale-scoped-root-successor/v1"
@@ -715,6 +715,7 @@ def validate_stop_stale_scoped_root_reference():
             "_finite_timestamp",
             "_newest_pipeline_run",
             "_newest_scoped_round",
+            "_normalized_assignment",
             "_scoped_root_is_stale",
             "_scoped_round_for_pipeline_run",
             "_scoped_round_summaries",
@@ -1107,7 +1108,7 @@ def validate_stop_role_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "73c5b190e658f6bcd1d0004e19b5552ddb1207f4eee510592fe3bd85acdccab7"
+        == "2a4b3718e2e009caae9e831a76baa675b34e7108ec82f54091a40c9d90f6649f"
     )
     value = json.loads(raw)
     assert value["schema"] == "closer-validate-stop-stale-scoped-root-role-successor/v1"
