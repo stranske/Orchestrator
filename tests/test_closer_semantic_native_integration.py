@@ -484,6 +484,7 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
 
     for filename, change in support.capacity_pre_effect_recovery_reference()["files"].items():
         raw = source_path(filename).read_bytes()
+        raw = support.before_reservation_drain_latch_source(raw, filename)
         if filename == "closer_native_source_upgrade.py":
             raw = support.before_completed_invitation_read_source(raw, filename)
             raw = support.before_source_pre_effect_readmission_source(raw, filename)

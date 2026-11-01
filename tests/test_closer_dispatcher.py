@@ -5799,6 +5799,63 @@ def test_expired_admission_diagnostics_reports_unmeasured_separately(tmp_path, m
     assert observe_calls["count"] == 3
 
 
+def test_terminal_plan_cache_does_not_latch_live_owner_refusal(tmp_path, monkeypatch):
+    """Local owner_still_alive plans must not be reused after the owner exits."""
+    import closer_resources as resources
+
+    path, _root = _dead_owner_reservations(tmp_path)
+    core = next(tmp_path.rglob("intent.json"))
+    live = json.loads(core.read_text())
+    live["owner"] = f"{os.getpid()}:123:original"
+    resources._atomic_write(core, live)
+    monkeypatch.setattr(
+        adapter,
+        "GitHub",
+        lambda *, deadline: SimpleNamespace(
+            snapshot=lambda _target: {"revision": "rev-owner", "kind": "pr", "state": "MERGED"}
+        ),
+    )
+    real_plan = resources.plan_terminal_reconciliation
+    plans = []
+
+    def counting_plan(state_path, *, target, observe=None):
+        plans.append(target)
+        return real_plan(state_path, target=target, observe=observe)
+
+    monkeypatch.setattr(resources, "plan_terminal_reconciliation", counting_plan)
+    first = adapter._expired_admission_diagnostics(path)
+    assert first["drainable_reservations"] == 0
+    assert first["reservation_reason_counts"]["owner_still_alive"] == 2
+    assert plans  # live owner still forces a fresh plan call
+    live_calls = len(plans)
+
+    dead = json.loads(core.read_text())
+    dead["owner"] = "99999999:123:original"
+    resources._atomic_write(core, dead)
+    monkeypatch.setattr(resources, "_terminal_remote_observation", _terminal_observation)
+    second = adapter._expired_admission_diagnostics(path)
+    assert len(plans) > live_calls
+    assert second["drainable_reservations"] == second["blocking_reservations"] == 2
+    assert second["deadlock"] is False
+
+
+def test_reservation_drain_pass2_number_pending_before_check_date():
+    """#1049 pass2 stays pending before its check date and does not edit pass1."""
+    cleared = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 11, "drainable_reservations": 11, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS - 1,
+    )
+    assert cleared["status"] == "pending"
+    assert cleared["check_date"] == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    assert cleared["reservation_cleared"] is True
+    failed = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 11, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert failed["status"] == "fail"
+    assert failed["check_date"] == "2026-10-30"
+
+
 def test_core_reserve_records_process_group(tmp_path):
     import closer_resources as resources
 

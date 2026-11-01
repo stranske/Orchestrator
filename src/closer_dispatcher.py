@@ -11799,23 +11799,77 @@ def _terminal_plan_cache_key(target, revision):
     return f"{target}:{revision}"
 
 
+# Local owner refusals are cheap to recompute. Caching them would latch a
+# reservation as undrainable after the recorded owner exits while the GitHub
+# snapshot revision is unchanged.
+_LOCAL_OWNER_PLAN_REASONS = frozenset(
+    {
+        "owner_still_alive",
+        "owner_liveness_unknown",
+        "owner_identity_unknown",
+        "owner_process_group_unknown",
+    }
+)
+
+
+def _probe_snapshot_revision(target):
+    """Cheap revision probe for cache identity; never raises into diagnostics."""
+    try:
+        snapshot = GitHub(deadline=time.time() + 30).snapshot(target)
+    except (OSError, RuntimeError, TypeError, ValueError, AttributeError, AssertionError):
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+    revision = snapshot.get("revision")
+    if not revision or revision == "unknown":
+        return None
+    return revision
+
+
+def _plan_snapshot_revision(plan):
+    if not isinstance(plan, dict):
+        return None
+    observation = plan.get("observation")
+    if not isinstance(observation, dict):
+        return None
+    snapshot = observation.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    revision = snapshot.get("revision")
+    if not revision or revision == "unknown":
+        return None
+    return revision
+
+
+def _cacheable_terminal_plan(plan):
+    if not isinstance(plan, dict):
+        return False
+    if plan.get("eligible") is True:
+        return True
+    reasons = [str(reason) for reason in plan.get("reasons") or [] if reason]
+    if not reasons:
+        return False
+    return not all(reason in _LOCAL_OWNER_PLAN_REASONS for reason in reasons)
+
+
 def _cached_terminal_plan(pipeline_path, target, cache, observe_calls):
     import closer_resources
 
-    revision = None
-    try:
-        snapshot = GitHub(deadline=time.time() + 30).snapshot(target)
-        revision = snapshot.get("revision") if isinstance(snapshot, dict) else None
-    except (OSError, RuntimeError, TypeError, ValueError):
-        revision = None
-    if revision and revision != "unknown":
+    # Probe only to reuse or invalidate a sidecar entry. A failed/stubbed probe
+    # must not abort diagnostics: fall through to plan_terminal_reconciliation,
+    # which already refuses live owners before any remote observe.
+    revision = _probe_snapshot_revision(target)
+    if revision:
         key = _terminal_plan_cache_key(target, revision)
         cached = cache.get(key)
-        if isinstance(cached, dict) and cached.get("plan") is not None:
-            return cached["plan"], key
+        plan = cached.get("plan") if isinstance(cached, dict) else None
+        if plan is not None and _cacheable_terminal_plan(plan):
+            return plan, key
     observe_calls["count"] = observe_calls.get("count", 0) + 1
     plan = closer_resources.plan_terminal_reconciliation(pipeline_path, target=target)
-    if revision and revision != "unknown":
+    if not revision:
+        revision = _plan_snapshot_revision(plan)
+    if revision and _cacheable_terminal_plan(plan):
         cache[_terminal_plan_cache_key(target, revision)] = {
             "target": target,
             "snapshot_revision": revision,
