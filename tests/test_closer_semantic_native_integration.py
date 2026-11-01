@@ -12,7 +12,9 @@ from closer_semantic_audit_support import fingerprint, functions, source_path
 
 def _historical_pagination_source(filename):
     """Retain old source-union assertions behind an exact reversible successor."""
-    raw = source_path(filename).read_bytes()
+    raw = support.before_capacity_pre_effect_recovery_source(
+        source_path(filename).read_bytes(), filename
+    )
     if filename != "closer_native_source_upgrade.py":
         return raw
     change = support.pagination_historical_role_reference()["files"][filename]
@@ -133,7 +135,9 @@ def test_initial_b_observability_successor_is_exact_and_has_no_unreviewed_ast_de
 
 def test_dispatcher_bytecode_bootstrap_successor_is_exact_and_top_level_scoped():
     change = support.dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
-    raw = source_path("closer_dispatcher.py").read_bytes()
+    raw = support.before_capacity_pre_effect_recovery_source(
+        source_path("closer_dispatcher.py").read_bytes(), "closer_dispatcher.py"
+    )
     assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(raw)
     assert fingerprint(tree) == change["after_module_ast_sha256"]
@@ -395,7 +399,10 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
     change = support.pagination_historical_role_reference()["files"][
         "closer_native_source_upgrade.py"
     ]
-    raw = source_path("closer_native_source_upgrade.py").read_bytes()
+    raw = support.before_capacity_pre_effect_recovery_source(
+        source_path("closer_native_source_upgrade.py").read_bytes(),
+        "closer_native_source_upgrade.py",
+    )
     assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(raw)
     assert fingerprint(tree) == change["after_module_ast_sha256"]
@@ -406,6 +413,19 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
         selected.extend(nodes)
     tree.body = [node for node in tree.body if node not in selected]
     assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+    for filename, change in support.capacity_pre_effect_recovery_reference()["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        selected = []
+        for name, delta in change["function_delta"].items():
+            nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+            assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+            selected.extend(nodes)
+        tree.body = [node for node in tree.body if node not in selected]
+        assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
 
 
 def _top_level_ast(raw):
@@ -420,7 +440,9 @@ def _top_level_ast(raw):
 def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
     reviewed = support.finite_no_start_v2_reference()
     for filename, change in reviewed["files"].items():
-        after = source_path(filename).read_bytes()
+        after = support.before_capacity_pre_effect_recovery_source(
+            source_path(filename).read_bytes(), filename
+        )
         successor = support.controlled_initialization_reference()["files"].get(filename)
         later = support.initial_b_observability_reference()["files"].get(filename)
         if successor:

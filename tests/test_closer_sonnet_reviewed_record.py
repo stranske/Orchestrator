@@ -69,10 +69,20 @@ def test_record_insertion_preserves_observed_model_contract():
     ]
     profile = execution_profiles.get_profile(record["profile_identity"]["profile_id"])
     assert (
-        q.qualified_record(profile, q.STRONG_CRITERION_ADJUDICATION, now=record["qualified_at"] + 1)
+        q.qualified_record(
+            profile,
+            q.STRONG_CRITERION_ADJUDICATION,
+            now=record["qualified_at"] + 1,
+            records={record["qualification_id"]: record},
+        )
         == record
     )
-    assert not q.is_qualified(profile, q.STRONG_CRITERION_ADJUDICATION, now=record["expires_at"])
+    assert not q.is_qualified(
+        profile,
+        q.STRONG_CRITERION_ADJUDICATION,
+        now=record["expires_at"],
+        records={record["qualification_id"]: record},
+    )
     observed = record["production_model_contract"]
     assert (
         observed["contract_sha256"]
@@ -81,7 +91,7 @@ def test_record_insertion_preserves_observed_model_contract():
     support = q.execution_source_support(
         record,
         record["profile_identity"],
-        descriptor,
+        observed,
         task_type="closer_exception",
         checked_at=record["qualified_at"] + 1,
     )

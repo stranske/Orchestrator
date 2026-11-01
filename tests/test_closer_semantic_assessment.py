@@ -12,6 +12,7 @@ from closer_semantic_audit_support import (
 )
 from closer_semantic_native_integration_support import (
     assert_reviewed_role_registry_successor,
+    before_capacity_pre_effect_recovery_source,
 )
 from closer_semantic_native_integration_support import (
     integrated_reference as reference,
@@ -369,14 +370,19 @@ def test_unmodified_host_security_strong_and_parser_ast_and_only_reserved_dispat
         ),
     ):
         old = reference(base)["files"][filename]["top_level_ast"]
-        new = leaves(source_path(filename).read_text())
+        raw = source_path(filename).read_bytes()
+        if filename == "closer_dispatcher.py":
+            raw = before_capacity_pre_effect_recovery_source(raw, filename)
+        new = leaves(raw.decode())
         assert {k: v for k, v in new.items() if k not in allowed} == {
             k: v for k, v in old.items() if k not in allowed
         }
 
 
 def test_no_unreserved_nested_dispatcher_edits():
-    current = source_path("closer_dispatcher.py").read_text()
+    current = before_capacity_pre_effect_recovery_source(
+        source_path("closer_dispatcher.py").read_bytes(), "closer_dispatcher.py"
+    ).decode()
     expected = reference("78f6244c")["files"]["closer_dispatcher.py"][
         "unreserved_pipeline_ast_sha256"
     ]

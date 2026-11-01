@@ -248,6 +248,15 @@ def integrated_native_source_reference():
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     assert original["closer_dispatcher.py"] == bootstrap["before_file_sha256"]
     original["closer_dispatcher.py"] = bootstrap["after_file_sha256"]
+    for filename, change in capacity_pre_effect_recovery_reference()["files"].items():
+        if filename == "closer_operational_capacity.py":
+            assert (
+                change["before_file_sha256"]
+                == scoped_capacity_reference()["operational"]["after_file_sha256"]
+            )
+        else:
+            assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -558,8 +567,70 @@ def pagination_historical_role_reference():
     return value
 
 
+def capacity_pre_effect_recovery_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_capacity_pre_effect_recovery_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "64411f22832c61b2438a76ec4e11f82917a4e65f666671a0d3c9b3f36cf8052c"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "native-capacity-pre-effect-recovery-successor/v1"
+    assert value["base_commit"] == "f9f14efe899f66daa0f10be191999bd75fbdc746"
+    assert {name: set(change["function_delta"]) for name, change in value["files"].items()} == {
+        "closer_dispatcher.py": {"_fresh_capacity_report"},
+        "closer_native_observer.py": {
+            "_verified_admitted_capacity_report",
+            "admitted_capacity_report",
+            "revalidate_admitted_capacity_report",
+            "validate_admission",
+        },
+        "closer_native_source_upgrade.py": {
+            "_generic_old_native_quiescent",
+            "_generic_pre_effect_manifest",
+            "_source_selection_pre_effect_reference",
+            "plan",
+            "prepare_held",
+        },
+        "closer_operational_capacity.py": {
+            "_AdmittedCapacityReport",
+            "_admitted_report",
+            "_evaluate",
+            "_report_snapshot_valid",
+            "declared_profile_ids",
+            "evaluate",
+            "validate_admitted_report",
+            "validate_report",
+        },
+    }
+    assert all(change["constant_delta"] == {} for change in value["files"].values())
+    return value
+
+
+def before_capacity_pre_effect_recovery_source(raw, filename):
+    """Keep historical assertions exact beneath the separately attested successor."""
+    change = capacity_pre_effect_recovery_reference()["files"].get(filename)
+    if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
+        return raw
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    for reversal in change["historical_reversal"]:
+        before, after = reversal["before_fragment"].encode(), reversal["after_fragment"].encode()
+        assert raw.count(after) == 1
+        raw = raw.replace(after, before, 1)
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def before_dispatcher_bytecode_bootstrap(source):
     """Undo only the exact sealed-runtime bootstrap successor for old audits."""
+    capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
+    if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
+        source = before_capacity_pre_effect_recovery_source(
+            source.encode(), "closer_dispatcher.py"
+        ).decode()
     change = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     assert hashlib.sha256(source.encode()).hexdigest() == change["after_file_sha256"]
     reversal = change["historical_reversal"]
@@ -571,6 +642,11 @@ def before_dispatcher_bytecode_bootstrap(source):
 
 def before_initial_b_observability_dispatcher(source):
     """Reverse only the exact reviewed initial-B dispatcher successor for old audits."""
+    capacity = capacity_pre_effect_recovery_reference()["files"]["closer_dispatcher.py"]
+    if hashlib.sha256(source.encode()).hexdigest() == capacity["after_file_sha256"]:
+        source = before_capacity_pre_effect_recovery_source(
+            source.encode(), "closer_dispatcher.py"
+        ).decode()
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
         source = before_dispatcher_bytecode_bootstrap(source)
@@ -695,7 +771,9 @@ def assert_standing_publisher_v2_successor(source=None):
     ]
     assert fingerprint(tree) == reviewed["outside_reviewed_changes_ast_sha256"]
     for filename, successor in reviewed["native_file_successors"].items():
-        raw = source_path(filename).read_bytes()
+        raw = before_capacity_pre_effect_recovery_source(
+            source_path(filename).read_bytes(), filename
+        )
         later = initial_b_observability_reference()["files"].get(filename)
         if later is not None:
             assert successor["after_file_sha256"] == later["before_file_sha256"]
@@ -824,10 +902,70 @@ def current_role_renewal_reference():
     return value
 
 
+def capacity_bridge_role_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_capacity_bridge_role_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "f9cbf11fe29067e630f0e769b247ad76c71f3d878e2cd3b77dccc8385266b4a8"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "closer-capacity-bridge-role-successor/v1"
+    assert (
+        value["role_module"]["before_file_sha256"]
+        == current_role_renewal_reference()["role_module"]["after_file_sha256"]
+    )
+    assert set(value["role_module"]["assignment_delta"]) == {
+        "ROLE_QUALIFICATIONS",
+        "ROLE_QUALIFICATION_SUPERSEDES",
+    }
+    return value
+
+
+def assert_capacity_bridge_role_successor(raw):
+    reference = capacity_bridge_role_reference()
+    change = reference["role_module"]
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    tree = ast.parse(raw)
+    assert fingerprint(tree) == change["after_module_ast_sha256"]
+    for symbol, delta in change["assignment_delta"].items():
+        node = next(
+            n
+            for n in tree.body
+            if (isinstance(n, ast.AnnAssign) and getattr(n.target, "id", None) == symbol)
+            or (
+                isinstance(n, ast.Assign)
+                and any(getattr(t, "id", None) == symbol for t in n.targets)
+            )
+        )
+        assert fingerprint(node) == delta["after_ast_sha256"]
+        indices = [
+            i
+            for i, key in enumerate(node.value.keys)
+            if isinstance(key, ast.Constant) and key.value == reference["new_qualification_id"]
+        ]
+        assert len(indices) == 1
+        index = indices[0]
+        assert fingerprint(node.value.values[index]) == delta["added_value_ast_sha256"]
+        node.value.keys.pop(index)
+        node.value.values.pop(index)
+        assert fingerprint(node) == delta["before_ast_sha256"]
+    assert fingerprint(tree) == change["before_module_ast_sha256"]
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    if (
+        hashlib.sha256(raw).hexdigest()
+        == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
+    ):
+        assert_capacity_bridge_role_successor(raw)
+        return
     bootstrap = dispatcher_bytecode_role_qualification_reference()["role_module"]
     renewal = current_role_renewal_reference()["role_module"]
     if hashlib.sha256(raw).hexdigest() == renewal["after_file_sha256"]:
@@ -1145,7 +1283,12 @@ def scoped_capacity_reference():
     assert change["validation_function"]["name"] == "_fresh_capacity_report"
     assert change["added_function"]["name"] == "_report_profiles_for_agent"
     assert (
-        hashlib.sha256(source_path("closer_operational_capacity.py").read_bytes()).hexdigest()
+        hashlib.sha256(
+            before_capacity_pre_effect_recovery_source(
+                source_path("closer_operational_capacity.py").read_bytes(),
+                "closer_operational_capacity.py",
+            )
+        ).hexdigest()
         == value["operational"]["after_file_sha256"]
     )
     return value
@@ -1153,6 +1296,9 @@ def scoped_capacity_reference():
 
 def before_scoped_capacity_source(source):
     """Undo only exact reviewed capacity bytes before applying older audits."""
+    source = before_capacity_pre_effect_recovery_source(
+        source.encode(), "closer_dispatcher.py"
+    ).decode()
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     if hashlib.sha256(source.encode()).hexdigest() == bootstrap["after_file_sha256"]:
         source = before_dispatcher_bytecode_bootstrap(source)

@@ -918,6 +918,48 @@ def _manifest(path: str | Path, *, old: bool = False) -> tuple[Path, bytes, dict
     return value, raw, doc
 
 
+def _generic_pre_effect_manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
+    """Validate a physically present predecessor without admitting it as a release.
+
+    This is deliberately narrower than ``_manifest(old=True)``: it is usable
+    only by the forensic source-selection reader below, and never imports the
+    predecessor or treats its candidate name as authority.
+    """
+    import closer_campaign as campaign
+
+    value, raw, doc = _object(path, "old manifest")
+    _need(
+        not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
+        "old closure invalid",
+    )
+    modules = doc.get("modules")
+    base = _canonical(doc.get("module_dir", ""))
+    _need(isinstance(modules, dict) and modules, "old closure invalid")
+    modules = cast(dict[str, Any], modules)
+    for name, digest in modules.items():
+        _need(
+            isinstance(name, str)
+            and Path(name).name == name
+            and isinstance(digest, str)
+            and _DIGEST.fullmatch(digest)
+            and _sha(host._read(base / name)[1]) == digest,
+            "old qualified module differs",
+        )
+    # The recorded stage is evidence only under the reviewed producer whose
+    # writer ordering and durable pre-write records this reader understands.
+    for name in (
+        "closer_correction_controller.py",
+        "closer_correction_native_effects.py",
+        "closer_correction_source_record.py",
+        "closer_source_installation.py",
+    ):
+        _need(
+            modules.get(name) == _sha(host._read(Path(__file__).with_name(name))[1]),
+            "old source-selection producer semantics differ",
+        )
+    return value, raw, doc
+
+
 def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
     """Bind the replacement to an actually installed, verified generation."""
     import closer_release
@@ -1136,6 +1178,255 @@ def _completed_reference(
         "result_path": str(result_path),
         "result_sha256": _sha(result_raw),
         "result": result,
+    }
+
+
+def _source_selection_pre_effect_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Current forensic reading of one signed, pre-instruction source failure.
+
+    The old UNKNOWN remains untouched.  This reader establishes only that the
+    authenticated finite row reached source selection, that the original queue
+    retained the single uncertain operation, and that its source-owned result
+    denied every effect/retry authority before a controller transaction existed.
+    """
+    import closer_campaign as campaign
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+    import closer_pipeline as pipeline
+
+    manifest_value, manifest_raw, manifest = _generic_pre_effect_manifest(manifest_path)
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "old campaign is not retained finite reconciliation",
+    )
+    worker = next(
+        (
+            x
+            for x in document.get("workers", [])
+            if isinstance(x, dict) and x.get("worker_id") == worker_id
+        ),
+        None,
+    )
+    _need(
+        isinstance(worker, dict)
+        and worker.get("state") == "terminal"
+        and worker.get("outcome") == "scoped_continuation",
+        "old worker is not retained source-selection failure",
+    )
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    _need(
+        result.get("worker_id") == worker_id and result.get("outcome") == "scoped_continuation",
+        "old result differs",
+    )
+    # Do not use native.contract()/completed_round_proof() here: after a
+    # wrapper CAS they correctly reject the *old* runtime.  Re-read only the
+    # old HMAC-sealed admission/handoff/cohort records instead.
+    import hmac
+
+    context = result.get("native_admission")
+    detail = json.loads(result.get("detail", ""))
+    _need(isinstance(context, dict) and isinstance(detail, dict), "old native result differs")
+    context = cast(dict[str, Any], context)
+    detail = cast(dict[str, Any], detail)
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    nonce = context.get("nonce")
+    _need(
+        isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce),
+        "old admission nonce differs",
+    )
+    nonce = cast(str, nonce)
+    directory = root / nonce
+    admission = native._read(directory / "admission.json")
+    handoff = native._read(directory / ("worker-" + worker_id + ".json"))
+    _need(
+        admission.get("record") == {"binding": binding, "context": context}
+        and hmac.compare_digest(
+            str(admission.get("signature", "")),
+            mechanisms._signature(admission["record"], mechanisms._key(root)),
+        )
+        and handoff.get("record", {}).get("binding") == binding
+        and handoff["record"].get("admission") == context
+        and hmac.compare_digest(
+            str(handoff.get("signature", "")),
+            mechanisms._signature(handoff["record"], mechanisms._key(root)),
+        ),
+        "old signed admission or handoff differs",
+    )
+    cfg = document.get("worker_config")
+    _need(isinstance(cfg, dict), "old worker configuration differs")
+    cfg = cast(dict[str, Any], cfg)
+    worker = cast(dict[str, Any], worker)
+    _need(
+        context.get("runtime_manifest") == str(manifest_value)
+        and context.get("runtime_manifest_sha256") == _sha(manifest_raw)
+        and context.get("demand_assignment") == document.get("demand_assignment")
+        and context.get("finite_frontier") == cfg.get("finite_frontier")
+        and context.get("request_timeout_seconds") == cfg.get("request_timeout_seconds"),
+        "old admission context differs",
+    )
+    for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
+        pin = context.get(key)
+        raw = host._read(directory / name)[1]
+        _need(
+            isinstance(pin, dict)
+            and pin.get("path") == str(directory / name)
+            and pin.get("sha256") == _sha(raw),
+            "old admission pin differs",
+        )
+    fields = {
+        "state": str(state),
+        "target": worker["target"],
+        "owner": document["owner"],
+        "generation": str(context["campaign"]["generation"]),
+        "result": str(result_path),
+        "runtime-manifest": context["runtime_manifest"],
+        "mechanism": mechanisms.NATIVE,
+    }
+    _need(
+        handoff["record"].get("fields") == fields
+        and context.get("campaign")
+        == native._campaign_identity(
+            state, {**document, "generation": context["campaign"]["generation"]}
+        ),
+        "old signed handoff fields differ",
+    )
+    cohort_path = directory / ("completed-cohort-" + worker_id + ".json")
+    terminal, _terminal_raw = campaign._signed_cohort_record(
+        detail.get("cohort_terminal"), cohort_path, root, [128 * 1024 * 1024]
+    )
+    _need(
+        isinstance(terminal, dict) and terminal.get("completed") is False,
+        "old terminal is completion authority",
+    )
+    proof = detail.get("proof")
+    _need(
+        terminal.get("binding") == binding
+        and terminal.get("admission") == context
+        and terminal.get("proof") == proof
+        and terminal.get("native_execution") == detail.get("native_execution"),
+        "old signed cohort differs",
+    )
+    execution = detail.get("native_execution")
+    _need(
+        isinstance(execution, dict)
+        and execution.get("phases", {}).get("A", {}).get("exit_code") == 0
+        and execution.get("phases", {}).get("B", {}).get("exit_code") == 78
+        and execution.get("phases", {}).get("C", {}).get("exit_code") == 65
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("exact_token_matched")
+        is True
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("released") is True,
+        "old native execution is not exact quarantined cleanup",
+    )
+    frontier = cfg.get("finite_frontier")
+    _need(
+        isinstance(frontier, dict)
+        and frontier.get("targets") == [next(iter(frontier.get("targets", [])), None)],
+        "old finite target is ambiguous",
+    )
+    frontier = cast(dict[str, Any], frontier)
+    target = frontier["targets"][0]
+    _need(
+        isinstance(proof, dict)
+        and proof.get("schema") == "native-scoped-continuation/v1"
+        and proof.get("accepted") is False
+        and proof.get("global_stop_valid") is False
+        and proof.get("domain_outcome") == "quarantined"
+        and proof.get("finite_frontier") == frontier
+        and proof.get("run_ids", {}).get(target),
+        "old scoped quarantine proof differs",
+    )
+    proof = cast(dict[str, Any], proof)
+    items = proof.get("quarantined_admitted_items")
+    _need(
+        isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict),
+        "old quarantine item differs",
+    )
+    items = cast(list[Any], items)
+    item = items[0]
+    item = cast(dict[str, Any], item)
+    shard = _canonical(str(item.get("source_path")))
+    _need(
+        isinstance(item.get("target"), str)
+        and item["target"].lower() == target.lower()
+        and shard.name == "state.json",
+        "old quarantine target differs",
+    )
+    shard_raw = host._read(shard)[1]
+    shard_doc = json.loads(shard_raw)
+    _need(isinstance(shard_doc, dict), "old quarantined shard differs")
+    shard_doc = cast(dict[str, Any], shard_doc)
+    try:
+        row = shard_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+    except (KeyError, TypeError) as exc:
+        raise SourceUpgradeHeld("old quarantined frontier row is unavailable") from exc
+    _need(item.get("item_sha256") == mechanisms.digest(row), "old signed quarantine row differs")
+    action = shard.parent / "state.actions" / (pipeline._digest(target) + ".json")
+    _action_path, action_raw, action_doc = _object(action, "old action queue")
+    action_sha = _sha(action_raw)
+    found = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("operation"), dict):
+                found.append(value["operation"])
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(action_doc)
+    _need(len(found) == 1, "old source operation is absent or ambiguous")
+    operation = found[0]
+    failure = operation.get("result")
+    _need(
+        operation.get("status") == "uncertain"
+        and operation.get("attempts") == 1
+        and isinstance(failure, dict)
+        and failure.get("failure_diagnostic")
+        == {
+            "stage": "source_selection",
+            "code": "full_source_validation_unavailable",
+            "exception": "ValueError",
+        }
+        and all(
+            failure.get(key) is False
+            for key in ("act_authorized", "source_closure_authorized", "retry_safe")
+        )
+        and failure.get("outcome_uncertain") is True,
+        "old operation is not exact pre-effect source-selection failure",
+    )
+    return {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "detail": detail,
+        "terminal": terminal,
+        "forensic": {
+            "schema": "source-selection-pre-effect-forensic/v1",
+            "authority": False,
+            "operation_id": operation.get("id"),
+            "operation_sha256": _sha(
+                json.dumps(operation, sort_keys=True, separators=(",", ":")).encode()
+            ),
+            "quarantined_item_sha256": item["item_sha256"],
+            "action_path": str(action),
+            "action_sha256": action_sha,
+        },
     }
 
 
@@ -1661,6 +1952,74 @@ def _old_native_terminal(manifest: dict[str, Any]) -> None:
             host._dead(value)
 
 
+def _generic_old_native_quiescent(manifest: dict[str, Any]) -> None:
+    """Read a stopped, pre-admission submitted wrapper without rewriting it."""
+    import hmac
+
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    _path, _raw, active = _object(root / "native-active.json", "old native active record")
+    if active.get("status") == "terminal":
+        _old_native_terminal(manifest)
+        return
+    binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    _need(
+        active.get("binding") == binding and active.get("status") == "submitted",
+        "old native submission differs",
+    )
+    nonce = active.get("nonce")
+    _need(
+        isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce), "old native nonce differs"
+    )
+    directory = root / cast(str, nonce)
+    names = set(os.listdir(directory))
+    _need(
+        names == {"startup.json", "terminal.json"},
+        "old submitted native entry lacks exact stopped terminal",
+    )
+    _startup_path, _startup_raw, startup = _object(directory / "startup.json", "old native startup")
+    _need(
+        startup.get("schema") == "native-wrapper-lifecycle/v1"
+        and startup.get("source") == "owned-native-wrapper-process"
+        and startup.get("nonce") == nonce
+        and startup.get("binding") == binding
+        and startup.get("actor") == "cursor",
+        "old native startup differs",
+    )
+    for key in ("entry", "wrapper"):
+        identity = startup.get(key)
+        _need(
+            isinstance(identity, dict)
+            and isinstance(identity.get("pid"), int)
+            and isinstance(identity.get("started"), str)
+            and isinstance(identity.get("argv_sha256"), str)
+            and _DIGEST.fullmatch(identity["argv_sha256"]),
+            "old native startup identity differs",
+        )
+        identity = cast(dict[str, Any], identity)
+        host._dead(identity["pid"])
+    terminal = native._read(directory / "terminal.json")
+    record = terminal.get("record")
+    _need(
+        isinstance(record, dict)
+        and record.get("schema") == "native-wrapper-lifecycle/v1"
+        and record.get("binding") == binding
+        and record.get("nonce") == nonce
+        and record.get("entry") == startup.get("entry")
+        and record.get("wrapper") == startup.get("wrapper")
+        and record.get("unknown") is True
+        and record.get("passed") is False
+        and record.get("error", {}).get("type") == "KeyboardInterrupt"
+        and hmac.compare_digest(
+            str(terminal.get("signature", "")),
+            mechanisms._signature(record, mechanisms._key(root)),
+        ),
+        "old submitted native terminal differs",
+    )
+
+
 def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
     """Pin target/owner/principal/epoch semantics across the source upgrade."""
     old_config = old["policy"]["correction_controller_installation"]["config"]
@@ -2175,14 +2534,26 @@ def plan(
     failed_before_pipeline = (
         candidate_old.get("candidate_sha") == "dd8d71119b92e15ff85836cc44ad40e20207ac6f"
     )
+    generic_pre_effect = not failed_before_pipeline and candidate_old.get("candidate_sha") not in {
+        REVIEWED_OLD_CANDIDATE,
+        REVIEWED_CAPACITY_CANDIDATE,
+        REVIEWED_CLOCK_CANDIDATE,
+        REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+        REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+        REVIEWED_PAGINATION_CANDIDATE,
+    }
     if failed_before_pipeline:
         old_path, old = candidate_path, candidate_old
+    elif generic_pre_effect:
+        old_path, _validated_old_raw, old = _generic_pre_effect_manifest(old_manifest)
+        _need(_validated_old_raw == old_raw, "old manifest changed during validation")
     else:
         old_path, _validated_old_raw, old = _manifest(old_manifest, old=True)
         _need(_validated_old_raw == old_raw, "old manifest changed during validation")
     new_path, new_raw, new = _manifest(new_manifest)
     _need(
-        old.get("candidate_sha")
+        generic_pre_effect
+        or old.get("candidate_sha")
         in {
             REVIEWED_OLD_CANDIDATE,
             REVIEWED_CAPACITY_CANDIDATE,
@@ -2203,15 +2574,21 @@ def plan(
         new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),
         "new manifest does not pin executing source-upgrade boundary",
     )
-    reference, failed_before_pipeline = _old_reference(old_path, old_state, worker_id)
+    reference = (
+        _source_selection_pre_effect_reference(old_path, old_state, worker_id)
+        if generic_pre_effect
+        else _old_reference(old_path, old_state, worker_id)[0]
+    )
     pagination_preinstruction = old.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
-    if failed_before_pipeline:
+    if generic_pre_effect:
+        diagnostic = reference["forensic"]
+    elif failed_before_pipeline:
         _need(
             _sha(old_raw) == reference["manifest_sha256"] and old == reference["manifest"],
             "failed-before-pipeline old manifest changed during reader validation",
         )
     _same_identity(old, new)
-    _old_native_terminal(old)
+    (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old)
     host._lane_absent()
     custody = _old_custody_quiet(old)
     index = fresh_read_native_index(
@@ -2227,6 +2604,14 @@ def plan(
             "terminal_sha256": reference["terminal_sha256"],
             "handoff_sha256": reference["handoff_sha256"],
         }
+    elif generic_pre_effect:
+        # The sealed forensic reader above is deliberately post-CAS safe.
+        # Do not invoke the literal reviewed-predecessor diagnostic here.
+        _need(
+            diagnostic.get("schema") == "source-selection-pre-effect-forensic/v1"
+            and diagnostic.get("authority") is False,
+            "generic pre-effect diagnostic differs",
+        )
     elif pagination_preinstruction:
         # This validates an old-source closure and an immutable failure frame,
         # but intentionally leaves its uncertain operation and reservations in
@@ -2337,6 +2722,7 @@ def plan(
             "native_index": index,
             "diagnostic": diagnostic,
             "failed_before_pipeline": failed_before_pipeline,
+            "generic_pre_effect": generic_pre_effect,
             "worker_id": worker_id,
         },
         "new": {
@@ -2614,7 +3000,12 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
     old_worker_id = record["old"].get("worker_id")
     _need(isinstance(old_worker_id, str), "sealed old worker unavailable")
     failed_before_pipeline = record["old"].get("failed_before_pipeline") is True
-    if failed_before_pipeline:
+    generic_pre_effect = record["old"].get("generic_pre_effect") is True
+    if generic_pre_effect:
+        old_reference = _source_selection_pre_effect_reference(
+            old_manifest_path, old_state, old_worker_id
+        )
+    elif failed_before_pipeline:
         old_reference = _failed_before_pipeline_reference(
             old_manifest_path, old_state, old_worker_id
         )
@@ -2637,7 +3028,12 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         and old_reference["state_sha256"] == record["old"]["state_sha256"],
         "old predecessor changed",
     )
-    _old_native_terminal(old_manifest)
+    if generic_pre_effect:
+        _need(
+            old_reference.get("forensic") == record["old"].get("diagnostic"),
+            "generic pre-effect forensic evidence changed",
+        )
+    (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old_manifest)
     host._lane_absent()
     inspection = _old_custody_quiet(old_manifest)
     _need(
@@ -2695,7 +3091,11 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         _locked_state_path, _locked_state_raw, old_doc = _pinned_object(
             old_state, record["old"]["state_sha256"], "old campaign state"
         )
-        if failed_before_pipeline:
+        if generic_pre_effect:
+            locked_reference = _source_selection_pre_effect_reference(
+                old_manifest_path, old_state, old_worker_id
+            )
+        elif failed_before_pipeline:
             locked_reference = _failed_before_pipeline_reference(
                 old_manifest_path, old_state, old_worker_id
             )
@@ -2718,7 +3118,14 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             and locked_reference["state_sha256"] == record["old"]["state_sha256"],
             "old predecessor changed under locks",
         )
-        _old_native_terminal(locked_old_manifest)
+        if generic_pre_effect:
+            _need(
+                locked_reference.get("forensic") == record["old"].get("diagnostic"),
+                "generic pre-effect forensic evidence changed under locks",
+            )
+        (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(
+            locked_old_manifest
+        )
         host._lane_absent()
         _need(
             _old_custody_quiet(locked_old_manifest) == inspection,

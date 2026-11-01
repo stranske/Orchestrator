@@ -967,14 +967,105 @@ def validate_admission(manifest, context, *, for_effects, _scope=None, for_test=
     ):
         raise mechanisms.MechanismError("native admission manifest bytes differ")
     capacity_report = _read(directory / "scoped-capacity.json")
+    model_policy = None
     if capacity_report.get("control_plane_only") is not True:
-        capacity_contract(manifest)  # Model qualification retains the strict registry contract.
-    if for_effects and (
-        (not finite and not time.time() < deadline)
-        or not scoped.validate_report(_read(directory / "scoped-capacity.json"), now=time.time())
-    ):
-        raise mechanisms.MechanismError("native admission expired or operational inputs changed")
+        model_policy = capacity_contract(
+            manifest
+        )  # Model qualification retains the strict registry contract.
+    if for_effects:
+        capacity_valid = (
+            scoped.validate_report(capacity_report, now=time.time())
+            if model_policy is None
+            else scoped.validate_admitted_report(
+                capacity_report,
+                now=time.time(),
+                policy=model_policy,
+                runtime_manifest=context["runtime_manifest"],
+                runtime_manifest_sha256=context["runtime_manifest_sha256"],
+            )
+        )
+        if (not finite and not time.time() < deadline) or not capacity_valid:
+            raise mechanisms.MechanismError(
+                "native admission expired or operational inputs changed"
+            )
     return context
+
+
+def _verified_admitted_capacity_report(path):
+    """Re-read one scoped report through its exact signed native admission."""
+    import closer_campaign as campaign
+
+    report_path = Path(path)
+    if (
+        not report_path.is_absolute()
+        or report_path.resolve() != report_path
+        or report_path.is_symlink()
+        or report_path.name != "scoped-capacity.json"
+    ):
+        raise mechanisms.MechanismError("native admitted capacity path differs")
+    raw = _bounded_bytes(report_path, 128 * 1024)
+    report = json.loads(raw)
+    if not isinstance(report, dict):
+        raise mechanisms.MechanismError("native admitted capacity report differs")
+    signed = _read(report_path.parent / "admission.json")
+    record = signed.get("record")
+    context = record.get("context") if isinstance(record, dict) else None
+    if not isinstance(context, dict):
+        raise mechanisms.MechanismError("native admitted capacity context differs")
+    manifest_path = Path(context.get("runtime_manifest", ""))
+    if (
+        not manifest_path.is_absolute()
+        or manifest_path.resolve() != manifest_path
+        or manifest_path.is_symlink()
+        or _hash(manifest_path) != context.get("runtime_manifest_sha256")
+        or context.get("report")
+        != {"path": str(report_path), "sha256": hashlib.sha256(raw).hexdigest()}
+    ):
+        raise mechanisms.MechanismError("native admitted capacity binding differs")
+    manifest = campaign.load_manifest(manifest_path)
+    validate_admission(manifest, context, for_effects=True)
+    campaign_identity = context.get("campaign")
+    if not isinstance(campaign_identity, dict):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    campaign_state = Path(campaign_identity.get("state", ""))
+    if (
+        not campaign_state.is_absolute()
+        or campaign_state.resolve() != campaign_state
+        or campaign_state.is_symlink()
+    ):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    document = campaign.Campaign(campaign_state).read()
+    if campaign_identity != _campaign_identity(campaign_state, document):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    config = document.get("worker_config")
+    if not isinstance(config, dict):
+        raise mechanisms.MechanismError("native admitted capacity campaign differs")
+    admission_config(manifest, config, context, for_effects=True)
+    if _bounded_bytes(report_path, 128 * 1024) != raw:
+        raise mechanisms.MechanismError("native admitted capacity report changed")
+    return report, hashlib.sha256(raw).hexdigest()
+
+
+def admitted_capacity_report(path):
+    """Return a same-process marker only after complete admission revalidation."""
+    import closer_operational_capacity as scoped
+
+    report, digest = _verified_admitted_capacity_report(path)
+    return scoped._admitted_report(report, path=Path(path), sha256=digest)
+
+
+def revalidate_admitted_capacity_report(report):
+    """Reject a copied, mutated, or no-longer-authenticated marker."""
+    import closer_operational_capacity as scoped
+
+    if not isinstance(report, scoped._AdmittedCapacityReport):
+        return False
+    try:
+        path = Path(report._admitted_path)
+        current, digest = _verified_admitted_capacity_report(path)
+        return digest == report._admitted_sha256 and current == dict(report)
+    except (AttributeError, KeyError, OSError, TypeError, ValueError, mechanisms.MechanismError):
+        return False
 
 
 def admission_config(manifest, cfg, context, *, for_effects=True):

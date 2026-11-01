@@ -5006,13 +5006,14 @@ def _fresh_capacity_report():
     try:
         report = json.loads(report_path.read_text())
         if explicit:
+            from closer_native_observer import admitted_capacity_report
             from closer_operational_capacity import validate_report
 
-            if (
-                not report_path.is_absolute()
-                or report_path.is_symlink()
-                or not validate_report(report, now=time.time())
-            ):
+            if not report_path.is_absolute() or report_path.is_symlink():
+                return None
+            if (report_path.parent / "admission.json").exists():
+                report = admitted_capacity_report(report_path)
+            elif not validate_report(report, now=time.time()):
                 return None
         age = time.time() - float(report["generated_at"])
         if age < -30 or age > 1800:
@@ -5025,7 +5026,7 @@ def _fresh_capacity_report():
         ):
             return None
         return report
-    except (OSError, ValueError, KeyError, TypeError, OverflowError):
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, OverflowError):
         return None
 
 

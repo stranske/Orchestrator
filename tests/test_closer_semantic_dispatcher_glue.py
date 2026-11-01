@@ -14,6 +14,7 @@ from closer_semantic_audit_support import (
 )
 from closer_semantic_native_integration_support import (
     assert_reviewed_role_registry_successor,
+    before_capacity_pre_effect_recovery_source,
 )
 from closer_semantic_native_integration_support import (
     integrated_reference as reference,
@@ -104,7 +105,10 @@ def functions(source):
 
 def test_dispatcher_ast_only_reserved_semantic_hunks_and_exact_one_act_merge():
     old = reference("9379f225")["files"]["closer_dispatcher.py"]
-    new_top = functions(Path(closer.__file__).read_text())
+    source = before_capacity_pre_effect_recovery_source(
+        Path(closer.__file__).read_bytes(), "closer_dispatcher.py"
+    ).decode()
+    new_top = functions(source)
     assert {
         name: value
         for name, value in old["top_level_ast"].items()
