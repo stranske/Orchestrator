@@ -463,6 +463,25 @@ def test_finite_frontier_campaign_dispatch_uses_exact_cli_flags(tmp_path):
     assert captured["request_timeout_seconds"] == 30
     assert captured["budget_seconds"] is None
     assert captured["coordinator_mode"] == "resource_scoped"
+    assert "--domain-act-timeout-seconds" not in command
+    domain_command = cc.dispatch_command(
+        {
+            "assignment": str(assignment),
+            "dispatch_state": str(tmp_path / "domain-dispatch.json"),
+            "dispatch_workers": 2,
+            "coordinator_mode": "resource_scoped",
+            "coordinator_contract_pin": closer_pipeline.scoped_capability(),
+            "finite_frontier": frontier,
+            "execution_policy": "finite-frontier/v2",
+            "request_timeout_seconds": 120,
+            "domain_act_timeout_seconds": 600,
+            "apply": True,
+            "runtime_manifest": str(tmp_path / "runtime.json"),
+        },
+        "/offline/python",
+        tmp_path,
+    )
+    assert domain_command[domain_command.index("--domain-act-timeout-seconds") + 1] == "600"
 
 
 def test_finite_campaign_does_not_relaunch_unavailable_worker(tmp_path):

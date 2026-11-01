@@ -1230,27 +1230,82 @@ def _facts(selection, controller, operation):
     def native_owner_transport(argv, **options):
         prefix = "repos/" + controller.config.repository
         _need(
-            isinstance(argv, list)
-            and len(argv) == 4
+            isinstance(argv, list) and not set(options) - {"resource", "timeout_s"},
+            "source owner read outside original native API protocol",
+        )
+        if (
+            len(argv) == 4
             and argv[:3] == ["api", "--method", "GET"]
             and isinstance(argv[3], str)
             and argv[3].startswith(prefix + "/")
-            and not set(options) - {"resource", "timeout_s"},
+        ):
+            controller.live(operation)
+            path = argv[3][len(prefix) :]
+            answer = controller.store.call("GET", path)
+            controller.live(operation)
+            effects = controller._native_effect_source()
+            return 0, effects.project_retained_issue_ownership(
+                controller,
+                getattr(controller._writer_context, "custody", None),
+                operation,
+                original,
+                path,
+                answer,
+            )
+
+        _need(
+            len(argv) == 6
+            and argv[:4] == ["api", "--method", "POST", "graphql"]
+            and argv[4] == "-f"
+            and isinstance(argv[5], str)
+            and argv[5].startswith("query=")
+            and options.get("resource") == "graphql",
             "source owner read outside original native API protocol",
         )
-        controller.live(operation)
-        path = argv[3][len(prefix) :]
-        answer = controller.store.call("GET", path)
-        controller.live(operation)
-        effects = controller._native_effect_source()
-        return 0, effects.project_retained_issue_ownership(
-            controller,
-            getattr(controller._writer_context, "custody", None),
-            operation,
-            original,
-            path,
-            answer,
+        query = argv[5][len("query=") :]
+        import closer_correction_canary_ownership as canary
+
+        # This is deliberately an inverse rendering check, not a caller flag:
+        # only the reviewed canary's bounded same-repository query grammar can
+        # reach the existing authenticated, read-only GitHub client.
+        _need(
+            canary.is_reviewed_seed(seed)
+            and controller.config.repository.lower() == canary.REPOSITORY
+            and controller.config.repository_id == canary.REPOSITORY_ID,
+            "source owner GraphQL identity differs",
         )
+        prefix_query = (
+            'query {repository(owner:"stranske",name:"Orchestrator"){databaseId nameWithOwner '
+        )
+        import re
+
+        aliases = re.findall(r"(?<![A-Za-z0-9_])([pi])([1-9][0-9]*):", query)
+        discovered = {
+            number: {"node_id": "sealed", "is_pr": kind == "p"} for kind, number in aliases
+        }
+        snapshot_query = (
+            query.startswith(prefix_query)
+            and query.endswith("}}")
+            and 0 < len(aliases) <= canary._MAX_DISCOVERED
+            and len(discovered) == len(aliases)
+            and query == canary._query(discovered)
+        )
+        lineage_query = (
+            'query {repository(owner:"stranske",name:"Orchestrator"){databaseId nameWithOwner '
+            "issue(number:988){id timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT])"
+            "{nodes{... on CrossReferencedEvent{actor{__typename ... on User{login databaseId}} "
+            "createdAt source{__typename ... on Issue{id number repository{nameWithOwner databaseId}} "
+            "... on PullRequest{id number repository{nameWithOwner databaseId}}}}} "
+            "pageInfo{hasNextPage}}}}}"
+        )
+        _need(snapshot_query or query == lineage_query, "source owner GraphQL query differs")
+        controller.live(operation)
+        answer = closer.GitHub(deadline=min(operation["deadline"], context["deadline"])).api(
+            "graphql", method="POST", fields={"query": query}, resource="graphql"
+        )
+        controller.live(operation)
+        _need(isinstance(answer, dict), "source owner GraphQL response unavailable")
+        return 0, answer
 
     native_reader = closer.GitHub(
         deadline=min(operation["deadline"], context["deadline"]), api_fn=native_owner_transport
