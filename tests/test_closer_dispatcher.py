@@ -5372,6 +5372,17 @@ def _pin_pass_number_before_check_date(monkeypatch):
     return real
 
 
+def _pin_pass2_number_before_check_date(monkeypatch):
+    """Keep #1049 pass2 pending on main() receipts; return the real grader."""
+    real = adapter.reservation_drain_pass2_number
+
+    def _pending(receipt, *, now=None):
+        return real(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS - 1)
+
+    monkeypatch.setattr(adapter, "reservation_drain_pass2_number", _pending)
+    return real
+
+
 def test_reservation_drain_pass_number_pending_before_check_date():
     """#898 pass number stays pending before 2026-10-30 while grading reservation half."""
     cleared = adapter.reservation_drain_pass_number(
@@ -5854,6 +5865,181 @@ def test_reservation_drain_pass2_number_pending_before_check_date():
     )
     assert failed["status"] == "fail"
     assert failed["check_date"] == "2026-10-30"
+
+
+def test_reservation_drain_pass2_number_requires_authority_after_check_date():
+    """#1049 pass2: latch clears only with authority true after the check date."""
+    no_authority = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 0, "drainable_reservations": 0, "authority": False},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert no_authority["status"] == "fail"
+    assert no_authority["reservation_cleared"] is True
+    assert "authority" in no_authority["reason"]
+    latch = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 2, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert latch["status"] == "fail"
+    assert latch["reservation_cleared"] is False
+    passed = adapter.reservation_drain_pass2_number(
+        {"blocking_reservations": 2, "drainable_reservations": 2, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS,
+    )
+    assert passed["status"] == "pass"
+    assert passed["check_date"] == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    assert passed["reason"] == "reservation latch cleared with authority"
+    # Failed #898 pass1 row stays fail; pass2 is a separate receipt field.
+    failed_pass1 = adapter.reservation_drain_pass_number(
+        {"blocking_reservations": 11, "drainable_reservations": 0, "authority": True},
+        now=adapter.RESERVATION_DRAIN_PASS_CHECK_TS,
+    )
+    assert failed_pass1["status"] == "fail"
+    assert failed_pass1["check_date"] == "2026-10-30"
+
+
+def test_admitted_pipeline_receipt_grades_pass2_cleared_with_authority(
+    tmp_path, monkeypatch, capsys
+):
+    """#1049 AC: --pipeline receipt with authority true clears pass2 on check date."""
+    state = _terminal_queue_state(tmp_path)
+    state["items"][TARGET]["revision"] = "invalidates-old-stop"
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    pipeline = closer_pipeline._empty()
+    pipeline["runs"]["prior"] = {
+        "created": 1,
+        "deadline": 2,
+        "assignment": [TARGET],
+        "targets": {TARGET: {"status": "completed"}},
+    }
+    pipeline_path.write_text(json.dumps(pipeline))
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted-pass2",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    _pin_pass_number_before_check_date(monkeypatch)
+    grade2 = _pin_pass2_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == 0 or (
+        receipt["drainable_reservations"] == receipt["blocking_reservations"]
+    )
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 0
+    assert receipt["reservation_drain_pass2"]["status"] == "pending"
+    assert (
+        receipt["reservation_drain_pass2"]["check_date"]
+        == adapter.RESERVATION_DRAIN_PASS2_CHECK_LABEL
+    )
+    assert receipt["reservation_drain_pass2"]["authority"] is True
+    # Failed 2026-10-30 pass1 row remains present and independently graded.
+    assert receipt["reservation_drain_pass"]["check_date"] == "2026-10-30"
+    after_check = grade2(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS)
+    assert after_check["status"] == "pass"
+    assert after_check["reason"] == "reservation latch cleared with authority"
+
+
+def test_admitted_pipeline_receipt_grades_pass2_drainable_equals_blocking(
+    tmp_path, monkeypatch, capsys
+):
+    """#1049 AC OR-branch: authority true + drainable==blocking grades pass2 pass."""
+    import closer_resources as resources
+
+    state = _terminal_queue_state(tmp_path)
+    state_path = tmp_path / "legacy-queue.json"
+    state_path.write_text(json.dumps(state))
+    pipeline_path = adapter._pipeline_state_path(state_path)
+    closer_pipeline._save(pipeline_path, closer_pipeline._empty())
+    key = "pr:" + TARGET.lower()
+    directory = resources._key_dir(resources.scoped_root(pipeline_path), key)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "lock").touch()
+    resources._atomic_write(
+        directory / "intent.json",
+        {
+            "key": key,
+            "target": TARGET.lower(),
+            "owner": "99999999:123:original",
+            "state": "unknown",
+            "at": 1,
+        },
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": TARGET}]}))
+    monkeypatch.setattr(adapter, "GitHub", lambda *, deadline: SimpleNamespace(deadline=deadline))
+    monkeypatch.setattr(adapter, "Closer", lambda *_a, **_k: SimpleNamespace())
+    monkeypatch.setattr(adapter, "known_workspaces", lambda _targets: {})
+    monkeypatch.setattr(
+        adapter,
+        "_run_staged_pipeline",
+        lambda *_: {
+            "schema": "closer-pipeline-receipt/v1",
+            "authority": True,
+            "run_id": "admitted-pass2-drainable",
+            "finished_at": time.time(),
+            "targets": {},
+        },
+    )
+    monkeypatch.setattr(closer_pipeline, "validate_stop", lambda *_a, **_k: {"valid": True})
+    monkeypatch.setattr(
+        resources, "_terminal_remote_observation", lambda target: _terminal_observation(target)
+    )
+    monkeypatch.setattr(adapter, "_probe_snapshot_revision", lambda _target: "rev-pass2")
+    _pin_pass_number_before_check_date(monkeypatch)
+    grade2 = _pin_pass2_number_before_check_date(monkeypatch)
+    assert (
+        adapter.main(
+            [
+                "run",
+                "--assignment",
+                str(assignment),
+                "--state",
+                str(state_path),
+                "--pipeline",
+                "--apply",
+                "--workers",
+            ]
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["authority"] is True
+    assert receipt["blocking_reservations"] == receipt["drainable_reservations"] == 1
+    assert receipt["reservation_drain_pass2"]["reservation_cleared"] is True
+    assert receipt["reservation_drain_pass2"]["status"] == "pending"
+    graded = grade2(receipt, now=adapter.RESERVATION_DRAIN_PASS2_CHECK_TS)
+    assert graded["status"] == "pass"
+    assert graded["authority"] is True
+    assert graded["reason"] == "reservation latch cleared with authority"
 
 
 def test_core_reserve_records_process_group(tmp_path):
