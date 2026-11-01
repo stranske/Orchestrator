@@ -227,6 +227,9 @@ def integrated_native_source_reference():
     for filename, change in pagination_held_successor_reference()["files"].items():
         assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
+    for filename, change in pagination_historical_role_reference()["files"].items():
+        assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
     assert "closer_failed_predecessor_readback.py" not in original
     original["closer_failed_predecessor_readback.py"] = failed[
         "closer_failed_predecessor_readback.py"
@@ -528,6 +531,33 @@ def pagination_held_successor_reference():
     return value
 
 
+def pagination_historical_role_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_pagination_historical_role_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "b588825db7943272766fc46907239ba23b82758d3a7d7b8c25e942b10cceeb74"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "pagination-historical-role-source-successor/v1"
+    assert value["base_commit"] == "2a5aea7e257c7bae2f2dd729fd0d0245ad62540a"
+    assert set(value["files"]) == {"closer_native_source_upgrade.py"}
+    change = value["files"]["closer_native_source_upgrade.py"]
+    prior = pagination_held_successor_reference()["files"]["closer_native_source_upgrade.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(change["function_delta"]) == {
+        "_old_reference",
+        "_pagination_preinstruction_diagnostic",
+        "plan",
+    }
+    assert change["constant_delta"] == {}
+    return value
+
+
 def before_dispatcher_bytecode_bootstrap(source):
     """Undo only the exact sealed-runtime bootstrap successor for old audits."""
     change = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
@@ -779,11 +809,49 @@ def dispatcher_bytecode_role_qualification_reference():
     return value
 
 
+def current_role_renewal_reference():
+    path = Path(__file__).parent / "fixtures/semantic_api_reference/current_role_renewal_v1.json"
+    raw = path.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == (
+        "2954761a7e87af45832985207ea1559937c81c92050c1f76ceff64649d4a2993"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "closer-current-role-renewal-overlay/v1"
+    prior = dispatcher_bytecode_role_qualification_reference()["role_module"]
+    change = value["role_module"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    return value
+
+
 def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
     bootstrap = dispatcher_bytecode_role_qualification_reference()["role_module"]
+    renewal = current_role_renewal_reference()["role_module"]
+    if hashlib.sha256(raw).hexdigest() == renewal["after_file_sha256"]:
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == renewal["after_module_ast_sha256"]
+        registry = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "ROLE_QUALIFICATIONS"
+        )
+        assert fingerprint(registry) == renewal["after_registry_ast_sha256"]
+        index = next(
+            index
+            for index, key in enumerate(registry.value.keys)
+            if isinstance(key, ast.Constant) and key.value == renewal["new_qualification_id"]
+        )
+        assert fingerprint(registry.value.values[index]) == renewal["new_record_ast_sha256"]
+        registry.value.keys.pop(index)
+        registry.value.values.pop(index)
+        assert fingerprint(registry) == renewal["before_registry_ast_sha256"]
+        assert fingerprint(tree) == renewal["before_module_ast_sha256"]
+        return
     if hashlib.sha256(raw).hexdigest() == bootstrap["after_file_sha256"]:
         tree = ast.parse(raw)
         assert fingerprint(tree) == bootstrap["after_module_ast_sha256"]

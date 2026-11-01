@@ -1550,8 +1550,17 @@ def _pagination_preinstruction_diagnostic(reference: dict[str, Any]) -> dict[str
         at = receipt["completed_at"]
         profile = execution_profiles.get_profile(expected["profile_id"])
         role = roles.TASK_ROLES["closer_exception"]
-        current_record = roles.qualified_record(profile, role, now=at)
-        admission_record = roles.qualified_record(profile, role, now=admission["started_at"])
+        qualification_id = expected.get("qualification_id")
+        qualified = (
+            roles.ROLE_QUALIFICATIONS.get(qualification_id)
+            if isinstance(qualification_id, str)
+            else None
+        )
+        historical_records = {qualification_id: qualified} if isinstance(qualified, dict) else None
+        current_record = roles.qualified_record(profile, role, now=at, records=historical_records)
+        admission_record = roles.qualified_record(
+            profile, role, now=admission["started_at"], records=historical_records
+        )
         strong = bool(
             actual.get("run_id")
             == controlled.get("run_id")
@@ -1638,7 +1647,7 @@ def _old_reference(
     if manifest.get("candidate_sha") == REVIEWED_SEED_ASSESSMENT_CANDIDATE:
         return _seed_assessment_reference(manifest_path, state_path, worker_id), False
     if manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
-        return _pagination_reference(manifest_path, state_path, worker_id), False
+        return _sealed_pagination_reference(manifest_path, state_path, worker_id), False
     return _completed_reference(manifest_path, state_path, worker_id), False
 
 
@@ -2222,17 +2231,14 @@ def plan(
         # This validates an old-source closure and an immutable failure frame,
         # but intentionally leaves its uncertain operation and reservations in
         # place. It is not a completion proof and cannot authorize a replay.
-        interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
-        historical = _old_diagnostic(
-            old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
-        )
+        _old_module_bytes(old)
+        diagnostic = _pagination_preinstruction_diagnostic(reference)
         _need(
-            historical.get("pagination_scoped_continuation") is True
-            and historical.get("state_sha256") == reference["state_sha256"]
-            and historical.get("result", {}).get("sha256") == REVIEWED_PAGINATION_RESULT_SHA256,
+            diagnostic.get("pre_instruction_proven") is True
+            and reference["state_sha256"] == _sha(host._read(Path(reference["state_path"]))[1])
+            and reference["result_sha256"] == REVIEWED_PAGINATION_RESULT_SHA256,
             "pagination old-source diagnostic differs",
         )
-        diagnostic = _pagination_preinstruction_diagnostic(reference)
     else:
         interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
         diagnostic = _old_diagnostic(

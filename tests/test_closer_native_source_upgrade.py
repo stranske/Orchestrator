@@ -1,7 +1,9 @@
 """Regression tests for the completed=False, no-native-ACT upgrade boundary."""
 
 import base64
+import copy
 import hashlib
+import inspect
 import json
 import sys
 from contextlib import nullcontext
@@ -533,6 +535,58 @@ def test_pagination_predecessor_uses_only_its_own_module_and_descriptor_hashes(
         upgrade._reviewed_old_metadata(
             {**manifest, "candidate_sha": upgrade.REVIEWED_SEED_ASSESSMENT_CANDIDATE}, raw
         )
+    import closer_role_qualification as roles
+    import execution_profiles
+
+    original_id = (
+        "sonnet-current-role-qualification:"
+        "5ba94b55db1e4dcfbac97e378e5eaa3031141f45dd1f6522d9e4fbbd27854ec9"
+    )
+    original = roles.ROLE_QUALIFICATIONS[original_id]
+    profile = execution_profiles.get_profile(original["profile_identity"]["profile_id"])
+    historical_now = original["qualified_at"] + 1
+    # The newly reviewed 3684 row is future at D4's signed observation time,
+    # so the global live registry correctly refuses historical selection.
+    assert (
+        roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=historical_now)
+        is None
+    )
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=historical_now,
+            records={original_id: copy.deepcopy(original)},
+        )
+        == original
+    )
+    assert "records=historical_records" in inspect.getsource(
+        upgrade._pagination_preinstruction_diagnostic
+    )
+    old_path = tmp_path / "pagination-old-manifest.json"
+    old_path.write_bytes(raw)
+    sealed = {"state_sha256": "a" * 64, "result_sha256": "b" * 64}
+    calls = []
+    monkeypatch.setattr(
+        upgrade,
+        "_sealed_pagination_reference",
+        lambda *_: (calls.append("sealed") or sealed),
+    )
+    monkeypatch.setattr(
+        upgrade,
+        "_pagination_reference",
+        lambda *_: pytest.fail("D4 must not enter current-admission cohort reader"),
+    )
+    monkeypatch.setattr(
+        roles,
+        "qualified_record",
+        lambda *_a, **_kw: pytest.fail("D4 historical read must not consult current role"),
+    )
+    assert upgrade._old_reference(old_path, tmp_path / "unused-state.json", "unused-worker") == (
+        sealed,
+        False,
+    )
+    assert calls == ["sealed"]
     _assert_pagination_prepare_held_rereads(tmp_path, monkeypatch)
 
 
