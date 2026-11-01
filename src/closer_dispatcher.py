@@ -146,7 +146,11 @@ def _scoped_round_summaries(
             continue
         if wanted is not None:
             receipt_assignment = receipt.get("assignment")
-            if not isinstance(receipt_assignment, list) or sorted(receipt_assignment) != wanted:
+            if (
+                not isinstance(receipt_assignment, list)
+                or not all(isinstance(item, str) for item in receipt_assignment)
+                or sorted(receipt_assignment) != wanted
+            ):
                 continue
         summaries.append(
             (round_id, finished, {k: v for k, v in run_ids.items() if isinstance(v, str)})
@@ -198,8 +202,14 @@ def _scoped_root_is_stale(
     if not pipeline_path.is_file():
         return False, newest_scoped_id, newest_scoped_finished, newest_run_id
     if newest_run_id is None:
-        # Empty ledger (or unloadable created stamps handled by the caller) has
-        # no current scoped binding; prefer the pipeline validator.
+        # Empty ledger: prefer the pipeline validator. Unrelated-only ledger
+        # (runs exist, none match the requested assignment): keep non-stale so
+        # a matching scoped receipt can still require --round-id.
+        unfiltered_id, _unfiltered_created = _newest_pipeline_run(
+            pipeline_path, assignment_targets=None
+        )
+        if unfiltered_id is not None and assignment_targets is not None:
+            return False, newest_scoped_id, newest_scoped_finished, newest_run_id
         return True, newest_scoped_id, newest_scoped_finished, newest_run_id
     if (
         _scoped_round_for_pipeline_run(
@@ -10852,7 +10862,11 @@ def main(argv=None):
                         print(json.dumps(result, sort_keys=True))
                         return 78
             if stale:
-                result = cp.validate_stop(pipeline_path, assignment_targets=targets)
+                result = cp.validate_stop(
+                    pipeline_path,
+                    assignment_targets=targets,
+                    expected_run_id=newest_run_id,
+                )
                 result = {
                     **result,
                     "scoped_root_stale": True,

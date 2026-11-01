@@ -845,6 +845,221 @@ def test_validate_stop_freshness_uses_requested_assignment_not_unrelated_newer_r
     assert "scoped_root_stale" not in verdict
 
 
+def test_validate_stop_unrelated_only_ledger_requires_matching_scoped_round_id(tmp_path):
+    """Ledger runs for other assignments must not force stale fallback when scoped work exists."""
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    requested = "o/r#1"
+    other = "other/repo#2"
+    pipeline._save(
+        pipeline_path,
+        {
+            "schema": pipeline.SCHEMA,
+            "runs": {
+                "unrelated-only-run": {
+                    "created": 3000.0,
+                    "deadline": 3500.0,
+                    "assignment": [other],
+                    "targets": {other: {"status": "completed", "stage": "act"}},
+                }
+            },
+            "carry": {},
+        },
+    )
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    current_scoped = "a" * 32
+    _write_scoped_receipt(
+        root,
+        round_id=current_scoped,
+        run_id="shard-run-for-requested",
+        finished_at=2000.0,
+        target=requested,
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": requested}]}))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+            "--assignment",
+            str(assignment),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert result.returncode == 78, result.stderr
+    assert verdict.get("valid") is False
+    assert "scoped_round_id_required" in verdict.get("reasons", [])
+    assert verdict.get("required_round_id") == current_scoped
+    assert "scoped_root_stale" not in verdict
+
+
+def test_validate_stop_empty_ledger_with_assignment_still_marks_scoped_root_stale(tmp_path):
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    pipeline._save(pipeline_path, {"schema": pipeline.SCHEMA, "runs": {}, "carry": {}})
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    stale_round = "b" * 32
+    _write_scoped_receipt(
+        root, round_id=stale_round, run_id="older-pipeline-run", finished_at=1000.0
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": "o/r#1"}]}))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+            "--assignment",
+            str(assignment),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert "scoped_round_id_required" not in verdict.get("reasons", [])
+    assert verdict.get("scoped_root_stale") is True
+    assert verdict.get("newest_scoped_round_id") == stale_round
+    assert verdict.get("validator") == "closer_pipeline.validate_stop"
+
+
+def test_validate_stop_skips_ill_typed_receipt_assignment_without_crashing(tmp_path):
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    current_run = "current-pipeline-run"
+    pipeline._save(
+        pipeline_path,
+        {
+            "schema": pipeline.SCHEMA,
+            "runs": {
+                current_run: {
+                    "created": 2000.0,
+                    "deadline": 2500.0,
+                    "assignment": ["o/r#1"],
+                    "targets": {"o/r#1": {"status": "completed", "stage": "act"}},
+                }
+            },
+            "carry": {},
+        },
+    )
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    bad_round = "c" * 32
+    resources.write_round_receipt(
+        root,
+        {
+            "schema": "closer-pipeline-receipt/v1",
+            "mode": "resource_scoped",
+            "round_id": bad_round,
+            "run_ids": {"o/r#1": "shard-run"},
+            "shards": {"o/r#1": resources.shard_dir(root, "o/r#1").name},
+            "deadline": 2500.0,
+            "elapsed_seconds": 1.0,
+            "finished_at": 3000.0,
+            "assignment": ["o/r#1", 2],
+            "carry_targets": [],
+            "targets": {"o/r#1": {"status": "completed"}},
+            "scoped": {
+                "contract": resources.CONTRACT_SCHEMA,
+                "layout": resources.LAYOUT,
+                "fenced_targets": [],
+                "lease_wait_seconds": {},
+                "max_lease_wait_seconds": 0.0,
+                "completed": ["o/r#1"],
+                "unknown_reservations": {},
+                "unknown_reservations_drainable": 0,
+            },
+        },
+    )
+    assignment = tmp_path / "assignment.json"
+    assignment.write_text(json.dumps({"targets": [{"target": "o/r#1"}]}))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+            "--assignment",
+            str(assignment),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert result.returncode == 0, result.stderr
+    assert verdict.get("scoped_root_stale") is True
+    assert "scoped_round_id_required" not in verdict.get("reasons", [])
+
+
+def test_validate_stop_stale_fallback_pins_expected_run_when_sibling_created_is_null(
+    tmp_path,
+):
+    import closer_pipeline as pipeline
+
+    state = tmp_path / "state"
+    pipeline_path = d._pipeline_state_path(state, shadow=True)
+    good_run = "good-pipeline-run"
+    pipeline._save(
+        pipeline_path,
+        {
+            "schema": pipeline.SCHEMA,
+            "runs": {
+                good_run: {
+                    "created": 2000.0,
+                    "deadline": 2500.0,
+                    "assignment": ["o/r#1"],
+                    "targets": {"o/r#1": {"status": "completed", "stage": "act"}},
+                },
+                "null-created-run": {
+                    "created": None,
+                    "deadline": 2600.0,
+                    "assignment": ["o/r#1"],
+                    "targets": {"o/r#1": {"status": "completed", "stage": "act"}},
+                },
+            },
+            "carry": {},
+        },
+    )
+    root = resources.open_root(pipeline_path, pipeline_schema=pipeline.SCHEMA)
+    stale_round = "d" * 32
+    _write_scoped_receipt(
+        root, round_id=stale_round, run_id="older-pipeline-run", finished_at=1000.0
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CLI),
+            "validate-stop",
+            "--state",
+            str(state),
+            "--shadow",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    verdict = json.loads(result.stdout)
+    assert result.returncode == 0, result.stderr
+    assert verdict.get("valid") is True
+    assert verdict.get("run_id") == good_run
+    assert verdict.get("scoped_root_stale") is True
+    assert "scoped_round_id_required" not in verdict.get("reasons", [])
+
+
 def test_incompatible_contract_fences_legacy_even_for_disjoint_target(tmp_path):
     root = resources.open_root(tmp_path / "s", pipeline_schema="closer-pipeline/v1")
     path = root / "contract.json"

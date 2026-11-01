@@ -510,6 +510,28 @@ def test_reviewed_supersession_holds_foreign_tied_or_changed_overlap(profile):
         roles.ROLE_QUALIFICATION_SUPERSEDES.update(original)
 
 
+def test_validate_stop_bridge_supersession_selects_successor_while_predecessor_active():
+    """Pin the 7be42… supersession while c6a57e… remains live in the same window."""
+    import execution_profiles
+
+    predecessor_id = "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
+    successor_id = "sonnet-current-role-qualification:7be42fa46b23bbf5ae9a5021e03fa7fc1aec9375ad2bd2705990f815f20962ae"
+    predecessor = deepcopy(roles.ROLE_QUALIFICATIONS[predecessor_id])
+    successor = deepcopy(roles.ROLE_QUALIFICATIONS[successor_id])
+    profile = execution_profiles.PROFILE_REGISTRY["claude-sonnet-5-5-high-v2"]
+    now = successor["qualified_at"] + 1
+    assert predecessor["qualified_at"] < now < predecessor["expires_at"]
+    assert successor["qualified_at"] < now < successor["expires_at"]
+    selected = roles.qualified_record(
+        profile,
+        roles.STRONG_CRITERION_ADJUDICATION,
+        now=now,
+        records={predecessor_id: predecessor, successor_id: successor},
+    )
+    assert selected == successor
+    assert selected["qualification_id"] == successor_id
+
+
 def test_runtime_qualification_requires_the_same_supported_installed_build(profile, monkeypatch):
     import adapters
 
