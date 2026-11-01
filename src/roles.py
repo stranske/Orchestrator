@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import sys
@@ -2747,11 +2748,12 @@ def run_decomposer_agent(
 # router's mid tier) against Argon (gemini's full tier), read from the feedback DB by role-triage
 # outcomes. The trial is ON only while this file names a window containing now; a missing,
 # unreadable or expired file means no trial, so it can never outlive its window. Even UTC hours
-# belong to the trial and alternate Flash/Argon; odd hours route normally. Each run records its
-# resolved model, so the readout splits arms by runs.model.
+# belong to the trial and alternate Flash/Argon; odd hours route normally. The role run records the
+# assigned arm as reasoning_level; the readout takes model identity from the worker attempt's
+# execution_attempts.resolved_model, never from runs.model (cost telemetry).
 TRIAGE_FLASH_TRIAL_PATH = Path(
     os.environ.get("ORCH_TRIAGE_FLASH_TRIAL")
-    or Path.home() / ".codex" / "orchestrator" / "trials" / "role-triage-flash.json"
+    or paths.runtime_state_path("trials", "role-triage-flash.json")
 )
 
 
@@ -2760,8 +2762,10 @@ def triage_trial_mode(*, path: Path | None = None, now: float | None = None) -> 
     try:
         spec = json.loads((path or TRIAGE_FLASH_TRIAL_PATH).read_text(encoding="utf-8"))
         start, end = float(spec["start_ts"]), float(spec["end_ts"])
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
         return None
+    if not (math.isfinite(start) and math.isfinite(end) and start < end):
+        return None  # an unbounded or inverted window must never enable the trial
     now = time.time() if now is None else now
     if not start <= now < end:
         return None

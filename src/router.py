@@ -73,10 +73,7 @@ RESERVE_AGENTS = {"claude"}
 # `select_agent(..., only={"aider"})`. Owner directive 2026-06-21: aider is paygo (burns the pay-go
 # Codestral credit) and was the weakest seat on the recent build-off — hold it as backup, not a seat.
 BACKUP_AGENTS = {"aider", "muse"}
-# testgen removed 2026-10-31 (owner decision): Gemini Flash had the lowest first-pass mutation
-# pinning of every agent in the 2026-10-24/25 coverage campaign (t1 12/30, t4 9/25) and hit its
-# output token limit on batched testgen in the agy pilot. Testgen stays on codex Terra and others.
-GEMINI_GOOD_FIT_TASKS = {"implement", "epic", "cross_repo", "runtime_ac", "review"}
+GEMINI_GOOD_FIT_TASKS = {"implement", "testgen", "epic", "cross_repo", "runtime_ac", "review"}
 
 
 class RouteEntryRef(TypedDict):
@@ -161,7 +158,7 @@ ROUTE_TABLE: dict = {
             {"agent": "codex", "mode": "mid", "late": False},
             {"agent": "cursor", "mode": "composer", "late": False},
             {"agent": "vibe", "mode": "mid", "late": False},
-            # gemini removed 2026-10-31 (owner decision): see GEMINI_GOOD_FIT_TASKS.
+            {"agent": "gemini", "mode": "mid", "late": False},
             {"agent": "aider", "mode": "mid", "late": True},
         ],
     },
@@ -1939,8 +1936,8 @@ def _selftest() -> None:
         ]
         assert pg_prom["assignments"][0]["capacity_policy"] == "drain", pg_prom["assignments"][0]
         assert (
-            select_agent("testgen", cap_drain)["agent"] != "gemini"
-        ), "testgen is off Gemini Flash (owner decision 2026-10-31), even while draining AGY"
+            select_agent("testgen", cap_drain)["agent"] == "gemini"
+        ), "drain should spend AGY on good-fit testgen"
         assert (
             select_agent("review", cap_drain)["agent"] == "gemini"
         ), "drain should spend AGY on reasoning review"

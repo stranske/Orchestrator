@@ -1,10 +1,7 @@
-"""Owner decisions 2026-10-31 on Gemini Flash routing.
+"""Owner decision 2026-10-31: a 7-day triage trial, Gemini Flash-high vs Argon.
 
-1. Testgen is off Gemini Flash: lowest first-pass mutation pinning of every agent in the
-   2026-10-24/25 coverage campaign, and output-token-limit failures on batched testgen.
-2. A 7-day triage trial: while the trial file names a window containing now, even UTC hours pin
-   triage to gemini and alternate Flash-high (mode "mid") with Argon (mode "full"); odd hours
-   route normally.
+While the trial file names a window containing now, even UTC hours pin triage to gemini and
+alternate Flash-high (mode "mid") with Argon (mode "full"); odd hours route normally.
 """
 
 from __future__ import annotations
@@ -16,7 +13,6 @@ import pytest
 import dispatcher
 import feedback
 import roles
-import router
 
 HOUR = 3600
 START = 498_332 * HOUR  # hour number divisible by 4: Flash hour
@@ -31,11 +27,6 @@ def _trial(tmp_path, start=START, end=START + 7 * 86400):
     return path
 
 
-def test_testgen_never_routes_to_gemini_even_when_draining_agy():
-    assert "testgen" not in router.GEMINI_GOOD_FIT_TASKS
-    assert all(entry["agent"] != "gemini" for entry in router.ROUTE_TABLE["testgen"]["agents"])
-
-
 @pytest.mark.parametrize(("now", "expected"), [(FLASH, "mid"), (ARGON, "full"), (NORMAL, None)])
 def test_trial_hours_alternate_flash_and_argon_and_leave_odd_hours_alone(tmp_path, now, expected):
     assert roles.triage_trial_mode(path=_trial(tmp_path), now=now) == expected
@@ -46,7 +37,19 @@ def test_trial_is_off_outside_its_window(tmp_path, when):
     assert roles.triage_trial_mode(path=_trial(tmp_path), now=when) is None
 
 
-@pytest.mark.parametrize("content", [None, "", "not json", "{}", '{"start_ts": "x", "end_ts": 1}'])
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "",
+        "not json",
+        "{}",
+        '{"start_ts": "x", "end_ts": 1}',
+        '{"start_ts": 0, "end_ts": 1e309}',
+        '{"start_ts": 0, "end_ts": ' + "9" * 400 + "}",
+        '{"start_ts": 2e9, "end_ts": 1e9}',
+    ],
+)
 def test_missing_or_malformed_trial_file_means_no_trial(tmp_path, content):
     path = tmp_path / "role-triage-flash.json"
     if content is not None:
