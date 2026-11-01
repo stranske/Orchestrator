@@ -20,6 +20,8 @@ from pathlib import Path
 SCHEMA = "closer-correction-source-decision/v1"
 INVITATION_SCHEMA = "closer-correction-source-invitation/v1"
 _LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+_SOURCE_READER = threading.local()
+_SOURCE_READER_SEAL = object()
 
 
 class SourceRecordUnavailable(ValueError):
@@ -677,6 +679,77 @@ class _CandidateSeal:
         self.pid = os.getpid()
 
 
+class _InvitationReaderScope:
+    """Private current-ACT custody for invitation proof readback only."""
+
+    def __init__(self, token, context, installation, row):
+        _need(token is _SOURCE_READER_SEAL, "current invitation reader issuer differs")
+        self.seal = token
+        self.context_json = _json(_project_context(context))
+        self.installation = installation
+        self.row = row
+        self.pid = os.getpid()
+        self.thread = threading.get_ident()
+        self.active = True
+
+    def __enter__(self):
+        _need(
+            getattr(_SOURCE_READER, "scope", None) is None,
+            "nested current invitation reader forbidden",
+        )
+        _SOURCE_READER.scope = self
+        return self
+
+    def __exit__(self, _kind, _value, _traceback):
+        self.active = False
+        if getattr(_SOURCE_READER, "scope", None) is self:
+            del _SOURCE_READER.scope
+
+    def check(self, proof):
+        _need(
+            self.seal is _SOURCE_READER_SEAL
+            and self.active
+            and self.pid == os.getpid()
+            and self.thread == threading.get_ident(),
+            "current invitation reader scope unavailable",
+        )
+        context = json.loads(self.context_json)
+        row = _current_act_frame(context, self.installation)
+        stage = row.get("stage_results", {}).get("exception")
+        actual = row.get("results", {}).get("exception", {}).get("actual")
+        _need(
+            row == self.row
+            and type(stage) is dict
+            and stage.get("status") == "completed"
+            and stage.get("work_key") == proof.get("expected", {}).get("operation_id")
+            and type(stage.get("started_at")) in (int, float)
+            and type(stage.get("finished_at")) in (int, float)
+            and type(stage.get("deadline")) in (int, float)
+            and stage["started_at"] <= stage["finished_at"] < stage["deadline"]
+            and type(actual) is dict
+            and actual.get("_closer_controlled_proof") == proof,
+            "current invitation completed provider proof differs",
+        )
+        return {"started_at": stage["started_at"], "finished_at": stage["finished_at"]}
+
+
+def _invitation_reader_scope(context, installation):
+    """Bind invitation history to the installed source and live ACT frame."""
+    import inspect
+
+    caller = inspect.currentframe().f_back
+    _need(
+        caller.f_globals is globals()
+        and caller.f_code in {candidate_for_original_act.__code__, _facts.__code__}
+        and caller.f_locals.get("context") is context
+        and caller.f_locals.get("installation") is installation,
+        "current invitation reader caller differs",
+    )
+    return _InvitationReaderScope(
+        _SOURCE_READER_SEAL, context, installation, _current_act_frame(context, installation)
+    )
+
+
 @dataclass(frozen=True)
 class SourceCandidate:
     """Private route metadata, never native queue/effects authority."""
@@ -732,9 +805,10 @@ def candidate_for_original_act(*, context, installation):
     _installed_current(installation)
     current = _current_act_frame(context, installation)
     ref = context["exception"]["correction"]["source_decision_ref"]
-    prep, snapshot, packet, root, record, intent, _result, _arguments, _materialized = _local_facts(
-        context, ref
-    )
+    with _invitation_reader_scope(context, installation):
+        prep, snapshot, packet, root, record, intent, _result, _arguments, _materialized = (
+            _local_facts(context, ref)
+        )
     seed, tests, inputs = _qualified_owner_projection(context, current, snapshot, packet, root)
     semantic = {
         "schema": intent["original_request"]["schema"],
@@ -926,7 +1000,13 @@ def retained_provider_time(proof):
         if publication_io is not None:
             execution_window = publication_io.historical_window(proof)
     if execution_window is None:
-        execution_window = maintenance._historical_window()
+        scope = getattr(_SOURCE_READER, "scope", None)
+        if type(scope) is _InvitationReaderScope:
+            execution_window = scope.check(proof)
+        elif scope is not None:
+            _need(False, "current invitation reader scope unavailable")
+        else:
+            execution_window = maintenance._historical_window()
     result = closer._revalidate_controlled_proof(
         proof,
         run_id=proof["run_id"],
@@ -963,6 +1043,22 @@ def retained_original_facts(context, ref):
     return _read_local_facts(context, ref, require_current_deadline=False)
 
 
+def _invitation_completion_before_deadline(proof, original):
+    from datetime import datetime
+
+    completed = retained_provider_time(proof)
+    deadline = datetime.fromisoformat(
+        original["original_operation"]["deadline"].replace("Z", "+00:00")
+    ).timestamp()
+    _need(
+        type(completed) in (int, float)
+        and type(deadline) in (int, float)
+        and completed <= deadline,
+        "original invitation provider completion exceeded declared deadline",
+    )
+    return completed
+
+
 def _read_local_facts(context, ref, *, require_current_deadline):
     from datetime import datetime
 
@@ -997,7 +1093,16 @@ def _read_local_facts(context, ref, *, require_current_deadline):
         "original intent/result/source record joins differ",
     )
     original = intent["original_request"]
-    if require_current_deadline:
+    invitation_scope = getattr(_SOURCE_READER, "scope", None)
+    _need(
+        invitation_scope is None or type(invitation_scope) is _InvitationReaderScope,
+        "current invitation reader scope unavailable",
+    )
+    historical_invitation = (
+        record.get("schema") == INVITATION_SCHEMA
+        and type(invitation_scope) is _InvitationReaderScope
+    )
+    if require_current_deadline and not historical_invitation:
         _need(
             time.time()
             < datetime.fromisoformat(
@@ -1027,11 +1132,15 @@ def _read_local_facts(context, ref, *, require_current_deadline):
         "physical completed original exception/decision differs",
     )
     arguments = materializer_arguments(intent, result)
-    materialized = (
-        decisions.materialize_selected(**arguments)
-        if require_current_deadline
-        else decisions.read_materialized_selected(**arguments)
-    )
+    if historical_invitation:
+        _invitation_completion_before_deadline(arguments["proof"], original)
+        materialized = decisions.read_materialized_selected(**arguments)
+    else:
+        materialized = (
+            decisions.materialize_selected(**arguments)
+            if require_current_deadline
+            else decisions.read_materialized_selected(**arguments)
+        )
     _need(
         materialized.get("status") == "materialized"
         and (
@@ -1109,9 +1218,10 @@ def _facts(selection, controller, operation):
         context["exception"].get("correction", {}).get("source_decision_ref") == ref,
         "original current exception does not select this source record",
     )
-    prep, snapshot, packet, root, record, intent, result, arguments, materialized = _local_facts(
-        context, ref
-    )
+    with _invitation_reader_scope(context, installation):
+        prep, snapshot, packet, root, record, intent, result, arguments, materialized = (
+            _local_facts(context, ref)
+        )
     original = intent["original_request"]
     seed, tests, inputs = _qualified_owner_projection(context, current, snapshot, packet, root)
 

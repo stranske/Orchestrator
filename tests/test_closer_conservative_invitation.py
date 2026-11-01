@@ -340,3 +340,100 @@ def test_one_actual_inert_strong_and_cold_invitation_readback(
             intake.materialize_invitation(
                 document=changed, now=receipt["completed_at"], persist=False, **kwargs
             )
+
+    # A completed named assessment remains evidence after its original
+    # assessment window, but only inside a fresh, live ACT frame. The fixture
+    # already supplies an authenticated provider receipt and controlled proof;
+    # this local frame is deliberately not an effects callback.
+    live_context = copy.deepcopy(context)
+    live_context["deadline"] = time.time() + 30
+    live_row = copy.deepcopy(row)
+    live_row.update(stage="act", stage_status="running", status="running")
+    live_row["stage_deadline"] = live_context["deadline"]
+    installation = object()
+    frame_changed = [False]
+
+    def current_frame(actual_context, actual_installation):
+        assert actual_installation is installation
+        if time.time() >= actual_context["deadline"]:
+            raise source_record.SourceRecordUnavailable("current ACT expired")
+        assert actual_context in (live_context, source_record._project_context(live_context))
+        value = copy.deepcopy(live_row)
+        if frame_changed[0]:
+            value["identity"] = "foreign"
+        return value
+
+    monkeypatch.setattr(source_record, "_installed_current", lambda actual: actual is installation)
+    monkeypatch.setattr(source_record, "_current_act_frame", current_frame)
+    late_request = copy.deepcopy(arguments["original_request"])
+    late_request["original_operation"]["deadline"] = datetime.fromtimestamp(
+        receipt["completed_at"] + 1, timezone.utc
+    ).isoformat()
+    with pytest.raises(source_record.SourceRecordUnavailable, match="reader caller differs"):
+        with source_record._invitation_reader_scope(live_context, installation):
+            pass
+    record_for_candidate, intent_for_candidate = copy.deepcopy(record), copy.deepcopy(values[5])
+    record_for_candidate["owner_semantics_sha256"] = "synthetic-digest"
+
+    def local_facts(_context, _ref):
+        assert (
+            source_record._invitation_completion_before_deadline(proof, late_request)
+            == receipt["completed_at"]
+        )
+        foreign = copy.deepcopy(proof)
+        foreign["run_id"] = "foreign"
+        with pytest.raises(source_record.SourceRecordUnavailable, match="provider proof differs"):
+            source_record._invitation_completion_before_deadline(foreign, late_request)
+        frame_changed[0] = True
+        with pytest.raises(source_record.SourceRecordUnavailable, match="provider proof differs"):
+            source_record._invitation_completion_before_deadline(proof, late_request)
+        frame_changed[0] = False
+        with pytest.raises(
+            source_record.SourceRecordUnavailable, match="exceeded declared deadline"
+        ):
+            source_record._invitation_completion_before_deadline(
+                proof,
+                {
+                    **late_request,
+                    "original_operation": {
+                        **late_request["original_operation"],
+                        "deadline": datetime.fromtimestamp(
+                            receipt["completed_at"] - 1, timezone.utc
+                        ).isoformat(),
+                    },
+                },
+            )
+        return (
+            None,
+            snapshot,
+            packet,
+            root,
+            record_for_candidate,
+            intent_for_candidate,
+            None,
+            None,
+            None,
+        )
+
+    original = intent_for_candidate["original_request"]
+    monkeypatch.setattr(source_record, "_local_facts", local_facts)
+    monkeypatch.setattr(
+        source_record,
+        "_qualified_owner_projection",
+        lambda *_args: (
+            {
+                key: original[key]
+                for key in ("target", "source_issue", "original_verifier", "finding", "scope")
+            },
+            original["required_tests"],
+            {},
+        ),
+    )
+    monkeypatch.setattr(bridge, "_owner_semantic_digest", lambda *_args: "synthetic-digest")
+    candidate = source_record.candidate_for_original_act(
+        context=live_context, installation=installation
+    )
+    assert type(candidate) is source_record.SourceCandidate
+    expired_context = {**live_context, "deadline": time.time() - 1}
+    with pytest.raises(source_record.SourceRecordUnavailable, match="current ACT expired"):
+        source_record.candidate_for_original_act(context=expired_context, installation=installation)

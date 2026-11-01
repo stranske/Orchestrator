@@ -953,8 +953,16 @@ def _generic_pre_effect_manifest(path: str | Path) -> tuple[Path, bytes, dict[st
         "closer_correction_source_record.py",
         "closer_source_installation.py",
     ):
+        # This exact prior reader also failed before instruction publication.
+        # Its completed-assessment deadline can expire during the live ACT.
+        prior_invitation_reader = (
+            name == "closer_correction_source_record.py"
+            and modules.get(name)
+            == "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575"
+        )
         _need(
-            modules.get(name) == _sha(host._read(Path(__file__).with_name(name))[1]),
+            modules.get(name) == _sha(host._read(Path(__file__).with_name(name))[1])
+            or prior_invitation_reader,
             "old source-selection producer semantics differ",
         )
     return value, raw, doc
@@ -1392,11 +1400,18 @@ def _source_selection_pre_effect_reference(
         and operation.get("attempts") == 1
         and isinstance(failure, dict)
         and failure.get("failure_diagnostic")
-        == {
-            "stage": "source_selection",
-            "code": "full_source_validation_unavailable",
-            "exception": "ValueError",
-        }
+        in (
+            {
+                "stage": "source_selection",
+                "code": "full_source_validation_unavailable",
+                "exception": "ValueError",
+            },
+            {
+                "stage": "source_selection",
+                "code": "unclassified_error",
+                "exception": "SourceRecordUnavailable",
+            },
+        )
         and all(
             failure.get(key) is False
             for key in ("act_authorized", "source_closure_authorized", "retry_safe")
