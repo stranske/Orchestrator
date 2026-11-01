@@ -150,3 +150,18 @@ def test_break_revert_testgen_in_good_fit_tasks():
     finally:
         router.GEMINI_GOOD_FIT_TASKS.clear()
         router.GEMINI_GOOD_FIT_TASKS.update(original)
+
+
+def test_break_revert_testgen_route_table_gemini_entry():
+    """Deliberate break → revert for the ROUTE_TABLE gemini pin (#1039)."""
+    import router
+
+    original = list(router.ROUTE_TABLE["testgen"]["agents"])
+    try:
+        router.ROUTE_TABLE["testgen"]["agents"] = original + [
+            {"agent": "gemini", "mode": "mid", "late": False},
+        ]
+        with pytest.raises(AssertionError):
+            test_testgen_never_routes_to_gemini_even_when_draining_agy()
+    finally:
+        router.ROUTE_TABLE["testgen"]["agents"] = original
