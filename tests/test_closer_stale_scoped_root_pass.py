@@ -161,9 +161,7 @@ def test_stale_scoped_root_pass_unmeasured_without_reason():
         {"authority": False, "reason": None},
         {"authority": False, "reason": 12},
     ):
-        row = grade.stale_scoped_root_pass_number(
-            receipt, now=CHECK_AT, merged_at=MERGED_AT
-        )
+        row = grade.stale_scoped_root_pass_number(receipt, now=CHECK_AT, merged_at=MERGED_AT)
         assert row["status"] == "unmeasured", receipt
 
 
