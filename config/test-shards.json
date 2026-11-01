@@ -12,6 +12,7 @@
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
     "tests/test_storage_abort_reconciliation.py",
+    "tests/test_storage_interrupted_release.py",
     "tests/test_verify_failure_evidence.py"
   ],
   "shards": [
@@ -229,7 +230,8 @@
       "tests/test_verify_coverage_mode.py",
       "tests/test_vibe_observing_backend.py",
       "tests/test_worktree_git_refusal_record.py",
-      "tests/test_gemini_flash_routing.py"
+      "tests/test_gemini_flash_routing.py",
+      "tests/test_storage_interrupted_release.py"
     ],
     [
       "tests/test_activation_audit_label_index.py",
