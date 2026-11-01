@@ -283,6 +283,9 @@ def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, 
     assert reference["forensic"]["authority"] is False
     assert reference["forensic"]["operation_id"] == operation["id"]
     assert {path: path.read_bytes() for path in originals} == originals
+    _assert_same_source_plan_requires_signed_pre_effect_evidence(
+        tmp_path, monkeypatch, manifest, manifest_path, state, worker_id, action, operation
+    )
     stopped_nonce = "3" * 32
     stopped = root / stopped_nonce
     stopped.mkdir()
@@ -346,6 +349,79 @@ def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, 
         changed()
         with pytest.raises(upgrade.SourceUpgradeHeld):
             upgrade._source_selection_pre_effect_reference(manifest_path, state, worker_id)
+
+
+def _assert_same_source_plan_requires_signed_pre_effect_evidence(
+    tmp_path, monkeypatch, manifest, manifest_path, state, worker_id, action, operation
+):
+    """Same-source routing still crosses the real signed no-effect reader."""
+
+    class IdentityBoundaryReached(Exception):
+        pass
+
+    raw = manifest_path.read_bytes()
+    original_action = action.read_bytes()
+    current = {
+        **manifest,
+        "modules": {
+            **manifest["modules"],
+            Path(upgrade.__file__)
+            .name: hashlib.sha256(Path(upgrade.__file__).read_bytes())
+            .hexdigest(),
+        },
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            upgrade, "_generic_pre_effect_manifest", lambda _: (manifest_path, raw, current)
+        )
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, current))
+        patch.setattr(upgrade, "_installed_release", lambda *_args: {})
+
+        def stop_at_identity(*_args):
+            raise IdentityBoundaryReached
+
+        patch.setattr(upgrade, "_same_identity", stop_at_identity)
+        args = (
+            manifest_path,
+            state,
+            worker_id,
+            manifest_path,
+            tmp_path / "fresh.campaign.json",
+            tmp_path / "restore.json",
+            {},
+            {},
+            tmp_path / "release.json",
+        )
+        with pytest.raises(IdentityBoundaryReached):
+            upgrade.plan(*args)
+        changed = {**current, "modules": {**current["modules"], "closer_queue.py": "f" * 64}}
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, changed))
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="changed immutable source closure"):
+            upgrade.plan(*args)
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, current))
+        action.write_text(
+            json.dumps(
+                {
+                    "operation": {
+                        **operation,
+                        "result": {**operation["result"], "act_authorized": True},
+                    }
+                },
+                sort_keys=True,
+            )
+        )
+        try:
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="exact pre-effect"):
+                upgrade.plan(*args)
+        finally:
+            action.write_bytes(original_action)
+        legacy = {**current, "candidate_sha": upgrade.REVIEWED_OLD_CANDIDATE}
+        patch.setattr(upgrade, "_object", lambda *_args: (manifest_path, raw, legacy))
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, legacy))
+        with pytest.raises(
+            upgrade.SourceUpgradeHeld, match="source candidate release is not different"
+        ):
+            upgrade.plan(*args)
 
 
 def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():

@@ -2566,9 +2566,16 @@ def plan(
         "old release is not reviewed no-ACT predecessor",
     )
     _need(
-        old.get("candidate_sha") != new.get("candidate_sha"),
+        # An authenticated pre-effect failure can need fresh operational inputs,
+        # not new source. The forensic/quiescence checks below still apply.
+        generic_pre_effect or old.get("candidate_sha") != new.get("candidate_sha"),
         "source candidate release is not different",
     )
+    if old.get("candidate_sha") == new.get("candidate_sha"):
+        _need(
+            old.get("modules") == new.get("modules"),
+            "same-source recovery changed immutable source closure",
+        )
     release = _installed_release(new_release_journal, new["candidate_sha"])
     _need(
         new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),

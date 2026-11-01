@@ -1,0 +1,27 @@
+{
+  "base_commit": "87360c8a4b7f",
+  "files": {
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "62ce93dd416a6159f898615ddefe8ecb3bf0f4a2422d0e574f4d49bd119fee68",
+      "after_module_ast_sha256": "fa22400f6b4c0787c21d4c50770332e75424e2b729039b362aa6e3b41e1cf3e1",
+      "before_file_sha256": "9205598db0a14656472af89d299b75d5af7dd94d69bf665720b7542cf3fb9091",
+      "before_module_ast_sha256": "0c9db85ffcb231a9bc22528ee8332daf06a6c757ef06545bb7b0d611079fd537",
+      "constant_delta": {},
+      "function_delta": {
+        "plan": {
+          "after": "7496f6aaa8db08b3f24fad06c114808d2212c0ac0fdda5c82becc19145e66306",
+          "before": "aca86f08dbe646a7e4466cb173a3bfd7362ffa2280e91d2870707a90d85c2eb9"
+        }
+      },
+      "historical_reversal": [
+        {
+          "after_fragment": "    _need(\n        # An authenticated pre-effect failure can need fresh operational inputs,\n        # not new source. The forensic/quiescence checks below still apply.\n        generic_pre_effect or old.get(\"candidate_sha\") != new.get(\"candidate_sha\"),\n        \"source candidate release is not different\",\n    )\n    if old.get(\"candidate_sha\") == new.get(\"candidate_sha\"):\n        _need(\n            old.get(\"modules\") == new.get(\"modules\"),\n            \"same-source recovery changed immutable source closure\",\n        )\n",
+          "before_fragment": "    _need(\n        old.get(\"candidate_sha\") != new.get(\"candidate_sha\"),\n        \"source candidate release is not different\",\n    )\n"
+        }
+      ],
+      "outside_reviewed_changes_ast_sha256": "d1ce3677aac3d0b58af64bc8c5258e8a85b1e204a7990af75a54cc15a94fc6fa"
+    }
+  },
+  "schema": "source-pre-effect-readmission-successor/v1",
+  "scope": "permit only authenticated generic pre-effect source selection to retain an unchanged candidate for fresh operational readmission; all other source-upgrade AST families unchanged"
+}
