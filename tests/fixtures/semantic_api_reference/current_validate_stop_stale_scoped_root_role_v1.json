@@ -1,0 +1,24 @@
+{
+  "base_commit": "f9f14efe899f66daa0f10be191999bd75fbdc746",
+  "current_model_contract_sha256": "75d14401e2d9fc6ff295862dbeb789a3739c984d64f40abf19fd5e6553503256",
+  "new_qualification_id": "sonnet-current-role-qualification:7be42fa46b23bbf5ae9a5021e03fa7fc1aec9375ad2bd2705990f815f20962ae",
+  "role_module": {
+    "after_file_sha256": "7aeafe55ba0d6f39a39087d2e226053c111f1b788b61b60ab799a8a2a327bb5c",
+    "after_module_ast_sha256": "43aad4c03b04018dd91412fd49c02f7cf43bbdbb1bc85323a06a5b4a73109620",
+    "assignment_delta": {
+      "ROLE_QUALIFICATIONS": {
+        "added_value_ast_sha256": "f8b58ab5995625b7433db60d5fad64547f67faf043b77a18d3b31a6f9a889e9b",
+        "after_ast_sha256": "45ab468433bb11b278597ddd89d2ce35ff43030e84b265199dfde322b2718da3",
+        "before_ast_sha256": "2c72ae2e281d1e820e2767b8e8b674215ebf1e65b7e5efe31e4ac7b2737a570d"
+      },
+      "ROLE_QUALIFICATION_SUPERSEDES": {
+        "added_value_ast_sha256": "ed3de35549f54f60eba7409da62141dbdc5f788c873e52750bc8f2f59199ca29",
+        "after_ast_sha256": "38ef609b21e0c44b51b2da1e0d2181bd2835b3be13e90851629fea3c499edd9e",
+        "before_ast_sha256": "d0583b0b6c5d2ccdfee66ae06372de6b234d730badbce83411fd46aaaa62f4e8"
+      }
+    },
+    "before_file_sha256": "98c108b75e7af622dbe5a84bc47a6e0ad9f9e01ca939e885aab9ea22871c7d69",
+    "before_module_ast_sha256": "0456fec41b09c3c7aced6007aee1c687cc9d054956dd7cf848fc1b6b90546a73"
+  },
+  "schema": "closer-validate-stop-stale-scoped-root-role-successor/v1"
+}

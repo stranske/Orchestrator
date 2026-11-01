@@ -483,7 +483,9 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
         assert fingerprint(before_tree) == fingerprint(after_tree)
 
     for filename, change in support.capacity_pre_effect_recovery_reference()["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = support.before_validate_stop_stale_scoped_root_source(
+            source_path(filename).read_bytes(), filename
+        )
         if filename == "closer_native_source_upgrade.py":
             raw = support.before_completed_invitation_read_source(raw, filename)
             raw = support.before_source_pre_effect_readmission_source(raw, filename)
@@ -497,6 +499,41 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
             selected.extend(nodes)
         tree.body = [node for node in tree.body if node not in selected]
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+
+def test_validate_stop_stale_scoped_root_successor_is_exact_live_tip():
+    reviewed = support.validate_stop_stale_scoped_root_reference()
+    for filename, change in reviewed["files"].items():
+        raw = source_path(filename).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+        tree = ast.parse(raw)
+        assert fingerprint(tree) == change["after_module_ast_sha256"]
+        selected = []
+        for name, delta in change["function_delta"].items():
+            nodes = [node for node in tree.body if getattr(node, "name", None) == name]
+            assert len(nodes) == 1 and fingerprint(nodes[0]) == delta["after"]
+            selected.extend(nodes)
+        tree.body = [node for node in tree.body if node not in selected]
+        assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+        # Reversal restores exactly the capacity tip, and the pre-image keeps
+        # every reviewed function at its recorded `before` fingerprint.
+        before = support.before_validate_stop_stale_scoped_root_source(raw, filename)
+        assert hashlib.sha256(before).hexdigest() == change["before_file_sha256"]
+        before_tree = ast.parse(before)
+        assert fingerprint(before_tree) == change["before_module_ast_sha256"]
+        top = {
+            node.name: node
+            for node in before_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef))
+        }
+        for name, delta in change["function_delta"].items():
+            assert (fingerprint(top[name]) if name in top else None) == delta["before"]
+        before_tree.body = [
+            node
+            for node in before_tree.body
+            if getattr(node, "name", None) not in change["function_delta"]
+        ]
+        assert fingerprint(before_tree) == change["outside_reviewed_changes_ast_sha256"]
 
 
 def _top_level_ast(raw):

@@ -109,7 +109,9 @@ def _scoped_round_summaries(root: Path) -> list[tuple[str, float, dict[str, str]
         run_ids = receipt.get("run_ids")
         if not isinstance(run_ids, dict):
             run_ids = {}
-        summaries.append((round_id, finished, {k: v for k, v in run_ids.items() if isinstance(v, str)}))
+        summaries.append(
+            (round_id, finished, {k: v for k, v in run_ids.items() if isinstance(v, str)})
+        )
     return summaries
 
 
