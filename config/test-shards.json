@@ -10,6 +10,7 @@
   ],
   "untimed_modules": [
     "tests/test_closer_correction_owner.py",
+    "tests/test_closer_stale_scoped_root_pass.py",
     "tests/test_gemini_flash_routing.py",
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_verify_failure_evidence.py"
@@ -503,6 +504,7 @@
       "tests/test_closer_source_upgrade_integration.py",
       "tests/test_closer_source_upgrade_old_closure.py",
       "tests/test_closer_stage_continuation.py",
+      "tests/test_closer_stale_scoped_root_pass.py",
       "tests/test_closer_verification_ack_barrier.py",
       "tests/test_closer_verifier_assessment_mode.py",
       "tests/test_closer_verifier_shared_contract.py",
