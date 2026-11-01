@@ -126,9 +126,7 @@ def stale_scoped_root_pass_number(
         return result
 
     if row.get("reservation_diagnostics_error"):
-        result.update(
-            status="unmeasured", grade_reason="reservation drain diagnostics unavailable"
-        )
+        result.update(status="unmeasured", grade_reason="reservation drain diagnostics unavailable")
         return result
 
     if _reservation_drain_stuck(row):

@@ -14,7 +14,7 @@ MERGED_AT = 1793621234.0
 CHECK_AT = MERGED_AT + 24 * 60 * 60
 CHECK_DATE = "2026-11-03T12:07:14+00:00"
 
-MODULE = Path(__file__).resolve().parents[1] / "src" / "closer_stale_scoped_root_pass.py"
+MODULE = Path(grade.__file__).resolve()
 
 
 def test_missing_merge_timestamp_stays_pending_even_after_old_calendar_deadline():
