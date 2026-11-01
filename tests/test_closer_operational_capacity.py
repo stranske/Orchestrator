@@ -232,7 +232,19 @@ def test_foreign_or_invalid_observation_never_becomes_trial(host, field, value):
     data = poll()
     data[field] = value
     (polls / "claude-usage.json").write_text(json.dumps(data))
-    assert scoped.evaluate(cfg, now=NOW)["agents"]["claude"]["state"] == "unknown"
+    report = scoped.evaluate(cfg, now=NOW)
+    assert report["agents"]["claude"]["state"] == "unknown"
+    assert not scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy={
+            "owner": cfg["owner"],
+            "profile_ids": cfg["profile_ids"],
+            "bounded_trial_agents": cfg["bounded_trial_agents"],
+        },
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 @pytest.mark.parametrize("new_constraint", ["marker", "ordinary_false"])
@@ -281,10 +293,29 @@ def test_selected_codex_usage_remains_a_fail_closed_input(host):
     (polls / "codex-usage.json").write_text(json.dumps(poll(codex=True)))
     report = scoped.evaluate(cfg, now=NOW)
     assert scoped.validate_report(report, now=NOW)
+    policy = {
+        "owner": cfg["owner"],
+        "profile_ids": cfg["profile_ids"],
+        "bounded_trial_agents": cfg["bounded_trial_agents"],
+    }
+    assert scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
     (polls / "codex-usage.json").write_text(
         json.dumps({**poll(codex=True), "ordinary_usage_allowed": False})
     )
     assert not scoped.validate_report(report, now=NOW)
+    assert not scoped.validate_admitted_report(
+        report,
+        now=NOW,
+        policy=policy,
+        runtime_manifest=cfg["runtime_manifest"],
+        runtime_manifest_sha256=cfg["runtime_manifest_sha256"],
+    )
 
 
 def test_marker_hash_and_decision_are_same_observation(host, monkeypatch):

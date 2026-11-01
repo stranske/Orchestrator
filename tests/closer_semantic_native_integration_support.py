@@ -248,6 +248,15 @@ def integrated_native_source_reference():
     bootstrap = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
     assert original["closer_dispatcher.py"] == bootstrap["before_file_sha256"]
     original["closer_dispatcher.py"] = bootstrap["after_file_sha256"]
+    for filename, change in capacity_pre_effect_recovery_reference()["files"].items():
+        if filename == "closer_operational_capacity.py":
+            assert (
+                change["before_file_sha256"]
+                == scoped_capacity_reference()["operational"]["after_file_sha256"]
+            )
+        else:
+            assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -558,6 +567,52 @@ def pagination_historical_role_reference():
     return value
 
 
+def capacity_pre_effect_recovery_reference():
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_capacity_pre_effect_recovery_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "b5b82f8b982ecd857814e40a28c0dce7e7722d7e641f23b3882a98a167b23ef6"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "native-capacity-pre-effect-recovery-successor/v1"
+    assert value["base_commit"] == "f9f14efe899f66daa0f10be191999bd75fbdc746"
+    assert {name: set(change["function_delta"]) for name, change in value["files"].items()} == {
+        "closer_native_observer.py": {"validate_admission"},
+        "closer_operational_capacity.py": {
+            "_report_snapshot_valid",
+            "validate_report",
+            "validate_admitted_report",
+        },
+        "closer_native_source_upgrade.py": {
+            "_generic_old_native_quiescent",
+            "_generic_pre_effect_manifest",
+            "_source_selection_pre_effect_reference",
+            "plan",
+            "prepare_held",
+        },
+    }
+    assert all(change["constant_delta"] == {} for change in value["files"].values())
+    return value
+
+
+def before_capacity_pre_effect_recovery_source(raw, filename):
+    """Keep historical assertions exact beneath the separately attested successor."""
+    change = capacity_pre_effect_recovery_reference()["files"].get(filename)
+    if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
+        return raw
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    for reversal in change["historical_reversal"]:
+        before, after = reversal["before_fragment"].encode(), reversal["after_fragment"].encode()
+        assert raw.count(after) == 1
+        raw = raw.replace(after, before, 1)
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def before_dispatcher_bytecode_bootstrap(source):
     """Undo only the exact sealed-runtime bootstrap successor for old audits."""
     change = dispatcher_bytecode_bootstrap_reference()["files"]["closer_dispatcher.py"]
@@ -695,7 +750,9 @@ def assert_standing_publisher_v2_successor(source=None):
     ]
     assert fingerprint(tree) == reviewed["outside_reviewed_changes_ast_sha256"]
     for filename, successor in reviewed["native_file_successors"].items():
-        raw = source_path(filename).read_bytes()
+        raw = before_capacity_pre_effect_recovery_source(
+            source_path(filename).read_bytes(), filename
+        )
         later = initial_b_observability_reference()["files"].get(filename)
         if later is not None:
             assert successor["after_file_sha256"] == later["before_file_sha256"]
@@ -1145,7 +1202,12 @@ def scoped_capacity_reference():
     assert change["validation_function"]["name"] == "_fresh_capacity_report"
     assert change["added_function"]["name"] == "_report_profiles_for_agent"
     assert (
-        hashlib.sha256(source_path("closer_operational_capacity.py").read_bytes()).hexdigest()
+        hashlib.sha256(
+            before_capacity_pre_effect_recovery_source(
+                source_path("closer_operational_capacity.py").read_bytes(),
+                "closer_operational_capacity.py",
+            )
+        ).hexdigest()
         == value["operational"]["after_file_sha256"]
     )
     return value

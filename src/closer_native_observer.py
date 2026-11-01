@@ -967,13 +967,27 @@ def validate_admission(manifest, context, *, for_effects, _scope=None, for_test=
     ):
         raise mechanisms.MechanismError("native admission manifest bytes differ")
     capacity_report = _read(directory / "scoped-capacity.json")
+    model_policy = None
     if capacity_report.get("control_plane_only") is not True:
-        capacity_contract(manifest)  # Model qualification retains the strict registry contract.
-    if for_effects and (
-        (not finite and not time.time() < deadline)
-        or not scoped.validate_report(_read(directory / "scoped-capacity.json"), now=time.time())
-    ):
-        raise mechanisms.MechanismError("native admission expired or operational inputs changed")
+        model_policy = capacity_contract(
+            manifest
+        )  # Model qualification retains the strict registry contract.
+    if for_effects:
+        capacity_valid = (
+            scoped.validate_report(capacity_report, now=time.time())
+            if model_policy is None
+            else scoped.validate_admitted_report(
+                capacity_report,
+                now=time.time(),
+                policy=model_policy,
+                runtime_manifest=context["runtime_manifest"],
+                runtime_manifest_sha256=context["runtime_manifest_sha256"],
+            )
+        )
+        if (not finite and not time.time() < deadline) or not capacity_valid:
+            raise mechanisms.MechanismError(
+                "native admission expired or operational inputs changed"
+            )
     return context
 
 

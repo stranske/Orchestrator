@@ -11,9 +11,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from test_closer_native_observer import host as host
 
+import closer_campaign as campaign
 import closer_correction_controller as controller
+import closer_mechanisms as mechanisms
+import closer_native_observer as native
 import closer_native_source_upgrade as upgrade
+import closer_pipeline
 import closer_release
 
 
@@ -83,7 +88,9 @@ def test_failed_before_pipeline_reference_is_literal_and_never_uses_completed_ro
     assert called == {"manifest": manifest, "state": state, "worker": "fa4c00f5e8c6"}
 
 
-def test_failed_before_pipeline_reference_refuses_authority_or_wrong_worker(tmp_path, monkeypatch):
+def test_failed_before_pipeline_reference_refuses_authority_or_wrong_worker(
+    tmp_path, monkeypatch, host
+):
     manifest = tmp_path / "pin.manifest.json"
     state = tmp_path / "campaign.json"
     manifest.write_text(json.dumps({"candidate_sha": "dd8d71119b92e15ff85836cc44ad40e20207ac6f"}))
@@ -111,6 +118,234 @@ def test_failed_before_pipeline_reference_refuses_authority_or_wrong_worker(tmp_
         )
         with pytest.raises(upgrade.SourceUpgradeHeld, match="failed-before-pipeline"):
             upgrade._old_reference(manifest, state, "fa4c00f5e8c6")
+    _assert_signed_source_selection_pre_effect_reference(tmp_path, host, monkeypatch)
+
+
+def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, monkeypatch):
+    """Exercise the generic pre-effect reader against genuine local HMAC records."""
+    manifest, manifest_path, _wrapper = native_host
+    root = Path(manifest["mechanism_contract"]["observation_root"])
+    mechanisms._key(root, create=True)
+    worker_id = "b4909059afe4"
+    nonce = "1" * 32
+    target = "stranske/Orchestrator#984"
+    frontier = {
+        "frontier_id": "public989-readmission-test",
+        "targets": [target],
+    }
+    state = tmp_path / "campaigns" / "public989-readmission.campaign.json"
+    state.parent.mkdir(exist_ok=True)
+    worker_config = {"finite_frontier": frontier, "request_timeout_seconds": 120}
+    document = {
+        "campaign_id": "public989-readmission",
+        "owner": "source-owner",
+        "generation": 1,
+        "phase": "work",
+        "hold": None,
+        "targets": {campaign.ROUND_UNIT: "reconcile"},
+        "workers": [
+            {
+                "worker_id": worker_id,
+                "state": "terminal",
+                "outcome": "scoped_continuation",
+                "target": target,
+            }
+        ],
+        "worker_config": worker_config,
+        "demand_assignment": {"request_id": "source-selection-test"},
+    }
+    state.write_text(json.dumps(document, sort_keys=True))
+    binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    directory = root / nonce
+    directory.mkdir()
+    assignment = directory / "assignment.json"
+    report = directory / "scoped-capacity.json"
+    native._write(assignment, {"target": target})
+    native._write(report, {"profiles": {"claude": {"state": "ok"}}})
+    context = {
+        "nonce": nonce,
+        "campaign": native._campaign_identity(state, document),
+        "runtime_manifest": str(manifest_path),
+        "runtime_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "demand_assignment": document["demand_assignment"],
+        "finite_frontier": frontier,
+        "request_timeout_seconds": 120,
+        "assignment": {
+            "path": str(assignment),
+            "sha256": hashlib.sha256(assignment.read_bytes()).hexdigest(),
+        },
+        "report": {
+            "path": str(report),
+            "sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+        },
+    }
+    native._signed(directory / "admission.json", {"binding": binding, "context": context}, root)
+    result_path = campaign.result_path(state, worker_id)
+    fields = {
+        "state": str(state),
+        "target": target,
+        "owner": document["owner"],
+        "generation": "1",
+        "result": str(result_path),
+        "runtime-manifest": str(manifest_path),
+        "mechanism": mechanisms.NATIVE,
+    }
+    native._signed(
+        directory / f"worker-{worker_id}.json",
+        {"binding": binding, "admission": context, "fields": fields},
+        root,
+    )
+    row = {"status": "unknown", "target": target}
+    shard = tmp_path / "shards" / "source984" / "state.json"
+    shard.parent.mkdir(parents=True)
+    shard.write_text(json.dumps({"frontiers": {frontier["frontier_id"]: {"items": {target: row}}}}))
+    action = shard.parent / "state.actions" / (closer_pipeline._digest(target) + ".json")
+    action.parent.mkdir()
+    operation = {
+        "id": "95b8587d24e9ad557e103aafb93baa03",
+        "status": "uncertain",
+        "attempts": 1,
+        "result": {
+            "failure_diagnostic": {
+                "stage": "source_selection",
+                "code": "full_source_validation_unavailable",
+                "exception": "ValueError",
+            },
+            "act_authorized": False,
+            "source_closure_authorized": False,
+            "retry_safe": False,
+            "outcome_uncertain": True,
+        },
+    }
+    action.write_text(json.dumps({"operation": operation}, sort_keys=True))
+    proof = {
+        "schema": "native-scoped-continuation/v1",
+        "accepted": False,
+        "global_stop_valid": False,
+        "domain_outcome": "quarantined",
+        "finite_frontier": frontier,
+        "run_ids": {target: "source-selection-test-run"},
+        "quarantined_admitted_items": [
+            {"target": target, "source_path": str(shard), "item_sha256": mechanisms.digest(row)}
+        ],
+    }
+    execution = {
+        "phases": {
+            "A": {"exit_code": 0},
+            "B": {"exit_code": 78},
+            "C": {"exit_code": 65, "cleanup": {"exact_token_matched": True, "released": True}},
+        }
+    }
+    cohort = directory / f"completed-cohort-{worker_id}.json"
+    native._signed(
+        cohort,
+        {
+            "completed": False,
+            "binding": binding,
+            "admission": context,
+            "proof": proof,
+            "native_execution": execution,
+        },
+        root,
+    )
+    detail = {
+        "cohort_terminal": {
+            "path": str(cohort),
+            "sha256": hashlib.sha256(cohort.read_bytes()).hexdigest(),
+        },
+        "proof": proof,
+        "native_execution": execution,
+    }
+    result_path.parent.mkdir()
+    result_path.write_text(
+        json.dumps(
+            {
+                "worker_id": worker_id,
+                "outcome": "scoped_continuation",
+                "native_admission": context,
+                "detail": json.dumps(detail, sort_keys=True),
+            },
+            sort_keys=True,
+        )
+    )
+    originals = {
+        path: path.read_bytes()
+        for path in (manifest_path, state, result_path, assignment, report, cohort, shard, action)
+    }
+    monkeypatch.setattr(native, "contract", lambda *_args, **_kwargs: pytest.fail("wrong reader"))
+    monkeypatch.setattr(
+        native, "completed_round_proof", lambda *_args, **_kwargs: pytest.fail("wrong reader")
+    )
+    monkeypatch.setattr(
+        campaign, "_cohort_worker_evidence", lambda *_args, **_kwargs: pytest.fail("wrong reader")
+    )
+    reference = upgrade._source_selection_pre_effect_reference(manifest_path, state, worker_id)
+    assert reference["forensic"]["authority"] is False
+    assert reference["forensic"]["operation_id"] == operation["id"]
+    assert {path: path.read_bytes() for path in originals} == originals
+    stopped_nonce = "3" * 32
+    stopped = root / stopped_nonce
+    stopped.mkdir()
+    startup = {
+        "schema": "native-wrapper-lifecycle/v1",
+        "source": "owned-native-wrapper-process",
+        "actor": "cursor",
+        "nonce": stopped_nonce,
+        "binding": binding,
+        "entry": {"pid": 999991, "started": "test", "argv_sha256": "a" * 64},
+        "wrapper": {"pid": 999992, "started": "test", "argv_sha256": "b" * 64},
+    }
+    native._write(stopped / "startup.json", startup)
+    native._signed(
+        stopped / "terminal.json",
+        {**startup, "unknown": True, "passed": False, "error": {"type": "KeyboardInterrupt"}},
+        root,
+    )
+    native._write(
+        root / "native-active.json",
+        {"status": "submitted", "binding": binding, "nonce": stopped_nonce},
+    )
+    upgrade._generic_old_native_quiescent(manifest)
+    terminal = json.loads((stopped / "terminal.json").read_text())
+    terminal["record"]["passed"] = True
+    (stopped / "terminal.json").write_text(json.dumps(terminal, sort_keys=True))
+    with pytest.raises(upgrade.SourceUpgradeHeld):
+        upgrade._generic_old_native_quiescent(manifest)
+    native._write(root / "native-active.json", {"status": "terminal", "pid": 999993})
+    upgrade._generic_old_native_quiescent(manifest)
+    for changed in (
+        lambda: action.write_text(
+            json.dumps(
+                {
+                    "operation": {
+                        **operation,
+                        "result": {**operation["result"], "act_authorized": True},
+                    }
+                },
+                sort_keys=True,
+            )
+        ),
+        lambda: shard.write_text(
+            json.dumps(
+                {
+                    "frontiers": {
+                        frontier["frontier_id"]: {
+                            "items": {target: {**row, "status": "authority-flipped"}}
+                        }
+                    }
+                }
+            )
+        ),
+        lambda: native._write(
+            directory / f"worker-{worker_id}.json",
+            {"binding": binding, "admission": {**context, "nonce": "2" * 32}, "fields": fields},
+        ),
+    ):
+        for path, raw in originals.items():
+            path.write_bytes(raw)
+        changed()
+        with pytest.raises(upgrade.SourceUpgradeHeld):
+            upgrade._source_selection_pre_effect_reference(manifest_path, state, worker_id)
 
 
 def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():

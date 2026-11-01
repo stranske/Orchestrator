@@ -277,7 +277,8 @@ def evaluate(config: dict, *, now: float | None = None) -> dict:
     )
 
 
-def validate_report(report: dict, *, now: float) -> bool:
+def _report_snapshot_valid(report: dict, *, now: float) -> bool:
+    """Validate the immutable report snapshot apart from host inputs that may refresh."""
     if not isinstance(report, dict):
         return False
     deadline = report.get("original_deadline")
@@ -303,6 +304,13 @@ def validate_report(report: dict, *, now: float) -> bool:
         and len(set(report["profile_ids"])) == len(report["profile_ids"])
         and set(report["profile_ids"]) == set(report.get("profiles", {}))
         and all(execution_profiles.get_profile(key) for key in report["profile_ids"])
+    )
+
+
+def validate_report(report: dict, *, now: float) -> bool:
+    """Require byte-identical current inputs for generic report consumers."""
+    return bool(
+        _report_snapshot_valid(report, now=now)
         and (
             (
                 report.get("control_plane_only") is True
@@ -315,6 +323,64 @@ def validate_report(report: dict, *, now: float) -> bool:
             )
         )
     )
+
+
+def validate_admitted_report(
+    report: dict,
+    *,
+    now: float,
+    policy: dict,
+    runtime_manifest: str,
+    runtime_manifest_sha256: str,
+) -> bool:
+    """Recheck an admitted model scope against current bounded provider facts.
+
+    A signed admission keeps its original report bytes and scope.  A routine
+    poll refresh must not invalidate that snapshot solely by changing a hash,
+    but a newly observed hold, exhaustion, denial, or unusable metric remains
+    fail-closed before work may continue.
+    """
+    if (
+        not _report_snapshot_valid(report, now=now)
+        or report.get("control_plane_only", False) is not False
+        or not isinstance(policy, dict)
+        or report.get("owner") != policy.get("owner")
+        or report.get("profile_ids") != policy.get("profile_ids")
+        or report.get("runtime_manifest_sha256") != runtime_manifest_sha256
+    ):
+        return False
+    try:
+        original_states = [
+            report["profiles"][profile_id]["state"] for profile_id in report["profile_ids"]
+        ]
+        if not all(isinstance(state, str) for state in original_states):
+            return False
+        # An already quota-shed signed scope has no model admission to refresh.
+        # Keep its existing byte-for-byte host-input fence; it can never acquire
+        # a model merely because a later observation is more favorable.
+        if all(state not in {"ok", "warn"} for state in original_states):
+            return all(state == "shed" for state in original_states) and validate_report(
+                report, now=now
+            )
+        current = evaluate(
+            {
+                "schema": SCHEMA,
+                "owner": policy["owner"],
+                "original_deadline": report["original_deadline"],
+                "profile_ids": report["profile_ids"],
+                "bounded_trial_agents": policy["bounded_trial_agents"],
+                "runtime_manifest": runtime_manifest,
+                "runtime_manifest_sha256": runtime_manifest_sha256,
+            },
+            now=now,
+        )
+        selected = {
+            execution_profiles.get_profile(profile_id)["agent"]
+            for profile_id in report["profile_ids"]
+        }
+        return all(current["agents"][agent]["state"] in {"ok", "warn"} for agent in selected)
+    except (CapacityError, KeyError, OSError, TypeError, ValueError):
+        return False
 
 
 def publish(config: dict, output: Path, *, expected_sha256: str | None) -> dict:

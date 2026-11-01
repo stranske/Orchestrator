@@ -101,11 +101,52 @@ def publish(fixture):
 
 def test_two_normal_invocations_preserve_old_assignment_report_and_original_window(capacity_host):
     manifest, path, obj, doc, source, clock, invocation = capacity_host
+    poll = Path.home() / ".codex/orchestrator/usage-poll/claude-usage.json"
+    poll.parent.mkdir(parents=True, exist_ok=True)
+    poll.write_text(
+        json.dumps(
+            {
+                "ts": clock[0],
+                "source": "claude-cli:/usage",
+                "weekly": {
+                    "used_percent": 24,
+                    "resets_at": clock[0] + 10_000,
+                    "label": "all models",
+                },
+                "session": {"used_percent": 0, "resets_at": clock[0] + 1_000},
+            }
+        )
+    )
     original_cfg = copy.deepcopy(doc["worker_config"])
     first = publish(capacity_host)
     paths = [Path(first[key]["path"]) for key in ("assignment", "report")]
     old = {p: p.read_bytes() for p in paths}
     assert scoped.validate_report(native._read(paths[1]), now=clock[0])
+    clock[0] += 1
+    poll.write_text(
+        json.dumps(
+            {
+                "ts": clock[0],
+                "source": "claude-cli:/usage",
+                "weekly": {
+                    "used_percent": 82,
+                    "resets_at": clock[0] + 10_000,
+                    "label": "all models",
+                },
+                "session": {"used_percent": 8, "resets_at": clock[0] + 1_000},
+            }
+        )
+    )
+    # A new, still-allowed poll must not revoke this exact signed admission.
+    assert not scoped.validate_report(native._read(paths[1]), now=clock[0])
+    assert native.validate_admission(manifest, first, for_effects=True) == first
+    exhausted = json.loads(poll.read_text())
+    exhausted["weekly"]["used_percent"] = 100
+    poll.write_text(json.dumps(exhausted))
+    with pytest.raises(mechanisms.MechanismError, match="operational inputs changed"):
+        native.validate_admission(manifest, first, for_effects=True)
+    exhausted["weekly"]["used_percent"] = 82
+    poll.write_text(json.dumps(exhausted))
     clock[0] += 3600
     assert not scoped.validate_report(native._read(paths[1]), now=clock[0])
     source.write_text('{"targets":[{"target":"offline/repo#2"}]}')
