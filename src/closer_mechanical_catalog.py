@@ -96,7 +96,7 @@ def compile_catalog(source_root: Path):
         black.get("line-length") != 100
         or "tests/rail_exercises" not in black.get("force-exclude", "")
         or ruff.get("line-length") != 100
-        or ruff.get("target-version") != "py312"
+        or ruff.get("target-version") != "py313"
         or ruff.get("force-exclude") is not True
         or not {"tests/rail_exercises", ".workflows-lib"}.issubset(ruff.get("extend-exclude", []))
         or set(ruff.get("lint", {}).get("select", [])) != {"E4", "E7", "E9", "F", "I"}
