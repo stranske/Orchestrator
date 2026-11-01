@@ -1248,6 +1248,173 @@ def _pagination_reference(
     }
 
 
+def _sealed_pagination_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Read d4ca's signed pre-CAS evidence without its replaced wrapper pin."""
+    import hmac
+
+    import closer_campaign as campaign
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+
+    _need(worker_id == REVIEWED_PAGINATION_WORKER_ID, "sealed pagination worker differs")
+    manifest_value, manifest_raw, manifest = _object(manifest_path, "old manifest")
+    _need(
+        manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
+        and _sha(manifest_raw) == REVIEWED_PAGINATION_MANIFEST_SHA256,
+        "sealed pagination manifest differs",
+    )
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "sealed pagination campaign differs",
+    )
+    workers = document.get("workers")
+    _need(isinstance(workers, list), "sealed pagination workers missing")
+    workers = cast(list[Any], workers)
+    worker = next(
+        (x for x in workers if isinstance(x, dict) and x.get("worker_id") == worker_id), None
+    )
+    _need(
+        isinstance(worker, dict)
+        and worker.get("state") == "terminal"
+        and worker.get("outcome") == "scoped_continuation",
+        "sealed pagination worker differs",
+    )
+    worker = cast(dict[str, Any], worker)
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    result = cast(dict[str, Any], result)
+    _need(
+        _sha(result_raw) == REVIEWED_PAGINATION_RESULT_SHA256
+        and result.get("worker_id") == worker_id
+        and result.get("target") == worker["target"] == campaign.ROUND_UNIT
+        and result.get("mechanism") == mechanisms.NATIVE
+        and result.get("outcome") == "scoped_continuation",
+        "sealed pagination result differs",
+    )
+    context = result.get("native_admission")
+    _need(isinstance(context, dict), "sealed pagination context differs")
+    context = cast(dict[str, Any], context)
+    detail = json.loads(result.get("detail", ""))
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    nonce = context.get("nonce") if isinstance(context, dict) else None
+    _need(
+        isinstance(nonce, str)
+        and nonce == REVIEWED_PAGINATION_NONCE
+        and re.fullmatch(r"[0-9a-f]{32}", nonce),
+        "sealed pagination admission differs",
+    )
+    nonce = cast(str, nonce)
+    directory = root / nonce
+    _need(
+        directory.resolve() == directory and not directory.is_symlink(),
+        "sealed pagination root differs",
+    )
+    expected_binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    _active_path, _active_raw, active = _object(root / "native-active.json", "sealed native active")
+    binding = active.get("binding")
+    _need(
+        isinstance(binding, dict) and binding == expected_binding,
+        "sealed pagination binding differs",
+    )
+    admission = native._read(directory / "admission.json")
+    _need(
+        admission.get("record") == {"binding": binding, "context": context}
+        and hmac.compare_digest(
+            admission.get("signature", ""),
+            mechanisms._signature(admission["record"], mechanisms._key(root)),
+        ),
+        "sealed pagination admission signature differs",
+    )
+    _need(
+        context.get("runtime_manifest") == str(manifest_value)
+        and context.get("runtime_manifest_sha256") == _sha(manifest_raw)
+        and context.get("campaign")
+        == native._campaign_identity(
+            state, {**document, "generation": context["campaign"]["generation"]}
+        )
+        and context.get("demand_assignment") == document.get("demand_assignment"),
+        "sealed pagination context differs",
+    )
+    cfg = document.get("worker_config")
+    _need(
+        isinstance(cfg, dict)
+        and cfg.get("finite_frontier") == context.get("finite_frontier")
+        and cfg.get("request_timeout_seconds") == context.get("request_timeout_seconds"),
+        "sealed pagination configuration differs",
+    )
+    for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
+        pin = context.get(key)
+        path = directory / name
+        raw = host._read(path)[1]
+        _need(
+            isinstance(pin, dict)
+            and pin.get("path") == str(path)
+            and _sha(raw) == pin.get("sha256"),
+            "sealed pagination admission pin differs",
+        )
+    fields = {
+        "state": str(state),
+        "target": worker["target"],
+        "owner": document["owner"],
+        "generation": str(context["campaign"]["generation"]),
+        "result": str(result_path),
+        "runtime-manifest": context["runtime_manifest"],
+        "mechanism": mechanisms.NATIVE,
+    }
+    handoff = native._read(directory / ("worker-" + worker_id + ".json"))
+    _need(
+        handoff.get("record", {}).get("binding") == binding
+        and handoff["record"].get("admission") == context
+        and handoff["record"].get("fields") == fields
+        and hmac.compare_digest(
+            handoff.get("signature", ""),
+            mechanisms._signature(handoff["record"], mechanisms._key(root)),
+        ),
+        "sealed pagination handoff differs",
+    )
+    cohort_path = directory / ("completed-cohort-" + worker_id + ".json")
+    terminal, _raw = campaign._signed_cohort_record(
+        detail.get("cohort_terminal"), cohort_path, root, [128 * 1024 * 1024]
+    )
+    _need(
+        detail.get("cohort_terminal", {}).get("sha256") == REVIEWED_PAGINATION_COHORT_SHA256
+        and terminal.get("schema") == "closer-terminal-cohort-worker/v1"
+        and terminal.get("binding") == expected_binding
+        and terminal.get("admission") == context
+        and terminal.get("campaign") == context["campaign"]
+        and terminal.get("worker_id") == worker_id
+        and terminal.get("completed") is False
+        and terminal.get("worker") == fields
+        and terminal.get("native_execution") == detail.get("native_execution")
+        and terminal.get("proof") == detail.get("proof")
+        and terminal.get("completed_round") == detail.get("completed_round")
+        and terminal.get("descendant_bundle") == detail.get("descendant_bundle")
+        and terminal.get("outcome") == "scoped_continuation",
+        "sealed pagination cohort differs",
+    )
+    reference = {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "detail": detail,
+        "terminal": terminal,
+    }
+    _pagination_preinstruction_diagnostic(reference)
+    return reference
+
+
 def _pagination_preinstruction_diagnostic(reference: dict[str, Any]) -> dict[str, Any]:
     """Prove d4ca's pinned local rejection; retain, never retire, its operation."""
     manifest = cast(dict[str, Any], reference["manifest"])
@@ -2447,13 +2614,18 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
         )
     else:
         _old_module_bytes(old_manifest)
-        old_reference = _completed_reference(
-            old_manifest_path,
-            old_state,
-            old_worker_id,
-            manifest_sha256=record["old"]["manifest_sha256"],
-            state_sha256=record["old"]["state_sha256"],
-        )
+        if old_manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+            old_reference = _sealed_pagination_reference(
+                old_manifest_path, old_state, old_worker_id
+            )
+        else:
+            old_reference = _completed_reference(
+                old_manifest_path,
+                old_state,
+                old_worker_id,
+                manifest_sha256=record["old"]["manifest_sha256"],
+                state_sha256=record["old"]["state_sha256"],
+            )
     _need(
         old_reference["result_sha256"] == record["old"]["result_sha256"]
         and old_reference["state_sha256"] == record["old"]["state_sha256"],
@@ -2523,13 +2695,18 @@ def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str
             )
         else:
             _old_module_bytes(locked_old_manifest)
-            locked_reference = _completed_reference(
-                old_manifest_path,
-                old_state,
-                old_worker_id,
-                manifest_sha256=record["old"]["manifest_sha256"],
-                state_sha256=record["old"]["state_sha256"],
-            )
+            if locked_old_manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+                locked_reference = _sealed_pagination_reference(
+                    old_manifest_path, old_state, old_worker_id
+                )
+            else:
+                locked_reference = _completed_reference(
+                    old_manifest_path,
+                    old_state,
+                    old_worker_id,
+                    manifest_sha256=record["old"]["manifest_sha256"],
+                    state_sha256=record["old"]["state_sha256"],
+                )
         _need(
             locked_reference["result_sha256"] == record["old"]["result_sha256"]
             and locked_reference["state_sha256"] == record["old"]["state_sha256"],
