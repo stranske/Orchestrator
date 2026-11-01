@@ -298,6 +298,54 @@ def test_grade_receipts_all_latched_fails():
     assert "all 2 receipt(s) still latched" in aggregate["grade_reason"]
 
 
+def test_grade_receipts_does_not_report_unread_receipts_as_latched():
+    latched = {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON}
+    for unread in (None, {}, {"authority": False, "reason": " "}):
+        for receipts in ([latched, unread], [unread, latched]):
+            aggregate = grade.grade_receipts(receipts, now=CHECK_AT, merged_at=MERGED_AT)
+            assert aggregate["status"] == "fail"
+            assert aggregate["grade_reason"] == (
+                f"1 of 2 receipt(s) still latched on {grade.PRIOR_STOP_LATCH_REASON}; "
+                "1 receipt(s) unmeasured"
+            )
+            assert sorted(row["grade"]["status"] for row in aggregate["grades"]) == [
+                "fail",
+                "unmeasured",
+            ]
+
+
+def test_cli_mixed_latched_and_unread_receipts_reports_measured_counts(tmp_path):
+    receipts = (
+        {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
+        {},
+        {"authority": False, "reason": None},
+    )
+    for index, receipt in enumerate(receipts):
+        (tmp_path / f"receipt-{index}.json").write_text(json.dumps(receipt), encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE),
+            str(tmp_path),
+            "--now",
+            str(CHECK_AT),
+            "--merged-at",
+            str(MERGED_AT),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "fail"
+    assert payload["receipt_count"] == 3
+    assert payload["grade_reason"] == (
+        f"1 of 3 receipt(s) still latched on {grade.PRIOR_STOP_LATCH_REASON}; "
+        "2 receipt(s) unmeasured"
+    )
+
+
 def test_grade_receipts_empty_set_unmeasured_after_check_date():
     empty = grade.grade_receipts([], now=CHECK_AT, merged_at=MERGED_AT)
     assert empty["status"] == "unmeasured"

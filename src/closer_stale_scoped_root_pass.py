@@ -198,9 +198,16 @@ def grade_receipts(
             f"{source_note}: {best['grade']['grade_reason']}"
         )
     elif aggregate["status"] == "fail":
-        aggregate["grade_reason"] = (
-            f"all {len(graded)} receipt(s) still latched on {PRIOR_STOP_LATCH_REASON}"
-        )
+        latched_count = sum(item["grade"]["status"] == "fail" for item in graded)
+        if latched_count == len(graded):
+            aggregate["grade_reason"] = (
+                f"all {len(graded)} receipt(s) still latched on {PRIOR_STOP_LATCH_REASON}"
+            )
+        else:
+            aggregate["grade_reason"] = (
+                f"{latched_count} of {len(graded)} receipt(s) still latched on "
+                f"{PRIOR_STOP_LATCH_REASON}; {len(graded) - latched_count} receipt(s) unmeasured"
+            )
     return aggregate
 
 
