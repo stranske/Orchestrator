@@ -25,6 +25,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -70,8 +71,6 @@ def stale_scoped_root_pass_number(
     the owner supplies that provenance when checking merge + 24 h.
     Without the actual merge timestamp, the grade remains pending.
     """
-    import time
-
     stamp = time.time() if now is None else float(now)
     if not math.isfinite(stamp):
         raise ValueError("now must be a finite Unix timestamp")
@@ -154,17 +153,19 @@ def grade_receipts(
     Ranking after the check date: ``pass`` > ``next_break`` > ``fail`` >
     ``unmeasured`` > ``pending``. A later cleared receipt wins over older
     still-latched ones so pre-merge failures do not veto the AC.
+    All receipts use one check time, even when grading crosses the deadline.
     """
+    stamp = time.time() if now is None else now
     graded: list[dict[str, Any]] = []
     for index, receipt in enumerate(receipts):
-        row = stale_scoped_root_pass_number(receipt, now=now, merged_at=merged_at)
+        row = stale_scoped_root_pass_number(receipt, now=stamp, merged_at=merged_at)
         source = None
         if sources is not None and index < len(sources):
             source = sources[index]
         graded.append({"source": source, "grade": row})
 
     if not graded:
-        empty = stale_scoped_root_pass_number(None, now=now, merged_at=merged_at)
+        empty = stale_scoped_root_pass_number(None, now=stamp, merged_at=merged_at)
         empty = dict(empty)
         empty.update(
             scope="receipt_set_at_least_one",

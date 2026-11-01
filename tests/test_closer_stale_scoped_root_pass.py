@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import closer_stale_scoped_root_pass as grade
 
@@ -350,6 +351,32 @@ def test_grade_receipts_empty_set_unmeasured_after_check_date():
     empty = grade.grade_receipts([], now=CHECK_AT, merged_at=MERGED_AT)
     assert empty["status"] == "unmeasured"
     assert empty["receipt_count"] == 0
+
+
+def test_grade_receipts_uses_one_check_time_when_batch_crosses_deadline():
+    receipts = [
+        {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON},
+        {"authority": True, "reason": "ok"},
+    ]
+    for check_time, expected_status in ((CHECK_AT - 0.25, "pending"), (CHECK_AT, "pass")):
+        with patch("time.time", side_effect=[check_time, CHECK_AT + 0.25]) as clock:
+            result = grade.grade_receipts(receipts, merged_at=MERGED_AT)
+        assert result["status"] == expected_status
+        assert clock.call_count == 1
+        assert all(
+            (item["grade"]["status"] == "pending") == (expected_status == "pending")
+            for item in result["grades"]
+        )
+
+
+def test_grade_receipts_explicit_check_time_does_not_read_clock():
+    with patch("time.time", side_effect=AssertionError("explicit now must be used")):
+        result = grade.grade_receipts(
+            [{"authority": True}, {"authority": False, "reason": grade.PRIOR_STOP_LATCH_REASON}],
+            now=CHECK_AT,
+            merged_at=MERGED_AT,
+        )
+    assert result["status"] == "pass"
 
 
 def test_cli_grades_directory_with_at_least_one_pass(tmp_path):
