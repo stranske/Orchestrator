@@ -8,6 +8,8 @@ grade machine-checkable once a receipt JSON is in hand.
 Pass: ``authority is True``, or ``reason`` is a non-empty string other than
 ``prior_run_has_no_valid_stop`` and the receipt is not still stuck on the
 reservation-drain latch named by #1049.
+If reservation diagnostics failed, a changed reason alone is unmeasured;
+it cannot exclude that successor latch.
 
 Next break (not #1050 completion): ``reason`` has left
 ``prior_run_has_no_valid_stop`` but ``blocking_reservations > 0`` with
@@ -97,6 +99,7 @@ def stale_scoped_root_pass_number(
         "reason": reason if isinstance(reason, str) else None,
         "blocking_reservations": row.get("blocking_reservations"),
         "drainable_reservations": row.get("drainable_reservations"),
+        "reservation_diagnostics_error": row.get("reservation_diagnostics_error"),
         "status": "pending",
         "grade_reason": "actual merge timestamp not supplied",
         "next_break_issue": None,
@@ -119,6 +122,12 @@ def stale_scoped_root_pass_number(
         result.update(
             status="fail",
             grade_reason="prior_run_has_no_valid_stop still latched",
+        )
+        return result
+
+    if row.get("reservation_diagnostics_error"):
+        result.update(
+            status="unmeasured", grade_reason="reservation drain diagnostics unavailable"
         )
         return result
 

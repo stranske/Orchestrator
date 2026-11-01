@@ -152,6 +152,66 @@ def test_stale_scoped_root_pass_records_reservation_drain_as_next_break():
     assert "drainable 0" in nxt["grade_reason"]
 
 
+def test_changed_reason_with_failed_reservation_diagnostics_is_unmeasured():
+    receipt = {
+        "authority": False,
+        "reason": "admission_deadline_expired",
+        "reservation_diagnostics_error": "OSError: reservation state unavailable",
+    }
+    result = grade.stale_scoped_root_pass_number(receipt, now=CHECK_AT, merged_at=MERGED_AT)
+    assert result["status"] == "unmeasured"
+    assert result["grade_reason"] == "reservation drain diagnostics unavailable"
+    assert result["reservation_diagnostics_error"] == receipt["reservation_diagnostics_error"]
+    assert result["next_break_issue"] is None
+
+
+def test_diagnostic_failure_does_not_override_explicit_authority_or_prior_stop_latch():
+    for authority, expected in ((True, "pass"), (False, "fail")):
+        result = grade.stale_scoped_root_pass_number(
+            {
+                "authority": authority,
+                "reason": grade.PRIOR_STOP_LATCH_REASON,
+                "reservation_diagnostics_error": "OSError: reservation state unavailable",
+            },
+            now=CHECK_AT,
+            merged_at=MERGED_AT,
+        )
+        assert result["status"] == expected
+
+
+def test_cli_diagnostic_failure_cannot_supply_a_passing_receipt(tmp_path):
+    path = tmp_path / "diagnostics-unavailable.json"
+    path.write_text(
+        json.dumps(
+            {
+                "authority": False,
+                "reason": "admission_deadline_expired",
+                "reservation_diagnostics_error": "OSError: reservation state unavailable",
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Both the single-receipt path and batch ranking must preserve the missing evidence.
+    (tmp_path / "unread.json").write_text("{}", encoding="utf-8")
+    for source in (path, tmp_path):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MODULE),
+                str(source),
+                "--now",
+                str(CHECK_AT),
+                "--merged-at",
+                str(MERGED_AT),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 78, result.stdout
+        assert json.loads(result.stdout)["status"] == "unmeasured"
+
+
 def test_partial_reservation_drain_remains_the_next_break():
     for drainable in (1, 5, 10):
         result = grade.stale_scoped_root_pass_number(
