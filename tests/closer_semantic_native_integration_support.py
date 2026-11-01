@@ -705,17 +705,19 @@ def validate_stop_stale_scoped_root_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "026d8f04d5c861e5417240fb8fa2a24ffa8a52a0c683467c0d30c14ee0dc2c79"
+        == "408a38c32208ac622505be9b7652b87dd18030e9b8d21a52fd06b5a7ff206fd2"
     )
     value = json.loads(raw)
     assert value["schema"] == "native-validate-stop-stale-scoped-root-successor/v1"
     assert value["base_commit"] == "f9f14efe899f66daa0f10be191999bd75fbdc746"
     assert {name: set(change["function_delta"]) for name, change in value["files"].items()} == {
         "closer_dispatcher.py": {
+            "_finite_timestamp",
             "_newest_pipeline_run",
-            "_scoped_round_summaries",
-            "_scoped_round_for_pipeline_run",
             "_newest_scoped_round",
+            "_scoped_root_is_stale",
+            "_scoped_round_for_pipeline_run",
+            "_scoped_round_summaries",
             "main",
         }
     }
@@ -1105,7 +1107,7 @@ def validate_stop_role_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "d01986bcea6840beea67f9cfc5f09c62b20b78b8dfaedee4fa2566eb8aefa41b"
+        == "73c5b190e658f6bcd1d0004e19b5552ddb1207f4eee510592fe3bd85acdccab7"
     )
     value = json.loads(raw)
     assert value["schema"] == "closer-validate-stop-stale-scoped-root-role-successor/v1"
