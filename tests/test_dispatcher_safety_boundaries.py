@@ -85,6 +85,12 @@ def test_routing_metadata_keeps_only_meaningful_assignment_provenance():
     assert dispatcher._routing_metadata({"target": "o/r#7"}) is None
 
 
+def test_routing_metadata_admits_profileless_caller_pinned_assignment():
+    metadata = dispatcher._routing_metadata({"caller_pinned": True, "agent": "cursor"})
+    assert metadata is not None
+    assert metadata["source"] == "caller_pinned"
+
+
 def test_routing_metadata_marks_delegate_profile_pins_as_caller_pinned():
     """Coverage-autopilot / `delegate --agent` pins must not read as router exploration."""
     assignment = {

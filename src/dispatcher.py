@@ -1208,7 +1208,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "selected_capability_id",
         "selected_capability_version_id",
     }
-    if not any(key in assignment for key in keys):
+    if not assignment.get("caller_pinned") and not any(key in assignment for key in keys):
         return None
     # Caller-named delegate --agent work still carries a profile; do not label it as a
     # router assignment or exploration_review will credit the router for caller pins.
