@@ -11,6 +11,7 @@
   "untimed_modules": [
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
+    "tests/test_python_floor.py",
     "tests/test_storage_abort_reconciliation.py",
     "tests/test_storage_interrupted_release.py",
     "tests/test_verify_failure_evidence.py"
@@ -530,6 +531,7 @@
       "tests/test_keepalive_replacement_rows.py",
       "tests/test_keepalive_spec_retry.py",
       "tests/test_offload_failure_evidence.py",
+      "tests/test_python_floor.py",
       "tests/test_python_standard_audit.py",
       "tests/test_read_only_github_rule.py",
       "tests/test_redirect_chain_backend_and_agent.py",
