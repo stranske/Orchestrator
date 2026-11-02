@@ -115,10 +115,19 @@ def test_unreviewed_source_profile_or_lifetime_never_gets_admission(change):
     elif change == "renewal":
         record["expires_at"] += 1
     elif change == "source":
-        descriptor["sources"]["adapters.py"] = "0" * 64
-        descriptor["contract_sha256"] = roles._source_digest(
-            {k: v for k, v in descriptor.items() if k != "contract_sha256"}
-        )
+        # Each changed execution source must independently invalidate admission,
+        # including the router/dispatcher edits that require the #1039 renewal.
+        for source in ("adapters.py", "router.py", "dispatcher.py"):
+            changed = copy.deepcopy(descriptor)
+            changed["sources"][source] = "0" * 64
+            changed["contract_sha256"] = roles._source_digest(
+                {k: v for k, v in changed.items() if k != "contract_sha256"}
+            )
+            with pytest.raises(ValueError, match="does not support this exact production source"):
+                support(record, changed, identity=identity, checked_at=checked_at, task=task)
+        assert descriptor == HISTORICAL_DESCRIPTOR
+        assert record == ORIGINAL
+        return
     elif change == "hash_claim":
         descriptor["sources"]["adapters.py"] = "0" * 64
     elif change == "old_as_current":
