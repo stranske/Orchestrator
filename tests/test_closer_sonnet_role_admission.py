@@ -337,6 +337,12 @@ def test_actual_shared_callback_native_proof_and_inactive_row(world):
     assert report["callback_proof"]["expected"]["qualification_only"] is True
     assert len(world.calls) == 1
     proposal = admission.reviewed_record_proposal(value["report_ref"])
+    observed = report["callback_proof"]["expected"]["production_model_contract"]
+    assert proposal["record"]["production_model_contract"] == observed
+    assert proposal["record"]["execution_limits"]["model_contract_sha256"] == (
+        observed["contract_sha256"]
+    )
+    assert proposal["record"]["qualified_at"] == report["completed_at"]
     assert (
         proposal["record"]["status"] == "pending_review"
         and proposal["record"]["expires_at"] is None
@@ -489,16 +495,33 @@ def test_registry_data_is_excluded_but_driver_source_is_in_contract(world, monke
 def test_report_modification_or_current_contract_change_holds_receiver(world, monkeypatch):
     value = run(world)
     actual = closer._controlled_model_contract
+    observed = actual(admission.TASK)
 
-    def changed(task):
-        descriptor = actual(task)
-        descriptor["contract_sha256"] = "0" * 64
-        return descriptor
+    # #1039 needs a new physical observation for the router/dispatcher change;
+    # #1053 also changed the catalog. A self-consistent new descriptor must not
+    # let the receiver reuse the old callback merely by replacing its hash.
+    for source in (None, "router.py", "dispatcher.py", "closer_mechanical_catalog.py"):
+        descriptor = copy.deepcopy(observed)
+        if source is None:
+            descriptor["contract_sha256"] = "0" * 64
+        else:
+            descriptor["sources"][source] = "0" * 64
+            descriptor["contract_sha256"] = roles._source_digest(
+                {key: val for key, val in descriptor.items() if key != "contract_sha256"}
+            )
+        with monkeypatch.context() as changed:
+            changed.setattr(closer, "_controlled_model_contract", lambda _task: descriptor)
+            with pytest.raises(ValueError, match="current canary source/request identity changed"):
+                admission.reviewed_record_proposal(value["report_ref"])
+        assert roles.ROLE_QUALIFICATIONS == {}
 
-    monkeypatch.setattr(closer, "_controlled_model_contract", changed)
-    with pytest.raises(ValueError):
-        admission.reviewed_record_proposal(value["report_ref"])
-    monkeypatch.setattr(closer, "_controlled_model_contract", actual)
+    # Refusing stale readback neither launches another attempt nor consumes the
+    # original report: restoring its exact sources still yields an inactive row.
+    proposal = admission.reviewed_record_proposal(value["report_ref"])
+    assert proposal["record"]["production_model_contract"] == observed
+    assert proposal["record"]["status"] == "pending_review"
+    assert len(world.calls) == 1
+    assert roles.ROLE_QUALIFICATIONS == {}
     path = Path(value["report_ref"]["path"])
     path.write_bytes(path.read_bytes() + b" ")
     with pytest.raises(ValueError):

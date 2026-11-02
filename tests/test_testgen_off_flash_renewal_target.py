@@ -13,8 +13,11 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 import closer_dispatcher as closer
 import closer_role_qualification as roles
+import execution_profiles
 
 FIXTURE = (
     Path(__file__).parent
@@ -66,6 +69,45 @@ def test_testgen_off_flash_renewal_predecessor_bridge_remains_immutable():
     )
     assert bridge["production_model_contract"] != live
     assert PREDECESSOR_ID in roles.ROLE_QUALIFICATION_SUPERSEDES
+    # Keep lifetime and profile eligibility positive: the refusal must come
+    # from the source change, rather than the predecessor's eventual expiry.
+    checked_at = bridge["qualified_at"] + 1
+    profile = execution_profiles.get_profile(bridge["profile_identity"]["profile_id"])
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=checked_at,
+            records={PREDECESSOR_ID: bridge},
+        )
+        == bridge
+    )
+    assert roles.execution_source_support(
+        bridge,
+        bridge["profile_identity"],
+        bridge["production_model_contract"],
+        task_type="closer_exception",
+        checked_at=checked_at,
+    ) == {"limits": bridge["execution_limits"], "admission": None}
+    with pytest.raises(ValueError, match="does not support this exact production source"):
+        roles.execution_source_support(
+            bridge,
+            bridge["profile_identity"],
+            live,
+            task_type="closer_exception",
+            checked_at=checked_at,
+        )
+    expected = {
+        "profile_identity": bridge["profile_identity"],
+        "task_type": "closer_exception",
+        "production_model_contract": live,
+        "limits": {
+            **bridge["execution_limits"],
+            "model_contract_sha256": target["live_model_contract_sha256"],
+        },
+    }
+    assert not roles.execution_record_matches(bridge, expected, checked_at=checked_at)
+    assert roles._source_digest(bridge) == target["predecessor_record_sha256"]
     if target["status"] == "awaiting_owner_host_canary":
         assert not any(
             record["production_model_contract"]["contract_sha256"]
