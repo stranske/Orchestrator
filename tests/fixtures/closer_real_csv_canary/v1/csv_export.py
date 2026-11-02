@@ -1,5 +1,6 @@
 """Declared partial fixture for the controlled Closer E2E negative test.
 This revision is intentionally incomplete; it is not production functionality.
+Manual setup target for an OPEN existing-PR update test; CSV remains incomplete.
 """
 
 import json
