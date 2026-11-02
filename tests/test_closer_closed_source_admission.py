@@ -16,6 +16,7 @@ import closer_dispatcher as closer
 import closer_role_qualification as roles
 import closer_source_installation as installation
 import dispatcher
+import execution_profiles
 
 controlled_world = controlled_fixture.world
 ORIGINAL = copy.deepcopy(next(iter(roles.ROLE_QUALIFICATIONS.values())))
@@ -186,8 +187,6 @@ def test_existing_root_closure_requires_and_pins_role_policy_bytes(tmp_path):
 
 def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
     """The #1039 predecessor remains historical until its successor is reviewed."""
-    import execution_profiles
-
     live = closer._controlled_model_contract("closer_exception")
     profile = execution_profiles.get_profile(CURRENT["profile_identity"]["profile_id"])
     assert (
@@ -221,7 +220,7 @@ def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
     assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
 
 
-def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
+def test_current_production_native_inert_proof_and_cold_enrollment(
     world,
     controlled_world,
     monkeypatch,
@@ -233,6 +232,25 @@ def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
     callbacks, native receipt/proof validation, owner and cold enrollment code
     executes. There is no live provider, enrollment or native issue effect.
     """
+    # Require an actual registry successor before exercising its inert transport.
+    # A stale predecessor or an inactive canary target cannot stand in for renewal.
+    descriptor = closer._controlled_model_contract("closer_exception")
+    profile = execution_profiles.get_profile(CURRENT["profile_identity"]["profile_id"])
+    observations = [
+        record["qualified_at"]
+        for record in roles.ROLE_QUALIFICATIONS.values()
+        if record.get("production_model_contract") == descriptor
+        and record.get("profile_identity") == roles.profile_identity(profile)
+    ]
+    assert observations, (
+        "Missing reviewed closer qualification for live contract "
+        f"{descriptor['contract_sha256']}; complete the owner-host canary and "
+        "append its independently reviewed successor before claiming renewal."
+    )
+    checked_at = max(observations) + 1
+    current = roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=checked_at)
+    assert current is not None and current["production_model_contract"] == descriptor
+
     # Only qualification clock inputs are fixed. The actual policy validators
     # still execute; native invocation, invitation, deadline and timeout clocks
     # retain their real module clock and the original record is never renewed.
@@ -243,11 +261,11 @@ def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
 
     def problems_at_observation(profile, role, *, now=None, records=None):
         qualification_clock_calls.append("qualification")
-        return original_problems(profile, role, now=CURRENT_INSIDE, records=records)
+        return original_problems(profile, role, now=checked_at, records=records)
 
     def support_at_observation(*args, **kwargs):
         qualification_clock_calls.append("source_admission")
-        return original_support(*args, **{**kwargs, "checked_at": CURRENT_INSIDE})
+        return original_support(*args, **{**kwargs, "checked_at": checked_at})
 
     monkeypatch.setattr(roles, "qualification_problems", problems_at_observation)
     monkeypatch.setattr(roles, "execution_source_support", support_at_observation)
@@ -255,11 +273,11 @@ def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
 
     def record_at_observation(profile, role, **kwargs):
         kwargs.pop("now", None)
-        return original_record(profile, role, now=CURRENT_INSIDE, **kwargs)
+        return original_record(profile, role, now=checked_at, **kwargs)
 
     monkeypatch.setattr(roles, "qualified_record", record_at_observation)
     monkeypatch.setattr(
-        roles, "ROLE_QUALIFICATIONS", {CURRENT["qualification_id"]: copy.deepcopy(CURRENT)}
+        roles, "ROLE_QUALIFICATIONS", {current["qualification_id"]: copy.deepcopy(current)}
     )
     assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     original_factory = invitation.InertCaller
@@ -269,14 +287,14 @@ def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
         caller = original_factory(*args, **kwargs)
         callers.append(caller)
         monkeypatch.setattr(
-            roles, "ROLE_QUALIFICATIONS", {CURRENT["qualification_id"]: copy.deepcopy(CURRENT)}
+            roles, "ROLE_QUALIFICATIONS", {current["qualification_id"]: copy.deepcopy(current)}
         )
         # Explicit hardware/bootstrap fixture; proof/result validators untouched.
         monkeypatch.setattr(
             roles,
             "is_runtime_qualified",
             lambda p, r, **kw: roles.qualified_record(p, r, **kw) is not None
-            and p["profile_id"] == CURRENT["profile_identity"]["profile_id"],
+            and p["profile_id"] == current["profile_identity"]["profile_id"],
         )
         return caller
 
@@ -297,7 +315,7 @@ def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
     assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
     proof = captured[0]["_closer_controlled_proof"]
     expected = proof["expected"]
-    assert expected["qualification_record_sha256"] == closer._contract_digest(CURRENT)
+    assert expected["qualification_record_sha256"] == closer._contract_digest(current)
     assert expected["production_model_contract"] == closer._controlled_model_contract(
         "closer_exception"
     )
@@ -322,8 +340,8 @@ def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
             receipt_root=dispatcher.DISPATCH_LOG_DIR,
         )
     assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
-    assert closer._contract_digest(roles.ROLE_QUALIFICATIONS[CURRENT["qualification_id"]]) == (
-        closer._contract_digest(CURRENT)
+    assert closer._contract_digest(roles.ROLE_QUALIFICATIONS[current["qualification_id"]]) == (
+        closer._contract_digest(current)
     )
 
 
