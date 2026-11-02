@@ -1192,7 +1192,6 @@ def test_argon_successor_tiers_reach_matching_offload_profiles(monkeypatch, tmp_
     ("task_type", "mode"),
     (
         ("codemod", "cheap"),
-        ("testgen", "mid"),
         ("review", "mid"),
         ("implement", "full"),
         ("epic", "full"),

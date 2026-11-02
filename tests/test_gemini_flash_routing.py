@@ -115,3 +115,53 @@ def test_trial_hour_pins_gemini_and_falls_back_without_capacity(monkeypatch, tmp
     roles.reset_role_invocation_counts()
     assert seen == ["gemini", "cursor"]
     assert picks == [{"gemini"}, {"gemini"}, None]
+
+
+def test_testgen_never_routes_to_gemini_even_when_draining_agy():
+    import router
+
+    assert "testgen" not in router.GEMINI_GOOD_FIT_TASKS
+    testgen_agents = {entry["agent"] for entry in router.ROUTE_TABLE["testgen"]["agents"]}
+    assert "gemini" not in testgen_agents
+
+    cap_drain = {
+        "agents": {
+            "claude": {"state": "shed"},
+            "codex": {"state": "ok"},
+            "gemini": {"state": "ok", "policy": "drain"},
+            "cursor": {"state": "ok"},
+            "vibe": {"state": "ok"},
+            "aider": {"state": "ok"},
+        }
+    }
+    selected = router.select_agent("testgen", cap_drain)
+    assert selected is not None
+    assert selected["agent"] != "gemini"
+
+
+def test_break_revert_testgen_in_good_fit_tasks():
+    import router
+
+    original = set(router.GEMINI_GOOD_FIT_TASKS)
+    try:
+        router.GEMINI_GOOD_FIT_TASKS.add("testgen")
+        with pytest.raises(AssertionError):
+            test_testgen_never_routes_to_gemini_even_when_draining_agy()
+    finally:
+        router.GEMINI_GOOD_FIT_TASKS.clear()
+        router.GEMINI_GOOD_FIT_TASKS.update(original)
+
+
+def test_break_revert_testgen_route_table_gemini_entry():
+    """Deliberate break → revert for the ROUTE_TABLE gemini pin (#1039)."""
+    import router
+
+    original = list(router.ROUTE_TABLE["testgen"]["agents"])
+    try:
+        router.ROUTE_TABLE["testgen"]["agents"] = original + [
+            {"agent": "gemini", "mode": "mid", "late": False},
+        ]
+        with pytest.raises(AssertionError):
+            test_testgen_never_routes_to_gemini_even_when_draining_agy()
+    finally:
+        router.ROUTE_TABLE["testgen"]["agents"] = original

@@ -85,6 +85,43 @@ def test_routing_metadata_keeps_only_meaningful_assignment_provenance():
     assert dispatcher._routing_metadata({"target": "o/r#7"}) is None
 
 
+def test_routing_metadata_marks_delegate_profile_pins_as_caller_pinned():
+    """Coverage-autopilot / `delegate --agent` pins must not read as router exploration."""
+    assignment = {
+        "caller_pinned": True,
+        "selected_profile_id": "codex-terra-mid-v1",
+        "requested_model": "gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "permission_mode": "workspace-write",
+        "transport": "local",
+        "profile_policy_version": "v1",
+        "profile_assignment_probability": 1.0,
+    }
+    assert dispatcher._routing_metadata(assignment) == {
+        "source": "caller_pinned",
+        "exploration": False,
+        "selected_profile_id": "codex-terra-mid-v1",
+        "requested_model": "gpt-5.6-terra",
+        "reasoning_effort": "medium",
+        "permission_mode": "workspace-write",
+        "transport": "local",
+        "profile_policy_version": "v1",
+        "profile_assignment_probability": 1.0,
+    }
+    # Router plan provenance stays router_assignment even when a profile is present.
+    assert (
+        dispatcher._routing_metadata(
+            {
+                "reason": "testgen→codex/mid (ok)",
+                "capacity_state": "ok",
+                "exploration": False,
+                "selected_profile_id": "codex-terra-mid-v1",
+            }
+        )["source"]
+        == "router_assignment"
+    )
+
+
 @pytest.mark.parametrize("profile", [False, True])
 def test_required_lineage_failure_releases_unlaunched_claim(tmp_path, monkeypatch, profile):
     releases = []

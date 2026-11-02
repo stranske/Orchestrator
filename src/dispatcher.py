@@ -1210,8 +1210,11 @@ def _routing_metadata(assignment: dict) -> dict | None:
     }
     if not any(key in assignment for key in keys):
         return None
+    # Caller-named delegate --agent work still carries a profile; do not label it as a
+    # router assignment or exploration_review will credit the router for caller pins.
+    source = "caller_pinned" if assignment.get("caller_pinned") else "router_assignment"
     metadata = {
-        "source": "router_assignment",
+        "source": source,
         "reason": assignment.get("reason"),
         "exploration": bool(assignment.get("exploration")),
         "exploration_mode": assignment.get("exploration_mode") or "",
@@ -2197,6 +2200,8 @@ def delegate(
         "prompt": prompt,
         "feedback_mode": "local",
         "branch_prefix": branch_prefix,
+        # Named by the caller (`delegate --agent`), not by router.plan / select_agent.
+        "caller_pinned": True,
         "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
         "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
         "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
