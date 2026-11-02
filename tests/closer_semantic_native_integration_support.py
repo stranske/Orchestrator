@@ -257,6 +257,15 @@ def integrated_native_source_reference():
         else:
             assert original[filename] == change["before_file_sha256"]
         original[filename] = change["after_file_sha256"]
+    for filename, change in source_pre_effect_readmission_reference()["files"].items():
+        assert original[filename] == change["before_file_sha256"]
+        original[filename] = change["after_file_sha256"]
+    for filename, change in completed_invitation_read_source_reference()["files"].items():
+        if filename in original:
+            assert original[filename] == change["before_file_sha256"]
+        else:
+            assert filename == "closer_correction_source_record.py"
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -610,8 +619,78 @@ def capacity_pre_effect_recovery_reference():
     return value
 
 
+SOURCE_PRE_EFFECT_READMISSION_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_source_pre_effect_readmission_v1.json"
+)
+SOURCE_PRE_EFFECT_READMISSION_SHA256 = (
+    "b2a6eb009cd8d0cf12343d99554dac619528abbdfe287437579c919b49c5e3f3"
+)
+
+
+def source_pre_effect_readmission_reference():
+    """Append the generic pre-effect same-candidate readmission successor."""
+    raw = SOURCE_PRE_EFFECT_READMISSION_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == SOURCE_PRE_EFFECT_READMISSION_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "source-pre-effect-readmission-successor/v1"
+    assert value["base_commit"] == "87360c8a4b7f"
+    change = value["files"]["closer_native_source_upgrade.py"]
+    prior = capacity_pre_effect_recovery_reference()["files"]["closer_native_source_upgrade.py"]
+    assert change["before_file_sha256"] == prior["after_file_sha256"]
+    assert change["before_module_ast_sha256"] == prior["after_module_ast_sha256"]
+    assert set(value["files"]) == {"closer_native_source_upgrade.py"}
+    assert set(change["function_delta"]) == {"plan"}
+    assert change["constant_delta"] == {}
+    return value
+
+
+def before_source_pre_effect_readmission_source(raw, filename):
+    """Restore the exact capacity-recovery source for that historical successor."""
+    successor = source_pre_effect_readmission_reference()["files"].get(filename)
+    if successor is not None and hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]:
+        for reversal in successor["historical_reversal"]:
+            before, after = (
+                reversal["before_fragment"].encode(),
+                reversal["after_fragment"].encode(),
+            )
+            assert raw.count(after) == 1
+            raw = raw.replace(after, before, 1)
+        assert hashlib.sha256(raw).hexdigest() == successor["before_file_sha256"]
+    return raw
+
+
+COMPLETED_INVITATION_READ_SOURCE_MANIFEST = (
+    Path(__file__).parent
+    / "fixtures/semantic_api_reference/current_completed_invitation_read_source_v1.json"
+)
+COMPLETED_INVITATION_READ_SOURCE_SHA256 = (
+    "8a12d6f12bcbde8cf869e1362fb3d8d1e3cceb7654efbd2aff5ea43fe369bbe1"
+)
+
+
+def completed_invitation_read_source_reference():
+    raw = COMPLETED_INVITATION_READ_SOURCE_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == COMPLETED_INVITATION_READ_SOURCE_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "completed-invitation-read-source-successor/v1"
+    return value
+
+
+def before_completed_invitation_read_source(raw, filename):
+    change = completed_invitation_read_source_reference()["files"].get(filename)
+    if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
+        return raw
+    assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
+    raw = change["before_source_utf8"].encode()
+    assert hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]
+    return raw
+
+
 def before_capacity_pre_effect_recovery_source(raw, filename):
-    """Keep historical assertions exact beneath the separately attested successor."""
+    """Keep historical assertions exact beneath separately attested successors."""
+    raw = before_completed_invitation_read_source(raw, filename)
+    raw = before_source_pre_effect_readmission_source(raw, filename)
     change = capacity_pre_effect_recovery_reference()["files"].get(filename)
     if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
         return raw
@@ -910,7 +989,7 @@ def capacity_bridge_role_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "f9cbf11fe29067e630f0e769b247ad76c71f3d878e2cd3b77dccc8385266b4a8"
+        == "ad538efd0593fafc740c5e9cbca61ab6e974cd1e9e94ecca45f8c7524dee7e87"
     )
     value = json.loads(raw)
     assert value["schema"] == "closer-capacity-bridge-role-successor/v1"

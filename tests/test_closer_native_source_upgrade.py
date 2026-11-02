@@ -119,6 +119,68 @@ def test_failed_before_pipeline_reference_refuses_authority_or_wrong_worker(
         with pytest.raises(upgrade.SourceUpgradeHeld, match="failed-before-pipeline"):
             upgrade._old_reference(manifest, state, "fa4c00f5e8c6")
     _assert_signed_source_selection_pre_effect_reference(tmp_path, host, monkeypatch)
+    _assert_prior_source_record_producer_closure(tmp_path, monkeypatch)
+
+
+def _assert_prior_source_record_producer_closure(tmp_path, monkeypatch):
+    import closer_semantic_native_integration_support as support
+
+    root = tmp_path / "producer-pins"
+    root.mkdir()
+    modules = {}
+    for name in (
+        "closer_correction_controller.py",
+        "closer_correction_native_effects.py",
+        "closer_correction_source_record.py",
+        "closer_source_installation.py",
+    ):
+        raw = Path(upgrade.__file__).with_name(name).read_bytes()
+        (root / name).write_bytes(raw)
+        modules[name] = hashlib.sha256(raw).hexdigest()
+    manifest = root / "manifest.json"
+
+    def save():
+        manifest.write_text(json.dumps({"module_dir": str(root), "modules": modules}))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(campaign, "validate_manifest", lambda _: [])
+        patch.setattr(campaign, "verify_modules", lambda _: [])
+        save()
+        upgrade._generic_pre_effect_manifest(manifest)
+        name = "closer_correction_source_record.py"
+        prior = support.before_completed_invitation_read_source((root / name).read_bytes(), name)
+        assert hashlib.sha256(prior).hexdigest() == (
+            "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575"
+        )
+        (root / name).write_bytes(prior)
+        modules[name] = hashlib.sha256(prior).hexdigest()
+        save()
+        upgrade._generic_pre_effect_manifest(manifest)
+        name = "closer_correction_native_effects.py"
+        prior_effects = support.before_completed_invitation_read_source(
+            (root / name).read_bytes(), name
+        )
+        assert hashlib.sha256(prior_effects).hexdigest() == (
+            "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76"
+        )
+        (root / name).write_bytes(prior_effects)
+        modules[name] = hashlib.sha256(prior_effects).hexdigest()
+        save()
+        upgrade._generic_pre_effect_manifest(manifest)
+        for name in (
+            "closer_correction_source_record.py",
+            "closer_correction_native_effects.py",
+            "closer_correction_controller.py",
+        ):
+            changed = b"unreviewed producer"
+            (root / name).write_bytes(changed)
+            modules[name] = hashlib.sha256(changed).hexdigest()
+            save()
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="producer semantics differ"):
+                upgrade._generic_pre_effect_manifest(manifest)
+            raw = Path(upgrade.__file__).with_name(name).read_bytes()
+            (root / name).write_bytes(raw)
+            modules[name] = hashlib.sha256(raw).hexdigest()
 
 
 def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, monkeypatch):
@@ -283,6 +345,25 @@ def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, 
     assert reference["forensic"]["authority"] is False
     assert reference["forensic"]["operation_id"] == operation["id"]
     assert {path: path.read_bytes() for path in originals} == originals
+    unavailable = {
+        **operation,
+        "result": {
+            **operation["result"],
+            "failure_diagnostic": {
+                "stage": "source_selection",
+                "code": "unclassified_error",
+                "exception": "SourceRecordUnavailable",
+            },
+        },
+    }
+    action.write_text(json.dumps({"operation": unavailable}, sort_keys=True))
+    selected = upgrade._source_selection_pre_effect_reference(manifest_path, state, worker_id)
+    assert selected["forensic"]["operation_id"] == operation["id"]
+    assert selected["forensic"]["authority"] is False
+    action.write_bytes(originals[action])
+    _assert_same_source_plan_requires_signed_pre_effect_evidence(
+        tmp_path, monkeypatch, manifest, manifest_path, state, worker_id, action, operation
+    )
     stopped_nonce = "3" * 32
     stopped = root / stopped_nonce
     stopped.mkdir()
@@ -318,6 +399,24 @@ def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, 
             json.dumps(
                 {
                     "operation": {
+                        **unavailable,
+                        "result": {
+                            **unavailable["result"],
+                            "failure_diagnostic": {
+                                "stage": "instruction_publication",
+                                "code": "unclassified_error",
+                                "exception": "SourceRecordUnavailable",
+                            },
+                        },
+                    }
+                },
+                sort_keys=True,
+            )
+        ),
+        lambda: action.write_text(
+            json.dumps(
+                {
+                    "operation": {
                         **operation,
                         "result": {**operation["result"], "act_authorized": True},
                     }
@@ -346,6 +445,79 @@ def _assert_signed_source_selection_pre_effect_reference(tmp_path, native_host, 
         changed()
         with pytest.raises(upgrade.SourceUpgradeHeld):
             upgrade._source_selection_pre_effect_reference(manifest_path, state, worker_id)
+
+
+def _assert_same_source_plan_requires_signed_pre_effect_evidence(
+    tmp_path, monkeypatch, manifest, manifest_path, state, worker_id, action, operation
+):
+    """Same-source routing still crosses the real signed no-effect reader."""
+
+    class IdentityBoundaryReached(Exception):
+        pass
+
+    raw = manifest_path.read_bytes()
+    original_action = action.read_bytes()
+    current = {
+        **manifest,
+        "modules": {
+            **manifest["modules"],
+            Path(upgrade.__file__)
+            .name: hashlib.sha256(Path(upgrade.__file__).read_bytes())
+            .hexdigest(),
+        },
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            upgrade, "_generic_pre_effect_manifest", lambda _: (manifest_path, raw, current)
+        )
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, current))
+        patch.setattr(upgrade, "_installed_release", lambda *_args: {})
+
+        def stop_at_identity(*_args):
+            raise IdentityBoundaryReached
+
+        patch.setattr(upgrade, "_same_identity", stop_at_identity)
+        args = (
+            manifest_path,
+            state,
+            worker_id,
+            manifest_path,
+            tmp_path / "fresh.campaign.json",
+            tmp_path / "restore.json",
+            {},
+            {},
+            tmp_path / "release.json",
+        )
+        with pytest.raises(IdentityBoundaryReached):
+            upgrade.plan(*args)
+        changed = {**current, "modules": {**current["modules"], "closer_queue.py": "f" * 64}}
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, changed))
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="changed immutable source closure"):
+            upgrade.plan(*args)
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, current))
+        action.write_text(
+            json.dumps(
+                {
+                    "operation": {
+                        **operation,
+                        "result": {**operation["result"], "act_authorized": True},
+                    }
+                },
+                sort_keys=True,
+            )
+        )
+        try:
+            with pytest.raises(upgrade.SourceUpgradeHeld, match="exact pre-effect"):
+                upgrade.plan(*args)
+        finally:
+            action.write_bytes(original_action)
+        legacy = {**current, "candidate_sha": upgrade.REVIEWED_OLD_CANDIDATE}
+        patch.setattr(upgrade, "_object", lambda *_args: (manifest_path, raw, legacy))
+        patch.setattr(upgrade, "_manifest", lambda *_args, **_kwargs: (manifest_path, raw, legacy))
+        with pytest.raises(
+            upgrade.SourceUpgradeHeld, match="source candidate release is not different"
+        ):
+            upgrade.plan(*args)
 
 
 def test_clock_no_act_is_literal_and_refuses_effect_or_wrong_stop():

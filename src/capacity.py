@@ -157,6 +157,71 @@ def _env_float_or_none(name: str):
 #   COMPUTE lever on a compute-metered seat (router/adapters proposal still open from the 2026-08-01
 #   recheck). No auth-flag change on any CLI this cycle.
 #   See ~/.claude/.../memory/orchestrator_local_build.md.
+# 2026-11-01: all seats re-verified against current public pricing/limits. Again NO cap-VALUE changes
+#   (the soft caps / plan_limit below are local placeholders; nothing published to swap in). PUBLIC
+#   vendor facts only here — this installation's observations (lockouts, lane readiness, installed CLI
+#   versions, backup-seat state) live in CAPACITY_RECHECK.local.md (gitignored) per the tool/evidence
+#   boundary at the top of CLAUDE.md.
+#   - gemini = Antigravity AI Pro. MODEL LINEUP CHANGED 2026-10-12..15: Gemini 3.1 Pro, 3.6 and 3.7
+#              Flash were withdrawn from individual plans (Free/Plus/Pro/Ultra; Enterprise keeps
+#              them); the individual lineup is Gemini 3.8 Flash + Gemini 4 Argon (low/medium/high
+#              effort ids), with third-party models alongside. adapters.MODEL_TIERS was re-pinned in
+#              #616/#618: cheap/mid = 3.8 Flash, full = Argon High. THE QUOTA SHAPE CHANGED WITH IT:
+#              Google (2026-10-15) gives AI Pro a SEPARATE WEEKLY-ONLY Argon quota on top of the
+#              5h-refreshing baseline; the plans page still says baseline quota is "refreshed every
+#              five hours until the weekly limit is reached" and publishes NO numbers.
+#              window="5h+weekly" below therefore stays right for the SEAT, but the `full` rung now
+#              drains a weekly-only bucket, so an Argon 429 sheds the whole seat for up to 7 days
+#              while the Flash rungs' 5h bucket may be untouched. PROPOSAL (not applied): shed per
+#              bucket (argon vs flash) so cheap/mid stay routable through an Argon weekly lockout.
+#              AI credits remain overage-only (Never/Always setting). Paid tiers are now named
+#              Pro $19.99 / Ultra 5x $99.99 / Ultra 20x $199.99 (same multiples, cosmetic).
+#              [antigravity.google/docs/plans; 429-shed authoritative]
+#   - cursor = PLAN LINEUP REPLACED 2026-10-12 ("The X Subscription", sold with Grok + X Premium):
+#              Plus $8 / Premium $30 (4x) / Super $100 (15x) / Ultra $200 (50x) draw ONE pool that
+#              refreshes WEEKLY, and third-party models (Claude/GPT/Gemini) are NOT covered — API
+#              list price from the first request, paid from prepaid credit. Legacy Pro $20 / Pro+ $60
+#              / Ultra $200 "keep working as they are" with TWO MONTHLY pools ("Cursor Models" = Grok
+#              4.5-4.7 + Composer 2.5; "Other Models" = third-party at API price), no end date, and
+#              switching is "optional and permanent"; the docs no longer state Pro+ = 3x Pro (only
+#              "more of each pool than Pro"). The seat modeled below is a legacy plan
+#              (LOCAL_POLICY.md), so window="monthly" stays correct; a switch to the new lineup means
+#              re-modeling (weekly window, no third-party cover). Composer 2.5 is $0.50/M in, $0.20
+#              cache read, $2.50/M out (Fast $3/$15) — unchanged, so Auto+Composer stays the cheap
+#              lane. [cursor.com/pricing; cursor.com/docs/account/pricing; .../legacy-cursor-plans]
+#   - codex  = ChatGPT Pro. Pro tiers now $100 / $200 / $500 (Ultrafast only on $500); Plus $20.
+#              learn.chatgpt.com/docs/pricing still says "Pro plans currently have no five-hour
+#              limit" → the weekly cap remains the only binding limit on a Pro seat and window="5h"
+#              is kept for the 2026-09-01 reason. Credits purchasable past the limit; Fast mode
+#              bills 2.5x, Ultrafast 8x included usage. GPT-5.5 retired from Codex-with-ChatGPT
+#              2026-10-14. [learn.chatgpt.com/docs/pricing]
+#   - claude = Max $100 (5x Pro, 5h + weekly + a separate Fable weekly at 50% of weekly). The $200
+#              tier is now sold as "Ultra" (10x Pro weekly, NO 5h limit for verified accounts, $200
+#              API credit); the Max 20x label is gone from the pricing page. A "wrap-up allowance"
+#              is rolling out (an in-flight turn may finish past a 5h limit, charged to weekly). No
+#              dated limit change since the 2026-09-14 permanent +25%. [support.claude.com 11049741
+#              + 11145838; claude.com/pricing]
+#   - vibe   = Mistral Vibe Pro $14.99 (student $5.99; Team $24.99/user, $50 min) UNCHANGED: "all-day
+#              coding in the CLI, IDE, or on web", fair-use, PAYG overflow "at API rate". NEW on the
+#              pricing page: a Pro-card bullet "$15 /mo in API credits" (a second card shows $25.5)
+#              — card attribution is ambiguous in the markup, so UNVERIFIED; if real, Pro now partly
+#              covers API calls and the aider note above ("Pro does NOT cover API calls") is stale.
+#              Only published number: Flash answers 150/day on Pro. [mistral.ai/pricing]
+#   - aider  = Codestral $0.30/$0.90 per 1M (cached input $0.03), 256K ctx — UNCHANGED per third-party
+#              rate cards (mistral.ai/pricing no longer lists Codestral). NB on retiring a backup
+#              seat: router.BACKUP_AGENTS is an EXCLUSION set (router.py skips its members in ordinary
+#              selection), so removing a seat from it would ENABLE auto-dispatch, not retire it.
+#              Retirement means removing the seat's routing candidates from the route table (and
+#              its AGENTS entry here) while the exclusion stays. A seat with no model catalog cannot
+#              be caught by `_unresolvable_tier`, so an absent backend still reads `ok` here.
+#   CLI surface this cycle (public release notes): agy 1.4.x keeps every headless flag (-p,
+#   --output-format json|stream-json, --dangerously-skip-permissions, --json-schema, --mode,
+#   --sandbox, --input-format stream-json); --effort now spans low|medium|high|xhigh|max; NEW
+#   `finished_reason` in json/stream-json results (print_timeout|interrupted|error, absent on a
+#   normal finish) — adapters could use it to tell a truncated offload from a complete one
+#   (PROPOSAL, not applied); 1.4.11 adds a Gemini-subscription vs Pay-As-You-Go billing choice at
+#   Google Cloud sign-in — keep the subscription path, PAYG would bill silently. No auth-flag change
+#   on the other CLIs. No re-tiering warranted beyond the gemini per-bucket shed proposal.
 AGENTS = {
     # block_token_limit (optional): projected-tokens ceiling for the active 5h block. Unset =>
     # the seat is OK (usable) and 429-shed is the authoritative limiter; set it (env, from your
