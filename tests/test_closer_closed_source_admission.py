@@ -219,7 +219,10 @@ def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
 
 
 def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
-    world, controlled_world, monkeypatch, tmp_path
+    world,
+    controlled_world,
+    monkeypatch,
+    tmp_path,
 ):
     """Native acquisition/outer Root/installed-adapter facts are inert fixtures.
 
