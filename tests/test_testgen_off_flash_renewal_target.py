@@ -2,7 +2,9 @@
 
 This is not a qualification record. It only pins the live closer_exception
 contract so router.py / dispatcher.py cannot drift again before the reviewed
-Sonnet successor is appended (#1002 / #1022 / #1040).
+Sonnet successor is appended (#1002 / #1022 / #1040). After main merged the
+py313 catalog retarget (#1053), the fixture must track the live contract
+(including closer_mechanical_catalog.py) and the current predecessor digest.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ FIXTURE = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_testgen_off_flash_renewal_target_v1.json"
 )
-FIXTURE_SHA256 = "5b5e782d77b49c9f8410d6848a3e2276ffcc42a42297ba4431dc77ee7b276a53"
+FIXTURE_SHA256 = "18e75a9d6dae190ee9d6edd56e5f2f20a1d16700d55d2cfab043d6b8a7a39681"
 PREDECESSOR_ID = (
     "sonnet-current-role-qualification:"
     "c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
