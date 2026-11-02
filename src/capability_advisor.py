@@ -1199,6 +1199,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "uniform coverage yields no prompt. Never dispatches the testgen agent",
     },
     "rail-exercise:audit": {
+        "closer-core": "EXERCISE the external closer's read-only value-chain adapter over a fixture: measured demand stays distinct from invocations and missing evidence stays unmeasured. Never invokes the external controller.",
         "value-chain-monitor": "EXERCISE independent demand and first-break reporting over a fixture; an unmeasured denominator must never become zero. Never changes gates.",
         "rail-exercise-cadence": "EXERCISE the committed rail contract cadence itself: each fixture-backed read-only or dry-run contract must pass and its counterexample must be detected; never enables recording unless explicitly armed.",
         "capability-activation-audit": "EXERCISE the activation audit against a FIXTURE ledger and "

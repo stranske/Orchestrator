@@ -1829,6 +1829,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "learning_sink": "feedback.py runs and durable issue_closure outcomes",
         "kill_switch": "remove the closer-core hook from the external controller",
         "rollback": {"restore": "rebuild/controller.py.before-closer-core"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "The external controller invokes the core; rail-exercise:audit offers its read-only accounting fixture.",
         "notes": (
             "dedup: the external thin core already closes merged-PR source issues; "
             "the existing closer construction remains idle. This declaration adds accounting, "

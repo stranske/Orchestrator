@@ -1048,6 +1048,8 @@ def format_lines(section: dict) -> list[str]:
 
 
 def recurrence_fixture() -> bool:
+    assert situation_count("closer-core", {"closer_core": {"demand": 3}}) == 3
+    assert situation_count("closer-core", {}) is None
     assert (
         situation_count(
             "generic-probe",
