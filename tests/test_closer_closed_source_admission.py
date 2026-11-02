@@ -190,12 +190,15 @@ def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
 
     live = closer._controlled_model_contract("closer_exception")
     profile = execution_profiles.get_profile(CURRENT["profile_identity"]["profile_id"])
-    assert roles.qualified_record(
-        profile,
-        roles.STRONG_CRITERION_ADJUDICATION,
-        now=CURRENT_INSIDE,
-        records={CURRENT["qualification_id"]: CURRENT},
-    ) == CURRENT
+    assert (
+        roles.qualified_record(
+            profile,
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=CURRENT_INSIDE,
+            records={CURRENT["qualification_id"]: CURRENT},
+        )
+        == CURRENT
+    )
     assert CURRENT["production_model_contract"] != live
     with pytest.raises(ValueError, match="does not support this exact production source"):
         roles.execution_source_support(
