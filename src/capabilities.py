@@ -1819,6 +1819,23 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # registering caller was refused on every attempt. `rail-exercise-cadence` had no registering caller
 # at all, so a fresh machine never got its row.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "closer-core": {
+        "status": "wired",
+        "entrypoint": str(Path.home() / ".codex/closer-core/closer_core.py"),
+        "matcher": {"kind": "tick_phase", "equals": "closer-core"},
+        "trigger_cadence": "existing external controller hook",
+        "output_artifact": "~/.codex/orchestrator/closer-core/rounds.jsonl",
+        "downstream_consumer": "value_chain_monitor.py:report via switch_review.py",
+        "learning_sink": "feedback.py runs and durable issue_closure outcomes",
+        "kill_switch": "remove the closer-core hook from the external controller",
+        "rollback": {"restore": "rebuild/controller.py.before-closer-core"},
+        "notes": (
+            "dedup: the external thin core already closes merged-PR source issues; "
+            "the existing closer construction remains idle. This declaration adds accounting, "
+            "not activation. Read demand and target dispositions from its existing round journal "
+            "and accepted outcomes from the Brain; no additional event store or advisor surface."
+        ),
+    },
     "testgen-lane": {
         "downstream_consumer": "testgen_gate.py:main consumes candidate tests for the acceptance gate",
         "notes": (

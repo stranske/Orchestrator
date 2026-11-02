@@ -1,7 +1,9 @@
 """Independent demand and first-break regressions, including the real weekly consumer."""
 
+import hashlib
 import json
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -152,7 +154,9 @@ def test_switch_review_prints_one_line_per_live_capability(tmp_path, monkeypatch
     )
 
 
-def test_situation_registry_counts_input_not_invocations():
+def test_situation_registry_counts_input_not_invocations(tmp_path, monkeypatch):
+    with monkeypatch.context() as patch:
+        _closer_core_fixture(tmp_path, patch)
     issues = [dict(createdAt="2026-10-01T01:00:00Z", state="OPEN", body="- [ ] task\n" * 12)] * 3
     inputs = {"fleet_issues": issues}
     assert monitor.situation_count("role-prompt", inputs) == 3
@@ -718,3 +722,154 @@ def test_deadline_index_uses_each_fixed_window_and_existing_edge_classifier(monk
         "Brain unavailable",
     )
     assert monitor.acted_on_window_index(tmp_path / "brain.db", {})[0] == {}
+
+
+CLOSER_NOW = 1793577600
+
+
+def _closer_round(stamp=CLOSER_NOW, actions=("complete",), fleet=12, errors=0):
+    return {
+        "ts": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+        "summary": f"closer-core test: targets {len(actions)}; fleet demand {fleet} (read errors {errors}; scope)",
+        "items": [{"target": f"o/r#{n}", "action": action} for n, action in enumerate(actions)],
+    }
+
+
+def _closer_journal(tmp_path, rows):
+    path = tmp_path / "closer-core/rounds.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return path
+
+
+def _check_latest_demand_and_windowed_activity(tmp_path):
+    actions = (
+        "close-pass",
+        "close-met",
+        "followup",
+        "request-verify",
+        "rerequest-verify",
+        "await-verdict",
+        "complete",
+        "wait-unmerged",
+        "classify",
+        "error",
+    )
+    rows = [
+        _closer_round(CLOSER_NOW - monitor.WINDOW_DAYS * 86400 - 1),
+        _closer_round(CLOSER_NOW - 10, actions),
+        _closer_round(CLOSER_NOW, (), fleet=20),
+        _closer_round(CLOSER_NOW + 1, fleet=999),
+    ]
+    counts = monitor._closer_core_rounds(CLOSER_NOW, _closer_journal(tmp_path, rows))
+    assert counts == {"demand": 20, "invocation_count": 1, "usable": 7}
+    assert monitor.situation_count("closer-core", {"closer_core": counts}) == 20
+    rows[-2] = _closer_round(CLOSER_NOW, ("complete", "followup"), fleet=30)
+    counts = monitor._closer_core_rounds(CLOSER_NOW, _closer_journal(tmp_path, rows))
+    assert counts == {"demand": 32, "invocation_count": 2, "usable": 9}
+
+
+def _check_unread_or_incomplete_rounds_are_unmeasured(tmp_path, damage):
+    path = tmp_path / "absent.jsonl"
+    if damage != "missing":
+        row = _closer_round()
+        if damage == "json":
+            path.write_text("{unfinished")
+        else:
+            if damage in {"items", "ts", "summary"}:
+                del row[damage]
+            elif damage == "fleet":
+                row["summary"] = "targets 1; fleet not read"
+            else:
+                row = _closer_round(errors=1)
+            path = _closer_journal(tmp_path, [row])
+    counts = monitor._closer_core_rounds(CLOSER_NOW, path)
+    assert counts is None or counts["demand"] is None
+    assert monitor.situation_count("closer-core", {"closer_core": counts}) is None
+
+
+def _check_declaration_seeds_wired_without_activation_or_gate(tmp_path):
+    path = tmp_path / "capabilities.json"
+    capabilities.seed_declared(path)
+    cap = capabilities.load_declared(path)["closer-core"]
+    assert cap["status"] == "wired"
+    assert cap["entrypoint"].endswith("/.codex/closer-core/closer_core.py")
+    assert not cap["activation_evidence"]
+    assert not cap["expiry"]
+    assert "closer-core" not in capabilities.KNOWN_GATES
+    assert cap["rollback"] == {"restore": "rebuild/controller.py.before-closer-core"}
+
+
+def _check_real_brain_issue_closure_writes_supply_outcomes(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *a, **kw: None)
+    ledger = tmp_path / "capabilities.json"
+    monkeypatch.setattr(capabilities, "REG", ledger)
+    source = tmp_path / "closer_core.py"
+    source.write_text("# recorded external entrypoint\n")
+    declared = capabilities.KNOWN_DECLARATIONS["closer-core"]
+    identity = capabilities.compiled_version_identity(
+        "closer-core",
+        artifact={
+            "target_kind": "module",
+            "entrypoint": declared["entrypoint"],
+            "sources": [
+                {"path": source.name, "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+            ],
+        },
+        lifecycle_policy={},
+    )
+    capabilities.register("closer-core", {**declared, **identity, "target_kind": "module"}, ledger)
+    stamp = int(monitor.time.time())
+    for n, verdict in enumerate(("PASS", "CONCERNS")):
+        run_id = f"closer-core:fixture-{n}"
+        feedback.record_run(
+            run_id,
+            f"o/r#{n}",
+            "issue_closure",
+            "orchestrator",
+            mode="deterministic",
+            source="orchestrator_local",
+            capability_ids=["closer-core"],
+            ts=stamp,
+        )
+        feedback.record_outcome(run_id, adjudicated_verdict=verdict, durability="durable")
+    _closer_journal(tmp_path, [_closer_round(stamp, ("close-met", "followup"), fleet=8)])
+    monkeypatch.setattr(monitor, "fleet_issues", lambda *a, **kw: [])
+    monkeypatch.setattr(monitor, "_dispute_count", lambda *a: 0)
+    monkeypatch.setattr(monitor, "_stall_sweep_targets", lambda *a: [])
+    monkeypatch.setattr(monitor, "_relay_decisions", lambda *a: {})
+    inputs = monitor.collect_inputs(now=stamp + 1, gh_fn=None, repos=[], db=feedback.DB_PATH)
+    assert inputs["errors"] == []
+    section = monitor.report(now=stamp + 1, path=ledger, env={}, inputs=inputs)
+    row = section["rows"][0]
+    assert [
+        row[k]
+        for k in (
+            "situation_count",
+            "invocation_count",
+            "usable",
+            "acted_on",
+            "outcome",
+            "outcome_success",
+        )
+    ] == [10, 1, 2, 2, 2, 1]
+    assert row["first_break"] == "works"
+    assert (
+        "closer-core: demand 10; invocation 1; usable 2; acted_on 2; outcome 2; success 1 (durable issue closures (PASS)); first_break works"
+        in "\n".join(monitor.format_lines(section))
+    )
+
+
+def _closer_core_fixture(tmp_path, monkeypatch):
+    """Extend the existing situation fixture; no new collection/shard reference is needed."""
+    _check_latest_demand_and_windowed_activity(tmp_path / "rounds")
+    for damage in ("missing", "json", "items", "ts", "summary", "fleet", "errors"):
+        case = tmp_path / damage
+        case.mkdir()
+        _check_unread_or_incomplete_rounds_are_unmeasured(case, damage)
+    _check_declaration_seeds_wired_without_activation_or_gate(tmp_path / "declaration")
+    case = tmp_path / "brain"
+    case.mkdir()
+    _check_real_brain_issue_closure_writes_supply_outcomes(case, monkeypatch)
