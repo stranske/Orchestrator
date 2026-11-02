@@ -484,6 +484,7 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
         if d.get("findability_category") == admission.EXERCISE_CATEGORY
     }
     assert exercise_bound == {
+        "closer-core",
         "capability-admission-gate",
         "docs-drift-fix-agent",
         "agy-runtime-isolation",
