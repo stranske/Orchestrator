@@ -1136,6 +1136,7 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
     # Feature discovery shares the Brain exercise phase with feature reflection,
     # keeping audit at five rails as independent value-chain monitoring joins it.
     "rail-exercise:brain": {
+        "closer-core": "EXERCISE the external closer's read-only value-chain adapter over a fixture: measured demand stays distinct from invocations and missing evidence stays unmeasured. Never invokes the external controller.",
         "feedback-store": "EXERCISE the learning store's spine on a COPY of the feedback db: "
         "integrity_check plus a referential recount (every outcome has its run; outcome counts "
         "match the ledger's outcome events); break case: a copy with an orphaned outcome must fail "
@@ -1199,7 +1200,6 @@ SURFACE_BINDINGS: dict[str, dict[str, str]] = {
         "uniform coverage yields no prompt. Never dispatches the testgen agent",
     },
     "rail-exercise:audit": {
-        "closer-core": "EXERCISE the external closer's read-only value-chain adapter over a fixture: measured demand stays distinct from invocations and missing evidence stays unmeasured. Never invokes the external controller.",
         "value-chain-monitor": "EXERCISE independent demand and first-break reporting over a fixture; an unmeasured denominator must never become zero. Never changes gates.",
         "rail-exercise-cadence": "EXERCISE the committed rail contract cadence itself: each fixture-backed read-only or dry-run contract must pass and its counterexample must be detected; never enables recording unless explicitly armed.",
         "capability-activation-audit": "EXERCISE the activation audit against a FIXTURE ledger and "
