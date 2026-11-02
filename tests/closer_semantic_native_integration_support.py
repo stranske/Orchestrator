@@ -989,7 +989,7 @@ def capacity_bridge_role_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "f9cbf11fe29067e630f0e769b247ad76c71f3d878e2cd3b77dccc8385266b4a8"
+        == "ad538efd0593fafc740c5e9cbca61ab6e974cd1e9e94ecca45f8c7524dee7e87"
     )
     value = json.loads(raw)
     assert value["schema"] == "closer-capacity-bridge-role-successor/v1"

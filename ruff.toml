@@ -31,9 +31,9 @@
 # the three cannot drift apart silently.
 line-length = 100
 
-# Matches `primary-python-version: '3.12'` in pr-00-gate.yml. Stated rather than inferred: with no
-# pyproject.toml there is no `requires-python` for Ruff to read, so the default would apply.
-target-version = "py312"
+# Matches the Gate CI matrix (3.13 backup, 3.14 primary) in pr-00-gate.yml. Stated rather than
+# inferred: with no `requires-python` in pyproject.toml for Ruff to read, the default would apply.
+target-version = "py313"
 
 # The Gate passes `--extend-exclude .workflows-lib` on its command line; Autofix does not. Naming
 # it here means both surfaces skip it. It is a CI-time checkout of stranske/Workflows with its own

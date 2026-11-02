@@ -642,7 +642,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
             "max_output_tokens": 4096,
             "max_prompt_bytes": 65536,
             "max_turns": 1,
-            "model_contract_sha256": "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23",
+            "model_contract_sha256": "e27810baa6b79d0f8efb11e49bf57c6dcd59bb04c9c329e55237422464fb2c4a",
             "role": "strong_criterion_adjudication",
             "schema": "closer-data-only-limits/v1",
             "timeout_seconds": 60,
@@ -651,7 +651,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
         "named_criterion_only": True,
         "production_model_contract": {
             "authority": False,
-            "contract_sha256": "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23",
+            "contract_sha256": "e27810baa6b79d0f8efb11e49bf57c6dcd59bb04c9c329e55237422464fb2c4a",
             "model_contract": {
                 "acceptance_authority": False,
                 "controller_action_policy": "closer-adjudication-action-policy/v1",
@@ -677,7 +677,7 @@ ROLE_QUALIFICATIONS: dict[str, dict[str, Any]] = {
                 "closer_evidence.py": "96bca7b0d0939d77cfcab7c4fe21af4945fa5d0aaff71b67bd14199635ab54a4",
                 "closer_execution_contracts.py": "1e449e01f72b316422910463ebcfa88050ffe868d80f7ec6e76bbd80edb5186a",
                 "closer_local_tool_confinement.py": "5152c424069a58d6cf4f93ce43cf2a2c22d81a38e3ffb0cd03d21b179c40365f",
-                "closer_mechanical_catalog.py": "86e732b5f9611dbd70b7bdb28011cf189b5ac8ca8b19af9de07542eeb2520b78",
+                "closer_mechanical_catalog.py": "4893b3ac01d60525612e7cfe5ed478bd22321eb6976e22dcd0f73ec72ca9d32f",
                 "closer_mechanical_executor.py": "21a753583dc734278bd2cd5709a70b181898bb759fbd4e56baa54db15549d7f0",
                 "closer_mechanical_source.py": "af61c2722c4794717eddf36e8986d725978285167d220d2b86c063f25a8bfc67",
                 "closer_model_contracts.py": "d0e95012d1cb48e8d275bf1ba3221ed9d931ede48da2321cb1a36bd769a66d62",
@@ -731,7 +731,7 @@ ROLE_QUALIFICATION_SUPERSEDES = {
     "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a": {
         "schema": "closer-role-qualification-supersession/v1",
         "effective_at": 1793514125.051002,
-        "successor_sha256": "49d2f797c1a76558606d68b30e9ac4cf4d91ad3bde96e2ef9508c5acdc39d0ed",
+        "successor_sha256": "05e27369baf6c61c65fa3786164c9aff1c2dd1cbf4fdc70aeca1bdfa5144f04b",
         "predecessors": {
             "sonnet-current-role-qualification:3684a85ab6fbd09214c56898b42ee63ac6246d6ea741f615310f0c54b5c90cfe": "f81fe800324af205db116c7da13020ca08fa326296cfacbda12c33a05b794830"
         },
