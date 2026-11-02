@@ -535,6 +535,35 @@ def test_receiver_has_no_caller_expiry_or_enrollment_argument(world):
     assert roles.ROLE_QUALIFICATIONS == {}
 
 
+@pytest.mark.parametrize("source", ["router.py", "dispatcher.py", "closer_mechanical_catalog.py"])
+def test_rehashed_intent_cannot_retarget_original_canary_source(world, source):
+    value = run(world)
+    report = admission._read(value["report_ref"])
+    intent = admission._read(report["intent_ref"])
+    descriptor = copy.deepcopy(report["callback_proof"]["expected"]["production_model_contract"])
+    descriptor["sources"][source] = "0" * 64
+    descriptor["contract_sha256"] = roles._source_digest(
+        {key: val for key, val in descriptor.items() if key != "contract_sha256"}
+    )
+    intent["descriptor_sha256"] = descriptor["contract_sha256"]
+    root = Path(value["report_ref"]["path"]).parent
+    # Both references have valid physical bytes and hashes. The receiver must
+    # still bind the intent to the source actually used by the native callback.
+    report["intent_ref"] = admission._write_once(root / "retargeted.intent.json", intent)
+    changed_ref = admission._write_once(root / "retargeted.result.json", report)
+    with pytest.raises(ValueError, match="original immutable qualification intent differs"):
+        admission.reviewed_record_proposal(changed_ref)
+
+    original = admission.reviewed_record_proposal(value["report_ref"])
+    assert original["record"]["production_model_contract"] == (
+        report["callback_proof"]["expected"]["production_model_contract"]
+    )
+    assert original["record"]["qualified_at"] == report["completed_at"]
+    assert original["record"]["status"] == "pending_review"
+    assert len(world.calls) == 1
+    assert roles.ROLE_QUALIFICATIONS == {}
+
+
 def test_huge_original_input_is_refused_before_native_callback(world):
     world.proposal["original"]["unused"] = "x" * admission.MAX_PROPOSAL_BYTES
     with pytest.raises(ValueError):
