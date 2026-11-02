@@ -616,6 +616,8 @@ def test_delegate_preserves_explicit_profile_and_ownership_lineage(
         "run_id": "run-1",
     }
     assignment = next(c[1] for c in calls if isinstance(c, tuple) and c[0] == "plan")
+    assert assignment["caller_pinned"] is True
+    assert dispatcher._routing_metadata(assignment)["source"] == "caller_pinned"
     assert assignment["influenced_by_role_run_ids"] == ["role-1"]
     assert assignment["capability_version_ids"] == ["existing@v1"]
     assert assignment["acceptance_gate_ids"] == ["gate-1"]
