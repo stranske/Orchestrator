@@ -91,9 +91,13 @@ def test_original_physical_record_remains_distinct_and_byte_exact():
 )
 def test_unreviewed_source_profile_or_lifetime_never_gets_admission(change):
     record = copy.deepcopy(ORIGINAL)
-    descriptor = closer._controlled_model_contract("closer_exception")
+    # Start with the reviewed pair: the unrenewed live contract would reject
+    # every case before exercising its specific record/source mutation.
+    descriptor = copy.deepcopy(HISTORICAL_DESCRIPTOR)
     identity = copy.deepcopy(record["profile_identity"])
     checked_at, task = INSIDE, "closer_exception"
+    baseline = support(record, descriptor, identity=identity, checked_at=checked_at, task=task)
+    assert baseline["admission"]["mode"] == "reviewed_current_source_admission"
     if change == "record":
         record["qualification_id"] = "unknown"
     elif change == "model":
