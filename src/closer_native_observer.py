@@ -286,7 +286,7 @@ def capacity_contract(manifest, *, control_plane_only=False):
     }:
         raise mechanisms.MechanismError("native capacity publication contract missing")
     if value["schema"] == "native-scoped-capacity/v2":
-        from closer_frontier_policy import POLICY, request_window
+        from closer_frontier_policy import POLICY, domain_act_window, request_window
 
         if value.get("execution_policy") != POLICY or "admission_seconds" in value:
             raise mechanisms.MechanismError("native finite frontier policy must be explicit")
@@ -294,6 +294,8 @@ def capacity_contract(manifest, *, control_plane_only=False):
             request_window(0, value.get("request_timeout_seconds"))
             if value["request_timeout_seconds"] > 120:
                 raise ValueError("native request timeout exceeds supported 120 seconds")
+            if value.get("domain_act_timeout_seconds") is not None:
+                domain_act_window(0, value["domain_act_timeout_seconds"])
         except (ValueError, TypeError) as exc:
             raise mechanisms.MechanismError("native finite request timeout invalid") from exc
         seconds = value.get("freshness_seconds")
@@ -761,6 +763,7 @@ def publish_admission(manifest, manifest_path, state_path, doc):
             frontier != cfg.get("finite_frontier")
             or frontier["owner"] != doc["owner"]
             or cfg.get("request_timeout_seconds") != policy["request_timeout_seconds"]
+            or cfg.get("domain_act_timeout_seconds") != policy.get("domain_act_timeout_seconds")
             or invocation.get("execution_policy") != frontier["schema"]
             or "original_deadline" in invocation
         ):
@@ -819,6 +822,8 @@ def publish_admission(manifest, manifest_path, state_path, doc):
     if finite:
         context["finite_frontier"] = frontier
         context["request_timeout_seconds"] = policy["request_timeout_seconds"]
+        if policy.get("domain_act_timeout_seconds") is not None:
+            context["domain_act_timeout_seconds"] = policy["domain_act_timeout_seconds"]
     else:
         context["original_deadline"] = invocation["original_deadline"]
     path = directory / "admission.json"
@@ -890,6 +895,7 @@ def validate_admission(manifest, context, *, for_effects, _scope=None, for_test=
             frontier != context.get("finite_frontier")
             or frontier["owner"] != context["campaign"]["owner"]
             or context.get("request_timeout_seconds") != policy["request_timeout_seconds"]
+            or context.get("domain_act_timeout_seconds") != policy.get("domain_act_timeout_seconds")
             or "original_deadline" in context
         ):
             raise mechanisms.MechanismError("native signed finite frontier differs")
@@ -1103,6 +1109,7 @@ def admission_config(manifest, cfg, context, *, for_effects=True):
         if (
             cfg.get("finite_frontier") != context["finite_frontier"]
             or cfg.get("request_timeout_seconds") != context["request_timeout_seconds"]
+            or cfg.get("domain_act_timeout_seconds") != context.get("domain_act_timeout_seconds")
         ):
             raise mechanisms.MechanismError(
                 "native worker finite frontier differs from signed admission"
@@ -1111,6 +1118,8 @@ def admission_config(manifest, cfg, context, *, for_effects=True):
             result.pop(key, None)
         result["finite_frontier"] = copy.deepcopy(context["finite_frontier"])
         result["request_timeout_seconds"] = context["request_timeout_seconds"]
+        if context.get("domain_act_timeout_seconds") is not None:
+            result["domain_act_timeout_seconds"] = context["domain_act_timeout_seconds"]
         result["execution_policy"] = context["finite_frontier"]["schema"]
     else:
         if cfg.get("finite_frontier") is not None:

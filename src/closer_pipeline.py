@@ -4184,6 +4184,7 @@ def _run_pipeline_finite(
     finite_frontier,
     frontier_target: str | None = None,
     request_timeout_seconds: float = 120.0,
+    domain_act_timeout_seconds: float | None = None,
     cancelled_fn=None,
     paused_fn=None,
     max_io_workers: int = 1,
@@ -4197,7 +4198,7 @@ def _run_pipeline_finite(
     deadline and recovery rules. A callback stage is durably marked running before
     invocation; after interruption that stage is UNKNOWN and is never replayed.
     """
-    from closer_frontier_policy import request_window, validate_frontier
+    from closer_frontier_policy import domain_act_window, request_window, validate_frontier
 
     path = Path(state_path)
     selected = list(targets)
@@ -4210,6 +4211,8 @@ def _run_pipeline_finite(
     if len({closer_resources.canonical_target(target) for target in selected}) != len(selected):
         raise ValueError("finite pipeline targets must be canonically unique")
     request_window(now(), request_timeout_seconds)
+    if domain_act_timeout_seconds is not None:
+        domain_act_window(now(), domain_act_timeout_seconds)
     bounds = {"io": max_io_workers, "low": max_low_workers, "exception": max_exception_workers}
     if any(
         isinstance(value, bool) or not isinstance(value, int) or value < 1
@@ -4439,7 +4442,11 @@ def _run_pipeline_finite(
                         _save(path, state)
                         rows[target] = dict(item)
                         break
-                    window = request_window(now(), request_timeout_seconds)
+                    window = (
+                        domain_act_window(now(), domain_act_timeout_seconds)
+                        if stage == "act" and domain_act_timeout_seconds is not None
+                        else request_window(now(), request_timeout_seconds)
+                    )
                     item.update(
                         status="running",
                         stage_status="running",
@@ -4460,6 +4467,11 @@ def _run_pipeline_finite(
                         "deadline": window["deadline"],
                         "request_started_at": window["started_at"],
                         "request_timeout_seconds": request_timeout_seconds,
+                        **(
+                            {"domain_act_timeout_seconds": domain_act_timeout_seconds}
+                            if stage == "act" and domain_act_timeout_seconds is not None
+                            else {}
+                        ),
                         "finite_frontier": frontier,
                         "frontier_binding": frontier["bindings"][target],
                         "state_path": str(path),

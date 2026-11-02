@@ -128,7 +128,7 @@ def test_waiting_target_does_not_block_another_target(tmp_path):
 def test_finite_frontier_has_no_aggregate_clock_but_each_request_is_bounded(tmp_path):
     path = tmp_path / "finite-frontier.json"
     targets = ["acme/repo#1", "acme/repo#2"]
-    phase = {target: "collect_evidence" for target in targets}
+    phase = {targets[0]: "disposition", targets[1]: "collect_evidence"}
     time_value = [1000.0]
     windows = []
 
@@ -141,9 +141,14 @@ def test_finite_frontier_has_no_aggregate_clock_but_each_request_is_bounded(tmp_
             "repo_keys": [target.split("#", 1)[0]],
         }
 
-    def execute(_target, _action, _snapshot, operation):
-        windows.append((operation["request_started_at"], operation["deadline"]))
-        assert operation["deadline"] - operation["request_started_at"] == 10.0
+    def execute(_target, action, _snapshot, operation):
+        windows.append((action, operation["request_started_at"], operation["deadline"]))
+        duration = operation["deadline"] - operation["request_started_at"]
+        assert duration == (600.0 if action == "disposition" else 10.0)
+        if action == "disposition":
+            assert operation["domain_act_timeout_seconds"] == 600
+        else:
+            assert "domain_act_timeout_seconds" not in operation
         # The second selected target gets its own bounded window after a long
         # elapsed interval; the finite target set remains unchanged.
         time_value[0] += 1_000_000.0
@@ -153,7 +158,7 @@ def test_finite_frontier_has_no_aggregate_clock_but_each_request_is_bounded(tmp_
     frontier = _frontier(
         targets,
         frontier_id="frontier-1",
-        actions={target: "collect_evidence" for target in targets},
+        actions={target: phase[target] for target in targets},
     )
     receipt = closer_queue.run_round(
         path,
@@ -173,10 +178,11 @@ def test_finite_frontier_has_no_aggregate_clock_but_each_request_is_bounded(tmp_
         release_fn=lambda *_: True,
         finite_frontier=frontier,
         request_timeout_seconds=10,
+        domain_act_timeout_seconds=600,
     )
 
     assert len(windows) == 2
-    assert windows[1][0] - windows[0][0] == 1_000_000.0
+    assert windows[1][1] - windows[0][1] == 1_000_000.0
     assert receipt["valid"] and receipt["stop_valid"]
     assert "deadline" not in receipt
     state = closer_queue._read_state(path)["frontiers"]["frontier-1"]

@@ -2163,6 +2163,7 @@ def run_round(
     frontier_target: str | None = None,
     finite_readmission: Mapping[str, Any] | None = None,
     request_timeout_seconds: float = 120.0,
+    domain_act_timeout_seconds: float | None = None,
     _inline_source=None,
     _publication_inline_source=None,
 ) -> dict[str, Any]:
@@ -2213,7 +2214,7 @@ def run_round(
 
     frontier = None
     if finite_frontier is not None:
-        from closer_frontier_policy import request_window, validate_frontier
+        from closer_frontier_policy import domain_act_window, request_window, validate_frontier
 
         frontier = validate_frontier(finite_frontier)
         if frontier_target is None:
@@ -2234,6 +2235,8 @@ def run_round(
             raise ValueError("finite frontier does not retry uncertain operations")
         finite_timeout = float(request_timeout_seconds)
         request_window(now(), finite_timeout)
+        if domain_act_timeout_seconds is not None:
+            domain_act_window(now(), domain_act_timeout_seconds)
     elif not isinstance(deadline, (int, float)) or isinstance(deadline, bool):
         raise ValueError("deadline must be an epoch timestamp")
     else:
@@ -2265,12 +2268,16 @@ def run_round(
         assert legacy_deadline is not None
         return _budget_available(legacy_deadline, receipt_reserve_seconds, min_action_seconds, now)
 
-    def request_deadline() -> float:
+    def request_deadline(action: str | None = None) -> float:
         if frontier is not None:
-            from closer_frontier_policy import request_window
+            from closer_frontier_policy import domain_act_window, request_window
 
             assert finite_timeout is not None
-            issued_deadline = request_window(now(), finite_timeout)["deadline"]
+            issued_deadline = (
+                domain_act_window(now(), domain_act_timeout_seconds)["deadline"]
+                if action == "disposition" and domain_act_timeout_seconds is not None
+                else request_window(now(), finite_timeout)["deadline"]
+            )
             if publication_inline is not None:
                 # This is a new finite IO request, never an extension of its
                 # actual signed admission while validation/persistence runs.
@@ -2992,12 +2999,14 @@ def run_round(
                             )
                             stalled.add(target)
                             continue
-                    op_deadline = request_deadline()
+                    op_deadline = request_deadline(action)
                     op["request_started_at"] = float(now())
                     op["deadline"] = op_deadline
                     op["timeout_seconds"] = max(0.0, op_deadline - float(now()))
                     if frontier is not None:
                         op["finite_frontier"] = frontier
+                        if action == "disposition" and domain_act_timeout_seconds is not None:
+                            op["domain_act_timeout_seconds"] = domain_act_timeout_seconds
                     item["operation"] = op
                     item["status"] = "submitted"
                     item.pop("deferred_reason", None)

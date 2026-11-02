@@ -432,8 +432,12 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
     tree.body = [node for node in tree.body if node not in selected]
     assert fingerprint(tree) == successor["outside_reviewed_changes_ast_sha256"]
 
+    _assert_domain_act_owner_read_successor()
+
     for filename, change in support.completed_invitation_read_source_reference()["files"].items():
-        after_raw = source_path(filename).read_bytes()
+        after_raw = support.before_domain_act_owner_read_source(
+            source_path(filename).read_bytes(), filename
+        )
         before_raw = support.before_completed_invitation_read_source(after_raw, filename)
         assert hashlib.sha256(after_raw).hexdigest() == change["after_file_sha256"]
         assert hashlib.sha256(before_raw).hexdigest() == change["before_file_sha256"]
@@ -483,7 +487,9 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
         assert fingerprint(before_tree) == fingerprint(after_tree)
 
     for filename, change in support.capacity_pre_effect_recovery_reference()["files"].items():
-        raw = source_path(filename).read_bytes()
+        raw = support.before_domain_act_owner_read_source(
+            source_path(filename).read_bytes(), filename
+        )
         if filename == "closer_native_source_upgrade.py":
             raw = support.before_completed_invitation_read_source(raw, filename)
             raw = support.before_source_pre_effect_readmission_source(raw, filename)
@@ -497,6 +503,56 @@ def test_pagination_successor_is_literal_and_top_level_scoped():
             selected.extend(nodes)
         tree.body = [node for node in tree.body if node not in selected]
         assert fingerprint(tree) == change["outside_reviewed_changes_ast_sha256"]
+
+
+def _assert_domain_act_owner_read_successor():
+    def constants(tree):
+        found = {}
+        for node in tree.body:
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else ([node.target] if isinstance(node, ast.AnnAssign) else [])
+            )
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    assert target.id not in found
+                    found[target.id] = node
+        return found
+
+    for filename, change in support.domain_act_owner_read_reference()["files"].items():
+        after = source_path(filename).read_bytes()
+        before = support.before_domain_act_owner_read_source(after, filename)
+        assert hashlib.sha256(after).hexdigest() == change["after_file_sha256"]
+        assert hashlib.sha256(before).hexdigest() == change["before_file_sha256"]
+        trees = [ast.parse(raw) for raw in (before, after)]
+        for label, tree in zip(("before", "after"), trees):
+            assert fingerprint(tree) == change[label + "_module_ast_sha256"]
+            top = {
+                node.name: node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            }
+            const = constants(tree)
+            removed = []
+            for name, delta in change["function_delta"].items():
+                node = top.get(name)
+                assert (fingerprint(node) if node is not None else None) == delta[label]
+                if node is not None:
+                    removed.append(node)
+            for name, delta in change["constant_delta"].items():
+                node = const.get(name)
+                assert (fingerprint(node) if node is not None else None) == delta[label]
+                if node is not None:
+                    removed.append(node)
+            imports = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+            assert (
+                fingerprint(ast.Module(body=imports, type_ignores=[]))
+                == change[label + "_imports_ast_sha256"]
+            )
+            tree.body = [node for node in tree.body if node not in removed and node not in imports]
+            assert fingerprint(tree) == change[label + "_outside_reviewed_changes_ast_sha256"]
+        assert fingerprint(trees[0]) == fingerprint(trees[1])
 
 
 def _top_level_ast(raw):
@@ -607,7 +663,11 @@ def test_finite_no_start_v2_successor_changes_only_two_pinned_native_methods():
 
 
 def test_current_native_top_level_entry_functions_are_not_backrevved():
-    top = functions(source_path("closer_dispatcher.py").read_text())
+    top = functions(
+        support.before_domain_act_owner_read_source(
+            source_path("closer_dispatcher.py").read_bytes(), "closer_dispatcher.py"
+        )
+    )
     for name, expected in support.current_receiver_reference()["native_top_level_ast"].items():
         assert fingerprint(top[name]) == expected, name
 
@@ -759,7 +819,11 @@ def test_current_publication_admission_overlay_preserves_unreviewed_ast_families
                 change["after_file_sha256"] == successor["historical_receiver_before_file_sha256"]
             )
             continue
-        top = functions(source_path(filename).read_text())
+        top = functions(
+            support.before_domain_act_owner_read_source(
+                source_path(filename).read_bytes(), filename
+            )
+        )
         before = change["before_top_level_ast"]
         changed = change["changed_top_level_ast"]
         added = change["added_top_level_ast"]

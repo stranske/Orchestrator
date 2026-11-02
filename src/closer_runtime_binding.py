@@ -1209,6 +1209,8 @@ class PinnedNativeHooks:
                             cfg.get("finite_frontier") != context["finite_frontier"]
                             or cfg.get("request_timeout_seconds")
                             != context["request_timeout_seconds"]
+                            or cfg.get("domain_act_timeout_seconds")
+                            != context.get("domain_act_timeout_seconds")
                             or any(
                                 key in cfg
                                 for key in (
@@ -1856,7 +1858,7 @@ def scoped_continuation_proof(cfg, candidate, *, diagnostic=None):
 
 def _finite_native_frontier(cfg):
     """Only an explicit signed v2 admission selects no aggregate work cutoff."""
-    from closer_frontier_policy import request_window, validate_frontier
+    from closer_frontier_policy import domain_act_window, request_window, validate_frontier
 
     candidate = cfg.get("finite_frontier")
     context = cfg.get("native_admission") or {}
@@ -1867,12 +1869,16 @@ def _finite_native_frontier(cfg):
     try:
         frontier = validate_frontier(candidate)
         timeout = cfg.get("request_timeout_seconds")
+        domain_timeout = cfg.get("domain_act_timeout_seconds")
         window = request_window(0, timeout)
+        if domain_timeout is not None:
+            domain_act_window(0, domain_timeout)
         if (
             frontier != candidate
             or context.get("schema") != "native-invocation-admission/v2"
             or context.get("finite_frontier") != frontier
             or context.get("request_timeout_seconds") != timeout
+            or context.get("domain_act_timeout_seconds") != domain_timeout
             or cfg.get("mechanism") != "native-handoff/v1"
             or any(
                 key in cfg
@@ -1882,12 +1888,12 @@ def _finite_native_frontier(cfg):
             or timeout > 120
         ):
             raise ValueError("finite frontier/config admission differs")
-        return frontier, float(timeout)
+        return frontier, float(timeout), domain_timeout
     except (ValueError, TypeError, KeyError) as exc:
         raise BindingError("native finite frontier requires exact signed v2 admission") from exc
 
 
-def _finite_dispatch_command(command, frontier, timeout):
+def _finite_dispatch_command(command, frontier, timeout, domain_timeout=None):
     """Reject ambiguous flags or any attempt to mix legacy aggregate authority."""
     for flag in ("--finite-frontier-json", "--request-timeout-seconds"):
         if command.count(flag) != 1 or any(
@@ -1895,6 +1901,15 @@ def _finite_dispatch_command(command, frontier, timeout):
             for arg in command
         ):
             raise BindingError("native finite dispatcher flags missing or ambiguous")
+    flag = "--domain-act-timeout-seconds"
+    if domain_timeout is None:
+        if any(arg == flag or arg.startswith(flag + "=") for arg in command):
+            raise BindingError("native finite dispatcher has unexpected domain ACT timeout")
+    elif command.count(flag) != 1 or any(
+        arg != flag and arg.startswith("--") and flag.startswith(arg.partition("=")[0])
+        for arg in command
+    ):
+        raise BindingError("native finite dispatcher domain ACT timeout missing or ambiguous")
     if any(
         arg.startswith("--") and "--budget-seconds".startswith(arg.partition("=")[0])
         for arg in command
@@ -1903,7 +1918,14 @@ def _finite_dispatch_command(command, frontier, timeout):
     try:
         descriptor = json.loads(command[command.index("--finite-frontier-json") + 1])
         request_timeout = float(command[command.index("--request-timeout-seconds") + 1])
-        if descriptor != frontier or request_timeout != timeout:
+        observed_domain = (
+            float(command[command.index(flag) + 1]) if domain_timeout is not None else None
+        )
+        if (
+            descriptor != frontier
+            or request_timeout != timeout
+            or observed_domain != domain_timeout
+        ):
             raise ValueError("finite dispatcher descriptor/timeout differs")
     except (IndexError, ValueError, TypeError) as exc:
         raise BindingError("native finite dispatcher binding differs") from exc
