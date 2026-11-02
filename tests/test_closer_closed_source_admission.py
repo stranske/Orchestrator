@@ -184,7 +184,41 @@ def test_existing_root_closure_requires_and_pins_role_policy_bytes(tmp_path):
         pins.close()
 
 
-def test_current_production_native_inert_proof_and_cold_enrollment(
+def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
+    """The #1039 predecessor remains historical until its successor is reviewed."""
+    import execution_profiles
+
+    live = closer._controlled_model_contract("closer_exception")
+    profile = execution_profiles.get_profile(CURRENT["profile_identity"]["profile_id"])
+    assert roles.qualified_record(
+        profile,
+        roles.STRONG_CRITERION_ADJUDICATION,
+        now=CURRENT_INSIDE,
+        records={CURRENT["qualification_id"]: CURRENT},
+    ) == CURRENT
+    assert CURRENT["production_model_contract"] != live
+    with pytest.raises(ValueError, match="does not support this exact production source"):
+        roles.execution_source_support(
+            CURRENT,
+            CURRENT["profile_identity"],
+            live,
+            task_type="closer_exception",
+            checked_at=CURRENT_INSIDE,
+        )
+    expected = {
+        "profile_identity": CURRENT["profile_identity"],
+        "task_type": "closer_exception",
+        "production_model_contract": live,
+        "limits": {
+            **CURRENT["execution_limits"],
+            "model_contract_sha256": live["contract_sha256"],
+        },
+    }
+    assert not roles.execution_record_matches(CURRENT, expected, checked_at=CURRENT_INSIDE)
+    assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
+
+
+def _obsolete_current_production_native_inert_proof_and_cold_enrollment(
     world, controlled_world, monkeypatch, tmp_path
 ):
     """Native acquisition/outer Root/installed-adapter facts are inert fixtures.
