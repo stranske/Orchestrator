@@ -220,7 +220,7 @@ def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
     assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
 
 
-def test_current_production_native_inert_proof_and_cold_enrollment(
+def test_current_production_requires_reviewed_source_before_native_proof_and_enrollment(
     world,
     controlled_world,
     monkeypatch,
@@ -228,12 +228,13 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
 ):
     """Native acquisition/outer Root/installed-adapter facts are inert fixtures.
 
-    The original real qualification DATA is unchanged. All actual launch,
-    callbacks, native receipt/proof validation, owner and cold enrollment code
-    executes. There is no live provider, enrollment or native issue effect.
+    Pending renewal must refuse before dispatch. With a reviewed successor,
+    actual launch, callbacks, native proof validation and cold enrollment run
+    against inert transport. Qualification data stays unchanged in both cases.
+    There is no live provider, enrollment or native issue effect.
     """
-    # Require an actual registry successor before exercising its inert transport.
-    # A stale predecessor or an inactive canary target cannot stand in for renewal.
+    # Exercise refusal while renewal is pending, then the inert success path
+    # once an actual reviewed registry successor exists. Neither path renews it.
     descriptor = closer._controlled_model_contract("closer_exception")
     profile = execution_profiles.get_profile(CURRENT["profile_identity"]["profile_id"])
     observations = [
@@ -243,14 +244,13 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
         and record.get("profile_identity") == roles.profile_identity(profile)
     ]
     if not observations:
-        pytest.skip(
-            "Missing reviewed closer qualification for live contract "
-            f"{descriptor['contract_sha256']}; complete the owner-host canary and "
-            "append its independently reviewed successor before claiming renewal."
+        monkeypatch.setattr(
+            roles, "ROLE_QUALIFICATIONS", {CURRENT["qualification_id"]: copy.deepcopy(CURRENT)}
         )
-    checked_at = max(observations) + 1
+    checked_at = max(observations) + 1 if observations else CURRENT_INSIDE
     current = roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=checked_at)
-    assert current is not None and current["production_model_contract"] == descriptor
+    assert current is not None
+    assert (current["production_model_contract"] == descriptor) is bool(observations)
 
     # Only qualification clock inputs are fixed. The actual policy validators
     # still execute; native invocation, invitation, deadline and timeout clocks
@@ -281,6 +281,48 @@ def test_current_production_native_inert_proof_and_cold_enrollment(
         roles, "ROLE_QUALIFICATIONS", {current["qualification_id"]: copy.deepcopy(current)}
     )
     assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
+    if not observations:
+        # Supply only the runtime fixture: the real source-admission validator
+        # must reject the otherwise eligible, still-in-lifetime predecessor.
+        monkeypatch.setattr(
+            roles,
+            "is_runtime_qualified",
+            lambda p, r: roles.qualified_record(p, r) == current,
+        )
+        launch = {
+            "profile_id": profile["profile_id"],
+            "task_type": "closer_exception",
+            "operation_id": "pending-reviewed-source-renewal",
+            "frontier": {"frontier_id": "pending-renewal"},
+            "target": "offline/repo#1",
+            "prompt": "bounded inert request",
+        }
+        with pytest.raises(
+            closer.ControlledOriginUnavailable,
+            match="reviewed production execution contract unavailable",
+        ):
+            closer._controlled_launch_options(**launch)
+
+        def forbidden_offload(*_args, **_kwargs):
+            pytest.fail("unreviewed production source reached the broker")
+
+        result = closer._controlled_offload(
+            agent="claude",
+            **launch,
+            basis={},
+            deadline=live_time() + 10,
+            offload=forbidden_offload,
+        )
+        assert result == closer._controlled_prestart_refusal()
+        assert {"qualification", "source_admission"} <= set(qualification_clock_calls)
+        assert roles.ROLE_QUALIFICATIONS == {current["qualification_id"]: CURRENT}
+        assert invitation.time.time is closer.time.time is dispatcher.time.time is live_time
+        assert not controlled_world.capture.exists()
+        assert controlled_world.events["auth"] == 0
+        assert controlled_world.events["started"] == controlled_world.events["finished"] == []
+        assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
+        return
+
     original_factory = invitation.InertCaller
     captured, callers = [], []
 
