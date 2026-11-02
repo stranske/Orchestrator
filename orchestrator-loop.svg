@@ -142,7 +142,7 @@
 <text class="ts" x="68" y="576">approved-issue queue → opener lane (issues + ready PRs) → KEEPALIVE (Actions) → closer lane</text>
 <text class="ts" x="68" y="596">Interfaces: capacity advice · review fallback · lane verdict to fleet-PR edges ·</text>
 <text class="ts" x="68" y="612">tick keepalive ingest; dispatch and heartbeat shadow unless ORCH_DISPATCH_LANE=1.</text>
-<text class="ts" x="68" y="634">closer: shared Core + guards · native IO → verify event → current outcome</text>
+<text class="ts" x="68" y="634">closer-core: rounds → value chain; issue_closure → Brain outcomes</text>
 <!-- Owner goals: feedback surface, never a dispatch or capability gate. -->
 <g id="feature-goals-feedback">
 <title>Feature goals ledger: daily goal-drift reconciliation and weekly switch review</title>

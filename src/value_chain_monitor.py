@@ -347,8 +347,95 @@ def _disputes(inputs: dict[str, Any]) -> int | None:
     return inputs.get("disputes")
 
 
+def _closer_core_rounds(now: int, path: Path | None = None) -> dict[str, Any] | None:
+    """Existing journal: latest fleet + scope demand, windowed rounds and dispositions."""
+    usable_actions = {
+        "close-pass",
+        "close-met",
+        "followup",
+        "request-verify",
+        "rerequest-verify",
+        "await-verdict",
+        "complete",
+    }
+    try:
+        rounds = []
+        for line in (path or _state_dir() / "closer-core/rounds.jsonl").read_text().splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            stamp = int(datetime.fromisoformat(row["ts"].replace("Z", "+00:00")).timestamp())
+            if now - WINDOW_DAYS * 86400 <= stamp <= now:
+                if not isinstance(row["items"], list) or any(
+                    not isinstance(item, dict) for item in row["items"]
+                ):
+                    return None
+                rounds.append((stamp, row))
+        demand = None
+        if rounds:
+            latest = max(rounds, key=lambda entry: entry[0])[1]
+            summary = latest["summary"]
+            fleet = re.search(r"\bfleet demand (\d+)\b", summary)
+            scope = re.search(r"\btargets (\d+)\b", summary)
+            errors = re.search(r"\bread errors (\d+)\b", summary)
+            if fleet and scope and errors and int(errors[1]) == 0:
+                demand = int(fleet[1]) + int(scope[1])
+        return {
+            "demand": demand,
+            "invocation_count": sum(bool(row["items"]) for _, row in rounds),
+            "usable": sum(
+                item.get("action") in usable_actions for _, row in rounds for item in row["items"]
+            ),
+        }
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _closer_core_situations(inputs: dict[str, Any]) -> int | None:
+    return (inputs.get("closer_core") or {}).get("demand")
+
+
+def _closer_core_outcomes(db: Path, since: int, now: int) -> dict[str, int] | None:
+    """record_outcomes tags validated decisions; these are closures, not PR-delivery edges."""
+    try:
+        with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
+            con.row_factory = sqlite3.Row
+            rows = [
+                dict(row)
+                for row in con.execute(
+                    "SELECT r.run_id, o.adjudicated_verdict, o.verifier_verdict, "
+                    "o.durability, o.merged, o.failure_class FROM runs r "
+                    "LEFT JOIN outcomes o ON o.run_id=r.run_id "
+                    "WHERE r.run_id GLOB 'closer-core:*' AND r.task_type='issue_closure' "
+                    "AND r.source='orchestrator_local' AND r.mode='deterministic' "
+                    "AND r.ts BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM completion_events ce "
+                    "WHERE ce.run_id=r.run_id AND ce.capability_id='closer-core' "
+                    "AND ce.capability_version_id IS NOT NULL AND ce.capability_version_id!='' "
+                    "AND ce.validation_status='accepted' AND ce.event_type='decision' "
+                    "AND ce.phase='decision')",
+                    (since, now),
+                )
+            ]
+        classified = [(capability_effectiveness._classify(row), row) for row in rows]
+        classes = Counter(kind for kind, _ in classified)
+        return {
+            "acted_on": len(rows),
+            **{field: classes[kind] for kind, field in CLASS_FIELDS.items()},
+            "outcome_success": sum(
+                kind == "terminal"
+                and row["adjudicated_verdict"] == "PASS"
+                and row["durability"] == "durable"
+                and row["verifier_verdict"] not in feedback.VERIFIER_FAILURES
+                for kind, row in classified
+            ),
+        }
+    except (OSError, sqlite3.Error):
+        return None
+
+
 # Callables can be replaced/extended without changing reporting or adding telemetry.
 SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
+    "closer-core": _closer_core_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
@@ -744,6 +831,12 @@ def collect_inputs(
     relay_log: Path | None = None,
 ) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    inputs["closer_core"] = _closer_core_rounds(now)
+    if inputs["closer_core"] is None:
+        inputs["errors"].append("closer-core round population unavailable")
+    inputs["closer_core_outcomes"] = _closer_core_outcomes(db, now - WINDOW_DAYS * 86400, now)
+    if inputs["closer_core_outcomes"] is None:
+        inputs["errors"].append("closer-core Brain outcomes unavailable")
     inputs["relay_decisions"] = _relay_decisions(
         relay_log
         or Path(
@@ -839,6 +932,17 @@ def report(
             # Every class set aside from `outcome` has its own count beside it.
             **outcome_counts(cid, own_edges),
         }
+        if cid == "closer-core":
+            rounds = inputs.get("closer_core") or {}
+            counts["invocation_count"] = rounds.get("invocation_count")
+            counts["usable"] = rounds.get("usable")
+            counts.update(
+                inputs.get("closer_core_outcomes")
+                or {
+                    field: None for field in ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+                }
+            )
+            counts["success_scope"] = "durable issue closures (PASS)"
         if cid == feedback.RELAY_PACING_CAPABILITY:
             usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
             counts["usable"] = None if usable is None else counts["usable"] + usable
