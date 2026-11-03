@@ -573,6 +573,68 @@ function nativeJournal(t) {
   return { ...fixture, journal, options: { ...fixture.options, journal } };
 }
 
+test('native receipt locators bind both case and backend identity for each retained attempt', (t) => {
+  const { root, saved, journal, options } = nativeJournal(t);
+  saved.rows[0].retry_attempts = [{ backend_run_id: 'native-provider' }];
+  saved.rows[1].backend_run_id = 'native-provider';
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const before = [options.report, journal].map((file) => fs.readFileSync(file));
+  const files = fs.readdirSync(root);
+  const result = reportInventory(options);
+  const [parent, retry, otherCase] = result.retained_attempt_observations;
+  assert.equal(parent.native_receipt_locator.status, 'matched_locator');
+  assert.equal(parent.native_receipt_locator.attempts[0].attempt_id, 'd');
+  assert.equal(parent.native_receipt_locator.attempts[0].state, 'raw_persisted');
+  assert.equal(parent.native_receipt_locator.next_evidence_step,
+    'resume_native_validation_without_redispatch');
+  assert.equal(retry.native_receipt_locator.status, 'matched_locator');
+  assert.equal(retry.native_receipt_locator.attempts[0].attempt_id, 'e');
+  assert.equal(retry.native_receipt_locator.next_evidence_step,
+    'reauthenticate_with_native_projection_before_grading');
+  assert.equal(otherCase.native_receipt_locator.status, 'case_identity_mismatch');
+  assert.equal(otherCase.native_receipt_locator.attempts[0].case_id, 'case-a');
+  for (const row of result.retained_attempt_observations) {
+    assert.equal(row.native_receipt_locator.authenticated, false);
+  }
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(Object.hasOwn(result, 'graded'), false);
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.deepEqual([options.report, journal].map((file) => fs.readFileSync(file)), before);
+  assert.deepEqual(fs.readdirSync(root), files);
+});
+
+test('missing native identities and receipts remain gaps rather than borrowing another attempt', (t) => {
+  const { saved, options } = nativeJournal(t);
+  delete saved.rows[0].backend_run_id;
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const observations = reportInventory(options).retained_attempt_observations;
+  assert.equal(observations[0].native_receipt_locator.status, 'backend_identity_not_recorded');
+  assert.deepEqual(observations[0].native_receipt_locator.attempts, []);
+  assert.equal(observations[1].native_receipt_locator.status, 'native_attempt_not_found');
+  assert.deepEqual(observations[1].native_receipt_locator.attempts, []);
+  const unavailable = reportInventory({ ...options, journal: undefined })
+    .retained_attempt_observations;
+  assert.equal(unavailable[0].native_receipt_locator.status, 'backend_identity_not_recorded');
+  assert.equal(unavailable[1].native_receipt_locator.status, 'journal_unavailable');
+  assert.deepEqual(unavailable[1].native_receipt_locator.attempts, []);
+  assert.equal(unavailable[1].native_receipt_locator.authenticated, false);
+});
+
+test('reused native backend identities remain ambiguous even when one candidate matches the case', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const connection = new DatabaseSync(journal);
+  connection.exec(`INSERT INTO native_attempts
+    SELECT 'duplicate', 'case-b', material_revision, case_digest, state, backend_run_id,
+      report_sha256, created_at, updated_at, raw_response, validated_json
+    FROM native_attempts WHERE attempt_id='d'`);
+  connection.close();
+  const locator = reportInventory(options).retained_attempt_observations[0].native_receipt_locator;
+  assert.equal(locator.status, 'ambiguous_backend_identity');
+  assert.deepEqual(locator.attempts.map((row) => row.attempt_id), ['d', 'duplicate']);
+  assert.equal(locator.next_evidence_step, 'resolve_native_receipt_identity_before_any_retry');
+  assert.equal(locator.authenticated, false);
+});
+
 test('pre-dispatch inventory reconciles report and native locators without exposing payloads', (t) => {
   const { root, journal, options } = nativeJournal(t);
   const before = fs.readFileSync(journal);

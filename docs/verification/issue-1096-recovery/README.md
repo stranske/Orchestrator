@@ -1,5 +1,38 @@
 # Acceptance evidence recovery for #1096
 
+## Per-attempt native receipt locators, 2026-11-03 UTC
+
+The report inventory now matches each retained attempt to native receipt
+locators using both case and backend identity. A reused backend identity is
+ambiguous even if one journal candidate matches the case; a receipt for another
+case remains a conflict. Missing identities and unavailable journals remain
+explicit gaps. Parent and nested retry matches stay separate. A matched locator
+is not authenticated receipt evidence, a grade, or retry authorization.
+
+Source commit `e4ce3ee` has checkout `408fc9a` as parent. All
+[116 focused regressions](receipt-binding-followup/validation.json) pass, including
+three controls that failed before implementation. The
+[recorded plan](receipt-binding-followup/plan.md) precedes the bounded
+[required-test attempt](receipt-binding-followup/acceptance-run/checks.json),
+which still fails before collection because pytest is missing. This does not
+establish accepted deployment identity. No Python files changed.
+
+The [historical projection summary](receipt-binding-followup/historical-locator-summary.json)
+binds the existing selected-fields projection, not original report bytes: 58
+rows, 64 attempts, 38 recorded provider identities with no supplied native journal,
+and 26 attempts without provider identities. No original retry manifest was
+recovered or reconstructed. Authenticated receipts, independent later truth,
+accepted/deployed/mirror bindings, original fixed next-20 membership and live
+writer ownership remain unavailable. No operational task checkbox is completed;
+no paid retry, canonical publication or mirror synchronization occurred.
+
+Normal staging failed because checkout Git metadata is read-only. The source
+commit is preserved in `/tmp/issue1096-receipt-git-vDZfnY` and the accompanying
+[applyable patch](../../../artifacts/issue-1096-receipt-binding.patch). The checkout
+branch is unchanged. Automatic approval rejected the blocker comment and
+`needs-human` label because connector mutations require approval while policy is
+`never`; neither remote change was applied.
+
 ## Retained later-truth diagnostics, 2026-11-03 UTC
 
 The inventory now separates missing, explicit UNKNOWN, invalid and binary-but-

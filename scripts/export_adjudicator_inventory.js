@@ -273,6 +273,49 @@ function preDispatchInventory(saved, paid, journal) {
   };
 }
 
+// A provider id appearing somewhere in the journal is insufficient: it must
+// identify exactly one attempt for this case. This join supplies recovery
+// locators only. Native projection must still authenticate the raw receipt,
+// material revision and source binding before a decision can be graded.
+function reconcileNativeLocators(observations, journal) {
+  const byBackend = new Map();
+  for (const attempt of journal.attempts || []) {
+    if (!attempt.backend_run_id) continue;
+    const candidates = byBackend.get(attempt.backend_run_id) || [];
+    candidates.push(attempt);
+    byBackend.set(attempt.backend_run_id, candidates);
+  }
+  for (const observation of observations) {
+    const candidates = byBackend.get(observation.backend_run_id) || [];
+    let status;
+    let nextStep;
+    if (!observation.backend_run_id) {
+      status = 'backend_identity_not_recorded';
+      nextStep = 'recover_attempt_identity_without_redispatch';
+    } else if (journal.status !== 'available') {
+      status = 'journal_unavailable';
+      nextStep = 'recover_native_journal_without_redispatch';
+    } else if (!candidates.length) {
+      status = 'native_attempt_not_found';
+      nextStep = 'recover_native_receipt_without_redispatch';
+    } else if (candidates.length > 1) {
+      status = 'ambiguous_backend_identity';
+      nextStep = 'resolve_native_receipt_identity_before_any_retry';
+    } else if (candidates[0].case_id !== observation.case_id) {
+      status = 'case_identity_mismatch';
+      nextStep = 'resolve_native_receipt_identity_before_any_retry';
+    } else {
+      status = 'matched_locator';
+      nextStep = candidates[0].recovery_step;
+    }
+    observation.native_receipt_locator = { status, authenticated: false,
+      next_evidence_step: nextStep,
+      attempts: candidates.map(({ attempt_id, case_id, material_revision, state,
+        raw_receipt_present, validation_present }) => ({ attempt_id, case_id, material_revision,
+        state, raw_receipt_present, validation_present })) };
+  }
+}
+
 function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal, manifest }) {
   integer(observedAt, 'observedAt', 0);
   if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
@@ -334,6 +377,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     identities.set(item.backend_run_id, occurrences);
   }
   const preDispatch = preDispatchInventory(saved, paid, journal);
+  reconcileNativeLocators(observations, preDispatch.native_journal);
   const reconciliation = requestedManifest
     ? reconcileRetainedRows(cases, requestedManifest, observations) : null;
   if (!fs.readFileSync(report).equals(bytes)) {
