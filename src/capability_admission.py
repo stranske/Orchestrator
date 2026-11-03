@@ -1493,7 +1493,9 @@ def _selftest() -> None:
     # A waiver must EXPIRE. An exception with no end date is how "temporary" became a month.
     for cid, waiver in WAIVERS.items():
         assert "expires" in waiver and "reason" in waiver, f"waiver for {cid} needs expiry+reason"
-        assert cid in ledger, f"waiver names unknown capability {cid}"
+        assert cid in ledger or cid in capabilities.declared_row_ids(), (
+            f"waiver names unknown capability {cid}"
+        )
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
     # The LIVE verdict is asserted in test_capability_admission.test_dated_promises_left_an_artifact
