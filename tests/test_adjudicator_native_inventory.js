@@ -36,7 +36,7 @@ function world(t) {
   publication.rows[0].native_projection = { trusted: true, graded: 1 };
   fs.writeFileSync(canonical, JSON.stringify(publication));
 
-  function execute(args) {
+  function execute(args, environment = {}) {
     const out = path.join(root, 'stdout');
     const err = path.join(root, 'stderr');
     const stdout = fs.openSync(out, 'w');
@@ -48,7 +48,7 @@ function world(t) {
         env: { ...process.env, PYTHONPATH: modules, PYTHONDONTWRITEBYTECODE: '1',
           ORCH_STATE_DIR: path.join(root, 'absent-state'),
           ORCH_LOCAL_RUNTIME: path.join(root, 'absent-runtime'),
-          ORCH_FEEDBACK_DB: path.join(root, 'absent-brain.sqlite') },
+          ORCH_FEEDBACK_DB: path.join(root, 'absent-brain.sqlite'), ...environment },
         stdio: ['ignore', stdout, stderr],
       });
     } finally {
@@ -59,8 +59,8 @@ function world(t) {
     return { status: result.status, stdout: fs.readFileSync(out, 'utf8'),
       stderr: fs.readFileSync(err, 'utf8') };
   }
-  function run(args) {
-    const result = execute(args);
+  function run(args, environment) {
+    const result = execute(args, environment);
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout);
   }
@@ -137,6 +137,124 @@ test('native inventory reads committed WAL receipts without checkpointing or gra
   for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
     assert.equal(fs.existsSync(path.join(w.root, name)), false);
   }
+});
+
+function git(root, ...args) {
+  // Fixture setup must use its own repositories even inside a CI Git hook.
+  const environment = Object.fromEntries(Object.entries(process.env)
+    .filter(([name]) => !name.startsWith('GIT_')));
+  const out = path.join(root, 'git-stdout');
+  const err = path.join(root, 'git-stderr');
+  const stdout = fs.openSync(out, 'w');
+  const stderr = fs.openSync(err, 'w');
+  let result;
+  try {
+    result = spawnSync('git', ['-C', root,
+      '-c', 'user.name=Inventory Test', '-c', 'user.email=inventory@example.invalid', ...args], {
+      timeout: 15000, env: environment, stdio: ['ignore', stdout, stderr],
+    });
+  } finally {
+    fs.closeSync(stdout);
+    fs.closeSync(stderr);
+  }
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, fs.readFileSync(err, 'utf8'));
+  return fs.readFileSync(out, 'utf8').trim();
+}
+
+function deployment(w) {
+  const root = path.join(w.root, 'deployment');
+  const modules = path.join(root, 'src');
+  fs.mkdirSync(modules, { recursive: true });
+  fs.writeFileSync(path.join(modules, 'adjudicator_retro.py'), '# deployed retrospective\n');
+  fs.writeFileSync(path.join(modules, 'roles.py'), '# deployed validator\n');
+  git(root, 'init', '-q');
+  git(root, 'add', 'src');
+  git(root, 'commit', '-qm', 'Deployment fixture');
+  return { root, modules, revision: git(root, 'rev-parse', 'HEAD') };
+}
+
+function moduleHashes(root) {
+  return Object.fromEntries(fs.readdirSync(root).filter((name) => name.endsWith('.py'))
+    .map((name) => [name, sha256(fs.readFileSync(path.join(root, name)))]));
+}
+
+test('inventory CLI keeps deployment and a flat mirror generation separately attributable', (t) => {
+  const w = world(t);
+  const deployed = deployment(w);
+  // The flat generation is nested inside a checkout but owns no Git metadata.
+  const generation = path.join(deployed.root, 'generation-a');
+  fs.mkdirSync(generation);
+  fs.writeFileSync(path.join(generation, 'adjudicator_retro.py'), '# mirrored retrospective\n');
+  fs.writeFileSync(path.join(generation, 'roles.py'), '# mirrored validator\n');
+  const mirror = path.join(w.root, 'published-mirror');
+  fs.symlinkSync(generation, mirror, 'dir');
+  const before = w.snapshot();
+  const args = [...w.inventoryArgs, '--deployed-root', deployed.root, '--mirror-root', mirror];
+  const report = w.run(args);
+  assert.equal(report.deployed_code.git_revision, deployed.revision);
+  assert.equal(report.deployed_code.tracked_files_clean, true);
+  assert.equal(report.deployed_code.resolved_path, fs.realpathSync(deployed.root));
+  assert.deepEqual(report.deployed_code.runtime_module_sha256, moduleHashes(deployed.modules));
+  assert.equal(report.mirror_code.path, mirror);
+  assert.equal(report.mirror_code.resolved_path, fs.realpathSync(generation));
+  assert.equal(report.mirror_code.git_revision, null, 'a flat mirror cannot inherit its parent HEAD');
+  assert.equal(report.mirror_code.tracked_files_clean, null);
+  assert.deepEqual(report.mirror_code.runtime_module_sha256, moduleHashes(generation));
+  assert.notEqual(report.deployed_code.adjudicator_sha256, report.mirror_code.adjudicator_sha256);
+  for (const observed of [report.deployed_code, report.mirror_code]) {
+    assert.equal(observed.adjudicator_sha256, observed.runtime_module_sha256['adjudicator_retro.py']);
+    assert.equal(observed.live_reader_binding, 'unverified');
+  }
+  assert.equal(report.evidence_class, 'current_local_inventory_only');
+  assert.equal(report.historical_observations.startsWith('unavailable'), true);
+  assert.equal(report.dispatch_authorized, false);
+  assert.deepEqual(w.snapshot(), before);
+
+  // HEAD alone cannot identify a later local validator edit.
+  fs.writeFileSync(path.join(deployed.modules, 'roles.py'), '# locally edited validator\n');
+  const later = w.run(args);
+  assert.equal(later.deployed_code.git_revision, deployed.revision);
+  assert.equal(later.deployed_code.tracked_files_clean, false);
+  assert.notDeepEqual(later.deployed_code.runtime_module_sha256,
+    report.deployed_code.runtime_module_sha256);
+  assert.deepEqual(later.mirror_code, report.mirror_code);
+  assert.deepEqual(later.native_journal, report.native_journal);
+  assert.deepEqual(w.snapshot(), before);
+});
+
+test('inventory CLI pins a dirty mirror worktree despite inherited deployment Git settings', (t) => {
+  const w = world(t);
+  const deployed = deployment(w);
+  const mirror = path.join(w.root, 'mirror-worktree');
+  git(deployed.root, 'worktree', 'add', '-q', '-b', 'mirror-fixture', mirror);
+  const mirrorRevision = git(mirror, 'rev-parse', 'HEAD');
+  git(deployed.root, 'commit', '--allow-empty', '-qm', 'Later deployment');
+  const deployedRevision = git(deployed.root, 'rev-parse', 'HEAD');
+  assert.notEqual(deployedRevision, mirrorRevision);
+  assert.equal(fs.statSync(path.join(mirror, '.git')).isFile(), true);
+  fs.writeFileSync(path.join(mirror, 'src', 'roles.py'), '# mirror-local validator\n');
+  const before = w.snapshot();
+  const environment = {
+    GIT_DIR: path.join(deployed.root, '.git'), GIT_WORK_TREE: deployed.root,
+    GIT_COMMON_DIR: path.join(deployed.root, '.git'),
+    GIT_INDEX_FILE: path.join(deployed.root, '.git', 'index'),
+  };
+  const args = [...w.inventoryArgs, '--deployed-root', deployed.root, '--mirror-root', mirror];
+  const report = w.run(args, environment);
+  assert.equal(report.deployed_code.git_revision, deployedRevision);
+  assert.equal(report.deployed_code.tracked_files_clean, true);
+  assert.equal(report.mirror_code.git_revision, mirrorRevision);
+  assert.equal(report.mirror_code.tracked_files_clean, false);
+  assert.deepEqual(report.mirror_code.runtime_module_sha256, moduleHashes(path.join(mirror, 'src')));
+  assert.equal(report.mirror_code.live_reader_binding, 'unverified');
+  assert.deepEqual(report.original_report.case_ids, ['original-a']);
+  assert.deepEqual(report.original_paid_attempts.map((item) => item.backend_run_id),
+    ['original-paid', 'earlier-paid']);
+  assert.equal(report.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+  assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+  assert.equal(report.dispatch_authorized, false);
+  assert.deepEqual(w.snapshot(), before);
 });
 
 test('native inventory separates uncommitted provider changes from a later committed observation', (t) => {
