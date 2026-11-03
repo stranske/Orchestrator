@@ -599,3 +599,68 @@ test('version 2 retains an observed target mismatch when verdict evidence is una
   }]);
   assert.equal(report.manifest_reconciliation.exact_match, false);
 });
+
+test('missing stored targets remain eligible disputes with explicit unavailable identity evidence', (t) => {
+  const { root, db } = world(t);
+  seed(db, [
+    ['null-target', now, 'NON_PASS', 'PASS'],
+    ['empty-target', now, 'NON_PASS', 'PASS'],
+    ['blank-target', now, 'NON_PASS', 'PASS'],
+    ['excluded-target', cutoff - 1],
+    ['other-target', now, 'NON_PASS', 'PASS'],
+    ['complete', now, 'NON_PASS', 'PASS'],
+  ]);
+  const connection = new DatabaseSync(db);
+  for (const [id, target] of [
+    ['null-target', null], ['empty-target', ''], ['blank-target', ' \t '],
+    ['excluded-target', null], ['other-target', 'owner/repo#2'],
+  ]) connection.prepare('UPDATE runs SET target=? WHERE run_id=?').run(target, id);
+  connection.close();
+  const requested = ['null-target', 'empty-target', 'blank-target', 'excluded-target',
+    'other-target', 'complete'].map((run_id) => ({ run_id, target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' }));
+  const before = fs.readFileSync(db);
+  const observed = inventory({ db, observedAt: now, expectedCount: 6 });
+  assert.equal(observed.population_count, 6);
+  assert.equal(observed.included_count, 5, 'preserve production replay selection');
+  assert.equal(observed.excluded_count, 1);
+  assert.equal(observed.evidence_gaps.filter((gap) => gap.kind === 'missing_target').length, 4,
+    'missing targets must be visible even without a supplied manifest');
+  const reference = execute(root, process.env.PYTHON || 'python3', ['-c', `
+import json
+from pathlib import Path
+import adjudicator_retro as retro
+print(json.dumps(retro.disputes(db=Path(${JSON.stringify(db)}), now=${now})))
+`]);
+  assert.equal(reference.status, 0, reference.stderr);
+  assert.deepEqual(observed.cases, JSON.parse(reference.stdout));
+  for (const version of [1, 2]) {
+    const manifest = manifestFile(root, requested, version);
+    const files = fs.readdirSync(root);
+    const report = inventory({ db, observedAt: now, expectedCount: 6, manifest });
+    const reconciled = report.manifest_reconciliation;
+    const identities = requested.map(({ run_id, target, ...verdicts }) => ({
+      run_id, target, ...(version === 2 ? verdicts : {}),
+    }));
+    const reasons = [
+      ['missing_target'], ['missing_target'], ['missing_target'],
+      ['outside_window', 'missing_outcome', 'missing_target'],
+    ];
+    assert.deepEqual(reconciled.cases.slice(0, 4), identities.slice(0, 4).map((item, i) =>
+      ({ ...item, status: 'unavailable', reasons: reasons[i] })));
+    assert.equal(reconciled.cases[4].status, 'identity_mismatch',
+      'a nonblank contradictory target still represents an identity mismatch');
+    assert.equal(reconciled.cases[5].status, 'included', 'continue to the next intact case');
+    assert.equal(reconciled.exact_match, false);
+    assert.equal(report.requested_cohort_verified, false);
+    assert.deepEqual(report.evidence_gaps.filter((gap) => gap.kind === 'requested_case_evidence_gap')
+      .slice(0, 4), identities.slice(0, 4).map((item, i) =>
+      ({ kind: 'requested_case_evidence_gap', ...item, reasons: reasons[i] })));
+    const result = execute(root, process.execPath, [script, '--db', db,
+      '--observed-at', String(now), '--expected-count', '6', '--manifest', manifest]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), report);
+    assert.deepEqual(fs.readFileSync(db), before);
+    assert.deepEqual(fs.readdirSync(root), files, 'no report or SQLite sidecars created');
+  }
+});

@@ -17,6 +17,10 @@ function integer(value, name, minimum) {
   return value;
 }
 
+function hasTarget(row) {
+  return typeof row.target === 'string' && Boolean(row.target.trim());
+}
+
 function readManifest(file) {
   if (typeof file !== 'string' || !file.trim()) throw new Error('manifest path is required');
   const bytes = fs.readFileSync(file);
@@ -75,6 +79,10 @@ function reconcile(report, manifest) {
       // The outcome exists, but without its run we cannot verify the target
       // or timestamp. Do not misreport this as a different observed target.
       status = 'unavailable'; reasons = row.reasons;
+    } else if (!hasTarget(row)) {
+      // A stored run without a target cannot establish a contradictory PR
+      // identity. Preserve other gaps without changing replay eligibility.
+      status = 'unavailable'; reasons = [...(row.reasons || []), 'missing_target'];
     } else if (row.target !== item.target) {
       status = 'identity_mismatch'; reasons = ['requested_target_mismatch'];
     } else if (manifest.schema_version === 2 && row.reasons?.some((reason) =>
@@ -204,6 +212,11 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
       report.evidence_gaps.push({
         kind: 'orphaned_outcome', run_id: row.run_id,
         detail: 'No matching run record; target and replay-window membership are unknown.',
+      });
+    } else if (!hasTarget(row)) {
+      report.evidence_gaps.push({
+        kind: 'missing_target', run_id: row.run_id, target: row.target,
+        detail: 'The run has no nonblank target; its requested PR identity cannot be verified.',
       });
     }
     if (!inWindow) reasons.push(row.ts === null ? 'missing_timestamp' : 'outside_window');
