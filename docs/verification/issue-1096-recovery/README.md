@@ -1,5 +1,15 @@
 # Acceptance evidence recovery for #1096
 
+## Retained later-truth diagnostics, 2026-11-03 UTC
+
+The inventory now separates missing, explicit UNKNOWN, invalid and binary-but-
+unverified later truth, with per-attempt value hashes and evidence steps. Parent
+and retry truth stay separate. All 111 focused regressions pass; the historical
+projection identifies five saved binary decisions without recorded truth.
+[Results and limitations](truth-followup/results.md) link the command receipts,
+source identity and historical summary. Required pytest execution still fails
+before collection; recovery and operational acceptance remain incomplete.
+
 ## Recorded failure stages, 2026-11-03 UTC
 
 The retained-report reader now identifies recorded failure stages from exact

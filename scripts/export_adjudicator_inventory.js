@@ -115,6 +115,31 @@ function retainedBreaks(attempt, location, conflict) {
     }]) : null };
 }
 
+function retainedTruth(attempt, location) {
+  const truth = attempt.later_truth;
+  let status;
+  let nextStep;
+  if (truth === undefined || truth === null) {
+    status = 'not_recorded';
+    nextStep = 'recover_independent_later_truth_without_redispatch';
+  } else if (truth === 'UNKNOWN') {
+    status = 'unknown';
+    nextStep = 'preserve_UNKNOWN_until_independent_truth_available';
+  } else if (['PASS', 'FAIL'].includes(truth)) {
+    status = 'binary_unverified';
+    nextStep = 'authenticate_independent_later_truth';
+  } else {
+    status = 'invalid';
+    nextStep = 'inspect_invalid_retained_truth_before_grading';
+  }
+  // A saved value (even one matching the decision) proves neither provenance
+  // nor freshness. Observe this attempt only; never borrow parent/retry truth.
+  return { status, location: `${location}.later_truth`,
+    json_value_sha256: truth === undefined ? null
+      : createHash('sha256').update(JSON.stringify(truth)).digest('hex'),
+    independent_truth_verified: false, next_evidence_step: nextStep };
+}
+
 // These observations describe saved fields, never a freshly validated result.
 // Error prose can include private provider material. Bind it by JSON-value hash
 // and location so recovery can inspect the original without publishing the text.
@@ -152,6 +177,7 @@ function attemptObservation(attempt, caseId, location) {
   return { case_id: caseId, location, retained_result: result,
     backend_run_id: attempt.backend_run_id ?? null,
     retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
+    later_truth_observation: retainedTruth(attempt, location),
     failure_fields: failureFields, next_evidence_step: nextStep,
     ...retainedBreaks(attempt, location, (binary || abstained) && runFailed) };
 }

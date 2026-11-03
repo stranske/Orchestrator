@@ -162,6 +162,73 @@ test('failure field hashes detect changed evidence even when retained classifica
   assert.ok(!JSON.stringify(changed).includes('private'));
 });
 
+test('later-truth diagnostics distinguish absence, UNKNOWN, binary claims and invalid values', (t) => {
+  const { saved, options } = retainedReport(t);
+  const attempts = [{}, { later_truth: null }, { later_truth: 'UNKNOWN' },
+    { later_truth: 'PASS' }, { later_truth: 'FAIL' }, { later_truth: 'PASS ' },
+    { later_truth: true }, { later_truth: [] }, { later_truth: { note: 'private detail' } }];
+  saved.rows = attempts.map((row, i) => ({ ...row, case_id: `case-${i}`,
+    target: `owner/repo#${i}`, decision: 'reject_blocker', backend_run_id: `paid-${i}` }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const before = fs.readFileSync(options.report);
+  const result = reportInventory(options);
+  const truth = result.retained_attempt_observations.map((row) => row.later_truth_observation);
+  assert.deepEqual(truth.map((item) => item.status), [
+    'not_recorded', 'not_recorded', 'unknown', 'binary_unverified', 'binary_unverified',
+    'invalid', 'invalid', 'invalid', 'invalid',
+  ]);
+  assert.equal(truth[0].json_value_sha256, null, 'absent is distinct from an explicit null');
+  for (const [i, item] of truth.entries()) {
+    assert.equal(item.location, `rows[${i}].later_truth`);
+    assert.equal(item.independent_truth_verified, false);
+    if (i > 0) assert.equal(item.json_value_sha256, createHash('sha256')
+      .update(JSON.stringify(attempts[i].later_truth)).digest('hex'));
+  }
+  assert.equal(truth[0].next_evidence_step, 'recover_independent_later_truth_without_redispatch');
+  assert.equal(truth[2].next_evidence_step, 'preserve_UNKNOWN_until_independent_truth_available');
+  assert.equal(truth[3].next_evidence_step, 'authenticate_independent_later_truth');
+  assert.equal(truth[5].next_evidence_step, 'inspect_invalid_retained_truth_before_grading');
+  assert.ok(!JSON.stringify(truth).includes('private detail'));
+  assert.equal(result.paid_attempts.length, attempts.length);
+  assert.ok(result.cases.every((row) => row.retained_decision === 'reject_blocker'));
+  assert.equal(Object.hasOwn(result, 'graded'), false);
+  assert.equal(result.dispatch_authorized, false);
+  assert.deepEqual(fs.readFileSync(options.report), before);
+});
+
+test('parent and retry truth remain separate without deriving truth from a decision', (t) => {
+  const { saved, options } = retainedReport(t);
+  saved.rows = [{ case_id: 'case-a', target: 'owner/repo#1', decision: 'uphold_blocker',
+    later_truth: 'UNKNOWN', backend_run_id: 'parent-paid', retry_attempts: [
+      { decision: 'reject_blocker', later_truth: 'PASS', backend_run_id: 'earlier-paid' },
+      { decision: 'uphold_blocker' },
+    ] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  assert.deepEqual(result.retained_attempt_observations.map((row) => [
+    row.later_truth_observation.status, row.later_truth_observation.location,
+  ]), [
+    ['unknown', 'rows[0].later_truth'],
+    ['binary_unverified', 'rows[0].retry_attempts[0].later_truth'],
+    ['not_recorded', 'rows[0].retry_attempts[1].later_truth'],
+  ]);
+  assert.equal(result.cases[0].retained_later_truth, 'UNKNOWN');
+  assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id), ['parent-paid', 'earlier-paid']);
+  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+});
+
+test('changed binary truth changes its evidence hash without authenticating either value', (t) => {
+  const { saved, options } = retainedReport(t);
+  const first = reportInventory(options).retained_attempt_observations[3].later_truth_observation;
+  saved.rows[1].later_truth = 'FAIL';
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const changed = reportInventory(options).retained_attempt_observations[3].later_truth_observation;
+  assert.equal(first.status, 'binary_unverified');
+  assert.equal(changed.status, first.status);
+  assert.notEqual(changed.json_value_sha256, first.json_value_sha256);
+  assert.equal(changed.independent_truth_verified, false);
+});
+
 test('recorded failure stages explain collection, execution and validation breaks on real message shapes', (t) => {
   const { saved, options } = retainedReport(t);
   const attempts = [

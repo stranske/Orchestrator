@@ -306,6 +306,21 @@
       "checks": "ignored-input-followup/acceptance-run/checks.json",
       "validation": "ignored-input-followup/validation.json",
       "limitation": "Runner controls pass, but pytest is unavailable before collection. Accepted deployment binding remains unverified; no task newly completed."
+    },
+    "retained_truth_followup": {
+      "checked_at": "2026-11-03T22:18:46.055133+00:00",
+      "source_commit": "e81b3e77c0ad615eeed479fb8f1e566cdec073c0",
+      "source_parent": "9c00d5bda5a429e48310a2bd5e7b27c4f5b30fba",
+      "plan": "truth-followup/plan.md",
+      "checks": "truth-followup/acceptance-run/checks.json",
+      "validation": "truth-followup/validation.json",
+      "historical_input_scope": "committed_selected_historical_fields_only",
+      "saved_binary_decisions_without_recorded_truth": 5,
+      "required_tests_passed": false,
+      "authenticated_outcomes_verified": false,
+      "original_retry_manifest_recovered": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Retained truth diagnostics only. Missing and UNKNOWN truth are not retry permission; binary values are not authenticated independent truth or grades."
     }
   },
   "mirror_synchronization": [
