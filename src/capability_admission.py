@@ -102,7 +102,20 @@ GRANDFATHERED_BEFORE = 1787270400  # 2026-08-21T00:00:00Z, the day this gate lan
 # a permanent exemption look like a temporary one — the same shape as a bounded trial that quietly
 # became permanent. So an expiry must also be within MAX_WAIVER_DAYS.
 MAX_WAIVER_DAYS = 90
-WAIVERS: dict[str, dict] = {}
+WAIVERS: dict[str, dict] = {
+    "closer-core": {
+        "expires": 1794268800,  # 2026-11-10T00:00:00Z; fixed, never renewed by loading
+        "reason": (
+            "Local external entrypoint: the audit only scans in-tree drivers or sibling CI "
+            "workflows. The real caller is ~/.codex/automations/"
+            "reviewed-repo-automation-controller/controller.py:start_closer_core, once per "
+            "15-minute tick. Its heartbeat source is ~/.codex/orchestrator/closer-core/"
+            "rounds.jsonl, one line per round, already consumed by value_chain_monitor. "
+            "Only caller_exists/heartbeat proof is unrecognized; remove this waiver when "
+            "the audit can verify those external sources. The core and controller stay running."
+        ),
+    },
+}
 
 
 def waiver_problems() -> list[str]:

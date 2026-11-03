@@ -1823,7 +1823,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         "status": "wired",
         "entrypoint": str(Path.home() / ".codex/closer-core/closer_core.py"),
         "matcher": {"kind": "tick_phase", "equals": "closer-core"},
-        "trigger_cadence": "existing external controller hook",
+        "trigger_cadence": "Luna controller start_closer_core(), once per 15-minute tick",
         "output_artifact": "~/.codex/orchestrator/closer-core/rounds.jsonl",
         "downstream_consumer": "value_chain_monitor.py:report via switch_review.py",
         "learning_sink": "feedback.py runs and durable issue_closure outcomes",
@@ -1835,7 +1835,11 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "dedup: the external thin core already closes merged-PR source issues; "
             "the existing closer construction remains idle. This declaration adds accounting, "
             "not activation. Read demand and target dispositions from its existing round journal "
-            "and accepted outcomes from the Brain; no additional event store or advisor surface."
+            "and accepted outcomes from the Brain; no additional event store or advisor surface. "
+            "Caller: ~/.codex/automations/reviewed-repo-automation-controller/"
+            "controller.py:start_closer_core(). Heartbeat source: "
+            "~/.codex/orchestrator/closer-core/rounds.jsonl, one JSON line per round. "
+            "Both producers intentionally live outside the in-tree activation audit."
         ),
     },
     "testgen-lane": {
