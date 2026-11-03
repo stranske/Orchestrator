@@ -1,0 +1,94 @@
+{
+  "scope": "inventory exporter only; synthetic controls are not named operational acceptance mutations",
+  "evaluated_parent": "d470db0eda5bd1c776cd55afb997e0612382613b",
+  "source_sha256": "21240bdc0b0d9b0f0048e82994418f3b176874ff05973db7da87eff41a44811a",
+  "test_sha256": "fb5b2f8a129e5c2293d8336ff60699c6040d65f2c52b0e4153d89f6b91295def",
+  "checks": {
+    "inventory_export": {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "exit": 0,
+      "passed": 7
+    },
+    "focused_existing": {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "exit": 0,
+      "passed": 8
+    },
+    "module_selftest": {
+      "command": "python3 src/adjudicator_retro.py --selftest",
+      "exit": 0,
+      "checks": 23
+    },
+    "evidence_unittest": {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+      "exit": 0,
+      "passed": 11
+    },
+    "full_existing_cli": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "passed": 51,
+      "failed": 16,
+      "failure_set_matches_previous_receipt": true
+    }
+  },
+  "controls": [
+    {
+      "name": "exclusive-cutoff",
+      "source_sha256": "b72910bae7242eadfbcdd9b200018981c67c1dfd8085786b85f94fcb50a6f256",
+      "exit": 1,
+      "failing_tests": [
+        "✖ inventory exports every synthetic dispute and every exclusion without writes (158.937148ms)",
+        "✖ inventory preserves the fixed cutoff and reports a count discrepancy (7.929529ms)",
+        "✖ inventory exports every synthetic dispute and every exclusion without writes (158.937148ms)",
+        "✖ inventory preserves the fixed cutoff and reports a count discrepancy (7.929529ms)"
+      ]
+    },
+    {
+      "name": "writable-store",
+      "source_sha256": "2d49cb8a147b23371be83324e1365028691b56ea3dea2eb80359c742501fe253",
+      "exit": 1,
+      "failing_tests": [
+        "✖ inventory distinguishes missing evidence from a complete cohort (5.127268ms)",
+        "✖ inventory distinguishes missing evidence from a complete cohort (5.127268ms)"
+      ]
+    },
+    {
+      "name": "collapse-per-pr",
+      "source_sha256": "2800e2a24b18618eed045d3ac8913f29bd8e650711dbe6aef0bc50b21f457270",
+      "exit": 1,
+      "failing_tests": [
+        "✖ inventory exports every synthetic dispute and every exclusion without writes (164.690605ms)",
+        "✖ inventory preserves the fixed cutoff and reports a count discrepancy (7.507272ms)",
+        "✖ inventory exports every synthetic dispute and every exclusion without writes (164.690605ms)",
+        "✖ inventory preserves the fixed cutoff and reports a count discrepancy (7.507272ms)"
+      ]
+    },
+    {
+      "name": "hide-count-discrepancy",
+      "source_sha256": "340afc97d16f58329017d3acfb3e08fa15bd86f009fb2f63a8352a792021125e",
+      "exit": 1,
+      "failing_tests": [
+        "✖ inventory preserves the fixed cutoff and reports a count discrepancy (15.192389ms)",
+        "✖ inventory preserves the fixed cutoff and reports a count discrepancy (15.192389ms)"
+      ]
+    },
+    {
+      "name": "restored",
+      "source_sha256": "21240bdc0b0d9b0f0048e82994418f3b176874ff05973db7da87eff41a44811a",
+      "exit": 0,
+      "failing_tests": []
+    }
+  ],
+  "restoration_byte_identical": true,
+  "real_inventory": {
+    "receipt": "issue-1074-inventory-snapshot.json",
+    "exit": 2,
+    "status": "unavailable",
+    "requested_count": 71,
+    "observed_count": null,
+    "original_manifest_available": false
+  },
+  "pr_body_reconciliation": "connector rejected: requires approval; approval policy never",
+  "python_changes": false
+}
