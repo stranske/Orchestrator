@@ -119,6 +119,119 @@ test('report recovery aborts if the input changes during observation', (t) => {
   }
 });
 
+test('retained report reconciliation preserves requested order and explains every identity gap', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const identity = (run_id, verifier_verdict = 'NON_PASS', adjudicated_verdict = 'PASS') => ({
+    run_id, target: 'owner/repo#1', verifier_verdict, adjudicated_verdict,
+  });
+  const requested = ['missing', 'wrong-target', 'wrong-verdict', 'incomplete',
+    'duplicate', 'decided', 'shared'].map((run) => identity(run));
+  saved.rows = [
+    { ...identity('decided'), decision: 'reject_blocker', later_truth: 'PASS',
+      backend_run_id: 'paid-before', raw_output: 'private payload',
+      retry_attempts: [{ backend_run_id: 'paid-earlier' }] },
+    { ...identity('wrong-target'), target: 'owner/repo#2' },
+    identity('wrong-verdict', 'PASS', 'FAIL'),
+    { ...identity('incomplete'), adjudicated_verdict: null },
+    identity('duplicate'), identity('duplicate'),
+    identity('shared', 'PASS', 'FAIL'), identity('shared'),
+    identity('unrequested'),
+  ].map((row, index) => ({ ...row, case_id: `retained-${index}` }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, requested, 2);
+  const before = [options.report, manifest].map((file) => fs.readFileSync(file));
+  const result = reportInventory({ ...options, manifest });
+  const reconciliation = result.manifest_reconciliation;
+  assert.equal(reconciliation.identity_scope, 'dispute');
+  assert.equal(reconciliation.manifest_sha256, createHash('sha256').update(before[1]).digest('hex'));
+  assert.equal(reconciliation.requested_count, requested.length);
+  assert.deepEqual(reconciliation.cases.map((row) => row.run_id), requested.map((row) => row.run_id));
+  assert.deepEqual(reconciliation.cases.map(({ status, reasons, retained_locations }) =>
+    ({ status, reasons, retained_locations })), [
+    { status: 'missing', reasons: ['requested_run_missing_from_report'], retained_locations: [] },
+    { status: 'identity_mismatch', reasons: ['requested_target_mismatch'], retained_locations: ['rows[1]'] },
+    { status: 'identity_mismatch', reasons: ['requested_verdict_mismatch'], retained_locations: ['rows[2]'] },
+    { status: 'unavailable', reasons: ['retained_verdict_identity_incomplete'], retained_locations: ['rows[3]'] },
+    { status: 'ambiguous', reasons: ['multiple_retained_rows_match_requested_identity'],
+      retained_locations: ['rows[4]', 'rows[5]'] },
+    { status: 'matched', reasons: [], retained_locations: ['rows[0]'] },
+    { status: 'matched', reasons: [], retained_locations: ['rows[7]'] },
+  ]);
+  assert.equal(reconciliation.all_requested_rows_uniquely_matched, false);
+  assert.deepEqual(reconciliation.unmatched_retained_locations,
+    ['rows[1]', 'rows[2]', 'rows[3]', 'rows[6]', 'rows[8]']);
+  assert.equal(result.cases[0].retained_decision, 'reject_blocker');
+  assert.equal(result.cases[0].retained_later_truth, 'PASS');
+  assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id),
+    ['paid-before', 'paid-earlier']);
+  assert.equal(reconciliation.original_cohort_provenance_verified, false);
+  assert.equal(reconciliation.authenticated_outcomes_verified, false);
+  assert.equal(result.requested_cohort_verified, false);
+  assert.equal(result.dispatch_authorized, false);
+  assert.ok(!JSON.stringify(result).includes('private payload'));
+  assert.deepEqual([options.report, manifest].map((file) => fs.readFileSync(file)), before);
+});
+
+test('retained report CLI matches supplied manifests without authenticating saved outcomes', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  saved.rows.forEach((row, index) => Object.assign(row, {
+    run_id: `run-${index}`, verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
+  }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const requested = saved.rows.map(({ run_id, target, verifier_verdict, adjudicated_verdict }) =>
+    ({ run_id, target, verifier_verdict, adjudicated_verdict })).reverse();
+  const manifest = manifestFile(root, requested, 2);
+  const files = fs.readdirSync(root);
+  const result = execute(root, process.execPath, [script, '--report', options.report,
+    '--observed-at', String(now), '--evidence-class', options.evidenceClass,
+    '--evidence-reference', options.evidenceReference, '--manifest', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  const observed = JSON.parse(result.stdout);
+  assert.deepEqual(observed, reportInventory({ ...options, manifest }));
+  assert.equal(observed.manifest_reconciliation.all_requested_rows_uniquely_matched, true);
+  assert.equal(observed.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.deepEqual(observed.manifest_reconciliation.unmatched_retained_locations, []);
+  assert.equal(observed.receipt_authority, 'not_authenticated_by_inventory');
+  assert.deepEqual(fs.readdirSync(root), [...files, 'stderr', 'stdout'].sort(),
+    'only the test harness output captures may be created');
+});
+
+test('legacy report manifest keeps verdict ambiguity visible and empty requests cannot complete accounting', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  saved.rows = ['NON_PASS', 'FAIL'].map((verifier_verdict, index) => ({
+    case_id: `case-${index}`, run_id: 'same', target: 'owner/repo#1', verifier_verdict,
+    adjudicated_verdict: 'PASS',
+  }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [{ run_id: 'same', target: 'owner/repo#1' }]);
+  const legacy = reportInventory({ ...options, manifest }).manifest_reconciliation;
+  assert.equal(legacy.identity_scope, 'run_target');
+  assert.equal(legacy.cases[0].status, 'ambiguous');
+  assert.deepEqual(legacy.cases[0].retained_locations, ['rows[0]', 'rows[1]']);
+  manifestFile(root, []);
+  const empty = reportInventory({ ...options, manifest }).manifest_reconciliation;
+  assert.equal(empty.all_requested_rows_uniquely_matched, false);
+  assert.deepEqual(empty.unmatched_retained_locations, ['rows[0]', 'rows[1]']);
+});
+
+test('report reconciliation refuses malformed or changing manifests without replacing evidence', (t) => {
+  const { root, options } = retainedReport(t);
+  const manifest = manifestFile(root, [{ run_id: 'original', target: 'owner/repo#1' }]);
+  const read = fs.readFileSync;
+  let observations = 0;
+  fs.readFileSync = function observed(file, ...args) {
+    if (file === manifest && ++observations === 2) fs.writeFileSync(file, '{"cases":[]}');
+    return read(file, ...args);
+  };
+  try {
+    assert.throws(() => reportInventory({ ...options, manifest }), /manifest changed during inventory/);
+  } finally {
+    fs.readFileSync = read;
+  }
+  assert.throws(() => reportInventory({ ...options, manifest }), /manifest requires/);
+  assert.equal(reportInventory(options).manifest_reconciliation, null);
+});
+
 test('report CLI never combines historical recovery with dispatch or current Brain selection', (t) => {
   const { root, options } = retainedReport(t);
   const args = [script, '--report', options.report, '--observed-at', String(now),

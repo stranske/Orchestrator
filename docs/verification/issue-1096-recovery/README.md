@@ -1,5 +1,37 @@
 # Acceptance evidence recovery for #1096
 
+## Retained retry-manifest matching, 2026-11-03 UTC
+
+The [bounded required-test attempt](retry-manifest-followup/acceptance-run/checks.json)
+binds checkout revision `191dfb9f5bbc27a357cef8b5f16ad306f5eb3f45` to the selected
+Python 3.14.9 interpreter, exact commands and output hashes. Collection, the four
+named tests and the full retrospective suite exit 1 before collection with missing
+pytest. Ordinary and isolated pip installation found no available distribution.
+The [pre-execution plan](retry-manifest-followup/plan.md) records the stop rule.
+The accepted deployment remains unverified; the required-test task stays open.
+
+With that task blocked, the retained-report reader now accepts `--manifest` to
+account for supplied retry identities without a Brain database. It preserves
+manifest order and distinguishes matched, missing, ambiguous, incomplete and
+conflicting identities, with retained-row locations. Version 2 matches the run,
+target and verdict pair; legacy version 1 retains its narrower run/target scope.
+Multiple saved rows remain ambiguous. Saved decisions, later truth and recursive
+paid history are preserved; manifest matching does not authenticate outcomes or
+establish original cohort provenance. Changing manifests invalidate the inventory.
+
+All [92 regressions](retry-manifest-followup/validation.json) pass: 44 inventory,
+26 runner and 22 ledger tests. The source commit is
+`ebf5f3b1bd998e2f4f8ce8cff6fda7b5055079b2`, parent `191dfb9f5bbc27a357cef8b5f16ad306f5eb3f45`.
+Only fixture manifests were exercised: the original requested retry manifest,
+authenticated native receipts, deployment binding and fixed next-20 manifest are
+still unavailable. No new task checkbox is complete. No provider call, production
+write, dispatch or mirror synchronization occurred. No Python files changed.
+
+Checkout Git metadata is read-only. The source/evidence commits are preserved in
+`/tmp/issue1096-retry-manifest-git-j4117ize` and the
+[applyable patch](../../../artifacts/issue-1096-retry-manifest.patch). The checkout
+branch is unchanged.
+
 ## Ledger audit follow-up, 2026-11-03 UTC
 
 The published [evidence ledger](evidence-ledger.json) now has a read-only
@@ -224,3 +256,9 @@ The source, tests and receipts are committed using an isolated Git directory
 under `/tmp/issue-1096-review-commit`, with this checkout as its work tree and
 the exact checkout HEAD as parent. The accompanying format-patch is available
 at `artifacts/issue-1096-recovery.patch`. The automation branch itself is unchanged.
+
+Retry-manifest follow-up handoff: PR #1097 was checked open with `draft=false`.
+Automatic approval review rejected this run's blocker comment and `needs-human`
+label because connector writes require approval while the run policy is `never`.
+Neither remote change is claimed; the blockers and required inputs are recorded
+locally above.

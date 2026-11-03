@@ -104,7 +104,7 @@ function preDispatchInventory(saved, paid, journal) {
   };
 }
 
-function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal }) {
+function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal, manifest }) {
   integer(observedAt, 'observedAt', 0);
   if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
   if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
@@ -113,6 +113,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
     throw new Error('evidenceReference is required');
   }
+  const requestedManifest = manifest === undefined ? null : readManifest(manifest);
   const bytes = fs.readFileSync(report);
   const saved = JSON.parse(bytes);
   if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
@@ -162,8 +163,13 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     identities.set(item.backend_run_id, occurrences);
   }
   const preDispatch = preDispatchInventory(saved, paid, journal);
+  const reconciliation = requestedManifest ? reconcileRetainedRows(cases, requestedManifest) : null;
   if (!fs.readFileSync(report).equals(bytes)) {
     throw new Error('report changed during inventory');
+  }
+  if (requestedManifest && createHash('sha256').update(fs.readFileSync(manifest)).digest('hex') !==
+      requestedManifest.sha256) {
+    throw new Error('manifest changed during inventory');
   }
   return {
     schema_version: 1,
@@ -176,6 +182,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     retained_summary: saved.summary ?? null,
     native_publication_present: Object.hasOwn(saved, 'native_publication'),
     cases, case_count: cases.length, paid_attempts: paid,
+    manifest_reconciliation: reconciliation,
     pre_dispatch: preDispatch,
     paid_identity_summary: {
       records: paid.length, unique: identities.size,
@@ -192,6 +199,58 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
       'independent_current_truth_not_observed', 'deployed_and_mirror_revisions_not_observed',
       'fixed_next_20_manifest_not_observed'],
   };
+}
+
+// Reconcile identities only. A saved decision/truth pair, native marker, paid
+// locator or a perfect manifest match cannot authenticate an actual outcome.
+function reconcileRetainedRows(cases, manifest) {
+  const exact = (requested, row) => requested.target === row.target &&
+    (manifest.schema_version === 1 ||
+      (requested.verifier_verdict === row.verifier_verdict &&
+       requested.adjudicated_verdict === row.adjudicated_verdict));
+  const byRun = new Map();
+  for (const row of cases) {
+    const rows = byRun.get(row.run_id) || [];
+    rows.push(row);
+    byRun.set(row.run_id, rows);
+  }
+  const matchedLocations = new Set();
+  const requested = manifest.cases.map((item) => {
+    const candidates = byRun.get(item.run_id) || [];
+    const matches = candidates.filter((row) => exact(item, row));
+    matches.forEach((row) => matchedLocations.add(row.location));
+    let status;
+    let reasons;
+    if (matches.length === 1) {
+      status = 'matched'; reasons = [];
+    } else if (matches.length > 1) {
+      status = 'ambiguous'; reasons = ['multiple_retained_rows_match_requested_identity'];
+    } else if (!candidates.length) {
+      status = 'missing'; reasons = ['requested_run_missing_from_report'];
+    } else {
+      const targetMatches = candidates.filter((row) => row.target === item.target);
+      if (!targetMatches.length) {
+        status = 'identity_mismatch'; reasons = ['requested_target_mismatch'];
+      } else if (targetMatches.some((row) =>
+        [row.verifier_verdict, row.adjudicated_verdict].some((value) =>
+          typeof value !== 'string' || !value.trim()))) {
+        status = 'unavailable'; reasons = ['retained_verdict_identity_incomplete'];
+      } else {
+        status = 'identity_mismatch'; reasons = ['requested_verdict_mismatch'];
+      }
+    }
+    return { ...item, status, reasons,
+      retained_locations: (matches.length ? matches : candidates).map((row) => row.location) };
+  });
+  return { scope: 'supplied_manifest_against_retained_report_only',
+    identity_scope: manifest.schema_version === 2 ? 'dispute' : 'run_target',
+    manifest_path: manifest.path, manifest_sha256: manifest.sha256,
+    requested_count: requested.length, cases: requested,
+    all_requested_rows_uniquely_matched: requested.length > 0 &&
+      requested.every((item) => item.status === 'matched'),
+    unmatched_retained_locations: cases.filter((row) => !matchedLocations.has(row.location))
+      .map((row) => row.location),
+    original_cohort_provenance_verified: false, authenticated_outcomes_verified: false };
 }
 
 function readManifest(file) {
@@ -432,18 +491,19 @@ function main() {
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
-      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE [--journal EXISTING_NATIVE_SQLITE]\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
+      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE [--journal EXISTING_NATIVE_SQLITE] [--manifest JSON_FILE]\nRetained rows, supplied-manifest identity matching and paid identities only; no grade authentication or dispatch.\n');
       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
     }
     if (values.report) {
-      if (tokens.some((item) => ['db', 'days', 'expected-count', 'manifest'].includes(item.name))) {
-        throw new Error('--report cannot combine with Brain window or manifest options');
+      if (tokens.some((item) => ['db', 'days', 'expected-count'].includes(item.name))) {
+        throw new Error('--report cannot combine with Brain window options');
       }
       const result = reportInventory({
         report: values.report, observedAt: Number(values['observed-at']),
         evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
         journal: values.journal,
+        manifest: values.manifest,
       });
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return;
