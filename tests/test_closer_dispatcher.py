@@ -4422,6 +4422,7 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     tmp_path, monkeypatch, capsys, admission_reason, expected_exit, stop_valid
 ):
     start = time.time()
+    monkeypatch.setattr(adapter, "PIPELINE_ADMISSION_PASS_CHECK_TS", start + 3600)
     monkeypatch.setattr(adapter.time, "time", lambda: start)
     state = _terminal_queue_state(tmp_path)
     state_path = tmp_path / "legacy-queue.json"
@@ -4621,6 +4622,7 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
 def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypatch, capsys):
     import closer_resources
 
+    monkeypatch.setattr(adapter, "PIPELINE_ADMISSION_PASS_CHECK_TS", time.time() + 3600)
     state = _terminal_queue_state(tmp_path)
     state["items"][TARGET]["revision"] = "invalidates-old-stop"
     state_path = tmp_path / "legacy-queue.json"

@@ -1,23 +1,23 @@
 {
   "base_commit": "f9f14efe899f66daa0f10be191999bd75fbdc746",
-  "current_model_contract_sha256": "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23",
+  "current_model_contract_sha256": "e27810baa6b79d0f8efb11e49bf57c6dcd59bb04c9c329e55237422464fb2c4a",
   "new_qualification_id": "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a",
   "provider_report_ref": {
     "path": "/Users/teacher/.codex/handoff/dispatch-logs/sonnet-role-qualification/c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a.result.json",
     "sha256": "ab296bce96a7480afb1cd65a485d320b223ad037a58a6f46e69200e4665f7492"
   },
   "role_module": {
-    "after_file_sha256": "98c108b75e7af622dbe5a84bc47a6e0ad9f9e01ca939e885aab9ea22871c7d69",
-    "after_module_ast_sha256": "0456fec41b09c3c7aced6007aee1c687cc9d054956dd7cf848fc1b6b90546a73",
+    "after_file_sha256": "940155b2ffb2e52bc88b7364548452e8d5acbd1ab4e826aae333ac27fe87c7d0",
+    "after_module_ast_sha256": "51c7a0e1415a28f7be4e08211becaadff87a58a7f33afd12499b4941a4a9dcaa",
     "assignment_delta": {
       "ROLE_QUALIFICATIONS": {
-        "added_value_ast_sha256": "25dc02787d384e2793adb4cf7a705a8a8b65828702072e8bf25bd57428e85695",
-        "after_ast_sha256": "2c72ae2e281d1e820e2767b8e8b674215ebf1e65b7e5efe31e4ac7b2737a570d",
+        "added_value_ast_sha256": "bbd87166fd890a70ece340e95c42a6ef8bf15a30d0c5314694defc71cb097bef",
+        "after_ast_sha256": "57a1c99f554885f2c2481320131e02a9d0954836a18f5540a95051b26fe349a1",
         "before_ast_sha256": "41b5ecdd8b7444f2af9ebb2f35cec4c0426c265350678d2feac63c609420e140"
       },
       "ROLE_QUALIFICATION_SUPERSEDES": {
-        "added_value_ast_sha256": "c142f330b69ecc18e0948eb0df57e0d381cada04e2edfe50fa6d0a88dc473e09",
-        "after_ast_sha256": "d0583b0b6c5d2ccdfee66ae06372de6b234d730badbce83411fd46aaaa62f4e8",
+        "added_value_ast_sha256": "0525c13a4da49eadfd9ea0787556df446e634241dfd670d4ab34f18d8cb8c14c",
+        "after_ast_sha256": "a5a6b045054ca6b77db59199a57e0fe8fa2625c27de235abec27d80110c05b00",
         "before_ast_sha256": "c479cc9ac23d1a453c3578670f1601f78b50f8fe1f55016aaf32ff8137a681c7"
       }
     },

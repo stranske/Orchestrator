@@ -1,0 +1,35 @@
+{
+  "evaluated_parent": "e28da4d3f987fe9e34d46ca32683310dae32d640",
+  "scope": "Synthetic supplied-manifest dispute-identity validation only",
+  "operational_acceptance_complete": false,
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "56ff1e4dd5aa6ea1ee28d5f98797891290e6ed46124d6431e30ed7f8864f7a21",
+    "tests/test_adjudicator_inventory.js": "a705f10d477b1f07e4d03bffaf984a734d14e7a8ed61fe1747cc16ae82eb4260"
+  },
+  "control_command": [
+    "node",
+    "--test-name-pattern=version 2",
+    "tests/test_adjudicator_inventory.js"
+  ],
+  "mutation": {
+    "before": "const verdictsMatch = (requested, row) => manifest.schema_version === 1 ||\n    (requested.verifier_verdict === row.verifier_verdict &&\n      requested.adjudicated_verdict === row.adjudicated_verdict);",
+    "after": "const verdictsMatch = () => true;"
+  },
+  "phases": [
+    {
+      "phase": "ignore-verdicts",
+      "exit": 1,
+      "log": "ignore-verdicts.log.gz",
+      "source_sha256": "e7bd878d468116918fc0676dafd6c5928cb1808caddb9190220addc38b440e47",
+      "uncompressed_log_sha256": "df0617c2850e521d93b19d918ba3532da69c8e4696c7451938ec124b9e45e28d"
+    },
+    {
+      "phase": "restored",
+      "exit": 0,
+      "log": "restored.log.gz",
+      "source_sha256": "56ff1e4dd5aa6ea1ee28d5f98797891290e6ed46124d6431e30ed7f8864f7a21",
+      "uncompressed_log_sha256": "d37ccfdf2b0d065c03d58588c950fb22d17fecefdd272db7550ed81dc2be8cec"
+    }
+  ],
+  "restoration_byte_identical": true
+}

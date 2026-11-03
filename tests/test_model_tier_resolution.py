@@ -961,14 +961,14 @@ def test_brain_write_path_survives_a_ledger_fault(monkeypatch, tmp_path):
 
 def test_every_capability_has_a_heartbeat_call_site(tmp_path):
     """Coverage guard: a capability with no heartbeat call site can never accrue evidence at its
-    own code path, so its gate is unliftable by construction. The single exception is documented:
-    docs-drift-fix-agent lives in the Workflows repo, not this tree."""
+    own code path, so its gate is unliftable by construction. External modules are documented:
+    docs-drift-fix-agent lives in Workflows; closer-core reports its own round journal."""
     import subprocess
 
     import capabilities as C
     import capability_activation_audit as audit
 
-    EXTERNAL = {"docs-drift-fix-agent"}  # lives in Workflows/scripts, wired there or not at all
+    EXTERNAL = {"docs-drift-fix-agent", "closer-core"}  # implementations live outside this tree
     VARIABLE_ID = {"capability:reference-sync-hygiene-test-gate"}  # id passed as a variable
     src = subprocess.run(
         ["grep", "-rn", "-A5", "heartbeat(", "--include=*.py", "."], capture_output=True, text=True

@@ -1211,6 +1211,8 @@ was registered only by a caller its own module wrote, which ran only after deplo
 caller (`docs/MIRROR_SYNC_PATCH.md`). (No stage, component or surface moved; the diagram is
 unchanged.)
 
+`closer-core` is declared wired: switch review reads its latest round's fleet-plus-scope demand, windowed nonempty rounds and usable target dispositions, and its versioned `issue_closure` Brain outcomes; the external controller hook owns invocation and rollback.
+
 **And a binding is only half of layer 1: `CONSULT_SITES` is the other half, and nothing declared it
 until 2026-08-23.** `SURFACE_BINDINGS` says which capabilities a surface should be offered; nothing
 said which surfaces are ever ASKED, and the two are independent — from a capability's point of view,

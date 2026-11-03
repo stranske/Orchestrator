@@ -158,6 +158,11 @@ def req_dedup_recorded(cap: dict, ctx: dict) -> tuple[bool, str]:
 def req_caller_exists(cap: dict, ctx: dict) -> tuple[bool, str]:
     """Something must actually invoke it. This is the defect that produced six dormant subsystems."""
     row = ctx["audit_rows"].get(cap["capability_id"]) or {}
+    if cap.get("external_caller") is not None:
+        import capability_activation_audit as audit
+
+        proof = row.get("external_caller") or audit.external_caller(cap) or {}
+        return bool(proof.get("exists")), proof.get("detail", "external caller not verified")
     if row.get("reachable"):
         return True, "entrypoint reachable"
     return False, f"unreachable: {', '.join(row.get('defects') or ['unknown'])}"
@@ -1478,9 +1483,10 @@ def _selftest() -> None:
         assert all(not r["enforced"] for r in legacy_rows), "legacy rows must not block the suite"
 
     # A waiver must EXPIRE. An exception with no end date is how "temporary" became a month.
+    waiver_targets = set(ledger) | set(capabilities.declared_row_ids())
     for cid, waiver in WAIVERS.items():
         assert "expires" in waiver and "reason" in waiver, f"waiver for {cid} needs expiry+reason"
-        assert cid in ledger, f"waiver names unknown capability {cid}"
+        assert cid in waiver_targets, f"waiver names unknown capability {cid}"
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
     # The LIVE verdict is asserted in test_capability_admission.test_dated_promises_left_an_artifact
