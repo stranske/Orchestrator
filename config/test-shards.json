@@ -11,6 +11,7 @@
   "untimed_modules": [
     "tests/test_adjudicator_diagnostics.py",
     "tests/test_adjudicator_inventory.py",
+    "tests/test_adjudicator_replay_revision.py",
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
     "tests/test_python_floor.py",
@@ -566,6 +567,7 @@
       "tests/test_adjudicator_live.py",
       "tests/test_adjudicator_live_log_bounds.py",
       "tests/test_adjudicator_replay.py",
+      "tests/test_adjudicator_replay_revision.py",
       "tests/test_adjudicator_retro_collection.py",
       "tests/test_adjudicator_retro_evidence.py",
       "tests/test_adversarial_high_stakes_shape.py",

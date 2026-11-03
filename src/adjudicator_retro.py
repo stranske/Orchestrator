@@ -3357,10 +3357,15 @@ def main() -> int:
                     runner = adjudicator_replay.REVIEWED_RUNNERS.get(runner_path)
                     if runner is None:
                         raise ValueError("cohort replay runner is not registered")
+                    # Replay and qualification must inspect the same evaluated
+                    # commit; a squash merge can differ from the saved PR head.
+                    evaluated_sha = _case_evaluated_sha(matches[0])
+                    if evaluated_sha is None:
+                        raise ValueError("cohort replay requires an exact evaluated commit")
                     replay_receipt = adjudicator_replay.collect_replay(
                         location("repository"),
                         key,
-                        qualification["snapshot"]["headRefOid"],
+                        evaluated_sha,
                         runner_path,
                         runner.sha256,
                         runner.tests,
