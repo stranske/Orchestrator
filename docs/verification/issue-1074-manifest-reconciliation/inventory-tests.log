@@ -1,0 +1,22 @@
+✔ inventory exports every synthetic dispute and every exclusion without writes (405.924713ms)
+✔ inventory preserves the fixed cutoff and reports a count discrepancy (8.48663ms)
+✔ inventory distinguishes missing evidence from a complete cohort (3.524821ms)
+✔ inventory distinguishes schema-less evidence from a complete cohort (0.732887ms)
+✔ inventory distinguishes empty evidence from a complete cohort (3.394546ms)
+✔ inventory distinguishes incomplete-schema evidence from a complete cohort (4.547384ms)
+✔ inventory CLI exports JSON, signals unavailable evidence and rejects replay options (164.945355ms)
+✔ matching 71 identities bind the supplied manifest bytes without claiming historical acceptance (134.743745ms)
+✔ equal inventory counts expose substituted identities, exclusions and absent requested runs (15.218153ms)
+✔ a requested run on another target cannot satisfy case identity (5.608275ms)
+✔ manifest retains every requested identity when Brain is empty (3.266474ms)
+✔ manifest retains every requested identity when Brain is unavailable (2.736416ms)
+✔ manifest count discrepancy prevents an exact match even when all supplied identities match (5.238129ms)
+✔ manifest CLI preserves input bytes, rejects malformed identities and signals unavailable Brain (379.90232ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1144.435424

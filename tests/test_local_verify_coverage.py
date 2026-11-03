@@ -264,6 +264,11 @@ def test_changed_paths_and_candidate_copy_handle_rename_and_directories(monkeypa
 
 
 def test_verify_reports_runner_errors_without_calling_the_overlay(monkeypatch, tmp_path):
+    def forbid_overlay(*_args, **_kwargs):
+        raise AssertionError("runner errors must not extract the base or copy candidate paths")
+
+    monkeypatch.setattr(local_verify, "_extract_base", forbid_overlay)
+    monkeypatch.setattr(local_verify, "_copy_candidate_paths", forbid_overlay)
     monkeypatch.setattr(local_verify, "_changed_paths", lambda *_args: ["tests/test_feature.py"])
     monkeypatch.setattr(
         local_verify,
