@@ -962,7 +962,8 @@ def test_fresh_weekly_usage_releases_only_dated_quota_hold(
     monkeypatch.setattr(
         pacing_usage,
         "usage",
-        lambda *a, **k: dict(used_fraction=used, short_used_fraction=0.2, ts=now - age),
+        # The short window is polled independently and stays fresh as weekly usage ages.
+        lambda *a, **k: dict(used_fraction=used, short_used_fraction=0.2, ts=now - age, short_ts=now),
     )
     assert capacity._shed("claude") is not clears
     assert marker.exists() is not clears

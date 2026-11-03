@@ -28,6 +28,8 @@ def stores(tmp_path, monkeypatch):
     monkeypatch.setattr(pacing_usage, "CODEX_SESSIONS", tmp_path / "no-rollouts")
     monkeypatch.setattr(capacity, "HANDOFF", tmp_path)
     monkeypatch.setattr(pacing_usage, "CLAUDE_PROJECTS", tmp_path / "projects")
+    # Offline: never let the live poller's files decide selection or boundaries.
+    monkeypatch.setattr(pacing_usage, "POLL_DIR", tmp_path / "polls")
     (tmp_path / "resets.json").write_text(json.dumps(dict(claude=[], codex=[])))
     return desktop, snapshots, tmp_path
 
@@ -222,6 +224,72 @@ def test_producer_deduplicates_and_respects_boundaries(stores):
     row = read_usage(stores, dict(claude_weekly_token_cap=1000))
     assert row["weekly_tokens"] == 100
     assert row["used_fraction"] == 0.1
+
+
+def claude_poll(stores, *, age, resets_at, percent=90):
+    directory = stores[2] / "polls"
+    directory.mkdir(exist_ok=True)
+    weekly = dict(label="All models", used_percent=percent, resets_at=resets_at)
+    row = dict(ts=NOW - age, weekly=weekly, session=dict(used_percent=10))
+    (directory / "claude-usage.json").write_text(json.dumps(row))
+
+
+@pytest.mark.parametrize(
+    "age,resets_at",
+    [
+        (pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS + 1, START + pacing.PERIOD_SECONDS),
+        (60, START),  # Rolled: its weekly usage describes the ended week.
+    ],
+)
+def test_stale_or_rolled_poll_yields_to_usable_fallback(stores, age, resets_at):
+    claude_poll(stores, age=age, resets_at=resets_at)
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 100, 100, "a")
+    row = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    assert row["source"] == "ccusage-fallback"
+    assert row["used_fraction"] == 0.1
+    # The poll's (rolled) reset time survives as the authoritative boundary.
+    assert row["period_end"] == START + pacing.PERIOD_SECONDS
+    assert row["poll"]["valid"] is True
+    assert integrated(stores, row)["claude"]["pacing"]["state"] != "unknown"
+
+
+def test_fallback_uses_non_default_authoritative_boundary(stores):
+    shift = 3 * pacing.DAY_SECONDS
+    end = START + pacing.PERIOD_SECONDS + shift
+    claude_poll(stores, age=pacing_usage.CLAUDE_USAGE_MAX_AGE_SECONDS + 1, resets_at=end)
+    ts = START - 10000
+    stores[0].write_text(json.dumps(dict(samples=[dict(t=ts * 1000, u=dict(sd=50))])))
+    path = pacing_usage.CLAUDE_PROJECTS / "seat.jsonl"
+    token_event(path, START - pacing.PERIOD_SECONDS + pacing.DAY_SECONDS, 300, "old-default")
+    token_event(path, ts - 1, 500, "prior")
+    token_event(path, START + pacing.DAY_SECONDS, 100, "default-only")
+    token_event(path, NOW - 100, 50, "current")
+    row = read_usage(stores)
+    assert (row["period_start"], row["period_end"]) == (end - pacing.PERIOD_SECONDS, end)
+    assert row["weekly_tokens"] == 50
+    assert row["token_cap"] == 1000  # 500 / 0.5 within the authoritative week, not 800 / 0.5.
+    assert integrated(stores, row)["claude"]["pacing"]["period_end"] == end
+    # A cached sample from another boundary is never reused.
+    (stores[2] / "polls" / "claude-usage.json").unlink()
+    row = read_usage(stores)
+    assert row["period_end"] == START + pacing.PERIOD_SECONDS
+    assert row["weekly_tokens"] == 150
+
+
+def test_disappearing_log_cannot_abort_fallback(stores, monkeypatch):
+    token_event(pacing_usage.CLAUDE_PROJECTS / "seat.jsonl", NOW - 100, 100, "a")
+    token_event(pacing_usage.CLAUDE_PROJECTS / "rotated.jsonl", NOW - 100, 900, "b")
+    real = pacing_usage.Path.stat
+
+    def rotating(self, *args, **kwargs):
+        if self.name == "rotated.jsonl":
+            raise FileNotFoundError(self)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(pacing_usage.Path, "stat", rotating)
+    row = read_usage(stores, dict(claude_weekly_token_cap=1000))
+    assert row["source"] == "ccusage-fallback"
+    assert row["weekly_tokens"] == 100
 
 
 def test_insufficient_calibration_uses_configured_published_cap_and_says_so(stores):

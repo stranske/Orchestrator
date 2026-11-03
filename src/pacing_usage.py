@@ -663,8 +663,24 @@ def claude_window(rows: list[dict], start: float, end: float, observed_at: float
     return dict(agent="claude", period_start=start, period_end=end, ts=observed_at, tokens=tokens)
 
 
+def claude_bounds(ts: float, end=None) -> tuple[float, float]:
+    """The Claude week containing ``ts``, rolled from the authoritative end when known."""
+    finish = pacing.timestamp(end)
+    if finish is None:
+        finish = pacing.CLAUDE_RESET_ANCHOR
+    finish += math.floor((ts - finish) / pacing.PERIOD_SECONDS) * pacing.PERIOD_SECONDS
+    if finish <= ts:
+        finish += pacing.PERIOD_SECONDS
+    return finish - pacing.PERIOD_SECONDS, finish
+
+
 def claude_pair_cap(
-    desktop: list[dict], events: list[dict], start: float, end: float, now: float
+    desktop: list[dict],
+    events: list[dict],
+    start: float,
+    end: float,
+    now: float,
+    authoritative_end=None,
 ) -> tuple[float | None, int]:
     # One prefix sum serves every contemporaneous observation. Historical pairs
     # must not each rescan the entire token history on a capacity read.
@@ -681,8 +697,7 @@ def claude_pair_cap(
         if ts > now or fraction <= 0 or ts in seen:
             continue
         seen.add(ts)
-        bounds = pacing.period("claude", ts)
-        assert bounds is not None
+        bounds = claude_bounds(ts, authoritative_end)
         total = (
             prefix[bisect.bisect_right(times, ts)] - prefix[bisect.bisect_left(times, bounds[0])]
         )
@@ -692,40 +707,35 @@ def claude_pair_cap(
 
 
 def produce_claude_sample(
-    now: float, desktop: list[dict], destination: Path, root: Path
+    now: float, desktop: list[dict], destination: Path, root: Path, authoritative_end=None
 ) -> tuple[dict | None, float | None, int]:
-    bounds = pacing.period("claude", now)
-    assert bounds is not None  # Claude has a fixed weekly anchor.
-    start, end = bounds
+    start, end = claude_bounds(now, authoritative_end)
     # A bounded cache keeps repeated reports stable and avoids rescanning logs on
     # every capacity read. Source changes invalidate it immediately.
-    signature = hashlib.sha256(
-        json.dumps(
-            [
-                [
-                    (str(p), p.stat().st_mtime_ns, p.stat().st_size)
-                    for p in sorted(root.glob("**/*.jsonl"))
-                ],
-                desktop,
-            ],
-            sort_keys=True,
-        ).encode()
-    ).hexdigest()
+    metadata = []
+    for p in sorted(root.glob("**/*.jsonl")):
+        try:
+            stat = p.stat()
+        except OSError:
+            continue  # Rotated away between glob and stat; the scan skips it too.
+        metadata.append((str(p), stat.st_mtime_ns, stat.st_size))
+    signature = hashlib.sha256(json.dumps([metadata, desktop], sort_keys=True).encode()).hexdigest()
     cached = read_json(destination) or {}
     if (
         cached.get("signature") == signature
         and cached.get("period_start") == start
+        and cached.get("period_end") == end
         and 0 <= now - cached.get("ts", 0) < pacing.TICK_SECONDS
     ):
         return cached, cached.get("cap_estimate"), cached.get("cap_pair_count", 0)
     earliest = min(
-        [start] + [b[0] for r in desktop if (b := pacing.period("claude", r["t"] / 1000))]
+        [start] + [claude_bounds(r["t"] / 1000, authoritative_end)[0] for r in desktop]
     )
     events = claude_token_events(root, earliest, now)
     if not events:
         return None, None, 0
     sample = claude_window(events, start, end, now)
-    cap, pairs = claude_pair_cap(desktop, events, start, end, now)
+    cap, pairs = claude_pair_cap(desktop, events, start, end, now, authoritative_end)
     sample.update(signature=signature, cap_estimate=cap, cap_pair_count=pairs)
     # Keep this producer in writable runtime state, never mutate desktop/ccusage originals.
     try:
@@ -761,6 +771,11 @@ def usage(
         observed = codex_rollout_usage(CODEX_SESSIONS if sessions is None else sessions, now)
         if observed is not None:
             candidates.append(observed)
+    # A valid poll's (rolled) reset time stays authoritative even when its usage is
+    # stale or describes the old week; the fallback is aligned to it.
+    authoritative_end = (
+        polled["period_end"] if polled["poll"].get("valid") else calibration.get("claude_period_end")
+    )
     produced = None
     pair_cap = None
     pair_count = 0
@@ -795,7 +810,7 @@ def usage(
                             or ts >= polled["period_end"] - pacing.PERIOD_SECONDS
                             else None
                         ),
-                        period_end=polled.get("period_end"),
+                        period_end=authoritative_end,
                         ts=ts,
                         short_used_fraction=(
                             row["u"]["fh"] / 100
@@ -817,7 +832,16 @@ def usage(
         # Produce the fallback sample whenever desktop is missing/stale so pair-cap
         # calibration is available even if a fresher poll later wins selection.
         if not any(c.get("source") == "claude-desktop" for c in candidates):
-            produced, pair_cap, pair_count = produce_claude_sample(now, valid, destination, root)
+            produced, pair_cap, pair_count = produce_claude_sample(
+                now, valid, destination, root, authoritative_end
+            )
+        # Only a measured, fresh weekly reading may outrank the fallback.
+        candidates = [
+            c
+            for c in candidates
+            if c.get("used_fraction") is not None
+            and now - c["ts"] <= CLAUDE_USAGE_MAX_AGE_SECONDS
+        ]
     if candidates:
         selected = dict(max(candidates, key=lambda r: r["ts"]))
         selected["poll"] = polled["poll"]
@@ -874,6 +898,7 @@ def usage(
                 poll=polled["poll"],
                 weekly_tokens=produced["tokens"],
                 period_start=produced["period_start"],
+                period_end=produced["period_end"],
                 sample_age_s=now - produced["ts"],
                 desktop_sample_age_s=desktop_age,
                 desktop_sample_ts=desktop_ts,
@@ -902,8 +927,8 @@ def usage(
         if pool == "claude":
             # Calendar-week buckets cannot stand in for this account's anchored
             # subscription week, and an old snapshot cannot become fresh on read.
-            bounds = pacing.period(pool, now, end=calibration.get("claude_period_end"))
-            if bounds is None or abs(row["period_start"] - bounds[0]) > 1 or age < 0:
+            bounds = claude_bounds(now, authoritative_end)
+            if abs(row["period_start"] - bounds[0]) > 1 or age < 0:
                 continue
             return dict(
                 used_fraction=row["tokens"] / cap if cap else None,
@@ -912,6 +937,7 @@ def usage(
                 poll=polled["poll"],
                 weekly_tokens=row["tokens"],
                 period_start=row["period_start"],
+                period_end=bounds[1],
                 sample_age_s=age,
                 desktop_sample_age_s=desktop_age,
                 desktop_sample_ts=desktop_ts,
@@ -951,6 +977,7 @@ def usage(
             ts=None,
             source="ccusage-fallback",
             poll=polled["poll"],
+            period_end=authoritative_end,
             sample_age_s=None,
             desktop_sample_age_s=desktop_age,
             desktop_sample_ts=desktop_ts,
