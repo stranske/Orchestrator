@@ -2304,6 +2304,7 @@ def run_scoped(
     deadline: float | None = None,
     finite_frontier=None,
     request_timeout_seconds: float = 120.0,
+    domain_act_timeout_seconds: float | None = None,
     cancelled_fn=None,
     paused_fn=None,
     priority_targets=(),
@@ -2349,10 +2350,12 @@ def run_scoped(
                 "reconcile": reconcile,
             }
         )
-        from closer_frontier_policy import request_window, validate_frontier
+        from closer_frontier_policy import domain_act_window, request_window, validate_frontier
 
         finite_frontier = validate_frontier(finite_frontier, targets=raw_list)
         request_window(now(), request_timeout_seconds)
+        if domain_act_timeout_seconds is not None:
+            domain_act_window(now(), domain_act_timeout_seconds)
         if deadline is not None:
             raise ValueError("finite frontier cannot inherit an aggregate deadline")
     else:
@@ -2384,7 +2387,16 @@ def run_scoped(
         state_path,
         pipeline_schema=cp.SCHEMA,
         pin=contract_pin,
-        deadline=now() + request_timeout_seconds if finite_frontier is not None else None,
+        deadline=(
+            now()
+            + (
+                domain_act_timeout_seconds
+                if domain_act_timeout_seconds is not None
+                else request_timeout_seconds
+            )
+            if finite_frontier is not None
+            else None
+        ),
         now=now,
     )
     owner = f"{os.getpid()}:{threading.get_ident()}:{started}"
@@ -2687,7 +2699,14 @@ def run_scoped(
     def work_locked(target: str) -> None:
         began = now()
         admission_deadline = (
-            began + request_timeout_seconds if finite_frontier is not None else None
+            began
+            + (
+                domain_act_timeout_seconds
+                if domain_act_timeout_seconds is not None
+                else request_timeout_seconds
+            )
+            if finite_frontier is not None
+            else None
         )
         row: dict[str, Any] | None
         try:
@@ -2840,6 +2859,11 @@ def run_scoped(
                                     "finite_frontier": finite_frontier,
                                     "frontier_target": target,
                                     "request_timeout_seconds": request_timeout_seconds,
+                                    **(
+                                        {"domain_act_timeout_seconds": domain_act_timeout_seconds}
+                                        if domain_act_timeout_seconds is not None
+                                        else {}
+                                    ),
                                     "cancelled_fn": cancelled_fn,
                                     "paused_fn": paused_fn,
                                 }

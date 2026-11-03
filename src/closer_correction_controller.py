@@ -987,14 +987,30 @@ class IndexController:
             "original queue is outside authenticated full source frontier",
         )
         timeout = installation.request_timeout_seconds
+        domain_timeout = installation.admission.get("domain_act_timeout_seconds")
         started, deadline = operation.get("request_started_at"), operation.get("deadline")
+        composite = (
+            operation.get("action") == "disposition"
+            and operation.get("domain_act_timeout_seconds") == domain_timeout
+            and domain_timeout is not None
+        )
+        if composite:
+            from closer_frontier_policy import domain_act_window
+
+            domain_act_window(started, domain_timeout)
         need(
             all(
                 type(v) in (int, float) and math.isfinite(v)
-                for v in (timeout, started, deadline, operation.get("timeout_seconds"))
+                for v in (
+                    timeout,
+                    started,
+                    deadline,
+                    operation.get("timeout_seconds"),
+                    *(() if not composite else (domain_timeout,)),
+                )
             )
-            and 0 < deadline - started <= timeout
-            and 0 <= operation["timeout_seconds"] <= timeout,
+            and 0 < deadline - started <= (domain_timeout if composite else timeout)
+            and 0 <= operation["timeout_seconds"] <= (domain_timeout if composite else timeout),
             "original queue request exceeds authenticated source budget",
         )
         projection = getattr(installation, "policy_projection", None)

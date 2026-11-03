@@ -7,6 +7,7 @@ import os
 import threading
 import time
 import weakref
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -549,3 +550,181 @@ def test_one_actual_inert_strong_and_cold_invitation_readback(
     expired_context = {**live_context, "deadline": time.time() - 1}
     with pytest.raises(source_record.SourceRecordUnavailable, match="current ACT expired"):
         source_record.candidate_for_original_act(context=expired_context, installation=installation)
+
+    # Exercise the source-owned native reader bridge itself.  The outer
+    # collector is deliberately small here: its only purpose is to make the
+    # real `_facts` closure issue its reviewed REST and GraphQL reads through
+    # the installed callback port.
+    import closer_correction_canary_ownership as canary
+
+    now = time.time()
+    graph_config = controller_source.ControllerConfig(
+        state_path=str(tmp_path / "graph-controller.json"),
+        repository=canary.REPOSITORY,
+        repository_id=canary.REPOSITORY_ID,
+        epoch="e" * 64,
+        bootstrap_source_sha="f" * 40,
+        source_sha="a" * 40,
+        writer_id=canary.OWNER_ID,
+        writer_login=canary.OWNER_LOGIN,
+        writer_type="User",
+        bootstrap_anchor_sha256="b" * 64,
+        max_bytes=1024,
+        max_entries=1,
+        max_subjects=1,
+    )
+    graph_installation = SimpleNamespace(
+        config=graph_config.source_binding(),
+        policy_projection={"controller_sha256": "c" * 64, "installation_sha256": "d" * 64},
+    )
+    graph_controller = controller_source.IndexController(graph_config, installation=graph_installation)
+    graph_operation = {
+        "id": "sealed-graph-read",
+        "deadline": now + 20,
+        "binding": {
+            "correction_controller_sha256": "c" * 64,
+            "correction_installation_sha256": "d" * 64,
+            "head": canary.TARGET_HEAD_SHA,
+            "merge": canary.TARGET_MERGE_SHA,
+            "review_revision": "r" * 64,
+            "pr_target": canary.REPOSITORY + "#" + canary.TARGET_PR,
+            "source_targets": [canary.REPOSITORY + "#" + canary.SOURCE_ISSUE],
+        },
+    }
+    graph_context = {
+        "deadline": now + 20,
+        "exception": {"correction": {"source_decision_ref": {"name": "record"}}},
+    }
+    graph_snapshot = {
+        "target": canary.REPOSITORY + "#" + canary.TARGET_PR,
+        "head": canary.TARGET_HEAD_SHA,
+        "merge": canary.TARGET_MERGE_SHA,
+        "review_revision": "r" * 64,
+        "pr_target": canary.REPOSITORY + "#" + canary.TARGET_PR,
+        "sources": [{"target": canary.REPOSITORY + "#" + canary.SOURCE_ISSUE}],
+    }
+    comment_body = "reviewed native verifier"
+    graph_original = {
+        "target": {"repository": canary.REPOSITORY, "pr": canary.TARGET_PR},
+        "source_issue": {"number": canary.SOURCE_ISSUE, "node_id": canary.SOURCE_NODE_ID},
+        "original_verifier": {
+            "comment_id": "1",
+            "comment_sha256": hashlib.sha256(comment_body.encode()).hexdigest(),
+        },
+    }
+    graph_seed = {
+        "schema": "closer-correction-seed/v1",
+        "target": {
+            "repository": canary.REPOSITORY,
+            "pr": canary.TARGET_PR,
+            "head_sha": canary.TARGET_HEAD_SHA,
+            "base_sha": canary.TARGET_BASE_SHA,
+            "merge_sha": canary.TARGET_MERGE_SHA,
+        },
+        "source_issue": {
+            "number": canary.SOURCE_ISSUE,
+            "node_id": canary.SOURCE_NODE_ID,
+            "body_sha256": canary.SOURCE_BODY_SHA256,
+        },
+        "original_verifier": {
+            "verification_event": {
+                "event_id": canary.VERIFICATION_EVENT,
+                "repo": canary.REPOSITORY,
+                "pr": canary.TARGET_PR,
+                "head_sha": canary.TARGET_HEAD_SHA,
+                "evaluated_sha": canary.TARGET_MERGE_SHA,
+            }
+        },
+        "finding": {},
+        "scope": "substantive_implementation",
+    }
+    graph_seal = source_record._SelectionSeal(graph_operation)
+    graph_selection = source_record.SourceSelection(
+        source_record._json({"name": "record"}),
+        source_record._json(graph_context),
+        graph_installation,
+        _issuer=graph_seal,
+    )
+    graph_seal.owner = weakref.ref(graph_selection)
+    seen = {"rest": 0, "graphql": []}
+
+    class StopAfterNativeReads(Exception):
+        pass
+
+    class Effects:
+        def project_retained_issue_ownership(self, *_args):
+            return {"projected": "rest"}
+
+    def graph_store(method, path, body=None):
+        assert method == "GET" and body is None
+        if path == "/issues/comments/1":
+            return {
+                "id": 1,
+                "issue_url": "https://api.github.com/repos/stranske/Orchestrator/issues/984",
+                "user": {"login": "github-actions[bot]", "type": "Bot"},
+                "body": comment_body,
+            }
+        seen["rest"] += 1
+        return {"native": path}
+
+    def native_leaf(argv, **options):
+        assert argv[:4] == ["api", "--method", "POST", "graphql"]
+        assert options["resource"] == "graphql"
+        seen["graphql"].append(argv[5])
+        return 0, {"data": {"repository": {}}}
+
+    snapshot_query = canary._query(
+        {
+            canary.ISSUE: {"node_id": canary.ISSUE_NODE_ID, "is_pr": False},
+            canary.DELIVERY_PR: {"node_id": canary.DELIVERY_NODE_ID, "is_pr": True},
+        }
+    )
+    lineage_query = (
+        'query {repository(owner:"stranske",name:"Orchestrator"){databaseId nameWithOwner '
+        "issue(number:988){id timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT])"
+        "{nodes{... on CrossReferencedEvent{actor{__typename ... on User{login databaseId}} "
+        "createdAt source{__typename ... on Issue{id number repository{nameWithOwner databaseId}} "
+        "... on PullRequest{id number repository{nameWithOwner databaseId}}}}} "
+        "pageInfo{hasNextPage}}}}}"
+    )
+
+    def graph_collect(*, github, **_kw):
+        assert github.api("repos/stranske/orchestrator/issues/983") == {"projected": "rest"}
+        assert github.api("graphql", method="POST", fields={"query": snapshot_query}, resource="graphql") == {
+            "data": {"repository": {}}
+        }
+        assert github.api("graphql", method="POST", fields={"query": lineage_query}, resource="graphql") == {
+            "data": {"repository": {}}
+        }
+        for endpoint, kwargs in (
+            ("repos/foreign/repo/issues/1", {}),
+            ("graphql", {"method": "GET"}),
+            ("graphql", {"method": "POST", "fields": {"query": "mutation {x}"}, "resource": "graphql"}),
+            ("graphql", {"method": "POST", "fields": {"query": "query {viewer{login}}"}, "resource": "graphql"}),
+        ):
+            with pytest.raises(source_record.SourceRecordUnavailable):
+                github.api(endpoint, **kwargs)
+        raise StopAfterNativeReads
+
+    monkeypatch.setattr(source_record, "_installed_current", lambda actual: actual is graph_installation)
+    monkeypatch.setattr(source_record, "_current_act", lambda *_args: {})
+    monkeypatch.setattr(source_record, "_current_act_frame", lambda *_args: {})
+    monkeypatch.setattr(source_record, "_invitation_reader_scope", lambda *_args: nullcontext())
+    monkeypatch.setattr(source_record, "_prepared", lambda *_args: (None, graph_snapshot, None, root))
+    monkeypatch.setattr(
+        source_record,
+        "_local_facts",
+        lambda *_args: (None, graph_snapshot, None, root, {}, {"original_request": graph_original}, None, None, None),
+    )
+    monkeypatch.setattr(
+        source_record, "_qualified_owner_projection", lambda *_args: (graph_seed, [], {})
+    )
+    monkeypatch.setattr(graph_controller, "live", lambda actual: actual == graph_operation)
+    monkeypatch.setattr(graph_controller.store, "call", graph_store)
+    monkeypatch.setattr(graph_controller, "_native_effect_source", lambda: Effects())
+    monkeypatch.setattr(ownership, "collect_ownership", graph_collect)
+    monkeypatch.setattr(closer.gh_capacity, "gh_run", native_leaf)
+    with pytest.raises(StopAfterNativeReads):
+        source_record._facts(graph_selection, graph_controller, graph_operation)
+    assert seen["rest"] == 1
+    assert seen["graphql"] == ["query=" + snapshot_query, "query=" + lineage_query]

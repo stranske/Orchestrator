@@ -6457,6 +6457,7 @@ def _run_staged_pipeline(args, targets, backend, deadline):
 
     finite_frontier = getattr(args, "finite_frontier", None)
     request_timeout = getattr(args, "request_timeout_seconds", 120.0)
+    domain_act_timeout = getattr(args, "domain_act_timeout_seconds", None)
 
     def queue_state_readback(path):
         state = closer_queue._read_state(Path(path))
@@ -6580,6 +6581,12 @@ def _run_staged_pipeline(args, targets, backend, deadline):
                 "finite_frontier": finite_frontier,
                 "frontier_target": target,
                 "request_timeout_seconds": min(float(request_timeout), remaining),
+                **(
+                    {"domain_act_timeout_seconds": domain_act_timeout}
+                    if context.get("domain_act_timeout_seconds") == domain_act_timeout
+                    and domain_act_timeout is not None
+                    else {}
+                ),
                 "deadline": None,
                 "receipt_reserve_seconds": 0,
                 "max_operation_retries": 0,
@@ -10518,6 +10525,11 @@ def _run_staged_pipeline(args, targets, backend, deadline):
             else {
                 "finite_frontier": finite_frontier,
                 "request_timeout_seconds": request_timeout,
+                **(
+                    {"domain_act_timeout_seconds": domain_act_timeout}
+                    if domain_act_timeout is not None
+                    else {}
+                ),
             }
         ),
         priority_targets=set(backend.dispositions).intersection(targets) if not shadow else (),
@@ -10556,6 +10568,7 @@ def main(argv=None):
     run.add_argument("--budget-seconds", type=int)
     run.add_argument("--finite-frontier-json", help="exact frozen finite-frontier/v2 descriptor")
     run.add_argument("--request-timeout-seconds", type=float, default=120.0)
+    run.add_argument("--domain-act-timeout-seconds", type=float)
     run.add_argument("--max-workers", type=int, default=2)
     run.add_argument("--worker-timeout", type=int, default=120)
     run.add_argument("--apply", action="store_true")
@@ -10713,14 +10726,18 @@ def main(argv=None):
         if not args.pipeline or args.coordinator_mode != "resource_scoped":
             p.error("finite frontier requires --pipeline --coordinator-mode resource_scoped")
         try:
-            from closer_frontier_policy import request_window, validate_frontier
+            from closer_frontier_policy import domain_act_window, request_window, validate_frontier
 
             args.finite_frontier = validate_frontier(json.loads(args.finite_frontier_json))
             request_window(time.time(), args.request_timeout_seconds)
+            if args.domain_act_timeout_seconds is not None:
+                domain_act_window(time.time(), args.domain_act_timeout_seconds)
         except (TypeError, ValueError) as exc:
             p.error(str(exc))
     else:
         args.finite_frontier = None
+        if args.domain_act_timeout_seconds is not None:
+            p.error("domain ACT timeout requires a finite frontier")
         if args.budget_seconds is None:
             args.budget_seconds = 2700
     if (

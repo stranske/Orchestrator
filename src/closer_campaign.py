@@ -2308,12 +2308,15 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
         command.append("--coding-worker")
     finite_frontier = cfg.get("finite_frontier")
     if finite_frontier is not None:
-        from closer_frontier_policy import request_window, validate_frontier
+        from closer_frontier_policy import domain_act_window, request_window, validate_frontier
 
         try:
             finite_frontier = validate_frontier(finite_frontier)
             request_timeout = cfg.get("request_timeout_seconds")
             request_window(time.time(), request_timeout)
+            domain_act_timeout = cfg.get("domain_act_timeout_seconds")
+            if domain_act_timeout is not None:
+                domain_act_window(time.time(), domain_act_timeout)
         except (TypeError, ValueError) as exc:
             raise CampaignError(f"invalid finite frontier dispatcher binding: {exc}") from exc
         if cfg.get("execution_policy") != "finite-frontier/v2":
@@ -2324,6 +2327,11 @@ def dispatch_command(cfg: dict[str, Any], python: str, module_dir: Path) -> list
                 json.dumps(finite_frontier, sort_keys=True, separators=(",", ":")),
                 "--request-timeout-seconds",
                 str(request_timeout),
+                *(
+                    ["--domain-act-timeout-seconds", str(domain_act_timeout)]
+                    if domain_act_timeout is not None
+                    else []
+                ),
             ]
         )
     else:

@@ -58,12 +58,18 @@ def _frontier(target):
 
 
 def _run(path, target, frontier, *, now, **callbacks):
+    domain_act_timeout = callbacks.pop("domain_act_timeout_seconds", None)
     return cp._run_pipeline_finite(
         path,
         [target],
         frontier_target=target,
         finite_frontier=frontier,
         request_timeout_seconds=10,
+        **(
+            {"domain_act_timeout_seconds": domain_act_timeout}
+            if domain_act_timeout is not None
+            else {}
+        ),
         capacity_fn=lambda: {"io": 1, "low": 1, "exception": 1},
         prepare=callbacks.get("prepare", lambda _target, _ctx: {"revision": "rev-1"}),
         interpret=callbacks.get("interpret", lambda _target, _ctx: {"substantive_needs": []}),
@@ -84,7 +90,12 @@ def test_finite_pipeline_has_no_aggregate_elapsed_cutoff(tmp_path):
     def callback(result):
         def call(_target, context):
             windows.append((context["request_started_at"], context["deadline"]))
-            assert context["deadline"] - context["request_started_at"] == 10
+            duration = context["deadline"] - context["request_started_at"]
+            assert duration in {10, 600}
+            if duration == 600:
+                assert context["domain_act_timeout_seconds"] == 600
+            else:
+                assert "domain_act_timeout_seconds" not in context
             assert context["finite_frontier"] == frontier
             clock[0] += 9
             return result
@@ -96,6 +107,7 @@ def test_finite_pipeline_has_no_aggregate_elapsed_cutoff(tmp_path):
         target,
         frontier,
         now=lambda: clock[0],
+        domain_act_timeout_seconds=600,
         prepare=callback({"revision": "rev-1"}),
         interpret=callback({"substantive_needs": []}),
         act=callback({"status": "completed", "target_complete": True}),
@@ -103,6 +115,7 @@ def test_finite_pipeline_has_no_aggregate_elapsed_cutoff(tmp_path):
 
     assert clock[0] - 1_000 > 20  # the legacy aggregate window used by this fixture
     assert len(windows) == 3
+    assert [deadline - started for started, deadline in windows] == [10, 10, 600]
     assert windows[1][0] - windows[0][0] == 9
     assert receipt["status"] == "completed"
     assert receipt["valid"] and receipt["stop_valid"]

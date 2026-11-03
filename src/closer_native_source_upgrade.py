@@ -947,27 +947,33 @@ def _generic_pre_effect_manifest(path: str | Path) -> tuple[Path, bytes, dict[st
         )
     # The recorded stage is evidence only under the reviewed producer whose
     # writer ordering and durable pre-write records this reader understands.
-    for name in (
+    reviewed_producers = (
+        "90ddd0f7937dc4d47b70e1ccb8e093c77a84a4c12664151feb5384a5507bbed0",
+        "99aef8f5a8f2b3d55ec97ab09bafeadaddb2b8356df712c9a7dd23189f1924c4",
+        "ee53b128d4b022097b37950a4a2dd426abc487082eb59d47686014f7c1ac7208",
+        "2a799f70bf9d816ee21187757d2e6911072a6565c75a3ce41ded114c4400bdb8",
+    )
+    producer_names = (
         "closer_correction_controller.py",
         "closer_correction_native_effects.py",
         "closer_correction_source_record.py",
         "closer_source_installation.py",
-    ):
-        # This exact prior reader also failed before instruction publication.
-        # Its completed-assessment deadline can expire during the live ACT.
-        prior_invitation_producer = modules.get(
-            "closer_correction_source_record.py"
-        ) == "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575" and (
-            name == "closer_correction_source_record.py"
-            or (
-                name == "closer_correction_native_effects.py"
-                and modules.get(name)
-                == "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76"
-            )
-        )
+    )
+    reviewed_producer_set = tuple(modules.get(name) for name in producer_names) in (
+        reviewed_producers,
+        (
+            reviewed_producers[0],
+            "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76",
+            "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575",
+            reviewed_producers[3],
+        ),
+    )
+    for name in producer_names:
+        # Old bytes are forensic input only. Do not mix a reviewed old reader
+        # with an otherwise unreviewed producer set.
         _need(
             modules.get(name) == _sha(host._read(Path(__file__).with_name(name))[1])
-            or prior_invitation_producer,
+            or reviewed_producer_set,
             "old source-selection producer semantics differ",
         )
     return value, raw, doc
@@ -1194,6 +1200,173 @@ def _completed_reference(
     }
 
 
+def _reviewed_read_timeout_reference(
+    manifest_value: Path,
+    manifest_raw: bytes,
+    manifest: dict[str, Any],
+    state_path: str | Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Retain one literal, read-only Source1044 failure without replay authority.
+
+    This witness never completed its pipeline stage or obtained a quarantine
+    cohort. It must not be relabelled as either. Exact retained bytes, the
+    signed original admission/handoff and the reviewed producer's pre-effect
+    failure ordering establish only that a fresh source preparation is safe.
+    """
+    import hmac
+
+    import closer_campaign as campaign
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+    import closer_pipeline as pipeline
+
+    _need(
+        manifest.get("candidate_sha") == "487888acafbb5b6ea354537ae8a34ed9f1ac8569"
+        and _sha(manifest_raw) == "503ed85c124534ea48182dbda7ee12d590cc1971d14c638b7bb1f6c6d5a2c4f0"
+        and worker_id == "d1c7c9fea285",
+        "read-only timeout is not the reviewed witness",
+    )
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "retained read-only timeout state")
+    _need(
+        _sha(state_raw) == "746839b43ead7e814b4fb53ddf399a476623ea06df6ae265a3d335a52a8ae4df"
+        and document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "retained read-only timeout state changed",
+    )
+    workers = [x for x in document.get("workers", []) if x.get("worker_id") == worker_id]
+    _need(len(workers) == 1, "retained read-only timeout worker differs")
+    worker = workers[0]
+    _need(
+        worker.get("state") == "terminal" and worker.get("outcome") == "unknown",
+        "retained timeout is not terminal UNKNOWN",
+    )
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "retained read-only timeout result")
+    _need(
+        _sha(result_raw) == "6bd9b6215b92e78fb7d54a07ddcff6451dfe235ff0b4f81b58521e8747feb85b"
+        and result.get("worker_id") == worker_id
+        and result.get("outcome") == "unknown",
+        "retained timeout result changed",
+    )
+    context = result["native_admission"]
+    detail = json.loads(result["detail"])
+    cfg = document["worker_config"]
+    frontier = cfg["finite_frontier"]
+    target = "stranske/Orchestrator#984"
+    _need(
+        frontier.get("targets") == [target]
+        and context.get("finite_frontier") == frontier
+        and context.get("demand_assignment") == document.get("demand_assignment")
+        and context.get("runtime_manifest") == str(manifest_value)
+        and context.get("runtime_manifest_sha256") == _sha(manifest_raw)
+        and context.get("nonce") == "f25b7e904141503aa65ddeafd3f78a0b",
+        "retained timeout admission differs",
+    )
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    directory = root / context["nonce"]
+    binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    for name, expected_sha in (
+        ("admission.json", "8379f9a4d7aaa71e3e9ad47a50b74e7c5c6181676e40ef6c40ac82e983c2ba68"),
+        (
+            "worker-" + worker_id + ".json",
+            "36e1913e72f7daf865c512e578b1b46541911be77180a2422342e610747583be",
+        ),
+    ):
+        _, raw, signed = _object(directory / name, "retained timeout signed record")
+        record = signed.get("record", {})
+        _need(
+            _sha(raw) == expected_sha
+            and record.get("binding") == binding
+            and hmac.compare_digest(
+                str(signed.get("signature", "")),
+                mechanisms._signature(record, mechanisms._key(root)),
+            )
+            and (
+                record.get("context") == context
+                if name == "admission.json"
+                else record.get("admission") == context
+            ),
+            "retained timeout signed record changed",
+        )
+    phases = detail["native_execution"]["phases"]
+    _need(
+        [phases[x]["exit_code"] for x in ("A", "B", "C")] == [0, 78, 65]
+        and phases["C"]["cleanup"].get("exact_token_matched") is True
+        and phases["C"]["cleanup"].get("released") is True,
+        "retained timeout cleanup differs",
+    )
+    shard = state.parent / (
+        "source984-dispatch-state.json.pipeline.json.scoped/targets/"
+        "076d9d6d20ce431c8d6bba76/state.json"
+    )
+    _, shard_raw, shard_doc = _object(shard, "retained timeout pipeline")
+    _need(
+        _sha(shard_raw) == "19cdec6fd92b5883417de41d7ff27eceba8c10eab2f37b9a6d252912b6e83c13",
+        "retained timeout pipeline changed",
+    )
+    row = shard_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+    _need(
+        row.get("stage") == "act"
+        and row.get("stage_status") == row.get("status") == "running"
+        and "act" not in row.get("results", {}),
+        "retained incomplete ACT was relabelled",
+    )
+    action = shard.parent / "state.actions" / (pipeline._digest(target) + ".json")
+    _, action_raw, action_doc = _object(action, "retained timeout action")
+    _need(
+        _sha(action_raw) == "b877227c5cf2ff42932657312c75e7947cf950dc4432cec28f144a688dd0f095",
+        "retained timeout action changed",
+    )
+    item = action_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+    operation = item["operation"]
+    failure = operation["result"]
+    _need(
+        operation.get("id") == "0828a0d1d470853e2f6db95ff9f42923"
+        and operation.get("status") == "uncertain"
+        and operation.get("attempts") == 1
+        and failure.get("failure_diagnostic")
+        == {
+            "stage": "source_selection",
+            "code": "read_only_deadline_exhausted",
+            "exception": "OtherError",
+        }
+        and all(
+            failure.get(k) is False
+            for k in ("act_authorized", "source_closure_authorized", "retry_safe")
+        )
+        and failure.get("outcome_uncertain") is True,
+        "retained timeout is not the reviewed pre-effect callback",
+    )
+    return {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "detail": detail,
+        "forensic": {
+            "schema": "source-selection-read-timeout-forensic/v1",
+            "authority": False,
+            "retry_authorized": False,
+            "old_outcome": "unknown",
+            "operation_id": operation["id"],
+            "operation_sha256": _sha(
+                json.dumps(operation, sort_keys=True, separators=(",", ":")).encode()
+            ),
+            "retained_pipeline_sha256": _sha(shard_raw),
+            "action_path": str(action),
+            "action_sha256": _sha(action_raw),
+        },
+    }
+
+
 def _source_selection_pre_effect_reference(
     manifest_path: Path, state_path: str | Path, worker_id: str
 ) -> dict[str, Any]:
@@ -1210,6 +1383,10 @@ def _source_selection_pre_effect_reference(
     import closer_pipeline as pipeline
 
     manifest_value, manifest_raw, manifest = _generic_pre_effect_manifest(manifest_path)
+    if manifest.get("candidate_sha") == "487888acafbb5b6ea354537ae8a34ed9f1ac8569":
+        return _reviewed_read_timeout_reference(
+            manifest_value, manifest_raw, manifest, state_path, worker_id
+        )
     state = _canonical(state_path)
     _, state_raw, document = _object(state, "old campaign state")
     _need(
@@ -2317,6 +2494,21 @@ def _physical_recipe(
     cfg["dispatch_state"] = str(new_state.parent / Path(old_cfg["dispatch_state"]).name)
     cfg["policy"] = _rebased_policy({"policy": old_policy}, new, new_state)
     cfg["coordinator_contract_pin"] = closer_pipeline.scoped_capability()
+    domain_timeout = (
+        new.get("mechanism_contract", {})
+        .get("capacity_publication", {})
+        .get("domain_act_timeout_seconds")
+    )
+    if domain_timeout is not None:
+        from closer_frontier_policy import domain_act_window
+
+        domain_act_window(0, domain_timeout)
+        cfg["domain_act_timeout_seconds"] = domain_timeout
+    else:
+        _need(
+            "domain_act_timeout_seconds" not in old_cfg,
+            "source-owned composite budget cannot disappear during rebind",
+        )
     _need(
         cfg.get("granularity", "round") == "round"
         and cfg.get("mechanism") == "native-handoff/v1"
@@ -2365,10 +2557,38 @@ def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
     import closer_correction_controller as controller
 
     controller_file = Path(controller.__file__).resolve()
-    _need(
-        old.get("modules", {}).get(controller_file.name) == _sha(host._read(controller_file)[1]),
-        "current controller differs from old pinned controller",
-    )
+    old_digest = old.get("modules", {}).get(controller_file.name)
+    current_raw = host._read(controller_file)[1]
+    if old_digest != _sha(current_raw):
+        # This upgrade changes the live request-budget gate, not the custody
+        # inspector. Prove that exact distinction from the captured old bytes;
+        # no old controller code or old writer is imported or activated.
+        import ast
+
+        old_file = _canonical(old["module_dir"]) / controller_file.name
+        old_raw = host._read(old_file)[1]
+        _need(
+            old_digest
+            == "90ddd0f7937dc4d47b70e1ccb8e093c77a84a4c12664151feb5384a5507bbed0"
+            == _sha(old_raw),
+            "old custody inspector producer differs",
+        )
+        trees = [ast.parse(raw) for raw in (old_raw, current_raw)]
+        for tree in trees:
+            classes = [
+                n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "IndexController"
+            ]
+            _need(len(classes) == 1, "custody controller class differs")
+            live = [
+                n for n in classes[0].body if isinstance(n, ast.FunctionDef) and n.name == "live"
+            ]
+            _need(len(live) == 1, "custody controller live gate differs")
+            classes[0].body.remove(live[0])
+        _need(
+            ast.dump(trees[0], include_attributes=False)
+            == ast.dump(trees[1], include_attributes=False),
+            "current custody inspector semantics differ from reviewed producer",
+        )
     config = old["policy"]["correction_controller_installation"]["config"]
     try:
         inspection = controller.inspect_provisioned_custody(config)
@@ -2635,7 +2855,11 @@ def plan(
         # The sealed forensic reader above is deliberately post-CAS safe.
         # Do not invoke the literal reviewed-predecessor diagnostic here.
         _need(
-            diagnostic.get("schema") == "source-selection-pre-effect-forensic/v1"
+            diagnostic.get("schema")
+            in {
+                "source-selection-pre-effect-forensic/v1",
+                "source-selection-read-timeout-forensic/v1",
+            }
             and diagnostic.get("authority") is False,
             "generic pre-effect diagnostic differs",
         )

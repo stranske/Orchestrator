@@ -147,6 +147,14 @@ def _assert_prior_source_record_producer_closure(tmp_path, monkeypatch):
         patch.setattr(campaign, "verify_modules", lambda _: [])
         save()
         upgrade._generic_pre_effect_manifest(manifest)
+        for prior_name in tuple(modules):
+            prior_raw = support.before_domain_act_owner_read_source(
+                (root / prior_name).read_bytes(), prior_name
+            )
+            (root / prior_name).write_bytes(prior_raw)
+            modules[prior_name] = hashlib.sha256(prior_raw).hexdigest()
+        save()
+        upgrade._generic_pre_effect_manifest(manifest)
         name = "closer_correction_source_record.py"
         prior = support.before_completed_invitation_read_source((root / name).read_bytes(), name)
         assert hashlib.sha256(prior).hexdigest() == (
@@ -155,7 +163,8 @@ def _assert_prior_source_record_producer_closure(tmp_path, monkeypatch):
         (root / name).write_bytes(prior)
         modules[name] = hashlib.sha256(prior).hexdigest()
         save()
-        upgrade._generic_pre_effect_manifest(manifest)
+        with pytest.raises(upgrade.SourceUpgradeHeld, match="producer semantics differ"):
+            upgrade._generic_pre_effect_manifest(manifest)
         name = "closer_correction_native_effects.py"
         prior_effects = support.before_completed_invitation_read_source(
             (root / name).read_bytes(), name
@@ -172,6 +181,10 @@ def _assert_prior_source_record_producer_closure(tmp_path, monkeypatch):
             "closer_correction_native_effects.py",
             "closer_correction_controller.py",
         ):
+            for current_name in tuple(modules):
+                current_raw = Path(upgrade.__file__).with_name(current_name).read_bytes()
+                (root / current_name).write_bytes(current_raw)
+                modules[current_name] = hashlib.sha256(current_raw).hexdigest()
             changed = b"unreviewed producer"
             (root / name).write_bytes(changed)
             modules[name] = hashlib.sha256(changed).hexdigest()

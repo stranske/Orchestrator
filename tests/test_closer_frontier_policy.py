@@ -1,9 +1,11 @@
 import pytest
 
 from closer_frontier_policy import (
+    DOMAIN_ACT_TIMEOUT_SECONDS,
     POLICY,
     action_identity,
     can_start_new_request,
+    domain_act_window,
     make_frontier,
     make_frontier_from_observations,
     request_is_live,
@@ -158,3 +160,11 @@ def test_request_window_rejects_unbounded_or_invalid_values():
     ]:
         with pytest.raises(ValueError):
             request_window(start, timeout)
+    assert domain_act_window(100.0, DOMAIN_ACT_TIMEOUT_SECONDS) == {
+        "started_at": 100.0,
+        "deadline": 700.0,
+    }
+    assert request_window(100.0, 120.0)["deadline"] == 220.0
+    for timeout in (120.0, 599.0, 601.0, True):
+        with pytest.raises(ValueError):
+            domain_act_window(100.0, timeout)

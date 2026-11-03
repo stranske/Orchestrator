@@ -16,6 +16,10 @@ from typing import Any
 
 POLICY = "finite-frontier/v2"
 MAX_REQUEST_TIMEOUT_SECONDS = 120.0
+# A source-sealed composite ACT may need to make several independently fresh,
+# bounded ownership observations before it can enter a separately bounded
+# CodingSession.  This is deliberately not a provider/request budget.
+DOMAIN_ACT_TIMEOUT_SECONDS = 600.0
 TERMINAL_STATES = frozenset({"completed", "held", "paused", "cancelled", "capacity_blocked"})
 FRONTIER_STATUSES = frozenset({"pending", *TERMINAL_STATES})
 
@@ -217,6 +221,29 @@ def request_window(started_at: Any, timeout_seconds: Any) -> dict[str, float]:
     deadline = float(started_at + timeout_seconds)
     if not math.isfinite(deadline):
         raise ValueError("request deadline must be finite")
+    return {"started_at": float(started_at), "deadline": deadline}
+
+
+def domain_act_window(started_at: Any, timeout_seconds: Any) -> dict[str, float]:
+    """Build the one reviewed composite-ACT window.
+
+    This is opt-in policy data, not a caller-controlled replacement for the
+    120-second provider/request window.  Consumers must bind it to a signed
+    source admission before using it.
+    """
+    if (
+        isinstance(started_at, bool)
+        or not isinstance(started_at, (int, float))
+        or not math.isfinite(started_at)
+        or isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or float(timeout_seconds) != DOMAIN_ACT_TIMEOUT_SECONDS
+    ):
+        raise ValueError("domain ACT window requires the sealed 600-second timeout")
+    deadline = float(started_at + timeout_seconds)
+    if not math.isfinite(deadline):
+        raise ValueError("domain ACT deadline must be finite")
     return {"started_at": float(started_at), "deadline": deadline}
 
 

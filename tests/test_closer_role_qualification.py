@@ -366,8 +366,26 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
         "264d7ad6fad590c9d33fae722b43dd74a3de4d6490c7856b876471ae1a3f60a2"
     )
     bridge_id = "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
-    assert roles.ROLE_QUALIFICATIONS[bridge_id]["production_model_contract"] == (
-        dispatcher._controlled_model_contract("closer_exception")
+    assert roles.ROLE_QUALIFICATIONS[bridge_id]["production_model_contract"]["contract_sha256"] == (
+        "b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23"
+    )
+    domain_id = "sonnet-current-role-qualification:165c8d0ce09a3171b098cb446ce799a614c36eb8d2f2bd14da0c742c30cdf68f"
+    domain = roles.ROLE_QUALIFICATIONS[domain_id]
+    assert domain["production_model_contract"] == dispatcher._controlled_model_contract(
+        "closer_exception"
+    )
+    assert domain["expires_at"] == domain["qualified_at"] + 86400
+    assert (
+        roles._source_digest(roles.ROLE_QUALIFICATIONS[bridge_id])
+        == "49d2f797c1a76558606d68b30e9ac4cf4d91ad3bde96e2ef9508c5acdc39d0ed"
+    )
+    assert (
+        roles.qualified_record(
+            execution_profiles.PROFILE_REGISTRY["claude-sonnet-5-5-high-v2"],
+            roles.STRONG_CRITERION_ADJUDICATION,
+            now=domain["qualified_at"] + 1,
+        )
+        == domain
     )
     assert current["evidence_refs"] == [
         {

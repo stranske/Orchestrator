@@ -14,6 +14,7 @@ import stat
 import sys
 import sysconfig
 import tempfile
+import threading
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -58,10 +59,145 @@ PACKAGE_DESCRIPTOR = "publisher-closure.json"
 INCOMPLETE_MARKER = ".publisher-incomplete"
 _HEX = set("0123456789abcdef")
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+_QUALIFIED_SOURCE_READ = threading.local()
 
 
 class PublisherClosureError(ValueError):
     pass
+
+
+def _capture_identity(capture: Mapping[str, Any]) -> str:
+    """An exact immutable capture is the only reusable snapshot assertion."""
+    return hashlib.sha256(
+        json.dumps(
+            capture, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+class _QualifiedSourceRead:
+    def __init__(self, *args, **kwargs):
+        raise TypeError("qualified Source read is issued by source installation only")
+
+    def check(self) -> None:
+        import closer_source_installation as installed
+
+        if (
+            type(self) is not _QualifiedSourceRead
+            or not self.active
+            or self.pid != os.getpid()
+            or self.thread != threading.get_ident()
+            or type(self.scope) is not installed._OriginalWriterScope
+            or type(self.native_scope) is not installed._NativeRuntimeRead
+            or self.native_scope.scope is not self.scope
+            or self.scope.native_read_context is not self.native_scope
+        ):
+            raise PublisherClosureError("qualified Source snapshot reader is unavailable")
+        self.native_scope.check(self.scope.manifest)
+
+
+@contextmanager
+def _original_writer_snapshot_attestation(scope):
+    """Record only snapshot captures that a full writer-scope validation proved."""
+    import inspect
+
+    import closer_source_installation as installed
+
+    caller = inspect.currentframe().f_back
+    try:
+        cursor, found = caller, False
+        for _ in range(16):
+            if cursor is None:
+                break
+            if (
+                cursor.f_code is installed._OriginalWriterScope.full.__code__
+                and cursor.f_globals is installed.__dict__
+                and cursor.f_locals.get("self") is scope
+            ):
+                found = True
+                break
+            cursor = cursor.f_back
+        if not found or type(scope) is not installed._OriginalWriterScope:
+            raise PublisherClosureError("full source writer attestation required")
+        scope.check(scope.installation._binding)
+        if getattr(_QUALIFIED_SOURCE_READ, "value", None) is not None:
+            raise PublisherClosureError("nested qualified Source snapshot attestation refused")
+        state = object.__new__(_QualifiedSourceRead)
+        state.scope, state.native_scope = scope, None
+        state.pid, state.thread, state.active = os.getpid(), threading.get_ident(), True
+        state.full_captures = set()
+        _QUALIFIED_SOURCE_READ.value = state
+        try:
+            yield
+        except BaseException:
+            raise
+        else:
+            scope.publisher_snapshot_captures = frozenset(state.full_captures)
+        finally:
+            state.active = False
+            del _QUALIFIED_SOURCE_READ.value
+    finally:
+        del cursor
+        del caller
+
+
+@contextmanager
+def _native_writer_snapshot_read(scope, native_scope):
+    """Permit one private reader to reuse a capture proved by its full scope."""
+    import inspect
+
+    import closer_source_installation as installed
+
+    caller = inspect.currentframe().f_back
+    try:
+        cursor, found = caller, False
+        for _ in range(16):
+            if cursor is None:
+                break
+            if (
+                cursor.f_code is installed._native_runtime_reads.__code__
+                and cursor.f_globals is installed.__dict__
+                and cursor.f_locals.get("scope") is scope
+                and cursor.f_locals.get("token") is native_scope
+            ):
+                found = True
+                break
+            cursor = cursor.f_back
+        if (
+            not found
+            or type(scope) is not installed._OriginalWriterScope
+            or type(native_scope) is not installed._NativeRuntimeRead
+            or native_scope.scope is not scope
+            or not isinstance(getattr(scope, "publisher_snapshot_captures", None), frozenset)
+        ):
+            raise PublisherClosureError("native Source snapshot reader is unavailable")
+        native_scope.check(scope.manifest)
+        if getattr(_QUALIFIED_SOURCE_READ, "value", None) is not None:
+            raise PublisherClosureError("nested qualified Source snapshot reader refused")
+        state = object.__new__(_QualifiedSourceRead)
+        state.scope, state.native_scope = scope, native_scope
+        state.pid, state.thread, state.active = os.getpid(), threading.get_ident(), True
+        state.captures = scope.publisher_snapshot_captures
+        _QUALIFIED_SOURCE_READ.value = state
+        try:
+            yield
+        finally:
+            state.active = False
+            del _QUALIFIED_SOURCE_READ.value
+            native_scope.check(scope.manifest)
+    finally:
+        del cursor
+        del caller
+
+
+def _verified_snapshot_reused(capture: Mapping[str, Any]) -> bool:
+    state = getattr(_QUALIFIED_SOURCE_READ, "value", None)
+    if state is None:
+        return False
+    if getattr(state, "native_scope", None) is None:
+        return False
+    state.check()
+    return _capture_identity(capture) in state.captures
 
 
 def _canonical(value: Any, what: str) -> Path:
@@ -203,12 +339,13 @@ def _verify_qualified_source(capture: Mapping[str, Any]) -> None:
     snapshot = Path(receipt["snapshot_path"])
     if not snapshot.is_dir() or snapshot.is_symlink():
         raise PublisherClosureError("Source release receipt is not verified")
-    digest_fn = _snapshot_digest_fn()
-    try:
-        if digest_fn(snapshot) != receipt["snapshot_digest"]:
-            raise PublisherClosureError("Source release snapshot digest differs")
-    except ValueError as exc:
-        raise PublisherClosureError("Source release snapshot digest differs") from exc
+    if not _verified_snapshot_reused(capture):
+        digest_fn = _snapshot_digest_fn()
+        try:
+            if digest_fn(snapshot) != receipt["snapshot_digest"]:
+                raise PublisherClosureError("Source release snapshot digest differs")
+        except ValueError as exc:
+            raise PublisherClosureError("Source release snapshot digest differs") from exc
     implementation = _implementation_path()
     if (
         tool["implementation_sha256"] != hashlib.sha256(implementation.read_bytes()).hexdigest()
@@ -224,6 +361,9 @@ def _verify_qualified_source(capture: Mapping[str, Any]) -> None:
         raise PublisherClosureError(
             "capture implementation is not a member of the verified Source snapshot"
         )
+    state = getattr(_QUALIFIED_SOURCE_READ, "value", None)
+    if state is not None and getattr(state, "native_scope", None) is None:
+        state.full_captures.add(_capture_identity(capture))
 
 
 def _bind_source_provenance(

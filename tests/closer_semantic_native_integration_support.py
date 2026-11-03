@@ -266,6 +266,12 @@ def integrated_native_source_reference():
         else:
             assert filename == "closer_correction_source_record.py"
         original[filename] = change["after_file_sha256"]
+    for filename, change in domain_act_owner_read_reference()["files"].items():
+        if filename in original:
+            assert original[filename] == change["before_file_sha256"]
+        else:
+            assert change["previously_unlisted"] is True
+        original[filename] = change["after_file_sha256"]
     return original
 
 
@@ -647,6 +653,7 @@ def source_pre_effect_readmission_reference():
 
 def before_source_pre_effect_readmission_source(raw, filename):
     """Restore the exact capacity-recovery source for that historical successor."""
+    raw = before_domain_act_owner_read_source(raw, filename)
     successor = source_pre_effect_readmission_reference()["files"].get(filename)
     if successor is not None and hashlib.sha256(raw).hexdigest() == successor["after_file_sha256"]:
         for reversal in successor["historical_reversal"]:
@@ -658,6 +665,31 @@ def before_source_pre_effect_readmission_source(raw, filename):
             raw = raw.replace(after, before, 1)
         assert hashlib.sha256(raw).hexdigest() == successor["before_file_sha256"]
     return raw
+
+
+DOMAIN_ACT_OWNER_READ_MANIFEST = (
+    Path(__file__).parent / "fixtures/semantic_api_reference/current_domain_act_owner_read_v1.json"
+)
+DOMAIN_ACT_OWNER_READ_SHA256 = "a9956b4d6cd57af1c820ace85db9b3548416eaf08b1a77d56a2e1a449c6c49eb"
+
+
+def domain_act_owner_read_reference():
+    raw = DOMAIN_ACT_OWNER_READ_MANIFEST.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == DOMAIN_ACT_OWNER_READ_SHA256
+    value = json.loads(raw)
+    assert value["schema"] == "domain-act-owner-read-source-successor/v1"
+    assert value["base_commit"] == "58618d8a24f8661a97fc0310303cff7ab2415f79"
+    return value
+
+
+def before_domain_act_owner_read_source(raw, filename):
+    """Peel this successor only; earlier immutable versions pass to their own audits."""
+    change = domain_act_owner_read_reference()["files"].get(filename)
+    if change is None or hashlib.sha256(raw).hexdigest() != change["after_file_sha256"]:
+        return raw
+    before = change["before_source_utf8"].encode()
+    assert hashlib.sha256(before).hexdigest() == change["before_file_sha256"]
+    return before
 
 
 COMPLETED_INVITATION_READ_SOURCE_MANIFEST = (
@@ -678,6 +710,7 @@ def completed_invitation_read_source_reference():
 
 
 def before_completed_invitation_read_source(raw, filename):
+    raw = before_domain_act_owner_read_source(raw, filename)
     change = completed_invitation_read_source_reference()["files"].get(filename)
     if change is None or hashlib.sha256(raw).hexdigest() == change["before_file_sha256"]:
         return raw
@@ -818,6 +851,7 @@ def assert_standing_publisher_v2_successor(source=None):
     """Compare the whole campaign module outside the exact reviewed v2 delta."""
     reviewed = standing_publisher_v2_reference()
     raw = source_path("closer_campaign.py").read_bytes() if source is None else source
+    raw = before_domain_act_owner_read_source(raw, "closer_campaign.py")
     assert hashlib.sha256(raw).hexdigest() == reviewed["after_file_sha256"]
     tree = ast.parse(raw)
     assert fingerprint(tree) == reviewed["after_module_ast_sha256"]
@@ -1039,6 +1073,7 @@ def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    raw = before_domain_act_owner_read_source(raw, "closer_role_qualification.py")
     if (
         hashlib.sha256(raw).hexdigest()
         == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]

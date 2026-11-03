@@ -919,11 +919,14 @@ class _OriginalWriterScope:
         self.pins.check()
 
     def full(self):
+        import closer_publisher_closure as publisher
+
         self.check(self.installation._binding)
-        _need(
-            validate_source_installation(self.installation),
-            "full original scoped source validation failed",
-        )
+        with publisher._original_writer_snapshot_attestation(self):
+            _need(
+                validate_source_installation(self.installation),
+                "full original scoped source validation failed",
+            )
         self.check(self.installation._binding)
 
     def close(self):
@@ -972,6 +975,7 @@ def original_writer_validation_scope(controller, operation, custody, lock):
     scope.manifest = copy.deepcopy(manifest)
     scope.pins = _PhysicalPackagePins()
     scope.native_read_context = None
+    scope.publisher_snapshot_captures = frozenset()
     try:
         scope.pins.pin(Path(installation.manifest_path), installation.manifest_sha256)
         for name, row in installation.source_closure.items():
@@ -1069,7 +1073,10 @@ def _native_runtime_reads(scope, binding, frame):
     token.seal, token.scope, token.frame, token.active = _SCOPE_SEAL, scope, frame, True
     scope.native_read_context = token
     try:
-        yield token
+        import closer_publisher_closure as publisher
+
+        with publisher._native_writer_snapshot_read(scope, token):
+            yield token
     finally:
         token.active, token.frame = False, None
         if scope.native_read_context is token:

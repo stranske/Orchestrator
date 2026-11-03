@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -130,8 +131,21 @@ def _pin(root: Path, tmp_path: Path) -> dict:
     }
 
 
-def test_valid_closure_loads_only_captured_modules(tmp_path):
+def test_valid_closure_loads_only_captured_modules(tmp_path, monkeypatch):
     descriptor = _pin(tmp_path / "pkg", tmp_path)
+    original_digest = closure._snapshot_digest_fn
+    snapshots = []
+
+    def digest():
+        real = original_digest()
+
+        def counted(path):
+            snapshots.append(path)
+            return real(path)
+
+        return counted
+
+    monkeypatch.setattr(closure, "_snapshot_digest_fn", digest)
     entry, after = closure.load_entrypoint(descriptor)
     assert entry([]) == 3
     assert after() == descriptor | {
@@ -140,6 +154,16 @@ def test_valid_closure_loads_only_captured_modules(tmp_path):
         "modules": descriptor["modules"],
         "dynamic_helpers": descriptor["dynamic_helpers"],
     }
+    assert len(snapshots) == 2
+    fake = object.__new__(closure._QualifiedSourceRead)
+    fake.active, fake.pid, fake.thread = True, os.getpid(), threading.get_ident()
+    fake.scope, fake.native_scope = object(), object()
+    closure._QUALIFIED_SOURCE_READ.value = fake
+    try:
+        with pytest.raises(closure.PublisherClosureError, match="snapshot reader is unavailable"):
+            closure.validate(descriptor)
+    finally:
+        del closure._QUALIFIED_SOURCE_READ.value
 
 
 def test_changed_imported_bytes_refuse_before_entrypoint(tmp_path):
