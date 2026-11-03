@@ -1004,8 +1004,32 @@ def capacity_bridge_role_reference():
     return value
 
 
-def assert_capacity_bridge_role_successor(raw):
-    reference = capacity_bridge_role_reference()
+def testgen_off_flash_role_reference():
+    """#1039: reviewed successor for the router.py/dispatcher.py contract."""
+    path = (
+        Path(__file__).parent
+        / "fixtures/semantic_api_reference/current_testgen_off_flash_role_successor_v1.json"
+    )
+    raw = path.read_bytes()
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "bacb615a07b7dbc6feb67b964b80bef6600e2ff1392fb63f29991a38b7bf2309"
+    )
+    value = json.loads(raw)
+    assert value["schema"] == "closer-testgen-off-flash-role-successor/v1"
+    assert (
+        value["role_module"]["before_file_sha256"]
+        == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]
+    )
+    assert set(value["role_module"]["assignment_delta"]) == {
+        "ROLE_QUALIFICATIONS",
+        "ROLE_QUALIFICATION_SUPERSEDES",
+    }
+    return value
+
+
+def assert_capacity_bridge_role_successor(raw, reference=None):
+    reference = capacity_bridge_role_reference() if reference is None else reference
     change = reference["role_module"]
     assert hashlib.sha256(raw).hexdigest() == change["after_file_sha256"]
     tree = ast.parse(raw)
@@ -1039,6 +1063,14 @@ def assert_reviewed_role_registry_successor(source=None):
     """Pin the reviewed record while preserving every other module AST statement."""
     change = publication_admission_reference()["reviewed_native_followups"]["role_registry"]
     raw = source_path("closer_role_qualification.py").read_bytes() if source is None else source
+    successor = testgen_off_flash_role_reference()
+    if hashlib.sha256(raw).hexdigest() == successor["role_module"]["after_file_sha256"]:
+        assert_capacity_bridge_role_successor(raw, successor)
+        assert (
+            successor["role_module"]["before_module_ast_sha256"]
+            == capacity_bridge_role_reference()["role_module"]["after_module_ast_sha256"]
+        )
+        return
     if (
         hashlib.sha256(raw).hexdigest()
         == capacity_bridge_role_reference()["role_module"]["after_file_sha256"]

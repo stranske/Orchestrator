@@ -23,7 +23,7 @@ FIXTURE = (
     Path(__file__).parent
     / "fixtures/semantic_api_reference/current_testgen_off_flash_renewal_target_v1.json"
 )
-FIXTURE_SHA256 = "18e75a9d6dae190ee9d6edd56e5f2f20a1d16700d55d2cfab043d6b8a7a39681"
+FIXTURE_SHA256 = "006c6d36600f06de48bde492b3edac25516a3f65df01b7fb5ebc368f64d3a82f"
 PREDECESSOR_ID = (
     "sonnet-current-role-qualification:"
     "c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
@@ -35,7 +35,7 @@ def _target():
     assert hashlib.sha256(raw).hexdigest() == FIXTURE_SHA256
     value = json.loads(raw)
     assert value["schema"] == "closer-testgen-off-flash-renewal-target/v1"
-    assert value["status"] == "awaiting_owner_host_canary"
+    assert value["status"] == "successor_enrolled"
     assert value["issue"] == 1039
     return value
 
@@ -108,9 +108,55 @@ def test_testgen_off_flash_renewal_predecessor_bridge_remains_immutable():
     }
     assert not roles.execution_record_matches(bridge, expected, checked_at=checked_at)
     assert roles._source_digest(bridge) == target["predecessor_record_sha256"]
-    if target["status"] == "awaiting_owner_host_canary":
-        assert not any(
-            record["production_model_contract"]["contract_sha256"]
-            == target["live_model_contract_sha256"]
-            for record in roles.ROLE_QUALIFICATIONS.values()
-        )
+    # Only the reviewed append-only successor carries the frozen live contract.
+    assert [
+        qualification_id
+        for qualification_id, record in roles.ROLE_QUALIFICATIONS.items()
+        if record["production_model_contract"]["contract_sha256"]
+        == target["live_model_contract_sha256"]
+    ] == [target["successor_qualification_id"]]
+
+
+def test_testgen_off_flash_successor_is_enrolled_and_admits_live_contract():
+    target = _target()
+    successor = roles.ROLE_QUALIFICATIONS[target["successor_qualification_id"]]
+    live = closer._controlled_model_contract("closer_exception")
+    assert successor["qualification_id"] == target["successor_qualification_id"]
+    assert roles._source_digest(successor) == target["successor_record_sha256"]
+    assert successor["status"] == "qualified"
+    assert successor["production_model_contract"] == live
+    assert successor["execution_limits"]["model_contract_sha256"] == (
+        target["live_model_contract_sha256"]
+    )
+    assert successor["qualified_at"] < successor["expires_at"]
+    assert roles.ROLE_QUALIFICATION_SUPERSEDES[target["successor_qualification_id"]] == {
+        "schema": "closer-role-qualification-supersession/v1",
+        "effective_at": successor["qualified_at"],
+        "successor_sha256": target["successor_record_sha256"],
+        "predecessors": {
+            target["predecessor_qualification_id"]: target["predecessor_record_sha256"]
+        },
+    }
+    # Selection over the whole registry picks the successor, and the real
+    # source-admission validator supports the exact live closer_exception contract.
+    checked_at = successor["qualified_at"] + 1
+    profile = execution_profiles.get_profile(successor["profile_identity"]["profile_id"])
+    assert (
+        roles.qualified_record(profile, roles.STRONG_CRITERION_ADJUDICATION, now=checked_at)
+        == successor
+    )
+    support = roles.execution_source_support(
+        successor,
+        successor["profile_identity"],
+        live,
+        task_type="closer_exception",
+        checked_at=checked_at,
+    )
+    assert support["limits"] == successor["execution_limits"]
+    expected = {
+        "profile_identity": successor["profile_identity"],
+        "task_type": "closer_exception",
+        "production_model_contract": live,
+        "limits": successor["execution_limits"],
+    }
+    assert roles.execution_record_matches(successor, expected, checked_at=checked_at)
