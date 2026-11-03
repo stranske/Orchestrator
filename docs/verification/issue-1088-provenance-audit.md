@@ -600,3 +600,54 @@ workflow files changed. Staging the four changed/new files failed because
 connector also rejected the blocker comment and additive `needs-human` label
 with the approval-policy error above. PR #1089 was re-read open and non-draft
 at `85650008e9966d020e7a36a71c59ea4d0f2147d1`.
+
+## Executable binding of the recovered supporting receipt
+
+The November 3 recovery follow-up searched connected storage for
+`independent-582-provenance`, `582 October 20 replay`,
+`20261020 redirect authorized`, and `shadow.jsonl`, including a filename search
+for `independent-582`. It found supporting reports and temporary test corpora,
+but no original private bindings or genuine October 20 replay receipt. Search
+results are not proof that an artifact never existed. The owner corpus and named
+private binding receipt remain unavailable in this runner. The first task stays
+unchecked, and the historical-provenance limitation remains explicit.
+
+The recovered October 14 mutation receipt can now be checked independently:
+
+```sh
+node scripts/check_redirect_recovered_receipt.js docs/verification/issue-1088-recovered-october14-recheck.json
+```
+
+At `2026-11-03T19:15:18.292Z`, this read-only check returned `bytes_verified`
+for two cases against merged revision
+`81fbab57e6622cd67c28dd7b7b3507a8d3ff55c0`, reachable from the observed
+`origin/main` at `bc66957f502d4f863b5cd523a867bd82e9e5af26`.
+Receipt SHA256: `b808f4b6289c30ef9898511ec024dc719956f3d807311993c9cbcd0ba1af3789`.
+Both before/restored hashes match the exact Git source/fixture bytes. The checker
+requires both distinct cases, their recorded revision, named test commands,
+mutation descriptions, restoration assertions, and red/green return codes to
+agree. It refuses contradictory claims or a hash that only agrees within the
+receipt. It does not execute receipt commands or read dirty working-tree source.
+
+`bytes_verified` qualifies byte correspondence only. The receipt has no recorded
+execution timestamp; its test outcomes remain unverified claims. Author and
+storage authenticity are not established by matching hashes. Private
+source-to-fixture provenance, a historical replay receipt, and operational
+acceptance all remain `not_established`. No new run receives October 14 or
+October 20 execution credit.
+
+The five new checks exercise the recovered artifact against actual merged Git
+bytes, reject altered/duplicate/incomplete claims and false restoration digests,
+and cover unavailable inputs and sanitized CLI output. All **51** scoped Node
+checks pass with zero failures or skips. Both new JavaScript files pass syntax
+checks, and `git diff --check` passes. No Python or workflow files changed.
+The selected Python 3.14.10 interpreter lacks pytest; installation into `/tmp`
+failed because the package index could not resolve. Focused execution therefore
+remains blocked. Production blocking, drainable, and eligible-candidate counts
+remain **unknown**, not candidates 0. No live apply or outcome is claimed.
+
+Staging the checker, its tests, and this report failed with
+`.git/index.lock: Read-only file system`; no commit was created. The PR-body
+reconciliation, blocker comment, and additive `needs-human` label were each
+rejected with `MCP tool call requires approval, but approval policy is never`.
+No remote mutation succeeded. PR #1089 remains open and ready for review.
