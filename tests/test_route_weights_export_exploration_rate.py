@@ -76,3 +76,47 @@ def test_challengers_exclude_hosted_unrunnable_agents(monkeypatch, week):
     monkeypatch.setattr(export.router, "KEEPALIVE_AGENTS", {"codex", "gemini"})
     block = export._exploration_block(2, by_task, task_types, week * export.WEEK_SECONDS)
     assert all(challenger is None for challenger in block["challengers"].values())
+
+
+@pytest.mark.parametrize("week", [2, 3], ids=["epsilon-greedy", "thompson-hybrid"])
+def test_unrunnable_winner_keeps_runnable_non_winner_as_challenger(monkeypatch, week):
+    """A hosted-unrunnable ranking winner must not consume the sole runnable seat.
+
+    Subtracting HOSTED_UNRUNNABLE_AGENTS from selector `only` promotes the
+    runnable non-winner into scored[0]; exploration then sees an empty
+    scored[1:] and publishes None. Keep the winner in selector context so the
+    runnable seat remains a challenger.
+    """
+    monkeypatch.setattr(export.router, "KEEPALIVE_AGENTS", {"codex", "gemini"})
+    by_task = {
+        task_type: [
+            {
+                "agent": agent,
+                "posterior": posterior,
+                "score": posterior,
+                "n_obs": n_obs,
+                "success_rate": posterior,
+            }
+            for agent, posterior, n_obs in [
+                ("gemini", 0.99, 50),
+                ("codex", 0.8, 50),
+            ]
+        ]
+        for task_type in export.CONSUMER_TASK_TYPES
+    }
+    task_types = {
+        task_type: {"ranking": export._ranking(rows, export.DEFAULT_MIN_OBSERVATIONS)}
+        for task_type, rows in by_task.items()
+    }
+    assert all(
+        task_types[task_type]["ranking"][0]["agent"] == "gemini"
+        for task_type in export.CONSUMER_TASK_TYPES
+    )
+    block = export._exploration_block(2, by_task, task_types, week * export.WEEK_SECONDS)
+    assert "gemini" not in block["challengers"].values()
+    # implement lists gemini in ROUTE_TABLE, so the unrunnable winner stays in
+    # scored[0] and codex remains the challenger instead of collapsing to None.
+    assert block["challengers"]["implement"] == "codex"
+    # mechanical has no gemini seat, so the sole runnable agent is scored[0].
+    assert block["challengers"]["mechanical"] is None
+    assert all(challenger in {None, "codex"} for challenger in block["challengers"].values())

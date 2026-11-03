@@ -556,17 +556,25 @@ def _exploration_block(
     # The public export balances arms by week, without consulting the local
     # supervised-window deficits (which could change the arm within a week).
     mode = exploration_collection.choose_mode({}, now=timestamp)
-    eligible = (
+    # Hosted-unrunnable seats must never be published as challengers, but a
+    # threshold-qualified unrunnable winner still anchors scored[0] so every
+    # runnable non-winner stays in scored[1:] (subtracting them from `only`
+    # would promote a runnable seat into the winner slot and shrink the pool).
+    hosted_runnable = (
         router.KEEPALIVE_AGENTS
         - router.RESERVE_AGENTS
         - router.BACKUP_AGENTS
         - HOSTED_UNRUNNABLE_AGENTS
     )
-    capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
     challengers: dict[str, str | None] = {}
     for task_type in CONSUMER_TASK_TYPES:
         ranking = task_types[task_type]["ranking"]
         ranks = {row["agent"]: index for index, row in enumerate(ranking)}
+        winner = ranking[0]["agent"] if ranking else None
+        eligible = set(hosted_runnable)
+        if winner is not None:
+            eligible.add(winner)
+        capacity = {"agents": {agent: {"state": "ok"} for agent in eligible}}
         # Exploitation must agree with the consumer's thresholded ranking.
         # Low-observation rows still inform challenger selection, so exploration
         # can collect evidence from seats absent from the public ranking.
@@ -601,7 +609,9 @@ def _exploration_block(
         )
         # Never describe the exploitation winner as a challenger when the
         # router cannot find another eligible seat in the same policy tier.
-        challengers[task_type] = pick["agent"] if pick and pick["exploration"] else None
+        # Drop hosted-unrunnable picks even if select_agent returned one.
+        agent = pick["agent"] if pick and pick["exploration"] else None
+        challengers[task_type] = agent if agent in hosted_runnable else None
     try:
         float(os.environ["ORCH_EXPLORATION_RATE"])
         rate_source = "env"
