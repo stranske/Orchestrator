@@ -590,6 +590,200 @@ def test_watch_and_redirect_sweep_hermetic_branches(
     assert redirect_sweep._parse_action_set("redirect,invalid") == {"redirect"}
 
 
+def _shadow_classify_result() -> dict:
+    plan = valid_plan()
+    return consumer_sync_shadow.classify_shadow_drift(
+        plan, repository="owner/repo", observed_targets={}
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        pytest.param("schema", "other", "unsupported_shadow_handoff_schema", id="handoff_schema"),
+        pytest.param(
+            "capability_id", "x", "shadow_handoff_capability_mismatch", id="handoff_capability"
+        ),
+        pytest.param(
+            "manifest_sha256",
+            "sha256:" + "0" * 64,
+            "shadow_handoff_manifest_mismatch",
+            id="handoff_manifest",
+        ),
+        pytest.param("entry_count", 0, "shadow_handoff_count_mismatch", id="handoff_entry_count"),
+        pytest.param(
+            "plan_filename",
+            "other.json",
+            "shadow_handoff_plan_filename_mismatch",
+            id="handoff_plan_filename",
+        ),
+        pytest.param(
+            "run_ref", "token:secret", "secret_like_shadow_handoff_run_ref", id="handoff_run_ref"
+        ),
+        pytest.param(
+            "supervision_mode",
+            "live",
+            "shadow_handoff_supervision_mismatch",
+            id="handoff_supervision",
+        ),
+        pytest.param(
+            "effect_allowlist",
+            ["create"],
+            "shadow_handoff_effect_allowlist_mismatch",
+            id="handoff_effect_allowlist",
+        ),
+        pytest.param(
+            "kill_switch", "OTHER=1", "shadow_handoff_kill_switch_mismatch", id="handoff_kill_switch"
+        ),
+        pytest.param(
+            "consumer", "other", "shadow_handoff_consumer_mismatch", id="handoff_consumer"
+        ),
+    ],
+)
+def test_shadow_handoff_rejects_isolated_field(
+    field: str, value: object, expected_reason: str
+) -> None:
+    plan = valid_plan()
+    bad_handoff = valid_handoff(plan)
+    bad_handoff[field] = value
+    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
+        consumer_sync_shadow.validate_shadow_handoff(bad_handoff, plan=plan)
+    assert expected_reason in exc_info.value.reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        pytest.param("schema", "nope", "unsupported_plan_schema", id="plan_schema"),
+        pytest.param("manifest_sha256", "bad", "invalid_manifest_sha256", id="plan_manifest"),
+        pytest.param("entries", "nope", "entries_not_array", id="plan_entries"),
+        pytest.param("removals", "nope", "removals_not_array", id="plan_removals"),
+    ],
+)
+def test_consumer_sync_plan_rejects_isolated_field(
+    field: str, value: object, expected_reason: str
+) -> None:
+    broken = valid_plan()
+    broken[field] = value
+    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
+        consumer_sync_shadow.validate_consumer_sync_plan(broken)
+    assert expected_reason in exc_info.value.reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        pytest.param("section", "  ", "invalid_section:0", id="entry_section"),
+        pytest.param("sync_mode", "overwrite", "unsupported_sync_mode:0", id="entry_sync_mode"),
+        pytest.param("is_directory", "yes", "invalid_is_directory:0", id="entry_is_directory"),
+        pytest.param("skip_repos", [1], "invalid_skip_repos:0", id="entry_skip_repos"),
+        pytest.param(
+            "skip_reasons",
+            {"owner/repo": 1},
+            "invalid_skip_reasons:0",
+            id="entry_skip_reasons",
+        ),
+        pytest.param(
+            "template_sync", "fuzzy", "unsupported_template_sync:0", id="entry_template_sync"
+        ),
+        pytest.param("delivery", "symlink", "unsupported_delivery:0", id="entry_delivery"),
+        pytest.param("content_sha256", "bad", "invalid_content_sha256:0", id="entry_content_sha"),
+        pytest.param("source", "../escape", "unsafe_source:0", id="entry_source"),
+    ],
+)
+def test_consumer_sync_plan_rejects_isolated_entry_field(
+    field: str, value: object, expected_reason: str
+) -> None:
+    bad_entry_plan = valid_plan()
+    bad_entry_plan["entries"][0][field] = value
+    if field == "skip_reasons":
+        bad_entry_plan["entries"][0]["skip_repos"] = ["owner/repo"]
+    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
+        consumer_sync_shadow.validate_consumer_sync_plan(bad_entry_plan)
+    assert expected_reason in exc_info.value.reasons
+
+
+def test_consumer_sync_plan_rejects_unsafe_removal_target() -> None:
+    bad_removal_plan = valid_plan()
+    bad_removal_plan["removals"] = [
+        {"target": "../x", "description": "", "effect_fingerprint": "bad"}
+    ]
+    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
+        consumer_sync_shadow.validate_consumer_sync_plan(bad_removal_plan)
+    assert "unsafe_removal_target:0" in exc_info.value.reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        pytest.param("extra", 1, "invalid_result_fields", id="result_extra_field"),
+        pytest.param("schema", "x", "unsupported_result_schema", id="result_schema"),
+        pytest.param("capability_id", "x", "result_capability_mismatch", id="result_capability"),
+        pytest.param("plan_id", "bad", "invalid_result_plan_id", id="result_plan_id"),
+        pytest.param(
+            "repository", "Owner/Repo", "result_repository_not_lowercase", id="result_repository"
+        ),
+        pytest.param("mode", "write", "invalid_result_mode", id="result_mode"),
+        pytest.param(
+            "side_effects_performed",
+            ["write"],
+            "result_side_effects_not_empty",
+            id="result_side_effects",
+        ),
+        pytest.param("proposals", "nope", "proposals_not_array", id="result_proposals"),
+    ],
+)
+def test_shadow_result_rejects_isolated_field(
+    field: str, value: object, expected_reason: str
+) -> None:
+    spoof = dict(_shadow_classify_result())
+    spoof[field] = value
+    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
+        consumer_sync_shadow.validate_shadow_result(spoof)
+    assert expected_reason in exc_info.value.reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_reason"),
+    [
+        pytest.param("action", "explode", "unallowlisted_shadow_action:0", id="proposal_action"),
+        pytest.param("reason", "nope", "invalid_proposal_reason:0", id="proposal_reason"),
+        pytest.param("target", "../x", "unsafe_proposal_target:0", id="proposal_target"),
+        pytest.param(
+            "source_effect_fingerprint",
+            "bad",
+            "invalid_proposal_source_effect_fingerprint:0",
+            id="proposal_source_effect",
+        ),
+        pytest.param(
+            "effect_fingerprint",
+            "bad",
+            "invalid_proposal_effect_fingerprint:0",
+            id="proposal_effect",
+        ),
+        pytest.param(
+            "observed_sha256",
+            "bad",
+            "invalid_proposal_observed_sha256:0",
+            id="proposal_observed_sha",
+        ),
+        pytest.param(
+            "desired_sha256", "bad", "invalid_proposal_desired_sha256:0", id="proposal_desired_sha"
+        ),
+    ],
+)
+def test_shadow_result_rejects_isolated_proposal_field(
+    field: str, value: object, expected_reason: str
+) -> None:
+    spoof = dict(_shadow_classify_result())
+    bad_prop = dict(spoof["proposals"][0])
+    bad_prop[field] = value
+    spoof["proposals"] = [bad_prop]
+    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
+        consumer_sync_shadow.validate_shadow_result(spoof)
+    assert expected_reason in exc_info.value.reasons
+
+
 def test_consumer_shadow_cli_validation_and_dashboard(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -653,119 +847,16 @@ def test_consumer_shadow_cli_validation_and_dashboard(
             plan, repository="owner/repo", observed_targets={"../x": "sha256:" + "a" * 64}
         )
 
-    # handoff / plan / result rejection matrices
-    # Handoff rejection cases - each field independently validated
     with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as caught:
         consumer_sync_shadow.validate_shadow_handoff(["nope"], plan=plan)
     assert "invalid_shadow_handoff_fields" in caught.value.reasons
 
-    # Isolated handoff field validations
-    for field, value, expected_reason in [
-        ("schema", "other", "unsupported_shadow_handoff_schema"),
-        ("capability_id", "x", "shadow_handoff_capability_mismatch"),
-        ("manifest_sha256", "sha256:" + "0" * 64, "shadow_handoff_manifest_mismatch"),
-        ("entry_count", 0, "shadow_handoff_count_mismatch"),
-        ("plan_filename", "other.json", "shadow_handoff_plan_filename_mismatch"),
-        ("run_ref", "token:secret", "secret_like_shadow_handoff_run_ref"),
-        ("supervision_mode", "live", "shadow_handoff_supervision_mismatch"),
-        ("effect_allowlist", ["create"], "shadow_handoff_effect_allowlist_mismatch"),
-        ("kill_switch", "OTHER=1", "shadow_handoff_kill_switch_mismatch"),
-        ("consumer", "other", "shadow_handoff_consumer_mismatch"),
-    ]:
-        bad_handoff = valid_handoff(plan)
-        bad_handoff[field] = value
-        with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
-            consumer_sync_shadow.validate_shadow_handoff(bad_handoff, plan=plan)
-        assert expected_reason in exc_info.value.reasons
-
-    # Plan rejection cases
     with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError, match="plan_not_object"):
         consumer_sync_shadow.validate_consumer_sync_plan("nope")
 
-    # Isolated plan field validations
-    for field, value, expected_reason in [
-        ("schema", "nope", "unsupported_plan_schema"),
-        ("manifest_sha256", "bad", "invalid_manifest_sha256"),
-        ("entries", "nope", "entries_not_array"),
-        ("removals", "nope", "removals_not_array"),
-    ]:
-        broken = valid_plan()
-        broken[field] = value
-        with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
-            consumer_sync_shadow.validate_consumer_sync_plan(broken)
-        assert expected_reason in exc_info.value.reasons
-
-    # Entry field validations - each entry field independently validated
-    for field, value, expected_reason in [
-        ("section", "  ", "invalid_section:0"),
-        ("sync_mode", "overwrite", "unsupported_sync_mode:0"),
-        ("is_directory", "yes", "invalid_is_directory:0"),
-        ("skip_repos", [1], "invalid_skip_repos:0"),
-        ("skip_reasons", {"x": 1}, "invalid_skip_reasons:0"),
-        ("template_sync", "fuzzy", "unsupported_template_sync:0"),
-        ("delivery", "symlink", "unsupported_delivery:0"),
-        ("content_sha256", "bad", "invalid_content_sha256:0"),
-        ("source", "../escape", "unsafe_source:0"),
-    ]:
-        bad_entry_plan = valid_plan()
-        bad_entry_plan["entries"][0][field] = value
-        with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
-            consumer_sync_shadow.validate_consumer_sync_plan(bad_entry_plan)
-        assert expected_reason in exc_info.value.reasons
-
-    # Removal field validations
-    bad_removal_plan = valid_plan()
-    bad_removal_plan["removals"] = [
-        {"target": "../x", "description": "", "effect_fingerprint": "bad"}
-    ]
-    with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
-        consumer_sync_shadow.validate_consumer_sync_plan(bad_removal_plan)
-    assert "unsafe_removal_target:0" in exc_info.value.reasons
-
-    # Result rejection cases
-    good = consumer_sync_shadow.classify_shadow_drift(
-        plan, repository="owner/repo", observed_targets={}
-    )
+    good = _shadow_classify_result()
     with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError, match="result_not_object"):
         consumer_sync_shadow.validate_shadow_result([])
-
-    # Isolated result field validations
-    for field, value, expected_reason in [
-        ("extra", 1, "invalid_result_fields"),
-        ("schema", "x", "unsupported_result_schema"),
-        ("capability_id", "x", "result_capability_mismatch"),
-        ("plan_id", "bad", "invalid_result_plan_id"),
-        ("repository", "Owner/Repo", "result_repository_not_lowercase"),
-        ("mode", "write", "invalid_result_mode"),
-        ("side_effects_performed", ["write"], "result_side_effects_not_empty"),
-        ("proposals", "nope", "proposals_not_array"),
-    ]:
-        spoof = dict(good)
-        spoof[field] = value
-        with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
-            consumer_sync_shadow.validate_shadow_result(spoof)
-        assert expected_reason in exc_info.value.reasons
-
-    # Proposal field validations - each proposal field independently validated
-    good = consumer_sync_shadow.classify_shadow_drift(
-        plan, repository="owner/repo", observed_targets={}
-    )
-    for field, value, expected_reason in [
-        ("action", "explode", "unallowlisted_shadow_action:0"),
-        ("reason", "nope", "invalid_proposal_reason:0"),
-        ("target", "../x", "unsafe_proposal_target:0"),
-        ("source_effect_fingerprint", "bad", "invalid_proposal_source_effect_fingerprint:0"),
-        ("effect_fingerprint", "bad", "invalid_proposal_effect_fingerprint:0"),
-        ("observed_sha256", "bad", "invalid_proposal_observed_sha256:0"),
-        ("desired_sha256", "bad", "invalid_proposal_desired_sha256:0"),
-    ]:
-        spoof = dict(good)
-        bad_prop = dict(spoof["proposals"][0])
-        bad_prop[field] = value
-        spoof["proposals"] = [bad_prop]
-        with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError) as exc_info:
-            consumer_sync_shadow.validate_shadow_result(spoof)
-        assert expected_reason in exc_info.value.reasons
 
     # record phase / supervision gates + dashboard blockers + CLI dashboard
     with pytest.raises(consumer_sync_shadow.ConsumerSyncShadowError, match="invalid_supervision"):
