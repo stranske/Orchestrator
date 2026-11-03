@@ -1,236 +1,193 @@
-# Issue #839 Validation Evidence
+# Issue #839 evidence repair
 
-This document contains the validation evidence for finishing stranske/Orchestrator#839 (closer repair).
+Checked **2026-11-03**. This repairs the evidence from #1060 and preserves all
+productive tests and malformed/nonfinite timestamp fixes delivered by #842.
+It adds no coverage or production changes.
 
-## Criteria Status
+- [x] Link successful CI pytest containing all ten new cases.
+- [x] Capture each mutation failure and restored pass, with commands and output.
+- [x] Report supported partial coverage and its limitations.
+- [x] Cite historical repository ranking output and distinguish missing evidence.
+- [x] Remove unsupported and contradictory assertions.
 
-- [x] Record a successful CI pytest run containing the new tests
-- [x] Record actual deliberate-break failure and reverted success for every new test case
-- [x] Provide Gate coverage measurements for the two targets
-- [x] Document the repository ranking evidence used to select the targets
+## Successful pytest
 
-## 1. Successful CI pytest Run
+[CI run 39488345332, verdict job 118854556372](https://github.com/stranske/Orchestrator/actions/runs/39488345332/job/118854556372)
+succeeded for #842 head `feff391af64038f118db167dc0b866a917523b06`:
 
-All 10 tests in `tests/test_issue839_ranked_coverage.py` pass:
-
-```
-tests/test_issue839_ranked_coverage.py::test_redirect_helpers_keep_invalid_corpus_rows_nonfatal PASSED
-tests/test_issue839_ranked_coverage.py::test_claim_inputs_and_experiment_recording_cover_skip_paths PASSED
-tests/test_issue839_ranked_coverage.py::test_sweep_and_recording_are_advisory_and_count_every_skip PASSED
-tests/test_issue839_ranked_coverage.py::test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access PASSED
-tests/test_issue839_ranked_coverage.py::test_classify_format_and_cli_paths_stay_read_only PASSED
-tests/test_issue839_ranked_coverage.py::test_redirect_sweep_main_cli_paths_are_advisory PASSED
-tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[inf] PASSED
-tests/test_issue839_ranked_coverage.py::test_nonfinite_corpus_timestamp_is_skipped[-inf] PASSED
-tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[inf] PASSED
-tests/test_issue839_ranked_coverage.py::test_nonfinite_report_timestamp_has_unknown_age[-inf] PASSED
-
-10 passed in 0.44s
+```text
+pytest:     7528 passed, 0 failed, 30/31 max (7558 collected; floor 7509 — 49 BEHIND)
+selftests:  108 of 115 modules ran, 7/7 max skipped
 ```
 
-Command used:
-```bash
-ORCH_STATE_DIR=/tmp/orch-state ORCH_LOCAL_RUNTIME=/tmp/orch-runtime python3 -m pytest tests/test_issue839_ranked_coverage.py -v
+The actual checkout was merge `4d4636e900dd242468301a76db0338bca7f910df` into
+`a538c8527d0e05f7cc78b30d599d61194d156078`. That merge adds exactly the ten
+unconditional cases in `tests/test_issue839_ranked_coverage.py` and the narrow
+production fixes. Baseline collected 7548 cases; head collected 7558. The test file
+is byte-for-byte unchanged in this repair (git blob
+`758ba8dc3eeab41c50dc0615c43acad59d20e72d`). The retained CI output is aggregate,
+not ten individual verdicts.
+
+[Gate run 39488345963, Python 3.12 job 118854827616](https://github.com/stranske/Orchestrator/actions/runs/39488345963/job/118854827616)
+also succeeded: `7434 passed, 124 skipped, 6 warnings in 992.36s`.
+Gate selected `not quarantine and not slow`; these ten cases carry neither marker.
+
+The required first local command used fresh directories for both runtime knobs:
+
+```sh
+ORCH_STATE_DIR=$(mktemp -d /private/tmp/issue839-state.XXXXXX) \
+ORCH_LOCAL_RUNTIME=$(mktemp -d /private/tmp/issue839-runtime.XXXXXX) \
+/opt/anaconda3/bin/python3 -m pytest tests/test_issue839_ranked_coverage.py -v
 ```
 
-## 2. Deliberate-Break Mutation Testing
+Exit 0: `10 passed in 0.51s`. After all mutations were restored, the same focused
+command with fresh directories exited 0: `10 passed in 0.29s`.
+[Final verbose output](docs/verification/issue-839-repair/restored-pytest.txt) names
+all ten cases. No full suite or release/verify pipeline was run locally.
 
-For each of the 10 new test cases, we executed narrowly scoped behavioral mutations,
-confirmed the test fails with the mutation, restored the original code, and confirmed
-the test passes again. Below is the mutation-to-test mapping:
+## Captured break-and-restore executions
 
-### Mutation 1: test_redirect_helpers_keep_invalid_corpus_rows_nonfatal
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_existing_sweep_fingerprints`
-- **Mutation**: Changed timestamp parsing to always return 0 (`ts = 0`)
-- **Expected behavior**: Function skips all entries with since_ts > 0
-- **Test assertion**: Expected fingerprints `{"good", "from-report"}`, got `set()`
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Correct parsing of timestamps including nonfinite values
+[Full transcript](docs/verification/issue-839-repair/mutations.txt) contains every
+exact replacement, single-node command, stdout/stderr, exit code, and restored pass
+(only trailing whitespace is normalized).
+Each command used `/opt/anaconda3/bin/python3 -m pytest
+'tests/test_issue839_ranked_coverage.py::<node>' -v`, isolated `ORCH_STATE_DIR`
+and `ORCH_LOCAL_RUNTIME`, and temporary
+`PYTHONPYCACHEPREFIX` to avoid stale bytecode. Source was restored in `finally`
+and checked byte-for-byte. No mutation is included in the PR.
 
-### Mutation 2: test_claim_inputs_and_experiment_recording_cover_skip_paths
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_claim_watch_inputs`
-- **Mutation**: Changed `expected_paths` parsing to always return empty list
-- **Expected behavior**: Worktree path exception handling broken
-- **Test assertion**: Expected `["tests/", "src/"]`, got `[]`
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Proper error handling for worktree path lookups
+Every row has **mutated exit 1; restored exit 0 (one passed)**. Node names omit
+only the common file prefix.
 
-### Mutation 3: test_sweep_and_recording_are_advisory_and_count_every_skip
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_parse_action_set`
-- **Mutation**: Changed function to always return empty set
-- **Expected behavior**: No actions are parsed from any input
-- **Test assertion**: Expected `{"collect", "redirect"}`, got `set()`
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Correct action set parsing and filtering
+| # | Node | Actual mutation | Captured failure |
+| --- | --- | --- | --- |
+| 1 | `test_redirect_helpers_keep_invalid_corpus_rows_nonfatal` | `_existing_sweep_fingerprints`: replace timestamp conversion with `ts = 0` | `AssertionError: assert set() == {'from-report', 'good'}` |
+| 2 | `test_claim_inputs_and_experiment_recording_cover_skip_paths` | `_claim_watch_inputs`: return `[]` for `expected_paths` | `AssertionError: assert [] == ['tests/', 'src/']` |
+| 3 | `test_sweep_and_recording_are_advisory_and_count_every_skip` | `sweep`: change `"mutates_state": False` to `True` | `assert True is False` |
+| 4 | `test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access` | `_read_report_status`: change exception fallback `age_seconds = None` to `0` | `assert 0 is None` |
+| 5 | `test_classify_format_and_cli_paths_stay_read_only` | `classify_lane`: disable missing-input guard with `False and ...` | `AssertionError: assert 'running' == 'missing'` |
+| 6 | `test_redirect_sweep_main_cli_paths_are_advisory` | `main`: return 1 after printing doctor output | `AssertionError: assert 1 == 0` for `main(['--doctor'])` |
+| 7 | `test_nonfinite_corpus_timestamp_is_skipped[inf]` | Remove `OverflowError` from corpus timestamp handler | `OverflowError: cannot convert float infinity to integer` |
+| 8 | `test_nonfinite_corpus_timestamp_is_skipped[-inf]` | Same removal, separate parameter execution | `OverflowError: cannot convert float infinity to integer` |
+| 9 | `test_nonfinite_report_timestamp_has_unknown_age[inf]` | Remove `OverflowError` from report timestamp handler | `OverflowError: cannot convert float infinity to integer` |
+| 10 | `test_nonfinite_report_timestamp_has_unknown_age[-inf]` | Same removal, separate parameter execution | `OverflowError: cannot convert float infinity to integer` |
 
-### Mutation 4: test_doctor_and_watch_helpers_handle_bad_inputs_without_live_access
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_read_report_status`
-- **Mutation**: Changed `now` timestamp to always be 0 when None
-- **Expected behavior**: Age calculation produces incorrect negative values
-- **Test assertion**: Expected proper age calculation, got `None` or wrong value
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Correct timestamp and age calculation for reports
+Rows 7–10 are behavioral exception failures at conversion, before assertions finish;
+they are not claimed as `AssertionError`s. They reproduce the inspection crash the
+tests prevent. Rows 3 and 4 now fail assertions inside the actual affected tests;
+row 4 exercises explicit `now=100`. Rows 8–10 replace the prior mutations that
+would not fail their cited tests.
 
-### Mutation 5: test_classify_format_and_cli_paths_stay_read_only
-- **Module**: `src/watch.py`
-- **Function**: `tail_text`
-- **Mutation**: Changed to always return empty string
-- **Expected behavior**: Log tail extraction returns no text
-- **Test assertion**: Expected log content in output, got empty
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Correct log tail extraction and formatting
+The capture harness initially could not find a proposed guard string for row 5;
+it stopped before mutating or running that node. The corrected actual guard is
+recorded in the transcript. No failed test execution was hidden or retried.
 
-### Mutation 6: test_redirect_sweep_main_cli_paths_are_advisory
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `main`
-- **Mutation**: Changed to always return 1 (failure exit code)
-- **Expected behavior**: CLI always exits with failure
-- **Test assertion**: Expected exit code 0, got 1
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Correct CLI exit code handling
+## Comparable CI coverage: supported partial result
 
-### Mutation 7: test_nonfinite_corpus_timestamp_is_skipped[inf]
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_existing_sweep_fingerprints`
-- **Mutation**: Removed `OverflowError` from exception handling
-- **Expected behavior**: float('inf') causes OverflowError and crashes
-- **Test assertion**: Expected `{"valid"}`, got exception or wrong result
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Nonfinite timestamp handling (inf, -inf)
+The historical `.github/workflows/ci.yml` combined job executed this existing
+command on **both** comparable trees with isolated runtime directories:
 
-### Mutation 8: test_nonfinite_corpus_timestamp_is_skipped[-inf]
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_existing_sweep_fingerprints`
-- **Mutation**: Changed to only parse string timestamps, skip float values
-- **Expected behavior**: float('-inf') is not parsed, treated as 0
-- **Test assertion**: Expected `{"valid"}`, got `set()`
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Nonfinite timestamp handling (inf, -inf)
-
-### Mutation 9: test_nonfinite_report_timestamp_has_unknown_age[inf]
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_read_report_status`
-- **Mutation**: Changed age_seconds calculation to always return None
-- **Expected behavior**: Age is always None regardless of timestamp
-- **Test assertion**: Expected age_seconds to be None for inf, got calculation
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Nonfinite timestamp handling in report status
-
-### Mutation 10: test_nonfinite_report_timestamp_has_unknown_age[-inf]
-- **Module**: `src/redirect_sweep.py`
-- **Function**: `_read_report_status`
-- **Mutation**: Changed generated_at to always be None
-- **Expected behavior**: All reports have no generated_at
-- **Test assertion**: Expected None for inf timestamp, got value
-- **Result**: ✅ Test failed with mutation, passed after restoration
-- **Behavior protected**: Nonfinite timestamp handling in report status
-
-**Summary**: 10/10 mutations successfully caused test failures and passed after restoration.
-
-## 3. Gate Coverage Measurements for Two Targets
-
-Coverage was measured using pytest-cov with branch coverage enabled:
-
-```bash
-ORCH_STATE_DIR=/tmp/orch-state ORCH_LOCAL_RUNTIME=/tmp/orch-runtime \
-  python3 -m pytest tests/test_issue839_ranked_coverage.py -v \
-  --cov=redirect_sweep --cov=watch --cov-report=term --cov-branch
+```sh
+python3 src/verify.py --coverage --floor-may-lag 2>&1 | tee /tmp/combined.txt
 ```
 
-### Target 1: src/redirect_sweep.py
-- **Total statements**: 446
-- **Missed statements**: 104
-- **Branches**: 106
-- **Partial branches**: 8
-- **Coverage**: 79.0%
-- **Missing lines**: 456-461, 713-902, 954-955, 1008-1009
+These are recovered CI executions, not new local full-suite runs. Baseline is the
+tested merge's exact first parent, not today's main or focused pytest-only coverage.
+`git diff a538c852 4d4636e9 --stat` contains only:
 
-### Target 2: src/watch.py
-- **Total statements**: 489
-- **Missed statements**: 156
-- **Branches**: 188
-- **Partial branches**: 35
-- **Coverage**: 70.3%
-- **Missing lines**: 130, 143, 148, 152-156, 171, 174, 182, 190, 228, 295, 297, 321, 324-325, 327, 337, 369-370, 379, 381-382, 386-400, 423, 437, 528, 555, 557, 617, 707-932, 942-947, 954-955
+```text
+ src/redirect_sweep.py                  |  15 +-
+ tests/test_issue839_ranked_coverage.py | 647 +++++++++++++++++++++++++++++++++
+ 2 files changed, 659 insertions(+), 3 deletions(-)
+```
 
-### Combined Totals
-- **Total units (statements + branches)**: 935 + 294 = 1229
-- **Uncovered units (missed + partial)**: 260 + 43 = 303
-- **Covered units**: 926
-- **Overall coverage**: 74.2%
+The coverage workflow, `src/verify.py`, and `pyproject.toml` do not differ across
+these trees. Both payloads use coverage.py 7.16.2 with `branch_coverage: false`.
 
-### This Chunk's Contribution (from PR #842)
-The new tests in `test_issue839_ranked_coverage.py` cover critical paths in both targets:
-- **redirect_sweep.py**: Tests cover helper functions (`_existing_sweep_fingerprints`, `_parse_action_set`, `_acceptance_criteria_for_report`, `_read_report_status`, `_claim_watch_inputs`, etc.) and CLI entry points
-- **watch.py**: Tests cover `tail_text`, `read_log_tail`, `pid_alive`, `file_age_seconds`, `worktree_activity_age`, `classify_lane`, `format_human`, and main CLI
+| Measurement | Baseline | #842 tested merge |
+| --- | --- | --- |
+| Tree | `a538c8527d0e05f7cc78b30d599d61194d156078` | `4d4636e900dd242468301a76db0338bca7f910df` |
+| CI run | [39487981121](https://github.com/stranske/Orchestrator/actions/runs/39487981121) | [39488345332](https://github.com/stranske/Orchestrator/actions/runs/39488345332) |
+| Combined measurement job | [118853305725](https://github.com/stranske/Orchestrator/actions/runs/39487981121/job/118853305725), success | [118854556173](https://github.com/stranske/Orchestrator/actions/runs/39488345332/job/118854556173), success |
+| `gate-coverage` artifact | [12295566251](https://github.com/stranske/Orchestrator/actions/runs/39487981121/artifacts/12295566251) | [12295346597](https://github.com/stranske/Orchestrator/actions/runs/39488345332/artifacts/12295346597) |
+| pytest | 7518 passed, 0 failed, 7548 collected | 7528 passed, 0 failed, 7558 collected |
 
-**Statement-level reduction**: The new tests cover approximately 139 previously uncovered statement+branch units across the two targets, leaving approximately 41 units still uncovered in the specific functions tested.
+Baseline **workflow overall failed**; its combined measurement job succeeded.
+Do not interpret it as an all-green baseline. Both measured 108 selftests and seven
+skipped modules. [Retained provenance](docs/verification/issue-839-repair/ci-provenance.txt)
+contains checkout/command/output excerpts, hashes, missing-line lists and metadata.
+Original `coverage.json` files are preserved losslessly inside
+[baseline-coverage.zip](docs/verification/issue-839-repair/baseline-coverage.zip) and
+[head-coverage.zip](docs/verification/issue-839-repair/head-coverage.zip).
 
-**Partial status confirmation**: The ~139-unit covered result is confirmed as partial. The ~41-unit shortfall from 180 represents:
-- Unreachable branches in exception handling (OverflowError paths that require specific float values)
-- Defensive code paths not triggered in hermetic test environment
-- CLI error paths that require live system state
+| Target | Baseline statements / missing lines | Head statements / missing lines | Missing-line reduction | Missing branches (both) |
+| --- | ---: | ---: | ---: | --- |
+| `src/redirect_sweep.py` | 437 / 88 | 446 / 5 | 83 | unmeasured |
+| `src/watch.py` | 486 / 62 | 486 / 15 | 47 | unmeasured |
+| Total | 923 / 150 | 932 / 20 | **130** | **unmeasured** |
 
-### Meaningful Coverage Limits for Each Target
+Recalculate from the retained payloads without running tests:
 
-**redirect_sweep.py (79.0% coverage):**
-- **Limitations**: 
-  - Lines 713-902 contain live sweep logic that requires active claims and processes (isolated by test fixture)
-  - Lines 954-955, 1008-1009 are edge cases in report writing that require specific system states
-  - The test successfully covers the critical parsing and validation paths added in PR #842
-- **What's protected**: All new timestamp parsing logic (nonfinite handling) is fully covered
+```python
+import json, zipfile
+from pathlib import Path
+root = Path('docs/verification/issue-839-repair')
+for phase in ('baseline', 'head'):
+    with zipfile.ZipFile(root / f'{phase}-coverage.zip') as archive:
+        data = json.loads(archive.read('coverage.json'))
+    for target in ('src/redirect_sweep.py', 'src/watch.py'):
+        summary = data['files'][target]['summary']
+        lines = summary['missing_lines']
+        branches = summary.get('missing_branches')
+        units = lines + branches if branches is not None else None
+        print(phase, target, lines, branches, units)
+```
 
-**watch.py (70.3% coverage):**
-- **Limitations**:
-  - Lines 707-932 contain live agent monitoring logic requiring active processes
-  - Lines 942-947, 954-955 are lifecycle management paths requiring specific runtime conditions
-  - Git operations (lines 146-200+) require actual git repositories
-- **What's protected**: All helper functions and CLI paths are covered, including the nonfinite timestamp handling
+Use `missing_lines + missing_branches`, never `num_partial_branches`. Missing branch
+data is unknown, not zero. The supported line-only reduction is **130**, **50 below
+180** on that measure. The statement-plus-branch reduction and its shortfall remain
+unmeasured. Nine extra executable statements in the production fix mean covered-line
+gain (139) differs from missing-line reduction (130).
 
-## 4. Repository Ranking Evidence
+This is **partial combined-CI evidence, not a verified Gate line-plus-branch
+reduction**. Historical Gate run 39488345963 currently lists zero retained artifacts;
+its pytest-only payload cannot be recovered from that listing. The issue explicitly
+identifies combined pytest+selftests as authoritative, so these recovered combined
+payloads are useful but do not prove the requested branch total. Current Gate
+disables reusable-job coverage and consumes CI's combined artifact; current CI uses
+shards and aggregation, so its commands must not be substituted for the historical
+measurement. This repair changes no workflow settings.
 
-The two targets (`redirect_sweep.py` and `watch.py`) were selected based on:
+Remaining historical head misses are exactly `redirect_sweep.py` lines
+460, 461, 835, 1008, 1009 and `watch.py` lines 153, 174, 228, 375, 378, 379,
+392, 393, 395, 396, 552, 554, 614, 943, 944. They are unexercised in that run;
+the data does not establish that they are unreachable or require live state.
+No extra tests were requested. Gains from earlier PRs on the first four targets
+are not credited to #842 or this repair.
 
-### Issue #839 Context
-Issue #839 was created to address coverage gaps identified by the ranking system. The commit message from PR #842 states:
-> "Exercise CLI, doctor branches, experiment intake, and classify_lane states hermetically so the #839 ranked targets close most remaining combined pytest+selftest gaps."
+## Original repository ranking
 
-### Selection Criteria
-1. **Highest uncovered statement+branch count**: Both modules had significant uncovered code in the combined pytest+selftest analysis
-2. **Critical functionality**: 
-   - `redirect_sweep.py`: Core functionality for automatic redirect candidate identification
-   - `watch.py`: Lane monitoring and classification logic
-3. **Hermetic testability**: Unlike modules requiring live external dependencies, these could be tested in isolation with mocked/faked inputs
-4. **PR #842 focus**: The merged PR specifically targeted these two modules for coverage improvement
+[Original issue #839](https://github.com/stranske/Orchestrator/issues/839) contains
+the historical generated ranking output, preserved in
+[original-ranking.txt](docs/verification/issue-839-repair/original-ranking.txt).
+It orders by escaped-defect signals, then churn, then uncovered mass:
 
-### Ranking Metrics (from PR #842 commit)
-- Both modules appeared in the top ranked list for issue #839
-- Combined, they represented a significant portion of the remaining pytest+selftest gaps
-- The nonfinite timestamp crashes (fixed in PR #842) were specifically called out as read-only inspection crashes that needed test coverage
+| Rank | Target | Reported uncovered units | Escaped signals | Churn |
+| --- | --- | ---: | ---: | ---: |
+| 1 | `keepalive_outcomes.py` | 43 | 3 | 6 |
+| 2 | `issue_quality.py` | 5 | 3 | 6 |
+| 3 | `experiment_recovery.py` | 9 | 2 | 5 |
+| 4 | `research_usage_guard.py` | 27 | 2 | 2 |
+| 5 | `redirect_sweep.py` | 88 | 1 | 5 |
+| 6 | `watch.py` | 62 | 1 | 5 |
 
-### Validation
-The selection was validated by:
-1. Successful hermetic testing of both modules (no external process/network calls)
-2. Coverage improvement in both modules (79.0% and 70.3% respectively with new tests)
-3. All new code paths (nonfinite timestamp handling) are fully covered
-
-## Conclusion
-
-This chunk successfully:
-1. ✅ Records successful pytest runs with all 10 new tests passing
-2. ✅ Demonstrates deliberate-break mutations for each test case with proper failure/recovery
-3. ✅ Provides Gate coverage measurements showing ~139 units covered, ~41 units shortfall (from 180 target)
-4. ✅ Documents the repository ranking evidence used for target selection
-
-The ~139-unit result is confirmed as **partial** coverage. The ~41-unit shortfall is explained by:
-- Unreachable defensive code paths in exception handling
-- Live system state dependencies that cannot be reproduced in hermetic tests
-- Git operations requiring actual repositories
-
-These limitations are meaningful and acceptable - the new tests cover all the critical logic paths that can be exercised in isolation, which was the goal of issue #839.
+The historical local dispatch log independently records #839 opening on
+2026-10-20 at 13:00:50 -0500 with six targets and 234 units (excerpt in provenance).
+[PR #842](https://github.com/stranske/Orchestrator/pull/842) explicitly chooses the
+**final two** ranked targets. This verifies historical selection from rendered
+output; they were not the highest-ranked two. The underlying original ranker
+JSON/input snapshot has not been recovered. The issue's label "statements+branches"
+is not independently verified by the retained line-only payloads. No current
+ranking was substituted as historical proof.
 
 Refs #839
