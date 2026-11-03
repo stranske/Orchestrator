@@ -383,8 +383,13 @@ def _closer_core_rounds(now: int, path: Path | None = None) -> dict[str, Any] | 
         return {
             "demand": demand,
             "invocation_count": sum(bool(row["items"]) for _, row in rounds),
-            "usable": sum(
-                item.get("action") in usable_actions for _, row in rounds for item in row["items"]
+            "usable": len(
+                {
+                    item["target"]
+                    for _, row in rounds
+                    for item in row["items"]
+                    if item.get("action") in usable_actions
+                }
             ),
         }
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
