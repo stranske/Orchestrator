@@ -137,3 +137,77 @@ report paths; an alternate lock cannot be supplied to evade serialization. The
 cohort CLI optionally accepts a `replay_runner` registry key per manifest entry.
 It executes that fixed producer freshly and passes its opaque receipt into
 qualification; manifest JSON cannot import a replay receipt or change its binding.
+
+## Retry handoff for a native canonical report
+
+The requested `--dispatch --retry --limit 21` command belongs to the generic
+retrospective writer. Once the canonical report carries `native_publication`,
+that command must stop before evidence reads, role-record repair or dispatch.
+Its CLI error directs the operator to native admission and publication. Do not
+remove the marker, replay a copy through the generic writer, or replace the
+original report with the canonical publication.
+
+After collecting the authentic inventory above, handle each eligible original
+abstention through the existing single-case admission command:
+
+```sh
+python src/adjudicator_retro.py --native-admit ORIGINAL_CASE_ID \
+  --report /absolute/immutable-original-report.json \
+  --expected-source-hash PINNED_ORIGINAL_SHA256 \
+  --case-input /absolute/enriched-original-case.json \
+  --repository /absolute/evaluated-git-checkout \
+  --qualification /absolute/qualification.json \
+  --native-journal /absolute/native-attempts.sqlite \
+  --output /absolute/new-case-projection.json \
+  --dispatch
+```
+
+Omit `--dispatch` for preparation only. The enriched input preserves the original
+identity, finding and evaluated-revision anchors; collection reissues an opaque
+case from local Git objects. The journal preserves prior paid attempts and
+refuses repeat spend for a consumed revision, a binary decision or an unresolved
+started invocation. A missing raw response remains UNKNOWN. The requested limit
+of 21 is an upper bound on selected eligible original retries, not permission
+to redispatch 21 rows. Native admission does not use generic `--retry` or
+`--limit`; record each actual outcome or its first broken step separately.
+
+Build the manifest from **all** validated journal cases for the immutable source,
+including prior admissions. Refresh canonical grading without another dispatch:
+
+```sh
+python src/adjudicator_retro.py \
+  --native-publish /absolute/capability-program/adjudicator-retro.json \
+  --report /absolute/immutable-original-report.json \
+  --expected-source-hash PINNED_ORIGINAL_SHA256 \
+  --expected-canonical-hash PINNED_CURRENT_CANONICAL_SHA256 \
+  --native-journal /absolute/native-attempts.sqlite \
+  --cohort-manifest /absolute/manifest.json
+```
+
+Publication needs no `--output`; `--native-cohort` still requires a fresh output
+path for its separate candidate. Choose exactly one mode. Use the current
+canonical hash for each publication and re-inventory after a compare-and-swap
+failure. The publisher reauthenticates receipts and freshly collected cases,
+preserves original decisions and history, and reads independent later truth.
+An authenticated decision without later truth remains ungraded. Neither this
+procedure nor fixture validation supplies missing production or October 18 proof.
+
+Issue #1072 follow-up on 2026-11-03: the native CLI no longer requires an unused
+output for publication, rejects simultaneous candidate/publication modes and
+names missing hash inputs. Regression coverage exercises a single native
+admission followed by two publications as independent later truth becomes
+available, plus refusal of the original generic retry command before side effects.
+Production execution and task completion remain unverified in this runner.
+
+Direct Python verification passes the admission/two-publication scenario with
+the real collector, SQLite journal and separate outcomes database, plus four CLI
+refusal scenarios. The same publication scenario fails on unchanged `a7098f8`
+because the CLI demands the unused output. The module selftest passes 23 checks.
+These direct checks do not replace pytest: this runner has neither pytest nor
+Black, and installation failed because PyPI DNS resolution is unavailable.
+The targeted pytest command and required repository-wide Black command therefore
+could not run. Staging also fails with `.git/index.lock: Read-only file system`;
+no commit or push was made and no task checkbox was changed.
+GitHub reports source issue #1072 closed and PR #1073 merged. Attempts to add
+`needs-human` and post the blocker comment on the source issue were rejected:
+the tools require approval while this run's approval policy is `never`.

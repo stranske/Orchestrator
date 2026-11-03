@@ -2521,7 +2521,9 @@ def run(
     previous = json.loads(path.read_text()) if path.exists() else {}
     if isinstance(previous, dict) and "native_publication" in previous:
         raise ValueError(
-            "generic retrospective run refuses to overwrite native canonical publication"
+            "generic retrospective run refuses to overwrite native canonical publication; "
+            "use --native-admit for eligible original abstentions, then --native-publish "
+            "to refresh canonical grading from authenticated receipts"
         )
     saved = {r["case_id"]: r for r in previous.get("rows", [])}
     # Exhaust the lazy traversal before recovery or paid dispatch can mutate state.
@@ -3182,6 +3184,8 @@ def main() -> int:
         _selftest()
         return 0
     if args.native_cohort or args.native_publish:
+        if args.native_cohort and args.native_publish:
+            parser.error("choose exactly one of --native-cohort and --native-publish")
         native_mode = "--native-cohort" if args.native_cohort else "--native-publish"
         if any(
             (
@@ -3198,20 +3202,19 @@ def main() -> int:
             )
         ):
             parser.error(f"{native_mode} cannot dispatch or combine with another mode")
-        if not all(
-            (
-                args.report,
-                args.output,
-                args.native_journal,
-                args.expected_source_hash,
-                args.cohort_manifest,
-                (not args.native_publish or args.expected_canonical_hash),
-            )
-        ):
-            parser.error(
-                f"{native_mode} requires --report --output --native-journal "
-                "--expected-source-hash --cohort-manifest"
-            )
+        required = {
+            "--report": args.report,
+            "--native-journal": args.native_journal,
+            "--expected-source-hash": args.expected_source_hash,
+            "--cohort-manifest": args.cohort_manifest,
+        }
+        if args.native_publish:
+            required["--expected-canonical-hash"] = args.expected_canonical_hash
+        else:
+            required["--output"] = args.output
+        missing = [flag for flag, value in required.items() if not value]
+        if missing:
+            parser.error(f"{native_mode} requires " + " ".join(missing))
         try:
             manifest = json.loads(args.cohort_manifest.read_text())
             if not isinstance(manifest, list) or len(manifest) > 1000:
@@ -3523,7 +3526,10 @@ def main() -> int:
             )
         )
         return 0
-    result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout)
+    try:
+        result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout)
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(result["summary"], indent=2))
     return 0
 
