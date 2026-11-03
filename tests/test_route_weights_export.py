@@ -421,9 +421,19 @@ def test_malformed_capacity_entry_triggers_rewrite(tmp_path: Path) -> None:
 def test_export_includes_capacity_block(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
-    document = export.build_document(database, capacity_snapshot=_capacity_fixture())
+    snapshot = _capacity_fixture(codex_state=capacity.SHED, generated_at=42)
+    document = export.build_document(database, now=100, capacity_snapshot=snapshot)
     assert "capacity" in document
     assert document.get("capacity_schema") == export.CAPACITY_SCHEMA
+    assert document["capacity"] == {
+        agent: {"state": row["state"], "window": row["window"], "observed_at": 42}
+        for agent, row in snapshot["agents"].items()
+    }
+    target = tmp_path / "route-weights.json"
+    assert export.write_document(target, document) is True
+    published = json.loads(target.read_text(encoding="utf-8"))
+    assert published["capacity"] == document["capacity"]
+    assert published["capacity_schema"] == export.CAPACITY_SCHEMA
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
