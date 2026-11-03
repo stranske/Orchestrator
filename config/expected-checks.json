@@ -14,6 +14,7 @@
   "detect changed files",
   "docker smoke",
   "docs guard",
+  "build flat exec-mirror tree (once per workflow)",
   "flat exec-mirror shard 1/6",
   "flat exec-mirror shard 2/6",
   "flat exec-mirror shard 3/6",

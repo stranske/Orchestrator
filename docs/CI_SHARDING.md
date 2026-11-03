@@ -50,21 +50,51 @@ When adding or removing a test module, regenerate the plan:
 
 ```sh
 python3 -m pytest -q -n 4 --junitxml=junit.xml
-python3 tools/make_test_shards.py junit.xml --shards 6
+python3 tools/make_test_shards.py junit.xml --shards 6 --workers 4
 python3 -m pytest -q tests/test_verify_sharding.py
 ```
 
-The generator balances modules by summed JUnit timing, with deterministic ties.
-It lists modules absent from the timing sample and assigns them the median measured
-duration. The initial plan used the 2026-10-25 local control; the current plan
-uses hosted run 40422953711. The newly merged
-`tests/test_closer_coding_session_v2.py` was measured locally at 0.41 test seconds
-and assigned to shard 5 as untimed input until the next hosted JUnit refresh.
+The generator balances modules by summed JUnit timing divided by the worker count
+(four on CI), with deterministic ties. It lists modules absent from the timing
+sample and assigns them the median measured duration. The current plan uses hosted
+PR CI run `41626212635`: JUnit from all six checkout `pytest-shard-*` artifacts
+merged into one timing sample (`timing_source: merged-junit.xml` in the manifest).
 JUnit is used here only for balancing timings. Hosted job minutes and pipeline
 wall time are read separately from `gh run view --json jobs`.
 
-Acceptance remains the issue's dated measurement: on 2026-11-22, inspect the five
-latest successful PR CI runs using `gh run view <id> --json jobs`. Measure from the
-earliest shard start to the latest aggregate completion. The median must be at most
-six minutes and no individual job may exceed ten minutes. Include the flat variant;
-a single fast run does not establish that median.
+## CI workflow scope and measured job durations
+
+Workflow: `.github/workflows/ci.yml` on `pull_request` (15 jobs: six checkout
+shards, checkout aggregate, one flat-mirror prebuild, six flat-mirror shards,
+flat-mirror aggregate; `reconcile the collection floor` is push-to-main only).
+
+Critical path for issue #957: earliest start among all shard jobs through latest
+completion among the two aggregate jobs (`verify.py aggregate + combined coverage`
+and `verify.py aggregate in the flat exec-mirror shape`), including the flat mirror
+leg.
+
+### Baseline before this repair (five latest successful PR CI runs on 2026-11-03)
+
+| Run ID | Earliest shard start (UTC) | Latest aggregate completion (UTC) | Critical path (s) | Max job (s) | Median job (s) |
+|--------|----------------------------|-----------------------------------|-------------------|-------------|----------------|
+| 41627143781 | 2026-11-03T11:23:39Z | 2026-11-03T11:33:24Z | 585 | 440 | 331 |
+| 41626212635 | 2026-11-03T11:17:13Z | 2026-11-03T11:27:38Z | 625 | 441 | 355 |
+| 41623556421 | 2026-11-03T10:57:38Z | 2026-11-03T11:06:41Z | 543 | 435 | 324 |
+| 41621379950 | 2026-11-03T10:41:40Z | 2026-11-03T10:51:41Z | 601 | 467 | 335 |
+| 41619877362 | 2026-11-03T10:30:52Z | 2026-11-03T10:40:17Z | 565 | 469 | 364 |
+
+Median critical path: **585 s (9.75 min)**. Maximum individual job duration across
+these runs: **469 s** (under the ten-minute per-job ceiling).
+
+Run `40507651605` (push of #970): checkout aggregate failed on main because
+`collected` was **12416** while `.verify-floor.json` still held **12388** — floor
+drift, not a sharding regression. The existing `reconcile-floor` job on main is the
+drain; no code change was required for that failure mode.
+
+### 2026-11-22 acceptance readback
+
+**Pending until 2026-11-22.** Re-measure the five latest successful PR CI runs with
+`gh run view <id> --repo stranske/Orchestrator --json jobs` after this repair merges
+and has propagated through several PR heads. The median critical path must be at most
+six minutes and no single job may exceed ten minutes. This document records pre-repair
+hosted measurements only; it does not claim the dated criterion has passed.

@@ -446,9 +446,9 @@ def test_make_plan_aggregates_module_timings_and_defaults_to_median(planner_juni
     plan = planner.make_plan(junit, root, 2)
     assert plan == planner.make_plan(junit, root, 2)
     # Measured modules: a=6, b=2, c=10; untimed gets median 6. Greedy placement
-    # puts c then b in shard 1, and a then untimed in shard 2 (load tie by index).
+    # uses wall time on four workers, so c then b in shard 1, and a then untimed in shard 2.
     assert plan["untimed_modules"] == ["tests/test_untimed.py"]
-    assert plan["estimated_test_seconds"] == [12.0, 12.0]
+    assert plan["estimated_test_seconds"] == [3.0, 3.0]
     assert plan["shards"] == [
         ["tests/test_b.py", "tests/test_c.py"],
         ["tests/test_a.py", "tests/test_untimed.py"],
