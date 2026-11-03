@@ -28,6 +28,40 @@ canonical summary numbers and journal validation states are inventory facts,
 not authenticated grading or retry authorization. Native publication still
 requires fresh collector capabilities and journal authentication below.
 
+The inventory also prints `row_diagnostics` in original cohort order. Each entry
+names the first retained break: unavailable packet, missing substantive evidence,
+recorded attempt error, current proposal-validator failure, inconsistent saved
+decision, abstention, missing binary decision, or unavailable retained later truth.
+`source_row` locates that evidence in the immutable original. Even a complete
+saved proposal and truth label still require fresh native authentication.
+These diagnoses describe retained inputs, not a fresh collection or outcome read.
+Native blockers are separate: every unresolved reservation/invocation/raw receipt
+has its attempt ID, state and UNKNOWN outcome, including foreign-source records
+that block the same case identity. A terminal foreign-source attempt requires
+review; a journal state called validated still requires receipt authentication.
+No saved projection supplies a grade or authorizes retry spending.
+
+Task reconciliation for the next issue #1072 iteration: commits `a7098f8` and
+`72805f7` implement inventory and CLI/publication controls but explicitly leave
+production execution unverified. Neither operational task can be checked off.
+GitHub currently reports PR #1073 merged, so no merged PR body was changed.
+The configured canonical report and independent outcomes database are absent in
+this runner. The per-row operational task also remains open until diagnostics and
+authenticated fresh checks run against the authentic original cohort.
+
+Local diagnostic verification: eight standard-library unittest tests pass,
+including real inventory CLI execution, unchanged original/canonical/journal
+bytes, preserved recursive paid identities and decided rows, unresolved foreign
+attempts, malformed proposals, and refusal to trust serialized projections.
+The module selftest passes all 23 checks. Targeted pytest cannot start because
+pytest is missing. Black is also missing, and installing the tools into `/tmp`
+failed. The required Black formatting/check gate cannot pass, so these Python
+changes have not been committed or pushed. No native dispatch or publication
+was attempted, and no acceptance checkbox was changed.
+Staging verification also fails because `.git/index.lock` is read-only. Attempts
+to add `needs-human` and post the blocker comment on issue #1072 were rejected:
+the tools require approval while this run's approval policy is `never`.
+
 Issue #1072 runner check on 2026-11-03: production state and the deployed mirror
 are unavailable in the CI workspace. The retained source-issue observation
 ([receipt](https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915))

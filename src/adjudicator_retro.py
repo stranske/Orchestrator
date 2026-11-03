@@ -510,6 +510,7 @@ def inventory_native_state(
             "summary_authority": "not_authenticated_by_inventory",
         },
         "original_paid_attempts": original_paid,
+        "row_diagnostics": diagnose_original_rows(saved["rows"], attempts),
         "native_journal": {"path": str(journal_path.resolve()), "attempts": attempts},
         "paid_identity_summary": {
             "original_records": len(original_ids),
@@ -521,6 +522,82 @@ def inventory_native_state(
         },
         "dispatch_authorized": False,
     }
+
+
+def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]:
+    """Locate retained breaks without promoting saved proposals or journal states.
+
+    A missing saved packet is not proof that fresh collection would fail, and a
+    missing saved truth label is not a current outcome-database observation.
+    Native receipt authentication and independent truth refresh still belong to
+    the existing collector/refresh path. No diagnosis authorizes another spend.
+    """
+    diagnostics = []
+    for index, row in enumerate(rows):
+        packet = row.get("packet")
+        ground = packet.get("ground_truth_evidence") if isinstance(packet, dict) else None
+        proposal = row.get("proposal")
+        decision = row.get("decision")
+        if not isinstance(ground, dict):
+            first_break = "saved_packet_unavailable"
+        elif _packet_metadata_only(ground):
+            first_break = "saved_substantive_evidence_missing"
+        elif row.get("errors") or row.get("error"):
+            first_break = "saved_attempt_error"
+        elif proposal is not None and roles.ROLE_REGISTRY["adjudicator"].validate(proposal):
+            first_break = "saved_proposal_validator_failure"
+        elif isinstance(proposal, dict) and proposal.get("decision") != decision:
+            first_break = "saved_decision_proposal_mismatch"
+        elif decision == "needs_more_evidence":
+            first_break = "saved_adjudicator_abstention"
+        elif decision not in ("uphold_blocker", "reject_blocker"):
+            first_break = "saved_binary_decision_unavailable"
+        elif row.get("later_truth") not in ("PASS", "FAIL"):
+            first_break = "saved_independent_later_truth_unavailable"
+        else:
+            first_break = "fresh_native_authentication_required"
+
+        # Reservations block spend by case identity even across source reports.
+        # Retain every unresolved locator; never select a newer completed row to
+        # conceal an earlier provider invocation with an UNKNOWN outcome.
+        case_attempts = [item for item in attempts if item["case_id"] == row["case_id"]]
+        unresolved = [
+            item
+            for item in case_attempts
+            if item["state"] in {"reserved", "in_flight", "raw_persisted"}
+        ]
+        matching = [item for item in case_attempts if item["matches_original_source"]]
+        if unresolved:
+            native_break = "unresolved_native_attempt"
+        elif matching:
+            native_break = "fresh_native_receipt_authentication_required"
+        elif case_attempts:
+            native_break = "foreign_source_native_attempt_requires_review"
+        else:
+            native_break = "fresh_native_collection_required"
+        diagnostics.append(
+            {
+                "case_id": row["case_id"],
+                "target": row.get("target"),
+                "source_row": f"rows[{index}]",
+                "evidence_scope": "retained_original_only; not fresh collection or truth",
+                "retained_decision": decision,
+                "retained_later_truth": row.get("later_truth"),
+                "retained_first_break": first_break,
+                "native_first_break": native_break,
+                "unresolved_native_attempts": [
+                    {
+                        "attempt_id": item["attempt_id"],
+                        "state": item["state"],
+                        "matches_original_source": item["matches_original_source"],
+                        "outcome": "UNKNOWN",
+                    }
+                    for item in unresolved
+                ],
+                "dispatch_authorized": False,
+            }
+        )
+    return diagnostics
 
 
 def admit_collected_retry(
