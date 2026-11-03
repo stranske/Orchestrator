@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "node",
+    "scripts/report_relay_join_window.js",
+    "--db",
+    "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+    "--start",
+    "1793693792",
+    "--end",
+    "1793742781",
+    "--pacing-log",
+    "/home/runner/.codex/handoff/relay-pacing.log",
+    "--exit-log",
+    "/home/runner/.codex/handoff/relay-exits.log"
+  ],
+  "started_at": "2026-11-03T21:53:08.799356+00:00",
+  "finished_at": "2026-11-03T21:53:08.863393+00:00",
+  "timeout_seconds": 45,
+  "exit_code": 1
+}

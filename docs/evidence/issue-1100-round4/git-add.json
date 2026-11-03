@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "git",
+    "add",
+    "--",
+    "scripts/report_relay_join_window.js",
+    "tests/test_relay_acceptance_cli.js"
+  ],
+  "started_at": "2026-11-03T21:53:32.872773+00:00",
+  "finished_at": "2026-11-03T21:53:32.875031+00:00",
+  "exit_code": 128
+}

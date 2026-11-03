@@ -1,0 +1,10 @@
+{
+  "assessed_origin_main": "296e144bbe2a7c847329d3fee879a0e995fd0a33",
+  "head": "7608bd6e7db577e12a668c8042cbb7f0f4c78447",
+  "byte_identical": true,
+  "local_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849",
+  "origin_main_sha256": "780186ee0caf07002daac988ecbd91c4d58efb8e1957adb164c8ebae25d0f849",
+  "fresh_main_floor_blob": "3ac9a5d4ce7b5854ae9cf8b8a7a2d23a4ba0a7f9",
+  "local_floor_blob": "3ac9a5d4ce7b5854ae9cf8b8a7a2d23a4ba0a7f9",
+  "fresh_main_blob_matches_local": true
+}

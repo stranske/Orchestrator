@@ -1,0 +1,24 @@
+✔ a pre-deployment decision exiting later does not satisfy the deployment window (677.858295ms)
+✔ an importer failure retains the explicit round and provider incident for recovery (562.574732ms)
+✔ an explicit exit remains a boundary for later legacy adjacency (560.736238ms)
+✔ interleaved decisions retain exact attribution while an unfinished decision stays pending (765.413591ms)
+✔ a completed exit after the deadline cannot establish an outcome before the deadline (561.781577ms)
+✔ the deployment boundary excludes an earlier decision despite both exits being in-window (562.560509ms)
+✔ the report separates cumulative bindings from completed joins in the selected window (702.420233ms)
+✔ positive window totals do not conceal a matching completed exit with no accepted join (551.737298ms)
+✔ ambiguous persisted exits cannot be reported as an attributable accepted join (360.164143ms)
+✔ unavailable Brain reports unknown counts without creating a database (1.419592ms)
+✔ an accepted flag cannot substitute for matching round facts and relay outcome evidence (248.372503ms)
+✔ raw receipts expose a completed decision that was never imported into Brain (267.798985ms)
+✔ raw correlation retains exact receipts and separates timely joins from later recovery (675.276751ms)
+✔ raw correlation requires receipt facts to agree with the persisted round (257.751329ms)
+✔ conflicting raw pacing facts cannot earn an attributable join (267.181734ms)
+✔ missing or malformed raw evidence stays unavailable or incomplete (337.869538ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7383.872548

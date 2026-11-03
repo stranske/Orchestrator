@@ -33,7 +33,7 @@ function world(t) {
     HANDOFF_DIR: root,
     HANDOFF_PACING_LOG: log,
   };
-  function run(args, command = python) {
+  function run(args, command = python, expectedStatus = 0) {
     // File capture works on hosts that disallow child-process pipes.
     const output = path.join(root, 'stdout');
     const errors = path.join(root, 'stderr');
@@ -44,7 +44,7 @@ function world(t) {
         cwd: root, env, stdio: ['ignore', stdout, stderr], timeout: 30000,
       });
       assert.ifError(result.error);
-      assert.equal(result.status, 0, fs.readFileSync(errors, 'utf8'));
+      assert.equal(result.status, expectedStatus, fs.readFileSync(errors, 'utf8'));
       return fs.readFileSync(output, 'utf8').trim();
     } finally {
       fs.closeSync(stdout);
@@ -59,11 +59,12 @@ function world(t) {
     report(end, start = deployment) {
       return reportWindow({ db: path.join(root, 'brain.db'), start, end });
     },
-    reportCli(end) {
+    reportCli(end, rawLogs = false, expectedStatus = 0) {
       return JSON.parse(run([
         path.join(repo, 'scripts', 'report_relay_join_window.js'),
         '--db', path.join(root, 'brain.db'), '--start', String(deployment), '--end', String(end),
-      ], process.execPath));
+        ...(rawLogs ? ['--pacing-log', log, '--exit-log', path.join(root, 'relay-exits.log')] : []),
+      ], process.execPath, expectedStatus));
     },
     append(id, ts) {
       assert.equal(cli([
@@ -112,6 +113,17 @@ print(json.dumps({'rounds': rounds, 'joins': joins, 'counts': counts}))
 `]));
     },
   };
+}
+
+function receipt(w, id, ts, { status = 0, agent = 'claude', lane = 'opener' } = {}) {
+  const stamp = new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
+  fs.appendFileSync(path.join(w.root, 'relay-exits.log'),
+    `=== ${stamp} RELAY exit=${status} agent=${agent} lane=${lane} duration_s=35 decision_id=${id} ===\n`);
+}
+
+function rawReport(w, end) {
+  return reportWindow({ db: path.join(w.root, 'brain.db'), start: deployment, end,
+    pacingLog: w.log, exitLog: path.join(w.root, 'relay-exits.log') });
 }
 
 test('a pre-deployment decision exiting later does not satisfy the deployment window', (t) => {
@@ -404,4 +416,140 @@ test('an accepted flag cannot substitute for matching round facts and relay outc
   } finally {
     db.close();
   }
+});
+
+test('raw receipts expose a completed decision that was never imported into Brain', (t) => {
+  const w = world(t);
+  w.append('unimported-decision', deployment + 10);
+  const original = fs.readFileSync(w.log);
+  fs.unlinkSync(w.log);
+  fs.mkdirSync(w.log);
+  const completed = w.exit('unimported-decision', deployment + 20);
+  assert.equal(completed.relay_pacing.status, 'unavailable');
+  // Restore only the fixture log. Do not run an importer or replay the fixture hook.
+  fs.rmdirSync(w.log);
+  fs.writeFileSync(w.log, original);
+  receipt(w, 'unimported-decision', deployment + 20);
+
+  const files = [path.join(w.root, 'brain.db'), w.log, path.join(w.root, 'relay-exits.log')];
+  const before = files.map((file) => fs.readFileSync(file));
+  const report = rawReport(w, deployment + 20);
+  assert.deepEqual(w.reportCli(deployment + 20, true), report);
+  assert.equal(report.window_decisions, 0); // Persisted-only population misses this decision.
+  const audit = report.raw_log_correlation;
+  assert.equal(audit.status, 'available');
+  assert.equal(audit.window_decisions, 1);
+  assert.equal(audit.matching_completed_exit_decisions, 1);
+  assert.equal(audit.accepted_window_joins, 0);
+  assert.equal(audit.unattributed_completed_exit_decisions, 1);
+  assert.equal(audit.decisions[0].status, 'missing_persisted_decision');
+  assert.equal(audit.decisions[0].raw_decision_id, 'unimported-decision');
+  assert.equal(audit.decisions[0].decision_ts, deployment + 10);
+  assert.equal(audit.decisions[0].persisted_decision, null);
+  assert.equal(audit.decisions[0].persisted_rounds[0].decision_id, completed.decision_id);
+  assert.equal(audit.decisions[0].persisted_rounds[0].ts, deployment + 20);
+  assert.equal(audit.decisions[0].raw_completed_exits[0].ts, deployment + 20);
+  assert.deepEqual(rawReport(w, deployment + 20), report);
+  assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+});
+
+test('raw correlation retains exact receipts and separates timely joins from later recovery', (t) => {
+  const w = world(t);
+  w.append('old-raw-decision', deployment - 1);
+  w.exit('old-raw-decision', deployment + 1);
+  receipt(w, 'old-raw-decision', deployment + 1);
+  w.append('timely-raw-decision', deployment);
+  const timely = w.exit('timely-raw-decision', deployment + 10, 1);
+  receipt(w, 'timely-raw-decision', deployment + 10, { status: 1 });
+  w.append('late-raw-decision', deadline - 1);
+  w.exit('late-raw-decision', deadline + 1);
+  receipt(w, 'late-raw-decision', deadline + 1);
+
+  const report = rawReport(w, deadline);
+  assert.equal(report.cumulative_accepted_bindings_present, 3);
+  const audit = report.raw_log_correlation;
+  assert.equal(audit.status, 'available');
+  assert.equal(audit.window_decisions, 2);
+  assert.equal(audit.matching_completed_exit_decisions, 1);
+  assert.equal(audit.accepted_window_joins, 1);
+  assert.equal(audit.unattributed_completed_exit_decisions, 0);
+  assert.deepEqual(audit.decisions.map((d) => [d.raw_decision_id, d.status]), [
+    ['timely-raw-decision', 'accepted_join'], ['late-raw-decision', 'no_completed_exit_receipt'],
+  ]);
+  const accepted = audit.decisions[0];
+  assert.match(accepted.raw_pacing_lines[0].text, /decision_id=timely-raw-decision /);
+  assert.equal(accepted.raw_pacing_lines[0].line_number, 2);
+  assert.match(accepted.raw_completed_exits[0].text, /decision_id=timely-raw-decision ===$/);
+  assert.equal(accepted.persisted_decision.completed_rounds[0].decision_id, timely.decision_id);
+  assert.equal(accepted.accepted_edge_ids.length, 1);
+  assert.equal(audit.files[w.log].sha256.length, 64);
+  assert.equal(audit.files[w.log].bytes, fs.statSync(w.log).size);
+
+  const recovery = rawReport(w, deadline + 1).raw_log_correlation;
+  assert.equal(recovery.accepted_window_joins, 2);
+  assert.equal(recovery.decisions[1].raw_completed_exits[0].ts, deadline + 1);
+});
+
+test('raw correlation requires receipt facts to agree with the persisted round', (t) => {
+  const w = world(t);
+  w.append('receipt-mismatch', deployment + 10);
+  w.exit('receipt-mismatch', deployment + 20);
+  const exitLog = path.join(w.root, 'relay-exits.log');
+  for (const facts of [
+    { status: 1 }, { agent: 'cursor' }, { lane: 'closer' }, { ts: deployment + 21 },
+  ]) {
+    fs.writeFileSync(exitLog, '');
+    receipt(w, 'receipt-mismatch', facts.ts || deployment + 20, facts);
+    const report = rawReport(w, deployment + 30);
+    assert.equal(report.accepted_window_joins, 1);
+    assert.equal(report.raw_log_correlation.accepted_window_joins, 0);
+    assert.match(report.raw_log_correlation.decisions[0].status, /mismatch/);
+    assert.deepEqual(report.raw_log_correlation.decisions[0].accepted_edge_ids, []);
+  }
+  // An accepted Brain edge also cannot choose between conflicting raw exit facts.
+  receipt(w, 'receipt-mismatch', deployment + 20);
+  const ambiguous = rawReport(w, deployment + 30).raw_log_correlation;
+  assert.equal(ambiguous.decisions[0].status, 'ambiguous_completed_exit_receipts');
+  assert.equal(ambiguous.accepted_window_joins, 0);
+});
+
+test('conflicting raw pacing facts cannot earn an attributable join', (t) => {
+  const w = world(t);
+  w.append('conflicting-raw', deployment + 10);
+  w.exit('conflicting-raw', deployment + 20);
+  receipt(w, 'conflicting-raw', deployment + 20);
+  const original = fs.readFileSync(w.log, 'utf8');
+  fs.writeFileSync(w.log, original.replace('weights=claude_code:1', 'weights=claude_code:2'));
+  const changed = rawReport(w, deployment + 20).raw_log_correlation;
+  assert.equal(changed.decisions[0].status, 'persisted_decision_mismatch');
+  assert.equal(changed.accepted_window_joins, 0);
+  fs.writeFileSync(w.log, original);
+  fs.appendFileSync(w.log, original); // An exact repeated line is harmless and retained.
+  assert.equal(rawReport(w, deployment + 20).raw_log_correlation.accepted_window_joins, 1);
+  fs.appendFileSync(w.log, original.replace('lane=opener', 'lane=closer'));
+  const audit = rawReport(w, deployment + 20).raw_log_correlation;
+  assert.equal(audit.decisions[0].status, 'conflicting_raw_decisions');
+  assert.equal(audit.decisions[0].raw_pacing_lines.length, 3);
+  assert.equal(audit.accepted_window_joins, 0);
+});
+
+test('missing or malformed raw evidence stays unavailable or incomplete', (t) => {
+  const w = world(t);
+  w.append('raw-input-errors', deployment + 10);
+  w.exit('raw-input-errors', deployment + 20);
+  const missing = rawReport(w, deployment + 20).raw_log_correlation;
+  assert.equal(missing.status, 'unavailable');
+  assert.equal(missing.accepted_window_joins, null);
+  assert.equal(missing.decisions, null);
+  assert.deepEqual(w.reportCli(deployment + 20, true, 1).raw_log_correlation, missing);
+  assert.equal(fs.existsSync(path.join(w.root, 'relay-exits.log')), false);
+  assert.throws(() => reportWindow({ db: path.join(w.root, 'brain.db'), start: deployment,
+    end: deadline, pacingLog: w.log }), /required together/);
+  receipt(w, 'raw-input-errors', deployment + 20);
+  fs.appendFileSync(w.log, '2026-11-03T08:17:00Z decision_id=truncated\n');
+  const incomplete = rawReport(w, deployment + 60).raw_log_correlation;
+  assert.equal(incomplete.status, 'incomplete');
+  assert.equal(incomplete.accepted_window_joins, 1); // Only the valid subset is counted.
+  assert.match(incomplete.errors[0], /:2: missing pacing field/);
+  assert.deepEqual(w.reportCli(deployment + 60, true, 1).raw_log_correlation, incomplete);
 });

@@ -1,0 +1,11 @@
+{
+  "pr": "stranske/Orchestrator#1101",
+  "actions": [
+    "Check both duplicate source-review task checkboxes in the PR body",
+    "Add the needs-human label",
+    "Publish the reconciliation and production-access blocker comment"
+  ],
+  "applied": false,
+  "error": "MCP tool call requires approval, but approval policy is never",
+  "prepared_body": "/tmp/issue1100-reconciled-pr-body.md"
+}

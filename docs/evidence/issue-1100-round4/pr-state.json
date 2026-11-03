@@ -1,0 +1,12 @@
+{
+  "url": "https://github.com/stranske/Orchestrator/pull/1101",
+  "state": "closed",
+  "isDraft": false,
+  "merged": true,
+  "merged_at": "2026-11-03T21:51:42Z",
+  "merge_commit_sha": "8ad3fd93293f389fa1207e8f2b9597e77ce15c5e",
+  "base_sha": "e86313cb6f1f6f047896b5c1bbb5d9c3c68d339e",
+  "head_sha": "7608bd6e7db577e12a668c8042cbb7f0f4c78447",
+  "remote_review_checkboxes_reconciled": false,
+  "body_update_error": "MCP tool call requires approval, but approval policy is never"
+}

@@ -1,0 +1,38 @@
+[
+  {
+    "argv": [
+      "node",
+      "--check",
+      "scripts/report_relay_join_window.js"
+    ],
+    "started_at": "2026-11-03T21:53:08.715041+00:00",
+    "finished_at": "2026-11-03T21:53:08.747155+00:00",
+    "timeout_seconds": 45,
+    "exit_code": 0,
+    "output": ""
+  },
+  {
+    "argv": [
+      "node",
+      "--check",
+      "tests/test_relay_acceptance_cli.js"
+    ],
+    "started_at": "2026-11-03T21:53:08.747540+00:00",
+    "finished_at": "2026-11-03T21:53:08.779568+00:00",
+    "timeout_seconds": 45,
+    "exit_code": 0,
+    "output": ""
+  },
+  {
+    "argv": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "started_at": "2026-11-03T21:53:08.779912+00:00",
+    "finished_at": "2026-11-03T21:53:08.799118+00:00",
+    "timeout_seconds": 45,
+    "exit_code": 0,
+    "output": ""
+  }
+]
