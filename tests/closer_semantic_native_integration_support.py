@@ -1108,7 +1108,7 @@ def validate_stop_role_reference():
     raw = path.read_bytes()
     assert (
         hashlib.sha256(raw).hexdigest()
-        == "7f7d6734feffa27c6e8796873f510f3b4da9adce9885d85756e1ed172722df0f"
+        == "1238400e351c4e14ca26c7caaaec50c85a83fec07e8910f4df7cd98a3a3beed6"
     )
     value = json.loads(raw)
     assert value["schema"] == "closer-validate-stop-stale-scoped-root-role-successor/v1"

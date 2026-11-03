@@ -1,24 +1,24 @@
 {
   "base_commit": "f9f14efe899f66daa0f10be191999bd75fbdc746",
-  "current_model_contract_sha256": "913d57e10a6e038fd6ad37a2e296f21e1a9168e1315ce7be1c0732e2c02f1583",
+  "current_model_contract_sha256": "e86a4f1f99a028b7b6939da89062c6122e949f364bc8792217531c92276dd96f",
   "new_qualification_id": "sonnet-current-role-qualification:7be42fa46b23bbf5ae9a5021e03fa7fc1aec9375ad2bd2705990f815f20962ae",
   "role_module": {
-    "after_file_sha256": "68e19e04efc50e133d6c26aa771d1ea92a5c093eba687262305bec0b56afc722",
-    "after_module_ast_sha256": "6be5128296c817b8bac3d3a2d76ec20f39869cede45c3fee75ead841a1aabc33",
+    "after_file_sha256": "d157a755c07fae5a458742408459dc93317e334d2203d97c52c6332637075978",
+    "after_module_ast_sha256": "18aefcba74b04112a6d01fa2dabfc95b9480eb9860bdc5a09559d88b28c049d7",
     "assignment_delta": {
       "ROLE_QUALIFICATIONS": {
-        "added_value_ast_sha256": "f592979edf2ac221c71f6cfa8bc93194a5961fcd8ecabbc19f2dee7c887e0a62",
-        "after_ast_sha256": "331da61d312b8c46be9b1042fbb3a2718d58e59699c8c3b8af4bba5f44478e03",
-        "before_ast_sha256": "2c72ae2e281d1e820e2767b8e8b674215ebf1e65b7e5efe31e4ac7b2737a570d"
+        "added_value_ast_sha256": "359e4c3d5a1841dabc1e2c02e8caea0c3a090b30ce02303ea649217478c5ff64",
+        "after_ast_sha256": "86c602fa0e44a531763b80937cf99ed9559b812163eb90f08ba9baee5ee38c97",
+        "before_ast_sha256": "57a1c99f554885f2c2481320131e02a9d0954836a18f5540a95051b26fe349a1"
       },
       "ROLE_QUALIFICATION_SUPERSEDES": {
-        "added_value_ast_sha256": "343bc0d2279289f2fb9bdb87ad46a99d59910b509592a61099028067784270a5",
-        "after_ast_sha256": "48a690d09d6bab47e5414424b7aa466cc590b24003fa27c153ee04d6092268f0",
-        "before_ast_sha256": "d0583b0b6c5d2ccdfee66ae06372de6b234d730badbce83411fd46aaaa62f4e8"
+        "added_value_ast_sha256": "bfd60a48f4e2fd52e0749b0752ec930ead0cb6c58c6545f60dbbb3525a556cbe",
+        "after_ast_sha256": "28a4716dde42171df218ebfe469898862375074ee4e937f806f59951f0ece665",
+        "before_ast_sha256": "a5a6b045054ca6b77db59199a57e0fe8fa2625c27de235abec27d80110c05b00"
       }
     },
-    "before_file_sha256": "98c108b75e7af622dbe5a84bc47a6e0ad9f9e01ca939e885aab9ea22871c7d69",
-    "before_module_ast_sha256": "0456fec41b09c3c7aced6007aee1c687cc9d054956dd7cf848fc1b6b90546a73"
+    "before_file_sha256": "940155b2ffb2e52bc88b7364548452e8d5acbd1ab4e826aae333ac27fe87c7d0",
+    "before_module_ast_sha256": "51c7a0e1415a28f7be4e08211becaadff87a58a7f33afd12499b4941a4a9dcaa"
   },
   "schema": "closer-validate-stop-stale-scoped-root-role-successor/v1"
 }

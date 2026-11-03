@@ -368,7 +368,7 @@ def test_reviewed_strong_records_preserve_history_and_select_latest_after_expiry
     capacity_bridge_id = "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a"
     assert roles.ROLE_QUALIFICATIONS[capacity_bridge_id]["production_model_contract"][
         "contract_sha256"
-    ] == ("b2032727da7c47591371f7f318239010887b221576eed559c627d83e5b0a2f23")
+    ] == ("e27810baa6b79d0f8efb11e49bf57c6dcd59bb04c9c329e55237422464fb2c4a")
     bridge_id = "sonnet-current-role-qualification:7be42fa46b23bbf5ae9a5021e03fa7fc1aec9375ad2bd2705990f815f20962ae"
     assert roles.ROLE_QUALIFICATIONS[bridge_id]["production_model_contract"] == (
         dispatcher._controlled_model_contract("closer_exception")
