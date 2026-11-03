@@ -143,6 +143,82 @@ test('changing input, failed processes and malformed screen output invalidate ca
   }
 });
 
+test('report directory refreshes invalidate capture for default and overridden paths', (t) => {
+  const s = sandbox(t);
+  for (const overridden of [false, true]) {
+    const reportDir = overridden ? path.join(s.root, 'PRIVATE-reports')
+      : path.join(s.stateDir, 'keepalive-supervisor-stage2');
+    fs.mkdirSync(reportDir);
+    const file = path.join(reportDir, 'PRIVATE-target.keepalive-supervisor-report.json');
+    const env = { ...s.env };
+    if (overridden) env.ORCH_KEEPALIVE_STAGE2_REPORT_DIR = reportDir;
+    const base = control({ ...s, env });
+    const stable = observe(base);
+    assert.equal(stable.status, 'observed');
+
+    const changes = [
+      () => fs.writeFileSync(file, '{}'),
+      () => fs.appendFileSync(file, '\n'),
+      () => fs.utimesSync(file, new Date(1000), new Date(1000)),
+      () => fs.unlinkSync(file),
+      () => fs.rmdirSync(reportDir),
+      () => fs.mkdirSync(reportDir),
+    ];
+    for (const change of changes) {
+      const result = observe({ ...base, run(...args) {
+        assert.equal(args[1][args[1].indexOf('--report-dir') + 1], reportDir);
+        const execution = base.run(...args);
+        change();
+        return execution;
+      } });
+      assert.equal(result.status, 'unavailable');
+      assert.deepEqual(result.changed_artifacts, ['report_dir']);
+      assert.deepEqual(result.limitations, ['artifacts_changed_during_capture']);
+      assert.equal(result.blocking, null);
+      assert.equal(result.drainable, null);
+      assert.equal(result.candidates, null);
+      assert.equal(result.operational_acceptance, 'not_established');
+      assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+    }
+    assert.equal(stable.artifacts.report_dir.status, 'read');
+    assert.match(stable.artifacts.report_dir.sha256, /^[a-f0-9]{64}$/);
+    fs.rmdirSync(reportDir);
+  }
+});
+
+test('report directory fingerprints are private, deterministic and read-only', (t) => {
+  const s = sandbox(t);
+  const reportDir = path.join(s.stateDir, 'keepalive-supervisor-stage2');
+  assert.deepEqual(observe(control(s)).artifacts.report_dir, { status: 'missing' });
+  fs.mkdirSync(reportDir);
+  const files = ['PRIVATE-b.keepalive-supervisor-report.json',
+    'PRIVATE-a.keepalive-supervisor-report.json'];
+  const timestamp = new Date(1000);
+  const save = (names) => {
+    for (const name of names) {
+      const file = path.join(reportDir, name);
+      fs.writeFileSync(file, '{}');
+      fs.utimesSync(file, timestamp, timestamp);
+    }
+  };
+  save(files);
+  const before = snapshot(s.root);
+  const first = observe(control(s));
+  assert.equal(first.status, 'observed');
+  assert.deepEqual(snapshot(s.root), before);
+  for (const name of files) fs.unlinkSync(path.join(reportDir, name));
+  save([...files].reverse());
+  const second = observe(control(s));
+  assert.deepEqual(second.artifacts.report_dir, first.artifacts.report_dir);
+  assert.doesNotMatch(JSON.stringify(second), /PRIVATE-/);
+
+  // An unusable path is distinct from a missing directory or a read empty one.
+  fs.writeFileSync(path.join(s.root, 'PRIVATE-file'), '{}');
+  const invalid = observe(control({ ...s, env: { ...s.env,
+    ORCH_KEEPALIVE_STAGE2_REPORT_DIR: path.join(s.root, 'PRIVATE-file') } }));
+  assert.deepEqual(invalid.artifacts.report_dir, { status: 'unreadable' });
+});
+
 test('real screen distinguishes empty, refused and stale populations without writes', (t) => {
   const s = sandbox(t);
   for (const scenario of ['empty', 'refused', 'stale']) {

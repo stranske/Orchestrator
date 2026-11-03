@@ -362,3 +362,46 @@ Staging these source, test and report changes failed with `.git/index.lock:
 Read-only file system`; this iteration could not create the required commit.
 The validated changes remain in the working tree for the automation's committing
 process. PR #1089 was re-read and remains open, `draft=false`, at `a57f1b6`.
+
+## Report-directory capture integrity
+
+The first task remains blocked on the two private receipts and original corpus;
+neither the public #582 discussion nor the #595 discussion supplies their contents.
+At `2026-11-03T17:10:38.394Z`, the audit again returned `unavailable` with
+`private_source_corpus_unavailable`. The historical-provenance limitation remains
+explicitly retained, but recovery and an October 20 execution remain unverified.
+
+An observed collector defect allowed a report added during screening to retain
+`status: observed`. Its regression failed on `observed` versus `unavailable`
+before the correction. The observer now fingerprints sorted report-directory
+entry names, sizes and modification times before and after screening, using the
+same directory passed to `--report-dir`. It emits only the fingerprint, preserving
+private filenames. A changed fingerprint or directory availability returns
+`artifacts_changed_during_capture` and `changed_artifacts: ["report_dir"]`, with
+blocking, drainable and candidate counts unknown. This is a metadata integrity
+check, not a filesystem snapshot; changes that restore identical metadata can
+escape it. No production-chain defect or live action is established by this fix.
+
+All **37** scoped Node checks pass with zero failures or skips. The two new tests
+cover default and overridden directories, report creation/removal, size and mtime
+changes, directory disappearance/creation, deterministic ordering, unavailable
+paths, private output and read-only execution. These inputs are manufactured
+controls, not historical evidence. Both changed JavaScript files pass syntax
+checks; `git diff --check` passes. No Python or workflow files changed.
+
+At `2026-11-03T17:10:30.174Z`, exact merged revision
+`8f596dc01e1ede350724c1b88bc36610380af79b` still could not execute either pytest
+invocation: the selected Python 3.14 interpreter lacks pytest, and installation
+failed. Offline replay printed `authorized 12/12 with named agents (dry-run)`;
+the subprocess layer also reported `EPERM`. The aggregate remains blocked.
+At `2026-11-03T17:10:31.338Z`, owner runtime artifacts, including the report
+directory, were missing. Blocking, drainable and candidate counts remain
+**unknown**, not candidates 0. These new runner observations do not satisfy an
+October 20 receipt or the November 3 production-chain acceptance.
+
+Staging the source and tests failed with `.git/index.lock: Read-only file system`;
+no commit could be created. The connector also rejected the checklist correction
+and additive `needs-human` label with `MCP tool call requires approval, but
+approval policy is never`. The local reconciliation above remains authoritative
+for this session: the production-inspection task is incomplete, and the retained
+historical-provenance limitation is verified. Operational acceptance remains open.

@@ -19,6 +19,19 @@ function read(file) {
   }
 }
 
+function directoryState(directory) {
+  try {
+    const entries = fs.readdirSync(directory).sort().map((name) => {
+      const stat = fs.statSync(path.join(directory, name));
+      return [name, stat.size, stat.mtimeMs];
+    });
+    // Names may identify private targets. Retain only the directory fingerprint.
+    return { status: 'read', sha256: digest(JSON.stringify(entries)) };
+  } catch (error) {
+    return { status: error.code === 'ENOENT' ? 'missing' : 'unreadable' };
+  }
+}
+
 function jsonLines(bytes) {
   return bytes.toString('utf8').split('\n').flatMap((line, index) => {
     if (!line.trim()) return [];
@@ -100,6 +113,9 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
   };
   const inputs = Object.fromEntries(Object.entries(files).map(([key, file]) => [key, read(file)]));
   for (const [key, { bytes, ...metadata }] of Object.entries(inputs)) result.artifacts[key] = metadata;
+  const reportDir = env.ORCH_KEEPALIVE_STAGE2_REPORT_DIR
+    || path.join(stateDir, 'keepalive-supervisor-stage2');
+  result.artifacts.report_dir = directoryState(reportDir);
   if (inputs.log.bytes) result.logged_runs = loggedRuns(inputs.log.bytes);
   result.recorded_switch_review = recordedSwitchReview(inputs.switch_review);
   let events;
@@ -127,19 +143,21 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
   delete childEnv.PYTHONPATH;
   delete childEnv.PYTHONHOME;
   const execution = run(python, ['-B', source, '--screen', '--json', '--corpus', files.corpus,
-    '--stage2-plan', files.plan, '--report-dir', env.ORCH_KEEPALIVE_STAGE2_REPORT_DIR
-      || path.join(stateDir, 'keepalive-supervisor-stage2')], {
+    '--stage2-plan', files.plan, '--report-dir', reportDir], {
     env: childEnv, encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024,
   });
   result.screen_execution = { exit_code: execution.status, signal: execution.signal || null,
     error_code: execution.error?.code || null };
-  // A growing append-only corpus or refreshed plan must not be attributed to an
-  // earlier hash. Retry capture after the bounded cadence finishes; never lock it.
+  // A growing corpus, refreshed plan, or refreshed report directory must not be
+  // attributed to an earlier hash. Retry after the cadence finishes; never lock it.
   const changed = Object.entries(files).filter(([key, file]) => {
     const after = read(file);
     return after.status !== inputs[key].status || after.sha256 !== inputs[key].sha256
       || after.mtime !== inputs[key].mtime;
   }).map(([key]) => key);
+  const afterReports = directoryState(reportDir);
+  if (afterReports.status !== result.artifacts.report_dir.status
+    || afterReports.sha256 !== result.artifacts.report_dir.sha256) changed.push('report_dir');
   if (changed.length) {
     result.limitations.push('artifacts_changed_during_capture');
     result.changed_artifacts = changed;
