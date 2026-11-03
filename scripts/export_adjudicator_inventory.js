@@ -77,6 +77,11 @@ function reconcile(report, manifest) {
       status = 'unavailable'; reasons = row.reasons;
     } else if (row.target !== item.target) {
       status = 'identity_mismatch'; reasons = ['requested_target_mismatch'];
+    } else if (manifest.schema_version === 2 && row.reasons?.some((reason) =>
+      ['missing_outcome', 'missing_verifier_verdict', 'missing_adjudicated_verdict'].includes(reason))) {
+      // A missing verdict cannot contradict the requested pair. Preserve all
+      // observed exclusion reasons so evidence recovery can target the gap.
+      status = 'unavailable'; reasons = row.reasons;
     } else if (!verdictsMatch(item, row)) {
       status = 'identity_mismatch'; reasons = ['requested_verdict_mismatch'];
     } else if (row.reasons) {

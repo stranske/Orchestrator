@@ -531,3 +531,71 @@ test('version 2 rejects malformed verdicts before publishing any inventory', (t)
     }
   }
 });
+
+test('version 2 distinguishes unavailable verdict evidence from contradictory verdicts', (t) => {
+  const { root, db } = world(t);
+  seed(db, [
+    ['no-outcome', now],
+    ['no-verifier', now, null, 'PASS'],
+    ['no-adjudication', now, 'NON_PASS', null],
+    ['neither-verdict', cutoff - 1, null, null],
+    ['changed-verdict', now, 'NON_PASS', 'FAIL'],
+  ]);
+  const requested = ['no-outcome', 'no-verifier', 'no-adjudication', 'neither-verdict',
+    'changed-verdict'].map((run_id) => ({ run_id, target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' }));
+  const manifest = manifestFile(root, requested, 2);
+  const before = fs.readFileSync(db);
+  const files = fs.readdirSync(root);
+  const report = inventory({ db, observedAt: now, expectedCount: 5, manifest });
+  assert.equal(report.status, 'available', 'missing case evidence does not hide the observed population');
+  assert.equal(report.population_count, 5);
+  assert.equal(report.included_count, 1);
+  assert.equal(report.excluded_count, 4);
+  assert.equal(report.manifest_reconciliation.exact_match, false);
+  const reasons = [
+    ['missing_outcome'],
+    ['missing_verifier_verdict'],
+    ['missing_adjudicated_verdict'],
+    ['outside_window', 'missing_verifier_verdict', 'missing_adjudicated_verdict'],
+  ];
+  assert.deepEqual(report.manifest_reconciliation.cases.slice(0, 4),
+    requested.slice(0, 4).map((item, i) => ({ ...item, status: 'unavailable', reasons: reasons[i] })));
+  assert.deepEqual(report.evidence_gaps.filter((gap) => gap.kind === 'requested_case_evidence_gap'),
+    requested.map((item, i) => ({ kind: 'requested_case_evidence_gap', ...item,
+      reasons: reasons[i] || ['requested_verdict_mismatch'] })));
+  assert.equal(report.manifest_reconciliation.cases[4].status, 'identity_mismatch');
+  assert.deepEqual(report.manifest_reconciliation.unexpected_cases, [{
+    ...requested[4], adjudicated_verdict: 'FAIL',
+  }]);
+  assert.equal(report.requested_cohort_verified, false);
+  assert.deepEqual(fs.readFileSync(db), before);
+  assert.deepEqual(fs.readdirSync(root), files);
+  const result = execute(root, process.execPath, [script, '--db', db, '--observed-at', String(now),
+    '--expected-count', '5', '--manifest', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), report);
+  assert.deepEqual(fs.readFileSync(db), before);
+
+  // Legacy run/target manifests can still identify an excluded run without
+  // requiring the verdict pair that only version 2 promises to reconcile.
+  manifestFile(root, requested);
+  const legacy = inventory({ db, observedAt: now, expectedCount: 5, manifest });
+  assert.deepEqual(legacy.manifest_reconciliation.cases.map((row) => row.status),
+    ['excluded', 'excluded', 'excluded', 'excluded', 'included']);
+});
+
+test('version 2 retains an observed target mismatch when verdict evidence is unavailable', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['no-outcome', now]]);
+  const requested = { run_id: 'no-outcome', target: 'owner/repo#2',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  const manifest = manifestFile(root, [requested], 2);
+  const report = inventory({ db, observedAt: now, expectedCount: 1, manifest });
+  assert.deepEqual(report.manifest_reconciliation.cases, [{ ...requested,
+    status: 'identity_mismatch', reasons: ['requested_target_mismatch'],
+    observed_target: 'owner/repo#1', observed_verifier_verdict: null,
+    observed_adjudicated_verdict: null,
+  }]);
+  assert.equal(report.manifest_reconciliation.exact_match, false);
+});

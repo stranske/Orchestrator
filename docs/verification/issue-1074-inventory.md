@@ -169,3 +169,31 @@ Remote metadata is unchanged. The prepared body is retained under
 Workspace staging failed because `.git/index.lock` is read-only. A source commit
 and transfer patch are prepared with separate Git metadata under
 `/tmp/1074-inventory-orphan-delivery`; workspace edits remain available to automation.
+
+## Follow-up: distinguish missing verdict evidence from contradictions
+
+Version 2 reconciliation now marks a run with a missing outcome or verdict as
+`unavailable`, preserving its observed exclusion reasons in both the requested
+case and its evidence gap. Previously these entries were reported as
+`requested_verdict_mismatch`, concealing the missing evidence. Actual target
+mismatches and complete contradictory verdict pairs still report identity
+mismatches; legacy run/target manifests retain their existing exclusion behavior.
+
+All 25 inventory tests pass. The new missing-evidence regression fails on parent
+`484c5a5` and passes after the repair; a second regression preserves target
+mismatch precedence. CLI serialization, database bytes and absence of new SQLite
+sidecars are checked. The related synthetic batch (1), closer (9), receipt (9)
+and focused reader/Gate (8) tests pass, as do 11 evidence unittests and 23 module
+selftest checks. No Python files change. Current named pytest and the full
+verifier were not run; pytest remains unavailable. The prior full CLI suite's
+16 failures remain outside this repair.
+
+The requested historical inventory remains unchecked: the original Brain and
+71-case manifest are still unavailable. This change does not run a historical
+replay or observe a real closer disposition. PR #1075 was verified open and ready
+for review. Staging again failed because the checkout's Git metadata is read-only;
+the source commit and transfer patch are preserved under
+`/tmp/1074-missing-verdict-3_948qie` for automation to collect.
+The connector rejected this round's blocker comment and `needs-human` label
+because writes require approval while the run's policy is `never`; neither was
+published. The PR's existing premature closing reference remains unchanged.
