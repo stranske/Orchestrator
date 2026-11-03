@@ -110,3 +110,30 @@ pytest is unavailable. No Python files changed. Staging failed because
 `.git/index.lock` is read-only, so no commit or push was made. GitHub access also
 failed, so PR readiness could not be rechecked during this follow-up. No
 operational task checkbox is complete and no production observation is claimed.
+
+## Earlier terminal receipt before a later UNKNOWN
+
+Checked on 2026-11-03 against checkout
+`680de345d35f209a5aafde39387519b471dda441`. Two new integration cases use
+the real native producer to retain a paid abstention or validator rejection,
+then begin an invocation at a different material revision without a response.
+The inventory CLI preserves both receipts, recursive original paid identities,
+and the later UNKNOWN locator. It changes no report/database/WAL bytes, exposes
+no response or validator payload, and grants no grade or dispatch authority.
+These are isolated fixtures, not authentic production observations.
+
+Validation: both inventory JavaScript suites pass all 36 tests; diagnostic
+unittests pass 32 and replay/publication unittests pass seven. JavaScript syntax
+and `git diff --check` pass. In a temporary source copy, making an earlier
+validated receipt hide the unresolved attempt causes both new tests to fail.
+No repository Python files changed. The full retrospective pytest command with
+`-m "not slow"` remains blocked by missing pytest; package installation failed.
+
+The configured canonical report, outcomes database, runtime and default mirror
+are absent. No original report/journal locations or live reader bindings were
+supplied. No operational task is complete. Local staging failed on the read-only
+Git metadata; automatic approval review rejected the connected GitHub file
+commit because approval is required and this run's policy is `never`. No commit
+or push was made. The same approval policy rejected the blocker comment and
+`needs-human` label. PR #1081 was rechecked open with `draft=false` at the
+revision above.

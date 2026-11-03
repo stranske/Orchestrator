@@ -410,6 +410,92 @@ raise SystemExit(retro.main())
   });
 }
 
+for (const outcome of ['abstention', 'validator_failure']) {
+  test(`inventory retains a paid ${outcome} before a later UNKNOWN revision`, (t) => {
+    const w = world(t);
+    const proposal = {
+      decision: 'needs_more_evidence', confidence: 'low',
+      rationale: 'The supplied evidence does not resolve the dispute.',
+      ground_truth_refs: [],
+      recommended_next_step: 'Inspect the missing acceptance evidence.',
+      evidence_gaps: ['Independent acceptance evidence is unavailable.'],
+      evidence_assessment: [{ claim: 'Acceptance criteria satisfied', status: 'insufficient',
+        evidence_ref: null, reason: 'Independent acceptance evidence is unavailable.' }],
+    };
+    const result = {
+      backend_run_id: 'earlier-native-paid',
+      raw_output: outcome === 'abstention' ? JSON.stringify(proposal) : 'private invalid response',
+      proposal: outcome === 'abstention' ? proposal : null,
+      errors: outcome === 'abstention' ? [] : ['private validator rejection'],
+    };
+    // Complete the existing reservation through the producer, then cross the
+    // invocation boundary on a new material revision without a raw response.
+    // The fixture supplies receipts only; it never invokes a provider.
+    const laterId = w.run(['-c', `
+import json, sys
+from pathlib import Path
+import adjudicator_retro as retro
+
+journal = retro.NativeAttemptJournal(Path(sys.argv[1]))
+result = json.loads(sys.argv[4])
+if result['proposal'] is not None:
+    assert not retro.roles.ROLE_REGISTRY['adjudicator'].validate(result['proposal'])
+journal.begin_invocation(sys.argv[2], {'run_id': result['backend_run_id']})
+journal.persist_raw(sys.argv[2], {
+    'run_id': result['backend_run_id'], 'output': result['raw_output'],
+})
+journal.validate(sys.argv[2], result)
+assert not journal.reserve('original-a', 'unstarted', 'same-digest', sys.argv[3])['reserved']
+later = journal.reserve('original-a', 'improved-evidence', 'new-digest', sys.argv[3], await_start=True)
+assert later['reserved']
+journal.begin_invocation(later['attempt_id'], {'run_id': 'later-unknown-paid'})
+print(json.dumps(later['attempt_id']))
+`, w.journal, w.ids[0], w.sourceHash, JSON.stringify(result)]);
+    const before = w.snapshot();
+    const report = w.run(w.inventoryArgs);
+    const prior = report.native_journal.attempts.find((item) => item.attempt_id === w.ids[0]);
+    const later = report.native_journal.attempts.find((item) => item.attempt_id === laterId);
+    assert.equal(report.native_journal.attempts.length, 4);
+    assert.equal(prior.state, 'validated');
+    assert.equal(prior.backend_run_id, result.backend_run_id);
+    assert.equal(prior.raw_response_sha256, sha256(result.raw_output));
+    const saved = w.connection.prepare('SELECT validated_json FROM native_attempts WHERE attempt_id=?')
+      .get(w.ids[0]);
+    assert.deepEqual(JSON.parse(saved.validated_json), result);
+    assert.equal(prior.validated_json_sha256, sha256(saved.validated_json));
+    assert.equal(prior.matches_original_source, true);
+    assert.equal(prior.in_original_cohort, true);
+    assert.equal(prior.receipt_authority, 'not_authenticated_by_inventory');
+    assert.equal(later.state, 'in_flight');
+    assert.equal(later.backend_run_id, 'later-unknown-paid');
+    assert.equal(later.raw_response_sha256, null);
+    assert.equal(later.validated_json_sha256, null);
+    assert.equal(later.matches_original_source, true);
+    const diagnostic = report.row_diagnostics[0];
+    assert.equal(diagnostic.retained_decision, 'needs_more_evidence');
+    assert.equal(diagnostic.native_first_break, 'unresolved_native_attempt');
+    assert.deepEqual(diagnostic.unresolved_native_attempts, [{
+      attempt_id: laterId, state: 'in_flight', matches_original_source: true, outcome: 'UNKNOWN',
+    }]);
+    assert.deepEqual(report.original_paid_attempts.map((item) => item.backend_run_id),
+      ['original-paid', 'earlier-paid']);
+    assert.deepEqual(report.paid_identity_summary, {
+      original_records: 2, original_unique: 2, native_records: 4, native_unique: 4,
+      union_unique: 6, overlapping_backend_ids: [],
+    });
+    assert.equal(report.canonical_report.retained_summary.graded, 29);
+    assert.equal(report.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+    assert.equal(report.dispatch_authorized, false);
+    assert.equal('graded' in report, false);
+    assert.equal(JSON.stringify(report).includes(result.raw_output), false);
+    assert.equal(JSON.stringify(report).includes('private validator rejection'), false);
+    assert.deepEqual(w.snapshot(), before);
+    for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+      assert.equal(fs.existsSync(path.join(w.root, name)), false);
+    }
+  });
+}
+
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);
   const before = w.snapshot();
