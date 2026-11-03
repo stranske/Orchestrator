@@ -773,13 +773,15 @@ def external_caller(cap: dict) -> dict | None:
         try:
             if not isinstance(declaration, dict):
                 raise ValueError("external_caller must name a path and function")
-            entry = Path(str(cap.get("entrypoint") or "").split(":", 1)[0]).expanduser()
+            external_entry = Path(str(cap.get("entrypoint") or "").split(":", 1)[0]).expanduser()
             caller = Path(str(declaration.get("path") or "")).expanduser()
             function = declaration.get("function")
             tree = HERE.parent if HERE.name == "src" else HERE
-            if not entry.is_absolute() or entry.resolve().is_relative_to(tree.resolve()):
+            if not external_entry.is_absolute() or external_entry.resolve().is_relative_to(
+                tree.resolve()
+            ):
                 raise ValueError("declared external entrypoint must be outside this tree")
-            if not entry.is_file():
+            if not external_entry.is_file():
                 raise ValueError("declared external entrypoint is absent")
             if not caller.is_absolute() or not caller.is_file() or caller.suffix != ".py":
                 raise ValueError("declared external caller Python file is absent")
@@ -899,7 +901,11 @@ def heartbeat_reachable(cap: dict) -> dict:
             ):
                 continue
             stamp = event.get("timestamp")
-            if type(stamp) in (int, float) and 0 <= now - stamp <= window:
+            if (
+                isinstance(stamp, (int, float))
+                and not isinstance(stamp, bool)
+                and 0 <= now - stamp <= window
+            ):
                 return {
                     "status": "reachable",
                     "via": ["runtime ledger invocation event"],
