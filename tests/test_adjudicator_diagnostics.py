@@ -47,6 +47,61 @@ def substantive_row():
 
 
 class OriginalRowDiagnosticsTests(unittest.TestCase):
+    def test_recorded_validator_rejection_survives_discarded_proposal(self):
+        row = substantive_row()
+        row.pop("proposal")
+        row["decision"] = None
+        row["errors"] = ["recommended_next_step must not contain mutating execution instructions"]
+        before = copy.deepcopy(row)
+        result = retro.diagnose_original_rows([row], [])[0]
+        self.assertEqual(result["retained_first_break"], "saved_proposal_validator_failure")
+        self.assertEqual(result["retained_error_ref"], "rows[0].errors[0]")
+        self.assertEqual(row, before)
+        self.assertFalse(result["dispatch_authorized"])
+
+    def test_recorded_error_order_and_locations_do_not_expose_payloads(self):
+        rejection = "recommended_next_step must not contain mutating execution instructions"
+        variants = [
+            (["private provider failure", rejection], "saved_attempt_error"),
+            ([rejection, "private provider failure"], "saved_proposal_validator_failure"),
+            (["private provider failure: " + rejection], "saved_attempt_error"),
+        ]
+        rows = []
+        for errors, _expected in variants:
+            row = substantive_row()
+            row.pop("proposal")
+            row["errors"] = errors
+            rows.append(row)
+        before = copy.deepcopy(rows)
+        results = retro.diagnose_original_rows(rows, [])
+        for index, ((_errors, expected), result) in enumerate(zip(variants, results)):
+            with self.subTest(index=index):
+                self.assertEqual(result["retained_first_break"], expected)
+                self.assertEqual(result["retained_error_ref"], f"rows[{index}].errors[0]")
+        self.assertNotIn("private provider failure", json.dumps(results))
+        self.assertEqual(rows, before)
+
+    def test_recorded_error_does_not_hide_missing_substantive_evidence(self):
+        row = substantive_row()
+        row["packet"]["ground_truth_evidence"].pop("diff_patch")
+        row["errors"] = ["recommended_next_step must not contain mutating execution instructions"]
+        result = retro.diagnose_original_rows([row], [])[0]
+        self.assertEqual(result["retained_first_break"], "saved_substantive_evidence_missing")
+        self.assertEqual(result["retained_error_ref"], "rows[0].errors[0]")
+
+    def test_scalar_and_singular_errors_have_specific_retained_locations(self):
+        for field in ("errors", "error"):
+            with self.subTest(field=field):
+                row = substantive_row()
+                row[field] = "private legacy error"
+                result = retro.diagnose_original_rows([row], [])[0]
+                self.assertEqual(result["retained_first_break"], "saved_attempt_error")
+                self.assertEqual(result["retained_error_ref"], f"rows[0].{field}")
+                self.assertNotIn("private legacy error", json.dumps(result))
+        self.assertIsNone(
+            retro.diagnose_original_rows([substantive_row()], [])[0]["retained_error_ref"]
+        )
+
     def test_retained_first_breaks_follow_evidence_validation_decision_truth_order(self):
         variants = []
         row = substantive_row()

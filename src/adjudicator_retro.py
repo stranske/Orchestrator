@@ -569,12 +569,27 @@ def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]
         ground = packet.get("ground_truth_evidence") if isinstance(packet, dict) else None
         proposal = row.get("proposal")
         decision = row.get("decision")
+        error_ref = None
+        attempt_break = "saved_attempt_error"
+        if row.get("errors"):
+            error_ref = f"rows[{index}].errors"
+            if isinstance(row["errors"], list):
+                error_ref += "[0]"
+                # The producer discards rejected proposals. Preserve the known
+                # historical rejection without parsing or exposing raw output.
+                # Earlier backend errors still take precedence in this list.
+                if row["errors"][0] == (
+                    "recommended_next_step must not contain mutating execution instructions"
+                ):
+                    attempt_break = "saved_proposal_validator_failure"
+        elif row.get("error"):
+            error_ref = f"rows[{index}].error"
         if not isinstance(ground, dict):
             first_break = "saved_packet_unavailable"
         elif _packet_metadata_only(ground):
             first_break = "saved_substantive_evidence_missing"
-        elif row.get("errors") or row.get("error"):
-            first_break = "saved_attempt_error"
+        elif error_ref is not None:
+            first_break = attempt_break
         elif proposal is not None and roles.ROLE_REGISTRY["adjudicator"].validate(proposal):
             first_break = "saved_proposal_validator_failure"
         elif isinstance(proposal, dict) and proposal.get("decision") != decision:
@@ -615,6 +630,7 @@ def diagnose_original_rows(rows: list[dict], attempts: list[dict]) -> list[dict]
                 "retained_decision": decision,
                 "retained_later_truth": row.get("later_truth"),
                 "retained_first_break": first_break,
+                "retained_error_ref": error_ref,
                 "native_first_break": native_break,
                 "unresolved_native_attempts": [
                     {

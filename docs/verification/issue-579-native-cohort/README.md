@@ -1,5 +1,31 @@
 # Original-cohort native candidate
 
+Issue #1072 retained-error follow-up (2026-11-03, base `b747622`): the
+producer discards proposals rejected by its validator. Diagnostics previously
+reported the known mutation-instruction rejection in `errors` as a generic
+attempt error. They now identify that exact retained rejection and expose
+`retained_error_ref`, an original-row field/index locator. Earlier backend
+errors and missing substantive evidence retain precedence. Other errors remain
+generic with their locator; raw provider/error text is not included. This is
+retained evidence only and grants no retry, receipt or grading authority.
+
+Four new regression methods fail before the repair (two assertion failures
+and six missing-field errors across subtests). Afterward all 32 diagnostics,
+seven replay/publication CLI tests and 23 module self-checks pass;
+`git diff --check` passes. The required Black commands and focused pytest
+command cannot start because Black and pytest are missing. Installation from
+PyPI into `/tmp` failed with no available package versions. No commit or push
+was attempted because the mandatory Black gate cannot pass. Full pytest
+collection and the collection-floor reconciliation remain outstanding.
+
+Reconciliation through `b747622` verifies no new operational checkbox. The
+configured canonical report and outcomes database are absent; authentic original,
+journal, deployed and mirror inputs were not available. No production dispatch
+or grading occurred. October 18 proof and fixed next-20 observations remain
+unavailable. PR #1081 was observed open with `draft=false`. Updating its body,
+adding `needs-human` and posting the blocker were rejected because the tools
+require approval while this run's policy is `never`. No checkbox was changed.
+
 Issue #1072 runtime-dependency inventory follow-up (base `8e2cb85`): the
 inventory now includes `runtime_module_sha256`, mapping each adjacent top-level
 Python module name to its content hash in either the checkout's `src/` or the
