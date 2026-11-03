@@ -8,6 +8,14 @@ const { createHash } = require('node:crypto');
 const { test } = require('node:test');
 const { execute, namedTests, runAcceptance } = require('../scripts/run_adjudicator_acceptance');
 
+// Only the JUnit reader uses real Python; pytest execution remains a test double.
+// Resolve it in this environment instead of pinning a hosted runner's patch release.
+const resolvedPython = execute(process.env.PYTHON || 'python3',
+  ['-I', '-c', 'import sys; print(sys.executable)'], { cwd: __dirname });
+assert.equal(resolvedPython.exit_code, 0, resolvedPython.stderr.toString());
+const parserPython = resolvedPython.stdout.toString().trim();
+assert.ok(path.isAbsolute(parserPython), 'JUnit parser needs an absolute interpreter');
+
 function fixture(t, scenario = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-acceptance-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -36,8 +44,10 @@ const options = ${JSON.stringify(scenario)};
 const required = ${JSON.stringify(namedTests)};
 if (args[0] === '--version') { console.log('Python fixture'); process.exit(0); }
 if (args[0] === '-I') {
+  if (options.parserFailure) { console.error('fixture parser failed'); process.exit(3); }
+  if (options.parserInvalidJson) { console.log('invalid json'); process.exit(0); }
   const { spawnSync } = require('node:child_process');
-  const result = spawnSync(${JSON.stringify(process.env.PYTHON || '/opt/hostedtoolcache/Python/3.14.9/x64/bin/python')}, args,
+  const result = spawnSync(${JSON.stringify(parserPython)}, args,
     { stdio: 'inherit' });
   process.exit(result.status ?? 1);
 }
@@ -96,6 +106,12 @@ test('records exact commands, source hashes, complete JUnit and logs for both ch
     assert.equal(item.log_sha256, createHash('sha256').update(log).digest('hex'));
     const xml = fs.readFileSync(path.join(options.output, item.junit));
     assert.equal(item.junit_sha256, createHash('sha256').update(xml).digest('hex'));
+    assert.equal(item.junit_reader.exit_code, 0);
+    assert.equal(item.junit_reader.json_decoded, true);
+    assert.equal(item.junit_reader.command[0], options.python);
+    const parserLog = fs.readFileSync(path.join(options.output, item.junit_reader.log));
+    assert.equal(item.junit_reader.log_sha256,
+      createHash('sha256').update(parserLog).digest('hex'));
   }
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(options.output, 'checks.json'))), receipt);
 });
@@ -120,9 +136,34 @@ test('missing pytest preserves two failures and cannot complete acceptance', (t)
     assert.equal(item.exit_code, 1);
     assert.equal(item.test_count, null);
     assert.equal(item.junit, null);
+    assert.equal(item.junit_reader, null);
     assert.match(fs.readFileSync(path.join(options.output, item.log), 'utf8'), /No module named pytest/);
   }
 });
+
+for (const scenario of [{ parserFailure: true }, { parserInvalidJson: true }, { malformed: true }]) {
+  test(`preserves JUnit reader failures: ${JSON.stringify(scenario)}`, (t) => {
+    const options = fixture(t, scenario);
+    const receipt = runAcceptance(options);
+    assert.equal(receipt.required_tests_passed, false);
+    assert.equal(receipt.collection.passed, true);
+    for (const item of receipt.checks) {
+      assert.equal(item.exit_code, 0, 'pytest exit and JUnit parsing are separate observations');
+      assert.equal(item.passed, false);
+      assert.equal(item.test_count, null);
+      assert.equal(item.junit_reader.json_decoded, false);
+      assert.equal(item.junit_reader.exit_code,
+        scenario.parserFailure ? 3 : scenario.parserInvalidJson ? 0 : 1);
+      assert.equal(item.junit_reader.error_code, null);
+      assert.equal(item.junit_reader.signal, null);
+      assert.equal(item.junit_reader.timed_out, false);
+      const log = fs.readFileSync(path.join(options.output, item.junit_reader.log));
+      assert.equal(item.junit_reader.log_sha256, createHash('sha256').update(log).digest('hex'));
+      assert.match(log.toString(), scenario.parserFailure ? /fixture parser failed/ :
+        scenario.parserInvalidJson ? /invalid json/ : /ParseError/);
+    }
+  });
+}
 
 for (const scenario of [{ noXml: true }, { malformed: true }, { empty: true },
   { incomplete: true }, { duplicate: true }, { skipped: true }, { foreign: true }, { exit: 1 }]) {

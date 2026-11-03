@@ -1,5 +1,33 @@
 # Acceptance evidence recovery for #1096
 
+## Interpreter portability follow-up, 2026-11-03 at 19:43 UTC
+
+The previous runner regression fixture hardcoded Python 3.14.9, which is absent
+in this environment. Its initial run passed 16 tests and failed seven. It now
+resolves an available parser interpreter; all 26 runner regressions and 40 inventory
+regressions pass. The production runner also preserves the JUnit reader's command,
+exit status, raw log and hash separately from the pytest invocation. Parser failure
+and invalid output remain unsuccessful evidence. [Validation and log hashes](interpreter-followup/validation.json)
+bind these observations to source commit `96dde1810f56562e0e23af6f0e603b3e48e7728a`.
+
+The [pre-execution plan](interpreter-followup/plan.md) selected the current Python
+3.14.10 installation. [Collection, the four named tests and the full suite](interpreter-followup/acceptance-run/checks.json)
+all exit 1 before collection with `No module named pytest`. No new task is complete;
+accepted deployment identity, authentic native grading/retry inputs and the fixed
+next-20 manifest remain unavailable. Targeted connected searches recovered no fixed
+manifest or individual original-retry artifact beyond the existing references.
+
+Recent commits were reviewed before continuing. They add recovery inventories,
+pre-dispatch checks and test-runner validation, not passing operational acceptance.
+The attempted PR-body reconciliation of the duplicated recovery/pre-execution
+checkboxes was rejected: the connector requires approval and this run's policy is
+`never`. No PR-body change is claimed. PR #1097 was rechecked open with `draft=false`.
+
+No Python source changed, so the Python-specific Black gate does not apply.
+The checkout Git metadata remains read-only. The source and evidence commits are
+preserved in `/tmp/issue1096-interpreter-git-oe_clm4j` and the accompanying
+[patch](../../../artifacts/issue-1096-interpreter-followup.patch).
+
 ## Suite completeness follow-up, 2026-11-03
 
 The runner previously accepted a full-suite JUnit file containing only the four

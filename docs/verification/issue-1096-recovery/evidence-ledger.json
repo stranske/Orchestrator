@@ -185,6 +185,36 @@
       "needs_human_label": "rejected_connector_requires_approval_policy_never",
       "source_commit_storage": "isolated_git_directory_because_checkout_metadata_is_read_only",
       "limitation": "Runner regression tests verify evidence validation only; no operational acceptance established."
+    },
+    "interpreter_portability_followup": {
+      "checked_at": "2026-11-03T19:43:14.177Z",
+      "evaluated_revision": "96dde1810f56562e0e23af6f0e603b3e48e7728a",
+      "source_parent": "1ecef8633d696c6e3b1ad864572dad65bea132dc",
+      "plan": "interpreter-followup/plan.md",
+      "checks": "interpreter-followup/acceptance-run/checks.json",
+      "validation": "interpreter-followup/validation.json",
+      "runner_regressions_before": {
+        "passed": 16,
+        "failed": 7
+      },
+      "runner_regressions_after": {
+        "passed": 26,
+        "failed": 0
+      },
+      "inventory_tests_passed": 40,
+      "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.10/x64/bin/python3",
+      "source_unchanged": true,
+      "pytest_status": "blocked_before_collection_missing_pytest",
+      "required_tests_passed": false,
+      "accepted_deployment_verified": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "pr_body_update": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "number": 1097,
+        "state": "open",
+        "isDraft": false
+      },
+      "limitation": "Test-double regressions and failed real commands only. No deployment, native grade, retry outcome or live-cohort acceptance established."
     }
   },
   "mirror_synchronization": [

@@ -125,11 +125,24 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
       const log = Buffer.concat([result.stdout, result.stderr]);
       fs.writeFileSync(path.join(output, `${name}.log`), log, { flag: 'wx' });
       let cases = null;
+      let junitRead = null;
       if (fs.existsSync(xml)) {
-        const parsed = execute(python, ['-I', '-c', junitReader, xml], { cwd: root, env, timeout });
-        if (parsed.exit_code === 0 && !parsed.error_code) {
-          try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Invalid receipt. */ }
+        const readerCommand = [python, '-I', '-c', junitReader, xml];
+        const parsed = execute(python, readerCommand.slice(1), { cwd: root, env, timeout });
+        const readerLog = Buffer.concat([parsed.stdout, parsed.stderr]);
+        const readerLogName = `${name}-junit-reader.log`;
+        fs.writeFileSync(path.join(output, readerLogName), readerLog, { flag: 'wx' });
+        let jsonDecoded = false;
+        if (parsed.exit_code === 0 && !parsed.error_code && !parsed.signal) {
+          try {
+            cases = JSON.parse(parsed.stdout.toString());
+            jsonDecoded = true;
+          } catch { /* The raw output remains available in the reader log. */ }
         }
+        junitRead = { command: readerCommand, exit_code: parsed.exit_code,
+          signal: parsed.signal, error_code: parsed.error_code,
+          timed_out: parsed.error_code === 'ETIMEDOUT', json_decoded: jsonDecoded,
+          log: readerLogName, log_sha256: digest(readerLog) };
       }
       const expected = name === 'named-tests' ? namedTests : collected;
       const complete = (name === 'named-tests' || collectionPassed) &&
@@ -141,6 +154,7 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
         log: `${name}.log`, log_sha256: digest(log),
         junit: fs.existsSync(xml) ? `${name}.xml` : null,
         junit_sha256: fs.existsSync(xml) ? digest(fs.readFileSync(xml)) : null,
+        junit_reader: junitRead,
         test_count: Array.isArray(cases) ? cases.length : null,
         passed: result.exit_code === 0 && !result.error_code && !result.signal && complete });
     }
