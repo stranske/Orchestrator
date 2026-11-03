@@ -1,5 +1,25 @@
 # Original-cohort native candidate
 
+Issue #1072 report-identity follow-up on 2026-11-03 (base `57bd9f6`): inventory
+now pins both report locations and filesystem identities across its reads and
+returns the originally observed resolved paths. Byte-identical atomic replacement
+or a symlink switch otherwise passed content checks and could misattribute the
+original cohort or canonical identity. Four new standard-library tests cover
+replacement, symlink switching, disappearance and stable read-only observation
+for both reports. Before the fix, the replacement and switching controls failed;
+afterward all 22 diagnostic tests, seven native replay/publication CLI tests and
+23 module self-checks pass. `git diff --check` also passes.
+
+The configured runtime directory and canonical report are absent in this runner.
+No authentic production inventory or dispatch was performed, and operational
+checkboxes remain incomplete. Missing October 18 evidence and fixed next-20
+observations remain unavailable. Targeted pytest cannot start because pytest is
+missing. Both required Black commands cannot start because Black is missing;
+installation into `/tmp` failed with no package versions available. No commit or
+push was attempted because the mandatory Black gate could not pass. Adding
+`needs-human` and posting the blocker on PR #1081 were rejected because those
+tools require approval while this run's policy is `never`.
+
 Issue #1072 journal-identity follow-up on 2026-11-03 (base `0e772b6`): reviewed
 the recent inventory, publication-guard and diagnostic commits. None verifies an
 operational checkbox: the configured canonical report and independent outcomes

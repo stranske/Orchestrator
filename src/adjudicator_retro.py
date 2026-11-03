@@ -407,8 +407,28 @@ def inventory_native_state(
     histories remain visible. No Brain read, capability issuance, provider call,
     publication, or report normalization is performed.
     """
-    source = original_report.read_bytes()
-    canonical = canonical_path.read_bytes()
+
+    def file_identity(path):
+        resolved = path.resolve()
+        try:
+            stat = resolved.stat()
+        except FileNotFoundError:
+            return resolved, None, None
+        return resolved, stat.st_dev, stat.st_ino
+
+    observed_source = file_identity(original_report)
+    observed_canonical = file_identity(canonical_path)
+    source = observed_source[0].read_bytes()
+    canonical = observed_canonical[0].read_bytes()
+
+    def check_report_locations():
+        if (
+            file_identity(original_report) != observed_source
+            or file_identity(canonical_path) != observed_canonical
+        ):
+            raise ValueError("native report location changed during inventory")
+
+    check_report_locations()
     source_hash = hashlib.sha256(source).hexdigest()
     saved = json.loads(source)
     current = json.loads(canonical)
@@ -441,17 +461,9 @@ def inventory_native_state(
         if attempt.get("backend_run_id")
     ]
 
-    def journal_identity():
-        resolved = journal_path.resolve()
-        try:
-            stat = resolved.stat()
-        except FileNotFoundError:
-            return resolved, None, None
-        return resolved, stat.st_dev, stat.st_ino
-
     # A connection keeps reading the old inode after an atomic replacement.
     # Pin the selected file as well as comparing records on that connection.
-    observed_journal = journal_identity()
+    observed_journal = file_identity(journal_path)
     # Do not instantiate NativeAttemptJournal: its constructor creates/repairs files.
     with sqlite3.connect(observed_journal[0].as_uri() + "?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
@@ -501,13 +513,17 @@ def inventory_native_state(
                 raise ValueError("runtime code location changed during inventory") from exc
             if rechecked != observed:
                 raise ValueError("runtime code location changed during inventory")
+        # Identical bytes do not prove the selected reports still belong to
+        # this observation. Pin both locations across the final content read.
+        check_report_locations()
         if (
             original_report.read_bytes() != source
             or canonical_path.read_bytes() != canonical
             or records() != before
         ):
             raise ValueError("native inventory inputs changed during observation")
-        if journal_identity() != observed_journal:
+        check_report_locations()
+        if file_identity(journal_path) != observed_journal:
             raise ValueError("native journal location changed during inventory")
 
     original_ids = [item["backend_run_id"] for item in original_paid]
@@ -520,13 +536,13 @@ def inventory_native_state(
         "deployed_code": deployed,
         "mirror_code": mirror,
         "original_report": {
-            "path": str(original_report.resolve()),
+            "path": str(observed_source[0]),
             "sha256": source_hash,
             "population": saved.get("population"),
             "case_ids": case_ids,
         },
         "canonical_report": {
-            "path": str(canonical_path.resolve()),
+            "path": str(observed_canonical[0]),
             "sha256": hashlib.sha256(canonical).hexdigest(),
             "native_publication_present": marker is not None,
             "retained_summary": current.get("summary"),

@@ -380,6 +380,88 @@ class InventoryCodeStabilityTests(unittest.TestCase):
         self.assertEqual(self.before, {key: path.read_bytes() for key, path in self.inputs.items()})
 
 
+class InventoryReportStabilityTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        original = self.root / "original.json"
+        canonical = self.root / "canonical.json"
+        original.write_text(json.dumps({"rows": [substantive_row()]}))
+        canonical.write_bytes(original.read_bytes())
+        journal = retro.NativeAttemptJournal(self.root / "native.sqlite")
+        self.inputs = {
+            "original_report": original,
+            "canonical_path": canonical,
+            "journal_path": journal.path,
+        }
+
+    def assert_rejected_change(self, change):
+        observe = retro._inventory_code
+        changed = False
+
+        def observe_then_change(root):
+            nonlocal changed
+            result = observe(root)
+            if not changed:
+                changed = True
+                change()
+            return result
+
+        with patch.object(retro, "_inventory_code", observe_then_change):
+            with self.assertRaisesRegex(ValueError, "report location changed"):
+                retro.inventory_native_state(**self.inputs)
+        self.assertTrue(changed)
+
+    def test_inventory_rejects_identical_report_replacement(self):
+        for name in ("original_report", "canonical_path"):
+            with self.subTest(report=name):
+                report = self.inputs[name]
+                replacement = self.root / "replacement.json"
+                replacement.write_bytes(report.read_bytes())
+                self.assert_rejected_change(lambda: replacement.replace(report))
+
+    def test_inventory_rejects_report_symlink_switch_with_identical_bytes(self):
+        for name in ("original_report", "canonical_path"):
+            with self.subTest(report=name):
+                report = self.inputs[name]
+                link = self.root / (name + "-link.json")
+                link.symlink_to(report)
+                self.inputs[name] = link
+                replacement = self.root / (name + "-replacement.json")
+                replacement.write_bytes(report.read_bytes())
+
+                def switch():
+                    link.unlink()
+                    link.symlink_to(replacement)
+
+                self.assert_rejected_change(switch)
+
+    def test_inventory_rejects_disappearing_report(self):
+        for name in ("original_report", "canonical_path"):
+            with self.subTest(report=name):
+                report = self.inputs[name]
+                contents = report.read_bytes()
+                try:
+                    self.assert_rejected_change(report.unlink)
+                finally:
+                    report.write_bytes(contents)
+
+    def test_stable_report_symlinks_pin_resolved_locations_without_writes(self):
+        before = {name: path.read_bytes() for name, path in self.inputs.items()}
+        targets = {}
+        for name in ("original_report", "canonical_path"):
+            targets[name] = self.inputs[name]
+            link = self.root / (name + "-link.json")
+            link.symlink_to(targets[name])
+            self.inputs[name] = link
+        result = retro.inventory_native_state(**self.inputs)
+        self.assertEqual(result["original_report"]["path"], str(targets["original_report"]))
+        self.assertEqual(result["canonical_report"]["path"], str(targets["canonical_path"]))
+        self.assertEqual(before, {name: path.read_bytes() for name, path in self.inputs.items()})
+        self.assertFalse(result["dispatch_authorized"])
+
+
 class InventoryJournalStabilityTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
