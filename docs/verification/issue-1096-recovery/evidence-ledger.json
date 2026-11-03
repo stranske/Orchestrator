@@ -163,6 +163,28 @@
         "state": "open",
         "isDraft": false
       }
+    },
+    "suite_completeness_followup": {
+      "checked_at": "2026-11-03T19:28:57.268Z",
+      "evaluated_revision": "b2e375553429ab2f632b41214e02f904204b9fa2",
+      "source_parent": "bfee009c368dd170682524924dd7e3a58678d1ee",
+      "plan": "suite-completeness-plan.md",
+      "checks": "suite-completeness-run/checks.json",
+      "runner_validation": "suite-completeness-run/runner-validation.json",
+      "runner_tests_passed": 23,
+      "collection_exit_code": 1,
+      "named_tests_exit_code": 1,
+      "retrospective_suite_exit_code": 1,
+      "source_unchanged": true,
+      "required_tests_passed": false,
+      "accepted_deployment_verified": false,
+      "pytest_status": "blocked_before_collection_missing_pytest",
+      "bounded_install_attempt": "no_available_distribution",
+      "task_checkboxes_verified_complete": 0,
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "source_commit_storage": "isolated_git_directory_because_checkout_metadata_is_read_only",
+      "limitation": "Runner regression tests verify evidence validation only; no operational acceptance established."
     }
   },
   "mirror_synchronization": [

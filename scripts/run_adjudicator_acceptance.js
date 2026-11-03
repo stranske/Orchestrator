@@ -15,7 +15,8 @@ const namedTests = [
   'test_floor_still_demotes_a_metadata_only_packet',
   'test_abstained_row_is_reattempted_when_the_packet_gains_diff_and_criteria',
 ];
-const sourcePaths = ['src', 'tests', 'pyproject.toml', 'requirements.lock'];
+const sourcePaths = ['src', 'tests', 'scripts/run_adjudicator_acceptance.js',
+  'conftest.py', 'pytest.ini', 'setup.cfg', 'pyproject.toml', 'requirements.lock'];
 const junitReader = `
 import json, sys, xml.etree.ElementTree as ET
 root = ET.parse(sys.argv[1]).getroot()
@@ -81,6 +82,7 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
   const env = { ...process.env, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1',
     ORCH_STATE_DIR: state, ORCH_CAPABILITIES_PATH: path.join(state, 'capabilities.json') };
   delete env.PYTEST_ADDOPTS;
+  delete env.PYTEST_PLUGINS;
   const receipt = { schema_version: 1, checked_at: new Date().toISOString(),
     evaluated_revision: revision, evaluated_tree: git(root, ['rev-parse', `${revision}^{tree}`]),
     accepted_deployment_verified: false, interpreter: python,
@@ -95,6 +97,23 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
     const version = execute(python, ['--version'], { cwd: root, env, timeout });
     receipt.interpreter_version = Buffer.concat([version.stdout, version.stderr]).toString().trim();
     receipt.interpreter_usable = version.exit_code === 0 && !version.error_code && !version.signal;
+    // A zero exit and the four named cases cannot establish that the full suite
+    // ran. Bind its JUnit identities to an independent collection at this tree.
+    const collectionCommand = [python, '-m', 'pytest', '-o', 'addopts=', '-m', 'not slow',
+      '--color=no', '--collect-only', '-q', 'tests/test_adjudicator_retro.py'];
+    const collection = execute(python, collectionCommand.slice(1), { cwd: root, env, timeout });
+    const collectionLog = Buffer.concat([collection.stdout, collection.stderr]);
+    fs.writeFileSync(path.join(output, 'collection.log'), collectionLog, { flag: 'wx' });
+    const prefix = 'tests/test_adjudicator_retro.py::';
+    const collected = collection.stdout.toString('utf8').split(/\r?\n/)
+      .filter((line) => line.startsWith(prefix)).map((line) => line.slice(prefix.length));
+    const collectionPassed = collection.exit_code === 0 && !collection.error_code &&
+      !collection.signal && collected.length > 0 && new Set(collected).size === collected.length &&
+      namedTests.every((test) => collected.includes(test));
+    receipt.collection = { command: collectionCommand, exit_code: collection.exit_code,
+      signal: collection.signal, error_code: collection.error_code,
+      timed_out: collection.error_code === 'ETIMEDOUT', log: 'collection.log',
+      log_sha256: digest(collectionLog), test_names: collected, passed: collectionPassed };
     for (const [name, nodes] of [
       ['named-tests', namedTests.map((test) => `tests/test_adjudicator_retro.py::${test}`)],
       ['retrospective-suite', ['tests/test_adjudicator_retro.py']],
@@ -112,10 +131,11 @@ function runAcceptance({ root = path.resolve(__dirname, '..'), python, revision,
           try { cases = JSON.parse(parsed.stdout.toString()); } catch { /* Invalid receipt. */ }
         }
       }
-      const complete = Array.isArray(cases) && cases.length > 0 &&
+      const expected = name === 'named-tests' ? namedTests : collected;
+      const complete = (name === 'named-tests' || collectionPassed) &&
+        Array.isArray(cases) && cases.length === expected.length && cases.length > 0 &&
         cases.every((item) => !item.unsuccessful && item.classname === 'tests.test_adjudicator_retro') &&
-        namedTests.every((test) => cases.filter((item) => item.name === test).length === 1) &&
-        (name !== 'named-tests' || cases.length === namedTests.length);
+        expected.every((test) => cases.filter((item) => item.name === test).length === 1);
       receipt.checks.push({ name, command, exit_code: result.exit_code, signal: result.signal,
         error_code: result.error_code, timed_out: result.error_code === 'ETIMEDOUT',
         log: `${name}.log`, log_sha256: digest(log),

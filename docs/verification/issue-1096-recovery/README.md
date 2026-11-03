@@ -1,5 +1,27 @@
 # Acceptance evidence recovery for #1096
 
+## Suite completeness follow-up, 2026-11-03
+
+The runner previously accepted a full-suite JUnit file containing only the four
+named tests. It now requires exact identities from a separate collection,
+including parameterized cases, and rejects missing or duplicate suite results.
+Its revision check also covers the runner and root pytest configuration.
+All [23 runner regressions](suite-completeness-run/runner-tests.log) pass.
+
+[The bounded run](suite-completeness-run/checks.json) evaluates source commit
+`b2e375553429ab2f632b41214e02f904204b9fa2`, parent `bfee009c368dd170682524924dd7e3a58678d1ee`.
+Collection, named tests and the full suite still fail before collection because
+the selected interpreter lacks pytest. A bounded temporary installation attempt
+found no available distribution. The accepted deployment remains unverified;
+no task checkbox is newly complete. [The plan](suite-completeness-plan.md) records
+the command and stop rule. Checkout Git metadata is read-only, so the source and
+evidence commits are preserved in isolated Git storage and
+`artifacts/issue-1096-suite-completeness.patch`.
+
+The connector rejected the blocker comment and `needs-human` label because they
+require approval and this run's approval policy is `never`. PR #1097 was observed
+open with `draft=false`; this run made no remote changes.
+
 ## Required-test follow-up at 19:06 UTC
 
 The four named tests and full retrospective suite were attempted using the selected
