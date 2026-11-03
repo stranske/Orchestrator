@@ -1,0 +1,415 @@
+## 1. tests/test_local_verify_coverage.py::test_run_argv_preserves_partial_text_after_a_timeout
+Mutation: return report, partial -> return report, ""
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_local_verify_coverage.py::test_run_argv_preserves_partial_text_after_a_timeout
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_run_argv_preserves_partial_text_after_a_timeout _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11123cad0>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-269/test_run_argv_preserves_partia0')
+
+    def test_run_argv_preserves_partial_text_after_a_timeout(monkeypatch, tmp_path):
+        def timed_out(*_args, **_kwargs):
+            raise subprocess.TimeoutExpired(["pytest"], 9, output="partial node output")
+    
+        monkeypatch.setattr(local_verify.subprocess, "run", timed_out)
+        report, stdout = local_verify._run_argv(["pytest"], tmp_path, 9)
+        assert report["returncode"] is None
+        assert report["stdout_tail"] == "partial node output"
+>       assert stdout == "partial node output"
+E       AssertionError: assert '' == 'partial node output'
+E         
+E         - partial node output
+
+tests/test_local_verify_coverage.py:144: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_local_verify_coverage.py::test_run_argv_preserves_partial_text_after_a_timeout
+1 failed in 0.29s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_local_verify_coverage.py::test_run_argv_preserves_partial_text_after_a_timeout
+.                                                                        [100%]
+1 passed in 0.24s
+
+## 2. tests/test_local_verify_coverage.py::test_main_renders_json_and_transcript_without_changing_the_verdict
+Mutation: return 0 if result.get("ok") else 1 -> return 1
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_local_verify_coverage.py::test_main_renders_json_and_transcript_without_changing_the_verdict
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_main_renders_json_and_transcript_without_changing_the_verdict ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1084fce90>
+capsys = <_pytest.capture.CaptureFixture object at 0x1094509e0>
+
+    def test_main_renders_json_and_transcript_without_changing_the_verdict(monkeypatch, capsys):
+        monkeypatch.setattr(local_verify, "_capability_heartbeat", lambda: None)
+        calls = []
+    
+        def verify(worktree, **kwargs):
+            calls.append((worktree, kwargs))
+            return {"ok": True, "verdict": "PASS", "worktree": worktree}
+    
+        monkeypatch.setattr(local_verify, "verify", verify)
+        monkeypatch.setattr(local_verify, "record_verdict", lambda run_id, result: {"run_id": run_id})
+        monkeypatch.setattr(local_verify, "break_transcript", lambda result: "transcript\n")
+    
+>       assert local_verify.main(["--worktree", "/candidate", "--test-cmd", "pytest"]) == 0
+E       AssertionError: assert 1 == 0
+E        +  where 1 = <function main at 0x1093ca160>(['--worktree', '/candidate', '--test-cmd', 'pytest'])
+E        +    where <function main at 0x1093ca160> = local_verify.main
+
+tests/test_local_verify_coverage.py:159: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{
+  "ok": true,
+  "verdict": "PASS",
+  "worktree": "/candidate"
+}
+=========================== short test summary info ============================
+FAILED tests/test_local_verify_coverage.py::test_main_renders_json_and_transcript_without_changing_the_verdict
+1 failed in 0.29s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_local_verify_coverage.py::test_main_renders_json_and_transcript_without_changing_the_verdict
+.                                                                        [100%]
+1 passed in 0.23s
+
+## 3. tests/test_repo_knowledge_cli_coverage.py::test_main_exports_agent_rules_and_requires_complete_apply_arguments
+Mutation: print(export_agents_md(repo, max_lines=max_lines), end="") -> print("broken export", end="")
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_exports_agent_rules_and_requires_complete_apply_arguments
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_main_exports_agent_rules_and_requires_complete_apply_arguments ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10737a210>
+capsys = <_pytest.capture.CaptureFixture object at 0x1082c0890>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-273/test_main_exports_agent_rules_0')
+
+    def test_main_exports_agent_rules_and_requires_complete_apply_arguments(
+        monkeypatch, capsys, tmp_path
+    ):
+        monkeypatch.setattr(repo_knowledge, "export_agents_md", lambda repo, **kwargs: f"export:{repo}")
+        assert repo_knowledge.main(["--export-agents-md", "owner/repo", "--max-lines", "4"]) == 0
+>       assert capsys.readouterr().out == "export:owner/repo"
+E       AssertionError: assert 'broken export' == 'export:owner/repo'
+E         
+E         - export:owner/repo
+E         + broken export
+
+tests/test_repo_knowledge_cli_coverage.py:35: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_exports_agent_rules_and_requires_complete_apply_arguments
+1 failed in 0.27s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_exports_agent_rules_and_requires_complete_apply_arguments
+.                                                                        [100%]
+1 passed in 0.24s
+
+## 4. tests/test_repo_knowledge_cli_coverage.py::test_main_exports_all_registered_repos
+Mutation: if export_agents_md(repo, max_lines=max_lines) -> if False
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_exports_all_registered_repos
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________________ test_main_exports_all_registered_repos ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x110b3a150>
+capsys = <_pytest.capture.CaptureFixture object at 0x110ccc3b0>
+
+    def test_main_exports_all_registered_repos(monkeypatch, capsys):
+        monkeypatch.setattr(repo_knowledge, "load", lambda: {"repos": {"z/repo": {}, "a/repo": {}}})
+        monkeypatch.setattr(
+            repo_knowledge, "export_agents_md", lambda repo, **kwargs: "" if repo == "z/repo" else "A"
+        )
+        assert repo_knowledge.main(["--export-all-agents-md", "--json", "--max-lines", "2"]) == 0
+>       assert capsys.readouterr().out.strip() == '{\n  "a/repo": "A"\n}'
+E       assert '{}' == '{\n  "a/repo": "A"\n}'
+E         
+E         + {}
+E         - {
+E         -   "a/repo": "A"
+E         - }
+
+tests/test_repo_knowledge_cli_coverage.py:65: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_exports_all_registered_repos
+1 failed in 0.28s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_exports_all_registered_repos
+.                                                                        [100%]
+1 passed in 0.26s
+
+## 5. tests/test_repo_knowledge_cli_coverage.py::test_main_validates_agent_exports_and_preserves_status
+Mutation: return 0 if result["ok"] else 1 -> return 0
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_validates_agent_exports_and_preserves_status
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_main_validates_agent_exports_and_preserves_status ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105cf86b0>
+capsys = <_pytest.capture.CaptureFixture object at 0x106c404d0>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-277/test_main_validates_agent_expo0')
+
+    def test_main_validates_agent_exports_and_preserves_status(monkeypatch, capsys, tmp_path):
+        seen = {}
+    
+        def validate(path, **kwargs):
+            seen.update(path=path, **kwargs)
+            return {"ok": False}
+    
+        monkeypatch.setattr(repo_knowledge, "validate_agents_md_export", validate)
+>       assert (
+            repo_knowledge.main(
+                ["--validate-agents-md", str(tmp_path), "--repo", "owner/repo", "--json"]
+            )
+            == 1
+        )
+E       AssertionError: assert 0 == 1
+E        +  where 0 = <function main at 0x106ca2de0>(['--validate-agents-md', '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-277/test_main_validates_agent_expo0', '--repo', 'owner/repo', '--json'])
+E        +    where <function main at 0x106ca2de0> = repo_knowledge.main
+
+tests/test_repo_knowledge_cli_coverage.py:76: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{
+  "ok": false
+}
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_validates_agent_exports_and_preserves_status
+1 failed in 0.28s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_validates_agent_exports_and_preserves_status
+.                                                                        [100%]
+1 passed in 0.26s
+
+## 6. tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_snapshot
+Mutation: print(json.dumps(suggest_from_snapshot(snapshot), indent=2)) -> print("broken snapshot")
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_snapshot
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________________ test_main_suggests_from_snapshot _______________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x107dce030>
+capsys = <_pytest.capture.CaptureFixture object at 0x108d14530>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-279/test_main_suggests_from_snapsh0')
+
+    def test_main_suggests_from_snapshot(monkeypatch, capsys, tmp_path):
+        snapshot = tmp_path / "snapshot.json"
+        monkeypatch.setattr(repo_knowledge, "suggest_from_snapshot", lambda path: [{"path": str(path)}])
+        assert repo_knowledge.main(["--suggest-from-snapshot", str(snapshot)]) == 0
+>       assert str(snapshot) in capsys.readouterr().out
+E       AssertionError: assert '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-279/test_main_suggests_from_snapsh0/snapshot.json' in 'broken snapshot\n'
+E        +  where '/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-279/test_main_suggests_from_snapsh0/snapshot.json' = str(PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-279/test_main_suggests_from_snapsh0/snapshot.json'))
+E        +  and   'broken snapshot\n' = CaptureResult(out='broken snapshot\n', err='').out
+E        +    where CaptureResult(out='broken snapshot\n', err='') = readouterr()
+E        +      where readouterr = <_pytest.capture.CaptureFixture object at 0x108d14530>.readouterr
+
+tests/test_repo_knowledge_cli_coverage.py:90: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_snapshot
+1 failed in 0.28s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_snapshot
+.                                                                        [100%]
+1 passed in 0.24s
+
+## 7. tests/test_repo_knowledge_cli_coverage.py::test_main_searches_with_all_optional_filters
+Mutation: include_runs="--no-runs" not in argv, -> include_runs=True,
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_searches_with_all_optional_filters
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________________ test_main_searches_with_all_optional_filters _________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x108fce240>
+capsys = <_pytest.capture.CaptureFixture object at 0x10a08c650>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-281/test_main_searches_with_all_op0')
+
+    def test_main_searches_with_all_optional_filters(monkeypatch, capsys, tmp_path):
+        seen = {}
+    
+        def search(target, **kwargs):
+            seen.update(target=target, **kwargs)
+            return [{"ok": True}]
+    
+        monkeypatch.setattr(repo_knowledge, "search_repo_memory", search)
+        assert repo_knowledge.main(["--search"]) == 2
+        assert "requires owner/repo" in capsys.readouterr().err
+        assert (
+            repo_knowledge.main(
+                [
+                    "--search",
+                    "owner/repo#7",
+                    "--query",
+                    "lint",
+                    "--task-type",
+                    "repair",
+                    "--lane",
+                    "opener",
+                    "--max",
+                    "3",
+                    "--snapshot-json",
+                    str(tmp_path / "snapshot.json"),
+                    "--no-runs",
+                ]
+            )
+            == 0
+        )
+>       assert seen == {
+            "target": "owner/repo#7",
+            "query": "lint",
+            "task_type": "repair",
+            "lane": "opener",
+            "max_results": 3,
+            "snapshot_path": tmp_path / "snapshot.json",
+            "include_runs": False,
+        }
+E       AssertionError: assert {'target': 'o...'opener', ...} == {'target': 'o...'opener', ...}
+E         
+E         Omitting 6 identical items, use -vv to show
+E         Differing items:
+E         {'include_runs': True} != {'include_runs': False}
+E         Use -v to get more diff
+
+tests/test_repo_knowledge_cli_coverage.py:123: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[
+  {
+    "ok": true
+  }
+]
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_searches_with_all_optional_filters
+1 failed in 0.28s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_searches_with_all_optional_filters
+.                                                                        [100%]
+1 passed in 0.25s
+
+## 8. tests/test_repo_knowledge_cli_coverage.py::test_main_audits_scopes_in_machine_and_human_formats
+Mutation: return 0 if result["clean"] else 1 -> return 0
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_audits_scopes_in_machine_and_human_formats
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_main_audits_scopes_in_machine_and_human_formats _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10affa3f0>
+capsys = <_pytest.capture.CaptureFixture object at 0x10c740650>
+
+    def test_main_audits_scopes_in_machine_and_human_formats(monkeypatch, capsys):
+        monkeypatch.setattr(
+            repo_knowledge,
+            "scope_audit",
+            lambda: {
+                "clean": False,
+                "scoped_items": 2,
+                "invariant_scoped_count": 1,
+                "invariant_scoped": [
+                    {
+                        "repo": "owner/repo",
+                        "section": "gotchas",
+                        "invariant_signal": "black",
+                        "scope": {},
+                        "text": "x",
+                    }
+                ],
+            },
+        )
+>       assert repo_knowledge.main(["--audit-scopes", "--json"]) == 1
+E       AssertionError: assert 0 == 1
+E        +  where 0 = <function main at 0x10c7a6de0>(['--audit-scopes', '--json'])
+E        +    where <function main at 0x10c7a6de0> = repo_knowledge.main
+
+tests/test_repo_knowledge_cli_coverage.py:154: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{
+  "clean": false,
+  "scoped_items": 2,
+  "invariant_scoped_count": 1,
+  "invariant_scoped": [
+    {
+      "repo": "owner/repo",
+      "section": "gotchas",
+      "invariant_signal": "black",
+      "scope": {},
+      "text": "x"
+    }
+  ]
+}
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_audits_scopes_in_machine_and_human_formats
+1 failed in 0.28s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_audits_scopes_in_machine_and_human_formats
+.                                                                        [100%]
+1 passed in 0.23s
+
+## 9. tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_docs_with_requested_sections
+Mutation: include_root_docs="--include-root-docs" in argv, -> include_root_docs=False,
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_docs_with_requested_sections
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_main_suggests_from_docs_with_requested_sections _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106a8e090>
+capsys = <_pytest.capture.CaptureFixture object at 0x106c20770>
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-285/test_main_suggests_from_docs_w0')
+
+    def test_main_suggests_from_docs_with_requested_sections(monkeypatch, capsys, tmp_path):
+        seen = {}
+    
+        def suggest(path, **kwargs):
+            seen.update(path=path, **kwargs)
+            return [{"section": "Validation"}]
+    
+        monkeypatch.setattr(repo_knowledge, "suggest_from_docs", suggest)
+        assert (
+            repo_knowledge.main(
+                [
+                    "--suggest-from-docs",
+                    str(tmp_path),
+                    "--repo",
+                    "owner/repo",
+                    "--max",
+                    "2",
+                    "--include-root-docs",
+                    "--section",
+                    "Validation",
+                    "--section",
+                    "Gotchas",
+                ]
+            )
+            == 0
+        )
+>       assert seen == {
+            "path": tmp_path,
+            "repo": "owner/repo",
+            "max_per_repo": 2,
+            "include_root_docs": True,
+            "sections": ["Validation", "Gotchas"],
+        }
+E       AssertionError: assert {'path': Posi...': False, ...} == {'path': Posi...s': True, ...}
+E         
+E         Omitting 4 identical items, use -vv to show
+E         Differing items:
+E         {'include_root_docs': False} != {'include_root_docs': True}
+E         Use -v to get more diff
+
+tests/test_repo_knowledge_cli_coverage.py:186: AssertionError
+----------------------------- Captured stdout call -----------------------------
+[
+  {
+    "section": "Validation"
+  }
+]
+=========================== short test summary info ============================
+FAILED tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_docs_with_requested_sections
+1 failed in 0.28s
+
+$ /opt/anaconda3/bin/python3 -B -m pytest -q tests/test_repo_knowledge_cli_coverage.py::test_main_suggests_from_docs_with_requested_sections
+.                                                                        [100%]
+1 passed in 0.24s
