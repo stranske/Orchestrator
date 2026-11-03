@@ -66,6 +66,9 @@ def test_challengers_exclude_hosted_unrunnable_agents(monkeypatch, week):
     block = export._exploration_block(2, by_task, task_types, week * export.WEEK_SECONDS)
     assert set(block["challengers"]) == set(export.CONSUMER_TASK_TYPES)
     assert "gemini" not in block["challengers"].values()
+    # Runnable alternatives must receive exploration; all-None would still pass the
+    # membership checks above and miss a lost challenger pool.
+    assert block["challengers"]["implement"] in {"cursor", "codex"}
     assert all(
         challenger in {"cursor", "codex"}
         for challenger in block["challengers"].values()
