@@ -249,6 +249,11 @@ uses `redirect_apply.py --screen --json`, whose candidate population and refusal
 rules remain authoritative. It avoids `--status`, since its default outcome-link
 preview can create or migrate the Brain. The source hash identifies the observer
 checkout, not an independently authenticated deployed revision.
+The observer also records a byte fingerprint of every Python source file under
+the local `src/` tree, including nested packages, before and after screening.
+Changed source bytes or file membership invalidate the capture; an unreadable
+tree prevents screening. This does not authenticate external dependencies or the
+deployed revision, and a change restored before the final read can escape detection.
 
 Blocking deficits and drainable/current candidate counts come from that screen.
 Unavailable or invalid corpora stop observation; stale or missing populations
@@ -405,3 +410,29 @@ and additive `needs-human` label with `MCP tool call requires approval, but
 approval policy is never`. The local reconciliation above remains authoritative
 for this session: the production-inspection task is incomplete, and the retained
 historical-provenance limitation is verified. Operational acceptance remains open.
+
+## Source-change capture regression
+
+The open review finding about source changes was reproduced: a simulated edit
+to `redirect_apply.py` during screening incorrectly retained `status: observed`.
+The observer now rejects changes to that entry point or its local imported
+modules with `changed_artifacts: ["screen_sources"]`, leaving blocking, drainable
+and candidate counts unknown. Three new tests cover the failing observation,
+nested source bytes and membership (including equal-size edits with restored
+mtimes), unavailable sources, read-only behavior and sanitized output. All **40**
+scoped Node checks pass without failures or skips; syntax checks and
+`git diff --check` pass. No Python or workflow files changed.
+
+The original private receipts and owner runtime are still unavailable. The
+selected interpreter still lacks pytest, and installing it into `/tmp` failed
+with no available distribution. No historical evidence, eligible real stall,
+attributed apply, control comparison or production-chain defect was established.
+The first four distinct tasks remain incomplete; no new checkbox was completed.
+
+At `2026-11-03T17:21:19.885Z`, the actual runtime observation returned
+`owner_corpus_unavailable`; blocking, drainable and candidates remain **unknown**.
+Staging the validated source, tests and report failed because `.git/index.lock`
+is on a read-only filesystem, so no commit was created. The connector rejected
+the production-task checkbox correction, blocker comment and additive
+`needs-human` label with `MCP tool call requires approval, but approval policy is
+never`. No remote update succeeded.

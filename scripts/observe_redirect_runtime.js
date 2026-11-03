@@ -32,6 +32,26 @@ function directoryState(directory) {
   }
 }
 
+function sourceTreeState(directory) {
+  try {
+    const entries = fs.readdirSync(directory, { recursive: true, withFileTypes: true });
+    // Symlinked directories would hide modules from recursive readdir. Refuse
+    // that tree rather than claiming to fingerprint source we did not traverse.
+    if (entries.some((entry) => entry.isSymbolicLink()
+      && fs.statSync(path.join(entry.parentPath, entry.name)).isDirectory())) {
+      return { status: 'unreadable' };
+    }
+    const files = entries.filter((entry) => !entry.isDirectory() && entry.name.endsWith('.py'))
+      .map((entry) => path.relative(directory, path.join(entry.parentPath, entry.name))).sort();
+    const hashes = files.map((file) => [file, digest(fs.readFileSync(path.join(directory, file)))]);
+    // Bind names and bytes, including imported siblings and nested packages.
+    // Neither source contents nor private filenames are emitted.
+    return { status: 'read', sha256: digest(JSON.stringify(hashes)), files: files.length };
+  } catch (error) {
+    return { status: error.code === 'ENOENT' ? 'missing' : 'unreadable' };
+  }
+}
+
 function jsonLines(bytes) {
   return bytes.toString('utf8').split('\n').flatMap((line, index) => {
     if (!line.trim()) return [];
@@ -138,6 +158,12 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
     }));
   const source = path.resolve(__dirname, '../src/redirect_apply.py');
   result.screen_source_sha256 = read(source).sha256 || null;
+  const sourceDir = path.dirname(source);
+  result.artifacts.screen_sources = sourceTreeState(sourceDir);
+  if (!result.screen_source_sha256 || result.artifacts.screen_sources.status !== 'read') {
+    result.limitations.push('screen_sources_unavailable');
+    return result;
+  }
   const childEnv = { ...env, ORCH_LOCAL_RUNTIME: runtime, ORCH_STATE_DIR: stateDir,
     ORCH_REDIRECT_SHADOW_CORPUS: files.corpus, ORCH_CAPABILITY_HEARTBEATS: '0' };
   delete childEnv.PYTHONPATH;
@@ -158,6 +184,10 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
   const afterReports = directoryState(reportDir);
   if (afterReports.status !== result.artifacts.report_dir.status
     || afterReports.sha256 !== result.artifacts.report_dir.sha256) changed.push('report_dir');
+  const afterSources = sourceTreeState(sourceDir);
+  if (afterSources.status !== result.artifacts.screen_sources.status
+    || afterSources.sha256 !== result.artifacts.screen_sources.sha256
+    || read(source).sha256 !== result.screen_source_sha256) changed.push('screen_sources');
   if (changed.length) {
     result.limitations.push('artifacts_changed_during_capture');
     result.changed_artifacts = changed;
@@ -211,4 +241,4 @@ function main(args = process.argv.slice(2)) {
 }
 
 if (require.main === module) process.exitCode = main();
-module.exports = { observe, main };
+module.exports = { observe, main, sourceTreeState };

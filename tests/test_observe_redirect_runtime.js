@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
-const { observe, main } = require('../scripts/observe_redirect_runtime');
+const { observe, main, sourceTreeState } = require('../scripts/observe_redirect_runtime');
 
 function sandbox(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'redirect-observation-control-'));
@@ -141,6 +141,102 @@ test('changing input, failed processes and malformed screen output invalidate ca
     assert.equal(result.drainable, null);
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
   }
+});
+
+test('source edits during screening invalidate counts for the entry point and imported modules', (t) => {
+  const s = sandbox(t);
+  const base = control(s);
+  const sourceRoot = path.resolve(__dirname, '../src');
+  const originalRead = fs.readFileSync;
+  let changedFile;
+  let afterExecution = false;
+  t.mock.method(fs, 'readFileSync', function(file, ...args) {
+    const bytes = originalRead.call(this, file, ...args);
+    if (afterExecution && file === changedFile) {
+      return Buffer.concat([Buffer.from(bytes), Buffer.from('\n# manufactured source change\n')]);
+    }
+    return bytes;
+  });
+  const before = snapshot(s.root);
+  // Inject changed reads without writing any checkout source. The imported
+  // module must be covered even though it is not the Python command's entry point.
+  for (const name of ['redirect_apply.py', 'redirect_shadow.py']) {
+    changedFile = path.join(sourceRoot, name);
+    afterExecution = false;
+    const result = observe({ ...base, run(...args) {
+      const execution = base.run(...args);
+      afterExecution = true;
+      return execution;
+    } });
+    assert.equal(result.status, 'unavailable', name);
+    assert.deepEqual(result.changed_artifacts, ['screen_sources']);
+    assert.deepEqual(result.limitations, ['artifacts_changed_during_capture']);
+    assert.equal(result.candidates, null);
+    assert.equal(result.drainable, null);
+    assert.equal(result.blocking, null);
+    assert.equal(result.operational_acceptance, 'not_established');
+    assert.match(result.artifacts.screen_sources.sha256, /^[a-f0-9]{64}$/);
+  }
+  assert.deepEqual(snapshot(s.root), before);
+});
+
+test('source fingerprints bind nested module bytes and roster without modifying the tree', (t) => {
+  const s = sandbox(t);
+  const directory = path.join(s.root, 'PRIVATE-sources');
+  const nested = path.join(directory, 'package');
+  fs.mkdirSync(nested, { recursive: true });
+  const firstFile = path.join(directory, 'entry.py');
+  const moduleFile = path.join(nested, 'PRIVATE-module.py');
+  fs.writeFileSync(firstFile, '# manufactured entry\n');
+  fs.writeFileSync(moduleFile, '# manufactured module A\n');
+  const originalTime = fs.statSync(moduleFile).mtime;
+  const before = snapshot(s.root);
+  const initial = sourceTreeState(directory);
+  assert.equal(initial.status, 'read');
+  assert.equal(initial.files, 2);
+  assert.match(initial.sha256, /^[a-f0-9]{64}$/);
+  assert.deepEqual(snapshot(s.root), before);
+  assert.doesNotMatch(JSON.stringify(initial), /PRIVATE-|manufactured/);
+
+  // Equal sizes and restored mtimes cannot conceal changed source bytes.
+  fs.writeFileSync(moduleFile, '# manufactured module B\n');
+  fs.utimesSync(moduleFile, originalTime, originalTime);
+  assert.notEqual(sourceTreeState(directory).sha256, initial.sha256);
+  fs.writeFileSync(moduleFile, '# manufactured module A\n');
+  assert.deepEqual(sourceTreeState(directory), initial);
+
+  fs.renameSync(moduleFile, path.join(nested, 'renamed.py'));
+  assert.notEqual(sourceTreeState(directory).sha256, initial.sha256);
+  fs.renameSync(path.join(nested, 'renamed.py'), moduleFile);
+  fs.unlinkSync(firstFile);
+  assert.equal(sourceTreeState(directory).files, 1);
+  fs.writeFileSync(firstFile, '# manufactured entry\n');
+  assert.deepEqual(sourceTreeState(directory), initial);
+  fs.writeFileSync(path.join(nested, 'new.py'), '# added module\n');
+  assert.equal(sourceTreeState(directory).files, 3);
+
+  assert.deepEqual(sourceTreeState(path.join(s.root, 'absent')), { status: 'missing' });
+  assert.deepEqual(sourceTreeState(firstFile), { status: 'unreadable' });
+  fs.symlinkSync(nested, path.join(directory, 'linked-package'), 'dir');
+  assert.deepEqual(sourceTreeState(directory), { status: 'unreadable' });
+});
+
+test('unreadable source trees refuse screening rather than accepting unattributed counts', (t) => {
+  const s = sandbox(t);
+  const imported = path.resolve(__dirname, '../src/redirect_shadow.py');
+  const originalRead = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', function(file, ...args) {
+    if (file === imported) throw Object.assign(new Error('PRIVATE-error'), { code: 'EACCES' });
+    return originalRead.call(this, file, ...args);
+  });
+  const result = observe({ ...s, run() { assert.fail('source tree cannot be captured'); } });
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.candidates, null);
+  assert.equal(result.blocking, null);
+  assert.equal(result.drainable, null);
+  assert.deepEqual(result.artifacts.screen_sources, { status: 'unreadable' });
+  assert.deepEqual(result.limitations, ['screen_sources_unavailable']);
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
 });
 
 test('report directory refreshes invalidate capture for default and overridden paths', (t) => {
