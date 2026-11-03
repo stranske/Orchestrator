@@ -373,3 +373,35 @@ task is marked complete.
 The connector rejected this follow-up's blocker comment and `needs-human` label:
 both require approval while run policy is `never`. Neither change was applied.
 PR #1097 was checked open with `draft=false` at head `441f22e` before handoff.
+
+## Ignored acceptance inputs, 2026-11-03
+
+Source commit `a4e8c0c800839088b63df4b8cff5935c689b8d7b` makes the test runner
+reject ignored source and fixture files before execution and during its final
+source check. Previously an ignored `conftest.py` or fixture could influence a
+run without appearing in the revision manifest. Ordinary Python bytecode caches
+and pytest caches remain allowed. This checks additional local inputs; it does
+not authenticate a deployment or external evidence.
+
+Five new negative controls failed before the fix. The final runner controls
+pass 33/33; inventory controls pass 53/53 and ledger controls pass 22/22.
+The [validation receipt](ignored-input-followup/validation.json) binds their
+logs and the pre-execution [plan](ignored-input-followup/plan.md).
+
+The [required-test receipt](ignored-input-followup/acceptance-run/checks.json)
+binds the four named tests and full suite to that exact source commit. Both
+fail before collection with `No module named pytest`; the selected interpreter
+is Python 3.14.9. Source checks pass, but `required_tests_passed=false` and the
+accepted deployment remains unverified. No additional task is complete.
+
+The [checklist reconciliation](ignored-input-followup/task-reconciliation.md)
+records the verified duplicate-checkbox updates. Automatic approval review
+rejected the attempted PR-body update because connector writes require approval
+while this run's policy is `never`. No remote checklist change is claimed.
+
+Normal staging failed because checkout Git metadata is read-only. The source
+commit is in `/tmp/issue-1096-ignored-git-kKjd0F`; the reviewable handoff is
+`artifacts/issue-1096-ignored-inputs.patch`. Original retry/cohort manifests,
+native authentication receipts, accepted revision binding and live writer
+ownership remain unavailable. No dispatch, canonical publication or mirror
+synchronization was performed.

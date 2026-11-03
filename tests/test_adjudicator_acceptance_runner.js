@@ -75,6 +75,10 @@ else {
   const xml = args.find((arg) => arg.startsWith('--junitxml=')).slice('--junitxml='.length);
   if (!options.noXml) fs.writeFileSync(xml, options.malformed ? '<broken' : '<testsuites><testsuite>' + cases + '</testsuite></testsuites>');
   if (options.mutate) fs.appendFileSync(path.join(__dirname, 'src/adjudicator_retro.py'), '# changed\\n');
+  if (options.ignoredMutate) {
+    fs.appendFileSync(path.join(__dirname, '.git/info/exclude'), 'tests/conftest.py\\n');
+    fs.writeFileSync(path.join(__dirname, 'tests/conftest.py'), '# unbound input\\n');
+  }
   console.log('fixture stdout'); console.error('fixture stderr');
   process.exit(options.exit ?? 0);
 }
@@ -222,4 +226,37 @@ test('requires explicit interpreter/revision/bounds and never overwrites a recei
   const before = fs.readFileSync(path.join(options.output, 'checks.json'));
   assert.throws(() => runAcceptance(options), /EEXIST/);
   assert.deepEqual(fs.readFileSync(path.join(options.output, 'checks.json')), before);
+});
+
+for (const file of ['tests/conftest.py', 'src/local_override.py',
+  'tests/fixtures/local-evidence.json', 'src/legacy.pyc', 'tests/__pycache__/conftest.py']) {
+  test(`refuses ignored execution inputs before running pytest: ${file}`, (t) => {
+    const options = fixture(t);
+    fs.writeFileSync(path.join(options.root, '.git/info/exclude'), `${file}\n`);
+    const target = path.join(options.root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'unbound execution input\n');
+    assert.throws(() => runAcceptance(options), /Ignored acceptance inputs/);
+    assert.equal(fs.existsSync(options.output), false);
+    assert.equal(fs.existsSync(path.join(options.root, 'calls.jsonl')), false);
+  });
+}
+
+test('ordinary ignored Python and pytest caches do not invalidate source receipts', (t) => {
+  const options = fixture(t);
+  fs.writeFileSync(path.join(options.root, '.git/info/exclude'), '__pycache__/\n.pytest_cache/\n');
+  for (const file of ['src/__pycache__/module.cpython-314.pyc',
+    'tests/.pytest_cache/v/cache/nodeids']) {
+    const target = path.join(options.root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, 'generated cache\n');
+  }
+  assert.equal(runAcceptance(options).required_tests_passed, true);
+});
+
+test('ignored inputs introduced during execution invalidate otherwise passing checks', (t) => {
+  const receipt = runAcceptance(fixture(t, { ignoredMutate: true }));
+  assert.ok(receipt.checks.every((item) => item.passed));
+  assert.equal(receipt.source_unchanged, false);
+  assert.equal(receipt.required_tests_passed, false);
 });

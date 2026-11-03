@@ -297,6 +297,15 @@
         "isDraft": false,
         "head": "441f22ebb3550d88c42061d85fa1275cd1da8116"
       }
+    },
+    "ignored_input_followup": {
+      "checked_date": "2026-11-03",
+      "class": "repository_test_input_binding",
+      "source_revision": "a4e8c0c800839088b63df4b8cff5935c689b8d7b",
+      "plan": "ignored-input-followup/plan.md",
+      "checks": "ignored-input-followup/acceptance-run/checks.json",
+      "validation": "ignored-input-followup/validation.json",
+      "limitation": "Runner controls pass, but pytest is unavailable before collection. Accepted deployment binding remains unverified; no task newly completed."
     }
   },
   "mirror_synchronization": [
