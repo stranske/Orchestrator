@@ -281,11 +281,37 @@ test('native inventory separates uncommitted provider changes from a later commi
   assert.equal(later.dispatch_authorized, false);
 });
 
-for (const transition of ['begin_invocation', 'persist_raw']) {
+for (const transition of ['begin_invocation', 'persist_raw', 'validate']) {
   test(`native inventory rejects ${transition} committed to WAL during observation`, (t) => {
     const w = world(t);
+    const proposal = {
+      decision: 'reject_blocker', confidence: 'high',
+      rationale: 'The supplied evidence contradicts the blocker.',
+      ground_truth_refs: ['git-path:proof.txt'],
+      recommended_next_step: 'Inspect the proof before acting.', evidence_gaps: [],
+      evidence_assessment: [{ claim: 'proof missing', status: 'contradicted',
+        evidence_ref: 'git-path:proof.txt', reason: 'Proof contents supplied.' }],
+    };
+    const validated = { backend_run_id: 'validated-paid', raw_output: JSON.stringify(proposal),
+      proposal, errors: [] };
+    const attemptId = w.ids[transition === 'persist_raw' ? 1 : 0];
+    if (transition === 'validate') {
+      // Keep this original-cohort attempt in raw_persisted until inventory has
+      // read it. The producer owns every transition; no SQL state fabrication.
+      w.run(['-c', `
+import json, sys
+from pathlib import Path
+from adjudicator_retro import NativeAttemptJournal
+journal = NativeAttemptJournal(Path(sys.argv[1]))
+result = json.loads(sys.argv[3])
+journal.begin_invocation(sys.argv[2], {'run_id': result['backend_run_id']})
+journal.persist_raw(sys.argv[2], {
+    'run_id': result['backend_run_id'], 'output': result['raw_output'],
+})
+print(json.dumps(True))
+`, w.journal, attemptId, JSON.stringify(validated)]);
+    }
     const before = w.snapshot();
-    const attemptId = w.ids[transition === 'begin_invocation' ? 0 : 1];
     const commitSnapshot = path.join(w.root, 'commit-snapshot.json');
     // The first code observation is after the initial journal read. Commit
     // through the native producer at that boundary, without a provider call.
@@ -298,6 +324,7 @@ writer = retro.NativeAttemptJournal.__new__(retro.NativeAttemptJournal)
 writer.path = Path(sys.argv[1])
 attempt_id, transition = sys.argv[2:4]
 snapshot_path = Path(sys.argv[4])
+validated_result = json.loads(sys.argv[5])
 observe = retro._inventory_code
 committed = False
 
@@ -308,10 +335,13 @@ def observe_after_commit(root):
         committed = True
         if transition == 'begin_invocation':
             writer.begin_invocation(attempt_id, {'run_id': 'concurrent-paid'})
-        else:
+        elif transition == 'persist_raw':
             writer.persist_raw(attempt_id, {
                 'run_id': 'unknown-paid', 'output': 'concurrent private receipt',
             })
+        else:
+            assert not retro.roles.ROLE_REGISTRY['adjudicator'].validate(validated_result['proposal'])
+            writer.validate(attempt_id, validated_result)
         snapshot_path.write_text(json.dumps([
             hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (writer.path, Path(str(writer.path) + '-wal'))
@@ -319,9 +349,10 @@ def observe_after_commit(root):
     return result
 
 retro._inventory_code = observe_after_commit
-sys.argv = ['adjudicator_retro.py', *sys.argv[5:]]
+sys.argv = ['adjudicator_retro.py', *sys.argv[6:]]
 raise SystemExit(retro.main())
-`, w.journal, attemptId, transition, commitSnapshot, ...w.inventoryArgs.slice(1)]);
+`, w.journal, attemptId, transition, commitSnapshot, JSON.stringify(validated),
+    ...w.inventoryArgs.slice(1)]);
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /native inventory inputs changed during observation/);
     assert.equal(result.stdout, '', 'a mixed observation must not emit an inventory');
@@ -345,12 +376,28 @@ raise SystemExit(retro.main())
       assert.equal(attempt.backend_run_id, 'concurrent-paid');
       assert.equal(later.paid_identity_summary.union_unique, 5);
       assert.equal(later.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
-    } else {
+    } else if (transition === 'persist_raw') {
       assert.equal(attempt.state, 'raw_persisted');
       assert.equal(attempt.backend_run_id, 'unknown-paid');
       assert.equal(attempt.raw_response_sha256, sha256('concurrent private receipt'));
       assert.equal(later.paid_identity_summary.union_unique, 4);
       assert.equal(JSON.stringify(later).includes('concurrent private receipt'), false);
+    } else {
+      assert.equal(attempt.state, 'validated');
+      assert.equal(attempt.backend_run_id, validated.backend_run_id);
+      assert.equal(attempt.raw_response_sha256, sha256(validated.raw_output));
+      const retained = w.connection.prepare(
+        'SELECT validated_json FROM native_attempts WHERE attempt_id=?').get(attemptId);
+      assert.deepEqual(JSON.parse(retained.validated_json), validated);
+      assert.equal(attempt.validated_json_sha256, sha256(retained.validated_json));
+      assert.equal(later.paid_identity_summary.union_unique, 5);
+      assert.equal(later.row_diagnostics[0].native_first_break,
+        'fresh_native_receipt_authentication_required');
+      assert.deepEqual(later.row_diagnostics[0].unresolved_native_attempts, []);
+      assert.equal(later.canonical_report.retained_summary.graded, 29);
+      assert.equal(later.canonical_report.summary_authority, 'not_authenticated_by_inventory');
+      assert.equal(Object.hasOwn(later, 'graded'), false);
+      assert.equal(JSON.stringify(later).includes(proposal.rationale), false);
     }
     assert.deepEqual(later.original_paid_attempts.map((item) => item.backend_run_id),
       ['original-paid', 'earlier-paid']);

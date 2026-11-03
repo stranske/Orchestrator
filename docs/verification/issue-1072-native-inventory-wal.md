@@ -85,3 +85,28 @@ failed because `.git/index.lock` is read-only, so no commit or push was made.
 Automatic approval review rejected PR-body reconciliation, `needs-human` labeling
 and the blocker comment because those tools require approval and this run's policy
 is `never`. PR #1081 was rechecked open with `draft=false` on the revision above.
+
+## Validation committed during inventory
+
+Follow-up checked on 2026-11-03 against checkout
+`22bc62101ce320c7cb56430b12d2867b0d8bdbd4`. The native inventory integration
+test now also commits validation of a synthetic binary receipt after inventory's
+initial journal read. The real native producer performs reservation, invocation,
+raw persistence and validation; the role validator checks the fixture proposal.
+Commit-time hashes prove validation resides in WAL without a main-file change.
+The CLI rejects the mixed observation without JSON, and a fresh inventory
+retains the raw and validated receipt hashes and all original paid identities.
+The binary receipt still requires fresh authentication; retained canonical grade
+claims remain unauthenticated and dispatch remains unauthorized.
+
+Validation: the combined inventory JavaScript command above passes all 34 tests;
+the diagnostic unittest command passes 32 and the replay/publication command
+passes seven. JavaScript syntax and `git diff --check` pass.
+
+The production canonical report, outcomes database and configured runtime are
+absent in this runner. No authentic original or journal location was supplied.
+The full retrospective pytest command with `-m "not slow"` cannot start because
+pytest is unavailable. No Python files changed. Staging failed because
+`.git/index.lock` is read-only, so no commit or push was made. GitHub access also
+failed, so PR readiness could not be rechecked during this follow-up. No
+operational task checkbox is complete and no production observation is claimed.
