@@ -1,5 +1,42 @@
 # Acceptance evidence recovery for #1096
 
+## Required-test follow-up at 19:06 UTC
+
+The four named tests and full retrospective suite were attempted using the selected
+Python 3.14.9 interpreter on isolated source commit
+`42ee516d3219c98129a9f4837a1edd35937148d8`. Both exit 1 before collection with
+`No module named pytest`. [The receipt](acceptance-run/checks.json) binds exact
+commands, logs, source hashes, tree identity and unchanged inputs. The accepted
+deployment is still unverified. This task and all operational acceptance remain open.
+
+The new [repository test runner](../../../scripts/run_adjudicator_acceptance.js)
+preserves both failed commands and cannot report success from absent, empty,
+skipped, duplicate or unrelated JUnit evidence. It bounds each command to 60 seconds,
+requires explicit revision/interpreter selection, refuses dirty inputs and existing
+output directories, and invalidates changing inputs. Its 14 regression tests and
+the existing 40 inventory tests pass; commands, output hashes and source hashes are
+in [runner-validation.json](acceptance-run/runner-validation.json). No Python files
+changed, so the Python-specific Black gate does not apply.
+
+[The pre-execution plan](acceptance-test-plan.md) records the expected failure and
+stop rule. There was no provider call, canonical publication or mirror write. An
+environment with pytest available to the selected interpreter and evidence binding
+the accepted revision are required for the next test attempt. The original native
+receipts, writer coordination and fixed cohort gaps also remain unchanged.
+
+The checkout's Git metadata is read-only. The source commit and the subsequent
+evidence commit are preserved in `/tmp/issue-1096-acceptance-git-1gfr70z1`; the
+two-commit [patch](../../../artifacts/issue-1096-acceptance-tests.patch) applies to
+checkout HEAD `0ecb2c1`. The original branch is unchanged. PR #1097 was observed
+open with `draft=false` at handoff. Earlier observations below retain their
+original check context.
+
+GitHub rejected this follow-up's blocker comment and `needs-human` label because
+connector mutations require approval while the run's approval policy is `never`.
+Neither remote change is claimed. The required test task stays unchecked.
+
+## Earlier recovery observations
+
 The first task is advanced, not complete. Current deployed/mirror revisions,
 the immutable native source and journal, live writer ownership, and the previously
 fixed next-20 manifest have not been recovered. Do not replace that manifest with

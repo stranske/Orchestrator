@@ -139,6 +139,30 @@
       "live_writer_ownership": "unverified",
       "task_checkboxes_verified_complete": 0,
       "pr_body_correction": "rejected_connector_requires_approval_policy_never"
+    },
+    "required_test_followup": {
+      "checked_at": "2026-11-03T19:06:14.708Z",
+      "evaluated_revision": "42ee516d3219c98129a9f4837a1edd35937148d8",
+      "source_parent": "0ecb2c1102b7043b74f905774d91b485d7d7fe27",
+      "plan": "acceptance-test-plan.md",
+      "checks": "acceptance-run/checks.json",
+      "runner_validation": "acceptance-run/runner-validation.json",
+      "selected_interpreter": "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python",
+      "source_unchanged": true,
+      "named_tests_exit_code": 1,
+      "retrospective_suite_exit_code": 1,
+      "pytest_status": "blocked_before_collection_missing_pytest",
+      "accepted_deployment_verified": false,
+      "required_tests_passed": false,
+      "task_checkboxes_verified_complete": 0,
+      "limitation": "Revision-bound runner evidence only; accepted deployment binding remains unverified.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "number": 1097,
+        "state": "open",
+        "isDraft": false
+      }
     }
   },
   "mirror_synchronization": [
