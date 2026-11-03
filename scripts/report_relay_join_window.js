@@ -89,7 +89,9 @@ function correlateRawLogs(report, pacingLog, exitLog, explicitRounds) {
     const byId = new Map();
     for (const row of pacing) {
       const id = row.fields.decision_id;
-      if (!id || row.ts < start || row.ts > end) continue; // legacy remains outside this audit
+      // Earlier uses of an ID can make an in-window decision ambiguous. Keep
+      // them for identity checks, while excluding facts after this observation.
+      if (!id || row.ts > end) continue; // legacy remains outside this audit
       if (!byId.has(id)) byId.set(id, []);
       byId.get(id).push(row);
     }
@@ -97,7 +99,8 @@ function correlateRawLogs(report, pacingLog, exitLog, explicitRounds) {
     const decisions = [];
     let matchingExits = 0;
     for (const [id, rawDecisions] of byId) {
-      const first = rawDecisions[0];
+      const first = rawDecisions.find((row) => row.ts >= start);
+      if (!first) continue; // only IDs with an in-window decision enter the counts
       const source = persisted.get(id);
       const receipts = exits.filter((row) => row.raw_decision_id === id && row.ts <= end);
       // Identical repeated receipts describe the same facts; conflicting facts do not.

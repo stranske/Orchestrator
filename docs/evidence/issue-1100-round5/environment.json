@@ -1,0 +1,17 @@
+{
+  "observed_at": "2026-11-03T22:13:27.476839+00:00",
+  "paths": {
+    "/home/runner/.codex/handoff/relay-pacing.log": false,
+    "/home/runner/.codex/handoff/relay-exits.log": false,
+    "/home/runner/.codex/orchestrator/feedback/orchestrator.db": false,
+    "/opt/anaconda3/bin/python3": false
+  },
+  "overrides_set": {
+    "HANDOFF_DIR": false,
+    "HANDOFF_PACING_LOG": false,
+    "ORCH_LOCAL_RUNTIME": false,
+    "ORCH_FEEDBACK_DB": false
+  },
+  "deadline": "2026-11-04T08:16:32+00:00",
+  "deadline_passed": false
+}

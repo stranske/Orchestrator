@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3",
+    "-m",
+    "pytest",
+    "tests/",
+    "-q",
+    "-m",
+    "not slow"
+  ],
+  "started_at": "2026-11-03T22:13:19.149382+00:00",
+  "exit_code": 1,
+  "timed_out": false,
+  "timeout_seconds": 60,
+  "elapsed_seconds": 0.016
+}

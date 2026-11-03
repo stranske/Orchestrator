@@ -553,3 +553,46 @@ test('missing or malformed raw evidence stays unavailable or incomplete', (t) =>
   assert.match(incomplete.errors[0], /:2: missing pacing field/);
   assert.deepEqual(w.reportCli(deployment + 60, true, 1).raw_log_correlation, incomplete);
 });
+
+test('a decision ID reused across the deployment boundary cannot earn an attributable join', (t) => {
+  const w = world(t);
+  w.append('reused-across-deployment', deployment + 10);
+  const original = fs.readFileSync(w.log, 'utf8');
+  w.exit('reused-across-deployment', deployment + 20);
+  receipt(w, 'reused-across-deployment', deployment + 20);
+  const beforeDeployment = new Date((deployment - 10) * 1000).toISOString().replace('.000Z', 'Z');
+  fs.writeFileSync(w.log, original.replace(/^\S+/, beforeDeployment) + original);
+
+  const files = [path.join(w.root, 'brain.db'), w.log, path.join(w.root, 'relay-exits.log')];
+  const before = files.map((file) => fs.readFileSync(file));
+  const report = rawReport(w, deployment + 20);
+  assert.equal(report.accepted_window_joins, 1); // Persisted state alone misses the ID reuse.
+  const audit = report.raw_log_correlation;
+  assert.equal(audit.status, 'available');
+  assert.equal(audit.window_decisions, 1);
+  assert.equal(audit.accepted_window_joins, 0);
+  assert.equal(audit.decisions[0].status, 'conflicting_raw_decisions');
+  assert.equal(audit.decisions[0].decision_ts, deployment + 10);
+  assert.deepEqual(audit.decisions[0].raw_pacing_lines.map((row) => row.ts),
+    [deployment - 10, deployment + 10]);
+  assert.deepEqual(audit.decisions[0].accepted_edge_ids, []);
+  assert.deepEqual(w.reportCli(deployment + 20, true), report);
+  assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+});
+
+test('a later reuse does not change the raw verdict for an earlier observation window', (t) => {
+  const w = world(t);
+  w.append('reused-after-window', deployment + 10);
+  const original = fs.readFileSync(w.log, 'utf8');
+  w.exit('reused-after-window', deployment + 20);
+  receipt(w, 'reused-after-window', deployment + 20);
+  const afterWindow = new Date((deployment + 30) * 1000).toISOString().replace('.000Z', 'Z');
+  fs.appendFileSync(w.log, original.replace(/^\S+/, afterWindow));
+
+  const earlier = rawReport(w, deployment + 20).raw_log_correlation;
+  assert.equal(earlier.accepted_window_joins, 1);
+  assert.equal(earlier.decisions[0].raw_pacing_lines.length, 1);
+  const later = rawReport(w, deployment + 30).raw_log_correlation;
+  assert.equal(later.accepted_window_joins, 0);
+  assert.equal(later.decisions[0].status, 'conflicting_raw_decisions');
+});

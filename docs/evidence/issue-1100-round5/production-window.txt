@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "scope": "persisted_explicit_relay_decisions",
+  "database": "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+  "window": {
+    "start_inclusive": 1793693792,
+    "end_inclusive": 1793744007
+  },
+  "status": "unavailable",
+  "cumulative_accepted_bindings_present": null,
+  "window_decisions": null,
+  "matching_completed_exit_decisions": null,
+  "accepted_window_joins": null,
+  "missing_join_decisions": null,
+  "decisions": null,
+  "limitations": [
+    "The cumulative count describes bindings present now, not joins newly observed in this window.",
+    "Decisions absent from Brain and legacy adjacency are outside this report population.",
+    "Raw pacing/exit logs and fresh switch-review counts must be verified separately.",
+    "Brain and raw log reads are separate snapshots; concurrent host writes may require another observation."
+  ],
+  "errors": [
+    "unable to open database file"
+  ],
+  "raw_log_correlation": {
+    "status": "unavailable",
+    "files": {},
+    "window_decisions": null,
+    "matching_completed_exit_decisions": null,
+    "accepted_window_joins": null,
+    "unattributed_completed_exit_decisions": null,
+    "decisions": null,
+    "errors": [
+      "Brain snapshot unavailable"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "command": [
+    "/opt/anaconda3/bin/python3",
+    "src/switch_review.py",
+    "--text-out",
+    "docs/evidence/issue-1100-round5/switch-review.txt"
+  ],
+  "started_at": "2026-11-03T22:13:19.165753+00:00",
+  "exit_code": 127,
+  "timed_out": false,
+  "timeout_seconds": 60,
+  "elapsed_seconds": 0.0
+}

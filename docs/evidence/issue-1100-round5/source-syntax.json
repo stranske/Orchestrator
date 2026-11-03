@@ -1,0 +1,12 @@
+{
+  "command": [
+    "node",
+    "--check",
+    "scripts/report_relay_join_window.js"
+  ],
+  "started_at": "2026-11-03T22:13:27.396594+00:00",
+  "exit_code": 0,
+  "timed_out": false,
+  "timeout_seconds": 60,
+  "elapsed_seconds": 0.032
+}

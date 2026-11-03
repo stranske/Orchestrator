@@ -1,0 +1,11 @@
+{
+  "command": [
+    "git",
+    "add",
+    "scripts/report_relay_join_window.js",
+    "tests/test_relay_acceptance_cli.js"
+  ],
+  "started_at": "2026-11-03T22:13:49.845553+00:00",
+  "exit_code": 128,
+  "elapsed_seconds": 0.003
+}
