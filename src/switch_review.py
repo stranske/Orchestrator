@@ -905,6 +905,19 @@ def _exploration_gate() -> dict:
         error = f"{type(exc).__name__}: {exc}"
         evidence = {}
     suspect = status in {"direct_mode_evidence_unreadable", "exploration_report_error"}
+    try:
+        import route_weights_export as export
+
+        hosted_pass = export.hosted_exploration_pass_number()
+    except Exception as exc:  # noqa: BLE001 — pass number must not sink the review
+        hosted_pass = {
+            "status": "unmeasured",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "check_date": "2026-11-08",
+            "min_switches": 4,
+            "deploy_ts": None,
+            "switches": None,
+        }
     return {
         "status": status,
         "suspect": suspect,
@@ -912,6 +925,7 @@ def _exploration_gate() -> dict:
         "arms": evidence.get("mode_counts", []),
         "window_days": evidence.get("window_days"),
         "window": _exploration_window(),
+        "hosted_exploration_pass": hosted_pass,
         "drainable": (
             "repair the Brain read"
             if status == "direct_mode_evidence_unreadable"
@@ -2327,6 +2341,18 @@ def format_report(rep: dict) -> str:
             f"epsilon-greedy {epsilon_n if epsilon_n is not None else 'unmeasured'} / "
             f"thompson-hybrid {thompson_n if thompson_n is not None else 'unmeasured'})",
             *[f"  UNKNOWN — {error}" for error in window.get("errors", [])],
+            "",
+        ]
+    hosted_pass = exploration_gate.get("hosted_exploration_pass")
+    if isinstance(hosted_pass, dict) and hosted_pass.get("check_date"):
+        if not window and not show_arms:
+            lines += ["## Exploration arms", ""]
+        switches = hosted_pass.get("switches")
+        switches_text = "unmeasured" if switches is None else switches
+        lines += [
+            f"  #932 hosted-exploration pass: {hosted_pass.get('status')} "
+            f"(switches={switches_text}, min={hosted_pass.get('min_switches')}, "
+            f"check={hosted_pass.get('check_date')}; {hosted_pass.get('reason')})",
             "",
         ]
     if show_arms:

@@ -52,6 +52,11 @@ EXPLORATION_WINDOW_MIN_PER_POLICY = 30
 EXPLORATION_WINDOW_START = "2026-10-17"
 # Hosted repos lack GEMINI_API_KEY; Gemini remains available for local routing.
 HOSTED_UNRUNNABLE_AGENTS = {"gemini"}
+# #932 operational pass: ≥4 hosted exploration switches after the fix publishes.
+HOSTED_EXPLORATION_PASS_CHECK_LABEL = "2026-11-08"
+HOSTED_EXPLORATION_PASS_CHECK_TS = int(dt.datetime(2026, 11, 8, tzinfo=dt.timezone.utc).timestamp())
+HOSTED_EXPLORATION_PASS_MIN_SWITCHES = 4
+HOSTED_EXPLORATION_DEPLOY_FILE = "hosted-exploration-deploy.json"
 # This is intentionally smaller than ROUTE_TABLE.  It is the contract that the
 # Workflows keepalive policy may act on; adding a router task type here is an
 # explicit cross-repository consumer-contract change, not an accidental export.
@@ -69,6 +74,133 @@ def _now() -> str:
     return (
         dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     )
+
+
+def _default_state_dir(state_dir: Path | None = None) -> Path:
+    if state_dir is not None:
+        return Path(state_dir)
+    return Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
+
+
+def hosted_exploration_deploy_ts(state_dir: Path | None = None) -> int | None:
+    """Return the stamped publish instant of the #932 hosted-challenger fix, if any."""
+    path = _default_state_dir(state_dir) / HOSTED_EXPLORATION_DEPLOY_FILE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    stamp = payload.get("deploy_ts") if isinstance(payload, dict) else None
+    if isinstance(stamp, bool) or not isinstance(stamp, int) or stamp < 0:
+        return None
+    return stamp
+
+
+def record_hosted_exploration_deploy(
+    document: dict[str, Any],
+    state_dir: Path | None = None,
+    *,
+    now: int | None = None,
+) -> dict[str, Any] | None:
+    """Stamp the first publish whose challengers exclude HOSTED_UNRUNNABLE_AGENTS.
+
+    Returns the stamp written or already present. Returns None when the document
+    still publishes an unrunnable challenger (this publish is not the fix deploy).
+    """
+    challengers = (document.get("exploration") or {}).get("challengers") or {}
+    if not isinstance(challengers, dict):
+        return None
+    if HOSTED_UNRUNNABLE_AGENTS & set(challengers.values()):
+        return None
+    root = _default_state_dir(state_dir)
+    path = root / HOSTED_EXPLORATION_DEPLOY_FILE
+    existing_ts = hosted_exploration_deploy_ts(root)
+    if existing_ts is not None:
+        return json.loads(path.read_text(encoding="utf-8"))
+    stamp = int(dt.datetime.now(dt.timezone.utc).timestamp() if now is None else now)
+    payload = {
+        "deploy_ts": stamp,
+        "deployed_at": (
+            dt.datetime.fromtimestamp(stamp, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        ),
+        "issue": 932,
+        "min_switches": HOSTED_EXPLORATION_PASS_MIN_SWITCHES,
+        "check_date": HOSTED_EXPLORATION_PASS_CHECK_LABEL,
+    }
+    write_document(path, payload)
+    return payload
+
+
+def hosted_exploration_pass_number(
+    *,
+    db_path: Path | None = None,
+    state_dir: Path | None = None,
+    now: int | None = None,
+    deploy_ts: int | None = None,
+) -> dict[str, Any]:
+    """#932 pass number: ≥4 ``route_weights_exploration`` switches after deploy.
+
+    Matches the issue acceptance query (``delegation_source`` only). Before the
+    check date the status stays ``pending`` while still reporting the live count
+    when the deploy stamp and Brain are readable. A missing stamp or Brain after
+    the check date is ``unmeasured``, never a silent zero.
+    """
+    stamp = int(dt.datetime.now(dt.timezone.utc).timestamp() if now is None else now)
+    if deploy_ts is None:
+        deploy_ts = hosted_exploration_deploy_ts(state_dir)
+    result: dict[str, Any] = {
+        "check_date": HOSTED_EXPLORATION_PASS_CHECK_LABEL,
+        "min_switches": HOSTED_EXPLORATION_PASS_MIN_SWITCHES,
+        "deploy_ts": deploy_ts,
+        "switches": None,
+        "status": "pending",
+        "reason": f"check date {HOSTED_EXPLORATION_PASS_CHECK_LABEL} not reached",
+    }
+    if deploy_ts is None:
+        if stamp < HOSTED_EXPLORATION_PASS_CHECK_TS:
+            result["reason"] = (
+                f"check date {HOSTED_EXPLORATION_PASS_CHECK_LABEL} not reached; "
+                "deploy stamp absent"
+            )
+            return result
+        result["status"] = "unmeasured"
+        result["reason"] = "hosted-exploration deploy stamp absent"
+        return result
+    try:
+        database = feedback.resolve_db_path(db_path)
+        connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            count = connection.execute(
+                "SELECT count(*) FROM agent_switches WHERE "
+                "delegation_source='route_weights_exploration' AND switched_ts > ?",
+                (int(deploy_ts),),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+    except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+        if stamp < HOSTED_EXPLORATION_PASS_CHECK_TS:
+            result["reason"] = (
+                f"check date {HOSTED_EXPLORATION_PASS_CHECK_LABEL} not reached; "
+                f"switches unreadable ({exc})"
+            )
+            return result
+        result["status"] = "unmeasured"
+        result["reason"] = f"exploration switches unreadable: {exc}"
+        return result
+    result["switches"] = int(count)
+    if stamp < HOSTED_EXPLORATION_PASS_CHECK_TS:
+        return result
+    if count >= HOSTED_EXPLORATION_PASS_MIN_SWITCHES:
+        result["status"] = "pass"
+        result["reason"] = (
+            f"{count} exploration switches after deploy "
+            f"(≥{HOSTED_EXPLORATION_PASS_MIN_SWITCHES})"
+        )
+        return result
+    result["status"] = "fail"
+    result["reason"] = (
+        f"{count} exploration switches after deploy " f"(<{HOSTED_EXPLORATION_PASS_MIN_SWITCHES})"
+    )
+    return result
 
 
 def update_exploration_window(
@@ -996,6 +1128,8 @@ def publish_document(
     subprocess.run(
         ["git", "-C", str(canonical), "push", "origin", f"HEAD:{EXPORT_BRANCH}"], check=True
     )
+    # #932: first publish without hosted-unrunnable challengers starts the pass clock.
+    record_hosted_exploration_deploy(document, state_dir)
     return True
 
 
@@ -1046,6 +1180,15 @@ def _selftest() -> None:
         assert not (
             HOSTED_UNRUNNABLE_AGENTS & set(document["exploration"]["challengers"].values())
         ), document["exploration"]["challengers"]
+        stamp = record_hosted_exploration_deploy(document, root, now=fixed_now)
+        assert stamp and stamp["deploy_ts"] == fixed_now, stamp
+        grade = hosted_exploration_pass_number(
+            db_path=root / "absent-switches.db",
+            state_dir=root,
+            now=HOSTED_EXPLORATION_PASS_CHECK_TS - 1,
+        )
+        assert grade["status"] == "pending", grade
+        assert grade["deploy_ts"] == fixed_now, grade
         import comparative
 
         assert document["comparative"]["schema"] == comparative.SCHEMA, document["comparative"]
