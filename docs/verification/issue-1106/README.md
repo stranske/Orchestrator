@@ -1,5 +1,22 @@
 # Issue #1106 execution evidence
 
+Completion-tracking validation at `2026-11-03T23:30Z` adds three regression
+checks against the retained receipts and both checklists in the proposed PR
+body. They require clean named/focused/replay proof for offline completion,
+preserve unknown owner counts and separate observation dates, and leave
+historical inspection, real-stall acceptance and remote reconciliation open.
+All **51** scoped Node tests passed without failures or skips; see
+[actual output](completion-tracking-node-tests.txt) and the
+[validation receipt](completion-tracking-validation.json). This validates
+existing evidence; no new owner-host observation or offline execution is claimed.
+The PR body correction, blocker comment and additive `needs-human` label were
+again rejected because approval is required while the run's approval policy is
+`never`. PR #1107 was re-read open and ready (`draft=false`), with the active
+`Closes #1106` directive still present. Remote reconciliation remains unchecked.
+After verification, the required commit attempt failed while staging with
+`.git/index.lock: Read-only file system`; this round's test and evidence changes
+remain uncommitted for automation to collect. No Python files changed.
+
 Observed November 3, 2026, in the hosted runner. Operational acceptance remains
 incomplete. No owner-host deployment, real apply, or resolved stall is established.
 
