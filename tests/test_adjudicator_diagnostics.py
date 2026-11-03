@@ -258,5 +258,127 @@ class OriginalRowDiagnosticsTests(unittest.TestCase):
             self.assertEqual(before, {key: path.read_bytes() for key, path in inputs.items()})
 
 
+class InventoryCodeStabilityTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        original = self.root / "original.json"
+        canonical = self.root / "canonical.json"
+        original.write_text(json.dumps({"rows": [substantive_row()]}))
+        canonical.write_bytes(original.read_bytes())
+        journal = retro.NativeAttemptJournal(self.root / "native.sqlite")
+        self.inputs = {
+            "original_report": original,
+            "canonical_path": canonical,
+            "journal_path": journal.path,
+        }
+        self.before = {key: path.read_bytes() for key, path in self.inputs.items()}
+        self.deployed = self.root / "deployed"
+        self.mirror = self.root / "mirror"
+        for location in (self.deployed, self.mirror):
+            location.mkdir()
+            (location / "adjudicator_retro.py").write_text("original code")
+
+    def inventory(self):
+        return retro.inventory_native_state(
+            **self.inputs, deployed_root=self.deployed, mirror_root=self.mirror
+        )
+
+    def assert_rejected_change(self, change):
+        observe = retro._inventory_code
+        changed = False
+
+        def observe_then_change(root):
+            nonlocal changed
+            result = observe(root)
+            if root == self.mirror and not changed:
+                changed = True
+                change()
+            return result
+
+        with patch.object(retro, "_inventory_code", observe_then_change):
+            with self.assertRaisesRegex(ValueError, "runtime code.*changed"):
+                self.inventory()
+        self.assertTrue(changed)
+        self.assertEqual(self.before, {key: path.read_bytes() for key, path in self.inputs.items()})
+
+    def test_inventory_rejects_deployed_or_mirror_script_change(self):
+        for location in (self.deployed, self.mirror):
+            with self.subTest(location=location.name):
+                code = location / "adjudicator_retro.py"
+                self.assert_rejected_change(lambda: code.write_text("replacement code"))
+                code.write_text("original code")
+
+    def test_inventory_rejects_mirror_generation_switch_with_identical_code(self):
+        generation = self.root / "generation-a"
+        self.mirror.rename(generation)
+        self.mirror.symlink_to(generation, target_is_directory=True)
+        replacement = self.root / "generation-b"
+        replacement.mkdir()
+        (replacement / "adjudicator_retro.py").write_text("original code")
+
+        def switch_generation():
+            self.mirror.unlink()
+            self.mirror.symlink_to(replacement, target_is_directory=True)
+
+        self.assert_rejected_change(switch_generation)
+
+    def git(self, *args):
+        return subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.deployed),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                *args,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def init_checkout(self):
+        self.git("init", "-q")
+        self.git("add", "adjudicator_retro.py")
+        self.git("commit", "-qm", "initial deployment")
+
+    def test_inventory_rejects_revision_change_with_identical_script(self):
+        self.init_checkout()
+        self.assert_rejected_change(
+            lambda: self.git("commit", "--allow-empty", "-qm", "new deployment")
+        )
+
+    def test_inventory_rejects_tracked_dirty_status_change(self):
+        self.init_checkout()
+        config = self.deployed / "deployment.json"
+        config.write_text("{}")
+        self.git("add", "deployment.json")
+        self.git("commit", "-qm", "deployment configuration")
+        self.assert_rejected_change(lambda: config.write_text('{"changed": true}'))
+
+    def test_inventory_rejects_disappearing_code_location(self):
+        self.assert_rejected_change(lambda: self.mirror.rename(self.root / "removed-mirror"))
+
+    def test_stable_code_inventory_preserves_inputs_and_remains_observational(self):
+        self.init_checkout()
+        result = self.inventory()
+        self.assertEqual(
+            result["deployed_code"]["git_revision"], self.git("rev-parse", "HEAD").stdout.strip()
+        )
+        self.assertTrue(result["deployed_code"]["tracked_files_clean"])
+        for key in ("deployed_code", "mirror_code"):
+            self.assertEqual(
+                result[key]["adjudicator_sha256"], hashlib.sha256(b"original code").hexdigest()
+            )
+            self.assertEqual(result[key]["live_reader_binding"], "unverified")
+        self.assertFalse(result["dispatch_authorized"])
+        self.assertEqual(self.before, {key: path.read_bytes() for key, path in self.inputs.items()})
+
+
 if __name__ == "__main__":
     unittest.main()

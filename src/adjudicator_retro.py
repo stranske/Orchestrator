@@ -480,6 +480,15 @@ def inventory_native_state(
             attempts.append(item)
         deployed = _inventory_code(deployed_root)
         mirror = _inventory_code(mirror_root)
+        # Code locations belong to the same observation as the reports and
+        # journal. A deployment or mirror switch must not leave stale pins.
+        for root, observed in ((deployed_root, deployed), (mirror_root, mirror)):
+            try:
+                rechecked = _inventory_code(root)
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ValueError("runtime code location changed during inventory") from exc
+            if rechecked != observed:
+                raise ValueError("runtime code location changed during inventory")
         if (
             original_report.read_bytes() != source
             or canonical_path.read_bytes() != canonical

@@ -28,6 +28,24 @@ canonical summary numbers and journal validation states are inventory facts,
 not authenticated grading or retry authorization. Native publication still
 requires fresh collector capabilities and journal authentication below.
 
+The code locations are reobserved before the final report/journal comparison.
+A changed script hash, checkout revision, tracked clean/dirty status, or resolved
+mirror generation aborts inventory, including disappearance of a selected location.
+This detects changes to the recorded code observations; it does not establish
+live-reader binding or inventory every dependency in a dirty checkout.
+
+Issue #1072 code-stability follow-up on 2026-11-03: six new standard-library tests
+reproduce the stale-pin bug before the fix, with six failing assertions across
+five negative tests. After the fix, all 14 diagnostic tests and all 23 module
+self-checks pass. Report and journal bytes remain unchanged. Targeted pytest and
+both required Black commands cannot run because pytest and Black are absent;
+installation into `/tmp` fails because PyPI DNS is unavailable. Git metadata is
+also read-only. No commit or push was made. The configured canonical report and
+outcomes database remain absent, so production inventory, retry/publication,
+historical observations, and all operational task checkboxes remain incomplete.
+Attempts to add `needs-human` to issue #1072 and post the blocker on PR #1081
+were refused because those tools require approval and this run's policy is `never`.
+
 The inventory also prints `row_diagnostics` in original cohort order. Each entry
 names the first retained break: unavailable packet, missing substantive evidence,
 recorded attempt error, current proposal-validator failure, inconsistent saved
