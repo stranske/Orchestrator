@@ -215,6 +215,26 @@
         "isDraft": false
       },
       "limitation": "Test-double regressions and failed real commands only. No deployment, native grade, retry outcome or live-cohort acceptance established."
+    },
+    "ledger_audit_followup": {
+      "checked_at": "2026-11-03T19:57:12.856565+00:00",
+      "evaluated_revision": "ff02e2e756f61828862b206c1a3795b1b3182b17",
+      "checks": "ledger-audit-tests/checks.json",
+      "validation": "ledger-audit/validation.json",
+      "audit_command": [
+        "node",
+        "scripts/audit_adjudicator_evidence_ledger.js",
+        "--ledger",
+        "docs/verification/issue-1096-recovery/evidence-ledger.json"
+      ],
+      "plan": "ledger-audit-plan.md",
+      "regressions_passed": 88,
+      "required_tests_passed": false,
+      "operational_acceptance_verified": false,
+      "pr_body_update": "rejected_connector_requires_approval_policy_never",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "limitation": "Recovery attribution and local receipt hashes only; no external authentication or source/deployment binding."
     }
   },
   "mirror_synchronization": [
@@ -293,5 +313,16 @@
     "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
     "Previously fixed next-20 manifest and at least 15 dated decisions",
     "Current live writer ownership"
-  ]
+  ],
+  "local_task_reconciliation": {
+    "recovery_complete": false,
+    "pre_execution_inventory_complete": true,
+    "required_tests_complete": false,
+    "original_retry_reconciliation_complete": false,
+    "canonical_grade_thresholds_complete": false,
+    "fixed_next_20_complete": false,
+    "evidence_ledger_publication_complete": true,
+    "evidence_attribution_and_missing_proof_disclosure_complete": true,
+    "remote_checkboxes_updated": false
+  }
 }

@@ -1,5 +1,54 @@
 # Acceptance evidence recovery for #1096
 
+## Ledger audit follow-up, 2026-11-03 UTC
+
+The published [evidence ledger](evidence-ledger.json) now has a read-only
+[audit command](../../../scripts/audit_adjudicator_evidence_ledger.js):
+
+```sh
+node scripts/audit_adjudicator_evidence_ledger.js \
+  --ledger docs/verification/issue-1096-recovery/evidence-ledger.json
+```
+
+The [audit result](ledger-audit/audit.json) binds the ledger bytes, inventories
+local artifacts, checks referenced receipt/log hashes, and retains separate
+historical, current, mirror and dispatch attribution. External references remain
+unauthenticated. This recovery audit does not verify historical source revisions,
+deployment identity, native receipts or operational acceptance. It rejects grade
+substitution, replacement cohort counts, lost October 18 disclosures, changed
+logs, missing checksums and artifact references that escape its directory.
+
+All [88 regressions](ledger-audit/validation.json) pass: 22 ledger, 26 runner and
+40 inventory tests. Source commit `ff02e2e756f61828862b206c1a3795b1b3182b17`
+has checkout `d84ae822cb6181d53e9a993712807dfc49fd41a5` as its parent.
+The new [required-test receipt](ledger-audit-tests/checks.json), evaluated against
+that checkout before source edits, still records missing pytest before collection
+for both required test commands. The [plan](ledger-audit-plan.md) was written first.
+
+Reconciled local tasks, after reviewing the recent commits and verifying the
+ledger audit:
+
+- [ ] Recover accepted/deployed/mirror bindings, original rows and fixed cohort;
+  recovery remains partial, including unavailable raw October 18 proof.
+- [x] Record the pre-execution command, expectation and stop rule; inventory paid
+  attempts and reconcile dispatch protection with unverified writer ownership.
+- [ ] Pass the four named tests and full retrospective suite on the accepted revision.
+- [ ] Reconcile all original retries and perform eligible authenticated retries.
+- [ ] Establish intermediate graded >=25 and canonical graded >=29.
+- [ ] Recover at least 15 dated decisions in the original fixed next-20 cohort.
+- [x] Publish the separately attributed evidence ledger.
+
+The attribution/missing-proof disclosure acceptance criterion is verified; the
+other four acceptance criteria remain open. No provider call, native journal
+write, publication or mirror synchronization occurred. No Python files changed,
+so the Python-specific Black gate does not apply.
+
+Remote reconciliation, the blocker comment and `needs-human` label were rejected
+because connector mutations require approval and this run's policy is `never`.
+Remote checkboxes were not changed. Git metadata is read-only, so the source and
+evidence commits are preserved under `/tmp/issue1096-ledger-git-vlq_uknf/.git` and
+in the [applyable patch](../../../artifacts/issue-1096-ledger-audit.patch).
+
 ## Interpreter portability follow-up, 2026-11-03 at 19:43 UTC
 
 The previous runner regression fixture hardcoded Python 3.14.9, which is absent
