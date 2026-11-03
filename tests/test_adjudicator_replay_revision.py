@@ -116,7 +116,9 @@ print(json.dumps([{"test": "control", "runs": [
         self.dispatch.side_effect = AssertionError("refresh must never dispatch")
 
     def git(self, *args):
-        environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        environment = {
+            key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+        }
         return subprocess.check_output(
             ["git", "-C", str(self.repo), *args], text=True, env=environment
         ).strip()
