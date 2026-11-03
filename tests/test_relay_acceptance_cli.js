@@ -13,6 +13,7 @@ const moduleDir = fs.existsSync(path.join(repo, 'src', 'rate_incidents.py'))
   ? path.join(repo, 'src') : repo;
 const python = process.env.PYTHON || 'python3';
 const deployment = 1793693792; // 2026-11-03T08:16:32Z, the recorded deployment boundary.
+const deadline = deployment + 24 * 60 * 60;
 
 function world(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-acceptance-'));
@@ -187,4 +188,93 @@ test('an explicit exit remains a boundary for later legacy adjacency', (t) => {
   assert.equal(snapshot.joins[0].target_run_id, explicit.decision_id);
   assert.equal(snapshot.counts.acted_on, 1);
   assert.equal(snapshot.counts.outcome, 1);
+});
+
+test('interleaved decisions retain exact attribution while an unfinished decision stays pending', (t) => {
+  const w = world(t);
+  w.append('first-decision', deployment + 10);
+  w.append('second-decision', deployment + 20);
+  w.append('unfinished-decision', deployment + 30);
+
+  // Completion order alone cannot identify which decision earned the join.
+  const second = w.exit('second-decision', deployment + 40);
+  assert.equal(second.relay_pacing.decisions, 3);
+  assert.equal(second.relay_pacing.joined, 1);
+  const partial = w.snapshot(deployment + 40);
+  assert.equal(partial.counts.acted_on, 1);
+  assert.equal(partial.counts.outcome, 1);
+  assert.deepEqual(partial.joins.map((j) => [j.raw_id, j.target_run_id]), [
+    ['second-decision', second.decision_id],
+  ]);
+
+  const first = w.exit('first-decision', deployment + 50);
+  assert.equal(first.relay_pacing.joined, 2);
+  const complete = w.snapshot(deployment + 50);
+  assert.equal(complete.counts.acted_on, 2);
+  assert.equal(complete.counts.outcome, 2);
+  assert.deepEqual(complete.joins.map((j) => [
+    j.raw_id, j.source_run_id, j.target_run_id, j.decision_ts, j.exit_ts, j.accepted,
+  ]), [
+    ['first-decision', 'relay-pacing:id:first-decision', first.decision_id,
+      deployment + 10, deployment + 50, 1],
+    ['second-decision', 'relay-pacing:id:second-decision', second.decision_id,
+      deployment + 20, deployment + 40, 1],
+  ]);
+  for (const join of complete.joins) {
+    const round = complete.rounds.find((r) => r.decision_id === join.target_run_id);
+    assert.ok(round);
+    assert.equal(round.ts, join.exit_ts);
+    assert.equal(JSON.parse(round.causal_context_json).relay_decision_id, join.raw_id);
+  }
+  assert.equal(complete.rounds.length, 2);
+});
+
+test('a completed exit after the deadline cannot establish an outcome before the deadline', (t) => {
+  const w = world(t);
+  w.append('late-completion', deadline - 60);
+  const late = w.exit('late-completion', deadline + 1);
+  assert.equal(late.relay_pacing.joined, 1);
+
+  // Read the earlier window after persistence: even a backdated edge timestamp
+  // and a positive cumulative joined counter must not pull the later exit into it.
+  const timely = w.snapshot(deadline);
+  assert.equal(timely.joins.length, 1);
+  assert.equal(timely.counts.acted_on, 1);
+  assert.equal(timely.counts.outcome, 0);
+  assert.equal(timely.counts.outcome_success, 0);
+  assert.deepEqual(timely.joins.map((j) => [
+    j.raw_id, j.target_run_id, j.decision_ts, j.exit_ts, j.accepted,
+  ]), [['late-completion', late.decision_id, deadline - 60, deadline + 1, 1]]);
+
+  const recovery = w.snapshot(deadline + 1);
+  assert.equal(recovery.counts.acted_on, 1);
+  assert.equal(recovery.counts.outcome, 1);
+  assert.equal(recovery.counts.outcome_success, 1);
+  assert.deepEqual(recovery.joins, timely.joins);
+
+  // Observing different windows must not import, replay, or rewrite evidence.
+  const before = ['brain.db', 'relay-pacing.log'].map((file) =>
+    fs.readFileSync(path.join(w.root, file)));
+  assert.deepEqual(w.snapshot(deadline), timely);
+  const after = ['brain.db', 'relay-pacing.log'].map((file) =>
+    fs.readFileSync(path.join(w.root, file)));
+  assert.deepEqual(after, before);
+});
+
+test('the deployment boundary excludes an earlier decision despite both exits being in-window', (t) => {
+  const w = world(t);
+  w.append('one-second-before', deployment - 1);
+  const older = w.exit('one-second-before', deployment + 10);
+  w.append('at-deployment', deployment);
+  const current = w.exit('at-deployment', deployment + 20);
+  assert.equal(current.relay_pacing.joined, 2);
+
+  const snapshot = w.snapshot(deployment + 20);
+  assert.equal(snapshot.joins.length, 2);
+  assert.equal(snapshot.counts.acted_on, 1);
+  assert.equal(snapshot.counts.outcome, 1);
+  assert.deepEqual(snapshot.joins.map((j) => [j.raw_id, j.target_run_id, j.decision_ts]), [
+    ['one-second-before', older.decision_id, deployment - 1],
+    ['at-deployment', current.decision_id, deployment],
+  ]);
 });
