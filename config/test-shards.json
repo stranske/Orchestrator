@@ -182,6 +182,7 @@
       "tests/test_closer_workspace_bindings.py",
       "tests/test_codemod_campaign.py",
       "tests/test_coverage_round_781.py",
+      "tests/test_coverage_round_1026.py",
       "tests/test_coverage_round_877.py",
       "tests/test_coverage_round_880.py",
       "tests/test_coverage_wp_feedback.py",

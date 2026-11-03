@@ -1,0 +1,45 @@
+Baseline (main plus preserved #1028 tests):
+F.......................                                                 [100%]
+=================================== FAILURES ===================================
+_________ test_shard_lists_partition_every_collected_test_exactly_once _________
+
+    def test_shard_lists_partition_every_collected_test_exactly_once():
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+            cwd=verify.ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        ids = [
+            line
+            for line in proc.stdout.splitlines()
+            if "::" in line and line.split("::", 1)[0].endswith(".py")
+        ]
+        assert ids, proc.stdout
+        plan = verify.shard_plan()
+        modules = [module for shard in plan for module in shard]
+        collected_modules = {node.split("::", 1)[0] for node in ids}
+>       assert set(modules) == collected_modules, (
+            f"unassigned modules: {sorted(collected_modules - set(modules))}; "
+            f"stale modules: {sorted(set(modules) - collected_modules)}"
+        )
+E       AssertionError: unassigned modules: ['tests/test_coverage_round_1026.py']; stale modules: []
+E       assert {'tests/test_...exts.py', ...} == {'tests/test_...exts.py', ...}
+E         
+E         Extra items in the right set:
+E         'tests/test_coverage_round_1026.py'
+E         Use -v to get more diff
+
+tests/test_verify_sharding.py:33: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_verify_sharding.py::test_shard_lists_partition_every_collected_test_exactly_once
+1 failed, 23 passed in 25.72s
+
+After repair, final focused command:
+........................                                                 [100%]
+24 passed in 9.82s
+
+Previously failing dispatcher nodes on current main plus preserved tests:
+...                                                                      [100%]
+3 passed in 0.44s

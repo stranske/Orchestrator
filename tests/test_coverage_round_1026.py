@@ -8,6 +8,8 @@ ORCH_STATE_DIR and ORCH_LOCAL_RUNTIME point at pytest temp dirs.
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,8 +27,20 @@ def _hermetic(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(capabilities, "REG", tmp_path / "capabilities.json")
+    attempts = []
+
+    def deny_external(*_args, **_kwargs):
+        attempts.append("external process or network call")
+        raise AssertionError("coverage tests must not start processes or use the network")
+
+    monkeypatch.setattr(subprocess, "Popen", deny_external)
+    monkeypatch.setattr(socket.socket, "connect", deny_external)
+    monkeypatch.setattr(socket, "getaddrinfo", deny_external)
     # Never touch a live Brain or ledger lock from these helpers.
     monkeypatch.setattr(admission, "_ACTED_ON_CACHE", {})
+
+    yield
+    assert attempts == []
 
 
 # --------------------------------------------------------------------------- capability_admission
@@ -114,7 +128,7 @@ def test_known_controls_and_findability_tolerate_io_failures(monkeypatch, tmp_pa
     monkeypatch.setattr(admission.paths, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(admission.paths, "MODULE_DIR", tmp_path)
     # No files present → every read raises OSError → empty control set.
-    assert isinstance(admission.known_controls(), set)
+    assert admission.known_controls() == set()
 
     class Boom:
         def consulting_surfaces(self, **_k):
@@ -202,7 +216,7 @@ def test_decision_records_and_unreadable_commitment_files(tmp_path, monkeypatch)
     monkeypatch.setattr(Path, "read_text", flaky)
     monkeypatch.setattr(admission, "_today", lambda: "2026-02-01")
     got = admission.commitments(root=root)
-    assert got["clean"] is True or isinstance(got["dangling_citations"], list)
+    assert got == {"clean": True, "dangling_citations": [], "overdue_without_record": []}
 
 
 def test_consumer_class_grace_acting_and_not_acting(tmp_path):
@@ -697,7 +711,7 @@ def test_record_completion_and_reconcile_dry_paths(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(feedback, "record_resume_token", lambda *_a, **_k: None)
     monkeypatch.setattr(feedback, "record_owner_question", lambda *_a, **_k: {"deduped": False})
     summary = ledger_reconcile.reconcile(ledger, dry_run=True)
-    assert summary["rows_read"] >= 2
+    assert summary["rows_read"] == 3
     assert summary["dry_run"] is True
     assert "missing_run_id" in summary["skipped"]
     ledger_reconcile._print_summary(summary, as_json=False)

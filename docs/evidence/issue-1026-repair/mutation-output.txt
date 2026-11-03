@@ -1,0 +1,254 @@
+Check date: 2026-11-03 UTC. Python: /opt/anaconda3/bin/python3.
+Each invocation used fresh private ORCH_STATE_DIR and ORCH_LOCAL_RUNTIME with PYTHONPATH=src.
+Production bytes were restored in finally and checked against their original SHA-256 after every mutation.
+Mutations are isolated early-return behavioral faults, one per test; this is not exhaustive mutation coverage.
+All 19 added tests and the 4 pre-existing tests in the two files are included.
+
+tests/test_coverage_round_1026.py::test_audits_dir_override_and_fallback
+src/capability_admission.py::_audits_dir -> return pathlib.Path("/wrong-audits")
+broken:
+E       AssertionError: assert PosixPath('/wrong-audits') == PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-434/test_audits_dir_override_and_f0/audits')
+E        +  where PosixPath('/wrong-audits') = <function _audits_dir at 0x123956160>()
+E        +    where <function _audits_dir at 0x123956160> = admission._audits_dir
+FAILED tests/test_coverage_round_1026.py::test_audits_dir_override_and_fallback
+1 failed in 0.32s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_python_symbol_walk_and_syntax_failures
+src/capability_admission.py::_python_symbol_defined -> return False
+broken:
+E       AssertionError: assert False
+E        +  where False = <function _python_symbol_defined at 0x1057e0a40>('class Outer:\n    class Inner:\n        def method(self):\n            pass\n        z = 1\n', 'Outer.Inner.method')
+E        +    where <function _python_symbol_defined at 0x1057e0a40> = admission._python_symbol_defined
+FAILED tests/test_coverage_round_1026.py::test_python_symbol_walk_and_syntax_failures
+1 failed in 0.31s
+restored:
+1 passed in 0.26s
+
+tests/test_coverage_round_1026.py::test_acted_on_context_records_monitor_exceptions
+src/capability_admission.py::acted_on_context -> return {"acted_on": {}, "acted_on_reason": ""}
+broken:
+E       assert {} is None
+FAILED tests/test_coverage_round_1026.py::test_acted_on_context_records_monitor_exceptions
+1 failed in 0.31s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_known_controls_and_findability_tolerate_io_failures
+src/capability_admission.py::known_controls -> return {"ORCH_INVENTED"}
+broken:
+E       AssertionError: assert {'ORCH_INVENTED'} == set()
+E         
+E         Extra items in the left set:
+E         'ORCH_INVENTED'
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_1026.py::test_known_controls_and_findability_tolerate_io_failures
+1 failed in 0.30s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_admit_and_preflight_surface_errored_checks
+src/capability_admission.py::admit -> return {"checks": {"caller_exists": {"ok": True}}}
+broken:
+E       assert True is False
+FAILED tests/test_coverage_round_1026.py::test_admit_and_preflight_surface_errored_checks
+1 failed in 0.32s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_decision_records_and_unreadable_commitment_files
+src/capability_admission.py::_decision_recorded_after -> return False
+broken:
+E       AssertionError: assert False is True
+E        +  where False = <function _decision_recorded_after at 0x108fc94e0>('ORCH_TINY_UNTIL', '2026-01-01')
+E        +    where <function _decision_recorded_after at 0x108fc94e0> = admission._decision_recorded_after
+FAILED tests/test_coverage_round_1026.py::test_decision_records_and_unreadable_commitment_files
+1 failed in 0.31s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_consumer_class_grace_acting_and_not_acting
+src/capability_admission.py::consumer_class -> return ("wrong", False, "")
+broken:
+E       AssertionError: assert 'wrong' == 'grace'
+E         
+E         - grace
+E         + wrong
+FAILED tests/test_coverage_round_1026.py::test_consumer_class_grace_acting_and_not_acting
+1 failed in 0.30s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_format_report_clean_and_drained_branches
+src/capability_admission.py::format_report -> return ""
+broken:
+E       AssertionError: assert 'no enforced failures' in ''
+FAILED tests/test_coverage_round_1026.py::test_format_report_clean_and_drained_branches
+1 failed in 0.31s
+restored:
+1 passed in 0.26s
+
+tests/test_coverage_round_1026.py::test_admission_main_cli_paths
+src/capability_admission.py::main -> return 1
+broken:
+E       assert 1 == 0
+E        +  where 1 = <function main at 0x106625b20>()
+E        +    where <function main at 0x106625b20> = admission.main
+FAILED tests/test_coverage_round_1026.py::test_admission_main_cli_paths - ass...
+1 failed in 0.31s
+restored:
+1 passed in 0.26s
+
+tests/test_coverage_round_1026.py::test_env_prereq_harness_glue_and_detectors
+src/env_prereq.py::require -> return None
+broken:
+E       Failed: DID NOT RAISE MissingPrerequisite
+FAILED tests/test_coverage_round_1026.py::test_env_prereq_harness_glue_and_detectors
+1 failed in 0.31s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_env_prereq_recorded_verdicts_and_replay
+src/env_prereq.py::run_or_replay -> return None
+broken:
+E       Failed: DID NOT RAISE AssertionError
+FAILED tests/test_coverage_round_1026.py::test_env_prereq_recorded_verdicts_and_replay
+1 failed in 0.33s
+restored:
+1 passed in 0.26s
+
+tests/test_coverage_round_1026.py::test_env_prereq_seat_and_cli_detectors
+src/env_prereq.py::seat_has_no_free_signal -> return None
+broken:
+E       assert (None)
+FAILED tests/test_coverage_round_1026.py::test_env_prereq_seat_and_cli_detectors
+1 failed in 0.30s
+restored:
+1 passed in 0.26s
+
+tests/test_coverage_round_1026.py::test_env_prereq_main_reports_shape
+src/env_prereq.py::main -> return 1
+broken:
+E       assert 1 == 0
+E        +  where 1 = <function main at 0x113fbc180>([])
+E        +    where <function main at 0x113fbc180> = env_prereq.main
+FAILED tests/test_coverage_round_1026.py::test_env_prereq_main_reports_shape
+1 failed in 0.31s
+restored:
+1 passed in 0.28s
+
+tests/test_coverage_round_1026.py::test_ledger_helpers_cover_fail_closed_edges
+src/ledger_reconcile.py::_usage_from_obj -> return (99, 99)
+broken:
+E       assert (99, 99) == (0, 0)
+E         
+E         At index 0 diff: 99 != 0
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_1026.py::test_ledger_helpers_cover_fail_closed_edges
+1 failed in 0.32s
+restored:
+1 passed in 0.32s
+
+tests/test_coverage_round_1026.py::test_scrub_and_classify_fail_open
+src/ledger_reconcile.py::_scrub_run_segment -> return 0
+broken:
+E       AssertionError: assert 'DISABLED' in ''
+E        +  where '' = CaptureResult(out='', err='').err
+E        +    where CaptureResult(out='', err='') = readouterr()
+E        +      where readouterr = <_pytest.capture.CaptureFixture object at 0x11a106690>.readouterr
+FAILED tests/test_coverage_round_1026.py::test_scrub_and_classify_fail_open
+1 failed in 0.33s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_1026.py::test_record_completion_and_reconcile_dry_paths
+src/ledger_reconcile.py::record_completion -> return None
+broken:
+E       AssertionError: assert [] == ['run-x']
+E         
+E         Right contains one more item: 'run-x'
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_1026.py::test_record_completion_and_reconcile_dry_paths
+1 failed in 0.31s
+restored:
+1 passed in 0.28s
+
+tests/test_coverage_round_1026.py::test_ledger_main_cli_dispatch
+src/ledger_reconcile.py::main -> return 1
+broken:
+E       AssertionError: assert 1 == 0
+E        +  where 1 = <function main at 0x125274860>(['resolve-unresolved'])
+E        +    where <function main at 0x125274860> = ledger_reconcile.main
+FAILED tests/test_coverage_round_1026.py::test_ledger_main_cli_dispatch - Ass...
+1 failed in 0.31s
+restored:
+1 passed in 0.28s
+
+tests/test_coverage_round_877.py::test_admission_defensive_branches_and_report_rendering
+src/capability_admission.py::waiver_problems -> return []
+broken:
+E       AssertionError: assert [] == ['no-reason: ...g a deadline']
+E         
+E         Right contains 3 more items, first extra item: 'no-reason: no reason'
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_877.py::test_admission_defensive_branches_and_report_rendering
+1 failed in 0.31s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_877.py::test_ledger_helper_fallbacks_are_fail_closed
+src/ledger_reconcile.py::_read_ledger -> return ([{}], [])
+broken:
+E       assert ([{}], []) == ([], [])
+E         
+E         At index 0 diff: [{}] != []
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_877.py::test_ledger_helper_fallbacks_are_fail_closed
+1 failed in 0.31s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_877.py::test_consumer_resolution_confines_paths_and_classifies_evidence
+src/capability_admission.py::consumer_resolution -> return {"resolved": [], "unresolved": []}
+broken:
+E       AssertionError: assert [] == ['consumer.py...er.sh:run_it']
+E         
+E         Right contains 2 more items, first extra item: 'consumer.py:Expected.consume'
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_877.py::test_consumer_resolution_confines_paths_and_classifies_evidence
+1 failed in 0.31s
+restored:
+1 passed in 0.27s
+
+tests/test_coverage_round_877.py::test_preflight_and_commitments_report_obligations_and_missing_records
+src/capability_admission.py::commitments -> return {"clean": True}
+broken:
+E       assert True is False
+FAILED tests/test_coverage_round_877.py::test_preflight_and_commitments_report_obligations_and_missing_records
+1 failed in 0.31s
+restored:
+1 passed in 0.30s
+
+tests/test_coverage_round_877.py::test_env_prerequisites_name_the_specific_missing_state
+src/env_prereq.py::ledger_rows_absent -> return "wrong reason"
+broken:
+E       AssertionError: assert 'declared by this tree, not yet registered here' in 'wrong reason'
+E        +  where 'declared by this tree, not yet registered here' = env_prereq.DECLARED_UNREGISTERED_MARK
+FAILED tests/test_coverage_round_877.py::test_env_prerequisites_name_the_specific_missing_state
+1 failed in 0.33s
+restored:
+1 passed in 0.28s
+
+tests/test_coverage_round_877.py::test_ledger_evidence_readers_ignore_other_runs_and_malformed_records
+src/ledger_reconcile.py::_read_ledger -> return ([], [])
+broken:
+E       AssertionError: assert [] == [{'run_id': 'a'}]
+E         
+E         Right contains one more item: {'run_id': 'a'}
+E         Use -v to get more diff
+FAILED tests/test_coverage_round_877.py::test_ledger_evidence_readers_ignore_other_runs_and_malformed_records
+1 failed in 0.32s
+restored:
+1 passed in 0.28s
+

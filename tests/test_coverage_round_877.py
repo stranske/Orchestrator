@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import subprocess
 
 import pytest
 
@@ -18,6 +20,18 @@ def _hermetic_state(tmp_path, monkeypatch):
     monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("ORCH_LOCAL_RUNTIME", str(tmp_path / "runtime"))
     monkeypatch.setattr(capabilities, "REG", tmp_path / "capabilities.json")
+    attempts = []
+
+    def deny_external(*_args, **_kwargs):
+        attempts.append("external process or network call")
+        raise AssertionError("coverage tests must not start processes or use the network")
+
+    monkeypatch.setattr(subprocess, "Popen", deny_external)
+    monkeypatch.setattr(socket.socket, "connect", deny_external)
+    monkeypatch.setattr(socket, "getaddrinfo", deny_external)
+
+    yield
+    assert attempts == []
 
 
 def test_consumer_resolution_confines_paths_and_classifies_evidence(tmp_path):
