@@ -21,8 +21,8 @@ function readManifest(file) {
   if (typeof file !== 'string' || !file.trim()) throw new Error('manifest path is required');
   const bytes = fs.readFileSync(file);
   const manifest = JSON.parse(bytes);
-  if (manifest?.schema_version !== 1 || !Array.isArray(manifest.cases)) {
-    throw new Error('manifest requires schema_version 1 and a cases array');
+  if (![1, 2].includes(manifest?.schema_version) || !Array.isArray(manifest.cases)) {
+    throw new Error('manifest requires schema_version 1 or 2 and a cases array');
   }
   const seen = new Set();
   for (const item of manifest.cases) {
@@ -30,18 +30,39 @@ function readManifest(file) {
         typeof item.target !== 'string' || !item.target.trim()) {
       throw new Error('manifest cases require nonblank run_id and target strings');
     }
-    if (seen.has(item.run_id)) throw new Error(`duplicate manifest run_id: ${item.run_id}`);
-    seen.add(item.run_id);
+    if (manifest.schema_version === 2 &&
+        ['verifier_verdict', 'adjudicated_verdict'].some((key) =>
+          typeof item[key] !== 'string' || !item[key].trim())) {
+      throw new Error('schema_version 2 cases require nonblank verifier_verdict and adjudicated_verdict strings');
+    }
+    // The retrospective keys a dispute by the run and both verdicts. A run
+    // can appear more than once only when the requested disputes differ.
+    const identity = manifest.schema_version === 1 ? item.run_id :
+      JSON.stringify([item.run_id, item.verifier_verdict, item.adjudicated_verdict]);
+    if (seen.has(identity)) throw new Error(`duplicate manifest identity: ${item.run_id}`);
+    seen.add(identity);
   }
   return { path: path.resolve(file), sha256: createHash('sha256').update(bytes).digest('hex'),
-    cases: manifest.cases.map(({ run_id, target }) => ({ run_id, target })) };
+    schema_version: manifest.schema_version,
+    cases: manifest.cases.map(({ run_id, target, verifier_verdict, adjudicated_verdict }) => ({
+      run_id, target,
+      ...(manifest.schema_version === 2 ? { verifier_verdict, adjudicated_verdict } : {}),
+    })) };
 }
 
 function reconcile(report, manifest) {
   if (!manifest) return report;
   const observed = new Map([...(report.cases || []), ...(report.exclusions || [])]
     .map((row) => [row.run_id, row]));
-  const requested = new Map(manifest.cases.map((row) => [row.run_id, row.target]));
+  const verdictsMatch = (requested, row) => manifest.schema_version === 1 ||
+    (requested.verifier_verdict === row.verifier_verdict &&
+      requested.adjudicated_verdict === row.adjudicated_verdict);
+  const requested = new Map();
+  for (const item of manifest.cases) {
+    const entries = requested.get(item.run_id) || [];
+    entries.push(item);
+    requested.set(item.run_id, entries);
+  }
   const cases = manifest.cases.map((item) => {
     const row = observed.get(item.run_id);
     let status;
@@ -56,6 +77,8 @@ function reconcile(report, manifest) {
       status = 'unavailable'; reasons = row.reasons;
     } else if (row.target !== item.target) {
       status = 'identity_mismatch'; reasons = ['requested_target_mismatch'];
+    } else if (!verdictsMatch(item, row)) {
+      status = 'identity_mismatch'; reasons = ['requested_verdict_mismatch'];
     } else if (row.reasons) {
       status = 'excluded'; reasons = row.reasons;
     } else {
@@ -65,16 +88,24 @@ function reconcile(report, manifest) {
       kind: 'requested_case_evidence_gap', ...item, reasons,
     });
     return { ...item, status, reasons,
-      ...(status === 'identity_mismatch' ? { observed_target: row.target } : {}) };
+      ...(status === 'identity_mismatch' ? { observed_target: row.target,
+        ...(manifest.schema_version === 2 ? {
+          observed_verifier_verdict: row.verifier_verdict,
+          observed_adjudicated_verdict: row.adjudicated_verdict,
+        } : {}) } : {}) };
   });
   const unexpected = report.cases === null ? null : report.cases
-    .filter((row) => requested.get(row.run_id) !== row.target)
-    .map(({ run_id, target }) => ({ run_id, target }));
+    .filter((row) => !(requested.get(row.run_id) || []).some((item) =>
+      item.target === row.target && verdictsMatch(item, row)))
+    .map(({ run_id, target, verifier_verdict, adjudicated_verdict }) => ({ run_id, target,
+      ...(manifest.schema_version === 2 ? { verifier_verdict, adjudicated_verdict } : {}),
+    }));
   const countDelta = manifest.cases.length - report.expected_count;
   const exactMatch = report.status === 'available' && countDelta === 0 &&
     cases.every((row) => row.status === 'included') && unexpected.length === 0;
   report.manifest_reconciliation = {
     scope: 'supplied_manifest_only',
+    identity_scope: manifest.schema_version === 2 ? 'dispute' : 'run_target',
     manifest_path: manifest.path, manifest_sha256: manifest.sha256,
     requested_count: cases.length, count_delta: countDelta,
     exact_match: exactMatch, cases, unexpected_cases: unexpected,
@@ -206,7 +237,7 @@ function main() {
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
-      process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":1,"cases":[{"run_id":"...","target":"owner/repo#N"}]}.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
+      process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
     }
     if (!values.db || !values['observed-at']) {

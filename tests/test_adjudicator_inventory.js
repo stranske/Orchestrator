@@ -189,9 +189,9 @@ test('inventory CLI exports JSON, signals unavailable evidence and rejects repla
   }
 });
 
-function manifestFile(root, cases) {
+function manifestFile(root, cases, schemaVersion = 1) {
   const file = path.join(root, 'requested.json');
-  fs.writeFileSync(file, JSON.stringify({ schema_version: 1, cases }, null, 2));
+  fs.writeFileSync(file, JSON.stringify({ schema_version: schemaVersion, cases }, null, 2));
   return file;
 }
 
@@ -392,7 +392,7 @@ test('manifest CLI preserves input bytes, rejects malformed identities and signa
   const unavailable = execute(root, process.execPath, args);
   assert.equal(unavailable.status, 2);
   assert.equal(JSON.parse(unavailable.stdout).manifest_reconciliation.cases[0].status, 'unavailable');
-  for (const value of [null, {}, { schema_version: 2, cases: [] },
+  for (const value of [null, {}, { schema_version: 3, cases: [] },
     { schema_version: 1, cases: {} },
     ...[[null], [{}], [{ run_id: ' ', target: 'owner/repo#1' }],
       [{ run_id: 'one', target: 3 }], [{ run_id: 'one', target: ' ' }],
@@ -410,4 +410,124 @@ test('manifest CLI preserves input bytes, rejects malformed identities and signa
   assert.equal(missing.status, 1);
   assert.equal(missing.stdout, '');
   assert.equal(fs.existsSync(db), false);
+});
+
+test('version 2 reconciles all 71 dispute identities without claiming historical provenance', (t) => {
+  const { root, db } = world(t);
+  const requested = Array.from({ length: 71 }, (_, i) => ({
+    run_id: `dispute-${i}`, target: 'owner/repo#1',
+    verifier_verdict: i < 57 ? 'NON_PASS' : 'FAIL_HOLLOW',
+    adjudicated_verdict: i < 57 ? 'PASS' : 'FAIL',
+  }));
+  seed(db, requested.map((row) =>
+    [row.run_id, now, row.verifier_verdict, row.adjudicated_verdict]));
+  const manifest = manifestFile(root, requested, 2);
+  const before = fs.readFileSync(db);
+  const manifestBefore = fs.readFileSync(manifest);
+  const files = fs.readdirSync(root);
+  const report = inventory({ db, observedAt: now, manifest });
+  const reconciled = report.manifest_reconciliation;
+  assert.equal(reconciled.identity_scope, 'dispute');
+  assert.equal(reconciled.exact_match, true);
+  assert.deepEqual(reconciled.cases, requested.map((item) =>
+    ({ ...item, status: 'included', reasons: [] })));
+  assert.deepEqual(reconciled.unexpected_cases, []);
+  assert.equal(reconciled.manifest_sha256, createHash('sha256').update(manifestBefore).digest('hex'));
+  assert.equal(report.requested_cohort_verified, false);
+  assert.deepEqual(fs.readFileSync(db), before);
+  assert.deepEqual(fs.readFileSync(manifest), manifestBefore);
+  assert.deepEqual(fs.readdirSync(root), files);
+});
+
+for (const [verifier, adjudicated] of [['NON_PASS', 'FAIL'], ['FAIL_HOLLOW', 'PASS'], ['PASS', 'FAIL']]) {
+  test(`version 2 exposes substituted verdicts ${verifier}/${adjudicated} despite matching run and count`, (t) => {
+    const { root, db } = world(t);
+    seed(db, [['same-run', now, verifier, adjudicated]]);
+    const expected = { run_id: 'same-run', target: 'owner/repo#1',
+      verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+    const manifest = manifestFile(root, [expected], 2);
+    const before = fs.readFileSync(db);
+    const report = inventory({ db, observedAt: now, expectedCount: 1, manifest });
+    assert.equal(report.count_delta, 0);
+    assert.equal(report.manifest_reconciliation.exact_match, false);
+    assert.deepEqual(report.manifest_reconciliation.cases, [{ ...expected,
+      status: 'identity_mismatch', reasons: ['requested_verdict_mismatch'],
+      observed_target: 'owner/repo#1', observed_verifier_verdict: verifier,
+      observed_adjudicated_verdict: adjudicated,
+    }]);
+    assert.deepEqual(report.manifest_reconciliation.unexpected_cases, [{
+      run_id: 'same-run', target: 'owner/repo#1',
+      verifier_verdict: verifier, adjudicated_verdict: adjudicated,
+    }]);
+    assert.deepEqual(report.evidence_gaps.filter((gap) => gap.kind === 'requested_case_evidence_gap'),
+      [{ kind: 'requested_case_evidence_gap', ...expected, reasons: ['requested_verdict_mismatch'] }]);
+    const result = execute(root, process.execPath, [script, '--db', db, '--observed-at', String(now),
+      '--expected-count', '1', '--manifest', manifest]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), report);
+    assert.deepEqual(fs.readFileSync(db), before);
+    // Legacy manifests remain readable, with their narrower identity scope explicit.
+    manifestFile(root, [expected]);
+    const legacy = inventory({ db, observedAt: now, expectedCount: 1, manifest });
+    assert.equal(legacy.manifest_reconciliation.identity_scope, 'run_target');
+    assert.equal(legacy.manifest_reconciliation.exact_match, true);
+    assert.equal(legacy.requested_cohort_verified, false);
+  });
+}
+
+test('version 2 retains different disputes on one run and rejects duplicate dispute identities', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['same-run', now, 'NON_PASS', 'PASS']]);
+  const original = { run_id: 'same-run', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  const changed = { ...original, verifier_verdict: 'FAIL_HOLLOW' };
+  const manifest = manifestFile(root, [original, changed], 2);
+  const report = inventory({ db, observedAt: now, expectedCount: 2, manifest });
+  assert.deepEqual(report.manifest_reconciliation.cases.map((row) => row.status),
+    ['included', 'identity_mismatch']);
+  assert.equal(report.manifest_reconciliation.exact_match, false);
+  assert.deepEqual(report.manifest_reconciliation.unexpected_cases, []);
+  for (const invalid of [original, { ...original, target: 'owner/repo#2' }]) {
+    manifestFile(root, [original, invalid], 2);
+    assert.throws(() => inventory({ db, observedAt: now, manifest }), /duplicate manifest identity/);
+  }
+});
+
+test('version 2 preserves full identities for excluded, missing and unavailable cases', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['old', cutoff - 1, 'NON_PASS', 'PASS']]);
+  const requested = ['old', 'missing'].map((run_id) => ({ run_id, target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' }));
+  const manifest = manifestFile(root, requested, 2);
+  const report = inventory({ db, observedAt: now, expectedCount: 2, manifest });
+  assert.deepEqual(report.manifest_reconciliation.cases, [
+    { ...requested[0], status: 'excluded', reasons: ['outside_window'] },
+    { ...requested[1], status: 'missing', reasons: ['requested_run_missing'] },
+  ]);
+  fs.unlinkSync(db);
+  const result = execute(root, process.execPath, [script, '--db', db, '--observed-at', String(now),
+    '--expected-count', '2', '--manifest', manifest]);
+  assert.equal(result.status, 2, result.stderr);
+  const unavailable = JSON.parse(result.stdout);
+  assert.equal(unavailable.population_count, null);
+  assert.equal(unavailable.manifest_reconciliation.unexpected_cases, null);
+  assert.deepEqual(unavailable.manifest_reconciliation.cases, requested.map((item) =>
+    ({ ...item, status: 'unavailable', reasons: ['brain_unavailable'] })));
+  assert.equal(fs.existsSync(db), false);
+});
+
+test('version 2 rejects malformed verdicts before publishing any inventory', (t) => {
+  const { root, db } = world(t);
+  const original = { run_id: 'run', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  for (const field of ['verifier_verdict', 'adjudicated_verdict']) {
+    for (const value of [undefined, null, '', ' ', 3, [], {}]) {
+      const manifest = manifestFile(root, [{ ...original, [field]: value }], 2);
+      const result = execute(root, process.execPath,
+        [script, '--db', db, '--observed-at', String(now), '--manifest', manifest]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(result.stdout, '', 'malformed dispute identity cannot publish partial JSON');
+      assert.match(result.stderr, /require nonblank verifier_verdict and adjudicated_verdict/);
+    }
+  }
 });
