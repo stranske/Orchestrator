@@ -256,6 +256,20 @@
       "required_tests_passed": false,
       "newly_completed_tasks": 0,
       "limitation": "Fixture-verified failure field locations, hashes and retained result classification only. Re-fetched historical report was counted in memory, not run through the new CLI. Original requested retry manifest, native authentication and deployment binding remain unavailable."
+    },
+    "failure_stage_followup": {
+      "checked_at": "2026-11-03T20:46:06Z",
+      "source_commit": "0699e4d4b9517142f427d3c54a94add3560a2a73",
+      "source_parent": "baa8250ae599ec23514a8a21c0c515943db1bddd",
+      "checks": "failure-stage-followup/acceptance-run/checks.json",
+      "validation": "failure-stage-followup/validation.json",
+      "historical_input_scope": "selected_identity_and_failure_fields_from_earlier_extracted_backup",
+      "recorded_stages": 9,
+      "unresolved_attempt_failures": 25,
+      "no_recorded_attempt_failure": 30,
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "task_checkboxes_newly_verified_complete": 0
     }
   },
   "mirror_synchronization": [

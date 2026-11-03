@@ -1,5 +1,41 @@
 # Acceptance evidence recovery for #1096
 
+## Recorded failure stages, 2026-11-03 UTC
+
+The retained-report reader now identifies recorded failure stages from exact
+repository messages and nonzero backend exits. It distinguishes collection,
+packet validation, backend selection/execution, proposal parsing/validation and
+role persistence. Unknown or contradictory fields stay unresolved. Later retry
+errors remain separate from the parent's saved decision. Backend execution
+failure precedes a consequent JSON parsing error; diagnostic text is not copied.
+
+The [historical diagnostic projection](failure-stage-followup/historical-failure-stages.json)
+contains all 58 rows and 64 attempts from selected identity and failure fields
+in the earlier extracted backup. It records nine failure stages (one collection,
+six proposal validation, two backend execution), 25 unresolved attempts and 30
+without a recorded attempt failure. The selection hash identifies reconstructed
+diagnostic input, not original report bytes. This is not the original native
+cohort, and no original retry manifest or authenticated outcome was recovered.
+
+All [98 focused regressions](failure-stage-followup/validation.json) pass: 50
+inventory, 26 runner and 22 ledger checks. The three added regressions failed
+before implementation. Source commit `0699e4d` has checkout `baa8250` as parent.
+No Python files changed. The [pre-execution plan](failure-stage-followup/plan.md)
+and [required-test receipt](failure-stage-followup/acceptance-run/checks.json)
+preserve the bounded attempt on that checkout: collection, named tests and full
+suite still fail before collection because pytest is missing. A bounded isolated
+installation found no available distribution. Accepted deployment is unverified.
+
+No new task is complete. The task reconciliation below remains unchanged;
+partial recovery must remain unchecked. PR-body reconciliation, the blocker
+comment and `needs-human` label were rejected because connector mutations require
+approval and policy is `never`. No remote change is claimed. No provider call,
+publication, production write or mirror synchronization occurred.
+
+Checkout Git metadata is read-only. The source commit is preserved in
+`/tmp/issue1096-failure-stage.git` and the
+[applyable source patch](../../../artifacts/issue-1096-failure-stage.patch).
+
 ## Retained attempt diagnostics, 2026-11-03 UTC
 
 The retry inventory now exposes ordered attempt observations, including nested

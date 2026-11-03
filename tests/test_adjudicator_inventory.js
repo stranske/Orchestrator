@@ -162,6 +162,77 @@ test('failure field hashes detect changed evidence even when retained classifica
   assert.ok(!JSON.stringify(changed).includes('private'));
 });
 
+test('recorded failure stages explain collection, execution and validation breaks on real message shapes', (t) => {
+  const { saved, options } = retainedReport(t);
+  const attempts = [
+    { error: 'current merge-bound verifier decision missing or changed' },
+    { errors: ['backend exit=124 timed out after 180s; agy log tail captured',
+      'could not parse a JSON adjudication proposal from the backend output'] },
+    { errors: ['could not parse a JSON adjudication proposal from the backend output'] },
+    { errors: ['recommended_next_step must not contain mutating execution instructions'] },
+    { errors: ['no eligible backend has capacity for the adjudicator role'] },
+    { error: 'packet requires merged diff summary' },
+  ];
+  saved.rows = attempts.map((row, i) => ({ ...row, case_id: `case-${i}`, target: `owner/repo#${i}` }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  assert.deepEqual(result.retained_attempt_observations.map((row) => row.first_broken_step.stage),
+    ['evidence_collection', 'backend_execution', 'proposal_parsing', 'proposal_validation',
+      'backend_selection', 'packet_validation']);
+  assert.ok(result.retained_attempt_observations.every((row) => row.first_broken_step.status === 'recorded'));
+  assert.deepEqual(result.retained_attempt_observations[1].first_broken_step.evidence_locations,
+    ['rows[1].errors[0]'], 'backend failure is earlier than its consequent parse failure');
+  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+  assert.equal(result.dispatch_authorized, false);
+});
+
+test('unknown and contradictory failure prose cannot borrow a recognized stage', (t) => {
+  const { saved, options } = retainedReport(t);
+  const attempts = [
+    { error: 'private timeout mentioned in a later note' },
+    { errors: ['private unknown failure',
+      'could not parse a JSON adjudication proposal from the backend output'] },
+    { errors: ['backend exit=0 private timeout note'] },
+    { error: { detail: 'packet requires merged diff summary' } },
+    { errors: 'could not parse a JSON adjudication proposal from the backend output' },
+    { decision: 'reject_blocker', errors: ['backend exit=124 timed out after 180s'] },
+  ];
+  saved.rows = attempts.map((row, i) => ({ ...row, case_id: `case-${i}`, target: `owner/repo#${i}` }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  for (const row of result.retained_attempt_observations) {
+    assert.equal(row.first_broken_step.status, 'unresolved');
+    assert.equal(row.first_broken_step.stage, null);
+    assert.ok(row.first_broken_step.evidence_locations.length > 0);
+  }
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
+test('later retries and persistence breaks cannot replace the parent attempt failure or decision', (t) => {
+  const { saved, options } = retainedReport(t);
+  saved.rows = [{ case_id: 'case-a', target: 'owner/repo#1', decision: 'uphold_blocker',
+    retry_error: 'current merge-bound verifier decision missing or changed',
+    role_record_error: 'private database failure', retry_attempts: [{
+      errors: ['backend exit=124 timed out after 180s'], backend_run_id: 'paid-retry',
+    }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  const [parent, retry] = result.retained_attempt_observations;
+  assert.equal(parent.retained_result, 'retained_binary_decision');
+  assert.equal(parent.first_broken_step.stage, 'role_persistence');
+  assert.deepEqual(parent.first_broken_step.evidence_locations, ['rows[0].role_record_error']);
+  assert.equal(parent.later_retry_broken_step.stage, 'evidence_collection');
+  assert.deepEqual(parent.later_retry_broken_step.evidence_locations, ['rows[0].retry_error']);
+  assert.equal(retry.first_broken_step.stage, 'backend_execution');
+  assert.equal(retry.later_retry_broken_step, null);
+  saved.rows[0].role_record_error = null;
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const cleanParent = reportInventory(options).retained_attempt_observations[0];
+  assert.equal(cleanParent.first_broken_step.status, 'not_recorded');
+  assert.equal(cleanParent.later_retry_broken_step.status, 'recorded');
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
 test('report recovery refuses malformed and ambiguous retained identities', (t) => {
   const { saved, options } = retainedReport(t);
   for (const change of [

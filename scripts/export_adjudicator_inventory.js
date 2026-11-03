@@ -22,6 +22,76 @@ function hasTarget(row) {
   return typeof row.target === 'string' && Boolean(row.target.trim());
 }
 
+// Match repository-emitted messages, not keywords in arbitrary provider prose.
+// Stage order follows build_packet/read_evidence and roles.run_adjudicator_agent.
+// These are explanations of saved fields, never authenticated retry outcomes.
+const failureMessages = new Map([
+  ['current merge-bound verifier decision missing or changed',
+    ['evidence_collection', 'merge_bound_verifier_changed', 0]],
+  ...['target, disputed_finding and ground_truth_evidence', 'verifier finding comment text',
+    'merged diff summary and gate runs', 'merged diff summary', 'gate runs']
+    .map((required) => [`packet requires ${required}`,
+      ['packet_validation', 'required_packet_evidence_missing', 1]]),
+  ['case validation failed; refusing live dispatch',
+    ['case_validation', 'case_validation_refused_dispatch', 2]],
+  ['no eligible backend has capacity for the adjudicator role',
+    ['backend_selection', 'no_eligible_backend_capacity', 3]],
+  ['could not parse a JSON adjudication proposal from the backend output',
+    ['proposal_parsing', 'adjudication_json_unparseable', 5]],
+  ['recommended_next_step must not contain mutating execution instructions',
+    ['proposal_validation', 'mutating_recommendation_rejected', 6]],
+]);
+
+function failureMessage(value) {
+  if (typeof value !== 'string') return null;
+  if (failureMessages.has(value)) return failureMessages.get(value);
+  // The roles emitter prefixes nonzero backend exits. Do not infer timeout,
+  // cost, invocation completion or provider failure details from the suffix.
+  const exit = /^backend exit=(-?\d+)(?: [^\r\n]*)?$/.exec(value);
+  if (exit && Number.isSafeInteger(Number(exit[1])) && Number(exit[1]) !== 0) {
+    return ['backend_execution', 'backend_nonzero_exit', 4];
+  }
+  return null;
+}
+
+function firstRetainedBreak(fields, conflict = false) {
+  const empty = { stage: null, code: null, evidence_locations: fields.map((item) => item.location) };
+  if (!fields.length) return { status: 'not_recorded', ...empty };
+  if (conflict || fields.some((item) => !item.classification)) {
+    return { status: 'unresolved', ...empty };
+  }
+  const first = fields.reduce((left, right) =>
+    left.classification[2] <= right.classification[2] ? left : right);
+  return { status: 'recorded', stage: first.classification[0], code: first.classification[1],
+    evidence_locations: fields.filter((item) => item.classification[2] === first.classification[2])
+      .map((item) => item.location) };
+}
+
+function retainedBreaks(attempt, location, conflict) {
+  const primary = [];
+  if (attempt.error) primary.push({ location: `${location}.error`,
+    classification: failureMessage(attempt.error) });
+  if (Array.isArray(attempt.errors)) {
+    attempt.errors.forEach((value, index) => primary.push({ location: `${location}.errors[${index}]`,
+      classification: failureMessage(value) }));
+  } else if (attempt.errors) {
+    primary.push({ location: `${location}.errors`, classification: null });
+  }
+  // The role record is written after adjudication; its failure cannot erase a
+  // saved decision or supersede an earlier failure in this attempt.
+  if (!primary.length && attempt.role_record_error) {
+    primary.push({ location: `${location}.role_record_error`,
+      classification: typeof attempt.role_record_error === 'string' && attempt.role_record_error.trim()
+        ? ['role_persistence', 'role_record_write_failed', 7] : null });
+  }
+  return { first_broken_step: firstRetainedBreak(primary, conflict),
+    // retry_error belongs to a later retry retained on the parent, not to the
+    // parent's original paid invocation. Nested attempts have their own steps.
+    later_retry_broken_step: attempt.retry_error ? firstRetainedBreak([{
+      location: `${location}.retry_error`, classification: failureMessage(attempt.retry_error),
+    }]) : null };
+}
+
 // These observations describe saved fields, never a freshly validated result.
 // Error prose can include private provider material. Bind it by JSON-value hash
 // and location so recovery can inspect the original without publishing the text.
@@ -59,7 +129,8 @@ function attemptObservation(attempt, caseId, location) {
   return { case_id: caseId, location, retained_result: result,
     backend_run_id: attempt.backend_run_id ?? null,
     retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
-    failure_fields: failureFields, next_evidence_step: nextStep };
+    failure_fields: failureFields, next_evidence_step: nextStep,
+    ...retainedBreaks(attempt, location, (binary || abstained) && runFailed) };
 }
 
 // Observe native receipt locators in one read-only SQLite snapshot. This does
