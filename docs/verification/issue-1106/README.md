@@ -179,3 +179,48 @@ cadence, writer lock or daily cap changed, and no Python files changed.
 The required commit was attempted after verification. Staging failed with
 `.git/index.lock: Read-only file system`, so this round's test and evidence
 changes remain uncommitted for the automation to collect.
+
+## CLI receipt follow-up on November 3
+
+A real subprocess regression exposed another concrete collector failure: exit 1
+with empty stdout, causing JSON parsing to fail. The restricted runner reproduced
+lost asynchronous Node pipe output with both console and stream writes, while a
+synchronous write reached the parent. The collector now finishes writing its JSON
+receipt synchronously before returning the CLI exit status. The bounded child
+launcher and free screen are unchanged. This repair is local, not a merged revision.
+
+[collector-cli-partial-state-red.txt](collector-cli-partial-state-red.txt) retains
+the actual failure. [collector-cli-partial-state-green.txt](collector-cli-partial-state-green.txt)
+retains all **48** scoped tests passing without skips using the four-file Node
+command above, on Node v24.22.1. The added real subprocess test uses manufactured
+missing, invalid, stale and verified empty populations. It checks complete JSON,
+nonzero unavailable exits, current observation times, private-value exclusion,
+retained positive review/log records without operational credit, and unchanged
+runtime bytes. Only the verified empty control reports candidates 0.
+
+[collector-cli-followup.json](collector-cli-followup.json) records the real runner
+check at `2026-11-03T23:23:35.294Z`: the receipt is now emitted, exit is 1 without a
+signal or process error, and all 237 Python source files are fingerprinted. The
+owner path is still unavailable; blocking, drainable and candidates remain unknown.
+This later runner check is not an owner-host observation or recovered historical
+artifact. No deployed flag, cadence, writer lock or daily cap was changed.
+
+[collector-cli-recovery-search.json](collector-cli-recovery-search.json) records
+the follow-up storage search and issue-comment inspection. Returned files predate
+the requested November 3 lower bound; search-filter enforcement and completeness
+cannot be assumed. The exact apply-log matches are October pytest controls. No
+authentic November 3 owner-host artifact or eligible real stall was recovered.
+The historical inspection and real-stall tasks remain unchecked.
+
+The reviewed commits verify the existing offline, limitation, repair and date
+items in the proposed PR body. Reconciliation remains unchecked: the connector
+again rejected the body correction, blocker comment and additive needs-human label
+because approval is required while the run's approval policy is never. The local
+proposal retains a nonclosing issue reference; the remote closure directive is
+still a blocker. No Python files changed in this follow-up.
+
+After verification, the required staging/commit attempt failed with
+`.git/index.lock: Read-only file system`. This round's source, test and evidence
+changes remain uncommitted for automation to collect. Final connector verification
+confirmed PR #1107 remains open with draft=false at `f02fbe7`; the remote
+`Closes #1106` directive remains present because its correction was rejected.

@@ -39,7 +39,7 @@ Source issue #1088; merged PR #1089 delivered: PR #1089 delivered provenance aud
 
 <!-- auto-status-summary:end -->
 
-Execution evidence: [issue-1106 receipts](https://github.com/stranske/Orchestrator/tree/codex/issue-1106/docs/verification/issue-1106). The retained exact-revision run passed 2 named tests, 25 focused tests and authorized 12/12 offline. A November 3 runner follow-up repaired the reproduced collector `EPERM` failure; 46 scoped Node tests pass. Authentic owner-host flag, cadence, populations, refusals and lineage remain unavailable. Blocking, drainable and candidates remain unknown. No real-stall apply, review, resolution or control comparison is established; historical and real-stall acceptance remain unmet. The merged PR #1089 inspection checkbox and closure directive do not establish those facts.
+Execution evidence: [issue-1106 receipts](https://github.com/stranske/Orchestrator/tree/codex/issue-1106/docs/verification/issue-1106). The retained exact-revision run passed 2 named tests, 25 focused tests and authorized 12/12 offline. November 3 runner follow-ups repaired the reproduced collector `EPERM` failure and lost CLI receipt output; 48 scoped Node tests pass. Authentic owner-host flag, cadence, populations, refusals and lineage remain unavailable. Blocking, drainable and candidates remain unknown. No real-stall apply, review, resolution or control comparison is established; historical and real-stall acceptance remain unmet. The merged PR #1089 inspection checkbox and closure directive do not establish those facts.
 
 <details>
 

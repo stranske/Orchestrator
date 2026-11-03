@@ -250,7 +250,9 @@ async function main(args = process.argv.slice(2)) {
   }
   const result = await observe({ runtime: path.resolve(args[0]),
     stateDir: path.resolve(args[1] || args[0]), python: args[2] });
-  console.log(JSON.stringify(result, null, 2));
+  // Restricted hosts can lose asynchronous pipe writes even with a clean exit.
+  // Finish emitting the receipt before returning its CLI disposition.
+  fs.writeFileSync(process.stdout.fd, `${JSON.stringify(result, null, 2)}\n`);
   return result.status === 'observed' ? 0 : 1;
 }
 

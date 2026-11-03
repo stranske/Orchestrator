@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 const { observe, main, sourceTreeState } = require('../scripts/observe_redirect_runtime');
+const { runCommand } = require('../scripts/verify_redirect_merged_revision');
 
 function sandbox(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'redirect-observation-control-'));
@@ -447,6 +448,64 @@ function reviewControl(s, row = {}) {
   save();
   return { file, report, save };
 }
+
+test('real CLI distinguishes unavailable captures from verified empty populations', async (t) => {
+  // Manufactured artifacts exercise the process boundary, not owner-host acceptance.
+  const s = sandbox(t);
+  reviewControl(s, { acted_on: 1, outcome: 1, outcome_success: 1, first_break: 'works' });
+  fs.writeFileSync(path.join(s.stateDir, 'redirect-apply.log'),
+    '[2026-11-03T03:00:00Z] redirect apply/link\n'
+    + 'offloads_spent=1 authorized=1 applied=1 (flag ORCH_REDIRECT_APPLY_BOOTSTRAP=1)\n'
+    + 'PRIVATE-target: PRIVATE-refusal\n');
+  for (const scenario of ['missing', 'invalid', 'stale', 'empty']) {
+    if (scenario === 'missing') fs.unlinkSync(s.corpus);
+    else fs.writeFileSync(s.corpus, scenario === 'invalid' ? 'PRIVATE-malformed\n' : '');
+    fs.writeFileSync(s.plan, JSON.stringify({
+      generated_at: scenario === 'empty' ? Math.floor(Date.now() / 1000) : 1, plans: [],
+    }));
+    const before = snapshot(s.root);
+    const started = Date.now();
+    // Early failures must not need a working interpreter. Stale state goes
+    // through the real free screen, with the same nonzero CLI disposition.
+    const screened = ['stale', 'empty'].includes(scenario);
+    const python = screened ? process.env.PYTHON || 'python3'
+      : path.join(s.root, 'PRIVATE-unavailable-interpreter');
+    const execution = await runCommand(process.execPath, [
+      path.resolve(__dirname, '../scripts/observe_redirect_runtime.js'),
+      s.runtime, s.stateDir, python,
+    ], { env: { ...s.env, ORCH_REDIRECT_APPLY_BOOTSTRAP: '0' },
+      encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 });
+    const empty = scenario === 'empty';
+    assert.equal(execution.status, empty ? 0 : 1, `${scenario} CLI disposition`);
+    assert.equal(execution.signal, null);
+    assert.equal(execution.error, undefined);
+    assert.equal(execution.stderr, '');
+    const result = JSON.parse(execution.stdout);
+    assert.ok(Date.parse(result.observed_at) >= started);
+    assert.ok(Date.parse(result.observed_at) <= Date.now());
+    assert.equal(result.status, empty ? 'observed' : 'unavailable');
+    assert.equal(result.candidates, empty ? 0 : null);
+    assert.equal(result.drainable, empty ? 0 : null);
+    assert.equal(result.recorded_switch_review.counts.acted_on, 1);
+    assert.equal(result.logged_runs.latest[0].recorded_at, '2026-11-03T03:00:00Z');
+    assert.equal(result.process_flag, '0');
+    assert.match(result.flag_scope, /deployed_tick_flag_not_established/);
+    assert.equal(result.operational_acceptance, 'not_established');
+    assert.equal(result.historical_replay_receipt, 'not_established');
+    const reason = scenario === 'missing' ? 'owner_corpus_unavailable'
+      : scenario === 'invalid' ? 'corpus_invalid' : 'current_population_unavailable';
+    assert.deepEqual(result.limitations, empty ? [] : [reason]);
+    if (screened) {
+      assert.deepEqual(result.screen_execution, { exit_code: 0, signal: null, error_code: null });
+      assert.equal(result.artifacts.screen_sources.status, 'read');
+    } else {
+      assert.equal(result.screen_execution, undefined);
+      assert.equal(result.blocking, null);
+    }
+    assert.doesNotMatch(execution.stdout, /PRIVATE-/);
+    assert.deepEqual(snapshot(s.root), before);
+  }
+});
 
 test('later captures keep their observation date apart from retained November 3 records', async (t) => {
   // Manufactured archive: even a positive rolling review and an apply record
