@@ -98,6 +98,59 @@ test('unexpected targets and changed checklist shapes are rejected', () => {
   }
 });
 
+test('ambiguous status blocks are rejected in either target without changing input', () => {
+  const start = '<!-- adjudicator-operational-status:start -->';
+  const end = '<!-- adjudicator-operational-status:end -->';
+  for (const key of ['issue', 'pull_request']) {
+    for (const markers of [
+      [end, start, end],
+      [start, end, end],
+      [start, start, end],
+      [start, end, start, end],
+      [end, start],
+    ]) {
+      const before = snapshot();
+      before[key].body += `\n${markers.join('\n')}\n`;
+      const original = structuredClone(before);
+      assert.throws(() => propose(before), /ambiguous operational status markers/,
+        `${key}: ${markers.join(' ')}`);
+      assert.deepEqual(before, original);
+    }
+  }
+});
+
+test('one existing status block is replaced while surrounding text and lifecycle are preserved', () => {
+  for (const state of ['open', 'closed']) {
+    const before = snapshot();
+    before.issue.state = state;
+    for (const key of ['issue', 'pull_request']) {
+      before[key].body += '\nUnrelated prefix: résumé.\n' +
+        '<!-- adjudicator-operational-status:start -->\n' +
+        'Obsolete operational status.\n' +
+        '<!-- adjudicator-operational-status:end -->\n' +
+        'Unrelated suffix: 続行.\n';
+    }
+    const result = propose(before);
+    assert.equal(result.issue.expected_state, state);
+    for (const key of ['issue', 'pull_request']) {
+      assert.equal(result[key].expected_body_sha256, createHash('sha256')
+        .update(before[key].body).digest('hex'));
+      assert.ok(!Object.hasOwn(result[key], 'state'));
+      assert.ok(!result[key].body.includes('Obsolete operational status.'));
+      assert.match(result[key].body, /Unrelated prefix: résumé\.\n<!-- adjudicator-operational-status:start -->/);
+      assert.match(result[key].body, /<!-- adjudicator-operational-status:end -->\nUnrelated suffix: 続行\.\n$/);
+      assert.equal(result[key].body.split('## Operational acceptance remains incomplete').length - 1, 1);
+    }
+    const repeated = propose({
+      ...before,
+      issue: { ...before.issue, body: result.issue.body },
+      pull_request: { ...before.pull_request, body: result.pull_request.body },
+    });
+    assert.equal(repeated.issue.body, result.issue.body);
+    assert.equal(repeated.pull_request.body, result.pull_request.body);
+  }
+});
+
 test('standalone close directives for #1074 are corrected without rewriting other references', () => {
   for (const directive of ['Closes', 'Fixes', 'Resolves', 'closes']) {
     const before = snapshot();
@@ -131,5 +184,40 @@ test('CLI only emits proposed patches and leaves its snapshot byte-identical', (
   } finally {
     fs.closeSync(stdout);
     fs.closeSync(stderr);
+  }
+});
+
+test('CLI rejects invalid snapshots without emitting a partial proposal or changing files', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-completion-invalid-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const input = path.join(dir, 'snapshot.json');
+  const ambiguous = snapshot();
+  ambiguous.pull_request.body += '\n<!-- adjudicator-operational-status:end -->\n' +
+    '<!-- adjudicator-operational-status:start -->\n' +
+    '<!-- adjudicator-operational-status:end -->\n';
+  const invalidTarget = snapshot();
+  invalidTarget.repository = 'other/repo';
+  for (const [bytes, error] of [
+    [JSON.stringify(ambiguous), /ambiguous operational status markers/],
+    [JSON.stringify(invalidTarget), /wrong repository/],
+    ['{', /JSON/],
+  ]) {
+    fs.writeFileSync(input, bytes);
+    const stdout = fs.openSync(path.join(dir, 'stdout'), 'w');
+    const stderr = fs.openSync(path.join(dir, 'stderr'), 'w');
+    try {
+      const result = spawnSync(process.execPath,
+        [path.join(__dirname, '../scripts/reconcile_adjudicator_completion.js'), input],
+        { cwd: dir, timeout: 10000, stdio: ['ignore', stdout, stderr] });
+      assert.ifError(result.error);
+      assert.equal(result.status, 1);
+      assert.equal(fs.readFileSync(path.join(dir, 'stdout'), 'utf8'), '');
+      assert.match(fs.readFileSync(path.join(dir, 'stderr'), 'utf8'), error);
+      assert.equal(fs.readFileSync(input, 'utf8'), bytes);
+      assert.deepEqual(fs.readdirSync(dir).sort(), ['snapshot.json', 'stderr', 'stdout']);
+    } finally {
+      fs.closeSync(stdout);
+      fs.closeSync(stderr);
+    }
   }
 });

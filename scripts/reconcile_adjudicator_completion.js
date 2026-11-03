@@ -56,7 +56,7 @@ function correctBody(body) {
     assert.ok(!corrected.includes(end), 'unmatched operational status marker');
     return `${status}\n\n${corrected}`;
   }
-  const last = corrected.indexOf(end, first);
+  const last = corrected.indexOf(end);
   assert.ok(last >= first && corrected.indexOf(start, first + start.length) < 0 &&
     corrected.indexOf(end, last + end.length) < 0, 'ambiguous operational status markers');
   return corrected.slice(0, first) + status + corrected.slice(last + end.length);
