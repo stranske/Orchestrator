@@ -1,0 +1,115 @@
+{
+  "scope": "synthetic inventory-reader regressions only; not the named acceptance mutations",
+  "source_sha256": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+  "test_sha256": "2b2eea6b16fae226639cda30498f716bc0f95441518eb97f868e8f81a2badd6f",
+  "mutations": [
+    {
+      "mutation": "exclusive-cutoff",
+      "before": "r.ts>=?",
+      "after": "r.ts>?",
+      "mutated_source_sha256": "633118f37cf889129b406e210ed14671c2fec6a404d3c3c6e050ca536075b8df",
+      "exit": 1,
+      "assertion_failure": true
+    },
+    {
+      "mutation": "include-agreements",
+      "before": "AND o.verifier_verdict!=o.adjudicated_verdict ORDER BY",
+      "after": "ORDER BY",
+      "mutated_source_sha256": "ca8db455b3c262c5ce7908b7822b440fb9af3adc4743a5ada2dc7ebdda3f46e7",
+      "exit": 1,
+      "assertion_failure": true
+    },
+    {
+      "mutation": "unstable-ties",
+      "before": "ORDER BY r.ts DESC,r.run_id",
+      "after": "ORDER BY r.ts DESC",
+      "mutated_source_sha256": "35075af4db2e49387fa0ed7aee40c801149944080772ac4bb05fef7da46edac2",
+      "exit": 1,
+      "assertion_failure": true
+    },
+    {
+      "mutation": "writable-reader",
+      "before": "?mode=ro",
+      "after": "?mode=rw",
+      "mutated_source_sha256": "c3865af32d2c485b4240ab63b24eedb9872bb58d750f6451522454425bfc6ef6",
+      "exit": 1,
+      "assertion_failure": true
+    },
+    {
+      "mutation": "collapse-per-pr",
+      "before": "ORDER BY r.ts DESC,r.run_id",
+      "after": "GROUP BY r.target ORDER BY r.ts DESC,r.run_id",
+      "mutated_source_sha256": "e9470edf3a4ea5a84211619bb0e3c245bcad461f1eeffbf8695ba04d5fad4c29",
+      "exit": 1,
+      "assertion_failure": true
+    }
+  ],
+  "byte_identical_restoration_exit": 0,
+  "evaluated_parent": "2725714f440d072b76f75c2e28122b28324080b1",
+  "source_blob": "acb3d5d40e0a1326c07dd69d95b8c0e3915797fe",
+  "requested_case_count": 71,
+  "observed_real_case_count": null,
+  "inventory_status": "unavailable",
+  "evidence_gaps": [
+    "original Brain database absent",
+    "canonical retrospective report absent",
+    "original 71-case identity manifest unavailable"
+  ],
+  "historical_summary": {
+    "path": "docs/evidence/issue-428-metadata-floor-20261006/private-replay-summary.json",
+    "cases": 37,
+    "population": 122,
+    "mapping_to_requested_71": "UNKNOWN"
+  },
+  "checks": {
+    "focused_node": {
+      "command": "node --test-name-pattern='dispute inventory|retro saves Gate gaps' tests/test_adjudicator_retro_cli.js",
+      "exit": 0,
+      "passed": 8
+    },
+    "selftest": {
+      "command": "python3 src/adjudicator_retro.py --selftest",
+      "exit": 0,
+      "checks": 23
+    },
+    "evidence_unittest": {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+      "exit": 0,
+      "passed": 11
+    },
+    "full_node_baseline": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "tests": 63,
+      "pass": 47,
+      "fail": 16
+    },
+    "full_node_candidate": {
+      "command": "node tests/test_adjudicator_retro_cli.js",
+      "exit": 1,
+      "tests": 67,
+      "pass": 51,
+      "fail": 16
+    },
+    "unchanged_baseline_failures": [
+      "retro CLI compares both rules on the same cases with mixed merge dispositions",
+      "retro CLI preserves raw proposals without grading metadata and refreshes measured costs",
+      "retro CLI publishes an empty report without inventing agreement or cost",
+      "retro CLI refreshes late abstention costs after its outcome leaves the Brain",
+      "retro CLI refreshes late invalid-response costs without grading or redispatch",
+      "retro CLI removes stale comparisons until durability is judged again",
+      "retro CLI reuses saved cases when later durability and costs arrive",
+      "retro CLI withdraws stale costs without changing the comparison cohort",
+      "retro bounded batches count paid abstentions and invalid responses outside agreement rates",
+      "retro collects complete gate pages before shadow dispatch: numeric-attempt-order",
+      "retro collects complete gate pages before shadow dispatch: numeric-run-order",
+      "retro dispatch records shadow roles without writing outcomes (newest PR #1)",
+      "retro dispatch records shadow roles without writing outcomes (newest PR #2)",
+      "retro replays each persisted dispute on the same PR (newest run 1)",
+      "retro replays each persisted dispute on the same PR (newest run 2)",
+      "switch review reads and renders saved adjudicator evidence without replay or writes"
+    ],
+    "named_pytest": "unavailable: pytest not installed; PyPI DNS resolution fails",
+    "black": "unavailable: no Python file changes"
+  }
+}

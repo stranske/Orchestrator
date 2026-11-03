@@ -597,6 +597,138 @@ test('collection CLI leaves failed acceptance and inventory exhaustiveness unass
   assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
 });
 
+test('dispute inventory preserves every synthetic case and excludes ineligible Brain rows read-only', (t) => {
+  const w = world(t);
+  const result = w.run(['-c', `
+import json
+import sqlite3
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+import roles
+
+# Synthetic scale fixture, not the unavailable historical 71-dispute inventory.
+now = 2000000000
+cutoff = now - 90 * 86400
+with feedback._conn() as conn:
+    for index in reversed(range(71)):
+        verdicts = ("NON_PASS", "PASS", 1) if index < 57 else (
+            ("FAIL_HOLLOW", "FAIL", 0) if index < 66 else ("PASS", "FAIL", 0)
+        )
+        run_id = f"dispute-{index:02d}"
+        conn.execute("INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                     (run_id, cutoff if index == 0 else now, "owner/repo#1"))
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict,merged) "
+            "VALUES (?,?,?,?)", (run_id, *verdicts),
+        )
+    exclusions = [
+        ("too-old", cutoff - 1, "NON_PASS", "PASS"),
+        ("agreement", now, "PASS", "PASS"),
+        ("missing-verifier", now, None, "PASS"),
+        ("missing-adjudication", now, "NON_PASS", None),
+        ("missing-both", now, None, None),
+    ]
+    for run_id, ts, verifier, adjudicated in exclusions:
+        conn.execute("INSERT INTO runs(run_id,ts,target) VALUES (?,?,?)",
+                     (run_id, ts, "owner/repo#2"))
+        conn.execute(
+            "INSERT INTO outcomes(run_id,verifier_verdict,adjudicated_verdict) VALUES (?,?,?)",
+            (run_id, verifier, adjudicated),
+        )
+    conn.execute("INSERT INTO runs(run_id,ts,target) VALUES ('no-outcome',?,'owner/repo#3')",
+                 (now,))
+before = feedback.DB_PATH.read_bytes()
+files_before = sorted(str(p) for p in feedback.DB_PATH.parent.rglob("*"))
+with (
+    patch.object(retro.sqlite3, "connect", wraps=sqlite3.connect) as connections,
+    patch.object(feedback, "_conn", side_effect=AssertionError("schema initialization")),
+    patch.object(feedback, "record_role_run", side_effect=AssertionError("role write")),
+    patch.object(retro, "fetch_evidence", side_effect=AssertionError("GitHub read")),
+    patch.object(roles, "run_adjudicator_agent", side_effect=AssertionError("dispatch")),
+):
+    explicit = retro.disputes(db=feedback.DB_PATH, now=now)
+    default = retro.disputes(now=now)
+    later = retro.disputes(db=feedback.DB_PATH, now=now + 1)
+    # A fixed observation time retains the boundary case after wall-clock time moves.
+    with patch.object(retro.time, "time", return_value=now + 91 * 86400):
+        fixed = retro.disputes(db=feedback.DB_PATH, now=now)
+        aged = retro.disputes(db=feedback.DB_PATH)
+assert connections.call_count == 5
+assert all(call.kwargs.get("uri") is True and call.args[0].endswith("?mode=ro")
+           for call in connections.call_args_list), "inventory opened a writable connection"
+assert feedback.DB_PATH.read_bytes() == before, "inventory changed the Brain bytes"
+assert sorted(str(p) for p in feedback.DB_PATH.parent.rglob("*")) == files_before
+print(json.dumps({
+    "rows": explicit, "default": default, "fixed": fixed, "aged": aged,
+    "later": later, "ids": [retro._case_id(row) for row in explicit],
+    "excluded": [row[0] for row in exclusions] + ["no-outcome"],
+}))
+`]);
+  const expected = [
+    ...Array.from({ length: 70 }, (_, index) => `dispute-${String(index + 1).padStart(2, '0')}`),
+    'dispute-00',
+  ];
+  assert.deepEqual(result.rows.map((row) => row.run_id), expected,
+    'inventory must include the exact lower time boundary and deterministically order ties');
+  assert.deepEqual(result.default, result.rows);
+  assert.deepEqual(result.fixed, result.rows);
+  assert.deepEqual(result.aged, [], 'a later rolling window cannot reconstruct the original cohort');
+  assert.deepEqual(result.later, result.rows.slice(0, -1));
+  assert.equal(new Set(result.ids).size, 71, 'same-PR disputes must retain distinct case identities');
+  assert.deepEqual([...new Set(result.rows.map((row) => row.target))], ['owner/repo#1']);
+  for (const excluded of result.excluded) {
+    assert.ok(!result.rows.some((row) => row.run_id === excluded), excluded);
+  }
+  const counts = {};
+  for (const row of result.rows) {
+    const key = `${row.verifier_verdict}/${row.adjudicated_verdict}`;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  assert.deepEqual(counts, { 'NON_PASS/PASS': 57, 'FAIL_HOLLOW/FAIL': 9, 'PASS/FAIL': 5 });
+  assert.equal(fs.existsSync(path.join(w.root, 'state')), false, 'inventory must not publish a report');
+});
+
+for (const state of ['missing', 'schema-less', 'empty']) {
+  test(`dispute inventory distinguishes unavailable evidence from an empty Brain: ${state}`, (t) => {
+    const w = world(t);
+    const result = w.run(['-c', `
+import json
+import sqlite3
+from unittest.mock import patch
+import adjudicator_retro as retro
+import feedback
+
+state = ${JSON.stringify(state)}
+if state == "empty":
+    with feedback._conn():
+        pass
+elif state == "schema-less":
+    with sqlite3.connect(feedback.DB_PATH):
+        pass
+before = feedback.DB_PATH.read_bytes() if feedback.DB_PATH.exists() else None
+with patch.object(feedback, "_conn", side_effect=AssertionError("schema initialization")):
+    try:
+        rows = retro.disputes(db=feedback.DB_PATH, now=2000000000)
+        result = {"status": "available", "rows": rows}
+    except sqlite3.OperationalError as exc:
+        result = {"status": "unavailable", "error": str(exc)}
+after = feedback.DB_PATH.read_bytes() if feedback.DB_PATH.exists() else None
+assert before == after, "inventory created or repaired an unavailable Brain"
+print(json.dumps(result))
+`]);
+    if (state === 'empty') {
+      assert.deepEqual(result, { status: 'available', rows: [] });
+    } else {
+      assert.equal(result.status, 'unavailable');
+      assert.match(result.error, state === 'missing' ? /unable to open database/ : /no such table/);
+      assert.equal(result.rows, undefined, 'unavailable evidence must never become a zero-case claim');
+    }
+    assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), state !== 'missing');
+    assert.equal(fs.existsSync(path.join(w.root, 'state')), false);
+  });
+}
+
 const initializeDisputes = `
 import json
 import sys
