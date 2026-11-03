@@ -105,7 +105,8 @@ Each cycle: patch production source → `pytest -q <nodeid>` (expect fail) → r
 
 ## 3. Gate / Combined CI Coverage (authoritative)
 
-**Command (repository Gate / CI):** `python3 src/verify.py --aggregate shard-evidence --coverage`
+**PR command** (`pull_request` runs, e.g. `39223779522`): `python3 src/verify.py --aggregate shard-evidence --coverage --floor-may-lag`
+**Push command** (`push` to main, e.g. `39229590060`): `python3 src/verify.py --aggregate shard-evidence --coverage`
 (with `ORCH_STATE_DIR` and `ORCH_LOCAL_RUNTIME` on the runner temp dirs), as in
 `.github/workflows/ci.yml` job **verify.py aggregate + combined coverage**.
 
@@ -116,9 +117,11 @@ Each cycle: patch production source → `pytest -q <nodeid>` (expect fail) → r
 | Pre–PR #779 baseline (last stored combined snapshot with issue-ranked missing counts) | 39224318238 | `gate-coverage/coverage.json` | 2026-10-19T08:45:29 |
 | PR #779 head / post-merge equivalent | 39223779522 / 39229590060 | `gate-coverage/coverage.json` | 2026-10-19T08:40:21 / 09:28:10 |
 
-`coverage.json` meta for these payloads: `format` 3, `branch_coverage`: **false** (statements/lines
-only in the artifact; blended line+branch **percent** in Gate text uses the fleet trend producer,
-but per-file branch counts are not present in these JSON files).
+`coverage.json` meta for these payloads: `format` 3, `branch_coverage`: **false**, so the artifact
+holds statement/line data only. The Gate trend value (`tools/coverage_trend.py`, which reads
+`totals.percent_covered`) is therefore **line/statement coverage** for these runs; the
+line+branch formula in that producer applies only when branch data is enabled. No branch-enabled
+artifact exists for these revisions, so branch coverage is **not measured** here.
 
 ### Whole tree
 
