@@ -6,10 +6,12 @@ identity, completeness, and cited raw proof; it never infers a PASS from a hash.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
-from pathlib import Path, PurePosixPath
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Mapping
 
 import closer_evidence
@@ -26,7 +28,11 @@ def _result(
     }
 
 
-def _safe_raw(ref: Any, root: Path) -> bytes | None:
+def _safe_raw(
+    ref: Any, root: Path, *, max_bytes: int = closer_evidence.MAX_SECTION_BYTES
+) -> bytes | None:
+    if not 0 < max_bytes <= closer_evidence.MAX_UNCOMPRESSED_BYTES:
+        return None
     if not isinstance(ref, dict) or not isinstance(ref.get("path"), str):
         return None
     if not isinstance(ref.get("sha256"), str) or not closer_evidence.SHA256.fullmatch(
@@ -52,14 +58,50 @@ def _safe_raw(ref: Any, root: Path) -> bytes | None:
                 except ValueError:
                     continue
                 return None
-        if not path.is_file() or path.stat().st_size > closer_evidence.MAX_SECTION_BYTES:
+        if not path.is_file() or path.stat().st_size > max_bytes:
             return None
-        data = path.read_bytes()
+        with path.open("rb") as source:
+            data = source.read(max_bytes + 1)
     except (OSError, ValueError):
         return None
-    if len(data) != ref.get("bytes") or hashlib.sha256(data).hexdigest() != ref["sha256"]:
+    if (
+        len(data) > max_bytes
+        or len(data) != ref.get("bytes")
+        or hashlib.sha256(data).hexdigest() != ref["sha256"]
+    ):
         return None
     return data
+
+
+def _safe_junit_raw(ref: Any, root: Path) -> bytes | None:
+    """Read one complete CI file under the collector's existing expansion cap."""
+    data = _safe_raw(ref, root, max_bytes=closer_evidence.MAX_UNCOMPRESSED_BYTES)
+    if data is None:
+        return None
+    try:
+        return data if closer_evidence._junit_receipt(data) is not None else None
+    except (ET.ParseError, ValueError):
+        return None
+
+
+def _unsupported_members_only(artifact: Mapping[str, Any]) -> bool:
+    omissions = artifact.get("omissions")
+    reasons = {
+        "file format is not a recognized test or coverage receipt",
+        "JSON format is not a recognized test or coverage receipt",
+        "XML format is not recognized JUnit",
+    }
+    return (
+        artifact.get("status") == "partial"
+        and isinstance(omissions, list)
+        and bool(omissions)
+        and all(
+            isinstance(row, Mapping)
+            and isinstance(row.get("reason"), str)
+            and row["reason"] in reasons
+            for row in omissions
+        )
+    )
 
 
 def _requirements(body: str) -> list[str]:
@@ -93,9 +135,9 @@ def _expected(snapshot: Mapping[str, Any]) -> list[tuple[str, str]] | None:
     return expected
 
 
-def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
+def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict | list[dict]]:
     """Index raw, typed, current-revision implementation and test proof."""
-    index = {}
+    index: dict[tuple[str, str], dict | list[dict]] = {}
     diff = packet["sections"]["diff_files"].get("content") or {}
     if not isinstance(diff, dict):
         diff = {}
@@ -145,7 +187,9 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
     for artifact in (
         content.get("artifacts", []) if isinstance(content.get("artifacts"), list) else []
     ):
-        if not isinstance(artifact, dict) or artifact.get("status") != "complete":
+        if not isinstance(artifact, dict) or (
+            artifact.get("status") != "complete" and not _unsupported_members_only(artifact)
+        ):
             continue
         if not isinstance(artifact.get("run_id"), int):
             continue
@@ -170,6 +214,8 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
             }:
                 continue
             kind = receipt["kind"]
+            if artifact.get("status") != "complete" and kind != "junit":
+                continue
             if kind == "junit" and not (
                 all(
                     type(receipt.get(k)) is int and receipt[k] >= 0
@@ -209,14 +255,23 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
             ):
                 continue
             ref = receipt.get("raw")
+            data = _safe_junit_raw(ref, root) if kind == "junit" else _safe_raw(ref, root)
             if (
                 not isinstance(ref, dict)
                 or not isinstance(ref.get("path"), str)
                 or not isinstance(ref.get("sha256"), str)
-                or _safe_raw(ref, root) is None
+                or data is None
             ):
                 continue
-            index[(ref["path"], ref["sha256"])] = {
+            if kind == "junit":
+                # A partial archive is not complete CI evidence. This individual
+                # file must nevertheless parse in full and match its descriptor.
+                parsed = closer_evidence._junit_receipt(data)
+                if parsed is None or any(
+                    receipt.get(key) != value for key, value in parsed.items()
+                ):
+                    continue
+            member = {
                 "artifact_id": artifact.get("id"),
                 "run_id": run.get("id"),
                 "run_attempt": run.get("run_attempt"),
@@ -224,6 +279,14 @@ def _receipt_index(packet: dict, root: Path) -> dict[tuple[str, str], dict]:
                 "kind": receipt["kind"],
                 "receipt_path": receipt.get("path"),
             }
+            key = (ref["path"], ref["sha256"])
+            prior = index.get(key)
+            if prior is None:
+                index[key] = member
+            else:
+                members = prior if isinstance(prior, list) else [prior]
+                if member not in members:
+                    index[key] = [*members, member]
     return index
 
 
@@ -281,7 +344,7 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
         return {}
     _section, content, run, manifest = metadata
     ref = manifest.get("raw")
-    data = _safe_raw(ref, root)
+    data = _safe_raw(ref, root, max_bytes=closer_evidence.MAX_NATIVE_INPUT_BYTES)
     if data is None:
         return {}
     try:
@@ -296,6 +359,15 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
         )
         or str(raw_manifest.get("source_run_id")) != str(run.get("id"))
     ):
+        return {}
+    # A compact presentation is valid only when reproduced exactly from the
+    # authenticated retained manifest. It supplies no acceptance authority.
+    presentation = closer_evidence._native_manifest_presentation(
+        {"manifest": raw_manifest, "raw": ref}
+    )
+    if {key: value for key, value in manifest.items() if key != "raw"} != presentation[
+        "manifest"
+    ] or content.get("input_manifest_projection") != presentation.get("manifest_projection"):
         return {}
     index = {}
     for artifact in (
@@ -316,7 +388,8 @@ def _native_resolution_index(packet: dict, root: Path, verifier: Mapping[str, An
                 not isinstance(container, dict)
                 or container.get("kind") != "native-input-manifest"
                 or container.get("raw") != ref
-                or container.get("manifest") != raw_manifest
+                or container.get("manifest") != presentation["manifest"]
+                or container.get("manifest_projection") != presentation.get("manifest_projection")
                 or container.get("omissions")
             ):
                 continue
@@ -373,8 +446,22 @@ def _proofs_valid(refs: Any, proofs: Any, index: dict, root: Path) -> bool:
             return False
         if not isinstance(ref.get("path"), str) or not isinstance(ref.get("sha256"), str):
             return False
-        member = index.get((ref.get("path"), ref.get("sha256")))
-        data = _safe_raw(ref, root)
+        entry = index.get((ref.get("path"), ref.get("sha256")))
+        members = entry if isinstance(entry, list) else [entry]
+        member = next(
+            (
+                row
+                for row in members
+                if isinstance(row, dict)
+                and all(proof.get(key) == value for key, value in row.items())
+            ),
+            None,
+        )
+        data = (
+            _safe_junit_raw(ref, root)
+            if isinstance(member, dict) and member.get("kind") == "junit"
+            else _safe_raw(ref, root)
+        )
         excerpt, relevance = proof.get("excerpt"), proof.get("relevance")
         if (
             member is None
@@ -472,6 +559,10 @@ def _ordinary_nonpass(
     root: Path,
     packet: dict,
     snapshot: Mapping[str, Any],
+    prep: Mapping[str, Any],
+    packet_ref: Mapping[str, Any],
+    *,
+    mechanical_registration=None,
 ) -> dict:
     raw = [{"finding_id": _finding_id(f), "raw": f} for f in findings]
     resolutions = proposal.get("resolutions")
@@ -500,7 +591,7 @@ def _ordinary_nonpass(
         }:
             return _result("exception", "nonpass_resolution_ambiguous", raw_findings=raw)
         action = resolution.get("next_guarded_action")
-        if action not in {"wait", "collect_evidence", "repair"}:
+        if action not in {"wait", "collect_evidence", "repair", "post_merge_verify"}:
             return _result("exception", "nonpass_action_outside_guard", raw_findings=raw)
         if status.startswith("resolved_") and not _proofs_valid(
             resolution.get("evidence"), resolution.get("proofs"), index, root
@@ -508,44 +599,106 @@ def _ordinary_nonpass(
             return _result("wait", "nonpass_resolution_proof_missing", raw_findings=raw)
         if status.startswith("unresolved_") and not isinstance(resolution.get("reason"), str):
             return _result("wait", "nonpass_unresolved_reason_missing", raw_findings=raw)
+        if action == "post_merge_verify" and not _proofs_valid(
+            resolution.get("evidence"), resolution.get("proofs"), index, root
+        ):
+            return _result("wait", "repeat_verification_evidence_missing", raw_findings=raw)
         if action == "repair":
-            plan = resolution.get("repair_plan")
-            files = (packet["sections"]["diff_files"].get("content") or {}).get("files") or []
-            changed_paths = {
-                f.get("filename") for f in files if isinstance(f, dict) and f.get("patch_retained")
-            }
-            source_owners = {
-                s.get("target") for s in snapshot.get("sources", []) if isinstance(s, dict)
-            }
-            paths = plan.get("paths") if isinstance(plan, dict) else None
-            if (
-                status != "unresolved_mechanical"
-                or not isinstance(paths, list)
-                or not 1 <= len(paths) <= 5
-                or any(
-                    not isinstance(p, str)
-                    or not p
-                    or p not in changed_paths
-                    or PurePosixPath(p).is_absolute()
-                    or ".." in PurePosixPath(p).parts
-                    or any(part in {".git", ".codex", ".aws"} for part in PurePosixPath(p).parts)
-                    for p in paths
-                )
-                or plan.get("head") != packet["head"]
-                or plan.get("source_owner") not in source_owners
-                or not isinstance(plan.get("prompt"), str)
-                or not 1 <= len(plan["prompt"].strip()) <= 2000
-                or not isinstance(plan.get("expected_failure"), str)
-                or not 1 <= len(plan["expected_failure"].strip()) <= 500
-                or not _proofs_valid(
-                    resolution.get("evidence"), resolution.get("proofs"), index, root
-                )
+            import closer_execution_contracts as contracts
+            import closer_mechanical_source as mechanical_source
+
+            admitted = None
+            source_tests = None
+            if mechanical_source.registration_matches(
+                mechanical_registration, snapshot, packet_ref
             ):
-                return _result("wait", "mechanical_repair_plan_unbound", raw_findings=raw)
-            if repair_plan is not None and repair_plan != plan:
-                return _result("exception", "conflicting_mechanical_repair_plans", raw_findings=raw)
-            repair_plan = plan
+                source_tests = mechanical_registration.registered_tests
+            try:
+                admitted = contracts.validate_mechanical_plan_identity(
+                    resolution.get("repair_plan"),
+                    snapshot=snapshot,
+                    packet=packet,
+                    packet_ref=packet_ref,
+                    retained_dir=root,
+                    registered_tests=source_tests,
+                )
+                capability = (
+                    mechanical_source.source_host_capability(
+                        mechanical_registration, snapshot, resolution["repair_plan"]
+                    )
+                    if source_tests is not None
+                    else None
+                )
+                if mechanical_source.capability_matches(
+                    capability, mechanical_registration, snapshot, resolution["repair_plan"]
+                ):
+                    repair_plan = copy.deepcopy(resolution["repair_plan"])
+                    continue
+                refusal = contracts.ContractError(
+                    "bounded_mechanical_executor_unqualified", owner_required=True
+                )
+            except contracts.ContractError as error:
+                refusal = error
+            except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                refusal = contracts.ContractError(
+                    "source_host_qualification_UNMET", owner_required=True
+                )
+            pending = contracts.deterministic_refusal(refusal, snapshot)
+            pending["raw_findings"] = raw
+            pending["pending_evidence"]["finding_id"] = resolution["finding_id"]
+            if admitted is not None:
+                pending["pending_evidence"]["required_test_identity"] = admitted[
+                    "required_test_identity"
+                ]
+            return pending
+    verification_request = None
+    if any(r["next_guarded_action"] == "post_merge_verify" for r in resolutions):
+        import verification_events
+
+        prior = snapshot.get("verifier") or {}
+        proposed = proposal.get("verification_request") or {}
+        try:
+            material = verification_events.material_selectors(proposed.get("material"))
+        except ValueError:
+            return _result("wait", "repeat_verification_material_missing", raw_findings=raw)
+        if (
+            repair_plan
+            or not isinstance(proposed.get("question"), str)
+            or not 1 <= len(proposed["question"].strip()) <= 2000
+        ):
+            return _result("wait", "repeat_verification_question_missing", raw_findings=raw)
+        proof_hashes = sorted(
+            {
+                p["evidence_sha256"]
+                for r in resolutions
+                if r["next_guarded_action"] == "post_merge_verify"
+                for p in r.get("proofs", [])
+            }
+        )
+        recovery_progress = None
+        if not prior.get("verification_event"):
+            recovery_progress = verification_events.recovered_required_material(
+                prep, packet, root, proof_hashes
+            )
+            if recovery_progress is None:
+                return _result(
+                    "wait", "legacy_repeat_requires_necessary_recovery_progress", raw_findings=raw
+                )
+        verification_request = {
+            "recovery_progress": recovery_progress,
+            "schema": "verification-request-reentry/v1",
+            "head": packet["head"],
+            "merge": snapshot.get("merge"),
+            "review_revision": snapshot.get("review_revision"),
+            "source_digest": __import__("closer_dispatcher").source_digest(snapshot["sources"]),
+            "predecessor_event_id": (prior.get("verification_event") or {}).get("event_id")
+            or verification_events.legacy_id(prior),
+            "material": material,
+            "question": proposed["question"],
+            "proof_hashes": proof_hashes,
+        }
     disposition = {
+        "verification_request": verification_request,
         "head": packet["head"],
         "base": packet["base"],
         "review_revision": snapshot.get("review_revision"),
@@ -570,6 +723,8 @@ def integrate_ordinary(
     packet_ref: Mapping[str, Any],
     prep: Mapping[str, Any],
     interpretation: Mapping[str, Any],
+    *,
+    mechanical_registration=None,
 ) -> dict:
     """Return ``accepted`` with a guarded disposition, or ``wait``/``exception``.
 
@@ -691,7 +846,17 @@ def integrate_ordinary(
     if nonpass:
         if isinstance(verifier, dict):
             index = {**index, **_native_resolution_index(packet, root, verifier)}
-        return _ordinary_nonpass(proposal, nonpass, index, root, packet, snapshot)
+        return _ordinary_nonpass(
+            proposal,
+            nonpass,
+            index,
+            root,
+            packet,
+            snapshot,
+            prep,
+            packet_ref,
+            mechanical_registration=mechanical_registration,
+        )
     expected = _expected(snapshot)
     decision = proposal.get("decision")
     rows = decision.get("criteria") if isinstance(decision, dict) else None

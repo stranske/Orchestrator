@@ -133,6 +133,55 @@ def test_analyse_nodes_marks_hollow_and_inconclusive_nodes(monkeypatch, tmp_path
     assert result["hollow_nodes"] == ["tests/a.py::test_old"]
 
 
+def test_run_argv_preserves_partial_text_after_a_timeout(monkeypatch, tmp_path):
+    def timed_out(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(["pytest"], 9, output="partial node output")
+
+    monkeypatch.setattr(local_verify.subprocess, "run", timed_out)
+    report, stdout = local_verify._run_argv(["pytest"], tmp_path, 9)
+    assert report["returncode"] is None
+    assert report["stdout_tail"] == "partial node output"
+    assert stdout == "partial node output"
+
+
+def test_main_renders_json_and_transcript_without_changing_the_verdict(monkeypatch, capsys):
+    monkeypatch.setattr(local_verify, "_capability_heartbeat", lambda: None)
+    calls = []
+
+    def verify(worktree, **kwargs):
+        calls.append((worktree, kwargs))
+        return {"ok": True, "verdict": "PASS", "worktree": worktree}
+
+    monkeypatch.setattr(local_verify, "verify", verify)
+    monkeypatch.setattr(local_verify, "record_verdict", lambda run_id, result: {"run_id": run_id})
+    monkeypatch.setattr(local_verify, "break_transcript", lambda result: "transcript\n")
+
+    assert local_verify.main(["--worktree", "/candidate", "--test-cmd", "pytest"]) == 0
+    assert '"verdict": "PASS"' in capsys.readouterr().out
+    assert calls == [
+        (
+            "/candidate",
+            {"base_ref": "HEAD", "test_cmd": "pytest", "test_paths": None, "timeout": 120},
+        )
+    ]
+
+    assert (
+        local_verify.main(
+            [
+                "--worktree",
+                "/candidate",
+                "--test-cmd",
+                "pytest",
+                "--record-run-id",
+                "run-1",
+                "--transcript",
+            ]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out == "transcript\n"
+
+
 def test_analyse_nodes_rejects_non_python_candidate_paths(tmp_path):
     result = local_verify._analyse_nodes(tmp_path, "pytest", ["notes.txt"], 12)
     assert result["supported"] is False
@@ -212,3 +261,45 @@ def test_changed_paths_and_candidate_copy_handle_rename_and_directories(monkeypa
     (worktree / "tests" / "nested" / "extra.py").write_text("nested = True\n")
     assert local_verify._copy_candidate_paths(worktree, destination, ["tests"]) == ["tests"]
     assert (destination / "tests" / "nested" / "extra.py").read_text() == "nested = True\n"
+
+
+def test_verify_reports_runner_errors_without_calling_the_overlay(monkeypatch, tmp_path):
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_args: ["tests/test_feature.py"])
+    monkeypatch.setattr(
+        local_verify,
+        "_run",
+        lambda *_args: {"ok": False, "returncode": 1, "stdout_tail": "1 passed", "stderr_tail": ""},
+    )
+    monkeypatch.setattr(
+        local_verify,
+        "_pytest_failure_cause",
+        lambda _run: {"test_failure": False, "cause": "coverage floor", "remedy": "use --no-cov"},
+    )
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert result["verdict"] == "ERROR"
+    assert result["reason"] == "coverage floor"
+    assert result["red"] is None
+
+
+def test_verify_marks_a_red_overlay_invalid_when_candidate_test_was_not_copied(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(local_verify, "_changed_paths", lambda *_args: ["tests/test_feature.py"])
+    runs = iter(
+        [
+            {"ok": True, "returncode": 0, "stdout_tail": "green", "stderr_tail": ""},
+            {"ok": False, "returncode": 1, "stdout_tail": "red", "stderr_tail": ""},
+        ]
+    )
+    monkeypatch.setattr(local_verify, "_run", lambda *_args: next(runs))
+    monkeypatch.setattr(local_verify, "_extract_base", lambda *_args: None)
+    monkeypatch.setattr(local_verify, "_copy_candidate_paths", lambda *_args: [])
+    monkeypatch.setattr(
+        local_verify,
+        "_analyse_nodes",
+        lambda *_args: {"verdict": "PASS", "hollow_nodes": [], "counts": {"nodes": 1}},
+    )
+    result = local_verify.verify(tmp_path, test_cmd="pytest tests/test_feature.py")
+    assert result["verdict"] == "PASS"
+    assert result["demonstration_valid"] is False
+    assert "NOT A VALID DEMONSTRATION" in result["reason"]

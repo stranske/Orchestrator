@@ -33,7 +33,7 @@ ORCH="$ORCH_REPO/src"
 # Tools the tick shells out to live outside the default cron/sandbox PATH: ccusage/npx/node
 # in homebrew, vibe/cursor-agent in ~/.local|.cursor/bin. Without this, capacity.py can't see
 # ccusage → codex/claude read 'unknown' and never get routed.
-export PATH="/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
+export PATH="$HOME/.codex/python-bin:/opt/homebrew/bin:$HOME/.local/bin:$HOME/.cursor/bin:$PATH"
 
 # ORCH-ANCHOR: mirror-reader-reentry -------------------------------------------------------------
 # Reopen the tick only after acquiring the publisher's shared lock. The helper
@@ -78,19 +78,6 @@ export ORCH_RESEARCH_ARM="${ORCH_RESEARCH_ARM:-0}"
 # completed, and 7 labelled issues closed with no PR from the labelled agent (4 delivered by codex
 # keepalive or by hand; re-measured 2026-10-04), while keepalive ran 1,239 rounds without it.
 export ORCH_DISPATCH_LANE="${ORCH_DISPATCH_LANE:-0}"
-# ORCH-ANCHOR: exploration-window-start
-# 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
-# Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
-_orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.argv[1]))["end"]; print(end if isinstance(end, str) and len(end) == 8 else "")' \
-  "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/exploration-window.json" 2>/dev/null || true)"
-if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
-  _orch_exploration_end=20261117
-fi
-# Only the window default expires; explicit caller overrides remain supported.
-if [[ "$(date -u +%Y%m%d)" -le "$_orch_exploration_end" ]]; then
-  export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
-fi
-# ORCH-ANCHOR: exploration-window-end
 # GitHub API rate-budget awareness (IMPROVEMENT_BACKLOG.md #8 P2). The local lanes share ONE gh token,
 # so gh-heavy cadence steps can hit the REST search (30/min) / core (5000/hr) budget. ORCH_GH_THROTTLE=1
 # turns ON the in-loop pace/defer in durability_sweep/keepalive/langsmith (each a no-op when unset).
@@ -363,6 +350,38 @@ if [[ "$mode" == "active" ]]; then
   export ORCH_CAPABILITY_HEARTBEATS=1
 fi
 
+# ORCH-ANCHOR: exploration-window-start
+# 2026-10-17 owners q-e9950a89551c92a1 / q-1ca1d09d255e987b: 20%, with sample-based extension.
+# Fallback source of truth: route_weights_export.EXPLORATION_WINDOW_END.
+_orch_exploration_end="$(python3 -c 'import json, sys; end = json.load(open(sys.argv[1]))["end"]; print(end if isinstance(end, str) and len(end) == 8 else "")' \
+  "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}/exploration-window.json" 2>/dev/null || true)"
+if [[ ! "$_orch_exploration_end" =~ ^[0-9]{8}$ ]]; then
+  _orch_exploration_end=20261117
+fi
+# Decide current measured counts BEFORE applying the default. Inspection never writes.
+# A later full export samples its own fresh clock for current capacity evidence.
+_orch_exploration_day="$(date -u +%Y%m%d)"
+if [[ -f "${ORCH:-}/route_weights_export.py" ]]; then
+  _orch_exploration_as_of="$(date -u +%s)"
+  _orch_exploration_operation=--preview-exploration-window
+  # A real tick retains its same-tick extension; bash-c inspection is read-only.
+  if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    _orch_exploration_operation=--refresh-exploration-window
+  fi
+  _orch_exploration_decision="$(python3 "$ORCH/route_weights_export.py" \
+    "$_orch_exploration_operation" --as-of "$_orch_exploration_as_of" \
+    --state-dir "${ORCH_STATE_DIR:-$HOME/.codex/orchestrator}" 2>/dev/null || true)"
+  if [[ "$_orch_exploration_decision" =~ ^([0-9]{8})\ ([0-9]{8})$ ]]; then
+    _orch_exploration_end="${BASH_REMATCH[1]}"
+    _orch_exploration_day="${BASH_REMATCH[2]}"
+  fi
+fi
+# Only the window default expires; explicit caller overrides remain supported.
+if [[ "$_orch_exploration_day" -le "$_orch_exploration_end" ]]; then
+  export ORCH_EXPLORATION_RATE="${ORCH_EXPLORATION_RATE:-0.20}"
+fi
+# ORCH-ANCHOR: exploration-window-end
+
 # ORCH-ANCHOR: experiment-producer-trial — independent of dispatch/research switches.
 # Read the trial default without starting it; the first active producer tick starts the clock.
 _orch_exp_trial="$(python3 "$ORCH/experiment_producer.py" --trial-defaults)" || {
@@ -478,7 +497,15 @@ python3 "$ORCH/research_subjects.py" rounds-report --headline 2>> "$STAMP_DIR/ro
 # pending->durable/reverted/reopened so the learner's success label is un-gameable; WEEKLY relearn
 # re-estimates the VERSIONED route_weights from accumulated outcomes (the router already reads
 # current_weights). Stamp-gated so the hourly tick runs them at the right cadence; never breaks the tick.
-_due() { [[ ! -f "$1" ]] && return 0; [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]; }   # due if missing or older than $2 days
+_due() {
+  [[ ! -f "$1" ]] && return 0
+  # -1 is the registry's named hourly period; retain whole-day semantics for existing rows.
+  if [[ "$2" == "-1" ]]; then
+    [[ -n "$(find "$1" -mmin +30 2>/dev/null)" ]]
+  else
+    [[ -n "$(find "$1" -mtime +"$2" 2>/dev/null)" ]]
+  fi
+}
 # The per-step kill switch (`_step_disabled`, `_warn_unknown_disable_steps`) is defined near the
 # top, above the tick watchdog that consults it. The check below needs the cadence registry, so it
 # runs here.
@@ -1127,25 +1154,32 @@ if _cadence_due relearn && _attempt_ok relearn; then
   echo "  [cadence] relearn + beliefs report (weekly)"
   if python3 "$ORCH/relearn_report.py" >/dev/null 2>&1; then _mark_success relearn; else _mark_fail relearn; fi
 fi
+# Observe once per tick, even during publication backoff or budget SKIPs. No network or publication.
+python3 "$ORCH/route_weights_export.py" --record-capacity-tick --state-dir "$STAMP_DIR" \
+  || echo "  warn: capacity publish observation unavailable; state changes remain held"
 if _cadence_due route-weights-export && _attempt_ok route-weights-export; then
-  # Daily export, PUBLISHED ON CADENCE when the owner's switch is set. Until 2026-09-21 the hourly
+  # Hourly export, PUBLISHED ON CADENCE when the owner's switch is set. Until 2026-09-21 the hourly
   # path never passed --publish, so the export the fleet's delegation policy fetches from
   # exports/route-weights was the one-off of 2026-09-04 while relearn moved from version ~50 to 63:
   # a learner whose output nobody could receive. The owner asked for cadence publication on
   # 2026-09-21. The script still refuses to publish unless ORCH_ROUTE_WEIGHTS_PUBLISH=1 is in the
   # environment (~/.bash_profile for launchd) and pushes only when the remote artifact would change.
   if [[ "${ORCH_ROUTE_WEIGHTS_PUBLISH:-0}" == "1" ]]; then
-    echo "  [cadence] route weights export (daily; publishing to exports/route-weights when changed)"
+    echo "  [cadence] route weights export (hourly; publishing to exports/route-weights when changed)"
   else
-    echo "  [cadence] route weights export (daily; shadow — ORCH_ROUTE_WEIGHTS_PUBLISH!=1, remote publish blocked)"
+    echo "  [cadence] route weights export (hourly; shadow — ORCH_ROUTE_WEIGHTS_PUBLISH!=1, remote publish blocked)"
   fi
-  if python3 "$ORCH/route_weights_export.py" --publish \
+  route_weights_export_start=$(date -u +%s)
+  echo "  [cadence] route weights export start $(date -u +%Y-%m-%dT%H:%M:%SZ) duration=0"
+  if python3 "$ORCH/route_weights_export.py" --publish --state-dir "$STAMP_DIR" \
        > "$STAMP_DIR/route-weights-export.log" 2>&1; then
     _mark_success route-weights-export
+    sed -n '/^\[cadence\] capacity publish held:/p' "$STAMP_DIR/route-weights-export.log"
   else
     cat "$STAMP_DIR/route-weights-export.log"
     _mark_fail route-weights-export "see $STAMP_DIR/route-weights-export.log"
   fi
+  echo "  [cadence] route weights export end $(date -u +%Y-%m-%dT%H:%M:%SZ) duration=$(( $(date -u +%s) - route_weights_export_start ))"
 fi
 if _cadence_due periodic-report && _attempt_ok periodic-report; then
   echo "  [cadence] periodic dataset report + observability dashboard (weekly)"
@@ -1215,7 +1249,6 @@ if [[ "${mode}" == "active" ]] && _cadence_due consumer-sync-artifact-ingest && 
          "${consumer_sync_phase_args[@]}" \
          --repository "stranske/Template" \
          --repository "stranske/Ready" \
-         --repository "stranske/Collab-Admin" \
          --repository "stranske/learning-management-system" \
          --repository "stranske/Fine-Art-Archive" >> "$STAMP_DIR/consumer-sync-artifact-ingest.log" 2>&1; then
       _mark_success consumer-sync-artifact-ingest

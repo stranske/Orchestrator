@@ -16,19 +16,23 @@ Simple/legible (design §11). `--selftest` validates command construction offlin
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import execution_profiles
 import worktree_git
@@ -102,18 +106,10 @@ MODEL_TIERS: dict[str, dict[str, str]] = {
 }
 MODEL_TIER_NAMES = ("cheap", "mid", "full")  # ordered cheap -> expensive; the ceiling relies on it
 
-# A seat can be high quality AND capacity-scarce — claude's weekly is frequently the binding
-# constraint on this fleet. Rather than lying about what the family offers (which would delete the
-# frontier option entirely), the tier map stays HONEST and a CEILING caps what routine routing may
-# actually spend: a request for `full` on a capped seat quietly executes at the ceiling instead.
-# The frontier model therefore remains permanently available — reachable by raising the ceiling
-# (ORCH_CLAUDE_MAX_TIER=full) or naming it directly (ORCH_CLAUDE_MODEL_FULL / requested_model /
-# an explicit profile) — without routine work spending it. To stop dispatching a seat ALTOGETHER
-# and keep it purely for orchestration, use the existing 429-shed switch instead of a ceiling:
-#   touch ~/.codex/handoff/capacity-shed/claude     (remove the file to re-enable)
-AGENT_TIER_CEILING: dict[str, str] = {
-    "claude": "mid",  # owner policy 2026-08-09: routine claude work runs Sonnet 5.5, not Opus 5.5
-}
+# Routine Claude work has no default Sonnet ceiling (owner direction 2026-10-25).
+# Explicit ORCH_<AGENT>_MAX_TIER caps remain available, as do the ordinary capacity
+# and shared-pool checks. Tier choice never establishes a Closer role qualification.
+AGENT_TIER_CEILING: dict[str, str] = {}
 CURSOR_FRONTIER_DEFAULT = None  # require explicit 'frontier:<model>'; bare 'frontier' is unsafe
 # Owner policy: cursor runs Composer and only Composer. Pinned by id because omitting --model
 # selects `auto`, which is NOT Composer — it routes across every frontier model cursor advertises.
@@ -957,17 +953,45 @@ def effective_tier(agent: str, tier: str) -> str:
     return cap if MODEL_TIER_NAMES.index(tier) > MODEL_TIER_NAMES.index(cap) else tier
 
 
+def automatic_profile_within_cap(profile: dict[str, Any]) -> bool:
+    """Apply an explicit tier cap to automatic selection, never explicit profiles.
+
+    A registered model outside the known tier ladder cannot silently become a
+    cheaper fallback. Role suitability and transport confinement are separate.
+    """
+    agent = profile.get("agent")
+    if not isinstance(agent, str) or not agent:
+        return False
+    cap = tier_ceiling(agent)
+    if cap is None:
+        return True
+    profile_id = profile.get("profile_id")
+    if not isinstance(profile_id, str):
+        return False
+    registered = execution_profiles.PROFILE_REGISTRY.get(profile_id)
+    if not registered or any(
+        profile.get(key) != registered.get(key) for key in ("agent", "requested_model")
+    ):
+        return False
+    tiers = MODEL_TIERS.get(agent, {})
+    permitted = {
+        tiers[tier] for tier in MODEL_TIER_NAMES[: MODEL_TIER_NAMES.index(cap) + 1] if tier in tiers
+    }
+    return profile.get("requested_model") in permitted
+
+
 def _tier_model(agent: str, mode: str | None) -> str | None:
     """Model for a router `mode` token, or None to leave --model off.
 
-    Only the three tier tokens select a model. Anything else (None, 'assess', 'offload',
-    'composer', 'frontier') deliberately falls through to the CLI default, preserving the
-    long-standing "never pin what we haven't verified" behaviour for non-tier modes.
+    Tier tokens select a model. Non-tier modes keep the CLI default unless an
+    explicit cap requires a known bounded model; an absent automatic profile
+    must not bypass that cap through the CLI's default model.
     An explicit `requested_model`/profile bypasses this entirely, so the ceiling constrains
     ROUTINE routing without ever making the frontier model unreachable.
     """
     if mode not in MODEL_TIER_NAMES:
-        return None
+        cap = tier_ceiling(agent)
+        return resolve_model(agent, cap) if cap is not None else None
     return resolve_model(agent, effective_tier(agent, mode))
 
 
@@ -1171,6 +1195,13 @@ def _models_in_jsonl(path: Path, *, limit_bytes: int = 4_000_000) -> list[str]:
             blob = handle.read(limit_bytes)
     except OSError:
         return []
+    return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
+
+
+def _claude_models_in_jsonl(path: Path) -> list[str]:
+    """A failed read is identity uncertainty, never permission to credit an older log."""
+    with path.open("r", errors="ignore") as handle:
+        blob = handle.read(4_000_000)
     return re.findall(r'"model"\s*:\s*"([^"]+)"', blob)
 
 
@@ -1421,19 +1452,41 @@ def cli_reported_model(
             "reason": None,
         }
     if agent == "claude":
-        directory = _claude_project_dir(workspace)
-        if not directory.is_dir():
-            return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
-        newest = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for path in newest[:4]:
-            model = _first_real_model(_models_in_jsonl(path))
-            if model:
-                return {
-                    "model": model,
-                    "cli_version": None,
-                    "source": str(path),
-                    "reason": None,
-                }
+        try:
+            directory = _claude_project_dir(workspace)
+            try:
+                directory_stat = directory.stat()
+            except FileNotFoundError:
+                return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+            if not stat.S_ISDIR(directory_stat.st_mode):
+                return {**blank, "reason": "no_claude_transcript_dir_for_workspace"}
+            # Path.is_dir/glob suppress some OSErrors on supported Python versions.
+            # Explicit stat/scandir keeps denied/disappearing discovery unresolved.
+            with os.scandir(directory) as entries:
+                newest = sorted(
+                    (
+                        (Path(entry.path), entry.stat().st_mtime)
+                        for entry in entries
+                        if entry.name.endswith(".jsonl")
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+            for path, _mtime in newest[:4]:
+                model = _first_real_model(_claude_models_in_jsonl(path))
+                if model:
+                    return {
+                        "model": model,
+                        "cli_version": None,
+                        "source": str(path),
+                        "reason": None,
+                    }
+        except OSError as exc:
+            # Identity enrichment must remain unresolved when its store cannot be read,
+            # including a valid cwd whose encoded Claude key exceeds NAME_MAX.
+            # Never substitute a requested model or a neighbouring workspace.
+            reason = errno.errorcode.get(exc.errno or 0, "UNKNOWN")
+            return {**blank, "reason": f"claude_transcript_probe_oserror:{reason}"}
         return {**blank, "reason": "claude_transcript_named_no_real_model"}
     return {**blank, "reason": f"no_cli_identity_reader_for_agent:{agent}"}
 
@@ -1767,6 +1820,231 @@ def apply_write_boundary(
     return [SANDBOX_EXEC, "-p", seatbelt_write_profile(protect, allow), *out]
 
 
+# The complete data-only controls below were inspected in this installed CLI's
+# embedded help. An upgrade must be requalified; unknown flags are not a tool fence.
+DATA_ONLY_CLAUDE_SHA256 = "c9b5341637becbd423ddffc5b254afb645682a3868cb708bbc6cc0e7bb419937"
+_DATA_ONLY_CLAUDE_PROBE_TTL_SECONDS = 5.0
+_DATA_ONLY_CLAUDE_PROBE_LOCK = threading.Lock()
+_DATA_ONLY_CLAUDE_PROBE_CACHE: dict[tuple[str, tuple[int, ...], str], float] = {}
+
+
+def _data_only_claude_binary() -> str:
+    name = shutil.which("claude")
+    if not name:
+        raise ValueError("data-only Claude CLI is absent")
+    path = Path(name).resolve(strict=True)
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 256 * 1024 * 1024:
+        raise ValueError("data-only Claude CLI is not a bounded regular binary")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        remaining = before.st_size
+        while remaining:
+            chunk = stream.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                raise ValueError("data-only Claude CLI changed during qualification")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if stream.read(1):
+            raise ValueError("data-only Claude CLI changed during qualification")
+        opened = os.fstat(stream.fileno())
+    after = path.stat()
+
+    def identity(info):
+        return (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+        )
+
+    if (
+        identity(before) != identity(opened)
+        or identity(opened) != identity(after)
+        or digest.hexdigest() != DATA_ONLY_CLAUDE_SHA256
+    ):
+        raise ValueError("data-only Claude CLI controls are not qualified for this binary")
+    return str(path)
+
+
+def _data_only_claude_probe_key() -> tuple[str, tuple[int, ...], str]:
+    name = shutil.which("claude")
+    if not name:
+        raise ValueError("data-only Claude CLI is absent")
+    path = Path(name).resolve(strict=True)
+    info = path.stat()
+    return (
+        str(path),
+        (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+            info.st_mode,
+            info.st_uid,
+            info.st_gid,
+        ),
+        DATA_ONLY_CLAUDE_SHA256,
+    )
+
+
+def _data_only_claude_eligibility_binary() -> str:
+    """Cache successful eligibility briefly; actual launches always rehash fully."""
+    with _DATA_ONLY_CLAUDE_PROBE_LOCK:
+        before = _data_only_claude_probe_key()
+        observed = time.monotonic()
+        cached = _DATA_ONLY_CLAUDE_PROBE_CACHE.get(before)
+        if cached is not None and 0 <= observed - cached < _DATA_ONLY_CLAUDE_PROBE_TTL_SECONDS:
+            if _data_only_claude_probe_key() != before:
+                raise ValueError("data-only Claude CLI changed during eligibility probe")
+            return before[0]
+        verified = _data_only_claude_binary()
+        if verified != before[0] or _data_only_claude_probe_key() != before:
+            raise ValueError("data-only Claude CLI changed during eligibility probe")
+        _DATA_ONLY_CLAUDE_PROBE_CACHE.clear()
+        _DATA_ONLY_CLAUDE_PROBE_CACHE[before] = time.monotonic()
+        return verified
+
+
+# Installed-source findings are candidate metadata, never execution authority.
+# Do not turn an advertised flag, environment override or fixture success into
+# a native no-tools fence. A real supported builder needs a separate reviewed
+# immutable runtime and confinement contract before this refusal can change.
+_NON_CLAUDE_DATA_ONLY_GAPS = {
+    "cursor": (
+        "empty allowed-tools is an unverified remote header, not a local execution fence",
+        "hook loading is independent of workspace-context exclusion",
+        "no complete MCP/hooks/no-fallback launch contract is established",
+        "wrapper identity omits bundled node, JavaScript and native dependency closure",
+    ),
+    "vibe": (
+        "native wildcard denial and zero-source discovery exist; production admission is not wired",
+        "experimental public-API candidate needs an observing backend and imports/closure review",
+        "exact model and high thinking are configurable; served identity/effort remain unmeasured",
+        "exact server model acceptance and subscription/no-paid-route assurance are unprobed",
+    ),
+    "gemini": (
+        "print/plan/sandbox and slash-command disabling do not disable all tools",
+        "no complete MCP/hooks/project-context/no-fallback launch contract is established",
+    ),
+    "muse": (
+        "selective tool disables and empty preset do not establish a universal tool fence",
+        "no complete MCP/hooks/project-context/no-fallback launch contract is established",
+        "auto-updating wrapper and selected native payload require separate immutable identities",
+    ),
+}
+
+
+def non_claude_data_only_boundary(agent: str, mode: str | None = "assess") -> dict[str, Any]:
+    """Pure fail-closed builder admission; never probes auth, CLIs or config.
+
+    This reports transport engineering gaps, not model capability or entitlement.
+    All currently inspected non-Claude candidates remain unsupported. The return
+    value is diagnostic evidence only and cannot enable a command or a role.
+    """
+    if agent == "claude":
+        raise ValueError("Claude retains its independent installed-binary confinement gate")
+    gaps = list(
+        _NON_CLAUDE_DATA_ONLY_GAPS.get(
+            agent, ("no reviewed data-only builder and complete native confinement contract",)
+        )
+    )
+    problem = (
+        "data-only transport requires explicit assess mode"
+        if mode != "assess"
+        else f"data-only tool boundary unsupported for {agent}"
+    )
+    return {
+        "agent": agent,
+        "transport": "offload",
+        "mode": mode,
+        "status": "unsupported",
+        "command_available": False,
+        "native_confinement_qualified": False,
+        "model_suitability": "not_assessed",
+        "entitlement": "unknown",
+        "evidence_kind": (
+            "installed_source_metadata_only"
+            if agent in _NON_CLAUDE_DATA_ONLY_GAPS
+            else "no_reviewed_transport_evidence"
+        ),
+        "unresolved_controls": gaps,
+        "detail": "; ".join(gaps),
+        "problem": problem,
+    }
+
+
+def prepare_non_claude_data_only_candidate(
+    agent: str,
+    *,
+    manifest: Any,
+    private_root: str | Path,
+    profile: str = "vibe-medium-3.5",
+    mode: str | None = "assess",
+    transport: str = "offload",
+) -> dict[str, Any]:
+    """Prepare an unverified experimental plan; never admit or invoke a transport.
+
+    The installed Vibe public API has sterile discovery/config primitives that
+    the ordinary CLI path does not wire. This helper binds those candidate
+    controls to the existing exact profile and reviewed runtime manifest. The
+    separate real backend, account and confinement evidence gates remain closed.
+    """
+    if mode != "assess" or transport != "offload":
+        raise ValueError("candidate preparation requires an explicit assess offload")
+    if agent != "vibe" or profile != "vibe-medium-3.5":
+        raise ValueError("only the exact Vibe Medium 3.5 candidate builder is implemented")
+    selected = execution_profiles.get_profile(profile)
+    if (
+        not selected
+        or selected["agent"] != agent
+        or selected["requested_model"] != "mistral-medium-3.5"
+        or selected["reasoning_effort"] != "high"
+    ):
+        raise ValueError("candidate profile identity changed")
+    import closer_role_qualification
+    import non_claude_data_only_candidate as candidate
+
+    if not isinstance(manifest, candidate.RuntimeManifest):
+        raise ValueError("an explicit pinned candidate runtime manifest is required")
+    plan = candidate.prepare_vibe_candidate(
+        requested_model=selected["requested_model"],
+        requested_effort=selected["reasoning_effort"],
+        manifest=manifest,
+        private_root=Path(private_root),
+    ).to_dict()
+    return {
+        **plan,
+        "candidate_builder": "vibe-zero-source-programmatic/v1",
+        "profile_identity": closer_role_qualification.profile_identity(selected),
+        "adapter_build_sha256": candidate.pin_file(Path(__file__)).sha256,
+        "production_admission": False,
+        "activation": False,
+    }
+
+
+def data_only_problem(agent: str, mode: str | None = "assess") -> str | None:
+    """Read-only eligibility; no provisioning, CLI invocation, or evidence writes.
+
+    Model/effort/profile authorization remains the caller's normal responsibility.
+    Unsupported here does not declare the provider unavailable for ordinary work.
+    """
+    if mode != "assess":
+        return "data-only transport requires explicit assess mode"
+    if agent != "claude":
+        return non_claude_data_only_boundary(agent, mode)["problem"]
+    try:
+        _data_only_claude_eligibility_binary()
+    except (OSError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 def build_command(
     agent: str,
     prompt: str,
@@ -1783,6 +2061,7 @@ def build_command(
     prompt_via_stdin: bool = False,
     prompt_file: str | Path | None = None,
     write_roots: list[str] | None = None,
+    data_only: bool = False,
 ):
     """Construct the CLI argv for one agent. `mode` is agent-specific.
 
@@ -1797,6 +2076,14 @@ def build_command(
     under workspace-write then also gets exactly the git paths that needs
     (`codex_worktree_git_roots`). Offloads are told never to commit, so they never pass it.
     """
+    data_only_binary = None
+    if data_only:
+        problem = data_only_problem(agent, mode)
+        if problem:
+            raise ValueError(problem)
+        if transport != "offload" or not prompt_via_stdin or prompt:
+            raise ValueError("data-only transport requires a self-contained stdin offload")
+        data_only_binary = _data_only_claude_binary()
     selected_profile = execution_profiles.get_profile(profile) if profile is not None else None
     if selected_profile:
         if selected_profile["agent"] != agent:
@@ -1871,13 +2158,50 @@ def build_command(
             cmd += ["--output-last-message", out_file]
         return cmd + [prompt]
     if agent == "claude":
-        cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions"]
-        if requested_model:
-            cmd += ["--model", requested_model]
-        else:
-            tiered = _tier_model("claude", mode)
-            if tiered:
-                cmd += ["--model", tiered]
+        cmd = (
+            [
+                # The data_only branch above qualified and assigned this path.
+                cast(str, data_only_binary),
+                "-p",
+                "--input-format",
+                "text",
+                "--safe-mode",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                '{"mcpServers":{}}',
+                "--setting-sources",
+                "",
+                "--settings",
+                '{"disableAllHooks":true}',
+                "--disable-slash-commands",
+                "--no-session-persistence",
+            ]
+            if data_only
+            else ["claude", "-p", prompt, "--dangerously-skip-permissions"]
+        )
+        model = requested_model or _tier_model("claude", mode)
+        if model:
+            cmd += ["--model", model]
+        if reasoning_effort is not None:
+            # Installed Claude 2.1.296 names Opus/Sonnet 5.5 and advertises these
+            # effort values. This is command support, not role qualification.
+            # v1 high-profile history is not retroactively evidence of this flag.
+            if (
+                model not in {"claude-sonnet-5-5", "claude-opus-5-5"}
+                or not isinstance(reasoning_effort, str)
+                or reasoning_effort
+                not in {
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                }
+            ):
+                raise ValueError("unsupported explicit Claude model/reasoning effort")
+            cmd += ["--effort", reasoning_effort]
         return cmd
     if agent == "cursor":
         # OFFLOADS ASK FOR stream-json SO THE RUN REPORTS ITS OWN MODEL. cursor's `system/init`
@@ -1945,6 +2269,19 @@ def build_command(
         ]
         if requested_model:
             cmd += ["--model", requested_model]
+        if reasoning_effort is not None:
+            if not isinstance(reasoning_effort, str) or reasoning_effort not in {
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+                "ultra",
+            }:
+                raise ValueError("unsupported explicit Muse reasoning effort")
+            cmd += ["--reasoning-effort", reasoning_effort]
         if prompt_file is not None:
             return cmd + ["--prompt-file", str(prompt_file)]
         return cmd + [prompt]
@@ -2190,11 +2527,16 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
     muse runs on the owner's SUBSCRIPTION LOGIN, and `META_API_KEY` always overrides that login, so
     it never reaches a muse process: a COPY of the effective environment (the process env when none
     was supplied) without the key. The caller's mapping is never mutated. Every other agent's
-    environment is returned exactly as given, including None (inherit). The detached wrapper in
+    environment is returned as given unless a validated storage job owns native TMPDIR. The detached wrapper in
     `dispatcher._agent_runtime_prelude` does the same for the offload and delegate paths.
     """
+    from storage_lifecycle import owned_agent_tmpdir
+
+    owned_tmp = owned_agent_tmpdir(agent, env)
     if agent != "muse":
-        return env
+        if owned_tmp is None:
+            return env
+        return {**(os.environ if env is None else env), "TMPDIR": str(owned_tmp)}
     scrubbed = dict(os.environ if env is None else env)
     scrubbed.pop("META_API_KEY", None)
     runtime = AGENT_RUNTIME / "muse"
@@ -2216,7 +2558,7 @@ def agent_subprocess_env(agent: str, env: dict | None) -> dict | None:
             "XDG_CONFIG_HOME": str(runtime / ".config"),
             "XDG_STATE_HOME": str(runtime / ".local/state"),
             "XDG_DATA_HOME": str(runtime / ".local/share"),
-            "TMPDIR": str(runtime / "tmp"),
+            "TMPDIR": str(owned_tmp if owned_tmp is not None else runtime / "tmp"),
         }
     )
     return scrubbed
@@ -2403,7 +2745,22 @@ def dispatch(
     that is or holds `/`, the home dir or the control plane is refused for every agent.
     """
     refuse_broad_workspace(agent, cwd)
-    process_env = agent_subprocess_env(agent, env)
+    from storage_lifecycle import StorageBlocked
+
+    try:
+        process_env = agent_subprocess_env(agent, env)
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "mode": mode,
+            "exit": 2,
+            "changed_files": False,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     muse_prompt = muse_prompt_file(prompt) if agent == "muse" else None
     try:
         cmd = build_command(
@@ -2460,7 +2817,8 @@ def dispatch(
             target=str(Path(cwd).expanduser().resolve()),
         )
         # And the same reset: the provider's own clock, from codex's harness events alone.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2604,6 +2962,7 @@ def _selftest_workspace_never_broad() -> None:
 def _selftest():
     old_codex_sandbox = os.environ.pop("CODEX_SANDBOX", None)
     old_codex_bypass = os.environ.pop("ORCH_CODEX_BYPASS_INNER_SANDBOX", None)
+    old_claude_cap = os.environ.pop("ORCH_CLAUDE_MAX_TIER", None)
     try:
         _selftest_inner(gaps=[])
     finally:
@@ -2611,9 +2970,15 @@ def _selftest():
             os.environ["CODEX_SANDBOX"] = old_codex_sandbox
         if old_codex_bypass is not None:
             os.environ["ORCH_CODEX_BYPASS_INNER_SANDBOX"] = old_codex_bypass
+        if old_claude_cap is not None:
+            os.environ["ORCH_CLAUDE_MAX_TIER"] = old_claude_cap
 
 
 def _selftest_inner(*, gaps: list[str] | None = None):
+    import inspect
+
+    # Wiring pin; behavioral stderr reset coverage also exercises dispatch in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(dispatch)
     assert _auto_resolve("gemini", "mid", "gemini-3.8-flash-high", ["gemini-4-argon-high"]) is None
     assert _auto_resolve("gemini", "full", "gemini-4-argon-high", ["gemini-3.8-flash-high"]) is None
     import env_prereq  # imported here: env_prereq reads this module
@@ -2768,24 +3133,22 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert "--add-dir" not in kept, kept
         assert codex_worktree_git_roots(common.parent) == [], "a .git DIRECTORY is never granted"
     _selftest_workspace_never_broad()
-    # Claude 5 family: Haiku 4.5 (cheap) / Sonnet 5.5 (mid) / Opus 5.5 (full) — but the seat is CAPPED
-    # at mid (scarce weekly), so the `full` lane really dispatches Sonnet 5.5. Expectations are
-    # written post-ceiling because that is what reaches the CLI.
+    # Claude tiers retain their named models without a routine Sonnet ceiling.
     assert MODEL_TIERS["claude"]["full"] == "claude-opus-5-5", "frontier option must stay defined"
-    assert tier_ceiling("claude") == "mid" and effective_tier("claude", "full") == "mid"
+    assert tier_ceiling("claude") is None and effective_tier("claude", "full") == "full"
     for tier, expected in (
         ("cheap", "claude-haiku-4-5"),
         ("mid", "claude-sonnet-5-5"),
-        ("full", "claude-sonnet-5-5"),
+        ("full", "claude-opus-5-5"),
     ):
         cl = build_command("claude", "x", mode=tier)
         assert cl[cl.index("--model") + 1] == expected, (tier, cl)
         assert model_identity("claude", tier) == expected, tier
-    # Raising the ceiling reaches the frontier model — the option is capped, never deleted.
-    os.environ["ORCH_CLAUDE_MAX_TIER"] = "full"
+    # An explicit cap still limits routine selection without changing the tiers.
+    os.environ["ORCH_CLAUDE_MAX_TIER"] = "mid"
     try:
-        uncapped = build_command("claude", "x", mode="full")
-        assert uncapped[uncapped.index("--model") + 1] == "claude-opus-5-5", uncapped
+        capped = build_command("claude", "x", mode="full")
+        assert capped[capped.index("--model") + 1] == "claude-sonnet-5-5", capped
     finally:
         os.environ.pop("ORCH_CLAUDE_MAX_TIER", None)
     assert model_identity("cursor", "frontier:gpt-5.5") == "cursor:gpt-5.5"
@@ -3105,7 +3468,11 @@ def _selftest_inner(*, gaps: list[str] | None = None):
             assert _env is not None and "META_API_KEY" not in _env and _env["PATH"] == "/p", _env
     finally:
         globals()["HOME"], globals()["AGENT_RUNTIME"] = _saved_muse_home, _saved_muse_runtime
-    assert agent_subprocess_env("vibe", None) is None, "other agents keep inheriting"
+    _vibe_env = agent_subprocess_env("vibe", None)
+    assert _vibe_env is None or (
+        os.environ.get("ORCH_STORAGE_RUN_ROOT")
+        and Path(_vibe_env["TMPDIR"]).is_relative_to(Path(os.environ["ORCH_STORAGE_RUN_ROOT"]))
+    ), "owned storage changes only native TMPDIR"
     import json as _mj
     import tempfile as _mt
 

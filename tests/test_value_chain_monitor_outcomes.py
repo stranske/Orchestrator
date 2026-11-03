@@ -89,6 +89,7 @@ def _consumed(n: int, cap_id: str = CAP, **outcome) -> str:
         source_run_id=f"capability-producer:{cap_id}:{n}",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     if outcome:
         feedback.record_outcome(run, **outcome)
@@ -393,6 +394,7 @@ def test_a_proven_no_delivery_run_is_not_the_outcome_step(brain, verdict):
         source_run_id="capability-producer:research",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(run, adjudicated_verdict=verdict, merged=0, durability="pending")
     row = _row(brain)

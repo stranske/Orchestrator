@@ -56,6 +56,92 @@ def test_tick_env_failure_messages_keep_tree_and_machine_causes_distinct():
     assert "ENVIRONMENT, not the tree" in machine
 
 
+def test_tick_env_retries_only_machine_failures_and_labels_the_result(monkeypatch):
+    """A transient shell failure must not be reported as a missing prologue."""
+    calls = []
+
+    def flaky_attempt():
+        calls.append(True)
+        if len(calls) == 1:
+            return {}, {"reason": "timeout", "detail": "busy"}
+        return {"ORCH_FIXTURE": "1"}, {"reason": "ok", "keys": 1}
+
+    monkeypatch.setattr(recurrence, "_tick_env_attempt", flaky_attempt)
+    monkeypatch.setattr(recurrence, "TICK_ENV_BACKOFF", 0)
+    monkeypatch.setattr(recurrence, "_TICK_ENV", None)
+    monkeypatch.setattr(recurrence, "_TICK_ENV_DIAG", None)
+    assert recurrence.tick_env(refresh=True, log=False) == {"ORCH_FIXTURE": "1"}
+    assert recurrence.tick_env_status(log=False)["retried"] == 1
+
+    calls.clear()
+
+    def no_exports_attempt():
+        calls.append(True)
+        return {}, {"reason": "no_orch_keys", "keys": 0}
+
+    monkeypatch.setattr(recurrence, "_tick_env_attempt", no_exports_attempt)
+    assert recurrence.tick_env(refresh=True, log=False) == {}
+    assert len(calls) == 1
+    assert recurrence.tick_env_status(log=False)["outcome"] == "defect"
+
+
+def test_tick_values_and_predicate_flags_keep_unknown_distinct_from_unset(monkeypatch):
+    # An inherited value turns the source into "ambient" (and an inherited ORCH_MISSING into the
+    # ambient value), so the flags under test must not exist in this process.
+    monkeypatch.delenv("ORCH_FLAG", raising=False)
+    monkeypatch.delenv("ORCH_MISSING", raising=False)
+    monkeypatch.setattr(recurrence, "tick_env", lambda: {"ORCH_FLAG": "1"})
+    monkeypatch.setattr(recurrence, "_TICK_ENV_DIAG", {"outcome": "ok"})
+    assert recurrence.as_the_tick_sees_it("ORCH_FLAG") == ("1", "tick")
+    assert recurrence.as_the_tick_sees_it("ORCH_MISSING") == (None, "unset")
+    assert recurrence._predicate_flag("ORCH_FLAG")["fires"] is True
+
+    monkeypatch.setattr(recurrence, "tick_env", lambda: {})
+    monkeypatch.setattr(
+        recurrence, "_TICK_ENV_DIAG", {"reason": "timeout", "outcome": "environment"}
+    )
+    assert recurrence.as_the_tick_sees_it("ORCH_MISSING") == (None, "tick-unresolved:timeout")
+    assert recurrence.tick_value_unknown("tick-unresolved:timeout")
+    assert not recurrence.tick_value_unknown("unset")
+
+
+def test_external_caller_and_format_report_cover_present_and_missing_caller(monkeypatch):
+    import capability_activation_audit as audit
+
+    monkeypatch.setattr(audit, "external_caller", lambda _cap: None)
+    missing = recurrence._external_caller_state("docs-drift-fix-agent")
+    assert missing["fires"] is False and missing["external_blocker"] is True
+    monkeypatch.setattr(audit, "external_caller", lambda _cap: {"exists": True, "path": "x"})
+    assert recurrence._external_caller_state("docs-drift-fix-agent")["fires"] is True
+
+    report = {
+        "total": 2,
+        "would_fire": 1,
+        "would_miss": 1,
+        "rows": [
+            {
+                "capability": "routing",
+                "kind": "classify",
+                "fires": False,
+                "source": "s",
+                "labels": [],
+                "expected": "x",
+                "actual": "y",
+            },
+            {
+                "capability": "risk",
+                "kind": "high_stakes",
+                "fires": True,
+                "source": "s",
+                "reason": "risk:major",
+            },
+        ],
+    }
+    rendered = recurrence.format_report(report)
+    assert "expected task_type=x" in rendered
+    assert "risk" in rendered and "risk:major" in rendered
+
+
 def test_predicate_checks_turn_missing_dependencies_into_nonfiring_rows(monkeypatch):
     """A recurrence report remains readable when an optional local subsystem is unavailable."""
     import builtins
@@ -173,6 +259,106 @@ def test_replay_records_fixture_errors_instead_of_raising(monkeypatch):
     assert "error" in report["rows"][0]["eligibility"]
     assert report["rows"][1]["reason"].startswith("ERROR")
     assert report["rows"][2]["detail"]["error"] == "broken"
+
+
+def test_replay_uses_live_labels_and_successful_routing_without_network(monkeypatch):
+    """Live fixtures retain their provenance while every routing shape stays locally controlled."""
+    fixture = {"live": True, "repo": "Orchestrator", "issue": 666, "labels": [], "title": "old"}
+    fetch_calls = []
+
+    def fake_fetch_issue(repo, number):
+        fetch_calls.append((repo, number))
+        return {"labels": [{"name": "task:test"}], "title": "current title"}
+
+    monkeypatch.setattr(recurrence, "_fetch_issue", fake_fetch_issue)
+    assert recurrence._labels_of(fixture, offline=False) == (
+        ["task:test"],
+        "current title",
+        "live Orchestrator#666",
+    )
+    assert fetch_calls == [("Orchestrator", 666)]
+
+    import adversarial
+    import backlog
+    import runtime_ac_gate
+
+    calls = []
+
+    def classify(labels):
+        assert labels == ["task:test"]
+        calls.append("classify")
+        return "testgen"
+
+    def eligibility(item, spec):
+        assert item == {
+            "target": "o/r#1",
+            "lane": "closer",
+            "labels": [],
+            "source_labels": [],
+        }
+        assert str(spec) == "/nonexistent/spec.json"
+        calls.append("eligibility")
+        return {"required": True}
+
+    def high_stakes_reason(item):
+        assert item == {
+            "target": "o/r#1",
+            "labels": [],
+            "title": "t",
+            "source_labels": [],
+            "lane": "closer",
+        }
+        calls.append("high_stakes_reason")
+        return "risk:major"
+
+    def forbidden_fetch(*_args):
+        pytest.fail("offline replay must not fetch a live fixture")
+
+    monkeypatch.setattr(recurrence, "_fetch_issue", forbidden_fetch)
+    monkeypatch.setattr(backlog, "classify", classify)
+    monkeypatch.setattr(runtime_ac_gate, "eligibility", eligibility)
+    monkeypatch.setattr(adversarial, "high_stakes_reason", high_stakes_reason)
+    monkeypatch.setattr(
+        recurrence,
+        "FIXTURES",
+        (
+            {
+                "capability": "routing",
+                "live": True,
+                "repo": "Orchestrator",
+                "issue": 666,
+                "kind": "classify",
+                "expect_task_type": "testgen",
+                "labels": ["task:test"],
+                "title": "t",
+                "source": "s",
+            },
+            {
+                "capability": "gate",
+                "kind": "gate_required",
+                "labels": [],
+                "title": "t",
+                "source": "s",
+            },
+            {
+                "capability": "risk",
+                "kind": "high_stakes",
+                "labels": [],
+                "title": "t",
+                "source": "s",
+            },
+        ),
+    )
+    monkeypatch.setattr(recurrence, "PREDICATE_FIXTURES", ())
+    report = recurrence.replay(offline=True)
+    assert report["would_fire"] == report["total"] == 3
+    assert calls == ["classify", "eligibility", "high_stakes_reason"]
+    assert report["rows"][0]["provenance"] == "frozen (live read failed) Orchestrator#666"
+    assert report["rows"][0]["labels"] == ["task:test"]
+    assert report["rows"][0]["title"] == "t"
+    assert report["rows"][0]["actual"] == "testgen"
+    assert report["rows"][1]["eligibility"] == {"required": True}
+    assert report["rows"][2]["reason"] == "risk:major"
 
 
 def test_format_report_renders_miss_and_repaired_fire_details():

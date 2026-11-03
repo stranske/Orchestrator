@@ -21,3 +21,13 @@ def test_deployment_evidence_collector_acceptance():
 
 def test_paired_generation_import_witness():
     witness(["bash", "tests/test_mirror_generation_imports.sh"])
+
+
+def test_generation_witness_does_not_feed_its_program_through_a_shell_pipe():
+    from test_orchestrate_no_heredoc import _logical_code_lines
+
+    script = ROOT / "tests/test_mirror_generation_imports.sh"
+    assert not any("<<" in line for line in _logical_code_lines(script.read_text()))
+    helper = ROOT / "tests/mirror_generation_imports_witness.py"
+    assert helper.is_file()
+    assert '"$repo/tests/mirror_generation_imports_witness.py" "$repo"' in script.read_text()

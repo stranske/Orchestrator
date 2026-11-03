@@ -16,6 +16,16 @@ import rate_incidents
 
 
 def _isolate_offload(monkeypatch, tmp_path):
+    # verify_before_sync exports its own lease to every xdist worker. Transport
+    # tests do not own that lease: an unrelated attribution test can hold its
+    # ledger lock and make offload refuse before reaching the subprocess stub.
+    for name in (
+        "ORCH_STORAGE_RUN_ROOT",
+        "ORCH_STORAGE_RUN_ID",
+        "ORCH_STORAGE_OWNER_TOKEN",
+        "ORCH_STORAGE_ENTRY_PID",
+    ):
+        monkeypatch.delenv(name, raising=False)
     # Model discovery is a separate subprocess boundary; a cold hosted cache must not
     # reach the transport failure stub before the prompt file has been created.
     monkeypatch.setattr(adapters, "_model_probe_enabled", lambda: False)

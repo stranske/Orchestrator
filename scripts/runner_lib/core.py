@@ -708,6 +708,37 @@ def assemble_prompt(
         )
 
     text = "".join(parts).rstrip() + "\n"
+    correction_file = context.get("correction_context_file")
+    if correction_file:
+        # The workflow's native artifact preflight supplies this required file.
+        # Missing/truncated material cannot inherit optional appendix behavior.
+        from scripts.langchain.issue_pr_context import (
+            ContextOptions,
+            render_correction_context,
+            require_complete_correction_prompt,
+            select_correction_budget,
+        )
+
+        correction = json.loads(Path(str(correction_file)).read_text(encoding="utf-8"))
+        budget = str(context.get("correction_token_budget") or "")
+        if not budget.isdigit() or int(budget) <= 0:
+            raise ValueError(
+                "correction_budget_unconfigured: final coding lane requires an explicit selected ISSUE_PR_CONTEXT_TOKEN_BUDGET"
+            )
+        original = correction.get("original_issue_body")
+        if not isinstance(original, str):
+            raise ValueError(
+                "correction_original_scope_missing: native incumbent body is mandatory"
+            )
+        text += (
+            "\n## Complete original issue scope\n"
+            + original
+            + render_correction_context(correction)
+            + "\n"
+        )
+        text = require_complete_correction_prompt(
+            text, ContextOptions(token_budget=select_correction_budget(correction, budget))
+        )
     output_path.write_text(text, encoding="utf-8")
     return RunnerPrompt(
         provider=provider,
@@ -1813,6 +1844,16 @@ def _authority_challenge_command(
 
 
 STORAGE_FAILURE_MESSAGE_MAX_CHARS = 200
+# API message text is untrusted. Discard credential-bearing diagnostics entirely:
+# guessing value boundaries can leave spaced, quoted or multiword secrets behind.
+# Match marker substrings deliberately: camel-case and underscore/prefixed field
+# names must not evade the policy at a regex word boundary.
+_STORAGE_FAILURE_CREDENTIAL_FIELD_RE = re.compile(
+    r"[=:\"']|(?:token|secret|password|passwd|passphrase|pwd|auth|credential|client[\s_-]*secret|"
+    r"x[\s_-]*access[\s_-]*token|authorization|api[\s_-]*key|"
+    r"access[\s_-]*token|refresh[\s_-]*token|private[\s_-]*key|cookie)",
+    re.IGNORECASE,
+)
 _STORAGE_FAILURE_SECRET_RE = re.compile(
     r"(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_\-]*|x-access-token:\S*|bearer\s+\S+|https?://\S*",
     re.IGNORECASE,
@@ -1828,10 +1869,13 @@ def _storage_failure_message(exc: Exception) -> str | None:
         return None
     try:
         payload = json.loads(text[start:])
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Malformed API diagnostics must not interrupt the fail-closed path.
         return None
     message = payload.get("message") if isinstance(payload, dict) else None
     if not isinstance(message, str):
+        return None
+    if _STORAGE_FAILURE_CREDENTIAL_FIELD_RE.search(message):
         return None
     message = _STORAGE_FAILURE_SECRET_RE.sub("<redacted>", " ".join(message.split()))
     return message[:STORAGE_FAILURE_MESSAGE_MAX_CHARS] or None
@@ -1930,6 +1974,7 @@ def record_completion(
     *,
     observed_head_sha: str = "",
     task_progress_after: object = None,
+    completion_reason: str = "",
 ) -> dict[str, Any]:
     """Persist terminal runner state after a dispatch finishes.
 
@@ -1978,6 +2023,14 @@ def record_completion(
         task_progress_after=task_progress_after,
         fallback=produced_work,
     )
+    if completion_reason not in {"", "rate_limited", "failed", "progressed", "no_progress"}:
+        raise ValueError("Invalid runner completion reason")
+    # Only measured branch/checklist progress clears a provider backoff marker.
+    # The JS classifier supplies provider failures; productivity is reconciled here.
+    if produced_work is True:
+        completion_reason = "progressed"
+    elif completion_reason not in {"rate_limited", "failed"}:
+        completion_reason = "no_progress" if result_payload.get("success") else "failed"
     if produced_work is None and prior.get("key") == key and _completion_was_unproductive(prior):
         produced_work = False
     completed_at = (
@@ -1994,8 +2047,21 @@ def record_completion(
         "status": status,
         "completed_at": completed_at,
         "result": compact_result,
+        "completion": {"reason": completion_reason},
         **productivity_fields,
     }
+    if completion_reason == "rate_limited":
+        ttl_config = json.loads(
+            (
+                Path(__file__).resolve().parents[2] / ".github/scripts/rate_limit_receipt.json"
+            ).read_text(encoding="utf-8")
+        )
+        # A replayed terminal record may preserve a malformed completed_at; fall
+        # back to now so expiry is still written instead of aborting the receipt.
+        base = _parse_timestamp(completed_at) or _utc_now_dt()
+        record["completion"]["expires_at"] = (
+            base + dt.timedelta(hours=ttl_config["RATE_LIMIT_RECEIPT_TTL_HOURS"])
+        ).isoformat()
     same_terminal_attempt = prior.get("key") == key and prior.get("status") in TERMINAL_STATUSES
     if status == "completed" and same_terminal_attempt:
         # Completion replays cannot change the first attempt's disposition.
@@ -2089,6 +2155,10 @@ def _parse_optional_bool(raw: str) -> bool | None:
 
 
 def _cmd_assemble(args: argparse.Namespace) -> int:
+    # The effect producer is source-disabled. Preserve pure assembly fixtures,
+    # but refuse an untransported typed sidecar at the actual provider intake.
+    if os.environ.get("CORRECTION_CONTEXT_FILE"):
+        raise ValueError("typed_correction_effects_not_deployed: collection-only source release")
     context = {
         "workspace": args.workspace,
         "base_prompt_file": args.base_prompt,
@@ -2097,6 +2167,8 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
         "pr_number": args.pr_number,
         "output_file": args.output,
         "task_appendix_file": args.task_appendix_file,
+        "correction_context_file": os.environ.get("CORRECTION_CONTEXT_FILE"),
+        "correction_token_budget": os.environ.get("ISSUE_PR_CONTEXT_TOKEN_BUDGET"),
         "materialize_reference_packs": args.materialize_reference_packs,
         "materialize_orchestrator_skill": args.materialize_orchestrator_skill,
         "orchestrator_skill_pack": args.orchestrator_skill_pack or None,
@@ -2230,6 +2302,7 @@ def _cmd_record_completion(args: argparse.Namespace) -> int:
         produced_work=_parse_produced_work(args.produced_work),
         observed_head_sha=args.observed_head_sha,
         task_progress_after=args.task_progress_after,
+        completion_reason=args.completion_reason,
     )
     outputs = {
         "recorded": "false" if record.get("completion_recorded") is False else "true",
@@ -2346,6 +2419,12 @@ def build_parser() -> argparse.ArgumentParser:
     complete.add_argument("--raw-output-file", default="")
     complete.add_argument("--summary", default="")
     complete.add_argument("--exit-code", default=None)
+    complete.add_argument(
+        "--completion-reason",
+        choices=["rate_limited", "failed", "progressed", "no_progress"],
+        default="",
+        help="provider completion classification from keepalive_loop.classifyCompletion",
+    )
     complete.add_argument(
         "--produced-work",
         default="",

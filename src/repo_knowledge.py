@@ -23,7 +23,13 @@ import feedback
 import provision
 
 ORCH = Path(__file__).resolve().parent
-REG = Path(os.environ.get("ORCH_REPO_KNOWLEDGE_PATH", ORCH / "experiments" / "repo_knowledge.json"))
+# Loading can seed or migrate this registry. Its mutable bytes belong to the
+# operational runtime, never beside modules in a verified mirror generation.
+REG = Path(
+    os.environ.get(
+        "ORCH_REPO_KNOWLEDGE_PATH", feedback.LOCAL_RUNTIME / "experiments" / "repo_knowledge.json"
+    )
+)
 DEFAULT_MAX_CHARS = 3000
 AGENTS_EXPORT_START = "<!-- BEGIN orch-playbook -->"
 AGENTS_EXPORT_END = "<!-- END orch-playbook -->"

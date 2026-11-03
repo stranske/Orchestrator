@@ -103,6 +103,7 @@ def _consumed(run: str, cap_id: str = "deliberate-break-verifier", **outcome) ->
         source_run_id=f"capability-producer:{cap_id}:{run}",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     if outcome:
         feedback.record_outcome(run, **outcome)
@@ -585,6 +586,7 @@ def _consumed_run(run: str, cap_id: str = "deliberate-break-verifier", **outcome
         source_run_id=f"capability-producer:{cap_id}:{run}",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     if outcome:
         feedback.record_outcome(run, **outcome)

@@ -7628,7 +7628,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="tick-evidence: consult and classify but record nothing",
+        help="supported only by tick-evidence: consult and classify but record nothing",
     )
     ap.add_argument(
         "--budget-seconds",
@@ -7662,6 +7662,12 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
+    if args.dry_run and args.command != "tick-evidence":
+        # This is intentionally a parser error rather than a per-command convention.  The global
+        # flag used to be accepted by every recording command but only tick-evidence honored it,
+        # which made a dry-run spelling silently mutate the ledger.  Reject before any command can
+        # load a store, emit a heartbeat, or reach a writer.
+        ap.error("--dry-run is supported only by tick-evidence")
     if args.selftest:
         # PRIVATE STORES FOR THE WHOLE RUN, and a red run if any path still reaches a live one.
         with _private_live_state():

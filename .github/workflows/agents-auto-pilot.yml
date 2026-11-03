@@ -21,6 +21,10 @@ on:
         description: "Issue number to auto-pilot"
         required: true
         type: string
+      correction_selector:
+        description: "Reserved correction selector; typed execution is disabled"
+        required: false
+        type: string
       force_step:
         description: "Force a specific step (optional, leave as 'auto' for normal flow)"
         required: false
@@ -113,6 +117,15 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      # No authenticated producer or durable subject index is installed. This
+      # reserved typed interface must fail before ordinary effects or providers.
+      - name: Reject unsupported correction requests
+        if: inputs.correction_selector != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            throw new Error('correction_handoff_disabled: typed execution requires a reviewed producer and durable subject identity');
+
       # Mint GitHub App token early to use for API calls (avoids rate limits)
       - name: Mint GitHub App Token
         id: app_token
@@ -164,7 +177,7 @@ jobs:
 
       - name: Set up Node
         if: steps.check_enabled.outputs.enabled == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '24'
 
@@ -239,7 +252,7 @@ jobs:
       - name: Set up Python
         id: setup-python
         if: steps.check_enabled.outputs.enabled == 'true'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
 
@@ -319,7 +332,7 @@ jobs:
 
             // Get issue number from various sources (in priority order)
             if (context.eventName === 'workflow_dispatch') {
-              issueNumber = parseInt('${{ inputs.issue_number }}');
+              issueNumber = parseInt(context.payload.inputs?.issue_number || '', 10);
             } else if (context.payload.issue) {
               issueNumber = context.payload.issue.number;
               issue = context.payload.issue;
@@ -2438,6 +2451,12 @@ jobs:
           ISSUE_TITLE: ${{ steps.context.outputs.issue_title }}
           STEP_COUNT: ${{ steps.cycles.outputs.count }}
           MAX_STALL_RETRIES: '5'
+          HAS_CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON != '' }}
+          HAS_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HAS_CLAUDE_AUTH_JSON: ${{ secrets.CLAUDE_AUTH_JSON != '' }}
+          HAS_CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY != '' }}
+          HAS_META_API_KEY: ${{ secrets.META_API_KEY != '' }}
+          HAS_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY != '' }}
         with:
           script: |
             const { createTokenAwareRetry } = require('./.github/scripts/github-api-with-retry.js');
@@ -2690,10 +2709,36 @@ jobs:
                 const rotLabels = (rotIssue.labels || [])
                   .map((l) => (typeof l === 'string' ? l : l && l.name))
                   .filter(Boolean);
+                // Secret names are enough; never read or log credential values.
+                const requiredSecretNames = [...new Set(
+                  Object.values(rotationRegistry.agents || {})
+                    .filter((config) => config?.capabilities?.belt === true)
+                    .flatMap((config) => config.required_secrets || [])
+                )];
+                const availableSecrets = Object.fromEntries(
+                  requiredSecretNames.map((name) => [name, process.env[`HAS_${name}`] === 'true'])
+                );
+                try {
+                  const repoSecrets = await withRetry((client) =>
+                    client.paginate(client.rest.actions.listRepoSecrets, {
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      per_page: 100,
+                    })
+                  );
+                  for (const secret of repoSecrets) {
+                    if (Object.hasOwn(availableSecrets, secret.name)) {
+                      availableSecrets[secret.name] = true;
+                    }
+                  }
+                } catch (secretLookupError) {
+                  core.warning('Could not list belt credential names; using explicit availability flags');
+                }
                 const decision = decideStallRotation({
                   registry: rotationRegistry,
                   labels: rotLabels,
                   capability: 'belt',
+                  secrets: availableSecrets,
                 });
                 if (!decision.rotate) {
                   core.info(`Belt stall rotation unavailable (${decision.reason}); escalating`);
@@ -3800,7 +3845,7 @@ jobs:
       # ── Upload auto-pilot metrics for weekly aggregation ───────────
       - name: Upload auto-pilot metrics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         continue-on-error: true
         with:
           name: autopilot-metrics-${{ github.run_id }}-${{ github.run_attempt }}

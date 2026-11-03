@@ -35,7 +35,9 @@ def priors_from_route_table(route_table) -> dict:
             agent = entry["agent"]
             if agent in priors:
                 continue
-            priors[agent] = round(max(0.45, 0.70 - 0.05 * rank), 2)
+            priors[agent] = (
+                0.5 if spec.get("neutral_prior") else round(max(0.45, 0.70 - 0.05 * rank), 2)
+            )
             rank += 1
         out[task_type] = priors
     out.update(_role_priors_from_registry(out))

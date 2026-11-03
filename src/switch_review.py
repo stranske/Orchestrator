@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import math
 import os
@@ -60,9 +61,21 @@ from collections.abc import Callable, Mapping
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import capabilities
 import paths
+import python_standard_audit
+
+CURSOR_CLOSER_LOG = Path.home() / ".codex/automations/logs/cursor-closer.out"
+CURSOR_LANE_WRAPPER = Path.home() / ".codex/bin/cursor-lane.sh"
+_CURSOR_MANIFEST_RE = re.compile(r"--manifest\s+(?:'([^']+)'|\"([^\"]+)\"|(\S+))")
+_CURSOR_POLICY_PINS = frozenset(
+    {
+        "imi-merge-verify-closer/automation.toml",
+        "reviewed-repo-automation-controller/automation.toml",
+    }
+)
 
 # How long a switch may sit unreviewed before the question comes back.
 REVIEW_DAYS = 7
@@ -1176,7 +1189,7 @@ def fleet_delivery_measures(
     return rows
 
 
-def _exploration_window() -> dict:
+def _exploration_window(*, now: int | None = None) -> dict:
     """Read the hosted rate and policy-switch population, never equating unreadable with zero."""
     import feedback
 
@@ -1190,6 +1203,8 @@ def _exploration_window() -> dict:
         "switches": "UNKNOWN",
         "errors": [],
     }
+    timestamp = int(time.time()) if now is None else now
+    cutoff = None
     state_dir = Path(os.environ.get("ORCH_STATE_DIR", Path.home() / ".codex" / "orchestrator"))
     try:
         state = json.loads((state_dir / "exploration-window.json").read_text(encoding="utf-8"))
@@ -1204,7 +1219,24 @@ def _exploration_window() -> dict:
             n_by_policy=state["n_by_policy"],
         )
         window["errors"].extend(state.get("errors", []))
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # New decisions share the exporter's exact snapshot boundary. Legacy state
+        # has no retained instant; bound its count to this review's captured clock.
+        if "decided_at" in state:
+            decided_at = datetime.fromisoformat(state["decided_at"].replace("Z", "+00:00"))
+            if decided_at.tzinfo is None or decided_at.utcoffset() != timezone.utc.utcoffset(
+                decided_at
+            ):
+                raise ValueError("exploration decision instant must be UTC")
+            cutoff = int(decided_at.timestamp())
+        else:
+            cutoff = timestamp
+        if cutoff < int(start.timestamp()):
+            raise ValueError("exploration decision precedes window start")
+        window["as_of"] = (
+            datetime.fromtimestamp(cutoff, timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        cutoff = None
         window["errors"].append(f"exploration window unmeasured: {exc}")
     ok, out, reason = _gh_call(
         [
@@ -1224,15 +1256,16 @@ def _exploration_window() -> dict:
     except (ValueError, KeyError, TypeError) as exc:
         window["errors"].append(f"published rate: {exc}")
     try:
-        if window["start"] == "unmeasured":
-            raise ValueError("window start unmeasured")
+        if window["start"] == "unmeasured" or cutoff is None:
+            raise ValueError("window start or decision instant unmeasured")
         with closing(
             sqlite3.connect(f"{feedback.DB_PATH.resolve().as_uri()}?mode=ro", uri=True)
         ) as conn:
             window["switches"] = conn.execute(
                 "SELECT count(*) FROM agent_switches WHERE source='policy' "
-                "AND delegation_source='route_weights_exploration' AND switched_ts>=?",
-                (int(start.timestamp()),),
+                "AND delegation_source='route_weights_exploration' AND switched_ts>=? "
+                "AND switched_ts<=?",
+                (int(start.timestamp()), cutoff),
             ).fetchone()[0]
     except (sqlite3.Error, ValueError) as exc:
         window["errors"].append(f"exploration switches: {exc}")
@@ -2083,6 +2116,8 @@ def review(
     sources: Mapping[str, str] | None = None,
     value_chain_inputs: dict | None = None,
     credential_exposure_report: dict | None = None,
+    python_standard_report: dict | None = None,
+    cursor_closer_native_entry_report: dict | None = None,
     feature_goals_fn=None,
 ) -> dict:
     """Which held-or-idle switches are due for an owner decision, and why.
@@ -2183,6 +2218,11 @@ def review(
         # And a seat stood down by hand is a switch held off. FYI only, on the real clock.
         "capacity_shed": capacity_shed(),
         "weekly_pacing": weekly_pacing_check(now=now),
+        # Collected by the CLI, so pure readers/selftests never probe the host's interpreters.
+        "python_standard": python_standard_report,
+        # Same collection boundary: formatting a stored weekly report must not reread a growing log
+        # or compare a newer automation policy than the snapshot that produced the report.
+        "cursor_closer_native_entry": cursor_closer_native_entry_report,
         # And a guard refusal is evidence that an agent's worktree disagreed with where the tool
         # put it. FYI only, real clock, never counted in `raise_count`.
         "worktree_git_refusals": worktree_git_refusals(),
@@ -2424,6 +2464,16 @@ def experiment_producer_line():
         else experiment_producer.COVERAGE_DAYS
     )
     reasons = ", ".join(f"{k}={v}" for k, v in sorted(m["skips"].items())) or "none"
+    classes = m.get("no_named_test_classes", {})
+    test_metrics = (
+        f"no_named_test={m['skips'].get('no_named_test', 0)} "
+        f"(file-only={classes.get('file-only', 0)}, ci-only={classes.get('ci-only', 0)}, "
+        f"none={classes.get('none', 0)}), derived_tests={m.get('derived_tests', 0)}, "
+        f"derive_failed={m.get('derive_failed', 0)}"
+    )
+    legacy_classes = max(0, m["skips"].get("no_named_test", 0) - sum(classes.values()))
+    if legacy_classes:
+        test_metrics += f", UNKNOWN historical_test_class={legacy_classes}"
     unknown = "; UNKNOWN " + ", ".join(m["unknowns"]) if m["unknowns"] else ""
     if verdict == "pending" and state.get("pending_since"):
         verdict += f" since {state['pending_since']}, resolves fail on {state.get('resolves_on')}"
@@ -2434,7 +2484,7 @@ def experiment_producer_line():
         f"winner_prs {m['winner_prs']}, winner_merged {m['winner_merged']}, "
         f"post_window_launches={m.get('post_window_launches', 0)}, "
         f"cells_fresh {m['cells_fresh']}/{m['cells_total']}, "
-        f"skipped {sum(m['skips'].values())} ({reasons}){unknown}; "
+        f"skipped {sum(m['skips'].values())} ({reasons}); {test_metrics}{unknown}; "
         f"trial_end {end}, verdict {verdict}, days_left {days_left}; "
         f"winner merge grace {experiment_producer.WINNER_MERGE_GRACE_DAYS}d"
     )
@@ -2458,6 +2508,231 @@ def review_loop_share_line(rows) -> str:
         return "  review loop first-pass MERGE-WHEN-GREEN: n/a (0 rounds)"
     accepted = sum(1 for row in first if row[3] == "MERGE-WHEN-GREEN")
     return f"  review loop first-pass MERGE-WHEN-GREEN: {accepted}/{len(first)} ({accepted / len(first):.0%})"
+
+
+def _cursor_closer_manifest_path(wrapper_path: Path) -> Path:
+    """Return the manifest named by the live wrapper's pinned native-entry block."""
+    wrapper = wrapper_path.read_text(encoding="utf-8")
+    match = _CURSOR_MANIFEST_RE.search(wrapper)
+    if not match:
+        raise ValueError("wrapper has no --manifest argument")
+    return Path(next(part for part in match.groups() if part is not None))
+
+
+def _cursor_closer_native_successes(manifest: dict) -> tuple[int, int | None]:
+    """Count authenticated successful entries for this exact retained package binding."""
+    import closer_mechanisms
+
+    contract = manifest["mechanism_contract"]
+    root = Path(contract["observation_root"])
+    if not root.is_absolute() or root.resolve() != root or not root.is_dir():
+        raise ValueError("native observation root is not a canonical directory")
+    expected_binding = {
+        "mechanism": closer_mechanisms.NATIVE,
+        "mechanism_contract_digest": closer_mechanisms.digest(contract),
+        "policy_digest": closer_mechanisms.digest(manifest["policy"]),
+        **{key: manifest.get(key) for key in closer_mechanisms.PIN_KEYS},
+    }
+    successes = []
+    for terminal in root.glob("*/terminal.json"):
+        if (
+            terminal.is_symlink()
+            or terminal.resolve() != terminal
+            or terminal.parent.parent != root
+            or not re.fullmatch(r"[0-9a-f]{32}", terminal.parent.name)
+        ):
+            raise ValueError("native terminal receipt path is invalid")
+        signed = json.loads(terminal.read_text(encoding="utf-8"))
+        record = closer_mechanisms.verify_signed_record(root, signed)
+        if record.get("binding") != expected_binding:
+            continue
+        if (
+            record.get("schema") == "native-wrapper-lifecycle/v1"
+            and record.get("kind") == "native-wrapper-invocation"
+            and record.get("passed") is True
+        ):
+            started = record.get("entry", {}).get("started")
+            if not isinstance(started, str):
+                raise ValueError("native terminal receipt has no signed entry timestamp")
+            successes.append(
+                int(datetime.strptime(started, "%a %b %d %H:%M:%S %Y").timestamp() * 1e9)
+            )
+    return len(successes), max(successes, default=None)
+
+
+def cursor_closer_native_entry_snapshot(
+    log_path: Path | str | None = None,
+    manifest_path: Path | str | None = None,
+    wrapper_path: Path | str | None = None,
+) -> dict:
+    """Measure native launcher refusals and configured-policy hash drift.
+
+    Explicit arguments win over environment overrides so fixture tests never need to inspect the
+    host. The manifest defaults to the one pinned by the live wrapper; this keeps the sweep aligned
+    after a guarded roll-forward rather than freezing another package path here.
+    """
+    import closer_mechanisms
+
+    log = Path(log_path or os.environ.get("ORCH_CURSOR_CLOSER_LOG", "") or CURSOR_CLOSER_LOG)
+    wrapper = Path(
+        wrapper_path or os.environ.get("ORCH_CURSOR_LANE_WRAPPER", "") or CURSOR_LANE_WRAPPER
+    )
+    report: dict[str, Any] = {
+        "log_path": str(log),
+        "launcher_results": None,
+        "refused": None,
+        "log_mtime_ns": None,
+        "log_error": None,
+        "manifest_path": None,
+        "successes_seen": None,
+        "last_success_mtime_ns": None,
+        "success_error": None,
+        "refused_since_success": None,
+        "results_since_success": None,
+        "hash_mismatch_count": None,
+        "hash_mismatches": [],
+        "pin_set_error": None,
+        "hash_error": None,
+    }
+
+    try:
+        launcher_results = refused = 0
+        with log.open(encoding="utf-8", errors="replace") as stream:
+            for raw in stream:
+                try:
+                    row = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(row, dict) or "launcher" not in row:
+                    continue
+                launcher_results += 1
+                refused += row.get("launcher") == "refused"
+        report.update(
+            launcher_results=launcher_results,
+            refused=refused,
+            log_mtime_ns=log.stat().st_mtime_ns,
+        )
+    except OSError as exc:
+        report["log_error"] = type(exc).__name__
+
+    payload = None
+    try:
+        manifest_override = (
+            manifest_path or os.environ.get("ORCH_CURSOR_CLOSER_MANIFEST", "") or None
+        )
+        manifest = (
+            Path(manifest_override) if manifest_override else _cursor_closer_manifest_path(wrapper)
+        )
+        report["manifest_path"] = str(manifest)
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        report["hash_error"] = type(exc).__name__
+
+    if payload is not None:
+        try:
+            successes, latest = _cursor_closer_native_successes(payload)
+            report.update(successes_seen=successes, last_success_mtime_ns=latest)
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            json.JSONDecodeError,
+            closer_mechanisms.MechanismError,
+        ) as exc:
+            report["success_error"] = type(exc).__name__
+
+        try:
+            pins = payload["policy"]["toml_sha256"]
+            if not isinstance(pins, dict) or not pins:
+                raise ValueError("manifest policy.toml_sha256 is empty")
+            expected_pins = {
+                str(closer_mechanisms.AUTOMATIONS / relative): relative
+                for relative in _CURSOR_POLICY_PINS
+            }
+            if not all(isinstance(name, str) for name in pins) or set(pins) != set(expected_pins):
+                report["pin_set_error"] = {
+                    "missing": sorted(
+                        expected_pins[name] for name in set(expected_pins) - set(pins)
+                    ),
+                    "unexpected": sorted(str(name) for name in set(pins) - set(expected_pins)),
+                }
+            else:
+                mismatches = []
+                for filename, pinned in sorted(pins.items()):
+                    path = Path(filename)
+                    if not path.is_absolute() or path.resolve() != path or path.is_symlink():
+                        raise ValueError("canonical policy path retargeted")
+                    current = hashlib.sha256(path.read_bytes()).hexdigest()
+                    if current != pinned:
+                        mismatches.append(expected_pins[filename])
+                report.update(hash_mismatch_count=len(mismatches), hash_mismatches=mismatches)
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            report["hash_error"] = type(exc).__name__
+
+    if (
+        report.get("last_success_mtime_ns") is not None
+        and report.get("log_mtime_ns") is not None
+        and report["last_success_mtime_ns"] >= report["log_mtime_ns"]
+    ):
+        # The refusal stream has no per-line timestamps. A newer authenticated terminal receipt's
+        # signed process-start time is the one exact boundary it can prove: every retained refusal
+        # predates that successful entry.
+        report.update(refused_since_success=0, results_since_success=1)
+    return report
+
+
+def format_cursor_closer_native_entry(report: dict) -> str:
+    prefix = "Cursor closer native entry: "
+    if report.get("log_error"):
+        launcher = f"cannot read launcher log ({report['log_error']})"
+    elif report.get("results_since_success"):
+        authenticated_drain = (
+            not report.get("success_error")
+            and report.get("successes_seen", 0) > 0
+            and not report.get("hash_error")
+            and not report.get("pin_set_error")
+            and report.get("hash_mismatch_count") == 0
+        )
+        launcher = ("drained: " if authenticated_drain else "") + (
+            f"since last retained success: refused {report['refused_since_success']}/"
+            f"{report['results_since_success']}"
+        )
+    elif report.get("launcher_results") == 0:
+        launcher = "unmeasured — no launcher results"
+    elif report.get("refused") == 0:
+        launcher = f"refused 0/{report['launcher_results']} launcher results"
+    elif report.get("launcher_results") is None or report.get("refused") is None:
+        launcher = "cannot read launcher log (no snapshot)"
+    else:
+        launcher = f"refused {report['refused']}/{report['launcher_results']} launcher results"
+
+    if report.get("success_error"):
+        successes = f"successes seen cannot read ({report['success_error']})"
+    elif report.get("successes_seen") is None:
+        successes = "successes seen cannot read (no snapshot)"
+    else:
+        successes = f"successes seen {report['successes_seen']}"
+
+    if report.get("pin_set_error"):
+        detail = report["pin_set_error"]
+        parts = []
+        if detail.get("missing"):
+            parts.append("missing " + ", ".join(detail["missing"]))
+        if detail.get("unexpected"):
+            parts.append("unexpected " + ", ".join(detail["unexpected"]))
+        hashes = "pinned-vs-current automation.toml incomplete pin set (" + "; ".join(parts) + ")"
+    elif report.get("hash_error"):
+        hashes = f"pinned-vs-current automation.toml hashes cannot read ({report['hash_error']})"
+    elif report.get("hash_mismatch_count") is None:
+        hashes = "pinned-vs-current automation.toml hashes cannot read (no snapshot)"
+    else:
+        names = ", ".join(report.get("hash_mismatches") or []) or "none"
+        hashes = (
+            "pinned-vs-current automation.toml hash mismatches "
+            f"{report['hash_mismatch_count']} ({names})"
+        )
+    return prefix + launcher + "; " + successes + "; " + hashes
 
 
 def format_report(rep: dict) -> str:
@@ -2708,6 +2983,8 @@ def format_report(rep: dict) -> str:
         lines += format_gate_expiry(expiry)
     if rep.get("weekly_pacing") is not None:
         lines += [rep["weekly_pacing"], ""]
+    lines += [python_standard_audit.format_line(rep.get("python_standard") or {}), ""]
+    lines += [format_cursor_closer_native_entry(rep.get("cursor_closer_native_entry") or {}), ""]
     shed = rep.get("capacity_shed")
     if shed is not None:
         lines += format_capacity_shed(shed)
@@ -3530,6 +3807,8 @@ def main(argv: list[str]) -> int:
         sources=sources,
         value_chain_inputs=value_chain_inputs,
         credential_exposure_report=credential_exposure(),
+        python_standard_report=python_standard_audit.snapshot(),
+        cursor_closer_native_entry_report=cursor_closer_native_entry_snapshot(),
     )
     rep["fleet_delivery_measures"] = fleet_delivery_measures()
     # The production weekly caller collects the curve, rather than leaving a CLI-only instrument.

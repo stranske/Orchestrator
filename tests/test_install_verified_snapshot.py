@@ -73,6 +73,36 @@ def _digest(snapshot: Path) -> str:
     return result.stdout.strip()
 
 
+def test_runtime_digest_preserves_legacy_owned_entry_contract(tmp_path, monkeypatch):
+    import source_snapshot_digest as shared
+
+    snapshot = _snapshot(tmp_path)
+    (snapshot / "alias.py").symlink_to("module.py")
+    monkeypatch.setattr(installer, "_shared_snapshot_digest", None)
+    assert shared.owned_entries(snapshot) == installer.owned_entries(snapshot)
+    before = installer.snapshot_digest(snapshot)
+    assert shared.snapshot_digest(snapshot) == before
+    (snapshot / "module.py").chmod(0o600)
+    assert shared.snapshot_digest(snapshot) == installer.snapshot_digest(snapshot)
+    assert shared.snapshot_digest(snapshot) != before
+
+
+def test_runtime_and_legacy_digest_refuse_walk_errors(tmp_path, monkeypatch):
+    import source_snapshot_digest as shared
+
+    snapshot = _snapshot(tmp_path)
+
+    def unreadable_tree(path, *, followlinks, onerror):
+        onerror(PermissionError("injected unreadable source tree"))
+        return iter(())
+
+    monkeypatch.setattr(os, "walk", unreadable_tree)
+    monkeypatch.setattr(installer, "_shared_snapshot_digest", None)
+    for digest in (shared.snapshot_digest, installer.snapshot_digest):
+        with pytest.raises(PermissionError, match="unreadable source tree"):
+            digest(snapshot)
+
+
 def test_install_uses_only_snapshot_bytes_and_preserves_local_markers(tmp_path):
     snapshot = _snapshot(tmp_path)
     mirror = tmp_path / "live mirror"
@@ -914,6 +944,35 @@ def test_runtime_writes_after_transfer_survive_switch_and_retry(tmp_path, monkey
     assert installer.install(snapshot, mirror, expected, registry) == 0
     assert (mirror / "docs/reports/runtime.md").read_text().endswith("after publication\n")
     assert (mirror / "docs/reports/late.md").read_text() == "late creation\n"
+
+
+def test_authored_review_installs_beside_retained_runtime_reports(tmp_path):
+    """A second generation must not ship authored evidence into runtime report storage."""
+    snapshot = _snapshot(tmp_path)
+    mirror = tmp_path / "live mirror"
+    reports = mirror / "docs" / "reports"
+    reports.mkdir(parents=True)
+    report = reports / "issue_completion_dashboard.md"
+    report.write_text("operator report\n")
+    expected = installer.snapshot_digest(snapshot)
+    assert installer.install(snapshot, mirror, expected) == 0
+    assert reports.is_symlink()
+    retained = reports.resolve()
+
+    relative = Path("docs/reviews/issue-837-review-recovery.md")
+    authored = paths.REPO_ROOT / relative
+    assert authored.is_file(), "authored review evidence must stay outside runtime docs/reports"
+    (snapshot / relative).parent.mkdir(parents=True)
+    (snapshot / relative).write_bytes(authored.read_bytes())
+    manifest = snapshot / ".docs-shipped.txt"
+    manifest.write_text(manifest.read_text() + relative.as_posix() + "\n")
+    generation = installer.generation_token(mirror)
+    expected = installer.snapshot_digest(snapshot)
+    assert installer.install(snapshot, mirror, expected, expected_generation=generation) == 0
+    assert installer.snapshot_digest(mirror) == expected
+    assert (mirror / relative).read_bytes() == authored.read_bytes()
+    assert reports.resolve() == retained
+    assert report.read_text() == "operator report\n"
 
 
 def test_new_runtime_leaf_in_mixed_directory_survives_publication_and_retry(tmp_path, monkeypatch):

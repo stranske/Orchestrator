@@ -1,0 +1,525 @@
+{
+  "schema": "closer-acceptance-workload/v1",
+  "evidence_kind": "synthetic_fixture",
+  "now": 10000.0,
+  "receipts": [
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "direct-merge",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "deterministic_merge",
+              "substantive_needs": []
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "direct-post",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "deterministic_post_merge_verify",
+              "substantive_needs": []
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "collection",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "evidence_pending",
+              "substantive_needs": []
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "ci-watch",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "deterministic_wait",
+              "substantive_needs": []
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "capacity-watch",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "capacity_deferred",
+              "substantive_needs": []
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "reconcile",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "unknown_provider",
+              "substantive_needs": []
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "classify",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "relevant",
+              "substantive_needs": [],
+              "actual": {
+                "run_id": "classify-1",
+                "exit": 0
+              }
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "adjudicate",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "criterion_unresolved",
+              "substantive_needs": [],
+              "actual": {
+                "run_id": "strong-1",
+                "exit": 0
+              }
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "mechanical",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "mechanical",
+              "substantive_needs": [],
+              "actual": {
+                "run_id": "repair-1",
+                "exit": 0
+              }
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "schema": "closer-pipeline-receipt/v1",
+      "run_id": "classify",
+      "finished_at": 9995.0,
+      "targets": {
+        "offline/example#12": {
+          "revision": "revision-a",
+          "status": "completed",
+          "results": {
+            "prepare": {
+              "revision": "revision-a",
+              "snapshot": {
+                "target": "offline/example#12",
+                "revision": "revision-a",
+                "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            },
+            "interpret": {
+              "classification": "relevant",
+              "substantive_needs": [],
+              "actual": {
+                "run_id": "classify-1",
+                "exit": 0
+              }
+            },
+            "act": {
+              "status": "completed",
+              "target_complete": true
+            }
+          },
+          "metrics": {
+            "stage_seconds": {
+              "prepare": 1,
+              "interpret": 0.1,
+              "act": 2
+            }
+          }
+        }
+      }
+    }
+  ],
+  "current_bindings": {
+    "offline/example#12": {
+      "revision": "revision-a",
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "stage_events": [
+    {
+      "run_id": "classify-1",
+      "event_type": "closer_stage",
+      "payload": {
+        "closer_stage": {
+          "task_category": "closer_interpret",
+          "target": "offline/example#12",
+          "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capacity_ledger_run_id": "classify-1",
+          "elapsed_seconds": 3.0,
+          "observed_cost_usd": 0.25,
+          "accepted": true,
+          "independent_validation": true,
+          "source_completion": false
+        }
+      }
+    },
+    {
+      "run_id": "strong-1",
+      "event_type": "closer_stage",
+      "payload": {
+        "closer_stage": {
+          "task_category": "closer_exception",
+          "target": "offline/example#12",
+          "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capacity_ledger_run_id": "strong-1",
+          "elapsed_seconds": 3.0,
+          "observed_cost_usd": null,
+          "accepted": true,
+          "independent_validation": true,
+          "source_completion": false
+        }
+      }
+    },
+    {
+      "run_id": "repair-1",
+      "event_type": "closer_stage",
+      "payload": {
+        "closer_stage": {
+          "task_category": "closer_repair",
+          "target": "offline/example#12",
+          "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "capacity_ledger_run_id": "repair-1",
+          "elapsed_seconds": 3.0,
+          "observed_cost_usd": 0,
+          "accepted": true,
+          "independent_validation": true,
+          "source_completion": false
+        }
+      }
+    }
+  ],
+  "holds": [
+    {
+      "schema": "closer-hold-followup/v1",
+      "hold_id": "hold-1",
+      "campaign_id": "campaign-1",
+      "owner": "owner",
+      "generation": 1,
+      "target": "offline/example#12",
+      "run_id": "pipeline-1",
+      "frontier": null,
+      "revision": "revision-a",
+      "stage": "interpret",
+      "source": {
+        "state_path": "retained/state.json",
+        "row_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "execution_state": "confirmed_not_started",
+      "release_proof": {
+        "kind": "fresh_evidence"
+      },
+      "event_selector": {
+        "kind": "timer"
+      },
+      "created_at": 6000.0,
+      "next_check_at": 9999.0,
+      "deadline": 10500.0,
+      "escalation_owner": "owner",
+      "attempt_budget": 3,
+      "attempts": 0,
+      "status": "waiting"
+    },
+    {
+      "schema": "closer-hold-followup/v1",
+      "hold_id": "escalated",
+      "campaign_id": "campaign-1",
+      "owner": "owner",
+      "generation": 1,
+      "target": "offline/example#12",
+      "run_id": "pipeline-1",
+      "frontier": null,
+      "revision": "revision-a",
+      "stage": "interpret",
+      "source": {
+        "state_path": "retained/state.json",
+        "row_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "execution_state": "confirmed_not_started",
+      "release_proof": {
+        "kind": "fresh_evidence"
+      },
+      "event_selector": {
+        "kind": "timer"
+      },
+      "created_at": 6000.0,
+      "next_check_at": 9999.0,
+      "deadline": 10500.0,
+      "escalation_owner": "owner",
+      "attempt_budget": 3,
+      "attempts": 0,
+      "status": "escalated"
+    }
+  ],
+  "independent_outcomes": [
+    {
+      "schema": "closer-independent-outcome/v1",
+      "run_id": "classify-1",
+      "target": "offline/example#12",
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "observed_at": 9999.0,
+      "independent": true,
+      "evidence_ref": {
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "url": "https://example.test/outcome"
+      },
+      "false_acceptance": false,
+      "rework": true
+    }
+  ],
+  "limitations": [
+    "Fixture model IDs/costs/latencies and labels, not executed providers or live savings.",
+    "Collection/watch/reconcile fixture labels exercise accounting, not route behavior. Existing causal tests cover routes.",
+    "No created benchmark replacing existing verifier shadow trial."
+  ]
+}

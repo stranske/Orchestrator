@@ -31,23 +31,30 @@ from scripts import api_client
 from scripts.langchain._llm_client import get_llm_client, get_llm_clients
 from scripts.langchain.structured_output import (
     build_repair_callback,
-    parse_structured_output,
 )
 from scripts.langchain.verifier_config import (
     EVAL_PAIR_BUDGET_TOKENS,
     EVAL_SCHEMA_REPAIR_BUDGET_TOKENS,
+    MAX_REVIEW_CHUNKS,
     MIN_CODE_COVERAGE_RATIO,
     VERIFIER_CONTEXT_BUDGET_TOKENS,
     VERIFIER_DIFF_BUDGET_TOKENS,
     SchemaRepairPolicy,
 )
-from tools.llm_registry import NativeCapacityFacts, native_capacity_facts_for
+from tools.llm_registry import (
+    NativeCapacityFacts,
+    NativeCapacityUnavailable,
+    native_capacity_facts_for,
+    normalize_provider,
+)
 from tools.verifier_capture_obligation_manifest import (
     build_capture_byte_inventory,
     build_capture_obligation_manifest,
     build_capture_reassembly_contract,
     record_capture_obligations,
 )
+from tools.verifier_artifact_capture import load_artifact_capture
+from tools.verifier_capture_obligation_manifest import parse_context_source_coverage
 from tools.verifier_semantic_acceptance import canonical_digest
 from tools.verifier_semantic_execution import MAX_NATIVE_SECONDS, execute_semantic_matrix
 from tools.verifier_semantic_rules import prepare_residual_all_input, prepare_reviewed_execution
@@ -112,7 +119,7 @@ Respond in JSON with:
     "risks": 0-10
   }},
   "concerns": ["..."],
-  "summary": "concise report"
+  "summary": "concise report as one JSON string, never a list or object"
 }}
 """.strip()
 
@@ -162,7 +169,7 @@ Respond in JSON with:
     "risks": 0-10
   }},
   "concerns": ["..."],
-  "summary": "concise report"
+  "summary": "concise report as one JSON string, never a list or object"
 }}
 """.strip()
 
@@ -208,9 +215,15 @@ Apply the following adjustments:
 - At chain depth {depth}, focus strictly on whether THIS iteration resolves
   its targeted concerns.  Avoid raising new concerns that were not part of
   the original feedback.
-- Treat the original source issue/PR scope as baseline context that may
-  already be satisfied by earlier merged work. Do NOT re-grade the full
-  original issue checklist unless this iteration explicitly reopens it.
+- Preserve the authentic original requirements and prior regression evidence
+  when evaluating this repair. Earlier merged work is context, not automatic
+  proof that an unmet original criterion has become satisfied. Check the
+  targeted concerns and the original criteria they affect against this
+  iteration's actual merged code and retained evidence; do not invent a
+  closing link or transfer a different PR's PASS to this repair.
+- Do not expand the repair into unrelated original criteria already supported
+  by applicable evidence. Identify genuinely missing necessary proof separately
+  from a demonstrated implementation failure.
 - If acceptance criteria require out-of-band GitHub metadata actions
   (for example: comments/labels/body updates on already merged PRs/issues),
   do not treat missing evidence in THIS diff as a hard completeness failure.
@@ -264,8 +277,22 @@ class EvaluationScores(BaseModel):
     risks: float = Field(ge=0, le=10)
 
 
+class DeferredChunkConcern(BaseModel):
+    """Optional attribution of a concern needing another changed-file chunk."""
+
+    concern_index: int = Field(ge=0, strict=True)
+    sibling_files: list[str] = Field(min_length=1)
+
+
+class ResolvedChunkConcern(BaseModel):
+    chunk_index: int = Field(ge=0, strict=True)
+    concern_index: int = Field(ge=0, strict=True)
+    supporting_files: list[str] = Field(min_length=1)
+    explanation: str = Field(min_length=1)
+
+
 class EvaluationResult(BaseModel):
-    verdict: Literal["PASS", "CONCERNS", "FAIL"]
+    verdict: Literal["PASS", "CONCERNS", "FAIL", "UNVERIFIABLE_INPUT"]
     scores: EvaluationScores | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     concerns: list[str] = Field(default_factory=list)
@@ -280,15 +307,32 @@ class EvaluationResult(BaseModel):
     langsmith_trace_url: str | None = None
     input_coverage: dict[str, object] | None = None
     partition_recovery: dict[str, Any] | None = None
+    files_not_reviewed: list[str] = Field(default_factory=list)
+    files_reviewed: list[str] | None = None
+    deferred_concerns: list[DeferredChunkConcern] = Field(default_factory=list)
+    resolved_chunk_concerns: list[ResolvedChunkConcern] = Field(default_factory=list)
+    chunk_reviews: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvaluationPayload(BaseModel):
     model_config = {"extra": "ignore"}
-    verdict: Literal["PASS", "CONCERNS", "FAIL"]
+    verdict: Literal["PASS", "CONCERNS", "FAIL", "UNVERIFIABLE_INPUT"]
     scores: EvaluationScores | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     concerns: list[str] = Field(default_factory=list)
     summary: str | None = None
+    files_not_reviewed: list[str] = Field(default_factory=list)
+    files_reviewed: list[str] | None = None
+    deferred_concerns: list[DeferredChunkConcern] = Field(default_factory=list)
+    resolved_chunk_concerns: list[ResolvedChunkConcern] = Field(default_factory=list)
+
+
+class CriterionSummaryEntry(BaseModel):
+    """Strict alternate transport entry emitted by one native provider."""
+
+    model_config = {"extra": "forbid"}
+    criterion: str = Field(min_length=1)
+    support: str = Field(min_length=1)
 
 
 SEMANTIC_ENVELOPE_SCHEMA = "workflows-verifier-semantic-acceptance-envelope/v1"
@@ -347,6 +391,9 @@ class ComparisonRunner:
         )
 
     def run_single(self, client: object, provider: str, model: str) -> EvaluationResult:
+        chunked = _evaluate_chunked(client, self.context, self.diff, provider, model)
+        if chunked is not None:
+            return chunked
         try:
             response, trace_id, trace_url = _invoke_llm(
                 client,
@@ -472,6 +519,9 @@ class PromptCoverage:
     context_truncated: bool
     reasons: tuple[str, ...]
     acceptance_source_discovery: CoverageStatus = "not_declared"
+    required_evidence_absent: bool = False
+    included_required_evidence_channels: tuple[str, ...] = ()
+    omitted_optional_evidence_sections: tuple[str, ...] = ()
 
     @property
     def sufficient(self) -> bool:
@@ -499,11 +549,24 @@ class PromptCoverage:
             "files_truncated": status_counts["truncated"],
             "files_omitted": status_counts["omitted"],
             "omitted_files": [item.path for item in self.files if item.status == "omitted"],
+            "files_not_reviewed": [item.path for item in self.files if item.status != "complete"],
             "code_included_chars": self.code_included_chars,
             "code_total_chars": self.code_total_chars,
             "code_ratio": round(self.code_ratio, 4),
             "context_truncated": self.context_truncated,
             "reasons": list(self.reasons),
+            **(
+                {
+                    "included_required_evidence_channels": list(
+                        self.included_required_evidence_channels
+                    ),
+                    "omitted_optional_evidence_sections": list(
+                        self.omitted_optional_evidence_sections
+                    ),
+                }
+                if self.omitted_optional_evidence_sections
+                else {}
+            ),
         }
 
     def render(self) -> str:
@@ -519,11 +582,24 @@ class PromptCoverage:
             (
                 f"- Changed code: {self.code} — {len(self.files)} file(s); "
                 f"{sum(1 for f in self.files if f.status == 'complete')} complete, "
-                f"{sum(1 for f in self.files if f.status == 'truncated')} truncated, "
-                f"{sum(1 for f in self.files if f.status == 'omitted')} omitted; "
+                + (
+                    f"{sum(1 for f in self.files if f.status == 'truncated')} truncated, "
+                    if any(f.status == "truncated" for f in self.files)
+                    else ""
+                )
+                + f"{sum(1 for f in self.files if f.status == 'omitted')} omitted; "
                 f"{self.code_included_chars}/{self.code_total_chars} characters shown"
             ),
         ]
+        if self.omitted_optional_evidence_sections:
+            lines.append(
+                "- Complete required evidence channels shown: "
+                + ", ".join(self.included_required_evidence_channels or ("none required",))
+            )
+            lines.append(
+                "- Optional evidence sections omitted from this prompt: "
+                + ", ".join(self.omitted_optional_evidence_sections)
+            )
         partial = [f for f in self.files if f.status != "complete"]
         for item in partial[:40]:
             lines.append(
@@ -544,6 +620,8 @@ class PromptInputs:
     context_block: str
     diff_block: str
     coverage: PromptCoverage
+    # Exact required projection, measured before optional fitter enrichment.
+    required_evidence_chars: int = 0
 
 
 def _budget_from_env(name: str, default: int) -> int:
@@ -870,9 +948,13 @@ def _diff_file_is_binary_descriptor(text: str) -> bool:
     return has_binary_marker and not has_hunk
 
 
-def _excerpt_file(path: str, text: str, share: int) -> tuple[str, FileCoverage]:
+def _excerpt_file(
+    path: str, text: str, share: int, *, asset_view: str = ""
+) -> tuple[str, FileCoverage]:
+    binary = _diff_file_is_binary_descriptor(text)
+    text = text + asset_view
     total = len(text)
-    if _diff_file_is_binary_descriptor(text):
+    if binary and not asset_view:
         return "", FileCoverage(path, "omitted", 0, total)
     if share >= total:
         return text, FileCoverage(path, "complete", total, total)
@@ -895,7 +977,7 @@ def _excerpt_file(path: str, text: str, share: int) -> tuple[str, FileCoverage]:
 
 
 def _build_code_block(
-    diff: str, budget_chars: int
+    diff: str, budget_chars: int, *, asset_views: dict[str, str] | None = None
 ) -> tuple[str, CoverageStatus, tuple[FileCoverage, ...], int, int]:
     files = _split_diff_files(diff)
     if not files:
@@ -910,7 +992,21 @@ def _build_code_block(
     # omitted paths after fair-share allocation exceeded the diff budget.
     # Fit text first, then use spare budget for a count-only diagnostic.
     # Omitted paths remain in FileCoverage metadata and still prevent PASS.
-    sizes = [0 if _diff_file_is_binary_descriptor(text) else len(text) for _, text in files]
+    asset_views = asset_views or {}
+    sizes = [
+        (
+            len(text) + len(asset_views.get(path, ""))
+            if path in asset_views or not _diff_file_is_binary_descriptor(text)
+            else 0
+        )
+        for path, text in files
+    ]
+    # A complete single-file unit is the minimum meaningful code input. The
+    # rough grouping budget bounds optional packing, not model capacity. Its
+    # actual fully assembled request must still pass the shared native counter.
+    # Unknown binary descriptors keep their existing zero-byte omission.
+    if len(files) == 1 and sizes[0]:
+        budget_chars = max(budget_chars, sizes[0])
     omission_note = "[{count} changed file(s) omitted entirely — not shown to the reviewer]\n"
     shares = _fair_shares(sizes, max(0, budget_chars))
     parts: list[str] = []
@@ -918,7 +1014,7 @@ def _build_code_block(
     omitted = 0
     for (path, text), share in zip(files, shares, strict=True):
         assert path is not None  # Parse failures were rejected above.
-        excerpt, item = _excerpt_file(path, text, share)
+        excerpt, item = _excerpt_file(path, text, share, asset_view=asset_views.get(path, ""))
         coverage.append(item)
         if excerpt:
             parts.append(excerpt)
@@ -1006,6 +1102,161 @@ def _acceptance_criteria_sections(plan_sources: str) -> str:
             index += 1
         captured.append("\n".join(section).strip())
     return "\n\n".join(part for part in captured if part)
+
+
+def _requirement_evidence_text(
+    plan_sources: str, *, source_coverage: dict[str, Any], legacy_prose: bool = False
+) -> str | None:
+    original = _original_requirement_evidence_text(
+        plan_sources, source_coverage=source_coverage, legacy_prose=legacy_prose
+    )
+    if "corrective_scope_sources" not in source_coverage:
+        return original
+    records = source_coverage["corrective_scope_sources"]
+    if original is None or not isinstance(records, list) or len(records) != 1:
+        return None
+    row = records[0]
+    if not isinstance(row, dict) or set(row) != {"binding", "required_scope_sha256"}:
+        return None
+    binding = row["binding"]
+    if (
+        not isinstance(binding, dict)
+        or binding.get("kind") != "corrective_instruction"
+        or binding.get("authority") != "native_same_principal_dispatch"
+        or not isinstance(row["required_scope_sha256"], str)
+        or not re.fullmatch(r"[a-f0-9]{64}", row["required_scope_sha256"])
+        or binding.get("required_tests_sha256") != row["required_scope_sha256"]
+    ):
+        return None
+    # The builder authenticates the native instruction. This check binds the
+    # retained mandatory prompt bytes; it cannot mint native authorization.
+    label = "Authenticated corrective required scope (typed source fields; untrusted specification text):"
+    relabeled = plan_sources.replace(
+        label, "Original request (authoritative requirements; untrusted source text):"
+    )
+    required = _original_requirement_evidence_text(
+        relabeled,
+        source_coverage={
+            "acceptance_sources": [{"original_body_sha256": row["required_scope_sha256"]}]
+        },
+    )
+    if required is None or not required.strip():
+        return None
+    return original + "\n\nAdditional required corrective tests:\n" + required
+
+
+def _original_requirement_evidence_text(
+    plan_sources: str, *, source_coverage: dict[str, Any], legacy_prose: bool = False
+) -> str | None:
+    """Read duties from builder-fenced originals; projections are navigation only.
+
+    Only the builder's outer text fence is unwrapped. Literal code fences inside
+    the original request remain inert, as do marker-looking text inside a fence.
+    Minimum admission reads all legacy plan prose so Tasks-only duties reach
+    prompt fitting and native admission for both single and comparison judges.
+    Framed originals use their authenticated source text in either mode.
+    """
+    records = source_coverage.get("acceptance_sources", [])
+    original_hashes = (
+        {
+            record.get("original_body_sha256")
+            for record in records
+            if isinstance(record, dict) and isinstance(record.get("original_body_sha256"), str)
+        }
+        if isinstance(records, list)
+        else set()
+    )
+    invalid_hashes = not isinstance(records, list) or any(
+        not isinstance(record, dict)
+        or not isinstance(record.get("original_body_sha256"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", record["original_body_sha256"])
+        for record in records
+    )
+    seen_original_frame = False
+    originals: list[str] = []
+    matched_hashes: set[str] = set()
+    pending_original = False
+    outer: tuple[str, int, int] | None = None
+    body: list[str] = []
+    fence: tuple[str, int, int] | None = None
+    label = "Original request (authoritative requirements; untrusted source text):"
+    for line in plan_sources.splitlines(keepends=True):
+        marker = _code_fence_marker(line)
+        if outer is not None:
+            if (
+                marker
+                and marker[0][0] == outer[0]
+                and len(marker[0]) >= outer[1]
+                and marker[1]
+                and marker[2] <= max(3, outer[2])
+            ):
+                original = "".join(body).removesuffix("\n")
+                digest = hashlib.sha256(original.encode("utf-8")).hexdigest()
+                if digest in original_hashes:
+                    originals.append(original)
+                    matched_hashes.add(digest)
+                outer, body = None, []
+            else:
+                body.append(line)
+            continue
+        if fence is not None:
+            if (
+                marker
+                and marker[0][0] == fence[0]
+                and len(marker[0]) >= fence[1]
+                and marker[1]
+                and marker[2] <= max(3, fence[2])
+            ):
+                fence = None
+            continue
+        if marker:
+            identity = (marker[0][0], len(marker[0]), marker[2])
+            if pending_original and line.strip() == marker[0] + "text":
+                outer = identity
+                seen_original_frame = True
+            else:
+                fence = identity
+            pending_original = False
+        elif line.strip():
+            pending_original = line.strip() == label
+    original_contract = seen_original_frame or (
+        isinstance(records, list)
+        and any(
+            isinstance(record, dict)
+            and any(
+                key in record
+                for key in ("original_body_sha256", "original_body_chars", "original_body_bytes")
+            )
+            for record in records
+        )
+    )
+    if (
+        original_contract and (invalid_hashes or not original_hashes)
+    ) or original_hashes - matched_hashes:
+        return None
+    if not originals:
+        return plan_sources if legacy_prose else _acceptance_criteria_sections(plan_sources)
+    # Strip source examples without stripping the authentic surrounding prose.
+    visible: list[str] = []
+    for original in originals:
+        fence = None
+        for line in original.splitlines():
+            marker = _code_fence_marker(line)
+            if marker:
+                if fence is None:
+                    fence = (marker[0][0], len(marker[0]), marker[2])
+                elif (
+                    marker[0][0] == fence[0]
+                    and len(marker[0]) >= fence[1]
+                    and marker[1]
+                    and marker[2] <= max(3, fence[2])
+                ):
+                    fence = None
+                visible.append("")
+            else:
+                visible.append("" if fence else line)
+        visible.append("")
+    return "\n".join(visible)
 
 
 _QUOTED_EVIDENCE_LITERAL = (
@@ -2161,8 +2412,7 @@ def _normalize_bare_artifact_destinations(acceptance: str) -> str:
             match[0]
             if match["literal"]
             else (
-                f"{match['head']}{match['mid']} {match['prep']} "
-                f"{match['article']}workflow artifact"
+                f"{match['head']}{match['mid']} {match['prep']} {match['article']}workflow artifact"
             )
         ),
         acceptance,
@@ -2316,8 +2566,9 @@ def _normalize_review_content_qualifiers(acceptance: str) -> str:
         + artifact_content_destination
         + r")"
         + shared_relative_content,
-        lambda match: match["literal"]
-        or match["prefix"] + match["destination"] + " with" + match["content"],
+        lambda match: (
+            match["literal"] or match["prefix"] + match["destination"] + " with" + match["content"]
+        ),
         acceptance,
         flags=re.I,
     )
@@ -2331,8 +2582,9 @@ def _normalize_review_content_qualifiers(acceptance: str) -> str:
         + r"(?P<suffix>"
         + shared_list_suffix
         + r")",
-        lambda match: match["literal"]
-        or match["destination"] + match["suffix"] + " with" + match["content"],
+        lambda match: (
+            match["literal"] or match["destination"] + match["suffix"] + " with" + match["content"]
+        ),
         acceptance,
         flags=re.I,
     )
@@ -2385,9 +2637,56 @@ def _normalize_review_content_qualifiers(acceptance: str) -> str:
     )
 
 
+def _requirement_sections(text: str) -> list[str]:
+    """Separate Markdown headings before grammar can bind across their edges.
+
+    Keep duties authored in a heading as their own criterion. Quoted examples
+    are masked without moving offsets, and remain inert in the classifiers.
+    """
+    masked = re.sub(_QUOTED_EVIDENCE_LITERAL, lambda m: " " * len(m[0]), text)
+    headings = list(
+        re.finditer(r"^ {0,3}(?P<level>#{1,6})[ \t]+(?P<title>[^\n]+)", masked, flags=re.M)
+    )
+    if not headings:
+        return [text]
+    sections: list[str] = [text[: headings[0].start()]]
+    optional_level: int | None = None
+    for index, heading in enumerate(headings):
+        level = len(heading["level"])
+        if optional_level is not None and level <= optional_level:
+            optional_level = None
+        title = text[heading.start("title") : heading.end("title")]
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        # A section explicitly marked optional must not become mandatory merely
+        # because its imperative body is parsed separately from its heading.
+        # This only classifies delivery duties; the full source stays in prompt.
+        optional_evidence_heading = re.fullmatch(
+            r"(?:optional|nice[- ]to[- ]have|possibly useful)\s+"
+            r"(?:evidence|proof|artifacts?|logs?|transcripts?)|"
+            r"(?:evidence|proof|artifacts?|logs?|transcripts?)\s*"
+            r"(?:\((?:optional|if available|where available)\)|not required)|"
+            r"no\s+(?:evidence|proof|artifacts?|logs?|transcripts?)\s+required",
+            title.strip().rstrip("# ").rstrip(":"),
+            flags=re.I,
+        )
+        if optional_evidence_heading:
+            optional_level = level if optional_level is None else min(optional_level, level)
+        if optional_level is None:
+            sections.extend((title, text[heading.end() : end]))
+    return [section.strip() for section in sections if section.strip()]
+
+
 def _classify_evidence_channels(acceptance: str, *, _bind_attached: bool = True) -> set[str]:
     """Identify explicit evidence deliverables without treating negations as requirements."""
 
+    sections = _requirement_sections(acceptance)
+    if sections != [acceptance]:
+        return set().union(
+            *(
+                _classify_evidence_channels(section, _bind_attached=_bind_attached)
+                for section in sections
+            )
+        )
     acceptance = _normalize_capability_deliveries(acceptance)
     acceptance = _normalize_leading_review_destination_quantifier(acceptance)
     acceptance = _normalize_review_comment_destinations(acceptance)
@@ -4246,16 +4545,18 @@ def _classify_evidence_channels(acceptance: str, *, _bind_attached: bool = True)
         # protected above. Keep the destination in the enclosing clause too.
         criterion = _normalize_relative_review_presence(criterion)
         criterion = shared_passive_product_review_destination.sub(
-            lambda match: match["predicate"]
-            + (match["preposition"] or "in ")
-            + match["destination"],
+            lambda match: (
+                match["predicate"] + (match["preposition"] or "in ") + match["destination"]
+            ),
             criterion,
         )
         # Shared destinations retain their predicate after actor inheritance.
         criterion = shared_storage_review_destination.sub(
-            lambda match: shared_storage_delivery_predicate(match)
-            + (match["preposition"] or "in ")
-            + match["destination"],
+            lambda match: (
+                shared_storage_delivery_predicate(match)
+                + (match["preposition"] or "in ")
+                + match["destination"]
+            ),
             criterion,
         )
         # Split independent mandatory clauses after optional evidence, including
@@ -4294,6 +4595,10 @@ def _classify_evidence_channels(acceptance: str, *, _bind_attached: bool = True)
             + bound_review_destinations
         )
         clause_boundary = (
+            # A mandate in a later sentence cannot govern a descriptive evidence
+            # noun in the preceding one. Retain pronoun delivery inheritance via
+            # the existing antecedent binding below; quoted literals are inert.
+            r"[.!?]\s+(?=(?-i:[A-Z]))|"
             r"\s*;\s*|,?\s+(?:but|whereas)\s+|"
             r"(?:,?\s+(?:and|or)\s+)(?=(?:" + elided_review_delivery_predicate + r"))|"
             r"(?:,?\s+(?:and|while)\s+)(?="
@@ -4344,6 +4649,15 @@ def _classify_evidence_channels(acceptance: str, *, _bind_attached: bool = True)
             match.span() for match in re.finditer(bound_review_destinations, criterion, re.I)
         ]
         for boundary_match in re.finditer(clause_boundary, criterion, re.I):
+            # A period in an abbreviation/initialism is not a new sentence.
+            # Literal/member/URL interiors were protected above or contain no
+            # intervening whitespace. Keep the original governing operation.
+            if boundary_match[0].startswith(".") and re.search(
+                r"\b(?:(?:[a-z]\.){2,}|(?-i:[A-Z])\.|(?:etc|vs|dr|mr|mrs|prof|no|fig)\.)$",
+                criterion[: boundary_match.start() + 1],
+                re.I,
+            ):
+                continue
             if re.fullmatch(r",\s+", boundary_match[0]) and re.match(
                 r"(?:that|which)\b", criterion[boundary_match.end() :], re.I
             ):
@@ -4739,6 +5053,16 @@ def _classify_evidence_channels(acceptance: str, *, _bind_attached: bool = True)
                 # Explicit positive predicates and body records still gate below.
                 and (gate or not evidence_prohibition.search(working_line))
                 and evidence_term.search(requirement_text)
+                # A checkbox around an investigative/software activity is not
+                # itself a nominal evidence deliverable. Explicit delivery and
+                # mandatory predicates below still apply to the same full text.
+                and not re.match(
+                    r"^\s*[-*]\s*\[[ xX]\]\s*(?:investigate|review|inspect|"
+                    r"analy[sz]e|assess|audit|explore|compare|consider|evaluate|research|"
+                    r"implement|support|test|validate)\b",
+                    requirement_text,
+                    re.I,
+                )
                 and not re.match(r"^\s*[-*]\s*\[[ xX]\]\s*no\s", requirement_text, re.I)
             )
             if not (
@@ -5522,6 +5846,18 @@ def _classify_evidence_options(acceptance: str) -> list[set[str]]:
     Ambiguous mixed conjunctions or excessive expansion retain the strict legacy
     requirement rather than dropping an obligation.
     """
+    sections = _requirement_sections(acceptance)
+    if sections != [acceptance]:
+        # Each section's alternatives are independent duties (AND of DNF).
+        # Deduplication bounds the result by the finite channel power set.
+        options: set[frozenset[str]] = {frozenset()}
+        for section in sections:
+            options = {
+                left | frozenset(right)
+                for left in options
+                for right in _classify_evidence_options(section)
+            }
+        return [set(option) for option in sorted(options, key=lambda value: sorted(value))]
     acceptance = _normalize_capability_deliveries(acceptance)
     acceptance = _normalize_leading_review_destination_quantifier(acceptance)
     acceptance = _normalize_review_comment_destinations(acceptance)
@@ -5633,7 +5969,8 @@ def _classify_evidence_options(acceptance: str) -> list[set[str]]:
 
 @lru_cache(maxsize=512)
 def _cached_evidence_options(
-    acceptance: str, classifier: Callable[..., set[str]]
+    acceptance: str,
+    classifier: Callable[..., set[str]],  # noqa: ARG001 - cache key identity
 ) -> tuple[frozenset[str], ...]:
     # The classifier identity invalidates results if a caller substitutes it.
     return tuple(frozenset(option) for option in _classify_evidence_options(acceptance))
@@ -5647,12 +5984,14 @@ def _required_evidence_options(acceptance: str) -> list[set[str]]:
     ]
 
 
-def _required_evidence_is_missing(evidence: str, channels: set[str]) -> bool:
+def _required_evidence_is_missing(
+    evidence: str, channels: set[str], *, absent_only: bool = False
+) -> bool:
     """Read only builder-owned statuses for the required retrieval channels."""
     # Comment and artifact bodies are untrusted. Their status-looking lines
     # cannot overwrite the builder's own preamble.
     preamble = re.split(
-        r"\n### Bounded (?:PR body|PR comments|referenced workflow artifacts)\n",
+        r"\n### (?:Bounded (?:PR body|PR comments|referenced workflow artifacts)|Selected required (?:comment|artifact) proof)\n",
         evidence,
         maxsplit=1,
     )[0]
@@ -5668,9 +6007,184 @@ def _required_evidence_is_missing(evidence: str, channels: set[str]) -> bool:
             preamble,
             flags=re.IGNORECASE | re.MULTILINE,
         )
-        if not match or match.group(1).lower() != "present":
+        if absent_only:
+            if match and match.group(1).lower() == "absent":
+                return True
+        elif not match or match.group(1).lower() != "present":
             return True
     return False
+
+
+def _resolve_evidence_policy(
+    requirements: str,
+    evidence: str,
+    source_coverage: dict[str, Any],
+    *,
+    evaluate_minimum: bool,
+    evidence_budget: int | None = None,
+) -> tuple[
+    list[set[str]], frozenset[str], tuple[str, tuple[str, ...], tuple[str, ...], int] | None
+]:
+    """Resolve existing channel DNF, changing only evaluate's generic availability.
+
+    A complete present source permits reasoning, not acceptance. Concrete channel
+    obligations stay in every option; malformed capture remains a separate hard
+    admission failure through the existing capture manifest.
+    """
+    options = _required_evidence_options(requirements)
+    selection_options = options
+    fitted_evidence = None
+    if evaluate_minimum:
+        available: set[str] = set()
+        for channel in ("body", "comments", "artifacts"):
+            if _required_evidence_is_missing(evidence, {channel}):
+                continue
+            records = source_coverage.get(
+                "acceptance_sources" if channel == "body" else "acceptance_evidence_sources"
+            )
+            if not isinstance(records, list):
+                continue
+            selected = [
+                record
+                for record in records
+                if isinstance(record, dict)
+                and (
+                    str(record.get("source", "")).startswith("Pull request #")
+                    if channel == "body"
+                    else record.get("channel") == channel
+                )
+            ]
+            if selected and all(
+                record.get("status") == "included"
+                and type(record.get("included_chars")) is int
+                and type(record.get("total_chars")) is int
+                and record["included_chars"] == record["total_chars"]
+                and record["included_chars"] > 0
+                for record in selected
+            ):
+                available.add(channel)
+        # Options with no generic duty must remain exactly as authored.
+        options = [
+            option
+            for original in options
+            for option in (
+                [original - {"overall"} | {channel} for channel in sorted(available)]
+                if "overall" in original and available
+                else [original]
+            )
+        ]
+        # Selection must be the same for prompt fitting and native obligations.
+        # A present projection cannot make a typed truncated channel complete.
+        selection_options = [option for option in options if option <= available]
+        if evidence_budget is not None and len(evidence) > evidence_budget:
+            fitted_evidence = _fit_required_evidence_prompt(
+                evidence, selection_options, evidence_budget
+            )
+            selection_options = (
+                [set(fitted_evidence[1])]
+                if fitted_evidence is not None
+                else [option for option in selection_options if not option]
+            )
+    for channels in selection_options:
+        if not _required_evidence_is_missing(evidence, channels):
+            optional = (
+                frozenset()
+                if "overall" in channels
+                else frozenset({"comments", "artifacts"} - channels)
+            )
+            return options, optional, fitted_evidence
+    return options, frozenset(), None
+
+
+def _fit_required_evidence_prompt(
+    evidence: str, options: list[set[str]], budget: int
+) -> tuple[str, tuple[str, ...], tuple[str, ...], int] | None:
+    """Fit one complete requirement alternative before optional builder sections.
+
+    Channel headings inside untrusted fences are inert. Retain complete selected
+    sections, never snippets of required proof; raw capture/statuses are untouched.
+    """
+    headings = {
+        "### Retrieval diagnostics": "diagnostics",
+        "### Bounded PR body": "body",
+        "### Bounded PR comments": "comments",
+        "### Bounded referenced workflow artifacts": "artifacts",
+        "### Selected required artifact proof": "selected_material",
+        "### Selected required comment proof": "selected_comments",
+    }
+    pieces: list[tuple[str, str]] = []
+    name = "preamble"
+    lines: list[str] = []
+    fence: tuple[str, int, int] | None = None
+    legacy_selected_comments = False
+    for line in evidence.splitlines(keepends=True):
+        marker = _code_fence_marker(line)
+        if fence is not None:
+            if (
+                marker
+                and marker[0][0] == fence[0]
+                and len(marker[0]) >= fence[1]
+                and marker[1]
+                and marker[2] <= max(3, fence[2])
+            ):
+                fence = None
+        elif marker:
+            fence = (marker[0][0], len(marker[0]), marker[2])
+        elif (
+            any(line.startswith(header) for header in headings)
+            and line.rstrip("\r\n") not in headings
+        ):
+            # A malformed builder heading can merge an optional artifact into
+            # the preceding required channel; do not certify that projection.
+            return None
+        elif line.rstrip("\r\n") in headings:
+            pieces.append((name, "".join(lines).strip()))
+            name, lines = headings[line.rstrip("\r\n")], []
+        elif name == "comments" and line.startswith("Selected source-comment provenance:"):
+            legacy_selected_comments = True
+        lines.append(line)
+    if fence is not None:
+        return None
+    pieces.append((name, "".join(lines).strip()))
+    present = {name for name, _ in pieces}
+    if "selected_material" in present:
+        present.add("artifacts")
+    if "selected_comments" in present:
+        present.add("comments")
+    if not present.intersection({"body", "comments", "artifacts"}):
+        return None
+    mandatory_pieces = {"preamble", "selected_material", "selected_comments"}
+    if legacy_selected_comments:
+        # A legacy mixed section must remain whole even when the authored
+        # request declares no channel duty. Only refreshed producer packets
+        # can separate its required proof from optional history safely.
+        mandatory_pieces.add("comments")
+    candidates = []
+    for channels in options:
+        if (
+            "overall" in channels
+            or _required_evidence_is_missing(evidence, channels)
+            or not channels <= present
+        ):
+            continue
+        required = [body for name, body in pieces if name in mandatory_pieces or name in channels]
+        rendered = "\n\n".join(required)
+        candidates.append((len(rendered), tuple(sorted(channels)), rendered))
+    # This budget bounds optional enrichment, never complete required proof.
+    # Choose the smallest valid complete alternative, then let native admission
+    # count the actual request rather than clipping it or inventing absence.
+    for required_chars, selected_channels, rendered in sorted(candidates):
+        channels = set(selected_channels)
+        omitted: list[str] = []
+        for name, body in pieces:
+            if name in mandatory_pieces or name in channels:
+                continue
+            if len(rendered) + len(body) + 2 <= budget:
+                rendered += "\n\n" + body
+            else:
+                omitted.append(name)
+        return rendered, tuple(sorted(channels)), tuple(omitted), required_chars
+    return None
 
 
 def _acceptance_discovery_coverage(
@@ -5705,7 +6219,9 @@ def _acceptance_discovery_coverage(
         return "unavailable"
 
 
-def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = False) -> PromptInputs:
+def build_prompt_inputs(
+    context: str, diff: str | None, *, lossless: bool = False, evaluate_minimum: bool = True
+) -> PromptInputs:
     """Bound the context and diff blocks and report what reaches the model."""
     context_budget = (
         _budget_from_env("VERIFIER_CONTEXT_BUDGET_TOKENS", VERIFIER_CONTEXT_BUDGET_TOKENS)
@@ -5729,6 +6245,28 @@ def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = Fals
     diff_text = diff.strip() if diff and diff.strip() else ""
     sections = _split_verifier_context(context_text) if context_text else None
     reasons: list[str] = []
+    source_coverage = parse_context_source_coverage(context_text) or {}
+    retrieval = source_coverage.get("diff_retrieval", {})
+    if isinstance(retrieval, dict) and retrieval.get("complete") is False:
+        reasons.append("PR diff retrieval incomplete: " + str(retrieval.get("reason", "unknown")))
+    raw_inventory = source_coverage.get("artifact_capture_inventory")
+    if (
+        not lossless
+        and isinstance(raw_inventory, list)
+        and any(
+            isinstance(archive, dict)
+            and isinstance(archive.get("members"), list)
+            and any(
+                isinstance(member, dict) and member.get("status") == "captured"
+                for member in archive["members"]
+            )
+            for archive in raw_inventory
+        )
+    ):
+        reasons.append(
+            "Raw captured artifact bytes require semantic native execution; "
+            "the legacy prompt does not contain every artifact."
+        )
     acceptance_source_discovery = _acceptance_discovery_coverage(sections)
     if acceptance_source_discovery in {"truncated", "unavailable"}:
         reasons.append(
@@ -5760,6 +6298,20 @@ def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = Fals
     if not code_source:
         code_source = diff_text
 
+    evidence_requirements = _requirement_evidence_text(
+        acceptance_source, source_coverage=source_coverage, legacy_prose=evaluate_minimum
+    )
+    required_evidence_options, optional_channels, fitted_evidence = _resolve_evidence_policy(
+        evidence_requirements or "",
+        evidence_source,
+        source_coverage,
+        evaluate_minimum=evaluate_minimum,
+        evidence_budget=evidence_budget,
+    )
+    included_required_evidence_channels: tuple[str, ...] = ()
+    omitted_optional_evidence_sections: tuple[str, ...] = ()
+    required_evidence_fitted = False
+    required_evidence_chars = 0
     if sections is None:
         context_block = _cap_prompt_text(
             context_text or "(context unavailable)", context_budget // TOKEN_CHARS
@@ -5768,13 +6320,34 @@ def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = Fals
         acceptance: CoverageStatus = "truncated" if context_truncated else "not_declared"
         acceptance_evidence: CoverageStatus = "not_declared"
     else:
-        fitted, section_status = _fit_context_sections(sections, context_budget)
-        context_block = "\n\n".join(fitted)
+        # The context budget bounds navigation and enrichment, not the original
+        # requirements. Keep every retained requirement byte; the existing
+        # native request counter admits or refuses the resulting whole prompt.
+        # Clipping requirements here made complete captures unevaluable before
+        # either judge could inspect them.
+        requirements = [body for name, body in sections if name == "acceptance"]
+        fitted, section_status = _fit_context_sections(
+            [(name, body) for name, body in sections if name != "acceptance"], context_budget
+        )
+        section_status["acceptance"] = "complete" if requirements else "unavailable"
+        context_block = "\n\n".join([*requirements, *fitted])
         context_truncated = any(value != "complete" for value in section_status.values())
         acceptance = section_status.get("acceptance", "unavailable")  # type: ignore[assignment]
         if evidence_source:
             evidence_block = _cap_prompt_text(evidence_source, evidence_budget // TOKEN_CHARS)
             acceptance_evidence = "complete" if evidence_block == evidence_source else "truncated"
+            if (
+                evaluate_minimum
+                and acceptance_evidence == "truncated"
+                and fitted_evidence is not None
+            ):
+                (
+                    evidence_block,
+                    included_required_evidence_channels,
+                    omitted_optional_evidence_sections,
+                    required_evidence_chars,
+                ) = fitted_evidence
+                required_evidence_fitted = True
             context_block = "\n\n".join(part for part in (context_block, evidence_block) if part)
         else:
             acceptance_evidence = "not_declared"
@@ -5782,9 +6355,25 @@ def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = Fals
         reasons.append("Acceptance/plan sources were truncated to fit the prompt budget.")
     elif acceptance == "unavailable":
         reasons.append("Acceptance/plan sources do not fit or are unavailable.")
-    required_evidence_options = _required_evidence_options(
-        _acceptance_criteria_sections(acceptance_source)
-    )
+    if evidence_requirements is None:
+        reasons.append("Original request provenance does not match retained source bytes.")
+    if evaluate_minimum and (
+        required_evidence_fitted
+        or (
+            any(
+                "overall" in option
+                for option in _required_evidence_options(evidence_requirements or "")
+            )
+            and all("overall" not in option for option in required_evidence_options)
+        )
+    ):
+        manifest = build_capture_obligation_manifest(
+            context_text,
+            full_diff_bytes=diff.encode("utf-8") if diff is not None else None,
+            optional_evidence_channels=optional_channels,
+        )
+        if not manifest["sufficient"]:
+            reasons.append("Required capture integrity unavailable: " + "; ".join(manifest["gaps"]))
     if all(required_evidence_options):
         if acceptance_evidence in {"not_declared", "unavailable"} or all(
             _required_evidence_is_missing(evidence_source, channels)
@@ -5793,11 +6382,26 @@ def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = Fals
             reasons.append(
                 "Required acceptance evidence is unavailable; completeness cannot be judged."
             )
-        elif acceptance_evidence == "truncated":
+        elif acceptance_evidence == "truncated" and not required_evidence_fitted:
             reasons.append("Required acceptance evidence was truncated to fit the prompt budget.")
 
     if code_source:
-        diff_block, code, files, included, total = _build_code_block(code_source, diff_budget)
+        asset_views = {}
+        try:
+            from tools.verifier_gzip_assets import review_assets
+
+            asset_views = review_assets(
+                source_coverage,
+                (diff if diff and "diff --git " in diff else code_source + "\n").encode("utf-8"),
+                context=context_text,
+            )
+            if lossless:
+                diff_budget += sum(map(len, asset_views.values()))
+        except (OSError, ValueError, TypeError) as exc:
+            reasons.append(f"Gzip evidence capture invalid: {exc}")
+        diff_block, code, files, included, total = _build_code_block(
+            code_source, diff_budget, asset_views=asset_views
+        )
     else:
         diff_block, code, files, included, total = "(diff unavailable)", "unavailable", (), 0, 0
     if upstream_truncated:
@@ -5853,13 +6457,27 @@ def build_prompt_inputs(context: str, diff: str | None, *, lossless: bool = Fals
         context_truncated=context_truncated,
         reasons=tuple(reasons),
         acceptance_source_discovery=acceptance_source_discovery,
+        included_required_evidence_channels=included_required_evidence_channels,
+        omitted_optional_evidence_sections=omitted_optional_evidence_sections,
+        required_evidence_absent=bool(all(required_evidence_options))
+        and all(
+            _required_evidence_is_missing(evidence_source, channels, absent_only=True)
+            for channels in required_evidence_options
+        ),
     )
     context_block = coverage.render() + "\n\n" + (context_block or "(context unavailable)")
-    return PromptInputs(context_block=context_block, diff_block=diff_block, coverage=coverage)
+    return PromptInputs(
+        context_block=context_block,
+        diff_block=diff_block,
+        coverage=coverage,
+        required_evidence_chars=required_evidence_chars,
+    )
 
 
-def prompt_coverage(context: str, diff: str | None) -> PromptCoverage:
-    return build_prompt_inputs(context, diff).coverage
+def prompt_coverage(
+    context: str, diff: str | None, *, evaluate_minimum: bool = True
+) -> PromptCoverage:
+    return build_prompt_inputs(context, diff, evaluate_minimum=evaluate_minimum).coverage
 
 
 def _apply_coverage_floor(
@@ -5869,10 +6487,30 @@ def _apply_coverage_floor(
     if coverage is None:
         return result
     result.input_coverage = coverage.to_dict()
-    if coverage.sufficient or result.verdict != "PASS" or not result.used_llm:
+    result.files_not_reviewed = list(
+        dict.fromkeys(
+            [
+                *result.files_not_reviewed,
+                *(f.path for f in coverage.files if f.status != "complete"),
+            ]
+        )
+    )
+    if result.files_not_reviewed:
+        result.input_coverage["files_complete"] = sum(
+            f.status == "complete" and f.path not in result.files_not_reviewed
+            for f in coverage.files
+        )
+    if (
+        (coverage.sufficient and not result.files_not_reviewed)
+        or result.verdict != "PASS"
+        or not result.used_llm
+    ):
         return result
-    note = "Verifier input coverage incomplete; PASS withheld: " + "; ".join(coverage.reasons)
-    result.verdict = "CONCERNS"
+    reasons = [*coverage.reasons]
+    if result.files_not_reviewed:
+        reasons.append("files not reviewed: " + ", ".join(result.files_not_reviewed))
+    note = "Verifier input coverage incomplete; PASS withheld: " + "; ".join(reasons)
+    result.verdict = "CONCERNS" if coverage.required_evidence_absent else "UNVERIFIABLE_INPUT"
     result.concerns = [note, *result.concerns]
     result.summary = f"{note}\n\n{result.summary}" if result.summary else note
     return result
@@ -5880,6 +6518,7 @@ def _apply_coverage_floor(
 
 def _evaluation_output_text(result: EvaluationResult) -> str:
     """CLI/file text aligned with the structured verdict after post-processing."""
+    header = _review_count(result) + "\n\n"
     if result.verdict != "PASS":
         parts = [result.summary] if result.summary else []
         if result.concerns:
@@ -5907,12 +6546,524 @@ def _evaluation_output_text(result: EvaluationResult) -> str:
         if raw_detail and raw_detail != result.summary:
             parts.append("Raw model detail (prior to verdict post-processing):\n" + raw_detail)
         body = "\n\n".join(parts)
-        return f"Verdict: {result.verdict}\n\n{body}"
-    return result.raw_content or result.summary or ""
+        return f"Verdict: {result.verdict}\n\n" + header + body
+    return header + (result.raw_content or result.summary or "")
 
 
-def _prepare_prompt(context: str, diff: str | None) -> str:
-    inputs = build_prompt_inputs(context, diff)
+def _review_count(result: EvaluationResult) -> str:
+    coverage = result.input_coverage or {}
+    reviewed = coverage.get("files_complete", 0) if result.used_llm else 0
+    total = coverage.get("files_total", 0)
+    missing = (
+        f"; files_not_reviewed: {json.dumps(result.files_not_reviewed)}"
+        if result.files_not_reviewed
+        else ""
+    )
+    return f"files reviewed {reviewed} of {total}" + missing
+
+
+def _retrieval_only_failure(result: EvaluationResult) -> bool:
+    """Recognize explicit retrieval-only reasons, never infer away a finding.
+
+    Match complete statements rather than looking for an 'artifact' keyword:
+    a missing deliverable or a mixed retrieval/code finding must retain FAIL.
+    Unknown phrasing deliberately retains the provider verdict.
+    """
+    evidence = r"(?:(?:the|required|acceptance|workflow|ci|validation|test)\s+)*(?:artifacts?|evidence|logs?)"
+    unavailable = (
+        r"(?:(?:is|are|was|were)\s+)?(?:unavailable|inaccessible|not accessible|not available)"
+        r"|(?:could not|cannot|can't)\s+be\s+(?:retrieved|fetched|downloaded|accessed)"
+    )
+    reason = re.compile(
+        rf"(?:{evidence}\s+(?:{unavailable})"
+        rf"|(?:unable to|failed to|could not|cannot)\s+(?:retrieve|fetch|download|access)\s+{evidence}"
+        rf"|{evidence}\s+retrieval\s+(?:failed|was unavailable|is unavailable|unavailable))"
+        r"(?:\s+due to\s+(?:api|network|retrieval|transport|permission|authorization)"
+        r"\s+(?:errors?|failures?|limits?|restrictions?|denied))?",
+        re.I,
+    )
+    statements = []
+    for text in [*result.concerns, result.summary or "", result.error or ""]:
+        for statement in re.split(r"[.!;\n]+", text):
+            statement = statement.strip(" -*\t")
+            if not statement or re.fullmatch(r"files reviewed \d+ of \d+", statement, re.I):
+                continue
+            statement = re.sub(
+                r"^(?:verification failed|fail)\s+(?:only\s+)?because\s+", "", statement, flags=re.I
+            )
+            statements.append(statement)
+    return bool(statements) and all(reason.fullmatch(text) for text in statements)
+
+
+def comparison_verdict(results: list[EvaluationResult]) -> str:
+    """Findings dominate incomplete input; unavailable judges never establish PASS."""
+    retrieval_failures = {
+        id(result)
+        for result in results
+        if result.verdict == "FAIL" and _retrieval_only_failure(result)
+    }
+    if any(result.verdict == "FAIL" and id(result) not in retrieval_failures for result in results):
+        return "FAIL"
+    if any(result.verdict == "CONCERNS" and not result.error for result in results):
+        return "CONCERNS"
+    if (
+        retrieval_failures
+        or not results
+        or any(result.verdict == "UNVERIFIABLE_INPUT" or result.error for result in results)
+    ):
+        return "UNVERIFIABLE_INPUT"
+    return "PASS" if all(result.used_llm for result in results) else "UNVERIFIABLE_INPUT"
+
+
+def _evaluate_chunked(
+    client: object,
+    context: str,
+    diff: str | None,
+    provider: str,
+    model: str | None,
+    *,
+    evaluate_minimum: bool = True,
+) -> EvaluationResult | None:
+    """Review complete file patches in bounded calls, never fair-share excerpts.
+
+    Oversized individual files are explicitly unreviewed, rather than cutting a
+    file mid-hunk or claiming that a partial file establishes acceptance.
+    """
+    budget = (
+        _budget_from_env("VERIFIER_DIFF_BUDGET_TOKENS", VERIFIER_DIFF_BUDGET_TOKENS) * TOKEN_CHARS
+    )
+    sections = _split_verifier_context(context)
+    source = diff or next(
+        (_strip_diff_fence(body) for name, body in sections or [] if name == "full_diff"), ""
+    )
+    files = _split_diff_files(source)
+    try:
+        from tools.verifier_gzip_assets import review_assets
+
+        asset_views = review_assets(
+            parse_context_source_coverage(context) or {}, source.encode("utf-8"), context=context
+        )
+    except (OSError, ValueError, TypeError):
+        asset_views = {}  # The shared prompt admission reports the precise integrity gap.
+    binary_paths = {
+        path
+        for path, patch in files
+        if _diff_file_is_binary_descriptor(patch) and path not in asset_views
+    }
+    destinations = [path for path, _ in files]
+    if len(destinations) != len(set(destinations)):
+        return EvaluationResult(
+            verdict="UNVERIFIABLE_INPUT",
+            provider_used=provider,
+            model=model,
+            summary="Changed-file inventory has duplicate destination paths; source identity is ambiguous.",
+            files_not_reviewed=list(
+                dict.fromkeys(path or "(unknown changed file)" for path in destinations)
+            ),
+        )
+    if len(source) + sum(map(len, asset_views.values())) <= budget and not binary_paths:
+        if source or sections is not None:
+            coverage = prompt_coverage(context, diff, evaluate_minimum=evaluate_minimum)
+            if not coverage.sufficient:
+                result = _apply_coverage_floor(
+                    EvaluationResult(
+                        verdict="PASS", used_llm=True, provider_used=provider, model=model
+                    ),
+                    coverage,
+                )
+                result.used_llm = False
+                result.files_not_reviewed = [item.path for item in coverage.files]
+                result.input_coverage = {**coverage.to_dict(), "files_complete": 0}
+                return result
+        return None
+    if not files or any(path is None for path, _ in files):
+        return EvaluationResult(
+            verdict="UNVERIFIABLE_INPUT",
+            provider_used=provider,
+            model=model,
+            summary="Changed-file inventory is unavailable; no complete review is possible.",
+            files_not_reviewed=["(unknown changed files)"],
+        )
+    full_coverage = build_prompt_inputs(
+        context, diff, lossless=True, evaluate_minimum=evaluate_minimum
+    ).coverage
+    # Missing binary bytes cannot certify acceptance, but must not prevent the
+    # same judges inspecting complete text code. Permit only this precisely
+    # identified omission; every source/provenance/evidence failure still gates.
+    omitted = {item.path for item in full_coverage.files if item.status == "omitted"}
+    binary_only_reasons = {
+        f"{len(omitted)} changed file(s) are omitted from the prompt entirely.",
+        f"Only {full_coverage.code_included_chars}/{full_coverage.code_total_chars} "
+        f"changed-code characters fit the prompt (minimum {MIN_CODE_COVERAGE_RATIO:.0%}).",
+    }
+    partial_binary_review = bool(
+        binary_paths
+        and omitted == binary_paths
+        and any(item.status == "complete" for item in full_coverage.files)
+        and all(item.status in {"complete", "omitted"} for item in full_coverage.files)
+        and set(full_coverage.reasons) <= binary_only_reasons
+    )
+    if not full_coverage.sufficient and not partial_binary_review:
+        return EvaluationResult(
+            verdict="CONCERNS" if full_coverage.required_evidence_absent else "UNVERIFIABLE_INPUT",
+            provider_used=provider,
+            model=model,
+            summary="Input unavailable: " + "; ".join(full_coverage.reasons),
+            files_not_reviewed=[path for path, _ in files],
+            input_coverage={**full_coverage.to_dict(), "files_complete": 0},
+        )
+    # Whole-file requests retain all acceptance sources. The full-set summary is
+    # removed from a local review so absent sibling files are not called defects.
+    local_context = (
+        "\n\n".join(
+            body for name, body in sections or [] if name not in {"full_diff", "diff_summary"}
+        )
+        if sections is not None
+        else context
+    )
+    chunks: list[tuple[list[str], str]] = []
+    for path, patch in files:
+        assert path is not None
+        review_size = len(patch) + len(asset_views.get(path, ""))
+        if path in binary_paths:
+            continue
+        elif review_size > budget:
+            # Preserve one whole file in its own request. Every ordinary prompt
+            # validator and native admission sees those same bytes; no rough
+            # four-character estimate may silently exclude required code.
+            if len(chunks) < MAX_REVIEW_CHUNKS:
+                chunks.append(([path], patch))
+        elif (
+            chunks
+            and sum(len(asset_views.get(p, "")) for p in chunks[-1][0])
+            + len(chunks[-1][1])
+            + review_size
+            <= budget
+        ):
+            paths, text = chunks[-1]
+            chunks[-1] = ([*paths, path], text + patch)
+        elif len(chunks) < MAX_REVIEW_CHUNKS:
+            chunks.append(([path], patch))
+        else:
+            continue
+    results = []
+    reviewed: set[str] = set()
+    unknown_review_paths: set[str] = set()
+    chunk_reviews: list[dict[str, Any]] = []
+    prompt_coverages: list[PromptCoverage] = []
+    guidance = (
+        "\nThis is a per-file review within a multi-file PR. Judge the supplied files "
+        "against all acceptance criteria; do not infer missing implementation in sibling "
+        "files. In your summary, identify each criterion supported by these files and "
+        "describe its implementation evidence. A final review will reconcile criteria "
+        "across all chunks. Report real findings as CONCERNS or FAIL. If input is "
+        "incomplete, use UNVERIFIABLE_INPUT. files_not_reviewed must name only supplied "
+        "assigned files you could not inspect, not files assigned to sibling chunks. "
+        "If the verdict is UNVERIFIABLE_INPUT only because global proof is missing, "
+        "list files_reviewed with the exact assigned paths actually inspected. "
+        "For an objection solely requiring a sibling file, optionally add deferred_concerns: "
+        "[{concern_index: <zero-based concerns index>, sibling_files: [<exact changed path>]}]. "
+        "The concern must name those exact sibling paths and contain no assigned-file objection. "
+        "Never defer a concrete defect or missing operational proof."
+    )
+    if partial_binary_review:
+        guidance += (
+            "\nBinary inputs remain unreviewed; no global acceptance PASS is available: "
+            + ", ".join(sorted(binary_paths))
+        )
+    for paths, patch in chunks:
+        # Guidance is trusted prompt framing, not an optional artifact's tail.
+        chunk_guidance = (
+            guidance
+            + "\nAssigned changed files: "
+            + json.dumps(paths)
+            + "\nSibling changed files (not supplied in this request): "
+            + json.dumps([p for p in destinations if p not in paths])
+        )
+        chunk_context = (
+            chunk_guidance + "\n\n" + local_context
+            if evaluate_minimum
+            else local_context + chunk_guidance
+        )
+        if asset_views:
+            # Existing whole-file chunks receive only their assigned changed-file
+            # obligations. Original requirements and the frozen full capture stay
+            # unchanged; this is a prompt projection, not a new Git patch/event.
+            inventory = parse_context_source_coverage(chunk_context)
+            if inventory is not None:
+                inventory = {
+                    **inventory,
+                    "changed_code_sources": [
+                        row
+                        for row in inventory.get("changed_code_sources", [])
+                        if row.get("source") in paths
+                    ],
+                    "gzip_asset_sources": [
+                        row
+                        for row in inventory.get("gzip_asset_sources", [])
+                        if row.get("source") in paths
+                    ],
+                }
+                chunk_context = re.sub(
+                    r"(^## Context source coverage[ \t]*\n(?:(?!^## |^```)[^\n]*\n)*^```json[ \t]*\n).*?(\n```)",
+                    lambda match, inventory=inventory: match[1]
+                    + json.dumps(inventory, ensure_ascii=False)
+                    + match[2],
+                    chunk_context,
+                    count=1,
+                    flags=re.M | re.S,
+                )
+        coverage = prompt_coverage(chunk_context, patch, evaluate_minimum=evaluate_minimum)
+        prompt_coverages.append(coverage)
+        record: dict[str, Any] = {
+            "assigned_files": paths,
+            "patch_sha256": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+            "prompt_coverage": coverage.to_dict(),
+        }
+        chunk_reviews.append(record)
+        if not coverage.sufficient:
+            results.append(
+                EvaluationResult(
+                    verdict=(
+                        "CONCERNS" if coverage.required_evidence_absent else "UNVERIFIABLE_INPUT"
+                    ),
+                    provider_used=provider,
+                    summary="Input unavailable: " + "; ".join(coverage.reasons),
+                    files_not_reviewed=paths,
+                )
+            )
+            continue
+        prompt = _prepare_prompt(chunk_context, patch, evaluate_minimum=evaluate_minimum)
+        record["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        try:
+            response, trace_id, trace_url = _invoke_llm(
+                client,
+                prompt,
+                operation="evaluate_pr_chunk" if evaluate_minimum else "evaluate_pr_compare_chunk",
+                context=chunk_context,
+                diff=patch,
+            )
+            result = _parse_llm_response(
+                getattr(response, "content", None) or str(response), provider, client=client
+            )
+            result.langsmith_trace_id, result.langsmith_trace_url = trace_id, trace_url
+            # The provider's original response remains evidence even when its
+            # omission list describes sibling context rather than assigned code.
+            record["provider_result"] = result.model_dump(mode="json")
+            sibling_paths = set(result.files_not_reviewed) & (set(destinations) - set(paths))
+            unknown = set(result.files_not_reviewed) - set(destinations)
+            record["sibling_files_not_supplied"] = sorted(sibling_paths)
+            record["unknown_review_paths"] = sorted(unknown)
+            unknown_review_paths.update(unknown)
+            result.files_not_reviewed = [p for p in result.files_not_reviewed if p in paths]
+            result = _apply_coverage_floor(result, coverage)
+        except Exception as exc:
+            result = EvaluationResult(
+                verdict="UNVERIFIABLE_INPUT",
+                error=f"Chunk review failed: {exc}",
+                summary=f"Chunk review failed: {exc}",
+                provider_used=provider,
+                model=model,
+                files_not_reviewed=paths,
+            )
+        results.append(result)
+        record["result"] = result.model_dump(mode="json")
+        # A completed inspection can find acceptance unverifiable (for example,
+        # a missing 24-hour observation) without leaving its code unreviewed.
+        # Failed requests and explicit assigned-file omissions never earn credit.
+        if result.used_llm and not result.error:
+            attested = (
+                set(result.files_reviewed or [])
+                if record.get("provider_result", {}).get("verdict") == "UNVERIFIABLE_INPUT"
+                else set(paths)
+            )
+            reviewed.update(
+                path for path in paths if path in attested and path not in result.files_not_reviewed
+            )
+    not_reviewed = [path for path, _ in files if path not in reviewed or path in binary_paths]
+    not_reviewed.extend(sorted(unknown_review_paths))
+    verdict = comparison_verdict(results) if results else "UNVERIFIABLE_INPUT"
+    if not_reviewed and verdict == "PASS":
+        verdict = "UNVERIFIABLE_INPUT"
+    synthesis: EvaluationResult | None = None
+    if not not_reviewed and results and all(r.used_llm and not r.error for r in results):
+        # Per-file PASS cannot establish that every global criterion is implemented.
+        # Reconcile the complete acceptance sources against every chunk's evidence.
+        synthesis_context = local_context
+        if evaluate_minimum:
+            fitted_inputs = build_prompt_inputs(local_context, source, evaluate_minimum=True)
+            synthesis_context = fitted_inputs.context_block.removeprefix(
+                fitted_inputs.coverage.render() + "\n\n"
+            )
+            if fitted_inputs.coverage.omitted_optional_evidence_sections:
+                synthesis_context = (
+                    "Optional evidence sections omitted from this prompt, not reviewed: "
+                    + ", ".join(fitted_inputs.coverage.omitted_optional_evidence_sections)
+                    + "\n\n"
+                    + synthesis_context
+                )
+        synthesis_prompt = (
+            "Reconcile acceptance completeness across the whole PR using the untrusted "
+            "acceptance context and per-chunk review summaries below. Identify any criterion "
+            "that no chunk implements, including cross-file obligations. Local PASS alone "
+            "is insufficient: require concrete implementation evidence for every criterion. "
+            "For every criterion, name its supporting chunks/files and implementation in "
+            "the summary. Preserve concrete defects and unmet operational proof; a sibling's "
+            "absence from one chunk is not absence from the PR. Return JSON with verdict, concerns "
+            "and a current whole-PR summary, not a concatenation of local limitations. "
+            "To resolve a deferred sibling-only concern, optionally return resolved_chunk_concerns: "
+            "[{chunk_index: <zero-based chunk>, concern_index: <original concerns index>, "
+            "supporting_files: [<actually reviewed sibling paths>], explanation: <concrete evidence>}]. "
+            "Only explicitly deferred concerns may be resolved; do not waive other findings. "
+            "Use CONCERNS for a missing "
+            "implementation, UNVERIFIABLE_INPUT if summaries cannot establish completeness."
+            "\n<acceptance_context>\n"
+            + synthesis_context
+            + "\n</acceptance_context>\n"
+            + json.dumps(
+                [
+                    {
+                        "chunk_index": index,
+                        "files": paths,
+                        "summary": result.summary,
+                        "concerns": result.concerns,
+                        "verdict": result.verdict,
+                        "deferred_concerns": [c.model_dump() for c in result.deferred_concerns],
+                    }
+                    for index, ((paths, _), result) in enumerate(zip(chunks, results, strict=True))
+                ]
+            )
+        )
+        try:
+            # This derived-evidence reconciliation has no raw diff obligations of its own;
+            # native counting admits the full requirements and summaries. The
+            # per-file diff budget is not a limit on original requirements.
+            response, _, _ = _invoke_llm(
+                client, synthesis_prompt, operation="evaluate_pr_chunk_synthesis"
+            )
+            synthesis = _parse_llm_response(
+                getattr(response, "content", None) or str(response), provider, client=client
+            )
+            synthesis = _apply_coverage_floor(synthesis, full_coverage)
+            for path in synthesis.files_not_reviewed:
+                if path not in not_reviewed:
+                    not_reviewed.append(path)
+                reviewed.discard(path)
+        except Exception as exc:
+            synthesis = EvaluationResult(
+                verdict="UNVERIFIABLE_INPUT",
+                error=str(exc),
+                summary=f"Cross-file acceptance reconciliation unavailable: {exc}",
+            )
+        # Reconciliation may discharge only a provider-attributed sibling gap
+        # backed by complete reviews of those sibling files. Untyped concerns,
+        # failures and unverifiable outcomes remain conservative verdict floors.
+        resolved: set[tuple[int, int]] = set()
+        accepted_resolutions: list[ResolvedChunkConcern] = []
+        if synthesis.used_llm and not synthesis.error and synthesis.verdict != "UNVERIFIABLE_INPUT":
+            for resolution in synthesis.resolved_chunk_concerns:
+                index, concern = resolution.chunk_index, resolution.concern_index
+                if index >= len(results):
+                    continue
+                local = results[index]
+                support = set(resolution.supporting_files)
+                siblings = {
+                    path
+                    for deferred in local.deferred_concerns
+                    if deferred.concern_index == concern
+                    for path in deferred.sibling_files
+                }
+                if (
+                    local.verdict == "CONCERNS"
+                    and concern < len(local.concerns)
+                    and resolution.explanation.strip()
+                    and siblings
+                    and siblings <= support <= (reviewed - set(chunks[index][0]))
+                    and all(
+                        re.search(
+                            r"(?<![\w./-])" + re.escape(path) + r"(?![\w./-])",
+                            local.concerns[concern],
+                        )
+                        for path in siblings
+                    )
+                    and not any(
+                        re.search(
+                            r"(?<![\w./-])" + re.escape(name) + r"(?![\w./-])",
+                            local.concerns[concern],
+                        )
+                        for path in chunks[index][0]
+                        for name in (path, path.rsplit("/", 1)[-1])
+                    )
+                ):
+                    resolved.add((index, concern))
+                    accepted_resolutions.append(resolution)
+        for index, local in enumerate(results):
+            original_concerns = local.concerns
+            local.concerns = [
+                c for number, c in enumerate(original_concerns) if (index, number) not in resolved
+            ]
+            if local.verdict == "CONCERNS" and original_concerns and not local.concerns:
+                local.verdict = "PASS"
+        results.append(synthesis)
+        verdict = comparison_verdict(results)
+    # No calls were possible due solely to input limits.
+    if not results:
+        verdict = "UNVERIFIABLE_INPUT"
+    aggregate_coverage = full_coverage.to_dict()
+    omitted_sections = sorted(
+        {
+            name
+            for coverage in prompt_coverages
+            for name in coverage.omitted_optional_evidence_sections
+        }
+    )
+    if omitted_sections:
+        aggregate_coverage.update(
+            acceptance_evidence="truncated",
+            included_required_evidence_channels=sorted(
+                {
+                    name
+                    for coverage in prompt_coverages
+                    for name in coverage.included_required_evidence_channels
+                }
+            ),
+            omitted_optional_evidence_sections=omitted_sections,
+        )
+    final_summary = None
+    if synthesis and synthesis.used_llm and not synthesis.error:
+        final_summary = synthesis.summary
+        if synthesis.verdict != verdict:
+            final_summary = (
+                "Reconciliation did not discharge the retained local findings or review uncertainty. "
+                "The original concerns and chunk review records remain authoritative."
+            )
+    return EvaluationResult(
+        verdict=verdict,
+        provider_used=provider,
+        model=model,
+        used_llm=any(result.used_llm for result in results),
+        error="; ".join(result.error for result in results if result.error) or None,
+        concerns=[item for result in results for item in result.concerns],
+        summary=final_summary
+        or "\n\n".join(result.summary or "" for result in results)
+        or "Changed files exceed the bounded review capacity.",
+        files_not_reviewed=not_reviewed,
+        chunk_reviews=chunk_reviews,
+        resolved_chunk_concerns=accepted_resolutions if synthesis else [],
+        raw_content=synthesis.raw_content if synthesis else None,
+        input_coverage={
+            **aggregate_coverage,
+            "sufficient": not not_reviewed,
+            "files_total": len(files),
+            "files_complete": len(reviewed),
+            "files_not_reviewed": not_reviewed,
+            "chunks": len(chunks),
+        },
+    )
+
+
+def _prepare_prompt(context: str, diff: str | None, *, evaluate_minimum: bool = True) -> str:
+    inputs = build_prompt_inputs(context, diff, evaluate_minimum=evaluate_minimum)
     diff_block = inputs.diff_block
     context_block = inputs.context_block
 
@@ -6057,17 +7208,89 @@ def _capacity_facts_for(provider: str, model: str) -> NativeCapacityFacts:
         raise InputCapacityError(str(exc)) from exc
 
 
+def _legacy_github_chat(client: object) -> bool:
+    """Preserve the existing standard GitHub route without asserting native count.
+
+    GitHub Models exposes a chat endpoint, not either direct provider's count
+    transport. Expanded recovery still requires native facts and refuses it.
+    Endpoint binding prevents an arbitrary OpenAI-compatible host receiving this
+    compatibility treatment; client selection remains registry-owned.
+    """
+    try:
+        from langchain_openai import ChatOpenAI
+        from openai import OpenAI
+        from tools.llm_provider import GITHUB_MODELS_BASE_URL
+    except ImportError:
+        return False
+    return (
+        type(client) is ChatOpenAI
+        and type(client.root_client) is OpenAI
+        and str(client.root_client.base_url).rstrip("/") == GITHUB_MODELS_BASE_URL.rstrip("/")
+        and str(client.openai_api_base).rstrip("/") == GITHUB_MODELS_BASE_URL.rstrip("/")
+        and not client.use_responses_api
+        and os.environ.get("VERIFIER_EVIDENCE_PROFILE") != "expanded"
+    )
+
+
+def _legacy_capacity_route(client: object) -> bool:
+    """Preserve registered standard routes without optional native facts.
+
+    Missing facts are not malformed facts. A declared contract, bad registry,
+    unknown model or unexpected transport still fails closed; expanded recovery
+    never takes this legacy path.
+    """
+    if _legacy_github_chat(client):
+        return True
+    if os.environ.get("VERIFIER_EVIDENCE_PROFILE") == "expanded":
+        return False
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        ChatOpenAI = None  # noqa: N806
+    try:
+        from langchain_anthropic import ChatAnthropic
+    except ImportError:
+        ChatAnthropic = None  # noqa: N806
+    if type(client) is ChatOpenAI:
+        from openai import OpenAI
+
+        if (
+            type(client.root_client) is not OpenAI
+            or str(client.root_client.base_url).rstrip("/") != "https://api.openai.com/v1"
+        ):
+            return False
+        provider, model = "openai", client.model_name
+    elif type(client) is ChatAnthropic:
+        from anthropic import Anthropic
+
+        if (
+            type(client._client) is not Anthropic
+            or str(client._client.base_url).rstrip("/") != "https://api.anthropic.com"
+        ):
+            return False
+        provider, model = "anthropic", client.model
+    else:
+        return False
+    try:
+        native_capacity_facts_for(provider, model)
+    except NativeCapacityUnavailable:
+        return True
+    except ValueError as exc:
+        raise InputCapacityError(str(exc)) from exc
+    return False
+
+
 def _prepare_capacity_client(client: object) -> object:
     """Prepare a registry-authorized Responses copy without mutating its owner.
 
-    Standard never calls this helper. Registry facts cannot choose adapter/SDK
-    types or endpoints; the native contract independently checks those bindings.
+    Registry facts cannot choose adapter/SDK types or endpoints; the native
+    contract independently checks those bindings for every profile.
     """
     try:
         from langchain_openai import ChatOpenAI
     except ImportError:
         return client
-    if type(client) is ChatOpenAI:
+    if type(client) is ChatOpenAI and not _legacy_capacity_route(client):
         facts = _capacity_facts_for("openai", client.model_name)
         updates = {"use_responses_api": True}
         if client.max_tokens is None:
@@ -6076,7 +7299,7 @@ def _prepare_capacity_client(client: object) -> object:
     return client
 
 
-def _native_capacity_contract(client: object) -> dict[str, object]:
+def _native_capacity_contract(client: object, *, trial: Any = None) -> dict[str, object]:
     """Bind validated exact registry facts to generation/count on the same SDK.
 
     Capacity data and dated official provenance live in model_registry.json.
@@ -6122,6 +7345,9 @@ def _native_capacity_contract(client: object) -> dict[str, object]:
             or native.models._client is not native
         ):
             raise InputCapacityError("Anthropic native generation/count transport mismatch")
+        if trial is not None:
+            trial.check_sdk(native)
+            trial.consume("metadata")
         metadata = native.models.retrieve(model)
         window = getattr(metadata, "max_input_tokens", None)
         output = getattr(metadata, "max_tokens", None)
@@ -6152,8 +7378,46 @@ def _native_capacity_contract(client: object) -> dict[str, object]:
     }
 
 
+def _evaluation_optional_evidence_channels(context: str) -> frozenset[str]:
+    """Reuse the prompt screen's OR-of-AND requirements, not a new evaluator.
+
+    Availability permits reasoning; it does not certify the evidence's claims.
+    No viable complete alternative leaves the lossless admission floor intact.
+    """
+    sections = _split_verifier_context(context.strip())
+    if sections is None:
+        return frozenset()
+    acceptance = next((body for name, body in sections if name == "acceptance"), "")
+    evidence = next((body for name, body in sections if name == "acceptance_evidence"), "")
+    # A delivery duty in Tasks or prose must not be waived merely because
+    # the acceptance-criteria subsection omits it.
+    evidence_requirements = _requirement_evidence_text(
+        acceptance, source_coverage=parse_context_source_coverage(context) or {}, legacy_prose=True
+    )
+    if evidence_requirements is None:
+        return frozenset()
+    _, optional, _ = _resolve_evidence_policy(
+        evidence_requirements,
+        evidence,
+        parse_context_source_coverage(context) or {},
+        evaluate_minimum=True,
+        evidence_budget=_budget_from_env(
+            "VERIFIER_ACCEPTANCE_EVIDENCE_BUDGET_TOKENS", VERIFIER_CONTEXT_BUDGET_TOKENS
+        )
+        * TOKEN_CHARS,
+    )
+    return optional
+
+
 def _preflight_input_capacity(
-    client: object, prompt: str, *, context: str | None = None, diff: str | None = None
+    client: object,
+    prompt: str,
+    *,
+    context: str | None = None,
+    diff: str | None = None,
+    operation: str | None = None,
+    validate_capture: bool = True,
+    trial: Any = None,
 ) -> dict[str, object]:
     """Count the complete native request; never substitute four-character estimates.
 
@@ -6164,20 +7428,36 @@ def _preflight_input_capacity(
     """
     receipt: dict[str, object] = {"status": "unavailable", "prompt_chars": len(prompt)}
     try:
-        if context is not None:
+        evaluate_minimum = operation in {
+            "evaluate_pr",
+            "evaluate_pr_chunk",
+            "evaluate_pr_compare",
+            "evaluate_pr_compare_chunk",
+        }
+        if context is not None and validate_capture:
             manifest = build_capture_obligation_manifest(
-                context, full_diff_bytes=diff.encode("utf-8") if diff is not None else None
+                context,
+                full_diff_bytes=diff.encode("utf-8") if diff is not None else None,
+                optional_evidence_channels=(
+                    _evaluation_optional_evidence_channels(context)
+                    if evaluate_minimum
+                    else frozenset()
+                ),
             )
             receipt["capture_obligations"] = manifest
-            coverage = prompt_coverage(context, diff)
+            coverage = prompt_coverage(context, diff, evaluate_minimum=evaluate_minimum)
             receipt["prompt_coverage"] = coverage.to_dict()
             if not manifest["sufficient"]:
                 raise InputCapacityError("capture obligation gaps: " + json.dumps(manifest["gaps"]))
             if not coverage.sufficient:
                 raise InputCapacityError("prompt obligation gaps: " + json.dumps(coverage.reasons))
-            if prompt != _prepare_prompt(context, diff):
+            if prompt != _prepare_prompt(context, diff, evaluate_minimum=evaluate_minimum):
                 raise InputCapacityError("prompt does not match the complete captured obligations")
-        contract = _native_capacity_contract(client)
+        contract = (
+            _native_capacity_contract(client)
+            if trial is None
+            else _native_capacity_contract(client, trial=trial)
+        )
         profile = contract["profile"]
         if not isinstance(profile, dict):
             raise InputCapacityError("model-specific capacity profile unavailable")
@@ -6212,6 +7492,8 @@ def _preflight_input_capacity(
         if not output_limits:
             raise InputCapacityError("actual native request output ceiling unavailable")
         output = max(output_limits)
+        if trial is not None and output != trial.policy["max_output_tokens"]:
+            raise InputCapacityError("paired trial actual output ceiling differs from policy")
         receipt.update(model=payload["model"], output_reserve=output)
         if output > ceiling:
             raise InputCapacityError("native output capacity exceeds exact-model ceiling")
@@ -6278,6 +7560,8 @@ def _preflight_input_capacity(
             raise InputCapacityError(f"uncounted native capacity fields: {sorted(unknown)}")
         request_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         receipt["request_sha256"] = hashlib.sha256(request_bytes).hexdigest()
+        if trial is not None:
+            trial.consume("count")
         counted = counter(**{key: value for key, value in payload.items() if key in names})
         tokens = getattr(counted, "input_tokens", None)
         if type(tokens) is not int or tokens <= 0:
@@ -6581,11 +7865,10 @@ class _CapacityCheckedRepairClient:
         self.client = client
 
     def invoke(self, prompt: str, **kwargs: Any) -> Any:
-        client = self.client
-        if os.environ.get("VERIFIER_EVIDENCE_PROFILE") == "expanded":
-            client = _prepare_capacity_client(client)
-            if set(kwargs) - {"config"}:
-                raise InputCapacityError("uncounted schema repair generation kwargs")
+        client = _prepare_capacity_client(self.client)
+        if set(kwargs) - {"config"}:
+            raise InputCapacityError("uncounted schema repair generation kwargs")
+        if not _legacy_capacity_route(client):
             _preflight_input_capacity(client, prompt)
         return client.invoke(prompt, **kwargs)
 
@@ -6605,11 +7888,43 @@ def _invoke_llm(
     Returns:
         Tuple of (response, trace_id, trace_url)
     """
-    # Native counting is an explicit expanded-recovery contract. Standard keeps
-    # its existing adapter behavior without claiming native capacity proof.
-    if os.environ.get("VERIFIER_EVIDENCE_PROFILE") == "expanded":
-        client = _prepare_capacity_client(client)
-        _preflight_input_capacity(client, prompt, context=context, diff=diff)
+    # Required sources are retained in every mode. Native-capable routes count
+    # each complete request, including synthesis. Registered standard routes
+    # without optional native facts do not claim a native-count receipt.
+    client = _prepare_capacity_client(client)
+    legacy_route = _legacy_capacity_route(client)
+    # Only necessary projections above their own existing soft bounds override
+    # legacy optional capacity. Measure the shared fitter's required evidence
+    # before optional enrichment, and the assembled code/asset view, never raw
+    # optional history or the entire source context.
+    legacy_inputs = (
+        build_prompt_inputs(context, diff) if legacy_route and context is not None else None
+    )
+    required_input_above_soft_budget = bool(
+        legacy_inputs is not None
+        and (
+            legacy_inputs.coverage.code_included_chars
+            > _budget_from_env("VERIFIER_DIFF_BUDGET_TOKENS", VERIFIER_DIFF_BUDGET_TOKENS)
+            * TOKEN_CHARS
+            or legacy_inputs.required_evidence_chars
+            > _budget_from_env(
+                "VERIFIER_ACCEPTANCE_EVIDENCE_BUDGET_TOKENS", VERIFIER_CONTEXT_BUDGET_TOKENS
+            )
+            * TOKEN_CHARS
+        )
+    )
+    if not legacy_route or required_input_above_soft_budget:
+        _preflight_input_capacity(
+            client,
+            prompt,
+            context=context,
+            diff=diff,
+            operation=operation,
+            # Expanded recovery retains its complete raw-capture admission contract.
+            # Standard already screens the assembled prompt; adding native counting
+            # must not impose expanded's separate all-capture contract on that path.
+            validate_capture=os.environ.get("VERIFIER_EVIDENCE_PROFILE") == "expanded",
+        )
     config = _build_llm_config(
         operation=operation,
         context=context,
@@ -6833,29 +8148,63 @@ def _coerce_response_content(content: object) -> str:
             return f"<unserializable {type(content).__name__}>"
 
 
+def _parse_semantic_evaluation_payload(content: str) -> EvaluationPayload:
+    """Accept one JSON value, optionally enclosed in one complete Markdown fence.
+
+    Only the transport envelope is normalized. The caller retains the original
+    raw response for provenance, and strict schema validation remains unchanged.
+    Surrounding prose, multiple blocks, invalid JSON and unknown fields fail.
+    """
+    text = content.strip()
+    fenced = re.fullmatch(
+        r"(?P<opening>`{3,})(?:json)?[ \t]*\r?\n(?P<payload>.*?)\r?\n(?P<closing>`{3,})",
+        text,
+        re.DOTALL,
+    )
+    if fenced is not None:
+        if len(fenced.group("closing")) < len(fenced.group("opening")):
+            raise ValueError("semantic response closing fence is shorter than its opening fence")
+        text = fenced.group("payload")
+
+    def unique_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        members: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in members:
+                raise ValueError("semantic response contains a duplicate JSON member")
+            members[key] = value
+        return members
+
+    payload_data = json.loads(text, object_pairs_hook=unique_members)
+    if isinstance(payload_data, dict) and isinstance(payload_data.get("summary"), list):
+        summary_entries = [
+            CriterionSummaryEntry.model_validate(entry, strict=True, extra="forbid")
+            for entry in payload_data["summary"]
+        ]
+        if not summary_entries:
+            raise ValueError("semantic response summary entries must not be empty")
+        # Keep the public evaluation payload and every downstream renderer scalar.
+        # Raw provider content remains attached by _parse_llm_response for audit.
+        payload_data = {
+            **payload_data,
+            "summary": "\n\n".join(
+                f"{entry.criterion}: {entry.support}" for entry in summary_entries
+            ),
+        }
+
+    return EvaluationPayload.model_validate(payload_data, strict=True, extra="forbid")
+
+
 def _parse_llm_response(
-    content: object, provider: str, *, client: object | None = None
+    content: object, provider: str, *, client: object | None = None  # noqa: ARG001 - compatibility
 ) -> EvaluationResult:
     content_text = _coerce_response_content(content)
-    repair = _build_verifier_repair_callback(client) if client is not None else None
-    parsed = parse_structured_output(
-        content_text,
-        EvaluationPayload,
-        repair=repair,
-        max_repair_attempts=SCHEMA_REPAIR_POLICY.max_attempts,
-    )
-    if parsed.payload is None:
-        decision = SCHEMA_REPAIR_POLICY.terminal_decision(
-            repair_attempts_used=parsed.repair_attempts_used,
-            error_stage=parsed.error_stage,
-            has_payload=False,
-        )
-        if parsed.error_stage == "repair_validation":
-            error = f"Failed to parse JSON response after repair: {parsed.error_detail}"
-        else:
-            error = f"Failed to parse JSON response: {parsed.error_detail}"
-        if decision == "escalate":
-            error = f"Schema repair policy escalated verifier output: {error}"
+    # A final answer is immutable provider evidence. Parse the existing strict
+    # transport/schema once; malformed or ambiguous output is held locally,
+    # never sent to a provider for a default repair generation.
+    try:
+        payload = _parse_semantic_evaluation_payload(content_text)
+    except (ValueError, TypeError) as exc:
+        error = f"Failed to parse JSON response: {type(exc).__name__}"
         return EvaluationResult(
             verdict="CONCERNS",
             scores=None,
@@ -6867,16 +8216,19 @@ def _parse_llm_response(
             error=error,
         )
 
-    payload = parsed.payload
     return EvaluationResult(
         verdict=payload.verdict,
+        files_not_reviewed=payload.files_not_reviewed,
+        files_reviewed=payload.files_reviewed,
+        deferred_concerns=payload.deferred_concerns,
+        resolved_chunk_concerns=payload.resolved_chunk_concerns,
         scores=payload.scores,
         confidence=payload.confidence,
         concerns=payload.concerns,
         summary=payload.summary,
         provider_used=provider,
         used_llm=True,
-        raw_content=parsed.raw_content or content_text,
+        raw_content=content_text,
     )
 
 
@@ -6924,14 +8276,14 @@ def evaluate_pr(
         diff: Optional PR diff or summary
         model: Optional model name (e.g., 'gpt-4o', 'gpt-5.2', 'o1-mini').
             Uses default if not specified.
-        provider: Optional provider ('openai' or 'github-models').
+        provider: Optional provider ('openai', 'github-models', or 'anthropic').
             Auto-selects if not specified.
 
     Returns:
         EvaluationResult with verdict, scores, and concerns.
     """
     resolved = _get_llm_client(model=model, provider=provider)
-    coverage = prompt_coverage(context, diff)
+    coverage = prompt_coverage(context, diff, evaluate_minimum=True)
     if resolved is None:
         return _apply_coverage_floor(
             _fallback_evaluation("LLM client unavailable (missing credentials or dependency)."),
@@ -6939,7 +8291,10 @@ def evaluate_pr(
         )
 
     client, provider_name = resolved
-    prompt = _prepare_prompt(context, diff)
+    chunked = _evaluate_chunked(client, context, diff, provider_name, model, evaluate_minimum=True)
+    if chunked is not None:
+        return chunked
+    prompt = _prepare_prompt(context, diff, evaluate_minimum=True)
     change_type = _classify_change_type(_bounded_diff_for_classification(diff))
     pr_number, _ = _extract_pr_metadata(context)
     trace_id, trace_url = None, None
@@ -7038,6 +8393,30 @@ def _semantic_envelope_signature(envelope: dict[str, Any]) -> str:
     return hmac.new(key, canonical_digest(envelope).encode(), hashlib.sha256).hexdigest()
 
 
+def _semantic_raw_inputs(context: str, diff: str | None) -> dict[str, bytes]:
+    raw = {"context": context.encode("utf-8")}
+    if diff is not None:
+        raw["diff"] = diff.encode("utf-8")
+    directory = os.environ.get("VERIFIER_EVIDENCE_CAPTURE_DIR")
+    if directory:
+        artifacts, _ = load_artifact_capture(
+            parse_context_source_coverage(context) or {}, Path(directory)
+        )
+        raw.update(artifacts)
+    if diff is not None:
+        from tools.verifier_gzip_assets import captured_inputs
+
+        raw.update(
+            captured_inputs(
+                parse_context_source_coverage(context) or {},
+                Path(directory or "verifier-evidence"),
+                diff.encode("utf-8"),
+                context=context,
+            )
+        )
+    return raw
+
+
 def _semantic_capture(context: str, diff: str | None) -> dict[str, Any]:
     """Create the complete-capture identity used by the semantic execution path."""
     head = os.environ.get("PR_HEAD_SHA", "")
@@ -7055,6 +8434,13 @@ def _semantic_capture(context: str, diff: str | None) -> dict[str, Any]:
     gaps.extend(str(item) for item in manifest["gaps"])
     coverage = build_prompt_inputs(context, diff, lossless=True).coverage
     gaps.extend(f"prompt:{item}" for item in coverage.reasons)
+    try:
+        raw_inputs = {
+            name: hashlib.sha256(value).hexdigest()
+            for name, value in _semantic_raw_inputs(context, diff).items()
+        }
+    except (OSError, ValueError) as exc:
+        gaps.append(f"artifact_raw_capture:{exc}")
     governing = hashlib.sha256(context.encode()).hexdigest()
     capture_id = canonical_digest({"head": head, "governing": governing, "raw_inputs": raw_inputs})
     return {
@@ -7073,6 +8459,7 @@ def _semantic_slots_and_clients(
     model1: str | None,
     model2: str | None,
     configured: list[Any] | None = None,
+    trial: Any = None,
 ) -> tuple[list[dict[str, Any]], dict[str, object], bool]:
     """Freeze configured slots before client availability can change the matrix."""
     from tools.llm_registry import resolve_slots
@@ -7092,7 +8479,11 @@ def _semantic_slots_and_clients(
         zip(clients, expected, strict=True)
     ):
         prepared = _prepare_capacity_client(client)
-        contract = _native_capacity_contract(prepared)
+        contract = (
+            _native_capacity_contract(prepared)
+            if trial is None
+            else _native_capacity_contract(prepared, trial=trial)
+        )
         if contract["provider"] != provider or contract["model"] != model:
             raise InputCapacityError(
                 "available native client does not match frozen configured slot"
@@ -7104,6 +8495,8 @@ def _semantic_slots_and_clients(
         )
         if getattr(native_sdk, "max_retries", None) != 0:
             raise InputCapacityError("native SDK retries must be disabled at construction")
+        if trial is not None:
+            trial.check_sdk(native_sdk)
         slot_id = f"slot-{index + 1}"
         slots.append(
             {
@@ -7122,16 +8515,39 @@ def _semantic_slots_and_clients(
 
 
 def _build_semantic_clients(
-    model1: str | None, model2: str | None
+    model1: str | None, model2: str | None, trial: Any = None
 ) -> list[tuple[object, str, str]]:
     from tools.langchain_client import build_chat_clients
 
     # Rebuild initialized SDK clients with the native retry policy. A Pydantic
     # model copy would retain SDK instances constructed with their old retries.
+    kwargs = {"max_retries": 0}
+    if trial is not None:
+        kwargs["timeout"] = trial.policy["per_request_timeout_seconds"]
     return [
-        (item.client, item.provider, item.model)
-        for item in build_chat_clients(model1=model1, model2=model2, max_retries=0)
+        (item.client if trial is None else trial.client(item.client), item.provider, item.model)
+        for item in build_chat_clients(model1=model1, model2=model2, **kwargs)
     ]
+
+
+def _semantic_package_prompt(
+    prepared: dict[str, Any], package: dict[str, Any], contract: dict[str, Any]
+) -> str:
+    package_bytes = prepared["prompts"][package["id"]]["bytes"]
+    # This path never calls the legacy character-budget prompt builder.
+    # Every reviewed dependency byte is preserved in the counted prompt.
+    text = package_bytes.decode("utf-8")
+    obligations = [
+        clause for clause in contract["clauses"] if clause["id"] in package["clause_ids"]
+    ]
+    text = "Reviewed closed obligations: " + json.dumps(obligations, sort_keys=True) + "\n" + text
+    prompt = _load_prompt().format(
+        context=text,
+        diff="Complete changed-code dependencies are included in the reviewed spans above.",
+    )
+    if _get_chain_depth() > 0:
+        prompt += "\n" + CHAIN_DEPTH_ADDENDUM.format(depth=_get_chain_depth())
+    return prompt
 
 
 def _evaluate_pr_multiple_semantic(
@@ -7140,6 +8556,7 @@ def _evaluate_pr_multiple_semantic(
     """Run the full semantic matrix without legacy recovery, retries, or repair."""
     capture = _semantic_capture(context, diff)
     execution = None
+    trial = None
     try:
         from tools.llm_registry import resolve_slots
 
@@ -7147,16 +8564,21 @@ def _evaluate_pr_multiple_semantic(
             raise InputCapacityError(
                 "complete capture is unavailable: " + json.dumps(capture["gaps"])
             )
+        if os.environ.get("VERIFIER_PAIRED_QUALIFICATION") is not None:
+            from tools.verify_paired_policy import PairedTrial
+
+            trial = PairedTrial.from_environment(capture)
         configured = resolve_slots()[:2]
-        slots, clients, authenticated = _semantic_slots_and_clients(
-            _build_semantic_clients(model1, model2), model1, model2, configured
-        )
-        raw_bytes = {"context": context.encode()}
-        if diff is not None:
-            raw_bytes["diff"] = diff.encode()
+        if trial is None:
+            slots, clients, authenticated = _semantic_slots_and_clients(
+                _build_semantic_clients(model1, model2), model1, model2, configured
+            )
+        raw_bytes = _semantic_raw_inputs(context, diff)
         prepared = prepare_reviewed_execution(capture, raw_bytes)
         if prepared is None:
             prepared = prepare_residual_all_input(capture, raw_bytes)
+        if trial is not None:
+            trial.check_matrix(prepared, model1, model2)
         execution_capture = prepared["capture"]
         checked_contract = prepared["contract"]
         package_specs = prepared["plan"]["packages"]
@@ -7172,25 +8594,7 @@ def _evaluate_pr_multiple_semantic(
         def build_request(
             slot: dict[str, Any], package: dict[str, Any], contract: dict[str, Any]
         ) -> dict[str, Any]:
-            package_bytes = prepared["prompts"][package["id"]]["bytes"]
-            # This path never calls the legacy character-budget prompt builder.
-            # Every reviewed dependency byte is preserved in the counted prompt.
-            text = package_bytes.decode("utf-8")
-            obligations = [
-                clause for clause in contract["clauses"] if clause["id"] in package["clause_ids"]
-            ]
-            text = (
-                "Reviewed closed obligations: "
-                + json.dumps(obligations, sort_keys=True)
-                + "\n"
-                + text
-            )
-            prompt = _load_prompt().format(
-                context=text,
-                diff="Complete changed-code dependencies are included in the reviewed spans above.",
-            )
-            if _get_chain_depth() > 0:
-                prompt += "\n" + CHAIN_DEPTH_ADDENDUM.format(depth=_get_chain_depth())
+            prompt = _semantic_package_prompt(prepared, package, contract)
             return {
                 "prompt": prompt,
                 "slot": slot["slot_id"],
@@ -7198,10 +8602,29 @@ def _evaluate_pr_multiple_semantic(
                 "contract": contract["id"],
             }
 
+        if trial is not None:
+            trial.check_prompt(
+                build_request({"slot_id": "slot-1"}, package_specs[0], checked_contract)["prompt"]
+            )
+            slots, clients, authenticated = _semantic_slots_and_clients(
+                _build_semantic_clients(model1, model2, trial),
+                model1,
+                model2,
+                configured,
+                trial=trial,
+            )
+
+        def count_request(slot: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+            client = clients[slot["slot_id"]]
+            if trial is None:
+                return _preflight_input_capacity(client, request["prompt"])
+            trial.check_prompt(request["prompt"])
+            return _preflight_input_capacity(client, request["prompt"], trial=trial)
+
         def preflight(
             slot: dict[str, Any], _package: dict[str, Any], request: dict[str, Any]
         ) -> dict[str, Any]:
-            receipt = _preflight_input_capacity(clients[slot["slot_id"]], request["prompt"])
+            receipt = count_request(slot, request)
             native_preflights[(slot["slot_id"], request["package"])] = str(
                 receipt["request_sha256"]
             )
@@ -7217,7 +8640,7 @@ def _evaluate_pr_multiple_semantic(
         def invoke(slot: dict[str, Any], request: dict[str, Any]) -> str | bytes:
             # Re-count immediately before each generation and require its real
             # native payload identity to match the all-cells preflight receipt.
-            receipt = _preflight_input_capacity(clients[slot["slot_id"]], request["prompt"])
+            receipt = count_request(slot, request)
             if monotonic() >= native_deadline:
                 raise InputCapacityError(
                     "semantic native elapsed bound exhausted before generation"
@@ -7226,6 +8649,8 @@ def _evaluate_pr_multiple_semantic(
                 (slot["slot_id"], request["package"])
             ):
                 raise InputCapacityError("native payload changed after matrix preflight")
+            if trial is not None:
+                trial.consume("generation")
             response = clients[slot["slot_id"]].invoke(request["prompt"])
             return _coerce_response_content(getattr(response, "content", None) or str(response))
 
@@ -7233,9 +8658,7 @@ def _evaluate_pr_multiple_semantic(
             raw: str | bytes, _slot: dict[str, Any], _package: dict[str, Any]
         ) -> dict[str, Any]:
             content = raw.decode() if isinstance(raw, bytes) else raw
-            payload = EvaluationPayload.model_validate(
-                json.loads(content), strict=True, extra="forbid"
-            )
+            payload = _parse_semantic_evaluation_payload(content)
             return {
                 "verdict": payload.verdict,
                 "findings": list(payload.concerns),
@@ -7276,6 +8699,15 @@ def _evaluate_pr_multiple_semantic(
         admission = {"verdict": "CONCERNS", "errors": [str(exc)], "findings": []}
         values = [_fallback_evaluation(f"semantic native verification blocked: {exc}")]
     envelope = {"schema": SEMANTIC_ENVELOPE_SCHEMA, "capture": capture, "admission": admission}
+    if trial is not None:
+        envelope["qualification_trial"] = {
+            "case": trial.case,
+            "policy": trial.policy,
+            "attempted_native_requests": trial.calls,
+            "attempted_physical_http_requests": trial.physical_http_attempts,
+            "native_capacity_claim": False,
+            "role_qualification_claim": False,
+        }
     if execution is not None:
         envelope["execution"] = {
             "contract": execution.contract,
@@ -7364,32 +8796,49 @@ def expanded_comparison_verdict(
     complete = len(results) == len(expected)
     observed = []
     failed = False
+    input_only = len(results) == len(expected)
+    saw_unverifiable = False
     for arm in results:
         if (
             not isinstance(arm, dict)
             or not {"provider_used", "model", "verdict", "used_llm"} <= arm.keys()
         ):
             complete = False
+            input_only = False
             continue
         try:
             result = EvaluationResult.model_validate(arm, strict=True, extra="forbid")
         except ValueError:
             complete = False
+            input_only = False
             continue
         identity = (result.provider_used, result.model)
-        if identity not in expected or result.used_llm is not True:
+        if identity not in expected or (
+            result.used_llm is not True and result.verdict != "UNVERIFIABLE_INPUT"
+        ):
             complete = False
+            input_only = False
             continue
         # A valid configured judge's FAIL survives a missing, duplicate, errored
         # or malformed sibling. Incompleteness blocks PASS; it cannot erase FAIL.
         # Unbound/fallback/unused or invalid-schema arms cannot impersonate a judge.
         if result.verdict == "FAIL":
             failed = True
+        if result.verdict == "UNVERIFIABLE_INPUT":
+            saw_unverifiable = True
+        if (
+            result.verdict not in {"PASS", "UNVERIFIABLE_INPUT"}
+            or result.error
+            or identity in observed
+        ):
+            input_only = False
         if identity in observed or result.verdict != "PASS" or result.error:
             complete = False
         observed.append(identity)
     if failed:
         return "FAIL"
+    if input_only and saw_unverifiable and set(observed) == set(expected):
+        return "UNVERIFIABLE_INPUT"
     return "PASS" if complete and set(observed) == set(expected) else "CONCERNS"
 
 
@@ -7505,6 +8954,15 @@ def _unique_concerns(results: list[EvaluationResult]) -> dict[int, list[str]]:
 
 def format_comparison_report(results: list[EvaluationResult]) -> str:
     lines = ["## Provider Comparison Report", ""]
+    for result in results:
+        no_review = ""
+        if not result.used_llm:
+            reason = result.error or result.summary or result.verdict
+            no_review = f"; no model review: {reason}"
+        lines.append(f"- {result.provider_used or 'provider'}: {_review_count(result)}{no_review}")
+    if not results:
+        lines.append("files reviewed 0 of 0 (coverage unavailable)")
+    lines.append("")
     if not results:
         lines.append("No evaluation results available.")
         return "\n".join(lines).strip() + "\n"
@@ -7650,6 +9108,13 @@ def _load_text(path: str | None) -> str:
     return sys.stdin.read()
 
 
+def _provider_argument(value: str | None) -> str:
+    provider = normalize_provider(value)
+    if provider is None:
+        raise argparse.ArgumentTypeError("unsupported LLM provider")
+    return provider
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate PRs against acceptance criteria.")
     parser.add_argument("--context-file", help="Path to verifier context markdown.")
@@ -7661,10 +9126,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        choices=["openai", "github-models"],
+        type=_provider_argument,
         help=(
             "LLM provider: 'openai' (requires OPENAI_API_KEY) or "
-            "'github-models' (uses GITHUB_TOKEN)."
+            "'github-models' (uses GITHUB_TOKEN), or 'anthropic' (uses CLAUDE_API_STRANSKE)."
         ),
     )
     parser.add_argument(

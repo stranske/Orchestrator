@@ -74,7 +74,8 @@ fi
 chmod +x "$MIRROR"/orchestrate.sh
 extra=0
 mkdir -p "$MIRROR/experiments" "$MIRROR/data" "$MIRROR/config"
-# Source snapshots, not mirror-local state. Remove the previous copies before the conditional copy
+# Immutable source snapshots; mutable registry defaults live in ORCH_LOCAL_RUNTIME.
+# Remove the previous source copies before the conditional copy
 # so a file deleted from the repository cannot keep influencing the mirror, and leave every other
 # mirror-local marker in these directories (experiments/.last-ship-gate, say) alone.
 rm -f \
@@ -83,6 +84,7 @@ rm -f \
   "$MIRROR/experiments/repo_knowledge.json" \
   "$MIRROR/data/feedback-snapshot.json" \
   "$MIRROR/config/coverage-baseline.json" \
+  "$MIRROR/config/closer_role_selection.json" \
   "$MIRROR/config/model_epochs.json"
 for snapshot in \
   experiments/hypotheses.json \
@@ -90,12 +92,19 @@ for snapshot in \
   experiments/repo_knowledge.json \
   data/feedback-snapshot.json \
   config/coverage-baseline.json \
+  config/test-shards.json \
   config/model_epochs.json; do
   if [[ -f "$SRC/$snapshot" ]]; then
     cp "$SRC/$snapshot" "$MIRROR/$snapshot"
     extra=$((extra + 1))
   fi
 done
+# Fixed flat native policy data is bound by the consuming Python source SHA.
+rm -f "$MIRROR/closer_role_selection.json"
+if [[ -f "$SRC/config/closer_role_selection.json" ]]; then
+  cp "$SRC/config/closer_role_selection.json" "$MIRROR/closer_role_selection.json"
+  extra=$((extra + 1))
+fi
 # verify.py's collection floor travels with the code. Without it a mirror run reports "floor unset",
 # and a silent drop in tests collected reads exactly like tests passing. (2026-08-21)
 if [[ -f "$SRC/.verify-floor.json" ]]; then
@@ -112,6 +121,17 @@ if git -C "$SRC" rev-parse --verify -q HEAD:scripts >/dev/null 2>&1; then
   git -C "$SRC" archive --format=tar HEAD scripts | { tar -x -C "$MIRROR" && cat >/dev/null; }
   chmod +x "$MIRROR/scripts/check_checks_reported.py"
   echo "scripts/ shipped from git HEAD ($(find "$MIRROR/scripts" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ') entries)"
+  extra=$((extra + 1))
+fi
+# Planner behavior is tested from its repository-relative path in both checkout and flat shapes.
+# Ship the tool from git alongside the tests that load it; working-tree edits are intentionally
+# excluded by the same committed-HEAD contract used for tests/ and scripts/.
+mkdir -p "$MIRROR/tools"
+rm -f "$MIRROR/tools/make_test_shards.py"
+if git -C "$SRC" rev-parse --verify -q HEAD:tools/make_test_shards.py >/dev/null 2>&1; then
+  git -C "$SRC" archive --format=tar HEAD tools/make_test_shards.py | {
+    tar -x -C "$MIRROR" && cat >/dev/null
+  }
   extra=$((extra + 1))
 fi
 # Campaign contracts are read by the campaign CLI and its acceptance tests in both shapes.

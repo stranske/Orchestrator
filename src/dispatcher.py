@@ -17,27 +17,174 @@ heartbeat unless --no-heartbeat). `--selftest` is fully offline.
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import hashlib
+import inspect
 import json
+import math
 import os
 import re
+import selectors
 import shlex
 import shutil
+import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import adapters
 import claims
+import closer_coding_delivery as _coding_delivery_source
+import closer_coding_session_runtime as _coding_session_runtime
 import credential_redaction
 import execution_profiles
 import feedback
 import provision
 import repo_knowledge
 import worktree_git
+
+# Loaded-source provenance marker, validated against physical signed closure.
+_LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+class _DataOnlyCommandOptions(TypedDict, total=False):
+    data_only: bool
+
+
+class _CompletionPersistencePending(RuntimeError):
+    """The provider finished, but its exact profile completion still needs accounting."""
+
+    def __init__(self, completion: dict):
+        super().__init__("completed offload profile accounting is pending")
+        self.completion = completion
+
+
+class _ProviderResultRetentionPending(RuntimeError):
+    """One actual invocation could not establish its durable result receipt."""
+
+    def __init__(self, result: dict):
+        super().__init__("provider result retention is pending; do not repeat invocation")
+        self.result = result
+
+
+def _retain_provider_result(
+    log_file: Path,
+    result: dict,
+    *,
+    profile_id: str | None,
+    attempt: int,
+    started_at: float,
+    completed_at: float,
+    run_cwd: Path,
+    process_cwd: Path,
+) -> Path:
+    """Create an immutable per-invocation result before exception-prone enrichment.
+
+    This receipt proves observed transport facts, never resolved model identity.
+    The explicit redaction opt-out keeps its existing return/log semantics, but
+    does not authorize another copy of unmasked free text in this new receipt.
+    """
+    _coding_session_runtime.bound_result(sys._getframe(), result)
+    original = json.dumps(result, sort_keys=True).encode()
+    disabled = credential_redaction.disabled()
+    receipt = {
+        "schema": "offload-provider-result/v1",
+        "run_id": result["run_id"],
+        "agent": result["agent"],
+        "profile_id": profile_id,
+        "cwd": str(run_cwd),
+        "process_cwd": str(process_cwd),
+        "log": str(log_file),
+        "attempt": attempt,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "exit": result["exit"],
+        "raw_exit": result.get("raw_exit", result["exit"]),
+        "outcome_uncertain": result.get("outcome_uncertain") is True,
+        "full_result_retained": not disabled,
+        "provider_result_sha256": hashlib.sha256(original).hexdigest(),
+    }
+    if disabled:
+        receipt.update(
+            retention_kind="bound_metadata_only",
+            omitted_free_text=True,
+            reason="credential_redaction_disabled",
+        )
+    else:
+        # Redact every string, including nested provider metadata. This is the
+        # existing redaction policy; no new credential source is consulted.
+        def masked(value):
+            if isinstance(value, str):
+                return credential_redaction.redact(value)
+            if isinstance(value, dict):
+                return {key: masked(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [masked(item) for item in value]
+            return value
+
+        receipt["result"] = masked(result)
+        receipt["retention_kind"] = "redacted_provider_result"
+        receipt["retained_result_sha256"] = hashlib.sha256(
+            json.dumps(receipt["result"], sort_keys=True).encode()
+        ).hexdigest()
+    raw = json.dumps(receipt, sort_keys=True).encode()
+    _coding_session_runtime.check_serialized(sys._getframe(), raw)
+    destination = log_file.with_suffix(f".provider-result-{attempt}.json")
+    temporary = None
+    try:
+        fd, temporary = tempfile.mkstemp(prefix=".provider-result-", dir=log_file.parent)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # link is create-only. A collision is a barrier, never an overwrite.
+        os.link(temporary, destination)
+        directory = os.open(log_file.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            # A private temporary orphan is recoverable. Cleanup must never
+            # shadow either the original write failure or a committed receipt.
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+    return destination
+
+
+def _persist_profile_completion(write, run_id: str, **fields) -> None:
+    """Retry only one idempotent UPDATE, never a provider or completion ledger append."""
+    deadline = time.monotonic() + 2.0
+    for attempt in range(8):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            write(run_id, **fields, lock_timeout_s=min(0.2, remaining))
+            return
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            locked = (
+                isinstance(code, int)
+                and (code & 255) in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+            ) or str(exc).lower() in {"database is locked", "database table is locked"}
+            if not locked:
+                raise
+        remaining = deadline - time.monotonic()
+        if attempt < 7 and remaining > 0:
+            time.sleep(min(0.05, remaining))
+    raise _CompletionPersistencePending(
+        {"operation": write.__name__, "run_id": run_id, "fields": fields, "reason": "sqlite_busy"}
+    )
+
 
 ORCH_DIR = Path(__file__).resolve().parent
 REAL_HOME = Path.home()
@@ -51,6 +198,17 @@ OFFLOAD_DIR = Path(
     os.environ.get("ORCH_OFFLOAD_DIR", Path.home() / ".codex" / "orchestrator" / "offloads")
 )
 AGENT_RUNTIME_DIR = Path(os.environ.get("ORCH_AGENT_RUNTIME_DIR", LOCAL_RUNTIME / "agent-runtime"))
+# Infrastructure delegates must not consume the registry-prefix opener slots.
+INFRA_REPOS = {"stranske/Workflows", "stranske/Orchestrator"}
+
+
+def _dispatch_branch(target: str, lane: str, agent: str, prefix: str | None) -> str:
+    repo, num = provision.parse_target(target)
+    prefix = prefix if prefix is not None else ("orch" if repo in INFRA_REPOS else agent)
+    prefix = prefix.rstrip("/")
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_][A-Za-z0-9_-]*)*", prefix):
+        raise ValueError("branch prefix must contain nonempty alphanumeric, '_' or '-' segments")
+    return f"{prefix}/issue-{num}" if num is not None else f"{prefix}/{lane}"
 
 
 def _env_int(name: str, default: int) -> int:
@@ -254,12 +412,20 @@ def build_prompt(
     return f"{body}\n\n{OWNER_QUESTION_PROTOCOL}"
 
 
-def _is_git_worktree(cwd: str | Path) -> bool:
-    res = subprocess.run(
-        worktree_git.hardened_argv(cwd, ["rev-parse", "--is-inside-work-tree"]),
-        capture_output=True,
-        text=True,
-    )
+def _is_git_worktree(cwd: str | Path, *, timeout: float | None = None) -> bool:
+    try:
+        res = subprocess.run(
+            worktree_git.hardened_argv(cwd, ["rev-parse", "--is-inside-work-tree"]),
+            capture_output=True,
+            text=True,
+            timeout=max(0.01, min(5.0, timeout)) if timeout is not None else None,
+        )
+    except subprocess.TimeoutExpired:
+        if timeout is not None:
+            raise TimeoutError(
+                "owned request window expired checking workspace provenance"
+            ) from None
+        return False
     return res.returncode == 0 and res.stdout.strip() == "true"
 
 
@@ -281,7 +447,9 @@ GH_READ_ONLY_RULE = (
 )
 
 
-def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> str:
+def _offload_prompt(
+    prompt: str, cwd: str | Path, agent: str | None = None, *, timeout: float | None = None
+) -> str:
     rules = [
         "OFFLOAD WORKSPACE RULES:",
         "- This is a synchronous offload; return the useful result to the orchestrator in stdout.",
@@ -301,7 +469,10 @@ def _offload_prompt(prompt: str, cwd: str | Path, agent: str | None = None) -> s
             "and PROCEED with your default — never wait."
         ),
     ]
-    if not _is_git_worktree(cwd):
+    is_worktree = (
+        _is_git_worktree(cwd, timeout=timeout) if timeout is not None else _is_git_worktree(cwd)
+    )
+    if not is_worktree:
         rules.insert(
             1, "- Non-git workspace: do not try to create commits, branches, pushes, or PRs."
         )
@@ -334,7 +505,58 @@ def _offload_ignore(_dir: str, names: list[str]) -> set[str]:
     return {name for name in names if name in heavy or name.endswith(".pyc")}
 
 
-def _isolate_offload_cwd(cwd: str | Path) -> Path:
+def _remove_owned_offload_partial(partial: Path, identity: tuple[int, int]) -> bool:
+    """Bound failed-copy deletion; a replaced path is never cleanup authority."""
+    try:
+        current = partial.lstat()
+    except FileNotFoundError:
+        return True
+    if partial.is_symlink() or (current.st_dev, current.st_ino) != identity:
+        return False
+    cleanup = (
+        "import os,shutil,stat,sys\n"
+        "path,device,inode=sys.argv[1:]\n"
+        "current=os.lstat(path)\n"
+        "if not stat.S_ISDIR(current.st_mode) or (current.st_dev,current.st_ino)!=(int(device),int(inode)): sys.exit(3)\n"
+        "shutil.rmtree(path)\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", cleanup, str(partial), *map(str, identity)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        child.communicate(timeout=2)
+    except subprocess.TimeoutExpired:
+        # One attempt against this helper's private group. A denial propagates;
+        # no alternate signal or in-process rmtree may bypass that fence.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.communicate(timeout=2)
+        return False
+    return child.returncode == 0 and not partial.exists() and not partial.is_symlink()
+
+
+def _offload_copier_terminal(proc) -> bool:
+    if proc.poll() is None:
+        return False
+    try:
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        raise
+    except OSError:
+        return False
+    return False
+
+
+def _isolate_offload_cwd(cwd: str | Path, *, timeout: float | None = None) -> Path:
+    if timeout is not None and timeout <= 0:
+        raise TimeoutError("bounded offload workspace copy has no request time remaining")
     src = adapters.workspace_path(cwd)
     if not src.is_dir():
         raise FileNotFoundError(f"offload cwd is not a directory: {src}")
@@ -343,10 +565,88 @@ def _isolate_offload_cwd(cwd: str | Path) -> Path:
     base = OFFLOAD_DIR / f"{stamp}-{src.name or 'workspace'}-{os.getpid()}"
     dest = base
     i = 1
-    while dest.exists():
+    while dest.exists() or (
+        timeout is not None and dest.with_name(dest.name + ".partial").exists()
+    ):
         i += 1
         dest = OFFLOAD_DIR / f"{base.name}-{i}"
-    shutil.copytree(src, dest, ignore=_offload_ignore)
+    if timeout is None:
+        shutil.copytree(src, dest, ignore=_offload_ignore)
+    else:
+        partial = dest.with_name(dest.name + ".partial")
+        partial.mkdir(mode=0o700)  # exclusive operation-owned destination
+        stat = partial.lstat()
+        partial_identity = (stat.st_dev, stat.st_ino)
+        copier = (
+            "import json,shutil,sys\n"
+            "src,dst,raw=sys.argv[1:]\n"
+            "heavy=set(json.loads(raw))\n"
+            "def ignore(_directory,names): return {name for name in names if name in heavy or name.endswith('.pyc')}\n"
+            "shutil.copytree(src,dst,ignore=ignore,dirs_exist_ok=True)\n"
+        )
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                copier,
+                str(src),
+                str(partial),
+                json.dumps(
+                    sorted(
+                        {
+                            ".git",
+                            ".venv",
+                            "venv",
+                            "node_modules",
+                            "__pycache__",
+                            ".pytest_cache",
+                            ".mypy_cache",
+                            ".ruff_cache",
+                            ".next",
+                            "dist",
+                            "build",
+                        }
+                    )
+                ),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            _stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            try:
+                proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                raise TimeoutError(
+                    "bounded offload workspace copy exceeded request window; "
+                    f"copier terminality unverified; partial retained: {partial}"
+                ) from None
+            removed = _offload_copier_terminal(proc) and _remove_owned_offload_partial(
+                partial, partial_identity
+            )
+            retained = (
+                "" if removed else f"; copier/cleanup unverified; partial retained: {partial}"
+            )
+            raise TimeoutError(
+                "bounded offload workspace copy exceeded request window" + retained
+            ) from None
+        if proc.returncode != 0:
+            removed = _offload_copier_terminal(proc) and _remove_owned_offload_partial(
+                partial, partial_identity
+            )
+            retained = (
+                "" if removed else f"; copier/cleanup unverified; partial retained: {partial}"
+            )
+            raise RuntimeError(
+                f"bounded offload workspace copy failed: {(stderr or '')[:500]}" + retained
+            )
+        os.replace(partial, dest)
     # Canonical like `src`: offload writes this path into gemini's `--add-dir` over the adapter's
     # own resolved value, so an OFFLOAD_DIR behind a symlink handed agy's guard, the GEMINI
     # ISOLATED WORKSPACE line and the run's target the unresolved spelling. (2026-10-02)
@@ -794,6 +1094,9 @@ def _gh_guard_exports() -> list[str]:
 
 def _agent_runtime_prelude(agent: str) -> str:
     """Shell exports for the child agent only; run this inside a subshell."""
+    from storage_lifecycle import owned_agent_tmpdir
+
+    owned_tmp = owned_agent_tmpdir(agent)
     base = _ensure_agent_runtime(agent)
     exports = [
         f"export ORCH_REAL_HOME={shlex.quote(str(REAL_HOME))}",
@@ -801,7 +1104,7 @@ def _agent_runtime_prelude(agent: str) -> str:
         f"export XDG_CACHE_HOME={shlex.quote(str(base / '.cache'))}",
         f"export XDG_CONFIG_HOME={shlex.quote(str(base / '.config'))}",
         f"export XDG_DATA_HOME={shlex.quote(str(base / '.local/share'))}",
-        f"export TMPDIR={shlex.quote(str(base / 'tmp'))}",
+        f"export TMPDIR={shlex.quote(str(owned_tmp if owned_tmp is not None else base / 'tmp'))}",
     ]
     # gh honours XDG_CONFIG_HOME, so the redirect above hid its hosts file from every agent whose
     # dispatcher exported neither GH_CONFIG_DIR nor GH_TOKEN (a delegate or offload started from a
@@ -902,6 +1205,8 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "selected_profile_id",
         "profile_decision",
         "requested_profile_id",
+        "selected_capability_id",
+        "selected_capability_version_id",
     }
     if not any(key in assignment for key in keys):
         return None
@@ -932,6 +1237,7 @@ def _routing_metadata(assignment: dict) -> dict | None:
         "capability_assignment_probability": assignment.get("capability_assignment_probability"),
         "capability_rng_seed": assignment.get("capability_rng_seed"),
         "capability_fallback": assignment.get("capability_fallback"),
+        "capability_dispatch_result": assignment.get("capability_dispatch_result"),
         "requested_profile_id": assignment.get("requested_profile_id"),
     }
     return {key: value for key, value in metadata.items() if value not in (None, "", [], {})}
@@ -946,8 +1252,27 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
              assignment is skipped, claim is freed by the caller) rather than crashing the tick.
     """
     agent, mode = assignment["agent"], assignment.get("mode")
+    from storage_lifecycle import StorageBlocked, owned_agent_tmpdir
+
+    try:
+        owned_agent_tmpdir(agent)
+    except StorageBlocked as exc:
+        return {
+            "error": str(exc),
+            "agent": agent,
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     target, task_type = assignment["target"], assignment["task_type"]
     lane = assignment.get("lane") or "opener"
+    branch = None
+    if lane != "closer":
+        try:
+            branch = _dispatch_branch(target, lane, agent, assignment.get("branch_prefix"))
+        except ValueError as exc:
+            return {"error": str(exc), "target": target, "agent": agent}
     # An assessing orchestrator passes its OWN crafted prompt; fall back to the template only
     # when none is given (the deterministic/router path).
     if assignment.get("prompt"):
@@ -967,6 +1292,13 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
             "Independent exact-head review runs after your writer exits; ordinary CI and "
             "review gates still apply."
         )
+    if branch:
+        prompt += (
+            f"\n\nBRANCH POLICY: Use the provisioned branch (default `{branch}`) for this work "
+            "and its PR; retain this prefix "
+            "if adding a descriptive slug. This dispatch policy overrides branch naming in "
+            "the task brief. Do not switch to another agent prefix."
+        )
     profile_id = assignment.get("selected_profile_id")
     selected_profile = execution_profiles.get_profile(profile_id) if profile_id else None
     model = adapters.model_identity(agent, mode, selected_profile)
@@ -975,7 +1307,11 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         worktree_missing = not (cwd / ".git").exists()
     else:
         try:
-            cwd = provision.provision(target, lane)
+            cwd = (
+                provision.provision(target, lane, branch)
+                if branch
+                else provision.provision(target, lane)
+            )
             worktree_missing = False
         except Exception as exc:  # clone/worktree/gh failure — skip this assignment
             return {"error": f"provision failed: {exc}", "target": target, "agent": agent}
@@ -1025,6 +1361,13 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # and must not be lost because the optional role layer raised. `assignment` may still be the
     # caller's dict here, so copy before mutating.
     assignment = dict(assignment)
+    if assignment.get("selected_capability_id"):
+        assignment["capability_fallback"] = "baseline"
+        assignment["capability_dispatch_result"] = {
+            "invoked": False,
+            "accepted": False,
+            "reason": "dry_run" if dry_run else "not_executed",
+        }
     assignment["capability_ids"] = list(
         dict.fromkeys(
             list(assignment.get("capability_ids") or [])
@@ -1072,7 +1415,17 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
     # so a plain `. file` would set a shell var the child agent never inherits (the auth failure
     # the first demo hit). set -a around the source exports CURSOR_API_KEY / tokens to the agent.
     auth_prelude = _auth_prelude(agent)
-    agent_prelude = _agent_runtime_prelude(agent)
+    try:
+        agent_prelude = _agent_runtime_prelude(agent)
+    except StorageBlocked as exc:
+        return {
+            "error": str(exc),
+            "agent": agent,
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     # _net_hygiene_prelude lives INSIDE the agent subshell (release runs outside it, on the real env).
     wrapped = (
         f"{path_prefix}; ({_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)})"
@@ -1082,6 +1435,7 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
         "mode": mode,
         "target": target,
         "lane": lane,
+        "branch": branch,
         "task_type": task_type,
         "model": model,
         "cwd": str(cwd),
@@ -1117,6 +1471,112 @@ def plan_dispatch(assignment: dict, *, dry_run: bool = False) -> dict | None:
 # capability's own heartbeat fires on, so a tag means "this ran" for exactly the reason the ledger
 # already records. Without the tag the capability records that it RAN and never how the work turned
 # out, which is what put both of these in `invoked_without_outcomes` with zero edges. (2026-08-21)
+def _invoke_selected_compiled_capability(d: dict) -> dict | None:
+    """Invoke supported selections after recording the run; keep refusal metadata explicit."""
+    routing = dict(d.get("routing_metadata") or {})
+    cap_id = routing.get("selected_capability_id")
+    if not cap_id:
+        return None
+    version_id = routing.get("selected_capability_version_id")
+    # Older or external callers may still forward a selection as exercised.
+    # Remove it before invocation; only a successful receipt can add it back.
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if cap_id in ids:
+        if versions and len(ids) != len(versions):
+            raise ValueError("capability identity/version lineage length mismatch")
+        d["capability_ids"] = [cid for cid in ids if cid != cap_id]
+        d["capability_version_ids"] = [
+            version for cid, version in zip(ids, versions) if cid != cap_id
+        ]
+
+    def fallback(reason: str, *, invoked: bool = False) -> dict:
+        result = {"invoked": invoked, "accepted": False, "reason": reason}
+        routing["capability_dispatch_result"] = result
+        routing["capability_fallback"] = "baseline"
+        d["routing_metadata"] = routing
+        return result
+
+    try:
+        import capabilities
+        import capability_lifecycle
+        import capability_targets
+
+        ledger = capabilities.load(capabilities.REG, create=False)
+        cap = ledger.get(cap_id)
+        if not cap:
+            return fallback("unknown_capability")
+        if not version_id or cap.get("capability_version_id") != version_id:
+            return fallback("selected_version_mismatch")
+        binding = capability_targets.get_binding(
+            version_id, registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY
+        )
+        if not binding:
+            return fallback("target_binding_missing")
+        # Workflow rails have a bounded producer and typed output consumer. Other
+        # target kinds need their own dispatch inputs and consumption seams.
+        if binding.get("kind") != "workflow":
+            return fallback("unsupported_target_kind")
+    except Exception as exc:
+        return fallback(f"target_lookup_failed:{type(exc).__name__}")
+    target = str(d.get("target") or "")
+    # Fail before any producer runs or consumption edge is written: a missing
+    # infrastructure version must not leave an accepted compiled edge for a
+    # run that never starts (issue #639).
+    ids = list(d.get("capability_ids") or [])
+    versions = list(d.get("capability_version_ids") or [])
+    if not versions:
+        versions = [str((ledger.get(cid) or {}).get("capability_version_id") or "") for cid in ids]
+    if len(ids) != len(versions):
+        raise ValueError("capability identity/version lineage length mismatch")
+    missing_versions = [cid for cid, version in zip(ids, versions) if cid != cap_id and not version]
+    if missing_versions:
+        raise ValueError(f"missing capability versions for {missing_versions}")
+    trigger = {
+        "target": target,
+        "task_type": d.get("task_type"),
+        "repository": target.split("#")[0] if "#" in target else target,
+        "lane": d.get("lane") or "opener",
+    }
+    try:
+        result = capability_lifecycle.invoke_compiled_target(
+            str(cap_id),
+            trigger=trigger,
+            target_run_id=str(d["run_id"]),
+            ledger_path=capabilities.REG,
+            target_registry_path=capability_lifecycle.DEFAULT_TARGET_REGISTRY,
+            inputs={},
+            expected_version_id=str(version_id),
+        )
+    except Exception as exc:
+        return fallback(f"invoke_failed:{type(exc).__name__}")
+    if not result.get("invoked") or not result.get("accepted"):
+        return fallback(
+            str(result.get("reason") or "output_not_consumed"),
+            invoked=bool(result.get("invoked")),
+        )
+    edge = result.get("causal_edge") or {}
+    if not result.get("consumer_ref") or not edge.get("source_event_id"):
+        return fallback("consumption_receipt_missing", invoked=True)
+    # Append the compiled pair only after a successful receipt.
+    pairs = [(cid, version) for cid, version in zip(ids, versions) if cid != cap_id]
+    pairs.append((str(cap_id), str(version_id)))
+    d["capability_ids"] = [cid for cid, _ in pairs]
+    d["capability_version_ids"] = [version for _, version in pairs]
+    routing.pop("capability_fallback", None)
+    routing["capability_dispatch_result"] = {
+        "invoked": True,
+        "accepted": True,
+        "capability_id": cap_id,
+        "capability_version_id": version_id,
+        "invocation_id": result["invocation_id"],
+        "consumer_ref": result["consumer_ref"],
+        **edge,
+    }
+    d["routing_metadata"] = routing
+    return result
+
+
 def _exercised_capability_ids(assignment: dict, agent: str) -> list[str]:
     out: list[str] = []
     # adapters.build_command: "The agy seat's runtime isolation (--gemini_dir + absolute
@@ -1240,12 +1700,34 @@ def _spawn(d: dict) -> int:
         # or leave an orphan execution_attempt.
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args,
+                    **{
+                        **run_kwargs,
+                        "routing_metadata": d["routing_metadata"],
+                        "capability_ids": d.get("capability_ids"),
+                        "capability_version_ids": d.get("capability_version_ids"),
+                    },
+                )
         except Exception:
             claims.release(d["target"], d["agent"])
             raise
     else:
         try:
             feedback.record_run(*run_args, **run_kwargs)
+            _invoke_selected_compiled_capability(d)
+            if (d.get("routing_metadata") or {}).get("selected_capability_id"):
+                feedback.record_run(
+                    *run_args,
+                    **{
+                        **run_kwargs,
+                        "routing_metadata": d["routing_metadata"],
+                        "capability_ids": d.get("capability_ids"),
+                        "capability_version_ids": d.get("capability_version_ids"),
+                    },
+                )
         except Exception as exc:
             adapters.record_ledger(
                 d["agent"],
@@ -1500,6 +1982,132 @@ def run(decision: dict, *, dry_run: bool = False, heartbeat: bool = True) -> dic
     return {"dry_run": dry_run, "launched": launched, "skipped": skipped, "count": len(launched)}
 
 
+_linked_pr_read_error: ContextVar[str] = ContextVar("linked_pr_read_error", default="")
+LINKED_PR_READ_TIMEOUT_S = 30
+
+
+def linked_open_prs(target: str) -> list[int] | None:
+    """Read all open PR links before a local claim; incomplete evidence is unknown.
+
+    One paginated REST listing supplies bodies/branches and one paginated GraphQL
+    operation supplies closing references. Never fall back to a GraphQL PR list.
+    The diagnostic is context-local so concurrent delegates cannot swap reasons.
+    """
+    _linked_pr_read_error.set("")
+    match = re.fullmatch(r"([^/\s]+)/([^/#\s]+)#([1-9][0-9]*)", target)
+    if not match:
+        _linked_pr_read_error.set("expected owner/repo#N")
+        return None
+    owner, name, number = match.groups()
+    repo = f"{owner}/{name}"
+
+    def read(args: list[str]) -> list:
+        result = subprocess.run(
+            ["gh", "api", *args, "--paginate", "--slurp"],
+            capture_output=True,
+            text=True,
+            timeout=LINKED_PR_READ_TIMEOUT_S,
+            check=False,
+        )
+        if result.returncode:
+            raise ValueError(f"gh exit {result.returncode}: {result.stderr.strip()}")
+        pages = json.loads(result.stdout)
+        if not isinstance(pages, list) or not pages:
+            raise ValueError("missing GitHub response pages")
+        return pages
+
+    def pr_number(value: Any) -> int:
+        if type(value) is not int or value <= 0:
+            raise ValueError("invalid PR/issue number")
+        return value
+
+    try:
+        rest_pages = read([f"repos/{repo}/pulls?state=open&per_page=100"])
+        linked = set()
+        rest_numbers = set()
+        closing = re.compile(
+            r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*"
+            rf"(?:#|{re.escape(repo)}#|https://github\.com/{re.escape(repo)}/issues/)"
+            rf"{number}\b",
+            re.IGNORECASE,
+        )
+        prefixes = "|".join(
+            re.escape(prefix)
+            for prefix in sorted({*AGENT_PERSONAS, "claude", "orch", "orchestrator"})
+        )
+        branch = re.compile(rf"^(?:{prefixes})/issue-{number}(-.*)?$")
+        for page in rest_pages:
+            if not isinstance(page, list):
+                raise ValueError("invalid REST PR page")
+            for pr in page:
+                n = pr_number(pr["number"])
+                body, head = pr["body"], pr["head"]["ref"]
+                if (body is not None and not isinstance(body, str)) or not isinstance(head, str):
+                    raise ValueError("invalid PR body or head branch")
+                rest_numbers.add(n)
+                if closing.search(body or "") or branch.fullmatch(head):
+                    linked.add(n)
+        query = """query($owner:String!,$name:String!,$endCursor:String){
+          repository(owner:$owner,name:$name){
+            pullRequests(states:OPEN,first:100,after:$endCursor){
+              pageInfo{hasNextPage endCursor}
+              nodes{number closingIssuesReferences(first:100){
+                pageInfo{hasNextPage} nodes{number repository{nameWithOwner}}
+              }}
+            }
+          }
+        }"""
+        graph_pages = read(
+            ["graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "name=" + name]
+        )
+        graph_numbers = set()
+        cursors = set()
+        for index, page in enumerate(graph_pages):
+            if page.get("errors"):
+                raise ValueError(f"GraphQL errors: {page['errors']}")
+            connection = page["data"]["repository"]["pullRequests"]
+            info = connection["pageInfo"]
+            if type(info["hasNextPage"]) is not bool:
+                raise ValueError("invalid GraphQL pagination")
+            if info["hasNextPage"] != (index < len(graph_pages) - 1):
+                raise ValueError("incomplete GraphQL PR pagination")
+            if info["hasNextPage"]:
+                cursor = info["endCursor"]
+                if not isinstance(cursor, str) or not cursor or cursor in cursors:
+                    raise ValueError("invalid GraphQL cursor")
+                cursors.add(cursor)
+            if not isinstance(connection["nodes"], list):
+                raise ValueError("invalid GraphQL PR nodes")
+            for pr in connection["nodes"]:
+                n = pr_number(pr["number"])
+                graph_numbers.add(n)
+                refs = pr["closingIssuesReferences"]
+                if refs["pageInfo"]["hasNextPage"] is not False:
+                    raise ValueError(f"incomplete closingIssuesReferences for PR #{n}")
+                if not isinstance(refs["nodes"], list):
+                    raise ValueError("invalid closing reference nodes")
+                for ref in refs["nodes"]:
+                    ref_number = pr_number(ref["number"])
+                    ref_repo = ref["repository"]["nameWithOwner"]
+                    if not isinstance(ref_repo, str):
+                        raise ValueError("invalid closing reference repository")
+                    if ref_number == int(number) and ref_repo.casefold() == repo.casefold():
+                        linked.add(n)
+        if rest_numbers != graph_numbers:
+            raise ValueError("open PR population changed between REST and GraphQL; retry")
+        return sorted(linked)
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as exc:
+        _linked_pr_read_error.set(str(exc))
+        return None
+
+
 def delegate(
     agent: str,
     target: str,
@@ -1509,6 +2117,7 @@ def delegate(
     task_type: str = "implement",
     profile_id: str | None = None,
     *,
+    branch_prefix: str | None = None,
     influenced_by_role_run_ids=None,
     influenced_by_skill_event_ids=None,
     influenced_by_workflow_ids=None,
@@ -1518,6 +2127,7 @@ def delegate(
     review_loop: bool = False,
     review_round: int = 1,
     review_run_id: str | None = None,
+    continue_pr: int | None = None,
 ) -> dict:
     """One ad-hoc delegation for the assessing orchestrator seat: claim + provision + spawn
     ONE cheap agent with the orchestrator's OWN crafted prompt (detached, PATH+auth+release
@@ -1558,6 +2168,22 @@ def delegate(
             return {"error": str(exc)}
         if requested_profile["agent"] != agent:
             return {"error": f"profile {profile_id} does not belong to {agent}"}
+    linked = linked_open_prs(target)
+    if linked is None:
+        reason = _linked_pr_read_error.get() or "GitHub linked-PR read failed"
+        return {"error": f"linked: unknown ({reason}); retry when GitHub access recovers"}
+    if (linked or continue_pr is not None) and (
+        type(continue_pr) is not int or continue_pr not in linked
+    ):
+        if not linked:
+            return {
+                "error": f"linked: continue_pr={continue_pr!r} is not an open PR linked to {target}"
+            }
+        names = ", ".join(f"#{n}" for n in linked)
+        return {
+            "error": f"linked: open PR {names or '(none)'} close {target}; "
+            "pass continue_pr=<N> to work on one of them"
+        }
     claims.reap_stale()
     if not claims.claim(target, agent):
         h = claims.holder(target)
@@ -1570,6 +2196,7 @@ def delegate(
         "mode": mode,
         "prompt": prompt,
         "feedback_mode": "local",
+        "branch_prefix": branch_prefix,
         "influenced_by_role_run_ids": list(influenced_by_role_run_ids or []),
         "influenced_by_skill_event_ids": list(influenced_by_skill_event_ids or []),
         "influenced_by_workflow_ids": list(influenced_by_workflow_ids or []),
@@ -1610,7 +2237,8 @@ def delegate(
     _delegate_lane_heartbeat(d)
     # Close the feedback loop for LOCAL delegations: re-record the decision keyed by mode='local'
     # (so outcomes.ingest_outcomes(mode='local') discovers it and resolves the resulting PR by the
-    # deterministic orchestrator/issue-N branch) with the REAL task_type; keep the agent-mode in
+    # recorded pushed branch, with deterministic candidates as fallback) with the REAL task_type;
+    # keep the agent-mode in
     # reasoning_level. INSERT OR REPLACE overwrites the generic row _spawn just wrote. Without this,
     # local-agent delegations never get a success/failure signal — only remote ones did.
     if not profile_id:
@@ -1647,7 +2275,7 @@ def delegate(
     }
 
 
-def _default_offload_timeout(agent: str, requested: int | None) -> int:
+def _default_offload_timeout(agent: str, requested: float | None) -> float:
     if requested is not None:
         return requested
     if agent == "gemini":
@@ -1672,7 +2300,7 @@ def _gemini_workspace_prompt(prompt: str, cwd: str | Path) -> str:
     )
 
 
-def _align_gemini_print_timeout(argv: list[str], timeout: int) -> None:
+def _align_gemini_print_timeout(argv: list[str], timeout: float) -> None:
     """Keep agy's print wait inside the outer deadline, retaining a receipt margin.
 
     agy accepts duration values in seconds (the CLI help documents ``0s`` as its
@@ -1788,14 +2416,23 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
     smearing across three.
     """
     try:
-        profiles = execution_profiles.profiles_for_agent(agent, transport="offload")
+        profiles = [
+            p
+            for p in execution_profiles.profiles_for_agent(agent, transport="offload")
+            if adapters.automatic_profile_within_cap(p)
+        ]
         if not profiles:
             return None
         if agent == "codex" and execution_profiles.codex_operator_tier_override(mode):
             return None
         if agent == "codex":
-            return execution_profiles.get_profile(
+            preferred_profile = execution_profiles.get_profile(
                 execution_profiles.default_codex_profile("offload", mode)
+            )
+            return (
+                preferred_profile
+                if adapters.automatic_profile_within_cap(preferred_profile)
+                else None
             )
         # HONOUR THE TIER THE CODEBASE ALREADY CHOSE. `DEFAULT_OFFLOAD_TIER` is "mid" with a comment
         # that had already diagnosed this exact waste -- "a codex offload burned Sol and a gemini
@@ -1803,11 +2440,13 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         # it: with only a Pro profile registered, every gemini read was routed to the reasoning
         # tier, and with three codex profiles it picked whichever sorted first.
         #
-        # Gemini's tier is a spend policy. A fresh automatic offload must use a
+        # Claude/Gemini tiers are spend policies. An automatic offload must use a
         # profile for the live resolved tier model, or refuse before dispatch.
         # Other agents retain the legacy fallback for their unprofiled/single-lane
         # paths.
         tier = mode if mode in adapters.MODEL_TIER_NAMES else adapters.DEFAULT_OFFLOAD_TIER
+        if agent == "claude":
+            tier = adapters.effective_tier(agent, tier)
         if agent == "gemini":
             tier = adapters.effective_tier(agent, tier)
             health = adapters.model_health(agent, tier)
@@ -1817,7 +2456,7 @@ def _select_offload_profile(agent: str, mode: str | None) -> dict | None:
         else:
             tier_model = adapters.resolve_model(agent, tier)
         tiered = [p for p in profiles if tier_model and p["requested_model"] == tier_model]
-        if agent == "gemini" and not tiered:
+        if agent in {"claude", "gemini"} and not tiered:
             return None
         candidate_ids = sorted(profile["profile_id"] for profile in (tiered or profiles))
         envelope = execution_profiles.select_profile(
@@ -1908,12 +2547,755 @@ def _offload_subject(
     return (caller, "caller") if caller else (None, None)
 
 
+def _public_process_observation(observation):
+    """Preserve process evidence without persisting raw prompt-bearing argv."""
+    if not isinstance(observation, dict):
+        return None
+    public = {k: v for k, v in observation.items() if k not in {"provider_argv", "transport_argv"}}
+    for name in ("provider_argv", "transport_argv"):
+        argv = observation.get(name)
+        if isinstance(argv, list) and all(isinstance(arg, str) for arg in argv):
+            public[name + "_argc"] = len(argv)
+            public[name + "_sha256"] = hashlib.sha256(
+                b"".join(os.fsencode(arg) + b"\0" for arg in argv)
+            ).hexdigest()
+    return public
+
+
+class ObservedOffloadFailure(RuntimeError):
+    """A transport was spawned before trusted observation failed; never prelaunch."""
+
+    def __init__(self, reason, observation, returncode, stdout, stderr):
+        super().__init__(reason)
+        self.observation, self.returncode = observation, returncode
+        self.stdout, self.stderr = stdout, stderr
+
+
+class _ObservedOutputLimit(RuntimeError):
+    pass
+
+
+@dataclass
+class _ControlledDataOnly:
+    limits: dict
+    profile: dict
+    root: Path
+    cwd: Path
+    operation_id: str
+    env: dict[str, str] = field(repr=False)
+    token: str = field(repr=False)
+    observation: dict | None = None
+    execution: dict | None = None
+    native_sources: dict = field(default_factory=dict)
+    pool_reservation: dict = field(default_factory=dict)
+    runtime_cleanup_attempted: bool = False
+
+
+_CONTROLLED_DATA_ONLY: ContextVar[_ControlledDataOnly | None] = ContextVar(
+    "controlled_data_only_execution", default=None
+)
+
+
+def _controlled_module_sha(module) -> str:
+    source = getattr(module, "__file__", None)
+    if not isinstance(source, str):
+        raise ValueError("controlled source module identity unavailable")
+    with Path(source).open("rb") as stream:
+        raw = stream.read(8_000_001)
+    if not raw or len(raw) > 8_000_000:
+        raise ValueError("controlled source module exceeds bound")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _controlled_cleanup_result(context: _ControlledDataOnly, result: dict) -> None:
+    """Finalize owned filesystem cleanup before immutable capture retention."""
+    if context.runtime_cleanup_attempted:
+        return
+    context.runtime_cleanup_attempted = True
+    try:
+        shutil.rmtree(context.root)
+    except OSError as error:
+        result["data_only_private_runtime"] = {
+            "path": str(context.root),
+            "cleanup": "held_owned_cleanup_unverified",
+            "error_type": type(error).__name__,
+        }
+        result["semantic_promotion_blocked"] = True
+        result["retry_safe"] = False
+    else:
+        result["data_only_private_runtime"] = {
+            "path": str(context.root),
+            "cleanup": "removed_owned_private_runtime",
+        }
+
+
+def _controlled_data_only_entry(function):
+    """Keep the existing accounting/supervisor body inside an explicit runtime.
+
+    The supplier is an integration dependency, not a credential reader. It must
+    return a context manager yielding an already-authorized existing OAuth token.
+    No environment fallback, shell sourcing, login or alternate auth is allowed.
+    """
+    signature = inspect.signature(function)
+
+    @functools.wraps(function)
+    def invoke(*args, **kwargs):
+        import closer_correction_maintenance
+
+        try:
+            closer_correction_maintenance.assert_offload_allowed()
+        except closer_correction_maintenance.MaintenanceUnknown:
+            return {
+                "agent": kwargs.get("agent", args[0] if args else None),
+                "exit": 2,
+                "output": "",
+                "run_id": None,
+                "error": "deterministic correction maintenance forbids provider offload",
+                "process_started": False,
+                "outcome_uncertain": False,
+                "retry_safe": False,
+            }
+        bound = signature.bind(*args, **kwargs)
+        values = bound.arguments
+        if values.get("data_only") is not True:
+            if any(
+                values.get(key) is not None
+                for key in ("data_only_limits", "trusted_auth_supplier", "data_only_operation_id")
+            ):
+                return {
+                    "agent": values.get("agent"),
+                    "exit": 2,
+                    "output": "",
+                    "run_id": None,
+                    "error": "controlled data-only inputs require data_only=True",
+                    "process_started": False,
+                    "outcome_uncertain": False,
+                }
+            return function(*args, **kwargs)
+
+        def refused(reason):
+            return {
+                "agent": values.get("agent"),
+                "exit": 2,
+                "output": "",
+                "run_id": None,
+                "error": reason,
+                "process_started": False,
+                "outcome_uncertain": False,
+                "unsupported_assessment_tool_boundary": True,
+            }
+
+        deadline = values.get("request_deadline_mono")
+        if deadline is not None and (
+            type(deadline) not in (int, float)
+            or not math.isfinite(deadline)
+            or deadline <= time.monotonic()
+        ):
+            return refused("original controlled request deadline exhausted or invalid")
+
+        # The existing global kill switch must precede private runtime/auth.
+        if os.environ.get("ORCH_OFFLOAD_DISABLED", "").strip() == "1":
+            return {**refused("offload disabled by ORCH_OFFLOAD_DISABLED=1"), "disabled": True}
+
+        import closer_data_only_execution as execution
+        import closer_resources
+        import closer_role_qualification as roles
+
+        try:
+            limits = execution.validate_limits(values.get("data_only_limits"))
+            supplier = values.get("trusted_auth_supplier")
+            if not callable(supplier):
+                raise ValueError("explicit trusted_auth_supplier is required")
+            if values.get("agent") != "claude" or values.get("mode") != "assess":
+                raise ValueError("controlled data-only requires explicit Claude assess")
+            if values.get("write_boundary") is not None:
+                raise ValueError("controlled data-only cannot inherit a generic write boundary")
+            if values.get("max_network_retries") not in (None, 0):
+                raise ValueError("data-only transport forbids automatic retries")
+            declared_timeout = values.get("timeout")
+            if declared_timeout is not None and (
+                type(declared_timeout) not in (int, float) or not 0 < declared_timeout <= 86400
+            ):
+                raise ValueError("invalid explicit controlled timeout")
+            expected_role = {
+                "closer_interpret": "bounded_classification",
+                "closer_correction_classification": "bounded_classification",
+                "closer_exception": "strong_criterion_adjudication",
+            }.get(values.get("task_type"))
+            if expected_role != limits["role"]:
+                raise ValueError("explicit task and execution limits role differ")
+            if not values.get("profile_id"):
+                raise ValueError("controlled data-only requires an explicit registered profile")
+            profile = roles.profile_identity(execution_profiles.get_profile(values["profile_id"]))
+            execution.profile_identity(profile)
+            # Size admission is deliberately hash-free: the borrowed token must
+            # be rejected from input before any prompt digest can be retained.
+            prompt = values["prompt"]
+            if (
+                type(prompt) is not str
+                or not prompt
+                or len(prompt.encode("utf-8")) > limits["max_prompt_bytes"]
+            ):
+                raise ValueError("complete controlled prompt exceeds explicit admission")
+            operation_id = values.get("data_only_operation_id")
+            if (
+                type(operation_id) is not str
+                or not operation_id
+                or len(operation_id) > 256
+                or any(ord(c) < 32 for c in operation_id)
+            ):
+                raise ValueError("exact original data-only operation identity is required")
+            if not all(
+                callable(values.get(key))
+                for key in (
+                    "process_starting_callback",
+                    "process_started_callback",
+                    "process_finished_callback",
+                )
+            ):
+                raise ValueError("existing observed process lifecycle callbacks are required")
+            if not closer_resources.finite_pool_has_active_reservations():
+                raise ValueError("original durable finite shared-pool reservation is required")
+            pool_binding = closer_resources.finite_pool_current_binding()
+            if pool_binding != {
+                "frontier_id": values.get("finite_frontier_id"),
+                "target": values.get("finite_frontier_target"),
+            }:
+                raise ValueError("original finite pool binding differs")
+            # A frontier/target alone does not prove the actual account lane.
+            slots = [
+                item
+                for item in closer_resources._pool_slots()
+                if item["record"].get("lane") == hashlib.sha256(b"claude-subscription").hexdigest()
+            ]
+            if len(slots) != 1:
+                raise ValueError("original Claude subscription lane is not held")
+            slot = slots[0]
+            record = slot["record"]
+            if (
+                slot["handle"].closed
+                or record.get("agent") != "claude"
+                or record.get("profile_id") != profile["profile_id"]
+                or record.get("frontier_id") != values.get("finite_frontier_id")
+                or record.get("target") != values.get("finite_frontier_target")
+            ):
+                raise ValueError("original pool profile or owner binding differs")
+            pool_reservation = {
+                key: record[key]
+                for key in (
+                    "reservation_id",
+                    "lane",
+                    "frontier_id",
+                    "target",
+                    "agent",
+                    "profile_id",
+                )
+            }
+            # Verify dependency availability before any runtime/credential effect.
+            from transport_saved_result import normalize_claude_result
+
+            if not callable(normalize_claude_result):
+                raise ValueError("reviewed native-result collector unavailable")
+        except (ImportError, OSError, ValueError, TypeError, KeyError):
+            return refused("controlled data-only contract/auth/lifecycle admission unavailable")
+
+        from storage_lifecycle import owned_agent_tmpdir
+
+        root = None
+        context = None
+        token = ""
+        entered_body = False
+        result = None
+        try:
+            parent = owned_agent_tmpdir("claude")
+            root = Path(tempfile.mkdtemp(prefix="controlled-data-only.", dir=parent)).resolve()
+            for leaf in ("home", "cache", "config", "tmp", "claude-config", "cwd"):
+                (root / leaf).mkdir(mode=0o700)
+            cwd = root / "cwd"
+            with supplier() as token:
+                if type(token) is not str or not token:
+                    raise ValueError("trusted borrower supplied no literal existing token")
+                if any(type(value) is str and token in value for value in values.values()):
+                    raise ValueError("borrowed credential entered retained caller metadata")
+                env = execution.isolated_environment(
+                    str(root), cwd=str(cwd), existing_oauth_token=token, limits=limits
+                )
+                context = _ControlledDataOnly(limits, profile, root, cwd, operation_id, env, token)
+                context.pool_reservation = pool_reservation
+                import transport_qualification
+                import transport_saved_result
+
+                context.native_sources = {
+                    name: _controlled_module_sha(module)
+                    for name, module in (
+                        ("transport_saved_result.py", transport_saved_result),
+                        ("transport_qualification.py", transport_qualification),
+                    )
+                }
+                marker = _CONTROLLED_DATA_ONLY.set(context)
+                try:
+                    entered_body = True
+                    result = function(*args, **kwargs)
+                    return result
+                finally:
+                    _CONTROLLED_DATA_ONLY.reset(marker)
+                    context.env.clear()
+                    context.token = ""
+        except Exception as error:
+            if not entered_body:
+                return refused("controlled auth/runtime unavailable:" + type(error).__name__)
+            raise
+        finally:
+            token = ""
+            # Preserve an uncertain invocation's private runtime for the existing
+            # owner/reconciler. A new call never reuses it or repeats its process.
+            if root is not None and not (context and context.runtime_cleanup_attempted):
+                if not entered_body or (result is not None and not result.get("outcome_uncertain")):
+                    try:
+                        shutil.rmtree(root)
+                    except OSError as cleanup_error:
+                        if result is not None:
+                            result["data_only_private_runtime"] = {
+                                "path": str(root),
+                                "cleanup": "held_owned_cleanup_unverified",
+                                "error_type": type(cleanup_error).__name__,
+                            }
+                            result["semantic_promotion_blocked"] = True
+                            result["retry_safe"] = False
+                elif result is not None:
+                    result["data_only_private_runtime"] = {
+                        "path": str(root),
+                        "cleanup": "deferred_original_outcome_unknown",
+                    }
+
+    return invoke
+
+
+def _finite_pool_fence(observation):
+    """Return only trusted process identity for an unverified finite cleanup."""
+    if not isinstance(observation, dict) or observation.get("cleanup_terminal") is not False:
+        return None
+    pgid = observation.get("process_group", observation.get("pid"))
+    if (
+        observation.get("source") != "trusted-popen-transport/v1"
+        or type(pgid) is not int
+        or pgid <= 1
+        or observation.get("pid") != pgid
+        or not isinstance(observation.get("os_started"), str)
+        or not observation.get("os_started")
+        or not isinstance(observation.get("run_id"), str)
+        or not observation.get("run_id")
+        or not isinstance(observation.get("finite_frontier_id"), str)
+        or not observation.get("finite_frontier_id")
+        or not isinstance(observation.get("finite_frontier_target"), str)
+        or not observation.get("finite_frontier_target")
+    ):
+        return None
+    return {
+        "process_group": pgid,
+        "run_id": observation["run_id"],
+        "agent": observation.get("agent"),
+        "profile_id": observation.get("profile_id"),
+        "process_birth": observation["os_started"],
+        "frontier_id": observation.get("finite_frontier_id"),
+        "target": observation.get("finite_frontier_target"),
+        "cleanup_terminal": False,
+        "cleanup_error": observation.get("cleanup_error"),
+    }
+
+
+def run_observed_offload(
+    command,
+    *,
+    callback,
+    observation,
+    cwd,
+    timeout,
+    stdin,
+    finished_callback=None,
+    starting_callback=None,
+    env=None,
+    output_limit=None,
+):
+    """Optional observed transport; default offloads retain subprocess.run.
+
+    The Popen handle names the transport shell, not a claimed provider process.
+    Its private process group permits bounded cleanup without signalling outsiders.
+    """
+    started = time.monotonic()
+    # Keep the before-Popen snapshot in module custody, outside callback-writable
+    # frame locals. Even legacy launches have a registry entry, so a missing
+    # record can never disable the final check.
+    _coding_delivery_source._begin(sys._getframe())
+    try:
+        if starting_callback is not None:
+            try:
+                starting_callback(observation)
+            except BaseException:
+                _coding_session_runtime.cancel_starting(sys._getframe())
+                raise
+        try:
+            _coding_delivery_source._verify(sys._getframe())
+            session_activation = _coding_session_runtime.activate(sys._getframe())
+            if session_activation is not None:
+                timeout, output_limit = session_activation
+                started = time.monotonic()
+            # Prelaunch guards spend the same original observation window.
+            # Refuse before creating a process when they exhaust it; a birth
+            # check after Popen is too late to prove that nothing started.
+            if (
+                starting_callback is not None
+                and timeout is not None
+                and time.monotonic() - started >= timeout
+            ):
+                raise subprocess.TimeoutExpired("source transport before spawn", timeout)
+            _coding_session_runtime.mark_submission(sys._getframe())
+            child = subprocess.Popen(
+                command,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                stdin=stdin,
+                start_new_session=True,
+                **({"env": env} if env is not None else {}),
+            )
+        except BaseException:
+            if starting_callback is not None:
+                import closer_resources
+
+                closer_resources.finite_pool_no_start(observation)
+            raise
+    finally:
+        _coding_delivery_source._revoke(sys._getframe())
+    observed = {
+        **observation,
+        "source": "trusted-popen-transport/v1",
+        "pid": child.pid,
+        "process_group": child.pid,
+        "transport_argv": list(command),
+    }
+    controlled_context = _CONTROLLED_DATA_ONLY.get() if env is not None else None
+    if controlled_context is not None:
+        controlled_context.observation = observed
+    token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "") if env is not None else ""
+
+    def safe_output(value):
+        if isinstance(value, bytes):
+            try:
+                text = value.decode("utf-8")
+            except UnicodeError:
+                observed["invalid_utf8_output"] = True
+                text = value.decode("utf-8", errors="replace")
+        else:
+            text = value or ""
+        if token and token in text:
+            observed["borrowed_credential_output"] = True
+            return text.replace(token, "[REDACTED]")
+        return text
+
+    captured = {"stdout": bytearray(), "stderr": bytearray()}
+    import closer_codex_owned_stdio as owned_stdio
+
+    owned_session = None
+
+    def bounded_communicate(timeout):
+        capture_bound = (
+            _coding_session_runtime.capture_limit(sys._getframe().f_back) or output_limit
+        )
+        deadline = time.monotonic() + timeout
+        count = 0
+        with selectors.DefaultSelector() as selector:
+            for pipe, kind in ((child.stdout, "stdout"), (child.stderr, "stderr")):
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ, kind)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                for key, _ in selector.select(min(0.05, remaining)):
+                    chunk = os.read(key.fileobj.fileno(), min(8192, capture_bound - count + 1))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        continue
+                    room = capture_bound - count
+                    captured[key.data].extend(chunk[:room])
+                    count += len(chunk)
+                    chunk = b""
+                    if count > capture_bound:
+                        raise _ObservedOutputLimit("controlled native output exceeds bound")
+        child.wait(timeout=max(0.001, deadline - time.monotonic()))
+        return tuple(safe_output(bytes(captured[k])) for k in ("stdout", "stderr"))
+
+    def stop_known_group():
+        cleanup_error = None
+        try:
+            # The trusted spawn observer can veto cleanup after an exact denial
+            # elsewhere in this same supervision. Never route around that denial.
+            if observed.get("cleanup_veto") is not None:
+                veto = observed["cleanup_veto"]
+                observed["cleanup_error"] = {
+                    **veto,
+                    "process_group": child.pid,
+                    "source": "trusted-supervisor-cleanup-veto/v1",
+                }
+            else:
+                os.killpg(child.pid, 9)
+        except OSError as exc:
+            cleanup_error = {
+                "type": type(exc).__name__,
+                "errno": exc.errno,
+                "reason": str(exc),
+                "process_group": child.pid,
+            }
+            observed["cleanup_error"] = cleanup_error
+        latest = ("", "")
+        group_absent_proven = False
+        cleanup_bound = _coding_session_runtime.cleanup_seconds(sys._getframe().f_back)
+        stop_deadline = time.monotonic() + min(
+            0.25 if cleanup_error else 2.0,
+            cleanup_bound if cleanup_bound is not None else 2.0,
+        )
+        while time.monotonic() < stop_deadline:
+            try:
+                if (
+                    _coding_session_runtime.capture_limit(sys._getframe().f_back) is not None
+                    or output_limit is not None
+                ):
+                    # Controlled output remains bounded even during failed cleanup.
+                    # Never switch back to communicate()'s unbounded buffers.
+                    cleanup_remaining = max(0.0, stop_deadline - time.monotonic())
+                    if cleanup_bound is not None:
+                        if cleanup_remaining <= 0:
+                            break
+                        child.wait(timeout=min(0.2, cleanup_remaining))
+                    else:
+                        child.wait(timeout=min(0.2, max(0.01, cleanup_remaining)))
+                    latest = tuple(safe_output(bytes(captured[k])) for k in ("stdout", "stderr"))
+                else:
+                    latest = child.communicate(
+                        timeout=min(0.2, max(0.01, stop_deadline - time.monotonic()))
+                    )
+            except subprocess.TimeoutExpired as pending:
+
+                def decoded(value):
+                    return (
+                        value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+                    )
+
+                latest = (decoded(pending.output), decoded(pending.stderr))
+                if cleanup_error:
+                    break
+                continue
+            try:
+                # The session/process group belongs exclusively to this Popen.
+                # Keep the callback (and its resource lease) alive until the
+                # whole owned group is gone, even when pipe holders outlive the
+                # direct shell process.
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                group_absent_proven = True
+                break
+            except OSError:
+                # An unreadable liveness result is not terminal proof. Bound
+                # cleanup and persist an uncertainty fence instead of waiting
+                # indefinitely on a denied or unreadable process-group probe.
+                cleanup_error = cleanup_error or {
+                    "type": "LivenessUnverified",
+                    "errno": None,
+                    "reason": "owned process-group liveness could not be verified",
+                    "process_group": child.pid,
+                }
+                observed["cleanup_error"] = cleanup_error
+                break
+            time.sleep(
+                min(0.05, max(0.0, stop_deadline - time.monotonic()))
+                if cleanup_bound is not None
+                else 0.05
+            )
+        if not group_absent_proven:
+            try:
+                os.killpg(child.pid, 0)
+            except ProcessLookupError:
+                group_absent_proven = True
+            except OSError:
+                pass
+        observed["cleanup_terminal"] = group_absent_proven and child.poll() is not None
+        observed["transport_returncode"] = child.returncode
+        return tuple(safe_output(value) for value in latest)
+
+    try:
+        try:
+            _coding_session_runtime.mark_started(sys._getframe())
+            birth_timeout = 5 if timeout is None else min(5, timeout - (time.monotonic() - started))
+            if birth_timeout <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            birth = subprocess.run(
+                ["ps", "-p", str(child.pid), "-o", "lstart="],
+                capture_output=True,
+                text=True,
+                timeout=birth_timeout,
+                check=True,
+            )
+            observed["os_started"] = birth.stdout.strip()
+            if not observed["os_started"]:
+                raise RuntimeError("transport birth identity unavailable")
+            callback(observed)
+            if _coding_session_runtime.supervision(sys._getframe()) is not None:
+                if observed.get("invalid_utf8_output"):
+                    raise _coding_session_runtime.SessionHeld(
+                        "coding-session native output encoding invalid"
+                    )
+        except BaseException as exc:
+            stdout, stderr = stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            if not isinstance(exc, Exception):
+                raise
+            detail = (
+                "original observation timeout exhausted"
+                if isinstance(exc, subprocess.TimeoutExpired)
+                else str(exc)
+            )
+            raise ObservedOffloadFailure(
+                f"trusted process observation failed after spawn: {type(exc).__name__}: {detail}",
+                observed,
+                child.poll(),
+                stdout,
+                stderr,
+            ) from exc
+        try:
+            remaining = None if timeout is None else max(0, timeout - (time.monotonic() - started))
+            supervision = _coding_session_runtime.supervision(sys._getframe())
+            if supervision is not None:
+                remaining, output_limit = supervision
+            import closer_codex_owned_stdio as owned_stdio
+
+            owned_session = owned_stdio.session_for_run(sys._getframe())
+            if owned_session is not None:
+                owned_stdio.bootstrap_from_run(sys._getframe())
+                # Reenter delivery custody for final admission without issuing a
+                # new runtime plan, process, pool request or timeout window.
+                _coding_delivery_source._begin(sys._getframe())
+                try:
+                    # Exact original callback in this same original run frame.
+                    starting_callback(observation)
+                    owned_stdio.write_first_turn_from_run(sys._getframe())
+                finally:
+                    _coding_delivery_source._revoke(sys._getframe())
+                stdout, stderr = owned_stdio.finish_turn_from_run(sys._getframe())
+            else:
+                stdout, stderr = (
+                    bounded_communicate(remaining)
+                    if (
+                        _coding_session_runtime.capture_limit(sys._getframe()) is not None
+                        or output_limit is not None
+                    )
+                    else child.communicate(timeout=remaining)
+                )
+        except owned_stdio.BootstrapHeld as exc:
+            stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            phase = owned_session.phase if owned_session is not None else "unissued"
+            observed["coding_bootstrap_phase"] = phase
+            raise ObservedOffloadFailure(str(exc), observed, child.poll(), "", "") from exc
+        except _ObservedOutputLimit as exc:
+            stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            raise ObservedOffloadFailure(
+                str(exc),
+                observed,
+                child.poll(),
+                safe_output(bytes(captured["stdout"])),
+                safe_output(bytes(captured["stderr"])),
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            expired = subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            expired.observation = observed
+            expired.raw_exit = child.poll()
+            raise expired from exc
+        except BaseException:
+            stop_known_group()
+            raise
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            observed["cleanup_terminal"] = child.poll() is not None
+            if observed["cleanup_terminal"] and finished_callback is not None:
+                finished_callback(observed)
+        except OSError as exc:
+            observed["cleanup_error"] = {
+                "type": type(exc).__name__,
+                "errno": exc.errno,
+                "reason": "owned process-group liveness could not be verified",
+                "process_group": child.pid,
+            }
+            stdout, stderr = stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            else:
+                raise ObservedOffloadFailure(
+                    "owned process group termination could not be verified",
+                    observed,
+                    child.returncode,
+                    stdout,
+                    stderr,
+                )
+        else:
+            stdout, stderr = stop_known_group()
+            if observed.get("cleanup_terminal") is True and finished_callback is not None:
+                finished_callback(observed)
+            else:
+                raise ObservedOffloadFailure(
+                    "owned process group remained after transport completion",
+                    observed,
+                    child.returncode,
+                    stdout,
+                    stderr,
+                )
+        if _coding_session_runtime.capture_limit(sys._getframe()) is not None and observed.get(
+            "invalid_utf8_output"
+        ):
+            raise ObservedOffloadFailure(
+                "coding-session native output encoding invalid",
+                observed,
+                child.returncode,
+                stdout,
+                stderr,
+            )
+        result = subprocess.CompletedProcess(
+            command, child.returncode, safe_output(stdout), safe_output(stderr)
+        )
+        if env is not None:
+            result.observation = observed
+        return result
+    finally:
+        try:
+            _coding_session_runtime.mark_terminal(sys._getframe(), observed, captured)
+        finally:
+            owned_stdio.clear_transient_native_data(sys._getframe())
+            token = ""
+            if env is not None:
+                env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+            for buffer in captured.values():
+                buffer.clear()
+            for pipe in (child.stdout, child.stderr, child.stdin):
+                if pipe is not None:
+                    pipe.close()
+
+
+@_controlled_data_only_entry
 def offload(
     agent: str,
     prompt: str,
     cwd: str = ".",
     mode: str | None = None,
-    timeout: int | None = None,
+    timeout: float | None = None,
     isolate: bool = False,
     profile_id: str | None = None,
     research_round: str | None = None,
@@ -1923,6 +3305,16 @@ def offload(
     attempt_receipt_callback=None,
     max_network_retries: int | None = None,
     attempt_started_callback=None,
+    process_started_callback=None,
+    process_starting_callback=None,
+    request_deadline_mono: float | None = None,
+    finite_frontier_id: str | None = None,
+    finite_frontier_target: str | None = None,
+    process_finished_callback=None,
+    data_only: bool = False,
+    data_only_limits: dict | None = None,
+    trusted_auth_supplier=None,
+    data_only_operation_id: str | None = None,
 ) -> dict:
     """SYNCHRONOUS offload for token conservation.
 
@@ -1969,6 +3361,45 @@ def offload(
     subject. A registered `research_round` supplies its own subject and wins. With neither, the run
     stays unkeyed and its subject falls back to `offload:<cwd>`, which pools every run from one
     directory; that is a statement that nothing named the work, never a guess at it."""
+    # Restriction only: typed v2 never consults personal session history, even
+    # when its source guard later refuses before issuing a runtime plan.
+    _coding_session_runtime.prepare_history_restriction(sys._getframe(), process_starting_callback)
+    # This opt-in is checked before any workspace, log, telemetry or provider work.
+    if type(data_only) is not bool:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": "data_only must be boolean",
+        }
+    controlled = _CONTROLLED_DATA_ONLY.get() if data_only else None
+    if data_only and controlled is None:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": "controlled data-only context unavailable",
+            "process_started": False,
+            "outcome_uncertain": False,
+        }
+    if data_only:
+        problem = adapters.data_only_problem(agent, mode)
+        if problem is None and max_network_retries not in (None, 0):
+            problem = "data-only transport forbids automatic retries"
+        if problem:
+            return {
+                "agent": agent,
+                "exit": 2,
+                "output": "",
+                "run_id": None,
+                "error": problem,
+                "process_started": False,
+                "outcome_uncertain": False,
+                "unsupported_assessment_tool_boundary": True,
+            }
+        max_network_retries = 0
     # KILL SWITCH. Added 2026-08-21 because the admission gate was literally right: nothing could
     # stop the fleet's most-used capability (~196 runs/week) without a code change. That is not
     # theoretical -- on 2026-08-08 the gemini model pin rotted and EVERY offload to that seat exited
@@ -1982,6 +3413,22 @@ def offload(
             "disabled": True,
             "exit": None,
             "run_id": None,
+        }
+    from storage_lifecycle import StorageBlocked, owned_agent_tmpdir
+
+    try:
+        owned_agent_tmpdir(agent)
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
         }
     if mode is None:
         # Offloads are advisory READS, but this defaulted to 'full' for years — so a codex offload
@@ -2006,7 +3453,35 @@ def offload(
     # tick (ORCH_CAPABILITY_HEARTBEATS), so tests and manual runs stay silent. Never allowed to
     # raise: recording that a capability ran must not be able to prevent the work. (2026-08-09)
     _capability_heartbeat("invocation", agent=agent, mode=mode)
-    timeout = _default_offload_timeout(agent, timeout)
+    timeout = (
+        min(timeout, controlled.limits["timeout_seconds"])
+        if controlled is not None and timeout is not None
+        else (
+            controlled.limits["timeout_seconds"]
+            if controlled is not None
+            else _default_offload_timeout(agent, timeout)
+        )
+    )
+
+    def remaining_request_time() -> float | None:
+        if request_deadline_mono is None:
+            return timeout
+        remaining = request_deadline_mono - time.monotonic()
+        if timeout is not None:
+            remaining = min(remaining, float(timeout))
+        return remaining
+
+    if request_deadline_mono is not None:
+        timeout = remaining_request_time()
+        if timeout is None or timeout <= 0:
+            return {
+                "agent": agent,
+                "exit": 124,
+                "output": "",
+                "error": "owned request window expired before offload preparation",
+                "run_id": None,
+                "outcome_uncertain": False,
+            }
     # DELIBERATELY no write_heartbeat() here. The heartbeat makes the legacy opener/closer cron lanes
     # YIELD for 15 min (handoff-prerun.sh yield-guard), which is only warranted for fleet-MUTATING
     # dispatch — run()/delegate(), orchestrate.sh --active, orchestrate-seat.sh. An offload is read-only
@@ -2021,11 +3496,22 @@ def offload(
     # with cwd `/`, so a role's `cwd="."` handed codex, agy and cursor the whole disk 1,521 times,
     # and an isolated copy of `/` would copy the disk. The run still starts, logged loudly.
     try:
-        source_cwd, relocated = adapters.agent_workspace(cwd, agent=agent)
+        source_cwd, relocated = (
+            (controlled.cwd, None)
+            if controlled is not None
+            else adapters.agent_workspace(cwd, agent=agent)
+        )
         # A relocated run's scratch dir is already its own, empty and unshared, so it is not copied:
         # a copy would tell the agent one directory and grant it another.
-        copied = isolate and relocated is None
-        run_cwd = _isolate_offload_cwd(source_cwd) if copied else source_cwd
+        copied = isolate and relocated is None and controlled is None
+        run_cwd = (
+            _isolate_offload_cwd(
+                source_cwd,
+                timeout=remaining_request_time() if request_deadline_mono is not None else None,
+            )
+            if copied
+            else source_cwd
+        )
     except Exception as exc:
         return {"agent": agent, "exit": 2, "output": "", "error": str(exc)}
     if relocated:
@@ -2064,8 +3550,29 @@ def offload(
             + ", ".join(boundary[0])
             + " is otherwise read-only to you, and a write there fails with 'Operation not permitted'."
         )
-    prepared_prompt = _offload_prompt(prompt, run_cwd, agent)
-    if relocated:
+    timeout = remaining_request_time()
+    if timeout is None or timeout <= 0:
+        return {
+            "agent": agent,
+            "exit": 124,
+            "output": "",
+            "error": "owned request window expired during offload preparation",
+            "cwd": str(run_cwd),
+            "process_cwd": str(proc_cwd),
+            "isolated_cwd": str(run_cwd) if isolate else None,
+            "run_id": None,
+            "outcome_uncertain": False,
+        }
+    prepared_prompt = (
+        prompt
+        if data_only
+        else (
+            _offload_prompt(prompt, run_cwd, agent, timeout=timeout)
+            if request_deadline_mono is not None
+            else _offload_prompt(prompt, run_cwd, agent)
+        )
+    )
+    if relocated and not data_only:
         prepared_prompt = f"{prepared_prompt}\n{_relocated_workspace_rule(relocated)}"
     profile = execution_profiles.get_profile(profile_id) if profile_id else automatic_profile
     if profile is None:
@@ -2109,14 +3616,30 @@ def offload(
     # out of bash's ``-lc`` argument and the provider's argv while leaving the established compact
     # print-mode transport untouched. Other adapters retain their qualified transport until their
     # own stdin protocol is covered by an equivalent regression.
-    prompt_via_stdin = (
+    prompt_via_stdin = data_only or (
         agent == "gemini"
         and len(prepared_prompt.encode("utf-8")) > GEMINI_STREAM_PROMPT_THRESHOLD_BYTES
     )
     command_prompt = "" if prompt_via_stdin else prepared_prompt
     # Refuse missing login before allocating a private prompt or recording a started invocation.
-    muse_prelude = _agent_runtime_prelude(agent) if agent == "muse" else None
+    try:
+        muse_prelude = (
+            _agent_runtime_prelude(agent) if agent == "muse" and controlled is None else None
+        )
+    except StorageBlocked as exc:
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
     muse_prompt = adapters.muse_prompt_file(command_prompt) if agent == "muse" else None
+    data_only_options: _DataOnlyCommandOptions = {"data_only": True} if data_only else {}
     argv = (
         adapters.build_command(
             agent,
@@ -2126,6 +3649,7 @@ def offload(
             profile=profile,
             transport="offload",
             prompt_via_stdin=prompt_via_stdin,
+            **data_only_options,
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
@@ -2144,10 +3668,46 @@ def offload(
                 else None
             ),
             prompt_via_stdin=prompt_via_stdin,
+            **data_only_options,
             prompt_file=muse_prompt,
             write_roots=boundary[1][1:] if boundary and agent == "codex" else None,
         )
     )  # raises ValueError on unknown agent
+    if controlled is not None:
+        import closer_data_only_execution as execution
+        import closer_role_qualification as roles
+
+        if profile is None or roles.profile_identity(profile) != controlled.profile:
+            raise ValueError("registered execution profile drifted during controlled preparation")
+        expected_argv = execution.expected_argv(
+            argv[0], controlled.profile, limits=controlled.limits
+        )
+        if argv not in (expected_argv, expected_argv[:-4]):
+            raise ValueError("adapter argv differs from controlled execution contract")
+        argv = expected_argv
+        sources = {
+            "adapters.py": _controlled_module_sha(adapters),
+            "dispatcher.py": _controlled_module_sha(sys.modules[__name__]),
+            "closer_data_only_execution.py": _controlled_module_sha(execution),
+        }
+        controlled_timeout = remaining_request_time()
+        if controlled_timeout is None or controlled_timeout <= 0:
+            raise ValueError("controlled request window expired before log allocation")
+        controlled.execution = execution.validate_launch(
+            agent=agent,
+            profile=controlled.profile,
+            binary_path=argv[0],
+            binary_sha256=adapters.DATA_ONLY_CLAUDE_SHA256,
+            argv=argv,
+            env=controlled.env,
+            cwd=str(proc_cwd),
+            private_root=str(controlled.root),
+            response_protocol=execution.NATIVE_JSON,
+            source_sha256=sources,
+            limits=controlled.limits,
+            prompt=prepared_prompt,
+            timeout_seconds=controlled_timeout,
+        )
     if agent == "gemini" and "--add-dir" in argv:
         argv[argv.index("--add-dir") + 1] = str(run_cwd)
         _align_gemini_print_timeout(argv, timeout)
@@ -2175,25 +3735,83 @@ def offload(
             argv = adapters.apply_write_boundary(agent, argv, *boundary)
         except Exception as exc:
             return {"agent": agent, "exit": 2, "output": "", "error": str(exc), "run_id": None}
-    auth_prelude = _auth_prelude(agent)
-    agent_prelude = muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
-    wrapped = (
-        f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
+    import closer_coding_route_v2
+
+    coding_route = closer_coding_route_v2.prepare(sys._getframe(), argv, str(proc_cwd), profile)
+    if coding_route is not None:
+        argv = list(coding_route.provider_argv)
+    auth_prelude = (
+        "" if controlled is not None or coding_route is not None else _auth_prelude(agent)
     )
-    stream_prompt = adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
-    if agent == "gemini":
+    try:
+        agent_prelude = (
+            ""
+            if controlled is not None or coding_route is not None
+            else muse_prelude if muse_prelude is not None else _agent_runtime_prelude(agent)
+        )
+    except StorageBlocked as exc:
+        if muse_prompt is not None:
+            muse_prompt.unlink(missing_ok=True)
+        return {
+            "agent": agent,
+            "exit": 2,
+            "output": "",
+            "run_id": None,
+            "error": str(exc),
+            "storage_context_refused": True,
+            "process_started": False,
+            "outcome_uncertain": False,
+            "next_trigger": "reconcile_owned_storage_context",
+        }
+    wrapped = (
+        ""
+        if controlled is not None or coding_route is not None
+        else (
+            f"{_path_prefix()}; {_net_hygiene_prelude()}{agent_prelude}{auth_prelude}{shlex.join(argv)}"
+        )
+    )
+    if coding_route is not None:
+        wrapped = coding_route.transport_argv[-1]
+    # Immutable source preparation, before any attempt callback can run. Keep
+    # provider argv and wrapped shell transport together without parsing shell.
+    _coding_prepared = (
+        (
+            prepared_prompt.encode("utf-8"),
+            tuple(argv),
+            wrapped,
+            str(proc_cwd),
+            json.dumps(profile, sort_keys=True, separators=(",", ":")),
+        )
+        if agent == "codex" and effective_profile_id == "codex-6.1-sol-high" and not data_only
+        else None
+    )
+    stream_prompt = (
+        prepared_prompt
+        if data_only
+        else adapters.gemini_stream_prompt(prepared_prompt) if prompt_via_stdin else None
+    )
+    if agent == "gemini" or data_only:
         content_bytes = prepared_prompt.encode("utf-8")
         transport_payload = stream_prompt if stream_prompt is not None else prepared_prompt
         transport_bytes = transport_payload.encode("utf-8")
         request_metadata = {
             "transport": (
-                "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
+                "claude-native-json-stdin/v1"
+                if data_only
+                else "agy-stream-json-stdin" if stream_prompt is not None else "agy-print-argument"
             ),
             "content_utf8_bytes": len(content_bytes),
             "content_sha256": hashlib.sha256(content_bytes).hexdigest(),
             "transport_utf8_bytes": len(transport_bytes),
             "transport_sha256": hashlib.sha256(transport_bytes).hexdigest(),
+            **(
+                {"data_only": True, "cli_sha256": adapters.DATA_ONLY_CLAUDE_SHA256}
+                if data_only
+                else {}
+            ),
         }
+        if controlled is not None:
+            request_metadata["execution"] = controlled.execution
     else:
         request_metadata = None
     target = f"offload:{run_cwd}"
@@ -2389,27 +4007,42 @@ def offload(
             probe: dict[str, str | None] = (
                 {"model": observed_model, "reason": None}
                 if observed_model
-                else adapters.cli_reported_model(
-                    agent, run_cwd, started_ts=started_ts, log_file=str(logf)
+                else (
+                    {
+                        "model": None,
+                        "reason": (
+                            "coding-session own capture model identity unavailable"
+                            if _coding_session_runtime.history_restricted(sys._getframe())
+                            else "controlled native model identity unavailable"
+                        ),
+                    }
+                    if controlled is not None
+                    or _coding_session_runtime.history_restricted(sys._getframe())
+                    else adapters.cli_reported_model(
+                        agent, run_cwd, started_ts=started_ts, log_file=str(logf)
+                    )
                 )
             )
             resolved_model = probe.get("model")
+            completed_ts = int(time.time())
             if resolved_model:
-                feedback.complete_profile_attempt(
+                _persist_profile_completion(
+                    feedback.complete_profile_attempt,
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     resolved_provider=profile["provider"],
                     resolved_model=resolved_model,
-                    completed_ts=int(time.time()),
+                    completed_ts=completed_ts,
                 )
             else:
-                feedback.complete_profile_attempt_unresolved(
+                _persist_profile_completion(
+                    feedback.complete_profile_attempt_unresolved,
                     run_id,
                     selected_profile_id=profile["profile_id"],
                     fallback_reason=(
                         f"resolved_model_not_reported_by_offload:{probe.get('reason') or 'unknown'}"
                     )[:200],
-                    completed_ts=int(time.time()),
+                    completed_ts=completed_ts,
                 )
         # Instant meter (2026-07-03 audit F2): don't wait a day for ledger_reconcile to pair the
         # ndjson events — the offload runs synchronously, so latency is known RIGHT NOW. Muse is an
@@ -2448,6 +4081,68 @@ def offload(
 
     attempt_stderr = ""
 
+    def _cleanup_result_artifacts() -> list[str]:
+        # New retention barriers still owe the existing prompt removal/log scrub.
+        # Cleanup failures must not erase the provider's original uncertain result.
+        errors = []
+        if muse_prompt is not None:
+            try:
+                muse_prompt.unlink(missing_ok=True)
+            except OSError as exc:
+                errors.append("muse_prompt:" + type(exc).__name__)
+        if agy_log is not None:
+            try:
+                scrub = credential_redaction.scrub_file(agy_log)
+                if scrub.get("status") in {"error", "too_large"}:
+                    errors.append("agy_log:" + str(scrub["status"]))
+            except OSError as exc:
+                errors.append("agy_log:" + type(exc).__name__)
+        return errors
+
+    def _retain_attempt_result(result: dict) -> None:
+        _coding_session_runtime.bound_result(sys._getframe(), result)
+        if controlled is not None and not result.get("outcome_uncertain"):
+            _controlled_cleanup_result(controlled, result)
+        try:
+            receipt_path = _retain_provider_result(
+                logf,
+                result,
+                profile_id=effective_profile_id,
+                attempt=attempt,
+                started_at=attempt_started,
+                completed_at=time.time(),
+                run_cwd=run_cwd,
+                process_cwd=proc_cwd,
+            )
+            if controlled is not None:
+                with receipt_path.open("rb") as receipt_stream:
+                    receipt_bytes = receipt_stream.read(1_048_577)
+                    receipt_stat = os.fstat(receipt_stream.fileno())
+                if len(receipt_bytes) > 1_048_576 or receipt_stat.st_size != len(receipt_bytes):
+                    raise ValueError("persisted provider receipt exceeds bound or changed")
+                result["provider_result_ref"] = {
+                    "path": str(receipt_path),
+                    "sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+                    "bytes": len(receipt_bytes),
+                }
+        except (OSError, ValueError, TypeError) as exc:
+            actual_exit = result.get("raw_exit", result.get("exit"))
+            held = {
+                **result,
+                "exit": 70,
+                "raw_exit": actual_exit,
+                "provider_completed": actual_exit == 0 and not result.get("outcome_uncertain"),
+                "outcome_uncertain": True,
+                "outcome_status": "uncertain",
+                "retry_safe": False,
+                "error": "provider_result_retention_failed:" + type(exc).__name__,
+            }
+            if cleanup_errors := _cleanup_result_artifacts():
+                held["cleanup_errors"] = cleanup_errors
+            raise _ProviderResultRetentionPending(held) from exc
+
+    data_only_cleanup_errors = []
+
     def _run_offload_attempt() -> dict:
         # `nonlocal`, because the model this attempt observes must reach `_record_complete` in the
         # ENCLOSING scope. Without it the assignment below made a local that the completion never
@@ -2458,13 +4153,37 @@ def offload(
         error: str | None
         attempt_stderr = ""
         stream_path: Path | None = None
+        stream_identity = None
 
         def _cleanup_stream() -> None:
             if stream_path is not None:
                 try:
                     stream_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except OSError as error:
+                    if data_only:
+                        # A failed unlink must not silently leave the input behind.
+                        # Scrub only our original regular inode; never a replacement.
+                        scrubbed = False
+                        try:
+                            fd = os.open(stream_path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                            try:
+                                info = os.fstat(fd)
+                                if (info.st_dev, info.st_ino) != stream_identity:
+                                    raise OSError("private input inode changed")
+                                os.ftruncate(fd, 0)
+                                os.fsync(fd)
+                                scrubbed = True
+                            finally:
+                                os.close(fd)
+                        except OSError:
+                            pass
+                        data_only_cleanup_errors.append(
+                            {
+                                "error": type(error).__name__,
+                                "input_scrubbed": scrubbed,
+                                "path": str(stream_path),
+                            }
+                        )
 
         try:
             attempt_wrapped = wrapped
@@ -2472,11 +4191,42 @@ def offload(
                 # mkstemp creates mode 0600. The shell only receives this controlled path as a
                 # redirection target, so prompt bytes never become shell syntax or argv bytes.
                 fd, raw_path = tempfile.mkstemp(
-                    prefix=f"offload-prompt.{agent}.", suffix=".ndjson", dir=DISPATCH_LOG_DIR
+                    prefix=f"offload-prompt.{agent}.",
+                    suffix=".txt" if data_only else ".ndjson",
+                    dir=DISPATCH_LOG_DIR,
                 )
                 stream_path = Path(raw_path)
+                info = os.fstat(fd)
+                stream_identity = (info.st_dev, info.st_ino)
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as prompt_file:
                     prompt_file.write(stream_prompt)
+            if data_only:
+                try:
+                    problem = adapters.data_only_problem(agent, mode)
+                    if not problem and adapters._data_only_claude_binary() != argv[0]:
+                        problem = "data-only CLI identity changed before dispatch"
+                except (OSError, ValueError) as exc:
+                    problem = f"{type(exc).__name__}: {exc}"
+                if problem:
+                    # The start ledger already exists, but no process callback
+                    # or spawn occurred. Return through normal result retention
+                    # and completion rather than leaving a stranded start row.
+                    _cleanup_stream()
+                    return {
+                        "agent": agent,
+                        "exit": 2,
+                        "output": "",
+                        "error": problem,
+                        "run_id": run_id,
+                        "model": model,
+                        "log": str(logf),
+                        "cwd": str(run_cwd),
+                        "process_cwd": str(proc_cwd),
+                        "request_metadata": request_metadata,
+                        "process_started": False,
+                        "outcome_uncertain": False,
+                        "unsupported_assessment_tool_boundary": True,
+                    }
             if attempt_started_callback is not None:
                 _notify_attempt(attempt_started_callback, {"run_id": run_id, "agent": agent})
         except BaseException:
@@ -2485,30 +4235,165 @@ def offload(
             _cleanup_stream()
             raise
         try:
-            proc = subprocess.run(
-                [
-                    "bash",
-                    "-lc",
+            attempt_timeout = remaining_request_time()
+            if attempt_timeout is not None and attempt_timeout <= 0:
+                raise subprocess.TimeoutExpired("owned offload request", 0)
+            if controlled is not None:
+                import closer_data_only_execution as execution
+
+                if stream_path is None:
+                    raise ValueError("controlled stdin payload is missing")
+                if (
+                    controlled.execution is None
+                    or request_metadata is None
+                    or attempt_timeout is None
+                ):
+                    raise ValueError("controlled execution binding unavailable")
+                controlled.execution = execution.validate_launch(
+                    agent=agent,
+                    profile=controlled.profile,
+                    binary_path=argv[0],
+                    binary_sha256=adapters.DATA_ONLY_CLAUDE_SHA256,
+                    argv=argv,
+                    env=controlled.env,
+                    cwd=str(proc_cwd),
+                    private_root=str(controlled.root),
+                    response_protocol=execution.NATIVE_JSON,
+                    source_sha256=controlled.execution["binding"]["source_sha256"],
+                    limits=controlled.limits,
+                    prompt=prepared_prompt,
+                    timeout_seconds=attempt_timeout,
+                )
+                request_metadata["execution"] = controlled.execution
+                with stream_path.open("rb") as private_stdin:
+                    proc = run_observed_offload(
+                        argv,
+                        callback=process_started_callback,
+                        observation={
+                            "run_id": run_id,
+                            "agent": agent,
+                            "profile_id": profile_id,
+                            "provider_argv": list(argv),
+                            "operation_id": controlled.operation_id,
+                            "task_type": task_type,
+                            "finite_frontier_id": finite_frontier_id,
+                            "finite_frontier_target": finite_frontier_target,
+                            "data_only_execution_binding_sha256": controlled.execution[
+                                "binding_sha256"
+                            ],
+                        },
+                        cwd=str(proc_cwd),
+                        timeout=attempt_timeout,
+                        stdin=private_stdin,
+                        env=controlled.env,
+                        output_limit=controlled.limits["max_native_result_bytes"],
+                        finished_callback=process_finished_callback,
+                        starting_callback=process_starting_callback,
+                    )
+            elif process_started_callback is None:
+                proc = subprocess.run(
+                    [
+                        "bash",
+                        "-lc",
+                        (
+                            f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                            if stream_path is not None
+                            else attempt_wrapped
+                        ),
+                    ],
+                    cwd=str(proc_cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=attempt_timeout,
+                    # The shell redirection above replaces this with the private NDJSON file for a
+                    # large Gemini packet. Every other adapter must still never inherit a caller TTY.
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                proc = run_observed_offload(
                     (
-                        f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
-                        if stream_path is not None
-                        else attempt_wrapped
+                        list(coding_route.transport_argv)
+                        if coding_route is not None
+                        else [
+                            "bash",
+                            "-lc",
+                            (
+                                f"{attempt_wrapped} < {shlex.quote(str(stream_path))}"
+                                if stream_path is not None
+                                else attempt_wrapped
+                            ),
+                        ]
                     ),
-                ],
-                cwd=str(proc_cwd),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                # The shell redirection above replaces this with the private NDJSON file for a
-                # large Gemini packet. Every other adapter must still never inherit a caller TTY.
-                stdin=subprocess.DEVNULL,
-            )
-        except subprocess.TimeoutExpired:
+                    callback=process_started_callback,
+                    observation={
+                        "run_id": run_id,
+                        "agent": agent,
+                        "profile_id": profile_id,
+                        "provider_argv": list(argv),
+                        **(
+                            {"finite_frontier_id": finite_frontier_id} if finite_frontier_id else {}
+                        ),
+                        **(
+                            {"finite_frontier_target": finite_frontier_target}
+                            if finite_frontier_target
+                            else {}
+                        ),
+                    },
+                    cwd=str(proc_cwd),
+                    timeout=attempt_timeout,
+                    stdin=(
+                        subprocess.PIPE
+                        if type(coding_route).__name__ == "BootstrapRoute"
+                        and type(coding_route).__module__ == "closer_codex_owned_stdio"
+                        else subprocess.DEVNULL
+                    ),
+                    finished_callback=process_finished_callback,
+                    starting_callback=process_starting_callback,
+                    env=dict(coding_route.environment) if coding_route is not None else None,
+                )
+        except ObservedOffloadFailure as exc:
+            return {
+                "agent": agent,
+                "exit": 70,
+                "raw_exit": exc.returncode,
+                "output": (
+                    "" if controlled is not None else credential_redaction.redact(exc.stdout or "")
+                ),
+                **(
+                    {"partial_native_stdout": credential_redaction.redact(exc.stdout or "")}
+                    if controlled is not None
+                    else {}
+                ),
+                "stderr_tail": credential_redaction.redact(exc.stderr or "")[-800:],
+                "error": credential_redaction.redact(str(exc)),
+                "run_id": run_id,
+                "log": str(logf),
+                "process_started": True,
+                "process_observation": _public_process_observation(exc.observation),
+                "outcome_uncertain": True,
+                "outcome_status": "uncertain",
+                "retry_safe": False,
+                **(
+                    {"finite_pool_fence": fence}
+                    if (fence := _finite_pool_fence(exc.observation))
+                    else {}
+                ),
+            }
+        except subprocess.TimeoutExpired as timeout_error:
             # A 0-byte timeout is the env-induced-hang signature; surface the ambient network env so the
             # cause is legible (proxy is scrubbed by default — if one shows here, ORCH_KEEP_PROXY=1 is set).
-            suspicious = _suspicious_net_env()
+            suspicious = (
+                []
+                if _coding_session_runtime.capture_limit(sys._getframe()) is not None
+                else _suspicious_net_env()
+            )
             hint = f" | ambient net env at dispatch: {'; '.join(suspicious)}" if suspicious else ""
-            error = f"timed out after {timeout}s{hint}"
+            session_timeout = _coding_session_runtime.capture_limit(sys._getframe()) is not None
+            error = (
+                "coding-session owned supervision deadline elapsed"
+                if session_timeout
+                else f"timed out after {timeout}s{hint}"
+            )
             agent_log_tail = _agent_log_tail_from_argv(argv, proc_cwd) if agent == "gemini" else ""
             turn_uncertain = agent == "gemini" and _agy_reports_turn_in_progress(agent_log_tail)
             if agent_log_tail:
@@ -2516,7 +4401,11 @@ def offload(
             if turn_uncertain:
                 error = "agy timed out while its provider turn was still in progress; outcome is uncertain"
             with logf.open("a") as fh:
-                fh.write(f"[orchestrator] offload marked failed: timed out after {timeout}s\n")
+                fh.write(
+                    (f"[orchestrator] offload marked failed: {error}\n")
+                    if session_timeout
+                    else f"[orchestrator] offload marked failed: timed out after {timeout}s\n"
+                )
                 if suspicious:
                     fh.write(
                         "Suspect inherited env (proxy/CA/NODE_OPTIONS):\n  "
@@ -2545,9 +4434,14 @@ def offload(
                 "request_metadata": request_metadata,
                 "run_id": run_id,
                 "log": str(logf),
+                **(
+                    {"finite_pool_fence": fence}
+                    if (fence := _finite_pool_fence(getattr(timeout_error, "observation", None)))
+                    else {}
+                ),
             }
             out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
-            if turn_uncertain:
+            if turn_uncertain or data_only:
                 out.update(
                     {
                         "outcome_status": "uncertain",
@@ -2555,13 +4449,44 @@ def offload(
                         "retry_safe": False,
                     }
                 )
+            if process_started_callback is not None:
+
+                def safe_partial(value):
+                    if isinstance(value, bytes):
+                        value = value.decode(errors="replace")
+                    return credential_redaction.redact(value or "")
+
+                out.update(
+                    process_started=True,
+                    outcome_uncertain=True,
+                    outcome_status="uncertain",
+                    retry_safe=False,
+                    partial_stdout=safe_partial(timeout_error.output),
+                    partial_stderr=safe_partial(timeout_error.stderr),
+                    raw_exit=getattr(timeout_error, "raw_exit", None),
+                    process_observation=_public_process_observation(
+                        getattr(timeout_error, "observation", None)
+                    ),
+                )
             if agent_log_tail:
                 out["agent_log_tail"] = agent_log_tail
             return out
         except OSError as exc:
+            try:
+                import closer_queue
+
+                read_diagnostic = closer_queue._native_read_failure(exc)
+            except Exception:
+                # Optional diagnostics must never replace the original failure.
+                read_diagnostic = None
             return {
                 "agent": agent,
                 "exit": 126,
+                **(
+                    {"read_only_deadline_diagnostic": read_diagnostic}
+                    if read_diagnostic is not None
+                    else {}
+                ),
                 "output": "",
                 "error": f"process start failed: {exc}",
                 "cwd": str(run_cwd),
@@ -2569,29 +4494,61 @@ def offload(
                 "isolated_cwd": str(run_cwd) if isolate else None,
                 "run_id": run_id,
                 "log": str(logf),
-            }
-        except KeyboardInterrupt:
-            if muse_prompt is not None:
-                muse_prompt.unlink(missing_ok=True)
-            error = "interrupted by orchestrator"
-            if attempt_receipt_callback is not None:
-                _notify_attempt(
-                    attempt_receipt_callback,
+                **(
                     {
-                        "agent": agent,
-                        "exit": 130,
-                        "output": "",
-                        "error": error,
-                        "run_id": run_id,
-                        "model": model,
-                        "log": str(logf),
-                        "cwd": str(run_cwd),
-                        "process_cwd": str(proc_cwd),
-                    },
+                        "process_started": controlled.observation is not None,
+                        "outcome_uncertain": controlled.observation is not None,
+                        "retry_safe": False,
+                        "process_observation": _public_process_observation(controlled.observation),
+                        **(
+                            {"finite_pool_fence": fence}
+                            if (fence := _finite_pool_fence(controlled.observation))
+                            else {}
+                        ),
+                    }
+                    if controlled is not None
+                    else {}
+                ),
+            }
+        except KeyboardInterrupt as interruption:
+            error = "interrupted by orchestrator"
+            interrupted = {
+                "agent": agent,
+                "exit": 130,
+                "output": "",
+                "error": error,
+                "run_id": run_id,
+                "model": model,
+                "log": str(logf),
+                "cwd": str(run_cwd),
+                "process_cwd": str(proc_cwd),
+            }
+            if data_only:
+                interrupted.update(
+                    outcome_uncertain=True,
+                    outcome_status="uncertain",
+                    retry_safe=False,
+                    request_metadata=request_metadata,
                 )
-            _record_complete(exit_code=130, error=error)
-            with logf.open("a") as fh:
-                fh.write(f"[orchestrator] offload marked failed: {error}\n")
+            try:
+                _retain_attempt_result(interrupted)
+                if cleanup_errors := _cleanup_result_artifacts():
+                    interrupted["cleanup_errors"] = cleanup_errors
+                if attempt_receipt_callback is not None:
+                    _notify_attempt(attempt_receipt_callback, interrupted)
+                _record_complete(exit_code=130, error=error)
+                with logf.open("a") as fh:
+                    fh.write(f"[orchestrator] offload marked failed: {error}\n")
+            except _ProviderResultRetentionPending as pending:
+                # Cancellation remains cancellation even when result storage failed.
+                # Preserve the exact held receipt for caller reconciliation, never retry.
+                _coding_session_runtime.bound_result(sys._getframe(), pending.result)
+                setattr(interruption, "held_result", pending.result)
+                raise interruption from pending
+            except Exception as completion_error:
+                # A callback/accounting/log error cannot consume operator cancellation.
+                setattr(interruption, "completion_error", type(completion_error).__name__)
+                raise interruption from completion_error
             raise
         finally:
             _cleanup_stream()
@@ -2607,7 +4564,122 @@ def offload(
             proc = subprocess.CompletedProcess(
                 getattr(proc, "args", argv), proc.returncode, stdout, stderr
             )
+        _coding_session_runtime.check_text(sys._getframe(), proc.stdout or "", proc.stderr or "")
         attempt_stderr = proc.stderr or ""
+        if controlled is not None:
+            import closer_data_only_execution as execution
+            import transport_qualification
+            import transport_saved_result
+
+            native_text = proc.stdout or ""
+            observation = controlled.observation or {}
+            origin = {
+                "schema": "closer-data-only-runtime-origin/v1",
+                "source": "existing-dispatcher-observed-supervisor",
+                "operation_id": controlled.operation_id,
+                "operation_binding_source": "explicit_trusted_caller_must_match_expected_operation",
+                "run_id": run_id,
+                "pool_id": "claude-subscription",
+                "pool_reservation": controlled.pool_reservation,
+                "profile_id": profile_id,
+                "task_type": task_type,
+                "finite_frontier_id": finite_frontier_id,
+                "finite_frontier_target": finite_frontier_target,
+                "process_observation": _public_process_observation(observation),
+                "execution": controlled.execution,
+                "collector_sources": dict(controlled.native_sources),
+                "native_stdout_sha256": hashlib.sha256(native_text.encode()).hexdigest(),
+                "native_stdout_bytes": len(native_text.encode()),
+                "stdout_scope": "captured_UTF8_text_redacted_before_parse_and_retention",
+                "native_json": native_text,
+                "authority": False,
+                "classification_validated": False,
+            }
+            native_error = None
+            normalized = None
+            final_text = ""
+            try:
+                if proc.returncode != 0 or observation.get("cleanup_terminal") is not True:
+                    raise ValueError("native transport did not complete with positive cleanup")
+                if observation.get("borrowed_credential_output") or observation.get(
+                    "invalid_utf8_output"
+                ):
+                    raise ValueError("native output required credential or encoding redaction")
+                current_sources = {
+                    name: _controlled_module_sha(module)
+                    for name, module in (
+                        ("transport_saved_result.py", transport_saved_result),
+                        ("transport_qualification.py", transport_qualification),
+                    )
+                }
+                if current_sources != controlled.native_sources:
+                    raise ValueError("collector source drifted during observed invocation")
+                launch_sources = {
+                    "adapters.py": _controlled_module_sha(adapters),
+                    "dispatcher.py": _controlled_module_sha(sys.modules[__name__]),
+                    "closer_data_only_execution.py": _controlled_module_sha(execution),
+                }
+                if (
+                    controlled.execution is None
+                    or launch_sources != controlled.execution["binding"]["source_sha256"]
+                ):
+                    raise ValueError("controlled launch source drifted during invocation")
+                execution.validate_payload(
+                    native_text, limits=controlled.limits, kind="native_result"
+                )
+                normalized = transport_saved_result.normalize_claude_result(
+                    native_text,
+                    run_id=run_id,
+                    pool_id="claude-subscription",
+                    requested_model=controlled.profile["requested_model"],
+                    requested_effort=controlled.profile["reasoning_effort"],
+                )
+                native = transport_qualification.strict_final(native_text)
+                if (
+                    normalized["response"]["num_turns"] != controlled.limits["max_turns"]
+                    or native.get("permission_denials", []) != []
+                    or native["modelUsage"][controlled.profile["requested_model"]].get(
+                        "webSearchRequests", 0
+                    )
+                    != 0
+                    or any(k in native for k in ("resume", "resumed", "resumed_session_id"))
+                ):
+                    raise ValueError("native turn/tool/resume evidence differs from contract")
+                final_text = normalized["response"]["final"]
+                origin["final"] = execution.validate_payload(
+                    final_text, limits=controlled.limits, kind="final"
+                )
+                origin["normalized_native_result"] = normalized
+                observed_model = normalized["observed"]["model"]
+                observed_model_source = normalized["observed"]["identity_source"]
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                native_error = "controlled native result rejected:" + type(exc).__name__
+            with logf.open("a") as fh:
+                fh.write("[controlled native JSON; redacted]\n" + native_text + "\n")
+            return {
+                "agent": agent,
+                "exit": 70 if native_error else 0,
+                "raw_exit": proc.returncode,
+                "output": "" if native_error else final_text,
+                "error": native_error,
+                "model": model,
+                "usage": {},
+                "request_metadata": request_metadata,
+                "data_only_origin": origin,
+                "stderr_tail": (proc.stderr or "")[-800:],
+                "cwd": str(run_cwd),
+                "process_cwd": str(proc_cwd),
+                "run_id": run_id,
+                "log": str(logf),
+                "process_started": True,
+                "process_observation": _public_process_observation(observation),
+                **_public_model_metadata(agent, model, observed_model, observed_model_source),
+                **(
+                    {"outcome_uncertain": True, "outcome_status": "uncertain", "retry_safe": False}
+                    if native_error
+                    else {}
+                ),
+            }
         # THE RUN REPORTED ITS OWN MODEL. When the transport asked for stream-json, the tool's
         # `system/init` event names the model that actually served -- `gen_ai.response.model` in
         # OpenTelemetry's terms, as opposed to the `--model` we requested. Read it here, from THIS
@@ -2687,7 +4759,7 @@ def offload(
             )
         # The large-prompt transport uses agy's matching NDJSON output. Preserve the existing
         # offload return contract by handing callers its final text response, as print mode does.
-        if prompt_via_stdin:
+        if prompt_via_stdin and agent == "gemini":
             response = adapters.gemini_stream_response(proc.stdout or "")
             proc = subprocess.CompletedProcess(
                 getattr(proc, "args", argv),
@@ -2713,6 +4785,7 @@ def offload(
                     stream["result_text"],
                     proc.stderr,
                 )
+        _coding_session_runtime.check_text(sys._getframe(), proc.stdout or "", proc.stderr or "")
         with logf.open("a") as fh:
             if proc.stdout:
                 fh.write(proc.stdout)
@@ -2729,7 +4802,7 @@ def offload(
         if raw_exit != 0:
             error = (
                 "Gemini stream has no final string response"
-                if prompt_via_stdin and response is None
+                if prompt_via_stdin and agent == "gemini" and response is None
                 else f"agent exited {raw_exit}"
             )
         else:
@@ -2757,6 +4830,9 @@ def offload(
             error = "agy stopped waiting while its provider turn was still in progress; outcome is uncertain"
             exit_code = 70
         if error:
+            _coding_session_runtime.check_text(
+                sys._getframe(), f"[orchestrator] offload marked failed: {error}\n", agent_log_tail
+            )
             with logf.open("a") as fh:
                 fh.write(f"[orchestrator] offload marked failed: {error}\n")
                 if agent_log_tail:
@@ -2778,6 +4854,13 @@ def offload(
             "run_id": run_id,
             "log": str(logf),
         }
+        if _coding_session_runtime.capture_limit(sys._getframe()) is not None and reported_usage:
+            # Preserve only this invocation's parser observations, unverified.
+            out["unverified_reported_usage"] = {
+                "status": "UNVERIFIED",
+                "scope": "this_owned_cli_stream_only",
+                "reported": dict(reported_usage),
+            }
         out.update(_public_model_metadata(agent, model, observed_model, observed_model_source))
         if agent_log_tail:
             out["agent_log_tail"] = agent_log_tail
@@ -2802,7 +4885,36 @@ def offload(
     for attempt in range(1, max_network_retries + 2):
         attempts = attempt
         attempt_started = time.time()
-        out = _run_offload_attempt()
+        try:
+            out = _run_offload_attempt()
+            if data_only:
+                out["request_metadata"] = request_metadata
+                if data_only_cleanup_errors:
+                    out.update(
+                        raw_exit=out.get("raw_exit", out.get("exit")),
+                        exit=70,
+                        error="data-only private input cleanup failed",
+                        cleanup_errors=data_only_cleanup_errors,
+                    )
+                if (
+                    out.get("exit") != 0
+                    and not (
+                        controlled is not None
+                        and out.get("process_started") is False
+                        and out.get("outcome_uncertain") is False
+                    )
+                    and not (
+                        out.get("exit") == 2
+                        and out.get("process_started") is False
+                        and out.get("unsupported_assessment_tool_boundary") is True
+                    )
+                ):
+                    out.update(outcome_uncertain=True, outcome_status="uncertain", retry_safe=False)
+            _retain_attempt_result(out)
+        except _ProviderResultRetentionPending as exc:
+            # Provider effects already happened: no callback, enrichment or retry.
+            _coding_session_runtime.bound_result(sys._getframe(), exc.result)
+            return exc.result
         attempt_ended = time.time()
         # Receipt consumers that reserve an external spend boundary must see
         # every actual invocation before retry, ledger completion, Brain or
@@ -2879,23 +4991,81 @@ def offload(
             + credential_redaction.describe(redaction_counts)
         )
     if redaction_note:
+        _coding_session_runtime.check_text(sys._getframe(), redaction_note)
         with logf.open("a") as fh:
             fh.write(f"[orchestrator] {redaction_note}\n")
     if muse_prompt is not None:
         muse_prompt.unlink(missing_ok=True)
-    _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    provider_result = dict(out)
+    try:
+        _record_complete(exit_code=out.get("exit"), error=out.get("error"))
+    except _CompletionPersistencePending as exc:
+        # Preserve the already-redacted actual result before handing a conservative
+        # accounting barrier to callers. This branch is outside the provider loop.
+        actual_exit = out.get("raw_exit", out.get("exit"))
+        provider_completed = (
+            type(actual_exit) is int
+            and actual_exit == 0
+            and out.get("outcome_uncertain") is not True
+        )
+        pending = {
+            "schema": "offload-completion-persistence/v1",
+            "status": "pending",
+            "provider_completed": provider_completed,
+            **exc.completion,
+        }
+        raw = json.dumps({"result": out, "completion": pending}, sort_keys=True).encode()
+        _coding_session_runtime.check_serialized(sys._getframe(), raw)
+        receipt_path = logf.with_suffix(".completion-pending.json")
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix=".completion-", dir=logf.parent)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, receipt_path)
+            pending["receipt"] = {
+                "path": str(receipt_path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        except OSError as retention_error:
+            # The native redacted log already exists. Accounting/retention failure
+            # must still return a barrier rather than lose the run identity.
+            pending["receipt_error"] = type(retention_error).__name__
+        finally:
+            if temporary is not None:
+                try:
+                    Path(temporary).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        out.update(
+            raw_exit=out.get("raw_exit", out.get("exit")),
+            exit=70,
+            error="offload profile completion persistence is pending",
+            completion_persistence=pending,
+            provider_completed=provider_completed,
+            outcome_status="uncertain",
+            outcome_uncertain=True,
+            retry_safe=False,
+        )
     # Telemetry is fail-open. Classify the actual result, stderr, and per-run agent log.
     evidence_result = None
     reset_at = None
     try:
         import rate_incidents
 
-        failure_parts = [out.get("error"), out.get("stderr_tail"), out.get("agent_log_tail")]
-        stdout = str(out.get("output") or "")
+        failure_parts = [
+            provider_result.get("error"),
+            provider_result.get("stderr_tail"),
+            provider_result.get("agent_log_tail"),
+        ]
+        stdout = str(provider_result.get("output") or "")
         # A FAILED run's stdout is error evidence less codex's own record of its work: two codex
         # offloads that printed a doc about quotas became quota incidents and shed the seat
         # (2026-09-19, 09-20). A successful run's stdout counts only through the strict envelope.
-        if out.get("exit") != 0:
+        if provider_result.get("exit") != 0:
             failure_parts.insert(0, rate_incidents.failed_stdout_evidence(agent, stdout))
         elif rate_incidents.stdout_carries_capacity_evidence(stdout):
             failure_parts.insert(0, stdout)
@@ -2911,7 +5081,8 @@ def offload(
         # The provider's stated reset, from codex's harness events alone. Without it the two
         # refusals of 2026-09-25 that named Sep 28 shed for the 6 h cooldown, and this record, the
         # first of a run's two observers, is the one whose shed stands.
-        reset_at = rate_incidents.provider_reset_at(agent, stdout.splitlines())
+        reset_lines = combined_output.splitlines() if agent == "gemini" else stdout.splitlines()
+        reset_at = rate_incidents.provider_reset_at(agent, reset_lines)
     except Exception as exc:
         print(f"warn: rate-incident classification failed for {agent}: {exc}", file=sys.stderr)
     if evidence_result and evidence_result.get("is_authoritative"):
@@ -2927,12 +5098,13 @@ def offload(
                 reset_at=reset_at,
                 extra={
                     "subcategory": evidence_result["subcategory"],
-                    "exit_code": out.get("exit"),
+                    "exit_code": provider_result.get("exit"),
                     "attempts": attempts,
                 },
             )
         except Exception as exc:
             print(f"warn: rate-incident recording failed for {agent}: {exc}", file=sys.stderr)
+    _coding_session_runtime.bound_result(sys._getframe(), out)
     return out
 
 
@@ -3171,10 +5343,125 @@ def _selftest_gemini_refusal() -> None:
         assert result["exit"] == 2 and result["run_id"] is None, result
 
 
+def _selftest_capability_dispatch(root: Path) -> None:
+    """Exercise real spawn and writer seams with offline producer/process doubles."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    import capabilities
+    import capability_lifecycle
+    import capability_targets
+
+    cap_id, version = "selftest-compiled", "cv:selftest-compiled"
+    ledger = {
+        cap_id: {"capability_version_id": version},
+        "thompson-hybrid-routing": {"capability_version_id": "cv:infra"},
+    }
+    receipt = {
+        "invoked": True,
+        "accepted": True,
+        "consumer_ref": "receipt:selftest",
+        "invocation_id": "invoke:selftest",
+        "causal_edge": {"source_event_id": "event:selftest"},
+    }
+    plan: dict = {
+        "run_id": "selftest-capability",
+        "target": "owner/repo#639",
+        "task_type": "implement",
+        "agent": "codex",
+        "mode": "full",
+        "cwd": str(root),
+        "wrapped": "true",
+        "capability_ids": ["thompson-hybrid-routing"],
+        "capability_version_ids": ["cv:infra"],
+        "routing_metadata": {
+            "selected_capability_id": cap_id,
+            "selected_capability_version_id": version,
+        },
+    }
+    with (
+        patch.object(capabilities, "load", return_value=ledger),
+        patch.object(capability_targets, "get_binding", return_value={"kind": "workflow"}),
+        patch.object(
+            capability_lifecycle, "invoke_compiled_target", return_value=receipt
+        ) as invoke,
+        patch.object(subprocess, "Popen", return_value=SimpleNamespace(pid=639)),
+        patch.object(claims, "update_metadata", return_value=True),
+        patch.object(sys.modules[__name__], "_agent_runtime_prelude", return_value=""),
+    ):
+        assert _spawn(plan) == 639
+        invoke.assert_called_once()
+        assert plan["capability_ids"] == ["thompson-hybrid-routing", cap_id], plan
+        assert plan["capability_version_ids"] == ["cv:infra", version], plan
+        with feedback._conn() as conn:
+            payloads = conn.execute(
+                "SELECT phase,payload_json FROM completion_events WHERE run_id=? AND event_type='decision'",
+                (plan["run_id"],),
+            ).fetchall()
+        # The pre-invocation envelopes remain immutable history. Both subsequent
+        # decision phases must carry the exercised pair.
+        assert {row[0] for row in payloads if cap_id in json.loads(row[1])["capability_ids"]} == {
+            "trigger",
+            "decision",
+        }, payloads
+        fallback_plan = {
+            **plan,
+            "run_id": "selftest-capability-fallback",
+            "routing_metadata": dict(plan["routing_metadata"]),
+        }
+        with patch.object(capability_targets, "get_binding", return_value=None):
+            assert _spawn(fallback_plan) == 639
+        assert cap_id not in fallback_plan["capability_ids"], fallback_plan
+        assert (
+            fallback_plan["routing_metadata"]["capability_dispatch_result"]["reason"]
+            == "target_binding_missing"
+        )
+        invoke.assert_called_once()
+        invoke.reset_mock()
+        bad = {**plan, "capability_ids": ["missing-infra"], "capability_version_ids": []}
+        try:
+            _invoke_selected_compiled_capability(bad)
+        except ValueError as exc:
+            assert "missing capability versions" in str(exc), exc
+        else:
+            raise AssertionError("missing infrastructure version was silently dropped")
+        invoke.assert_not_called()
+
+
+def _selftest_delegate_linked_pr() -> None:
+    from unittest.mock import patch
+
+    # Exercise the pre-claim edge without GitHub, state cleanup or a worker.
+    with (
+        patch.object(sys.modules[__name__], "linked_open_prs", return_value=[734, 736]),
+        patch.object(claims, "reap_stale") as reap,
+        patch.object(claims, "claim", return_value=False) as claim,
+        patch.object(claims, "holder", return_value={"agent": "incumbent"}),
+    ):
+        refused = delegate("cursor", "o/r#731", "opener", "bounded")
+        assert "open PR #734, #736" in refused["error"], refused
+        claim.assert_not_called()
+        reap.assert_not_called()
+        continued = delegate("cursor", "o/r#731", "opener", "fix", continue_pr=736)
+        assert "already claimed" in continued["error"], continued
+        claim.assert_called_once_with("o/r#731", "cursor")
+
+
 def _selftest() -> None:
+    import inspect
+
+    # Wiring pin; behavioral stderr/log reset coverage also exercises offload in pytest.
+    assert "combined_output.splitlines()" in inspect.getsource(offload)
     import tempfile
 
+    for repo in INFRA_REPOS:
+        assert _dispatch_branch(f"{repo}#7", "opener", "codex", None) == "orch/issue-7"
+    assert _dispatch_branch("o/product#7", "opener", "gemini", None) == "gemini/issue-7"
+    assert (
+        _dispatch_branch("stranske/Workflows#7", "opener", "codex", "custom/") == "custom/issue-7"
+    )
     _selftest_gemini_refusal()
+    _selftest_delegate_linked_pr()
 
     tmp = tempfile.mkdtemp(prefix="dispatcher-selftest-")
     os.environ["HANDOFF_DIR"] = tmp
@@ -3199,6 +5486,7 @@ def _selftest() -> None:
         _selftest_muse_login, auth_dst
     )
     try:
+        _selftest_capability_dispatch(HANDOFF)
         for agent, persona in AGENT_PERSONAS.items():
             preamble = _agent_preamble(agent)
             assert persona in preamble and CRITICAL_EVALUATOR_DIRECTIVE in preamble, preamble
@@ -4703,9 +6991,13 @@ def main(argv: list[str]) -> int:
         p.add_argument("--agent", required=True)
         p.add_argument("--target", required=True)
         p.add_argument("--lane", default="opener")
+        p.add_argument(
+            "--branch-prefix", help="override opener prefix (infra: orch/; otherwise agent/)"
+        )
         p.add_argument("--mode")
         p.add_argument("--profile-id", help="explicit immutable execution profile")
         p.add_argument("--task-type", default="implement")
+        p.add_argument("--continue-pr", type=int, help="continue this confirmed linked open PR")
         p.add_argument(
             "--review-loop",
             action="store_true",
@@ -4736,8 +7028,10 @@ def main(argv: list[str]) -> int:
             ns.mode,
             task_type=ns.task_type,
             profile_id=ns.profile_id,
+            continue_pr=ns.continue_pr,
             influenced_by_role_run_ids=ns.influenced_by_role_run_id,
             **review_kwargs,
+            **({"branch_prefix": ns.branch_prefix} if ns.branch_prefix is not None else {}),
         )
         print(json.dumps(out, default=str))
         return 0 if "error" not in out else 1
@@ -4789,13 +7083,32 @@ def main(argv: list[str]) -> int:
                 task_type=ns.task_type,
                 subject_id=ns.subject,
             )
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as interruption:
             out = {
                 "agent": ns.agent,
                 "exit": 130,
                 "output": "",
                 "error": "interrupted by orchestrator",
             }
+            held = getattr(interruption, "held_result", None)
+            if (
+                isinstance(held, dict)
+                and isinstance(held.get("run_id"), str)
+                and held["run_id"]
+                and held.get("outcome_status") == "uncertain"
+                and held.get("outcome_uncertain") is True
+                and held.get("retry_safe") is False
+                and held.get("exit") == 70
+                and held.get("raw_exit") == 130
+            ):
+                out.update(
+                    run_id=held["run_id"],
+                    held_result=held,
+                    raw_exit=130,
+                    outcome_status="uncertain",
+                    outcome_uncertain=True,
+                    retry_safe=False,
+                )
         print(out["output"] if out.get("output") else json.dumps(out, default=str))
         if out.get("error"):
             print(f"[orchestrator] offload error: {out['error']}", file=sys.stderr)
@@ -4816,6 +7129,18 @@ def main(argv: list[str]) -> int:
     out = run(load_decision(), dry_run=dry, heartbeat=not no_hb)
     print(json.dumps(out, indent=2, default=str))
     return 0
+
+
+# Preserve the actual loaded source code identities, including the nested attempt.
+# A similarly named caller, wrapper, or replayed observation cannot issue delivery.
+_CODING_DELIVERY_RUN_CODE = run_observed_offload.__code__
+_CODING_DELIVERY_OFFLOAD_CODE = offload.__wrapped__.__code__
+_CODING_DELIVERY_ATTEMPT_CODE = next(
+    code
+    for code in _CODING_DELIVERY_OFFLOAD_CODE.co_consts
+    if isinstance(code, type(_CODING_DELIVERY_OFFLOAD_CODE))
+    and code.co_name == "_run_offload_attempt"
+)
 
 
 if __name__ == "__main__":

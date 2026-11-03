@@ -1,0 +1,3 @@
+# PR701 bounded review recovery
+
+Retains the first supervisor closure outcome timestamp on deterministic replay, bounds the exact-head git probe at 120 seconds, and adds the executable value-chain deadline/prefix fixture. Each production mutation fails the unchanged regression or module selftest; restored production bytes return 135 focused tests to green. Feedback and supervisor module selftests and focused mypy pass. Main integration retained all ceilings and independently measured 4684 collected cases; the pass floor is an expectation, not an observed full-suite result. Current hosted CI and source675 live post-merge acceptance remain required.

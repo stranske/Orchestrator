@@ -1,0 +1,129 @@
+{
+  "target": "stranske/Inv-Man-Intake#1012",
+  "head": "2aa63214f6de87cd9012336fbc789575bd7358b1",
+  "base": "fb3d5dd7d214bf67140d6d07d5c15b545ec4eef5",
+  "classification": "uncertain",
+  "substantive_needs": [
+    "CI failure unexplained: the checks section reports aggregate_state FAILURE at the current head, and both Gate runs (38870532469 and 38870122995, attempt 1) concluded 'failure'. Per-check names are unavailable (named_checks null), so the failing job and its relation to the three changed files are unknown. The retained JUnit receipts show failures=0 and errors=0 but cannot explain a Gate failure.",
+    "AC1 not proven: no retained receipt cites the named test tests/intake/test_consultant_section_ontology.py::test_sections_resolve_without_code_change as passed. The JUnit receipts carry only totals (1033 tests, 8 skipped), and the testcase-level entry was not supplied. The claim of '62 passed' appears only in untrusted PR and comment text.",
+    "AC2 (deliberate-break gate) has no raw evidence. The diff shows an exact-set assertion (set(keys) == EXPECTED_KEYS), which would plausibly fail on a one-key removal. But no run showing a failing result with one key removed, nor a revert, is supplied. The only claim is the author's untrusted comment.",
+    "Task 1 (add data/consultant_sections.json) has no matching file in the diff. Only config/standard_elements/_stub.json was modified. The PR body asserts the repo design makes this unnecessary; that is an untrusted source-text claim requiring a senior coordinator ruling.",
+    "Task 2 (extend standard_elements.py to load consultant sections) has no matching file in the diff, which touches no src file. Same unresolved scope divergence as Task 1.",
+    "Task 4 (README cross-reference to tracked-variable/v1) is not in the diff. The PR body states it was deliberately not done as conditional on a Workflows sync. Disposition needs a senior coordinator decision.",
+    "Task 3 (add the test file) is evidenced by the added-file patch (blob a8137c0e...), but passing status is covered by the AC1 gap.",
+    "Source requirement 'at least 15 section keys per R2 brief' is met by count (18 keys in the stub patch). The keys are not verified against the R2 brief, which the PR body says is not in the repo and whose keys came from model general knowledge.",
+    "Stale PR metadata: the PR body's auto-status summary cites Head SHA 9d21a2a1... and a Gate 'in progress', which does not match current head 2aa63214.... The body also describes the test as 'at least 15 elements', whereas the diff asserts an exact 18-key set. Neither can be used as evidence.",
+    "Drift audit incomplete: no file-reading tools are available, so the retained raw files for the cited sections were not opened. See drift_summary."
+  ],
+  "findings": [
+    {
+      "severity": "high",
+      "category": "ci_state",
+      "summary": "Aggregate check state is FAILURE at the current head and the Gate workflow concluded failure on both retained runs. The cause is not identifiable from the supplied evidence.",
+      "evidence_refs": [
+        "checks: raw/fc/fc5ba64e68c4a9b2e2b985bebce7678584452e50b664ae5c2d40887722ed2bca.json (aggregate_state FAILURE, named_checks null)",
+        "ci_artifacts runs: Gate 38870532469 and 38870122995 conclusion failure, head 2aa63214"
+      ]
+    },
+    {
+      "severity": "medium",
+      "category": "acceptance_proof_gap",
+      "summary": "No testcase-level receipt for the named AC test. The JUnit totals show 0 failures and 0 errors but do not name the test. Receipts are run 38870532469, attempt 1, artifacts 12033031988 (3.13) and 12032897904 (3.12), plus the equivalent artifacts for run 38870122995.",
+      "evidence_refs": [
+        "ci_artifacts: raw/88/88cfcde71fd307541c015d3008a434972a3010b9cc3bda883cf475895ad0bfa5.xml (sha256 88cfcde7...)",
+        "ci_artifacts: raw/d9/d9ff65886d06cddd312c0292468c2b6ab0ee1ad2ca5bddf790d6327b0003df15.xml (sha256 d9ff6588...)"
+      ]
+    },
+    {
+      "severity": "medium",
+      "category": "acceptance_proof_gap",
+      "summary": "No raw evidence for the deliberate-break gate. The retained patch shows the exact-set assertion that would make a one-key removal fail, but demonstrating the gate requires a failing run or equivalent receipt.",
+      "evidence_refs": [
+        "diff_files: tests/intake/test_consultant_section_ontology.py, blob a8137c0e726acc2ed22730e728790d6ad41ef433, patch sha256 974afb8ae5d82c4373d4aee29c638112f02f03c05afe61359b104e89133bbfa8, base fb3d5dd7, head 2aa63214 (excerpt: 'assert set(keys) == EXPECTED_KEYS')"
+      ]
+    },
+    {
+      "severity": "medium",
+      "category": "scope_divergence",
+      "summary": "The diff changes three files (_stub.json, the new test, and test_standard_element_library.py). It does not add data/consultant_sections.json, does not modify standard_elements.py, and does not add the README cross-reference. This conflicts with Tasks 1, 2 and 4 as written in the source issue. The PR body justifies this as a design disagreement, but that text is untrusted and needs senior coordinator disposition.",
+      "evidence_refs": [
+        "diff_files: file_count_observed 3, filenames config/standard_elements/_stub.json, tests/intake/test_consultant_section_ontology.py, tests/intake/test_standard_element_library.py"
+      ]
+    },
+    {
+      "severity": "low",
+      "category": "positive_observation",
+      "summary": "The stub patch adds report.consultant_review with 18 unique consultant.* keys, all field_present and mandatory:false. It leaves non_authoritative untouched and emits no tracked-variable/v1, consistent with the issue's Non-Goals. The CodeRabbit thread on the minimum-count assertion is resolved and outdated, and its fix is visible in the head patch. This is not acceptance proof.",
+      "evidence_refs": [
+        "diff_files: config/standard_elements/_stub.json, blob 9c353ddfec9abdde5d00ad0057001d31cbfe37cf, patch sha256 3177183de1309dbd58e92d76e264f14f735a50dd4890b6c8225c85d8611f5c90",
+        "review_conversations: thread PRRT_kwDORbgIAs6tHChG, resolved true, outdated true"
+      ]
+    },
+    {
+      "severity": "low",
+      "category": "stale_metadata",
+      "summary": "The PR body status block references Head SHA 9d21a2a1... rather than the current head 2aa63214.... It cannot be used as current-head evidence.",
+      "evidence_refs": [
+        "current_request.content body (auto-status-summary block)"
+      ]
+    }
+  ],
+  "evidence_requests": [
+    {
+      "necessity": "necessary",
+      "locator": "Gate workflow runs 38870532469 and 38870122995 (attempt 1, head 2aa63214f6de87cd9012336fbc789575bd7358b1): per-job conclusions and the failing job log",
+      "question": "Which job(s) failed, and is the failure caused by the changed files (_stub.json, test_consultant_section_ontology.py, test_standard_element_library.py) or by an unrelated step?",
+      "basis": "Current finding: checks aggregate_state FAILURE at the current head with Gate conclusion 'failure'."
+    },
+    {
+      "necessity": "necessary",
+      "locator": "Testcase entry for tests/intake/test_consultant_section_ontology.py::test_sections_resolve_without_code_change in the retained raw pytest-junit.xml (raw/88/88cfcde7... or raw/d9/d9ff6588...), run 38870532469 attempt 1",
+      "question": "Is the named test present with no failure, error or skip at head 2aa63214?",
+      "basis": "Original acceptance criterion 1 (named test passes). Only totals are supplied."
+    },
+    {
+      "necessity": "necessary",
+      "locator": "A raw receipt (CI run or retained command output bound to head 2aa63214) showing the named test failing with one key removed from config/standard_elements/_stub.json, then passing after revert",
+      "question": "Does removing exactly one consultant.* key make the named test fail?",
+      "basis": "Original acceptance criterion 2 (deliberate-break gate). Currently supported only by untrusted author text."
+    },
+    {
+      "necessity": "necessary",
+      "locator": "Existing senior coordinator disposition for Tasks 1, 2 and 4 of issue #948",
+      "question": "Is the PR's data-only approach (no data/consultant_sections.json, no standard_elements.py change, no README cross-reference) accepted as satisfying or superseding those tasks?",
+      "basis": "Original Tasks list versus the diff, which has no files for Tasks 1, 2 or 4. A repair or acceptance route needs a senior disposition."
+    },
+    {
+      "necessity": "nice_to_have",
+      "locator": "ci_artifacts section (truncated, 20 runs)",
+      "question": "What is the required-check topology?",
+      "basis": "Readiness rail: ci_artifacts:optional_enrichment. Suggestion only; not a substantive need."
+    },
+    {
+      "necessity": "nice_to_have",
+      "locator": "test_coverage_artifacts section (partial)",
+      "question": "Which test and coverage jobs are required?",
+      "basis": "Readiness rail: test_coverage_artifacts:optional_enrichment. Suggestion only."
+    },
+    {
+      "necessity": "possibly_useful",
+      "locator": "native_merge_verifier section (missing)",
+      "question": "Is there a trusted exact-identity NON_PASS marker for this PR?",
+      "basis": "Readiness rail: native_merge_verifier:optional_enrichment. Suggestion only."
+    },
+    {
+      "necessity": "possibly_useful",
+      "locator": "The 'R2 brief' cited by issue #948 (not in the repo, per the PR body)",
+      "question": "Do the 18 consultant.* keys match the brief?",
+      "basis": "Source Task 1 ('per R2 brief'). The keys are unverified against any authoritative source."
+    }
+  ],
+  "resolutions": [],
+  "decision": {
+    "criteria": []
+  },
+  "nonpass_accounting": "No nonpass_finding records were supplied, so the NON_PASS accounting path does not apply. The ordinary original-criterion assessment above was used. No PASS rows are returned because the acceptance proof is incomplete.",
+  "drift_review_complete": false,
+  "drift_mismatches": [],
+  "drift_summary": "No file-reading tools are available, so the retained raw files for the drift samples (source, ci_artifacts, native_merge_verifier, prior_dispositions, test_coverage_artifacts, and the packet manifest) could not be opened. I compared only the inline supplied content against the sample refs and expected assertions. The inline content is consistent with the 'pending_or_missing' case: ci_artifacts is truncated, test_coverage_artifacts is partial, and native_merge_verifier and prior_dispositions are missing. The 'untrusted_source' case is consistent: the source text is flagged text_is_untrusted with credential_pattern_present false and no redactions. One observation is not a confirmed mismatch: ci_artifacts content_bytes (25326) differs from its retained bytes (24297), which matches the section's truncated status. No exact mismatching case or section IDs are asserted. The 'schema_valid_packet' case (validate_packet success and digest matching) could not be executed or verified here. Unavailable: raw section files under <retained-path> Failed command: none run, because no tools are available in this assessment."
+}

@@ -24,6 +24,8 @@ def fixture(
     native=False,
     native_report=True,
     native_manifest_pr=12,
+    native_reported_verdict="FAIL",
+    native_ci_failed=True,
     pr_target=ABSENT,
 ):
     snap = {
@@ -56,8 +58,8 @@ def fixture(
             "evaluated_sha": snap["merge"],
             "run_id": 34,
             "run_attempt": 1,
-            "provider_verdicts": ["FAIL"],
-            "ci_failed": True,
+            "provider_verdicts": [native_reported_verdict],
+            "ci_failed": native_ci_failed,
         }
         native_manifest = {
             "schema": "workflows-verifier-input-snapshot/v1",
@@ -135,7 +137,12 @@ def fixture(
         if endpoint.endswith("/runs/34/artifacts?per_page=100"):
             return {
                 "artifacts": [
-                    {"id": 35, "name": "native-input", "size_in_bytes": 100, "expired": False}
+                    {
+                        "id": 35,
+                        "name": "comparison-results-34",
+                        "size_in_bytes": 100,
+                        "expired": False,
+                    }
                 ]
             }
         if endpoint.endswith("/runs/7/artifacts?per_page=100"):
@@ -188,6 +195,7 @@ def fixture(
     }
     interpretation = {"actual": {"exit": 0, "run_id": "actual-run-7"}, "proposal": proposal}
     prep = {
+        "proposal": {"action": "collect_evidence"},
         "revision": snap["revision"],
         "producer_sha256": packet["producer_sha256"],
         "evidence_summary": {"section_digests": packet["section_digests"]},
@@ -442,7 +450,12 @@ def test_ordinary_nonpass_resolution_preserves_raw_verdict_without_pass_authorit
             "expected_failure": "report test failed",
         },
     )
-    assert check(fx)["reason"] == "mechanical_repair_plan_unbound"
+    refusal = check(fx)
+    assert refusal["reason"] == "registered_required_test_missing"
+    assert refusal["status"] == "pending"
+    assert refusal["pending_kind"] == "external_event"
+    assert refusal["pending_evidence"]["finding_id"] == resolution["finding_id"]
+    assert refusal["raw_findings"][0]["raw"]["verdict"] == "NON_PASS"
 
 
 def test_native_merge_input_is_resolution_only_and_exact_run_bound(tmp_path):

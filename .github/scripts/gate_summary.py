@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ class SummaryContext:
     delivery_seal_required: bool = False
     delivery_seal_valid: bool = True
     delivery_seal_reason: str = ""
+    combined_coverage_status: str = "not-requested"
+    combined_coverage_percent: float | None = None
 
 
 @dataclass(slots=True)
@@ -50,6 +53,11 @@ PRIORITY: dict[str, int] = {
 
 STABLE_SYNC_BRANCHES = {"sync/workflows-candidate", "sync/workflows-delivery"}
 DELIVERY_RECORD_PATTERN = re.compile(r"<!--\s*sync-pr-delivery-record:v1\s+([\s\S]*?)\s*-->")
+PYTHON_SHARD_COUNT = 6
+PYTHON_SHARD_RUNTIMES = ("3.13", "3.14")
+PYTHON_SHARD_ARTIFACT = re.compile(
+    r"^gate-shard-(?P<shard>[1-9]\d*)-coverage-" r"(?P<runtime>3\.13|3\.14)-(?P<attempt>[1-9]\d*)$"
+)
 
 
 def _delivery_seal_from_event(event_path: Path | None) -> tuple[bool, bool, str]:
@@ -88,8 +96,15 @@ def _delivery_seal_from_event(event_path: Path | None) -> tuple[bool, bool, str]
         return True, False, "invalid delivery schema"
     if record.get("terminal_disposition"):
         return True, False, "terminal delivery record"
-    if record.get("delivery_state") != "sealed":
-        return True, False, f"delivery state is {record.get('delivery_state') or 'missing'}"
+    delivery_state = record.get("delivery_state")
+    if delivery_state != "sealed":
+        # PR-body data must never become an output-file instruction or shell source.
+        reason = (
+            f"delivery state is {delivery_state}"
+            if isinstance(delivery_state, str) and delivery_state in {"staging", "reviewing"}
+            else "delivery state is missing or invalid"
+        )
+        return True, False, reason
     if not head_sha or record.get("sealed_head_sha") != head_sha:
         return True, False, "sealed head does not match the PR head"
     repository = base_repository
@@ -156,6 +171,7 @@ def _normalize_check_outcome(section: Mapping[str, object] | None) -> str:
 
 def _load_summary_records(artifacts_root: Path) -> list[dict]:
     records: list[dict] = []
+    latest_shards: dict[tuple[int, str], dict] = {}
     base = artifacts_root / "downloads"
     if not base.exists():
         return records
@@ -173,9 +189,36 @@ def _load_summary_records(artifacts_root: Path) -> list[dict]:
 
         if isinstance(data, dict):
             data.setdefault("job_name", job_name)
-            records.append(data)
+            match = PYTHON_SHARD_ARTIFACT.fullmatch(job_name)
+            if match:
+                shard = int(match.group("shard"))
+                runtime = match.group("runtime")
+                attempt = int(match.group("attempt"))
+                data["shard"] = shard
+                data["run_attempt"] = attempt
+                key = (shard, runtime)
+                current = latest_shards.get(key)
+                if current is None or attempt > int(current["run_attempt"]):
+                    latest_shards[key] = data
+            else:
+                records.append(data)
 
+    records.extend(latest_shards[key] for key in sorted(latest_shards))
     return records
+
+
+def _missing_python_shard_receipts(records: Iterable[Mapping[str, object]]) -> list[str]:
+    observed = {
+        (record.get("shard"), record.get("python_version"))
+        for record in records
+        if isinstance(record.get("shard"), int) and isinstance(record.get("python_version"), str)
+    }
+    return [
+        f"shard {shard}/{PYTHON_SHARD_COUNT} (Python {runtime})"
+        for shard in range(1, PYTHON_SHARD_COUNT + 1)
+        for runtime in PYTHON_SHARD_RUNTIMES
+        if (shard, runtime) not in observed
+    ]
 
 
 def _detect_cosmetic_failure(
@@ -231,8 +274,15 @@ def _collect_table(
     coverage_percents: list[str] = []
     job_results: dict[str, list[str]] = {}
 
-    for record in sorted(records, key=lambda item: str(item.get("python_version", ""))):
+    for record in sorted(
+        records,
+        key=lambda item: (int(item.get("shard", 0)), str(item.get("python_version", ""))),
+    ):
         runtime = str(record.get("python_version", "unknown"))
+        shard = record.get("shard")
+        runtime_label = (
+            f"{runtime} shard {shard}/{PYTHON_SHARD_COUNT}" if isinstance(shard, int) else runtime
+        )
         job_name = str(record.get("job_name") or runtime)
         checks = record.get("checks") if isinstance(record.get("checks"), Mapping) else {}
 
@@ -246,10 +296,10 @@ def _collect_table(
         tests = _check("tests")
         coverage_min = _check("coverage_minimum")
 
-        lint_entries.append((runtime, lint))
-        type_entries.append((runtime, typing))
-        test_entries.append((runtime, tests))
-        coverage_entries.append((runtime, coverage_min))
+        lint_entries.append((runtime_label, lint))
+        type_entries.append((runtime_label, typing))
+        test_entries.append((runtime_label, tests))
+        coverage_entries.append((runtime_label, coverage_min))
         job_results.setdefault(job_name, []).extend([lint, typing, tests, coverage_min])
 
         coverage_info = (
@@ -257,13 +307,13 @@ def _collect_table(
         )
         percent = coverage_info.get("percent") if isinstance(coverage_info, Mapping) else None
         if isinstance(percent, (int, float)):
-            coverage_percents.append(f"{runtime}: {percent:.2f}%")
+            coverage_percents.append(f"{runtime_label}: {percent:.2f}%")
             percent_display = f"{percent:.2f}%"
         else:
             percent_display = "—"
 
         row = (
-            f"| {runtime}"
+            f"| {runtime_label}"
             f" | {_emoji(lint)} {_friendly(lint)}"
             f" | {_emoji(typing)} {_friendly(typing)}"
             f" | {_emoji(tests)} {_friendly(tests)}"
@@ -393,6 +443,7 @@ def summarize(context: SummaryContext) -> SummaryResult:
 
     records = _load_summary_records(context.artifacts_root)
     has_records = bool(records)
+    missing_shards = _missing_python_shard_receipts(records) if context.python_required else []
 
     (
         table,
@@ -416,6 +467,22 @@ def summarize(context: SummaryContext) -> SummaryResult:
         context.docker_result,
         context.test_quality_result,
     )
+    if missing_shards:
+        lines.append("- Python shard artifacts: ❌ missing " + ", ".join(missing_shards) + ".")
+    elif context.python_required:
+        lines.append("- Python shard artifacts: ✅ all 6 shards reported for Python 3.13 and 3.14.")
+    if context.combined_coverage_status == "complete" and isinstance(
+        context.combined_coverage_percent, (int, float)
+    ):
+        lines.append(
+            "- Combined coverage: ✅ "
+            f"{context.combined_coverage_percent:.2f}% from CI verify.py aggregate."
+        )
+    elif context.combined_coverage_status != "not-requested":
+        lines.append(
+            "- Combined coverage: ❔ UNKNOWN "
+            f"({context.combined_coverage_status}); no percentage or pass is inferred."
+        )
 
     state = "success"
     description = "All Gate checks succeeded."
@@ -427,7 +494,10 @@ def summarize(context: SummaryContext) -> SummaryResult:
     failure_checks: tuple[str, ...] = ()
     format_failure = False
 
-    if docs_guard_result == "cancelled":
+    if missing_shards:
+        state = "failure"
+        description = "Python CI artifacts missing: " + ", ".join(missing_shards) + "."
+    elif docs_guard_result == "cancelled":
         state = "pending"
         description = "Docs guard cancelled; waiting for rerun."
     elif docs_guard_result not in ("success", "skipped"):
@@ -504,6 +574,13 @@ def build_context() -> SummaryContext:
     test_quality_result = os.environ.get("TEST_QUALITY_RESULT") or "skipped"
     docker_changed = _normalize(os.environ.get("DOCKER_CHANGED"), "false") == "true"
     python_required = _normalize(os.environ.get("PYTHON_REQUIRED"), "true") == "true"
+    combined_coverage_status = _normalize(
+        os.environ.get("COMBINED_COVERAGE_STATUS"), "not-requested"
+    )
+    try:
+        combined_coverage_percent = float(os.environ["COMBINED_COVERAGE_PERCENT"])
+    except (KeyError, TypeError, ValueError):
+        combined_coverage_percent = None
     artifacts_root = Path(os.environ.get("GATE_ARTIFACTS_ROOT", "gate_artifacts"))
     summary_path = _resolve_path("GITHUB_STEP_SUMMARY")
     output_path = _resolve_path("GITHUB_OUTPUT")
@@ -531,6 +608,8 @@ def build_context() -> SummaryContext:
         delivery_seal_required=delivery_seal_required,
         delivery_seal_valid=delivery_seal_valid,
         delivery_seal_reason=delivery_seal_reason,
+        combined_coverage_status=combined_coverage_status,
+        combined_coverage_percent=combined_coverage_percent,
     )
 
 
@@ -548,7 +627,14 @@ def _write_outputs(result: SummaryResult, output_path: Path | None) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("a", encoding="utf-8") as handle:
         handle.write(f"state={result.state}\n")
-        handle.write(f"description={result.description}\n")
+        description = result.description
+        if "\n" in description or "\r" in description:
+            delimiter = f"gate_description_{uuid.uuid4().hex}"
+            while delimiter in description:
+                delimiter = f"gate_description_{uuid.uuid4().hex}"
+            handle.write(f"description<<{delimiter}\n{description}\n{delimiter}\n")
+        else:
+            handle.write(f"description={description}\n")
         handle.write(f"cosmetic_failure={'true' if result.cosmetic_failure else 'false'}\n")
         if result.failure_checks:
             handle.write("failure_checks=" + ",".join(result.failure_checks) + "\n")

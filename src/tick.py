@@ -261,7 +261,9 @@ def research_tick(
         for row in plan_out.get("skipped") or []:
             if row.get("reason"):
                 if producer_enabled:
-                    if not experiment_producer.record_skip(row["reason"], target=row.get("target")):
+                    if not experiment_producer.record_skip(
+                        row["reason"], target=row.get("target"), test_class=row.get("test_class")
+                    ):
                         continue
                 research_subjects.record_event(
                     "rejected",
@@ -441,7 +443,7 @@ def research_tick(
                 )
                 producer_meta_path.parent.mkdir(parents=True, exist_ok=True)
                 producer_meta_path.write_text(json.dumps(producer_meta, indent=2))
-                experiment_producer.record_launch()
+                experiment_producer.record_launch(test_source=prepare_result.get("test_source"))
             launched.append(prepare_result)
             plan["active_status"] = "launched"
             plan["exp_id"] = exp_id
@@ -497,6 +499,12 @@ def research_tick(
         except Exception as exc:
             plan["active_status"] = "failed"
             plan["error"] = str(exc)
+            if producer_enabled and isinstance(exc, experiment_producer.FrozenTestError):
+                experiment_producer.record_skip(
+                    "derive_failed",
+                    target=target,
+                    test_class=experiment_producer.test_class(spec),
+                )
             research_subjects.record_event(
                 "rejected",
                 identity=subject_identity,

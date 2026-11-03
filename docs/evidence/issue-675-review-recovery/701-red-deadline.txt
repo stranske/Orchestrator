@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/Orchestrator-issue-675-verified-closure/src/value_chain_monitor.py", line 808, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ^^^^^^^^^^^^^^^^^^
+  File "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/Orchestrator-issue-675-verified-closure/src/value_chain_monitor.py", line 800, in main
+    recurrence_fixture()
+  File "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/Orchestrator-issue-675-verified-closure/src/value_chain_monitor.py", line 775, in recurrence_fixture
+    assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "deadline_missed"
+AssertionError

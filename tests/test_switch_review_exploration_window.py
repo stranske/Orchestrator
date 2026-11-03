@@ -4,6 +4,8 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+import pytest
+
 import exploration_review
 import feedback
 import switch_review
@@ -129,3 +131,80 @@ def test_review_reads_window_dates_from_state(tmp_path, monkeypatch):
         "unconditioned": [],
     }
     assert "epsilon-greedy 0 / thompson-hybrid unmeasured" in switch_review.format_report(report)
+
+
+def test_weekly_switch_count_uses_window_decision_instant(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(switch_review, "_gh_call", lambda *a, **kw: (False, "", "offline"))
+    cutoff = int(datetime(2026, 11, 18, tzinfo=timezone.utc).timestamp())
+    (tmp_path / "exploration-window.json").write_text(
+        json.dumps(
+            {
+                "start": "2026-10-17",
+                "end": "20261215",
+                "extended": True,
+                "n_by_policy": {"epsilon-greedy": 1, "thompson-hybrid": 1},
+                "decided_at": "2026-11-18T00:00:00Z",
+            }
+        )
+    )
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        conn.execute(
+            "CREATE TABLE agent_switches (source TEXT, delegation_source TEXT, switched_ts INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO agent_switches VALUES ('policy', 'route_weights_exploration', ?)",
+            [(cutoff - 1,), (cutoff,), (cutoff + 1,)],
+        )
+    assert switch_review._exploration_window()["switches"] == 2
+
+
+@pytest.mark.parametrize(
+    "decided_at", ["garbage", None, "2026-11-18T00:00:00", "2026-10-16T00:00:00Z"]
+)
+def test_malformed_decision_does_not_turn_unknown_into_zero(tmp_path, monkeypatch, decided_at):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "absent.db")
+    monkeypatch.setattr(switch_review, "_gh_call", lambda *a, **kw: (False, "", "offline"))
+    (tmp_path / "exploration-window.json").write_text(
+        json.dumps(
+            {
+                "start": "2026-10-17",
+                "end": "20261215",
+                "extended": True,
+                "n_by_policy": {"epsilon-greedy": None, "thompson-hybrid": None},
+                "decided_at": decided_at,
+            }
+        )
+    )
+    window = switch_review._exploration_window()
+    assert window["switches"] == "UNKNOWN"
+    assert any("decision" in error or "unmeasured" in error for error in window["errors"])
+    assert not feedback.DB_PATH.exists()
+
+
+def test_legacy_window_bounds_future_switches_to_review_clock(tmp_path, monkeypatch):
+    monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+    monkeypatch.setattr(switch_review, "_gh_call", lambda *a, **kw: (False, "", "offline"))
+    start = int(datetime(2026, 10, 17, tzinfo=timezone.utc).timestamp())
+    (tmp_path / "exploration-window.json").write_text(
+        json.dumps(
+            {
+                "start": "2026-10-17",
+                "end": "20261117",
+                "extended": False,
+                "n_by_policy": {},
+            }
+        )
+    )
+    with sqlite3.connect(feedback.DB_PATH) as conn:
+        conn.execute(
+            "CREATE TABLE agent_switches (source TEXT, delegation_source TEXT, switched_ts INTEGER)"
+        )
+        conn.executemany(
+            "INSERT INTO agent_switches VALUES ('policy', 'route_weights_exploration', ?)",
+            [(start,), (start + 1,)],
+        )
+    assert switch_review._exploration_window(now=start)["switches"] == 1

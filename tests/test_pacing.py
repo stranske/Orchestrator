@@ -248,6 +248,105 @@ def test_router_consumes_pacing_shed_loses_to_ok():
     assert codex["pacing"]["projected_fraction"] == 4.2
 
 
+def test_shed_still_loses_to_ok_with_neutral_cursor():
+    """Issue #891: shed-loses-to-ok stays intact when Cursor joins as neutral."""
+    cap = cap_for()
+    cap["agents"]["cursor"] = dict(state="ok")
+    result = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "claude", "cursor"},
+        exploration_rate=0,
+        rng=random.Random(42),
+        simulate=True,
+    )
+    assert result["agent"] in {"claude", "cursor"}
+    decision = result["pacing_decision"]
+    assert decision["policy"] == "posterior*pacing"
+    assert {r["agent"]: r["routing_weight"] for r in decision["candidates"]} == {
+        "codex": 0.0,
+        "claude": 0.5,
+        "cursor": 1.0,
+    }
+
+
+def test_unmeasured_cursor_is_neutral_not_legacy():
+    import rate_incidents
+
+    cap = cap_for(codex="warn", cw=0.8)
+    cap["agents"]["cursor"] = dict(state="ok")
+    original = copy.deepcopy(cap)
+    result = router.select_agent(
+        "implement",
+        cap,
+        only={"codex", "cursor"},
+        exploration_rate=0,
+        rng=random.Random(42),
+        simulate=True,
+    )
+    decision = result["pacing_decision"]
+    assert decision["policy"] == "posterior*pacing"
+    assert {r["agent"]: r["routing_weight"] for r in decision["candidates"]} == {
+        "codex": 0.8,
+        "cursor": 1.0,
+    }
+    cursor = next(r for r in decision["candidates"] if r["agent"] == "cursor")
+    assert cursor["pacing"] is None
+    assert "cursor" not in router.PACING_POOLS
+    assert cap == original
+    # Relay log token must stay numeric even when Cursor has no nested pacing reading.
+    fields = rate_incidents.relay_log_fields_from_decision(decision, candidates="codex,cursor")
+    assert fields["weights"] == "codex:0.8,cursor:1"
+    assert "unknown" not in fields["weights"]
+
+
+def test_unmeasured_cursor_is_sampled_beside_ok_codex():
+    cap = cap_for(codex="ok", cw=1)
+    cap["agents"]["cursor"] = dict(state="ok")
+    chosen = {
+        router.select_agent(
+            "implement",
+            cap,
+            only={"codex", "cursor"},
+            exploration_rate=0,
+            rng=random.Random(seed),
+            simulate=True,
+        )["agent"]
+        for seed in range(200)
+    }
+    assert chosen == {"codex", "cursor"}
+
+
+def test_unmeasured_warn_drain_does_not_outrank_ok(monkeypatch):
+    """Drain-urgent unmeasured warn must not steal an unmeasured-only stripped tier."""
+    cap = cap_for(codex="ok", cw=1)
+    cap["agents"]["cursor"] = dict(state="ok")
+    cap["agents"]["vibe"] = dict(state="warn")
+    monkeypatch.setattr(
+        router, "_drain_urgency", lambda agent, _cap: -1.0 if agent == "vibe" else 0.0
+    )
+    chosen = set()
+    for seed in range(50):
+        result = router.select_agent(
+            "implement",
+            cap,
+            only={"codex", "cursor", "vibe"},
+            exploration_rate=0,
+            rng=random.Random(seed),
+            simulate=True,
+        )
+        chosen.add(result["agent"])
+        decision = result["pacing_decision"]
+        assert decision["policy"] == "posterior*pacing"
+        assert {r["agent"]: r["routing_weight"] for r in decision["candidates"]} == {
+            "codex": 1.0,
+            "cursor": 1.0,
+            "vibe": 1.0,
+        }
+    assert chosen == {"codex", "cursor"}
+    assert "vibe" not in chosen
+
+
 def test_all_shed_fails_toward_motion_best_posterior():
     result = pick(
         cap_for(claude="shed", aw=0),
@@ -735,13 +834,11 @@ def test_all_unknown_pacing_matches_legacy_including_exploration():
         assert before == after
 
 
-@pytest.mark.parametrize("field", ["late", "state", "policy", "drain"])
+@pytest.mark.parametrize("field", ["late", "policy", "drain"])
 def test_measured_weight_preserves_policy_tiers(monkeypatch, field):
     cap = cap_for(codex="ok", cw=1, aw=0.01)
     if field == "late":
         monkeypatch.setitem(router._ROUTE_TABLE_TYPED["implement"]["agents"][1], "late", True)
-    elif field == "state":
-        cap["agents"]["codex"]["state"] = "warn"
     elif field == "policy":
         monkeypatch.setattr(
             router, "_capacity_policy_bias", lambda task, agent, cap: int(agent == "codex")
@@ -786,7 +883,12 @@ def test_export_ignores_volatile_pacing_but_publishes_capacity_changes():
     assert route_weights_export._semantic_for_compare(
         base
     ) == route_weights_export._semantic_for_compare(other)
+    # The published pool state is the damped trigger; pacing.state alone is diagnostic.
     pace["state"] = "ok"
+    assert route_weights_export._semantic_for_compare(
+        base
+    ) == route_weights_export._semantic_for_compare(other)
+    other["capacity"]["codex"]["state"] = "ok"
     assert route_weights_export._semantic_for_compare(
         base
     ) != route_weights_export._semantic_for_compare(other)
@@ -888,11 +990,17 @@ def test_export_schedule_and_weight_drift_wait_for_regular_cadence():
     other["capacity"]["codex"]["pacing"]["used_fraction"] = 0.2
     assert route_weights_export._semantic_for_compare(
         base
+    ) == route_weights_export._semantic_for_compare(other)
+
+    # A real period rollover still triggers, without waiting for the refresh floor.
+    other["capacity"]["codex"]["pacing"]["period_end"] = START + pacing.PERIOD_SECONDS
+    assert route_weights_export._semantic_for_compare(
+        base
     ) != route_weights_export._semantic_for_compare(other)
 
 
 @pytest.mark.parametrize("leader", ["claude", "cursor", "vibe", "gemini"])
-def test_measured_codex_keeps_nonpacing_legacy_shares(monkeypatch, leader):
+def test_measured_codex_keeps_nonpacing_exploration_shares(monkeypatch, leader):
     agents = ("claude", "cursor", "codex", "vibe", "gemini")
     posteriors = dict(zip(agents, (0.766, 0.776, 0.612, 0.641, 0.561)))
     learned = {
@@ -910,18 +1018,25 @@ def test_measured_codex_keeps_nonpacing_legacy_shares(monkeypatch, leader):
         monkeypatch.setitem(entry, "late", False)
     before = {a: 0 for a in agents}
     after = {a: 0 for a in agents}
+    exploited = {a: 0 for a in agents}
     for seed in range(2000):
         args = dict(
             learned=learned, exploration_rate=0.2, exploration_mode="epsilon-greedy", simulate=True
         )
         old = router.select_agent("implement", cap, rng=random.Random(seed), **args)
         new = router.select_agent("implement", measured, rng=random.Random(seed), **args)
-        before[old["agent"]] += 1
-        after[new["agent"]] += 1
-    for agent in ("cursor", "vibe", "gemini"):
-        assert after[agent] == before[agent], (before, after)
+        # Neutral participation intentionally changes exploitation shares. The
+        # independent exploration draw must still choose the same challenger.
+        assert old["exploration"] == new["exploration"]
+        if old["exploration"]:
+            before[old["agent"]] += 1
+            after[new["agent"]] += 1
+        else:
+            exploited[new["agent"]] += 1
+    assert sum(before.values()) > 0
+    assert after == before
     if leader == "claude":
-        share = after["claude"] / (after["claude"] + after["codex"])
+        share = exploited["claude"] / (exploited["claude"] + exploited["codex"])
         assert share == pytest.approx(0.766 / (0.766 + 0.612 * 0.918), abs=0.04)
 
 
@@ -1074,14 +1189,26 @@ def test_shed_to_warn_with_projection_prints_drain():
 
 
 @pytest.mark.parametrize("weight", [0, 0.918])
-def test_pacing_subset_ignores_nonpool_positive_weight(monkeypatch, weight):
+def test_pacing_includes_neutral_nonpool_candidates(monkeypatch, weight):
     cap = {"agents": {a: dict(state="ok") for a in ("claude", "codex", "cursor", "vibe", "gemini")}}
     for a in ("codex", "claude"):
         cap["agents"][a]["pacing"] = dict(state="ok", routing_weight=weight)
     monkeypatch.setattr(router.execution_profiles, "profiles_for_agent", lambda *a, **k: [])
-    row = router.select_agent("implement", cap, exploration_rate=0, simulate=True)
-    assert row["agent"] in router.PACING_POOLS
-    assert row["pacing_decision"]["policy"] == ("posterior*pacing" if weight else "fallback-warn")
+    row = router.select_agent(
+        "implement", cap, exploration_rate=0, rng=random.Random(42), simulate=True
+    )
+    decision = row["pacing_decision"]
+    assert decision["policy"] == "posterior*pacing"
+    candidates = {r["agent"]: r for r in decision["candidates"]}
+    # Gemini has no admissible execution profile in this fixture and stays out.
+    assert "gemini" not in candidates
+    for agent in ("cursor", "vibe"):
+        assert candidates[agent]["routing_weight"] == 1.0
+        assert candidates[agent]["pacing"] is None
+    for agent in router.PACING_POOLS:
+        assert candidates[agent]["routing_weight"] == weight
+    if not weight:
+        assert row["agent"] not in router.PACING_POOLS
 
 
 # #698: history confidence, minimum evidence, reset boundaries and tick damping.
@@ -1160,16 +1287,21 @@ def test_minimum_sample_rule_counts_distinct_observations(offsets, values, span)
     assert row["routing_weight"] == pytest.approx(1.0)
 
 
-def test_burn_window_excludes_old_future_other_source_and_prior_period():
+def test_burn_window_keeps_anchor_excludes_future_other_source_and_prior_period():
     now = START + pacing.DAY_SECONDS
     data = observations([now - 3600, now - 1800, now], [0.08, 0.09, 0.1])
     data += observations([START - 1, now - 6 * 3600 - 1, now + 1], [0, 0, 1])
     data += [dict(ts=now - 6 * 3600, used_fraction=0.9, source="other")]
     row = evaluate(u=0.1, samples=data)
-    assert row["span_h"] == 1 and row["confidence"] == pytest.approx(1 / 6)
-    assert row["burn_rate_per_day"] == pytest.approx(0.48)
-    # Old endpoints cannot manufacture three observations inside the window.
-    assert pacing.burn_rate(data[1:], now, START, source=SOURCE) is None
+    assert row["span_h"] == 6 and row["confidence"] == 1
+    # Anchor interval: .08 / 18001s * 86400 = .3839786679/day;
+    # next two intervals: .01 / 1800s * 86400 = .48/day each.
+    # Clipped EWMA masses are exp(-1/6)-exp(-1) and 1-exp(-1/6):
+    # (.3839786679*.4786022837 + .48*.1535182751) / .6321205588
+    # = .4072986328160915/day (future/other-source/prior-period rows excluded).
+    assert row["burn_rate_per_day"] == pytest.approx(0.4072986328160915)
+    # One anchor plus one in-window observation still cannot meet the sample minimum.
+    assert pacing.burn_rate(data[2:], now, START, source=SOURCE) is None
 
 
 def test_usage_drop_restarts_span_even_with_unchanged_period():
@@ -1264,7 +1396,7 @@ def test_integrate_persists_previous_weight_and_report_fields(tmp_path, monkeypa
             )
         )
         text = pacing_usage.report(tmp_path, now=now, current=dict(agents=agents))
-        for field in ("span_h=0.0", "c=0.0", f"w_p_prev→w_p={float(prior)}→{expected}"):
+        for field in ("span_h=0.0", "c=0.0", f"w_p_prev→w_p={prior:.3f}→{expected:.3f}"):
             assert field in text
     saved = pacing_usage.read_rows(tmp_path / "capacity-ledger.ndjson")[-1]
     assert saved["agents"]["codex"]["pacing"]["routing_weight"] == 0.75
@@ -1371,3 +1503,36 @@ def test_expired_reset_does_not_expand_pacing_budget():
     )
     assert row["n_usable"] == 1
     assert row["capacity_budget"] == pytest.approx(1.925)
+
+
+@pytest.mark.parametrize(
+    "anchor_age,used",
+    [(20 * 3600, False), (6.1 * 3600, True), (8 * 3600, True), (8 * 3600 + 1, False)],
+)
+def test_burn_anchor_age_bound_after_poller_outage(anchor_age, used):
+    now = START + pacing.DAY_SECONDS
+    data = observations([now - anchor_age, now - 720, now - 360, now], [0.01, 0.58, 0.59, 0.6])
+    row = evaluate(u=0.6, samples=data)
+    ignored = f"anchor ignored: age={anchor_age:.0f}s > bound=28800s"
+    assert (ignored in row["fyi"]) is not used
+    if used:
+        assert row["confidence"] == 1 and row["span_h"] == 6
+        assert row["state"] == "shed"
+    else:
+        assert row["span_h"] == pytest.approx(0.2)
+        assert row["confidence"] == pytest.approx(0.2 / 6)
+        assert row["burn_rate_per_day"] is None
+        assert row["state"] == "warn", "partial confidence must not shed from projection"
+
+
+@pytest.mark.parametrize("age,rendered", [(2_000_000, "2000000"), (32_400.6, "32401")])
+def test_ignored_anchor_age_is_a_plain_rounded_integer(age, rendered):
+    now = 3_000_000
+    diagnostics = []
+    pacing.burn_estimate(
+        [{"ts": now - age, "used_fraction": 0.1}],
+        now,
+        0,
+        diagnostics=diagnostics,
+    )
+    assert diagnostics == [f"anchor ignored: age={rendered}s > bound=28800s"]

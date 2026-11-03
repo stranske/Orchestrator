@@ -1,0 +1,9 @@
+Controlled public CSV fixture task for one real Closer end-to-end test. Every issue, branch and PR in this chain must be visibly labeled as a test. The initial partial fixture revision is intentionally incomplete and must never be described as completed implementation. Original requirements below remain unchanged before and after that initial merge.
+
+Tasks and acceptance criteria:
+- In tests/fixtures/closer_real_csv_canary/v1/csv_export.py, implement export_rows(rows, format) for fixed fields name and score. JSON must preserve the existing round-trip behavior.
+- CSV must emit exactly the header name,score, CRLF record endings and one record per input. Values containing commas, quotes, LF or CR must round-trip through Python csv.reader. Empty input must return the header alone.
+- Unsupported formats must raise ValueError.
+- Add verify_csv_contract.py in the same isolated fixture directory. It is an explicit standard-library-only contract script, not an automatically collected production test. Run it on the partial revision to retain a genuine failure, then after correction to retain a genuine pass.
+- Keep every change within these two fixture files; do not alter production modules, workflows, credentials, permissions or settings.
+- Genuine native Verify outcomes and corrective worker/publication proof are required before claiming this test complete. Mock evidence and an initial partial merge do not satisfy the task.

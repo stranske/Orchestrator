@@ -19,6 +19,7 @@ LANES = {
 
 @pytest.fixture
 def world(monkeypatch, tmp_path):
+    monkeypatch.setattr(dispatcher, "linked_open_prs", lambda _target: [])
     ledger = tmp_path / "capabilities.json"
     rows = {}
     for name in LANES.values():

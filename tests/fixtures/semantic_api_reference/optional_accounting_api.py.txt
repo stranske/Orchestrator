@@ -1,0 +1,478 @@
+"""Prospective semantic advice bridge; retained source identity stays host-owned.
+
+No actions, collection plans, tools or qualification are issued here. Each read
+rebuilds the numbered catalog from the original physical packet and raw files.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+from pathlib import Path
+
+import closer_disposition as disposition
+import closer_execution_contracts as contracts
+
+SCHEMA = "closer-semantic-assessment/v1"
+PROOF_GAPS = frozenset(
+    {"evidence_absent", "evidence_inconclusive", "observed_execution_required", "source_conflict"}
+)
+
+
+class AssessmentError(ValueError):
+    pass
+
+
+def _need(ok, reason):
+    if not ok:
+        raise AssessmentError(reason)
+
+
+def _text(value, minimum=1, maximum=2000):
+    return isinstance(value, str) and minimum <= len(value.strip()) <= maximum
+
+
+def _members(index):
+    for key in sorted(index):
+        rows = index[key] if isinstance(index[key], list) else [index[key]]
+        for row in sorted(rows, key=lambda value: json.dumps(value, sort_keys=True)):
+            yield key, row
+
+
+def catalog_digest(view):
+    """Identity of supplied public content, never an admission/semantic permit."""
+    return hashlib.sha256(
+        json.dumps(
+            view, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _ci_visible(member, ref, raw_text, projection):
+    """Reuse the existing source-owned CI view; never move catalog numbers."""
+    if member.get("kind") not in {"junit", "test-summary", "coverage-summary"}:
+        return raw_text, True, None
+    matched = [
+        row
+        for row in projection["receipts"]
+        if isinstance(row.get("ref"), dict)
+        and all(row["ref"].get(key) == ref[key] for key in ("path", "sha256", "bytes"))
+        and row.get("receipt_kind") == member["kind"]
+        and row.get("receipt_path") == member["receipt_path"]
+        and all(
+            row.get(key) == member[key]
+            for key in ("artifact_id", "run_id", "run_attempt", "head_sha")
+        )
+    ]
+    row = matched[0] if matched else {}
+    supplied = row.get("content_supplied") is True
+    text = row.get("content", "") if supplied else ""
+    redacted = row.get("redaction_applied") is True
+    citable = supplied and not redacted
+    if citable and text == raw_text and not row.get("truncated"):
+        return text, True, None  # Existing complete unredacted view is unchanged.
+    visibility = {
+        "schema": "closer-semantic-visible-catalog/v1",
+        "source": projection["schema"],
+        "limits": copy.deepcopy(projection["limits"]),
+        "total_bytes": ref["bytes"],
+        "supplied_bytes": len(text.encode("utf-8")),
+        "raw_prefix_bytes": row.get("raw_prefix_bytes", 0),
+        "content_supplied": supplied,
+        "truncated": bool(row.get("truncated")) or not supplied,
+        "redaction_applied": redacted,
+        "citable": citable,
+        "omission_reason": (
+            "credential-redacted context only; this entry is not citable"
+            if redacted
+            else row.get("omission_reason", "receipt count bound; content not supplied to model")
+        ),
+    }
+    return text, citable, visibility
+
+
+def _build(snapshot, packet, packet_ref, retained_dir):
+    identity, root = contracts._context(snapshot, packet, packet_ref, retained_dir)
+    expected = disposition._expected(snapshot)
+    _need(expected is not None, "original_obligation_inventory_unavailable")
+    findings = disposition.pending_nonpass_findings(snapshot, packet)
+    # Match integrate_ordinary's complete NON_PASS union, including retained
+    # raw findings as well as prior criteria/current native rows. Keep occurrence
+    # multiplicity; equal IDs with different original content are ambiguous.
+    previous = packet["sections"]["prior_dispositions"].get("content") or {}
+    previous_raw = previous.get("raw_findings", []) if isinstance(previous, dict) else []
+    if isinstance(previous_raw, list):
+        findings += [
+            {"finding_id": disposition._finding_id(row), "raw": copy.deepcopy(row)}
+            for row in previous_raw
+            if isinstance(row, dict)
+            and str(row.get("verdict", row.get("result", ""))).upper()
+            in {"NON_PASS", "FAIL", "FAILED"}
+        ]
+    originals = {}
+    for finding in findings:
+        key = finding["finding_id"]
+        _need(
+            key not in originals or originals[key] == finding["raw"],
+            "original_finding_identity_collision",
+        )
+        originals[key] = copy.deepcopy(finding["raw"])
+    # Catalog numbers must never slide onto another proof when an original raw
+    # file disappears or changes. Validate physical retained refs before the
+    # existing index can omit an invalid member and renumber its successors.
+    pending = [packet]
+    visited = 0
+    while pending:
+        visited += 1
+        _need(visited <= 100000, "catalog_packet_inventory_exceeds_bound")
+        value = pending.pop()
+        if isinstance(value, dict):
+            if (
+                {"path", "sha256", "bytes"} <= set(value)
+                and isinstance(value.get("path"), str)
+                and Path(value["path"]).is_absolute()
+            ):
+                _need(
+                    disposition._safe_raw(
+                        value, root, max_bytes=disposition.closer_evidence.MAX_UNCOMPRESSED_BYTES
+                    )
+                    is not None,
+                    "catalog_raw_changed",
+                )
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    ordinary = disposition._receipt_index(packet, root)
+    verifier = snapshot.get("verifier")
+    native = (
+        disposition._native_resolution_index(packet, root, verifier)
+        if isinstance(verifier, dict)
+        else {}
+    )
+    # Source-known NON_PASS defines a nonaccepting accounting question; a
+    # missing native resolution receipt is a proof gap, not a demand to assess
+    # every previously unassessed acceptance obligation. This mode grants no
+    # authority and cannot resolve a finding without its own valid proof.
+    known_nonpass = bool(findings)
+    mode = "known_NONPASS_accounting" if known_nonpass else "ordinary_acceptance"
+    required = [] if known_nonpass else list(range(1, len(expected) + 1))
+    # Same physical/member/total/count/redaction policy as the original model
+    # context. Complete safe-JUnit/index admission above remains unchanged.
+    from closer_dispatcher import _data_only_ci_receipt_inputs
+
+    ci_projection = _data_only_ci_receipt_inputs(
+        packet["sections"]["ci_artifacts"], retained_dir=root, max_bytes=32 * 1024
+    )
+    entries = []
+    # Keep namespaces distinct even if the same raw reference has two meanings.
+    for purpose, index in (("ordinary", ordinary), ("native_resolution", native)):
+        for (path, sha), member in _members(index):
+            ref = {"path": path, "sha256": sha, "bytes": Path(path).stat().st_size}
+            reader = (
+                disposition._safe_junit_raw
+                if member.get("kind") == "junit"
+                else disposition._safe_raw
+            )
+            raw = reader(ref, root)
+            _need(raw is not None, "catalog_raw_changed")
+            try:
+                content = raw.decode("utf-8")
+            except UnicodeError as error:
+                raise AssessmentError("catalog_raw_not_utf8") from error
+            visible, citable, visibility = _ci_visible(member, ref, content, ci_projection)
+            entries.append(
+                {
+                    "ref": ref,
+                    "member": copy.deepcopy(member),
+                    "purpose": purpose,
+                    "content": visible,
+                    "citable": citable,
+                    "visibility": visibility,
+                }
+            )
+    view = {
+        "mode": mode,
+        "required_obligation_slots": required,
+        "required_finding_slots": list(range(1, len(findings) + 1)),
+        "obligations": [
+            {"slot": n, "source": source, "text": text}
+            for n, (source, text) in enumerate(expected, 1)
+        ],
+        "findings": [
+            {
+                "slot": n,
+                "raw": copy.deepcopy(row["raw"]),
+                "proof_scope": "ordinary_or_native_resolution",
+            }
+            for n, row in enumerate(findings, 1)
+        ],
+        "catalog": [
+            {
+                "ref": n,
+                "kind": row["member"]["kind"],
+                "purpose": row["purpose"],
+                "context": {
+                    key: row["member"][key]
+                    for key in ("filename", "receipt_path")
+                    if key in row["member"]
+                },
+                "content": row["content"],
+                **({"visibility": copy.deepcopy(row["visibility"])} if row["visibility"] else {}),
+            }
+            for n, row in enumerate(entries, 1)
+        ],
+    }
+    return identity, root, expected, findings, entries, view
+
+
+def catalog_input(snapshot, packet, packet_ref, retained_dir):
+    """Return visible source inventory/content; never expected semantic answers."""
+    return _build(snapshot, packet, packet_ref, retained_dir)[-1]
+
+
+def _citations(values, entries, root, *, required=False, purpose=None):
+    _need(
+        isinstance(values, list) and (1 if required else 0) <= len(values) <= 8, "citations_invalid"
+    )
+    selected, refs, proofs, seen = [], [], [], set()
+    for value in values:
+        _need(
+            isinstance(value, dict) and set(value) == {"ref", "excerpt", "relevance"},
+            "citation_keys_invalid",
+        )
+        number = value["ref"]
+        _need(
+            type(number) is int and 1 <= number <= len(entries) and number not in seen,
+            "citation_ref_invalid",
+        )
+        seen.add(number)
+        row = entries[number - 1]
+        _need(purpose is None or row["purpose"] == purpose, "citation_purpose_invalid")
+        _need(
+            _text(value["excerpt"], 4, 2_000_000) and _text(value["relevance"], 12),
+            "citation_semantics_missing",
+        )
+        _need(
+            row["citable"] and value["excerpt"] in row["content"],
+            "citation_outside_supplied_visible_content",
+        )
+        ref = copy.deepcopy(row["ref"])
+        proof = {
+            **copy.deepcopy(row["member"]),
+            "evidence_sha256": ref["sha256"],
+            "excerpt": value["excerpt"],
+            "relevance": value["relevance"],
+        }
+        # Exactly the selected member, never a search for another supporting proof.
+        index = {(ref["path"], ref["sha256"]): row["member"]}
+        _need(disposition._proofs_valid([ref], [proof], index, root), "citation_proof_unbound")
+        _need(ref not in refs, "citation_same_physical_ref_repeated")
+        refs.append(ref)
+        proofs.append(proof)
+        selected.append(copy.deepcopy(value))
+    return refs, proofs
+
+
+def _rows(values, count, statuses, entries, root, *, required=None):
+    required = set(range(1, count + 1)) if required is None else set(required)
+    _need(isinstance(values, list) and len(values) <= count, "coverage_incomplete")
+    mapped = {}
+    for row in values:
+        _need(isinstance(row, dict), "assessment_row_invalid")
+        status = row.get("status")
+        keys = {"slot", "meaning", "status", "citations", "explanation"}
+        if status == "unknown":
+            keys.add("gap")
+        _need(set(row) == keys, "assessment_row_keys_invalid")
+        slot = row["slot"]
+        _need(
+            type(slot) is int and 1 <= slot <= count and slot not in mapped,
+            "assessment_slot_invalid",
+        )
+        _need(type(status) is str and status in statuses, "assessment_status_invalid")
+        _need(
+            row["meaning"] in ("understood", "unknown") and _text(row["explanation"]),
+            "assessment_meaning_invalid",
+        )
+        if status == "unknown":
+            _need(
+                (row["meaning"] == "unknown" and row["gap"] == "obligation_ambiguous")
+                or (
+                    row["meaning"] == "understood"
+                    and isinstance(row["gap"], str)
+                    and row["gap"] in PROOF_GAPS
+                ),
+                "assessment_gap_invalid",
+            )
+        else:
+            _need(row["meaning"] == "understood", "known_outcome_requires_understood_meaning")
+        refs, proofs = _citations(row["citations"], entries, root, required=status != "unknown")
+        mapped[slot] = (row, refs, proofs)
+    _need(required <= set(mapped), "coverage_incomplete")
+    return mapped
+
+
+def materialize(
+    response, *, snapshot, packet, packet_ref, retained_dir, expected_catalog_sha256=None
+):
+    """Validate model semantics and attach only original selected host metadata."""
+    _need(
+        isinstance(response, dict)
+        and set(response) == {"schema", "obligations", "findings", "global_concerns"}
+        and response.get("schema") == SCHEMA,
+        "assessment_schema_invalid",
+    )
+    _need(
+        len(json.dumps(response, ensure_ascii=False).encode()) <= contracts.MAX_BYTES,
+        "assessment_exceeds_bound",
+    )
+    identity, root, expected, findings, entries, _view = _build(
+        snapshot, packet, packet_ref, retained_dir
+    )
+    _need(
+        expected_catalog_sha256 is None or expected_catalog_sha256 == catalog_digest(_view),
+        "supplied_catalog_view_changed",
+    )
+    obligations = _rows(
+        response["obligations"],
+        len(expected),
+        {"satisfied", "unsatisfied", "unknown"},
+        entries,
+        root,
+        required=_view["required_obligation_slots"],
+    )
+    meanings = _rows(
+        response["findings"],
+        len(findings),
+        {"confirmed", "duplicate", "nonissue", "unknown"},
+        entries,
+        root,
+    )
+    concerns = response["global_concerns"]
+    _need(isinstance(concerns, list) and len(concerns) <= 20, "global_concerns_invalid")
+    for concern in concerns:
+        _need(
+            isinstance(concern, dict) and set(concern) == {"kind", "explanation", "citations"},
+            "concern_keys_invalid",
+        )
+        _need(
+            concern["kind"] in ("security", "authority_conflict", "ownership", "ambiguity")
+            and _text(concern["explanation"]),
+            "concern_invalid",
+        )
+        _citations(concern["citations"], entries, root)
+    all_rows = [value[0] for value in [*obligations.values(), *meanings.values()]]
+    meaning_unknown = any(row["meaning"] == "unknown" for row in all_rows)
+    incomplete = any(row["status"] == "unknown" for row in all_rows)
+    unmet = any(row["status"] in {"unsatisfied", "confirmed"} for row in all_rows)
+    needs = ["semantic_meaning_unknown"] if meaning_unknown else []
+    if (
+        any(
+            obligations[slot][0]["status"] == "unknown"
+            for slot in _view["required_obligation_slots"]
+        )
+        and not meaning_unknown
+    ):
+        needs.append("semantic_acceptance_proof_gap")
+    if concerns:
+        needs.append("semantic_global_concern")
+    if any(row["status"] == "confirmed" for row, _refs, _proofs in meanings.values()):
+        needs.append("known_unmet_finding_requires_independently_admitted_source_route")
+    if contracts.owner_review_required(findings):
+        needs.append("original_finding_requires_qualified_owner")
+    criteria = []
+    for slot, (source, text) in enumerate(expected, 1):
+        if slot not in obligations:
+            continue  # Host-only UNASSESSED, never an observed semantic result.
+        row, refs, proofs = obligations[slot]
+        # A native input record is not acceptance proof even if semantically cited.
+        if row["status"] == "satisfied":
+            _citations(row["citations"], entries, root, required=True, purpose="ordinary")
+        criteria.append(
+            {
+                "source": source,
+                "criterion": text,
+                "result": "PASS"
+                if row["status"] == "satisfied"
+                else "UNKNOWN"
+                if row["status"] == "unknown" and slot not in _view["required_obligation_slots"]
+                else "FAIL",
+                "evidence": refs,
+                "proofs": proofs,
+            }
+        )
+    resolutions = []
+    for slot, original in enumerate(findings, 1):
+        row, refs, proofs = meanings[slot]
+        if row["status"] in {"duplicate", "nonissue"}:
+            refs, proofs = _citations(row["citations"], entries, root, required=True)
+            # Match the unchanged ordinary NON_PASS host index exactly. Native
+            # input proofs are resolution-only; ordinary code/CI can also support
+            # a finding when the reviewer supplies its semantic connection.
+            resolution_index = disposition._receipt_index(packet, root)
+            verifier = snapshot.get("verifier")
+            if isinstance(verifier, dict):
+                resolution_index = {
+                    **resolution_index,
+                    **disposition._native_resolution_index(packet, root, verifier),
+                }
+            _need(
+                disposition._proofs_valid(refs, proofs, resolution_index, root),
+                "finding_resolution_proof_unbound",
+            )
+            resolutions.append(
+                {
+                    "finding_id": original["finding_id"],
+                    "status": "resolved_" + row["status"],
+                    "next_guarded_action": "wait",
+                    "evidence": refs,
+                    "proofs": proofs,
+                }
+            )
+        elif row["status"] == "unknown" and row["meaning"] == "understood":
+            resolutions.append(
+                {
+                    "finding_id": original["finding_id"],
+                    "status": "unresolved_missing_evidence",
+                    "next_guarded_action": "wait",
+                    "reason": row["explanation"],
+                }
+            )
+    # Recheck physical context/raw catalog after all semantic validation.
+    _need(
+        _build(snapshot, packet, packet_ref, retained_dir)[-1] == _view,
+        "assessment_context_changed",
+    )
+    return {
+        "target": identity["target"],
+        "head": identity["head"],
+        "base": identity["base"],
+        "classification": "uncertain" if meaning_unknown else "relevant",
+        "substantive_needs": needs,
+        "findings": [],
+        "resolutions": resolutions,
+        "semantic_original_findings": copy.deepcopy(findings),
+        "semantic_mode": _view["mode"],
+        "unassessed_obligation_slots": [
+            n for n in range(1, len(expected) + 1) if n not in obligations
+        ],
+        "decision": {"criteria": criteria},
+        "semantic_assessment": copy.deepcopy(response),
+        "semantic_summary": {
+            "meaning_unknown": meaning_unknown,
+            "proof_incomplete": incomplete,
+            "known_unmet": unmet,
+            "global_concern": bool(concerns),
+        },
+        "semantic_readiness": "held"
+        if concerns
+        else "knowledge_incomplete"
+        if incomplete
+        else "known_unmet"
+        if unmet
+        else "nonaccepting_accounting"
+        if _view["mode"] == "known_NONPASS_accounting"
+        else "acceptance_candidate_only",
+        "authority": False,
+    }

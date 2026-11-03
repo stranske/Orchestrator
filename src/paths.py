@@ -78,19 +78,24 @@ FLEET_ROOT = REPO_ROOT.parent
 # and an implicit `sys.path` accident is how that dependency would rot silently.
 TESTS_DIR = REPO_ROOT / "tests"
 
-# Registries that SEED themselves on a first load, at MODULE_DIR/experiments/<file>, unless the named
-# variable points elsewhere: features.py and capabilities.py read ORCH_FEATURES_PATH,
-# repo_knowledge.py ORCH_REPO_KNOWLEDGE_PATH, research_scheduler.py ORCH_HYP_PATH. In the flat exec
-# mirror those default paths are deployment-owned (install_verified_snapshot.OWNED_FILES), so a run
-# that loads one without its variable writes into the tree being deployed; on 2026-10-04 that VOIDed
-# every verified sync from a clean clone. Anything that runs the modules in a sandbox points all of
-# these at the sandbox. scripts/verify_before_sync.sh sets the same three, and
-# tests/test_verify_before_sync.py checks both the loaders and the script against this map.
+# Mutable defaults belong to the operational runtime, independently of source layout.
+# Explicit per-registry paths still win; verifiers isolate all three named variables.
+# Optional shipped registry snapshots remain immutable source-owned payloads.
 SEEDED_REGISTRY_ENV = {
     "ORCH_FEATURES_PATH": "features.json",
     "ORCH_REPO_KNOWLEDGE_PATH": "repo_knowledge.json",
     "ORCH_HYP_PATH": "hypotheses.json",
 }
+
+
+def runtime_state_path(*parts: str) -> Path:
+    """Resolve mutable state without reading or writing the deployment tree.
+
+    No implicit migration: existing snapshots and historical runtime data stay in
+    place. A caller can explicitly select an older store with its named override.
+    """
+    root = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
+    return root.joinpath(*parts)
 
 
 def checkout_root(module_dir: Path) -> Path:

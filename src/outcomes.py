@@ -2068,6 +2068,7 @@ def link_triage_consumption(*, now: float | None = None, limit: int = 100, pr_re
                 accepted=True,
                 producer="triage_consumption",
                 attempt_id=row.get("consumption_id") or str(row["ts"]),
+                receipt_ref=f"{triage_shadow.consumed_path()}#{consumption_id}",
             )
             record = {
                 "consumed_ts": row["ts"],

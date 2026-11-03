@@ -56,6 +56,8 @@ markers = [
 # file; `coverage combine` merges them. `verify.py --coverage` does both.
 [tool.coverage.run]
 parallel = true
+# Shards run in separate checkouts; their data must name the same source files on aggregation.
+relative_files = true
 # `src`, not `.`: the modules moved, and pointing at the checkout root would measure the tests and
 # the tooling instead of the code under test.
 source = ["src"]

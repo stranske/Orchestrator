@@ -30,16 +30,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import random
 import sys
 import time
 from pathlib import Path
-from typing import Any, Tuple, TypedDict, Union
+from typing import Any, NotRequired, Tuple, TypedDict, Union
 
 import adapters
 import capabilities
 import claims
+import closer_role_selection
 import execution_profiles
 import feedback
 
@@ -92,6 +94,10 @@ class RouteSpec(TypedDict):
 
     role: str
     agents: list[RouteEntry]
+    neutral_prior: NotRequired[bool]
+    reasoning_efforts: NotRequired[list[str]]
+    closer_role: NotRequired[str]
+    permission_modes: NotRequired[list[str]]
 
 
 Score = Tuple[Union[int, float], ...]
@@ -229,6 +235,38 @@ ROUTE_TABLE: dict = {
     },
 }
 
+# Closer requirements describe the work, not a preferred provider. These cells
+# get equal priors in the existing learner; allocations are temporary decisions.
+for _closer_task, _closer_role in {
+    "closer_interpret": "bounded_classification",
+    "closer_exception": "strong_criterion_adjudication",
+    "closer_repair": "constrained_repair",
+}.items():
+    ROUTE_TABLE[_closer_task] = {
+        "role": "code" if _closer_task == "closer_repair" else "review",
+        "neutral_prior": True,
+        "closer_role": _closer_role,
+        "permission_modes": (
+            ["workspace-write"]
+            if _closer_task == "closer_repair"
+            else ["workspace-write", "read-only"]
+        ),
+        "agents": [
+            {
+                "agent": agent,
+                # A compatibility hint for mode-only consumers, not a profile/model
+                # preference. Exact selected profiles retain their own model/effort.
+                "mode": (
+                    "composer"
+                    if agent == "cursor"
+                    else "cheap" if _closer_task == "closer_interpret" else "mid"
+                ),
+                "late": False,
+            }
+            for agent in ("codex", "claude", "gemini", "muse", "cursor", "vibe")
+        ],
+    }
+
 # The public route table remains a generic mapping for compatibility with its existing consumers;
 # this private view records the invariant enforced by the static table above.
 _ROUTE_TABLE_TYPED: dict[str, RouteSpec] = ROUTE_TABLE
@@ -241,7 +279,11 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
     exact model pinned for the entry's mode.  Historical/replay callers use
     ``execution_profiles`` directly and remain able to name every profile.
     """
-    profiles = execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+    profiles = [
+        profile
+        for profile in execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+        if adapters.automatic_profile_within_cap(profile)
+    ]
     if entry["agent"] != "gemini":
         return profiles
     tier = adapters.effective_tier("gemini", entry["mode"])
@@ -250,6 +292,59 @@ def _automatic_profiles(entry: RouteEntry, *, transport: str) -> list[dict]:
         return []
     expected_model = health["model"]
     return [profile for profile in profiles if profile["requested_model"] == expected_model]
+
+
+def _route_profiles(
+    entry: RouteEntry,
+    spec: RouteSpec,
+    transport: str,
+    *,
+    category=None,
+    selection_policy=None,
+    independent_of_provider=None,
+) -> list[dict]:
+    role = spec.get("closer_role")
+    if role is not None:
+        import closer_role_qualification as roles
+
+        return [
+            profile
+            for profile in closer_role_selection.candidates_for_agent(
+                entry["agent"],
+                role,
+                transport,
+                category,
+                policy=selection_policy,
+                independent_of_provider=independent_of_provider,
+            )
+            if adapters.automatic_profile_within_cap(profile)
+            and roles.is_runtime_qualified(profile, role)
+            and profile.get("permission_mode")
+            in spec.get("permission_modes", [profile.get("permission_mode")])
+        ]
+    efforts = spec.get("reasoning_efforts")
+    if efforts is None:
+        return _automatic_profiles(entry, transport=transport)
+    return [
+        profile
+        for profile in execution_profiles.profiles_for_agent(entry["agent"], transport=transport)
+        if adapters.automatic_profile_within_cap(profile)
+        and profile["reasoning_effort"] in efforts
+        and profile.get("permission_mode")
+        in spec.get("permission_modes", [profile.get("permission_mode")])
+    ]
+
+
+def _closer_profile_capacity(profile: dict, cap: dict) -> bool:
+    agent = cap.get("agents", {}).get(profile["agent"], {})
+    pools = profile.get("capacity_pool_ids") or []
+    return bool(
+        agent.get("state") in {"ok", "warn"}
+        and (agent.get("auth") or {}).get("authenticated") is not False
+        and cap.get("profiles", {}).get(profile["profile_id"], {}).get("state") in {"ok", "warn"}
+        and pools
+        and all(cap.get("pools", {}).get(pool, {}).get("state") in {"ok", "warn"} for pool in pools)
+    )
 
 
 def _state(cap: dict, agent: str) -> str:
@@ -479,34 +574,52 @@ def _measured_pacing(row: dict) -> bool:
 
 def _pacing_choice(scored, cap, learned, rng):
     """Posterior × literal pacing weight; warn-zero before shed fallback."""
-    if scored[0][1]["agent"] not in PACING_POOLS:
+
+    def measured(row):
+        agent = row[1]["agent"]
+        return agent in PACING_POOLS and _measured_pacing(cap.get("agents", {}).get(agent, {}))
+
+    if not any(measured(row) for row in scored):
         return scored[0], None
     rows = []
     for row in scored:
         _, entry, state, idx = row
         pace = cap.get("agents", {}).get(entry["agent"], {}).get("pacing") or {}
-        weight = pace.get("routing_weight")
-        weight = float(weight) if weight is not None else (1.0 if state == "ok" else 0.0)
+        # Unmetered seats compete neutrally; this does not invent a usage reading.
+        weight = float(pace["routing_weight"]) if measured(row) else 1.0
         posterior, _, _ = _learned_posterior_score(
             learned, entry["agent"], _prior_posterior_from_rank(idx, len(scored))
         )
         rows.append((row, posterior, max(0.0, weight)))
     non_shed = [r for r in rows if r[0][2] in ("ok", "warn")]
     eligible = non_shed or rows
-    # Preserve every legacy policy tier; replace only the final learned ranking.
-    best_tier = min(r[0][0][:-1] for r in eligible)
-    eligible = [r for r in eligible if r[0][0][:-1] == best_tier]
-    pools = [r for r in eligible if r[0][1]["agent"] in PACING_POOLS]
-    if not pools:
-        return eligible[0][0], None
-    positive = [r for r in pools if non_shed and r[2] > 0]
-    tier = positive or pools
+
+    # Keep load, late-seat and capacity-policy boundaries. Pacing weights replace
+    # ok-before-warn ranking so measured warn seats can compete with neutral ones.
+    def policy_tier(item):
+        score = item[0][0]
+        return score[:2] + score[3:-1]
+
+    def legacy_tier(item):
+        # Full discrete+drain prefix (ok-before-warn included); learned rank excluded.
+        return item[0][0][:-1]
+
+    best_tier = min(policy_tier(r) for r in eligible)
+    paced = [r for r in eligible if policy_tier(r) == best_tier]
+    if not any(measured(r[0]) for r in paced):
+        # Stripped tier is unmeasured-only. Restore ok-before-warn so a drain-urgent
+        # warn cannot outrank ok; pace if that legacy tier still has measurements.
+        best_legacy = min(legacy_tier(r) for r in eligible)
+        eligible = [r for r in eligible if legacy_tier(r) == best_legacy]
+        if not any(measured(r[0]) for r in eligible):
+            return eligible[0][0], None
+    else:
+        eligible = paced
+    positive = [r for r in eligible if non_shed and r[2] > 0]
+    tier = positive or eligible
     policy = (
         "posterior*pacing" if positive else "fallback-warn" if non_shed else "fail-toward-motion"
     )
-    if not any(_measured_pacing(cap.get("agents", {}).get(r[0][1]["agent"], {})) for r in pools):
-        # Other tiers having measurements cannot randomize this unmeasured tier.
-        return eligible[0][0], None
     weights = [r[1] * (r[2] if positive else 1.0) for r in tier]
     # Zero posterior mass is uninformative; it must not stop all-shed motion.
     if sum(weights) <= 0:
@@ -549,6 +662,8 @@ def select_agent(
     causal_context: dict | None = None,
     profile_transport: str = "local",
     simulate: bool = False,
+    closer_category: str | None = None,
+    independent_of_provider: str | None = None,
 ):
     """Pick the best available agent entry for a task, or None if none have capacity.
 
@@ -572,6 +687,34 @@ def select_agent(
     if not spec:
         return None
     load = load or {}
+    neutral = bool(spec.get("neutral_prior"))
+    selection_policy = None
+    if neutral:
+        try:
+            selection_policy = closer_role_selection.load_policy()
+            if (
+                closer_role_selection.category_spec(
+                    spec["closer_role"], closer_category, selection_policy
+                )
+                is None
+            ):
+                return None
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            # Policy contents, paths and exception messages are not diagnostic data.
+            failure_kind = next(
+                kind.__name__
+                for kind in (OSError, ValueError, TypeError, KeyError)
+                if isinstance(error, kind)
+            )
+            logging.getLogger(__name__).warning(
+                "closer selection policy unavailable (%s)", failure_kind
+            )
+            return None
+    if neutral and learned is None:
+        learned = {
+            entry["agent"]: {"rank": 0, "n_obs": 0, "posterior": 0.5, "score": 0.5}
+            for entry in spec["agents"]
+        }
     scored: list[ScoredSelection] = []
     pacing_active = any(_measured_pacing(r) for r in cap.get("agents", {}).values())
     for idx, entry in enumerate(spec["agents"]):
@@ -579,9 +722,15 @@ def select_agent(
             continue
         # backup-only seats (aider): never auto-selected; reachable only when a caller explicitly
         # restricts to them via `only` (e.g. only={"aider"}). Keeps them as on-demand overflow capacity.
-        if entry["agent"] in BACKUP_AGENTS and not (only and entry["agent"] in only):
+        if (
+            not neutral
+            and entry["agent"] in BACKUP_AGENTS
+            and not (only and entry["agent"] in only)
+        ):
             continue
         st = _state(cap, entry["agent"])
+        if neutral and st not in {"ok", "warn"}:
+            continue
         if st == "unknown" or (st == "shed" and not _pacing_shed_fallback(cap, entry["agent"])):
             continue
         if st == "warn" and not allow_warn:
@@ -589,7 +738,16 @@ def select_agent(
         raw_agent_profiles = execution_profiles.profiles_for_agent(
             entry["agent"], transport=profile_transport
         )
-        agent_profiles = _automatic_profiles(entry, transport=profile_transport)
+        agent_profiles = _route_profiles(
+            entry,
+            spec,
+            profile_transport,
+            category=closer_category,
+            selection_policy=selection_policy,
+            independent_of_provider=independent_of_provider,
+        )
+        if neutral and not agent_profiles:
+            continue
         if (
             entry["agent"] == "gemini"
             and not agent_profiles
@@ -601,10 +759,24 @@ def select_agent(
         if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
             entry.get("mode")
         ):
-            agent_profiles = []
-        elif entry["agent"] == "codex":
+            if neutral:
+                expected_model = adapters.resolve_model(
+                    "codex", adapters.effective_tier("codex", entry.get("mode"))
+                )
+                agent_profiles = [
+                    p
+                    for p in agent_profiles
+                    if expected_model and p["requested_model"] == expected_model
+                ]
+            else:
+                agent_profiles = []
+        elif entry["agent"] == "codex" and not neutral:
             preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
             agent_profiles = [p for p in agent_profiles if p["profile_id"] == preferred]
+        if neutral:
+            agent_profiles = [p for p in agent_profiles if _closer_profile_capacity(p, cap)]
+            if not agent_profiles:
+                continue
         if agent_profiles and not any(
             (
                 cap.get("profiles", {}).get(profile["profile_id"], {}).get("state", st)
@@ -623,12 +795,20 @@ def select_agent(
             over_cap,
             0 if not entry["late"] else 1,
             0 if st == "ok" else 1,
-            _capacity_policy_bias(task_type, entry["agent"], cap),
+            (
+                (
+                    1
+                    if _policy(cap, entry["agent"]) == "reserve"
+                    else -1 if _policy(cap, entry["agent"]) == "drain" else 0
+                )
+                if neutral
+                else _capacity_policy_bias(task_type, entry["agent"], cap)
+            ),
             _drain_urgency(entry["agent"], cap),
         )  # 16(e): continuous pacing within the tier
         # Stable table rank is the legacy learned-rank fallback.
         score = score + (
-            _learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx,
+            (_learned_rank(learned, entry["agent"], len(learned) + idx) if learned else idx),
         )
         scored.append((score, entry, st, idx))
     if not scored:
@@ -637,6 +817,14 @@ def select_agent(
     picked = scored[0]
     explored = False
     rng = rng or random
+    cold_start = neutral and not any(
+        _learned_n_obs(learned, entry["agent"]) > 0 for entry in spec["agents"]
+    )
+    if cold_start:
+        # Sample only an equally admissible capacity tier. This is allocation of
+        # an already-needed job, not extra comparison/benchmark dispatches.
+        tier = scored[0][0][:5]
+        picked = rng.choice([row for row in scored if row[0][:5] == tier])
     pacing_decision = None
     # Draw legacy exploration first so pacing cannot consume or suppress the
     # unrelated pools' exploration share. Pace only the exploitation choice.
@@ -663,7 +851,7 @@ def select_agent(
                     "invocation",
                     ref=f"{task_type}:{entry_agent(challenger)}",
                 )
-    if pacing_active and not explored:
+    if pacing_active and not explored and not cold_start:
         picked, pacing_decision = _pacing_choice(scored, cap, learned, rng)
     _, entry, st, _idx = picked
     result = {
@@ -673,11 +861,37 @@ def select_agent(
         **({"pacing_decision": pacing_decision} if pacing_decision else {}),
         "exploration": explored,
         "exploration_mode": _exploration_mode(exploration_mode) if explored else "",
+        **(
+            {
+                "neutral_prior": True,
+                "cold_start": cold_start,
+                "evidence_state": (
+                    "sparse"
+                    if max(
+                        (_learned_n_obs(learned, e["agent"]) for e in spec["agents"]),
+                        default=0,
+                    )
+                    < feedback.PRIOR_STRENGTH
+                    else "observed"
+                ),
+                "eligible_provider_ids": sorted({r[1]["agent"] for r in scored}),
+            }
+            if neutral
+            else {}
+        ),
     }
-    profiles = _automatic_profiles(entry, transport=profile_transport)
+    profiles = _route_profiles(
+        entry,
+        spec,
+        profile_transport,
+        category=closer_category,
+        selection_policy=selection_policy,
+        independent_of_provider=independent_of_provider,
+    )
     if (
         entry["agent"] == "gemini"
         and not profiles
+        and not neutral
         and (
             profile_transport != "remote"
             or execution_profiles.profiles_for_agent("gemini", transport=profile_transport)
@@ -686,14 +900,26 @@ def select_agent(
         # Model health may change since admission (for example a catalog refresh).
         # Never turn that disappearance into an unprofiled local dispatch.
         return None
+    if neutral and not profiles:
+        return None
     if entry["agent"] == "codex" and execution_profiles.codex_operator_tier_override(
         entry.get("mode")
     ):
-        profiles = []
-        result["reasoning_effort"] = execution_profiles.get_profile(
-            execution_profiles.default_codex_profile(task_type, entry.get("mode"))
-        )["reasoning_effort"]
-    elif entry["agent"] == "codex":
+        if neutral:
+            expected_model = adapters.resolve_model(
+                "codex", adapters.effective_tier("codex", entry.get("mode"))
+            )
+            profiles = [
+                p for p in profiles if expected_model and p["requested_model"] == expected_model
+            ]
+            if not profiles:
+                return None
+        else:
+            profiles = []
+            result["reasoning_effort"] = execution_profiles.get_profile(
+                execution_profiles.default_codex_profile(task_type, entry.get("mode"))
+            )["reasoning_effort"]
+    elif entry["agent"] == "codex" and not neutral:
         preferred = execution_profiles.default_codex_profile(task_type, entry.get("mode"))
         profiles = [profile for profile in profiles if profile["profile_id"] == preferred]
     if profiles:
@@ -701,9 +927,13 @@ def select_agent(
         gates = {
             profile_id: {
                 "eligible": (
-                    cap.get("profiles", {}).get(profile_id, {}).get("state", st)
-                    not in ("shed", "unknown")
-                    or (st == "shed" and _pacing_shed_fallback(cap, entry["agent"]))
+                    _closer_profile_capacity(execution_profiles.get_profile(profile_id), cap)
+                    if neutral
+                    else (
+                        cap.get("profiles", {}).get(profile_id, {}).get("state", st)
+                        not in ("shed", "unknown")
+                        or (st == "shed" and _pacing_shed_fallback(cap, entry["agent"]))
+                    )
                 ),
                 "capacity_state": cap.get("profiles", {}).get(profile_id, {}).get("state", st),
             }
@@ -713,10 +943,12 @@ def select_agent(
             profile["profile_id"]: (
                 float(profile_scores.get(profile["profile_id"], 0.0))
                 if profile_scores
-                else float(profile.get("prior_offset") or 0.0)
+                else 0.0 if neutral else float(profile.get("prior_offset") or 0.0)
             )
             for profile in profiles
         }
+        if neutral and profile_seed is None:
+            profile_seed = int(rng.random() * (2**32))
         envelope = execution_profiles.select_profile(
             task_type,
             (causal_context or {}).get("target"),
@@ -724,17 +956,29 @@ def select_agent(
             rng_seed=int(profile_seed or 0),
             scores=static_scores,
             gate_results=gates,
-            exploration=explored,
+            exploration=explored or cold_start,
             exploration_policy=(
-                f"{_exploration_mode(exploration_mode)}-profile"
-                if explored
-                else "deterministic-profile-prior"
+                "neutral-cold-start"
+                if cold_start
+                else (
+                    f"{_exploration_mode(exploration_mode)}-profile"
+                    if explored or cold_start
+                    else "deterministic-profile-prior"
+                )
             ),
             causal_context=causal_context,
         )
         if not envelope["selected_profile_id"]:
             return None
         selected = execution_profiles.get_profile(envelope["selected_profile_id"])
+        if neutral:
+            scope = closer_role_selection.quality_scope(
+                selected, spec["closer_role"], closer_category, policy=selection_policy
+            )
+            if scope is None:
+                return None
+            result["closer_selection"] = scope
+            result["requested_provider"] = selected["provider"]
         result.update(
             {
                 "selected_profile_id": selected["profile_id"],
@@ -1168,16 +1412,10 @@ def plan(
                     "capability_rng_seed": capability_decision["seed"],
                     "capability_assignment_probability": capability_decision["propensity"],
                     "capability_fallback": capability_decision["fallback"],
-                    "capability_ids": (
-                        [capability_decision["selected_capability_id"]]
-                        if capability_decision["selected_capability_id"]
-                        else []
-                    ),
-                    "capability_version_ids": (
-                        [capability_decision["selected_capability_version_id"]]
-                        if capability_decision["selected_capability_version_id"]
-                        else []
-                    ),
+                    # Selection is routing metadata only; exercised pairs are admitted only after
+                    # invoke_compiled_target (or infrastructure-specific evidence) in dispatcher.
+                    "capability_ids": [],
+                    "capability_version_ids": [],
                 }
             )
 
@@ -1284,6 +1522,7 @@ def _selftest_gemini_policy() -> None:
 
 
 def _selftest() -> None:
+    import copy
     import tempfile
 
     _selftest_gemini_policy()
@@ -1326,6 +1565,75 @@ def _selftest() -> None:
             "r/Repo#2"
         ]  # implement → claude leads (hand-set prior)
         assert by_t["r/Repo#3"]["task_type"] == "review"  # review runs (no pressure)
+
+        # Selection is routing metadata only: exercised lists stay empty until
+        # dispatcher invoke_compiled_target (or infrastructure evidence) admits them.
+        selected_cap = capabilities._blank_capability("selftest-selected")
+        selected_cap.update(
+            {
+                "status": "active",
+                "matcher": {"field": "task_type", "value": "implement"},
+                "capability_version_id": "version:selftest-selected",
+                "artifact_hash": "hash:selftest-selected",
+                "lifecycle_policy_hash": "policy:selftest-selected",
+                "routing_prior": {"posterior": 0.9},
+            }
+        )
+        sel = plan(
+            [{"target": "owner/repo#23", "task_type": "implement", "lane": "opener"}],
+            all_ok,
+            dry_run=True,
+            capability_records={"selftest-selected": selected_cap},
+        )
+        sel_a = sel["assignments"][0]
+        assert sel_a["selected_capability_id"] == "selftest-selected", sel_a
+        # Break demo: restoring [selected_capability_id] into capability_ids here
+        # must fail this assertion (selection must not earn consumption credit).
+        assert sel_a["capability_ids"] == [] and sel_a["capability_version_ids"] == [], sel_a
+
+        # injected clock: a row expiring exactly at `now` is rejected as
+        # expired with the baseline fallback, and planning must not mutate
+        # the caller's capability records (no sweep on the read path).
+        clock_now = 1_700_000_000
+        expiring = capabilities._blank_capability("expiring")
+        expiring.update(
+            {
+                "status": "active",
+                "matcher": {"repository": "owner/repo", "task_types": ["implement"]},
+                "expiry": clock_now,
+                "capability_version_id": "capability-version:expiring",
+                "artifact_hash": "sha256:artifact",
+                "lifecycle_policy_hash": "sha256:policy",
+            }
+        )
+        expired_records = {"expiring": expiring}
+        expired_before = copy.deepcopy(expired_records)
+        expired_plan = plan(
+            [{"target": "owner/repo#99", "task_type": "implement", "lane": "opener"}],
+            all_ok,
+            dry_run=True,
+            capability_records=expired_records,
+            now=clock_now,
+        )
+        expired_assignment = expired_plan["assignments"][0]
+        assert expired_assignment["selected_capability_id"] is None, expired_assignment
+        assert expired_assignment["capability_fallback"] == "baseline", expired_assignment
+        assert expired_assignment["capability_rejection_reasons"]["expiring"] == [
+            "expired"
+        ], expired_assignment
+        assert expired_records == expired_before, "plan must leave capability records unchanged"
+        live = copy.deepcopy(expiring)
+        live["expiry"] = clock_now + 1
+        live_plan = plan(
+            [{"target": "owner/repo#99", "task_type": "implement", "lane": "opener"}],
+            all_ok,
+            dry_run=True,
+            capability_records={"expiring": live},
+            now=clock_now,
+        )
+        assert live_plan["assignments"][0]["selected_capability_id"] == "expiring", live_plan[
+            "assignments"
+        ]
 
         # learned-weights wiring: a learned rank reorders WITHIN the capacity tier (feedback loop closing)
         assert (

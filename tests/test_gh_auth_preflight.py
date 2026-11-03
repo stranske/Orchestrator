@@ -423,6 +423,17 @@ def test_an_authenticated_tick_runs_the_github_steps(tmp_path: Path, lane_live: 
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
     for step in ("tick.py --active", "redirect_apply.py", "capability_activation_audit.py"):
         assert _ran(calls, step), f"{step} did not run on an authenticated tick"
+    decisions = [
+        i
+        for i, call in enumerate(calls)
+        if call.startswith("route_weights_export.py --refresh-exploration-window")
+    ]
+    assert len(decisions) == 1, calls
+    watchdog = next(i for i, call in enumerate(calls) if call.startswith("tick_watchdog.py start"))
+    authenticated = next(
+        i for i, call in enumerate(calls) if call.startswith("gh_capacity.py --auth-preflight")
+    )
+    assert watchdog < authenticated < decisions[0], calls
     # The two GraphQL readers sit behind the budget gate, which this sandbox answers SHED.
     assert _ran(calls, "gh_capacity.py --gate graphql"), calls
     if lane_live:

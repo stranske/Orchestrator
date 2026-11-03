@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import time
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 
@@ -52,10 +53,10 @@ def test_drained_ledger_prints_zero_drifting(monkeypatch):
         NOW,
     )
     assert drained["drifting"] == 0
-    assert drained["features"] == 5
+    assert drained["features"] == 6
     assert all(row["state"] == "ok" for row in drained["goals"])
     rendered = "\n".join(fg.format_lines(drained))
-    assert "feature goals: 5 features, 0 drifting" in rendered
+    assert "feature goals: 6 features, 0 drifting" in rendered
     assert len(drained["goals"]) == len(fg.FEATURES)
     # Actual weekly formatter, including the drained state, immediately after value chain.
     monkeypatch.setattr(switch_review, "profile_trial_summary_line", lambda: "")
@@ -73,7 +74,7 @@ def test_drained_ledger_prints_zero_drifting(monkeypatch):
     }
     text = switch_review.format_report(report)
     assert "## Feature goals" in text
-    assert "5 features, 0 drifting" in text
+    assert "6 features, 0 drifting" in text
 
 
 def test_check_exits_3_after_14_days_silence_and_0_before(monkeypatch, capsys):
@@ -312,19 +313,9 @@ def test_multi_source_feedback_live_targets_and_metadata(tmp_path, monkeypatch):
     assert result.inactive_since == NOW - fg.GOAL_SILENCE_DAYS * fg.DAY
 
 
-@pytest.mark.parametrize(
-    "symbol",
-    [
-        "comparative_routing",
-        "random_retest",
-        "pacing_usage",
-        "pacing_incidents",
-        "pacing_share",
-        "keepalive_acceptance",
-    ],
-)
-def test_absent_sources_have_explicit_reasons(symbol):
-    goal = replace(GOAL, measure=f"feature_goals.py:{symbol}")
+def test_absent_sources_have_explicit_reasons():
+    # Every live goal now has a source; an unresolvable measure must still explain itself.
+    goal = replace(GOAL, measure="feature_goals.py:no_such_measure")
     result = fg.measure(goal, NOW)
     assert result.value is None
     assert result.reason
@@ -562,6 +553,217 @@ def test_filer_ignores_pull_requests_and_creates_missing_labels():
     assert gh.labels == {"goal-drift", "priority:high"}
 
 
-def test_keepalive_reason_uses_configured_horizon(monkeypatch):
+def test_keepalive_window_uses_configured_horizon(monkeypatch):
     monkeypatch.setattr(fg, "GOAL_SILENCE_DAYS", 19)
-    assert "19-day" in fg.keepalive_acceptance(NOW).reason
+    queries = []
+    monkeypatch.setattr(fg, "_gh", lambda args: queries.append(args) or json.dumps({"items": []}))
+    fg.keepalive_acceptance(NOW)
+    start = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW - 19 * fg.DAY))
+    assert any(f"merged:>={start} " in arg for arg in queries[0])
+
+
+def test_producer_subject_string_is_attributed(tmp_path, monkeypatch):
+    """Producer experiments store `subject` as `owner/repo#N`; the measure must link them."""
+    import exp_abcd
+    import feedback
+
+    db = tmp_path / "brain.db"
+    monkeypatch.setattr(feedback, "DB_PATH", db)
+    monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path / "experiments")
+    experiment = "tick-1-stranske-workflows-3972"
+    directory = exp_abcd.exp_paths(experiment)
+    directory.mkdir(parents=True)
+    (directory / "meta.json").write_text(
+        json.dumps({"producer": "experiment_producer", "subject": "stranske/Workflows#3972"})
+    )
+    with sqlite3.connect(db) as conn:
+        conn.executescript(
+            "CREATE TABLE runs(experiment_id TEXT,target TEXT);"
+            "CREATE TABLE evaluations_v2(experiment_id TEXT,ts INT,score REAL,evaluator_id TEXT);"
+        )
+        conn.execute(
+            "INSERT INTO runs VALUES(?,?)",
+            (experiment, "stranske/Workflows [exp x arm a member b]"),
+        )
+        for judge in ("codex", "cursor"):
+            conn.execute("INSERT INTO evaluations_v2 VALUES(?,?,?,?)", (experiment, NOW, 8, judge))
+    body = "\n".join("- [ ] task" for _ in range(12))
+    monkeypatch.setattr(fg, "_gh", lambda args: json.dumps({"body": body, "labels": []}))
+    result = fg.multi_source_feedback(NOW)
+    assert result.value == 1.0
+    assert result.reason == "unattributable 0; issue reads failed 0"
+
+
+def test_random_retest_reads_producer_cells(monkeypatch):
+    import experiment_producer
+
+    state = {"cells_fresh": 4, "cells_total": 37, "last_draw_ts": NOW - 3600}
+    monkeypatch.setattr(experiment_producer, "read_state", lambda: state)
+    result = fg.random_retest(NOW)
+    assert result.value == 4 / 37 and result.reason == "4/37 cells fresh"
+    state["last_draw_ts"] = NOW - fg.PRODUCER_STATE_MAX_AGE - 1
+    stale = fg.random_retest(NOW)
+    assert stale.value is None and stale.reason.startswith(
+        "producer not ticking: last draw 2.0 days"
+    )
+    monkeypatch.setattr(experiment_producer, "read_state", lambda: {})
+    assert fg.random_retest(NOW).value is None
+
+
+def test_comparative_routing_reads_the_shadow_report(monkeypatch):
+    import comparative
+
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {"classes_differing": 1, "status": "optimal", "reasons": []},
+    )
+    result = fg.comparative_routing(NOW)
+    assert result.value == 1.0 and "status optimal" in result.reason
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {"classes_differing": 0, "status": "not_testable_slack", "reasons": []},
+    )
+    result = fg.comparative_routing(NOW)
+    assert result.value is None and "slack" in result.reason
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {
+            "classes_differing": 2,
+            "status": "inputs_unmeasured",
+            "reasons": ["thin"],
+        },
+    )
+    assert fg.comparative_routing(NOW).value is None
+    monkeypatch.setattr(
+        comparative,
+        "report",
+        lambda *a, **k: {
+            "classes_differing": None,
+            "status": "inputs_unmeasured",
+            "reasons": ["claude stale"],
+        },
+    )
+    result = fg.comparative_routing(NOW)
+    assert result.value is None and "claude stale" in result.reason
+
+
+def _search(items, incomplete=False):
+    return json.dumps({"incomplete_results": incomplete, "items": items})
+
+
+def test_keepalive_acceptance_counts_prs_whose_gates_all_pass(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "x\nDeterministic gates: 2/2 passed\nCriterion 1: PASS",
+        },
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 1/2 passed",
+        },
+        {"repository_url": "https://api.github.com/repos/stranske/Ready", "body": "no gates"},
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Ready",
+            "body": "Deterministic gates: 0/0 passed",
+        },
+    ]
+    monkeypatch.setattr(
+        fg, "KEEPALIVE_GATE_REPOS", frozenset({"stranske/Workflows", "stranske/Ready"})
+    )
+    monkeypatch.setattr(fg, "_gh", lambda args: _search(items))
+    result = fg.keepalive_acceptance(NOW)
+    assert result.value == 0.25
+    assert result.reason.startswith("1/4 keepalive PRs merged since ")
+
+
+def test_keepalive_acceptance_counts_only_repos_with_the_gate(monkeypatch):
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/stranske/Workflows",
+            "body": "Deterministic gates: 1/1 passed",
+        },
+        {"repository_url": "https://api.github.com/repos/stranske/Ready", "body": "no gates"},
+        {"repository_url": "https://api.github.com/repos/stranske/Ready", "body": "no gates"},
+    ]
+    monkeypatch.setattr(fg, "_gh", lambda args: _search(items))
+    result = fg.keepalive_acceptance(NOW)
+    assert result.value == 1.0
+    assert result.reason.endswith("; 2 merged in repos without the gate")
+    monkeypatch.setattr(fg, "_gh", lambda args: _search(items[1:]))
+    consumers_only = fg.keepalive_acceptance(NOW)
+    assert consumers_only.value is None and "2 in repos without the gate" in consumers_only.reason
+
+
+def test_keepalive_acceptance_is_unknown_without_a_complete_population(monkeypatch):
+    monkeypatch.setattr(fg, "_gh", lambda args: _search([], incomplete=True))
+    assert fg.keepalive_acceptance(NOW).value is None
+    monkeypatch.setattr(fg, "_gh", lambda args: _search([]))
+    empty = fg.keepalive_acceptance(NOW)
+    assert (
+        empty.value is None and "in gate repos (none; 0 in repos without the gate)" in empty.reason
+    )
+
+
+def test_keepalive_acceptance_window_never_starts_before_the_gate(monkeypatch):
+    queries = []
+
+    def search(args):
+        queries.append(next(a for a in args if a.startswith("q=")))
+        return _search([])
+
+    monkeypatch.setattr(fg, "_gh", search)
+    fg.keepalive_acceptance(NOW)
+    assert queries == [
+        f"q=org:stranske is:pr is:merged merged:>={max(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(NOW - fg.GOAL_SILENCE_DAYS * fg.DAY)), fg.KEEPALIVE_GATE_LIVE)} label:agents:keepalive"
+    ]
+
+
+def test_pacing_unknown_carries_the_reports_reason(monkeypatch):
+    import capacity
+
+    monkeypatch.setattr(
+        capacity,
+        "pacing_report",
+        lambda now: {
+            "quota_incidents_while_other_ok": {
+                "value": None,
+                "evidence_class": "e",
+                "as_of": NOW,
+                "reason": "coverage 59/1008",
+            },
+            "usage_in_target_band": {
+                "value": 0.5,
+                "evidence_class": "e",
+                "as_of": NOW,
+                "reason": "claude in band",
+            },
+        },
+    )
+    unknown = fg.pacing_incidents(NOW)
+    assert unknown.value is None and unknown.reason.endswith("coverage 59/1008")
+    measured = fg.pacing_usage(NOW)
+    assert measured.value == 0.5 and measured.reason == "claude in band"
+
+
+def test_pacing_measure_survives_the_freshness_check(monkeypatch):
+    """measure() rejects as_of > now; the pacing reader must be stamped with the ledger's clock."""
+    import capacity
+
+    monkeypatch.setattr(
+        capacity,
+        "pacing_report",
+        lambda now: {
+            "usage_in_target_band": {
+                "value": 0.0,
+                "evidence_class": "e",
+                "as_of": int(now),
+                "reason": "claude 0.98",
+            }
+        },
+    )
+    goal = replace(GOAL, measure="feature_goals.py:pacing_usage")
+    result = fg.measure(goal, NOW)
+    assert result.value == 0.0 and result.as_of == NOW

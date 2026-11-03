@@ -1,0 +1,71 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 23.0 MB; Brain 104.7 MB
+  time:       pytest 11m18s, selftests 37s (8 at a time), gates 47s
+  pytest:     4960 passed, 28 failed, 0/31 max skipped (4988 collected; floor 4988)
+  selftests:  103 of 107 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   48 of 48 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  48 of 53
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 49 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 24 admission checks passed — 12 enforced, 20 legacy debt, commitments clean (24 of 24 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 18 rows this tree declares are registered in the ledger judged
+  entrypoints: NOT CHECKED (PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capabilities.json.lock')
+  mypy ratchet: 0/0 max of 136 module(s) exempt, 136 checked — fully drained
+
+  PROBLEMS:
+    - 28 pytest failure(s)/error(s)
+    - executed-or-skipped count dropped: 4960 passed + 0 skipped < floor 4988 — a test stopped being run without becoming a named skip
+    - 4 module selftest(s) failed: adapters, capability_propensity, dispatcher, tick_watchdog
+    selftest adapters: ason and "default state dir" in reason, reason
+AssertionError: /Users/teacher/.codex/orchestrator contains the user's ho
+    selftest capability_propensity:  root {nested}"
+AssertionError: the private store /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/propensity-
+    selftest dispatcher: ously-skip-permissions', '--add-dir', '/Users/teacher/.codex/orchestrator/worktrees/o__r__8__opener', '--print-timeout',
+    selftest tick_watchdog: le "/opt/anaconda3/lib/python3.12/subprocess.py", line 1953, in _execute_child
+    raise child_exception_type(errno_num,
+
+  pytest failures (28):
+    FAILED tests/test_agent_workspace_never_broad.py::test_every_homes_control_plane_is_refused_when_home_is_moved
+    FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+    FAILED tests/test_build_exec_mirror.py::test_the_390_guard_composes_with_the_documented_copier
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+    FAILED tests/test_model_profile_trial.py::test_three_profiles_create_distinct_worker_attempts
+    FAILED tests/test_model_profile_trial.py::test_evaluator_trace_stays_separate
+    FAILED tests/test_model_profile_trial.py::test_trial_readiness_surfaces_in_reports_and_lifecycle
+    FAILED tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+    FAILED tests/test_model_tier_resolution.py::test_capacity_stays_ok_when_model_resolves
+    FAILED tests/test_model_tier_resolution.py::test_offload_survives_a_heartbeat_failure
+    FAILED tests/test_propensity_selftest_private_state.py::test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores
+    FAILED tests/test_propensity_selftest_private_state.py::test_production_heartbeats_cannot_fire_inside_and_the_flag_is_restored
+    FAILED tests/test_propensity_selftest_private_state.py::test_record_overrides_are_watched_as_records_not_as_their_directory
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_combined
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_quote
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+    FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+    FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+    FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+    FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+    FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+    FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+    FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+    FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+    FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+    FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+
+  pytest tail:
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+    FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+    FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+    FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+    FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+    FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+    FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+    FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+    FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+    FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+    FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+    28 failed, 4960 passed, 4 warnings, 319 subtests passed in 676.10s (0:11:16)

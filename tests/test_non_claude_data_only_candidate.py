@@ -1,0 +1,569 @@
+"""Explicit inert API/bootstrap controls; no installed Vibe, SDK or provider runs."""
+
+import asyncio
+import copy
+import hashlib
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, replace
+from enum import StrEnum, auto
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Annotated, Any, Literal
+from uuid import uuid4
+
+import pytest
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+
+import non_claude_data_only_candidate as c
+
+CALLS = []
+RAW = {
+    "model": c.MODEL,
+    "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "message": {"content": '{"criterion_id":"C1","verdict":"UNKNOWN"}', "tool_calls": None},
+        }
+    ],
+}
+
+
+def init_sources(*sources, **kwargs):
+    CALLS.append(("sources", sources, kwargs))
+
+
+def make_config(**values):
+    assert CALLS[0] == ("sources", (), {})
+    CALLS.append(("config", values))
+    return SimpleNamespace(**values)
+
+
+def empty_hooks(**values):
+    CALLS.append(("hooks", values))
+    return SimpleNamespace(**values)
+
+
+@dataclass
+class Assistant:
+    content: str
+    stopped_by_middleware: bool = False
+
+
+class Loop:
+    def __init__(self, config, **kwargs):
+        assert config.enabled_tools == [] and config.disabled_tools == ["*"]
+        assert kwargs["agent_name"] == "default" and kwargs["max_turns"] == 1
+        assert kwargs["headless"] and not kwargs["enable_streaming"]
+        assert kwargs["hook_config_result"].hooks == []
+        assert "previous_messages" not in kwargs
+        self.backend = kwargs["backend"]
+        self.tool_manager = SimpleNamespace(available_tools={})
+        CALLS.append(("loop", dict(os.environ), str(Path.cwd())))
+
+    async def act(self, prompt):
+        CALLS.append(("prompt", prompt))
+        chunk = await self.backend.complete()
+        yield Assistant(chunk.message.content)
+
+    async def aclose(self):
+        CALLS.append(("closed",))
+
+
+def backend_factory(observer):
+    return c.InertObservingBackend(observer, RAW)
+
+
+@pytest.fixture
+def fixture(tmp_path):
+    CALLS.clear()
+    root = tmp_path / "imports"
+    root.mkdir()
+    (root / "stub.py").write_text("# inert import-root inventory\n")
+    api = c.VibePublicAPI(init_sources, make_config, empty_hooks, Loop, Assistant)
+    manifest = c.snapshot_runtime_manifest(
+        interpreter=Path(sys.executable),
+        import_roots=(root,),
+        support_files=(Path(c.__file__), Path(__file__)),
+        origin="offline_fixture",
+    )
+    plan = c.prepare_vibe_candidate(
+        requested_model=c.MODEL,
+        requested_effort=c.EFFORT,
+        manifest=manifest,
+        private_root=tmp_path / "private",
+    )
+    pins = c.ExecutionPins(
+        tuple(
+            (name, c.pin_object(getattr(api, name)))
+            for name in c.VibePublicAPI.__dataclass_fields__
+        ),
+        c.pin_object(backend_factory),
+    )
+    return plan, api, pins
+
+
+def execute(fixture, prompt=b"packet\n  "):
+    plan, api, pins = fixture
+    return c.run_vibe_candidate_inert(
+        plan, prompt, api=api, backend_factory=backend_factory, execution_pins=pins
+    )
+
+
+def test_plan_emits_exact_isolation_stdin_config_and_never_native_authority(fixture):
+    plan, _, _ = fixture
+    doc = plan.to_dict()
+    assert doc["argv"][1:4] == ["-I", "-S", "-B"]
+    assert "pycache_prefix=" in doc["argv"][5]
+    assert doc["argv"][-1] == "--candidate-bootstrap"
+    assert doc["bootstrap_execution"] == "planned_not_executed_by_inert_driver"
+    assert doc["inert_guard_scope"] == "trusted_same_process_tcp_connect_and_dns_only"
+    assert doc["isolated_imports_proven"] is doc["kernel_sandbox"] is False
+    assert doc["config"]["mcp_servers"] == [] and not doc["config"]["enable_experimental_hooks"]
+    assert not doc["config"]["enable_connectors"] and not doc["config"]["include_project_context"]
+    assert not doc["config"]["include_prompt_detail"] and not doc["config"]["experiments"]["enable"]
+    assert doc["config"]["models"][0]["name"] == c.MODEL
+    assert doc["config"]["providers"][0]["api_base"] == "https://api.mistral.ai/v1"
+    assert doc["config_sha256"] == c.digest(doc["config"])
+    assert doc["manifest_sha256"] == c.digest(doc["manifest"])
+    assert doc["production_admission"] is doc["activation"] is False
+    assert doc["backend_gate"] == "unimplemented_real_provider"
+    assert not any(
+        name == "vibe" or name.startswith(("vibe.", "mistralai")) for name in sys.modules
+    )
+
+
+def test_driver_zero_sources_precedes_config_and_uses_mandatory_observing_backend(
+    fixture, monkeypatch
+):
+    monkeypatch.setenv("MISTRAL_API_KEY", "ambient-secret-must-not-enter")
+    result = execute(fixture, b"snowman \xe2\x98\x83\n  ")
+    assert result["status"] == "offline_fixture_unverified"
+    assert not result["provider_attested"] and not result["activation"]
+    assert result["bootstrap_execution"] == "planned_not_executed_by_inert_driver"
+    assert result["inert_guard_scope"] == "trusted_same_process_tcp_connect_and_dns_only"
+    assert result["isolated_imports_proven"] is result["kernel_sandbox"] is False
+    assert result["observed_model"] == c.MODEL and result["observed_effort"] == "UNKNOWN"
+    assert CALLS[0] == ("sources", (), {})
+    assert next(row[1] for row in CALLS if row[0] == "prompt") == "snowman ☃\n  "
+    env = next(row[1] for row in CALLS if row[0] == "loop")
+    assert "MISTRAL_API_KEY" not in env and "ambient-secret-must-not-enter" not in json.dumps(env)
+    assert os.environ["MISTRAL_API_KEY"] == "ambient-secret-must-not-enter"
+    config = Path(fixture[0].to_dict()["private_config_path"])
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert CALLS[-1] == ("closed",)
+
+
+def network_config(**kwargs):
+    socket.create_connection(("127.0.0.1", 1))
+    return make_config(**kwargs)
+
+
+def test_fixture_tcp_dns_guard_precedes_config_and_environment_is_restored(fixture):
+    plan, api, pins = fixture
+    api = replace(api, VibeConfig=network_config)
+    pins = replace(
+        pins,
+        api=tuple(
+            (name, c.pin_object(getattr(api, name)))
+            for name in c.VibePublicAPI.__dataclass_fields__
+        ),
+    )
+    before = dict(os.environ)
+    with pytest.raises(RuntimeError, match="TCP-connect/DNS forbidden"):
+        execute((plan, api, pins))
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("change", ["added_file", "changed_file", "support_file", "interpreter"])
+def test_manifest_inventory_and_interpreter_drift_refuse(fixture, tmp_path, change):
+    plan, api, pins = fixture
+    if change == "added_file":
+        (Path(plan.manifest.import_roots[0]) / "hostile.py").write_text("raise RuntimeError()")
+    elif change == "changed_file":
+        (Path(plan.manifest.import_roots[0]) / "stub.py").write_text("# changed")
+    elif change == "support_file":
+        plan = replace(plan, manifest=replace(plan.manifest, support_files=()))
+    else:
+        plan = replace(
+            plan,
+            manifest=replace(
+                plan.manifest, interpreter=replace(plan.manifest.interpreter, sha256="0" * 64)
+            ),
+        )
+    with pytest.raises(ValueError):
+        execute((plan, api, pins))
+    assert CALLS == []
+
+
+def test_config_and_factory_identity_drift_cannot_change_imports_or_agent(fixture):
+    plan, api, pins = fixture
+    altered = json.loads(plan.config_json)
+    altered["agent_paths"] = ["/ambient/agents"]
+    with pytest.raises(ValueError):
+        execute((replace(plan, config_json=json.dumps(altered)), api, pins))
+    with pytest.raises(ValueError):
+        execute(
+            (
+                plan,
+                api,
+                replace(pins, backend_factory=replace(pins.backend_factory, qualname="other")),
+            )
+        )
+    assert CALLS == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"choices": []},
+        {"model": "mistral-vibe-cli-latest", "choices": []},
+        {"model": c.MODEL, "choices": [{"finish_reason": "length", "message": {}}]},
+        {"model": c.MODEL, "choices": [{"finish_reason": "stop", "message": {"tool_calls": [{}]}}]},
+    ],
+)
+def test_observer_never_infers_model_alias_or_accepts_tools_or_incomplete_response(raw):
+    with pytest.raises(ValueError):
+        c.RawResponseObserver(c.MODEL).observe(raw)
+
+
+def test_observer_does_not_promote_requested_or_extra_effort_and_refuses_multiple_responses():
+    observer = c.RawResponseObserver(c.MODEL)
+    observer.observe({**RAW, "reasoning_effort": "high"})
+    with pytest.raises(ValueError):
+        observer.observe(RAW)
+
+
+@pytest.mark.parametrize(
+    "text", ["```json\n{}\n```", "{}\n{}", "[]", '{"a":1,"a":2}', '{"a":NaN}', '{"a":1e999}']
+)
+def test_strict_final_requires_one_semantic_object(text):
+    with pytest.raises(ValueError):
+        c.strict_final(text)
+
+
+def test_large_runtime_manifest_is_internal_not_a_model_response(fixture, tmp_path):
+    plan, _, _ = fixture
+    imports = Path(plan.manifest.import_roots[0])
+    for index in range(600):
+        (imports / f"module_{index:04d}.py").write_text("# inert pinned import\n")
+    manifest = c.snapshot_runtime_manifest(
+        interpreter=Path(sys.executable),
+        import_roots=(imports,),
+        support_files=(Path(c.__file__), Path(__file__)),
+        origin="offline_fixture",
+    )
+    large = c.prepare_vibe_candidate(
+        requested_model=c.MODEL,
+        requested_effort=c.EFFORT,
+        manifest=manifest,
+        private_root=tmp_path / "large-private",
+    )
+    assert len(manifest.trees[0].files) == 601
+    assert len(large.contract_json.encode()) > 65536
+    assert large.to_dict()["manifest_sha256"] == c.digest(large.to_dict()["manifest"])
+    with pytest.raises(ValueError, match="oversized"):
+        c.strict_final(large.contract_json)
+
+
+@pytest.mark.parametrize(
+    "text", ['{"a":1,"a":2}', '{"a":NaN}', '{"a":1e999}', "[]", b"{}", None, 0]
+)
+def test_internal_contract_still_rejects_invalid_json(fixture, text):
+    plan, _, _ = fixture
+    with pytest.raises(ValueError):
+        replace(plan, contract_json=text).to_dict()
+
+
+def test_fixed_model_effort_and_installed_import_roots_cannot_be_overridden(fixture, tmp_path):
+    plan, _, _ = fixture
+    with pytest.raises(ValueError):
+        c.prepare_vibe_candidate(
+            requested_model="mistral-vibe-cli-latest",
+            requested_effort="high",
+            manifest=plan.manifest,
+            private_root=tmp_path / "different",
+        )
+    with pytest.raises(ValueError):
+        c.snapshot_runtime_manifest(
+            interpreter=Path(sys.executable),
+            import_roots=(tmp_path,),
+            support_files=(),
+            origin="installed_candidate",
+        )
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        c.load_installed_provider_backend()
+
+
+class ToolsVisible(Loop):
+    def __init__(self, config, **kwargs):
+        super().__init__(config, **kwargs)
+        self.tool_manager.available_tools = {"bash": object()}
+
+
+def test_nonempty_tool_inventory_stops_before_act_and_closes_loop(fixture):
+    plan, api, pins = fixture
+    api = replace(api, AgentLoop=ToolsVisible)
+    pins = replace(
+        pins,
+        api=tuple(
+            (name, c.pin_object(getattr(api, name)))
+            for name in c.VibePublicAPI.__dataclass_fields__
+        ),
+    )
+    with pytest.raises(ValueError, match="tool-free"):
+        execute((plan, api, pins))
+    assert not any(row[0] == "prompt" for row in CALLS)
+    assert CALLS[-1] == ("closed",)
+
+
+def test_native_effort_mapping_is_source_present_but_not_live_observed(fixture):
+    plan, _, _ = fixture
+    control = plan.to_dict()["native_effort_control"]
+    assert control["config_field"] == "models[0].thinking"
+    assert control["configured_value"] == "high"
+    assert control["native_request_field"] == "reasoning_effort"
+    assert control["status"] == "present_configured_not_live_observed"
+    assert control["request_actually_sent"] is False
+    assert execute(fixture)["observed_effort"] == "UNKNOWN"
+
+
+def test_directory_symlink_and_nonprivate_runtime_overlap_refuse(fixture, tmp_path):
+    plan, _, _ = fixture
+    imports = Path(plan.manifest.import_roots[0])
+    with pytest.raises(ValueError, match="overlap"):
+        c.prepare_vibe_candidate(
+            requested_model=c.MODEL,
+            requested_effort=c.EFFORT,
+            manifest=plan.manifest,
+            private_root=imports / "private",
+        )
+    (imports / "outside").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        c.verify_manifest(plan.manifest)
+
+
+def test_emitted_selftest_runs_inert_controls(capsys, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["candidate", "--selftest"])
+    c.main()
+    result = json.loads(capsys.readouterr().out)
+    assert result["synthetic_pipeline_controls_only"] is True
+    assert len(result["checked_assertions"]) >= 6 and all(result["checked_assertions"].values())
+    assert result["activation"] is False
+
+
+def test_manifest_cannot_name_credential_or_arbitrary_support_files(fixture, tmp_path, monkeypatch):
+    plan, _, _ = fixture
+    secret = tmp_path / "auth.json"
+    secret.write_text("synthetic secret fixture; must not be opened")
+    original = c.pin_file
+
+    def guarded(path):
+        assert path != secret, "arbitrary secret file was read"
+        return original(path)
+
+    monkeypatch.setattr(c, "pin_file", guarded)
+    bad = replace(
+        plan.manifest,
+        support_files=(*plan.manifest.support_files, c.FilePin(str(secret), "0" * 64)),
+    )
+    with pytest.raises(ValueError, match="support pins"):
+        c.verify_manifest(bad)
+
+
+# Retained installed public boundary source: no native module/SDK import at test time.
+# vibe/core/agent_loop.py:1529-1599; full file SHA256 a144802d59503e030508f9a8e2c8168fc4c9c40e5ec348eef5ce86fe4463a256
+NATIVE_CHAT_SHA256 = "17eb05a4d1f3fab3f9a04c63b6cf8ba1a9c448ad073c7dd1dfe224a23fc4dec3"
+NATIVE_CHAT = 'async def _chat(\n    self, max_tokens: int | None = None, model_override: ModelConfig | None = None\n) -> LLMChunk:\n    active_model = model_override or self.config.get_active_model()\n    provider = self.config.get_provider_for_model(active_model)\n    backend_metadata = self._build_backend_metadata()\n\n    available_tools = self.format_handler.get_available_tools(self.tool_manager)\n    tool_choice = self.format_handler.get_tool_choice()\n\n    last_user_message = self._last_user_message()\n    self.telemetry_client.send_request_sent(\n        model=active_model.alias,\n        nb_context_chars=sum(len(m.content or "") for m in self.messages),\n        nb_context_messages=len(self.messages),\n        nb_prompt_chars=len(last_user_message.content or "")\n        if last_user_message\n        else 0,\n        call_type=backend_metadata.call_type,\n        message_id=backend_metadata.message_id,\n        attachment_counts=build_attachment_counts(\n            last_user_message, supports_images=active_model.supports_images\n        ),\n    )\n\n    try:\n        start_time = time.perf_counter()\n        result = await self.backend.complete(\n            model=active_model,\n            messages=self._messages_for_backend(active_model),\n            temperature=active_model.temperature,\n            tools=available_tools,\n            tool_choice=tool_choice,\n            extra_headers=self._get_extra_headers(provider),\n            max_tokens=max_tokens,\n            metadata=backend_metadata.model_dump(exclude_none=True),\n        )\n        end_time = time.perf_counter()\n\n        if result.usage is None:\n            raise AgentLoopLLMResponseError(\n                "Usage data missing in non-streaming completion response"\n            )\n        self._update_stats(usage=result.usage, time_seconds=end_time - start_time)\n\n        if result.correlation_id:\n            self.telemetry_client.last_correlation_id = result.correlation_id\n\n        processed_message = self.format_handler.process_api_response_message(\n            result.message\n        )\n        self.messages.append(processed_message)\n        if result.stop and result.stop.is_refusal:\n            raise _refusal_error(provider.name, active_model.name, result)\n        return LLMChunk(\n            message=processed_message, usage=result.usage, stop=result.stop\n        )\n\n    except Exception as e:\n        if isinstance(e, RefusalError):\n            raise\n        if _should_raise_rate_limit_error(e):\n            raise RateLimitError(provider.name, active_model.name) from e\n        if _is_context_too_long_error(e):\n            raise ContextTooLongError(provider.name, active_model.name) from e\n        if _is_non_retryable_error(e):\n            raise\n\n        raise RuntimeError(\n            f"API error from {provider.name} (model: {active_model.name}): {e}"\n        ) from e\n'
+# vibe/core/llm/format.py:78-101; full file SHA256 bd6a7243f7965f588a5536535a751220142b80e7acabdd0a9df4786afccb7560
+NATIVE_FORMAT_SHA256 = "293f88d5a45720e64aa04bded98407b493a94b6fd02cc0ca5193a332b67b811a"
+NATIVE_FORMAT = 'def process_api_response_message(self, message: Any) -> LLMMessage:\n    clean_message = {\n        "role": message.role,\n        "content": message.content,\n        "reasoning_content": getattr(message, "reasoning_content", None),\n        "reasoning_state": getattr(message, "reasoning_state", None),\n        "reasoning_signature": getattr(message, "reasoning_signature", None),\n    }\n\n    if message.tool_calls:\n        clean_message["tool_calls"] = [\n            {\n                "id": tc.id,\n                "index": tc.index,\n                "type": "function",\n                "function": {\n                    "name": tc.function.name,\n                    "arguments": tc.function.arguments,\n                },\n            }\n            for tc in message.tool_calls\n        ]\n\n    return LLMMessage.model_validate(clean_message)\n'
+
+
+# Retained native Pydantic types and all their field/validator dependencies.
+# vibe/core/types.py SHA256 058d59426b2115b58c3497f529077e4b079de800ab2ebdc6e72be4f6b247e216
+NATIVE_TYPES_SHA256 = "c2813f61d184bf9f3e794419a059222ab84320a34c400e40086bf990adedd19b"
+NATIVE_TYPES = 'class FunctionCall(BaseModel):\n    name: str | None = None\n    arguments: str | None = None\n\n\nclass ToolCall(BaseModel):\n    id: str | None = None\n    index: int | None = None\n    function: FunctionCall = Field(default_factory=FunctionCall)\n    type: Literal["function"] = "function"\n\n\ndef _content_before(v: Any) -> str:\n    if isinstance(v, str):\n        return v\n    if isinstance(v, list):\n        parts: list[str] = []\n        for p in v:\n            if isinstance(p, dict) and isinstance(p.get("text"), str):\n                parts.append(p["text"])\n            else:\n                parts.append(str(p))\n        return "\\n".join(parts)\n    return str(v)\n\n\nContent = Annotated[str, BeforeValidator(_content_before)]\n\n\nclass Role(StrEnum):\n    system = auto()\n    user = auto()\n    assistant = auto()\n    tool = auto()\n\n\nclass ImageAttachment(BaseModel):\n    model_config = ConfigDict(extra="ignore")\n\n    path: Path\n    alias: str\n    mime_type: str\n\n\nclass LLMMessage(BaseModel):\n    model_config = ConfigDict(extra="ignore")\n\n    role: Role\n    content: Content | None = None\n    images: list[ImageAttachment] | None = None\n    injected: bool = False\n    reasoning_content: Content | None = None\n    reasoning_state: list[str] | None = None\n    reasoning_signature: str | None = None\n    reasoning_message_id: str | None = None\n    tool_calls: list[ToolCall] | None = None\n    name: str | None = None\n    tool_call_id: str | None = None\n    message_id: str | None = None\n\n    @model_validator(mode="before")\n    @classmethod\n    def _from_any(cls, v: Any) -> dict[str, Any] | Any:\n        if isinstance(v, dict):\n            v.setdefault("content", "")\n            v.setdefault("role", "assistant")\n            if v.get("message_id") is None and v.get("role") != "tool":\n                v["message_id"] = str(uuid4())\n            if v.get("reasoning_message_id") is None and v.get("reasoning_content"):\n                v["reasoning_message_id"] = str(uuid4())\n            return v\n        role = str(getattr(v, "role", "assistant"))\n        reasoning_content = getattr(v, "reasoning_content", None)\n        return {\n            "role": role,\n            "content": getattr(v, "content", ""),\n            "reasoning_content": reasoning_content,\n            "reasoning_state": getattr(v, "reasoning_state", None),\n            "reasoning_signature": getattr(v, "reasoning_signature", None),\n            "reasoning_message_id": getattr(v, "reasoning_message_id", None)\n            or (str(uuid4()) if reasoning_content else None),\n            "tool_calls": getattr(v, "tool_calls", None),\n            "name": getattr(v, "name", None),\n            "tool_call_id": getattr(v, "tool_call_id", None),\n            "images": getattr(v, "images", None),\n            "message_id": getattr(v, "message_id", None)\n            or (str(uuid4()) if role != "tool" else None),\n        }\n\n    def __add__(self, other: LLMMessage) -> LLMMessage:\n        """Careful: this is not commutative!"""\n        if self.role != other.role:\n            raise ValueError("Can\'t accumulate messages with different roles")\n\n        if self.name != other.name:\n            raise ValueError("Can\'t accumulate messages with different names")\n\n        if self.tool_call_id != other.tool_call_id:\n            raise ValueError("Can\'t accumulate messages with different tool_call_ids")\n\n        content = (self.content or "") + (other.content or "")\n        if not content:\n            content = None\n\n        reasoning_content = (self.reasoning_content or "") + (\n            other.reasoning_content or ""\n        )\n        if not reasoning_content:\n            reasoning_content = None\n\n        reasoning_signature = (self.reasoning_signature or "") + (\n            other.reasoning_signature or ""\n        )\n        if not reasoning_signature:\n            reasoning_signature = None\n\n        reasoning_state: list[str] | None = None\n        if self.reasoning_state or other.reasoning_state:\n            reasoning_state = [\n                *(self.reasoning_state or []),\n                *(other.reasoning_state or []),\n            ]\n\n        tool_calls_map = OrderedDict[int, ToolCall]()\n        for tool_calls in [self.tool_calls or [], other.tool_calls or []]:\n            for tc in tool_calls:\n                if tc.index is None:\n                    raise ValueError("Tool call chunk missing index")\n                if tc.index not in tool_calls_map:\n                    tool_calls_map[tc.index] = copy.deepcopy(tc)\n                else:\n                    existing_name = tool_calls_map[tc.index].function.name\n                    new_name = tc.function.name\n                    if existing_name and new_name and existing_name != new_name:\n                        raise ValueError(\n                            "Can\'t accumulate messages with different tool call names"\n                        )\n                    if new_name and not existing_name:\n                        tool_calls_map[tc.index].function.name = new_name\n                    new_args = (tool_calls_map[tc.index].function.arguments or "") + (\n                        tc.function.arguments or ""\n                    )\n                    tool_calls_map[tc.index].function.arguments = new_args\n\n        return LLMMessage(\n            role=self.role,\n            content=content,\n            images=self.images if self.images is not None else other.images,\n            reasoning_content=reasoning_content,\n            reasoning_state=reasoning_state,\n            reasoning_signature=reasoning_signature,\n            reasoning_message_id=self.reasoning_message_id\n            or other.reasoning_message_id,\n            tool_calls=list(tool_calls_map.values()) or None,\n            name=self.name,\n            tool_call_id=self.tool_call_id,\n            message_id=self.message_id,\n        )\n\n\nclass LLMUsage(BaseModel):\n    model_config = ConfigDict(frozen=True)\n    prompt_tokens: int = 0\n    completion_tokens: int = 0\n\n    def __add__(self, other: LLMUsage) -> LLMUsage:\n        return LLMUsage(\n            prompt_tokens=self.prompt_tokens + other.prompt_tokens,\n            completion_tokens=self.completion_tokens + other.completion_tokens,\n        )\n\n\nclass StopReason(StrEnum):\n    REFUSAL = "refusal"\n\n\nclass StopInfo(BaseModel):\n    model_config = ConfigDict(frozen=True, extra="ignore")\n    reason: str | None = None\n    category: str | None = None\n    explanation: str | None = None\n\n    @property\n    def is_refusal(self) -> bool:\n        return self.reason == StopReason.REFUSAL\n\n\nclass LLMChunk(BaseModel):\n    model_config = ConfigDict(frozen=True)\n    message: LLMMessage\n    usage: LLMUsage | None = None\n    correlation_id: str | None = None\n    stop: StopInfo | None = None\n\n    def __add__(self, other: LLMChunk) -> LLMChunk:\n        if self.usage is None and other.usage is None:\n            new_usage = None\n        else:\n            new_usage = (self.usage or LLMUsage()) + (other.usage or LLMUsage())\n        return LLMChunk(\n            message=self.message + other.message,\n            usage=new_usage,\n            correlation_id=other.correlation_id or self.correlation_id,\n            stop=other.stop or self.stop,\n        )\n'
+# Native AgentLoop._update_stats (not replaced by a permissive recorder).
+NATIVE_STATS_SHA256 = "f62399b9c50e1451fc681145450c1b4ad628c8c7efa8bbd37605bf5950db8443"
+NATIVE_STATS = "def _update_stats(self, usage: LLMUsage, time_seconds: float) -> None:\n    self.stats.last_turn_duration = time_seconds\n    self.stats.last_turn_prompt_tokens = usage.prompt_tokens\n    self.stats.last_turn_completion_tokens = usage.completion_tokens\n    self.stats.session_prompt_tokens += usage.prompt_tokens\n    self.stats.session_completion_tokens += usage.completion_tokens\n    self.stats.context_tokens = usage.prompt_tokens + usage.completion_tokens\n    if time_seconds > 0 and usage.completion_tokens > 0:\n        self.stats.tokens_per_second = usage.completion_tokens / time_seconds\n"
+
+
+def retained_native_boundary(backend):
+    """Execute exact retained native attribute access/control flow with inert dependencies."""
+    for source, sha in [
+        (NATIVE_CHAT, NATIVE_CHAT_SHA256),
+        (NATIVE_FORMAT, NATIVE_FORMAT_SHA256),
+        (NATIVE_TYPES, NATIVE_TYPES_SHA256),
+        (NATIVE_STATS, NATIVE_STATS_SHA256),
+    ]:
+        assert hashlib.sha256(source.encode()).hexdigest() == sha
+    namespace = {
+        "time": time,
+        "__name__": __name__,
+        "BaseModel": BaseModel,
+        "ConfigDict": ConfigDict,
+        "Field": Field,
+        "BeforeValidator": BeforeValidator,
+        "model_validator": model_validator,
+        "Any": Any,
+        "Annotated": Annotated,
+        "Literal": Literal,
+        "StrEnum": StrEnum,
+        "auto": auto,
+        "Path": Path,
+        "uuid4": uuid4,
+        "OrderedDict": OrderedDict,
+        "copy": copy,
+        "build_attachment_counts": lambda *args, **kwargs: {},
+        "AgentLoopLLMResponseError": ValueError,
+        "RefusalError": type("RefusalError", (Exception,), {}),
+        "_should_raise_rate_limit_error": lambda error: False,
+        "_is_context_too_long_error": lambda error: False,
+        "_is_non_retryable_error": lambda error: False,
+    }
+    exec(
+        compile(
+            "from __future__ import annotations\n"
+            + NATIVE_TYPES
+            + NATIVE_CHAT
+            + NATIVE_FORMAT
+            + NATIVE_STATS,
+            "<retained-native-public-boundary>",
+            "exec",
+        ),
+        namespace,
+    )
+    for name in (
+        "FunctionCall",
+        "ToolCall",
+        "ImageAttachment",
+        "LLMMessage",
+        "LLMUsage",
+        "StopInfo",
+        "LLMChunk",
+    ):
+        namespace[name].model_rebuild(_types_namespace=namespace)
+    model = SimpleNamespace(name=c.MODEL, alias="fixture", temperature=0.2, supports_images=False)
+    provider = SimpleNamespace(name="fixture")
+    messages = [SimpleNamespace(content="inert prompt")]
+    stats = []
+    formatter = SimpleNamespace(
+        get_available_tools=lambda manager: [],
+        get_tool_choice=lambda: "auto",
+        process_api_response_message=lambda message: namespace["process_api_response_message"](
+            None, message
+        ),
+    )
+    session = SimpleNamespace(
+        config=SimpleNamespace(
+            get_active_model=lambda: model, get_provider_for_model=lambda model: provider
+        ),
+        _build_backend_metadata=lambda: SimpleNamespace(
+            call_type="fixture", message_id=None, model_dump=lambda **kwargs: {}
+        ),
+        format_handler=formatter,
+        tool_manager=object(),
+        messages=messages,
+        _last_user_message=lambda: messages[0],
+        telemetry_client=SimpleNamespace(send_request_sent=lambda **kwargs: None),
+        backend=backend,
+        _messages_for_backend=lambda model: messages,
+        _get_extra_headers=lambda provider: {},
+        stats=SimpleNamespace(session_prompt_tokens=0, session_completion_tokens=0),
+    )
+
+    def update_stats(**kwargs):
+        namespace["_update_stats"](session, **kwargs)
+        stats.append({**kwargs, "native_stats": session.stats})
+
+    session._update_stats = update_stats
+    result = asyncio.run(namespace["_chat"](session, max_tokens=512))
+    assert isinstance(result, namespace["LLMChunk"])
+    assert isinstance(result.usage, namespace["LLMUsage"])
+    return result, stats, messages
+
+
+def test_inert_chunk_passes_retained_native_chat_and_formatter_boundary():
+    observer = c.RawResponseObserver(c.MODEL)
+    chunk, stats, messages = retained_native_boundary(c.InertObservingBackend(observer, RAW))
+    assert chunk.message.role == "assistant"
+    assert chunk.message.content == RAW["choices"][0]["message"]["content"]
+    assert chunk.usage.prompt_tokens == 3 and chunk.usage.completion_tokens == 2
+    assert stats[0]["usage"] == chunk.usage.model_dump() and len(messages) == 2
+    assert stats[0]["native_stats"].session_prompt_tokens == 3
+    assert stats[0]["native_stats"].session_completion_tokens == 2
+    assert stats[0]["native_stats"].context_tokens == 5
+    assert chunk.stop is None and observer.responses == 1
+
+
+@pytest.mark.parametrize("missing", ["usage", "correlation_id", "stop", "role", "tool_calls"])
+def test_retained_native_boundary_rejects_missing_native_chunk_fields(missing):
+    class Broken:
+        async def complete(self, **kwargs):
+            chunk = await c.InertObservingBackend(c.RawResponseObserver(c.MODEL), RAW).complete()
+            delattr(chunk.message if missing in ("role", "tool_calls") else chunk, missing)
+            return chunk
+
+    with pytest.raises(RuntimeError, match=missing):
+        retained_native_boundary(Broken())
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": True, "completion_tokens": 1},
+        {"prompt_tokens": 1, "completion_tokens": -1},
+    ],
+)
+def test_inert_backend_requires_native_usage_without_fabrication(usage):
+    observer = c.RawResponseObserver(c.MODEL)
+    with pytest.raises(ValueError, match="native usage"):
+        asyncio.run(c.InertObservingBackend(observer, {**RAW, "usage": usage}).complete())
+    assert observer.responses == 0
+
+
+def test_guard_scope_leaves_udp_existing_connection_processes_and_import_paths_untouched():
+    originals = (socket.socket.sendto, socket.socket.sendall, subprocess.Popen, sys.path)
+    with c._fixture_tcp_dns_guard():
+        assert (
+            socket.socket.sendto,
+            socket.socket.sendall,
+            subprocess.Popen,
+            sys.path,
+        ) == originals
+        for operation, args in [
+            (socket.getaddrinfo, ("invalid.test", 1)),
+            (socket.create_connection, (("127.0.0.1", 1),)),
+        ]:
+            with pytest.raises(RuntimeError, match="TCP-connect/DNS forbidden"):
+                operation(*args)
+    assert (socket.socket.sendto, socket.socket.sendall, subprocess.Popen, sys.path) == originals
+
+
+@pytest.mark.parametrize("form", ["old_namespace", "plain_dict", "malformed_mapping"])
+def test_real_native_validation_and_stats_reject_nonconforming_usage(form):
+    class BrokenUsage:
+        async def complete(self, **kwargs):
+            chunk = await c.InertObservingBackend(c.RawResponseObserver(c.MODEL), RAW).complete()
+            if form == "old_namespace":
+                chunk.usage = SimpleNamespace(prompt_tokens=3, completion_tokens=2)
+            elif form == "plain_dict":
+                chunk.usage = {"prompt_tokens": 3, "completion_tokens": 2}
+            else:
+                chunk.usage = c._InertNativeUsage(prompt_tokens="malformed", completion_tokens=2)
+            return chunk
+
+    # Namespace reaches the actual native LLMChunk usage validator and fails.
+    # Plain dict / malformed mapping fail actual native _update_stats first.
+    match = "validation error for LLMChunk" if form == "old_namespace" else None
+    with pytest.raises(RuntimeError, match=match):
+        retained_native_boundary(BrokenUsage())
