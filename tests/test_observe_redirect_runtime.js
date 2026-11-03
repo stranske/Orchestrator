@@ -20,7 +20,8 @@ function sandbox(t) {
   const plan = path.join(stateDir, 'keepalive-supervisor-stage2-plan.json');
   fs.writeFileSync(corpus, '');
   fs.writeFileSync(plan, JSON.stringify({ generated_at: Math.floor(Date.now() / 1000), plans: [] }));
-  const env = { PATH: process.env.PATH, ORCH_CLAIMS_DIR: path.join(root, 'claims') };
+  // claims.py reads HANDOFF_DIR/claims; ORCH_CLAIMS_DIR is not a supported override.
+  const env = { PATH: process.env.PATH, HANDOFF_DIR: path.join(root, 'handoff') };
   return { root, runtime, stateDir, corpus, plan, env };
 }
 
@@ -410,6 +411,57 @@ test('real screen distinguishes empty, refused and stale populations without wri
     assert.equal(result.drainable, drainable);
     assert.deepEqual(snapshot(s.root), before);
   }
+});
+
+test('real observation preserves held claims and the corpus daily cap with an armed process flag', async (t) => {
+  // Manufactured controls exercise the real screen, never a production apply.
+  const s = sandbox(t);
+  const target = 'private/repo#1';
+  const report = { target, agent: 'keepalive', lane: 'closer',
+    state: 'stalled', recommended_action: 'redirect' };
+  fs.writeFileSync(s.plan, JSON.stringify({ generated_at: Math.floor(Date.now() / 1000),
+    plans: [{ eligible: true, report, acceptance_criteria: 'AC' }] }));
+  const env = { ...s.env, ORCH_REDIRECT_APPLY_BOOTSTRAP: '1' };
+  const hash = (value) => createHash('sha256').update(value).digest('hex');
+  const capture = async (expectedBlocks) => {
+    const before = snapshot(s.root);
+    const started = Date.now();
+    const result = await observe({ ...s, env, python: process.env.PYTHON || 'python3' });
+    assert.deepEqual(result.screen_execution, { exit_code: 0, signal: null, error_code: null });
+    assert.equal(result.status, 'observed');
+    assert.equal(result.candidates, 1, 'a refused candidate is not an empty population');
+    assert.equal(result.drainable, expectedBlocks.length ? 0 : 1);
+    assert.deepEqual(result.refusals, expectedBlocks.length ? [{
+      target_sha256: hash(target), block_sha256: expectedBlocks.map(hash),
+    }] : []);
+    assert.equal(result.process_flag, '1');
+    assert.match(result.flag_scope, /deployed_tick_flag_not_established/);
+    assert.equal(result.operational_acceptance, 'not_established');
+    assert.ok(Date.parse(result.observed_at) >= started);
+    assert.doesNotMatch(JSON.stringify(result), /private\/repo|PRIVATE-/);
+    assert.deepEqual(snapshot(s.root), before, 'screening must not release claims or spend the cap');
+  };
+  // Positive control prevents unrelated refusals from satisfying the guard checks.
+  await capture([]);
+  const claim = path.join(s.root, 'handoff/claims/private__repo_1');
+  fs.mkdirSync(claim, { recursive: true });
+  fs.writeFileSync(path.join(claim, 'meta'), JSON.stringify({ target,
+    agent: 'PRIVATE-other-agent', pid: process.pid, ts: Date.now() / 1000 }));
+  const held = fs.statSync(claim);
+  const claimBlock = "target is claimed by 'PRIVATE-other-agent', not the stalled agent";
+  await capture([claimBlock]);
+  const dailyBlock = 'daily bound reached (1/1)';
+  fs.writeFileSync(s.corpus, JSON.stringify({ kind: 'redirect_apply', target: 'private/repo#2',
+    role_run_id: 'PRIVATE-earlier-role', applied: true, ts: Math.floor(Date.now() / 1000) }) + '\n');
+  await capture([claimBlock, dailyBlock]);
+  assert.equal(fs.statSync(claim).ino, held.ino, 'the held claim directory must not be recreated');
+  assert.equal(fs.statSync(claim).mtimeMs, held.mtimeMs);
+  // Release only this manufactured claim to isolate the cap refusal.
+  fs.rmSync(claim, { recursive: true });
+  await capture([dailyBlock]);
+  // Restore only manufactured history to show observation did not consume capacity.
+  fs.writeFileSync(s.corpus, '');
+  await capture([]);
 });
 
 test('a missing real Python executable leaves counts unknown without exposing its path', async (t) => {

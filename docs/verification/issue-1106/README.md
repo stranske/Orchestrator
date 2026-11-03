@@ -1,5 +1,33 @@
 # Issue #1106 execution evidence
 
+At `2026-11-03T23:37:48.131Z`, the runner still cannot access the owner path;
+blocking, drainable and candidates remain unknown. Historical inspection and
+real-stall acceptance remain unmet. A bounded connected-storage search for
+`redirect-apply-link` returned October test artifacts, not November 3 production
+evidence; the retrieved issue #1106 comments contain no owner-host capture.
+
+A new real-Python screening regression checks an eligible control, another
+agent's held claim, a held claim combined with the corpus daily cap, the cap
+alone, and restored capacity. It verifies exact hashed refusals, current capture
+dates, unchanged runtime bytes and retention of the held claim directory.
+The initial failure exposed an unsupported test override: `claims.py` reads
+`HANDOFF_DIR/claims`, not `ORCH_CLAIMS_DIR`. The sandbox now uses `HANDOFF_DIR`.
+All **52** scoped Node tests passed without failures or skips on Node v24.22.1
+with real Python 3.14.9 screening. See [failure output](observation-bounds-red.txt),
+[passing output](observation-bounds-green.txt) and the
+[dated validation receipt](observation-bounds-validation.json). These are
+manufactured controls, not a production apply or an operational control comparison.
+No new offline exact-revision execution is claimed, and no Python files changed.
+
+Remote reconciliation is still blocked: the connector rejected the PR body,
+comment and additive `needs-human` label because approval is required while the
+run's approval policy is `never`. PR #1107 remains open and ready (`draft=false`),
+with its active `Closes #1106` directive unchanged. The local proposal retains
+the verified checkboxes and a nonclosing reference; operational tasks stay open.
+The required commit attempt failed at staging with `.git/index.lock: Read-only
+file system`. This round's test and evidence changes remain uncommitted for
+automation to collect.
+
 Completion-tracking validation at `2026-11-03T23:30Z` adds three regression
 checks against the retained receipts and both checklists in the proposed PR
 body. They require clean named/focused/replay proof for offline completion,
