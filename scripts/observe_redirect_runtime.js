@@ -9,6 +9,13 @@ const { spawnSync } = require('node:child_process');
 
 const digest = (bytes) => crypto.createHash('sha256').update(bytes).digest('hex');
 const identity = (value) => typeof value === 'string' && value ? digest(value) : null;
+const recordedBoolean = (value) => typeof value === 'boolean' ? value : null;
+
+function refusalHashes(value) {
+  // Missing or malformed persisted blocks are unknown, not an empty refusal list.
+  return Array.isArray(value) && value.every((block) => typeof block === 'string')
+    ? value.map((block) => digest(block)) : null;
+}
 
 function read(file) {
   try {
@@ -153,8 +160,13 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
       line, sha256, kind: entry.kind, recorded_at: Number.isFinite(entry.ts) ? entry.ts : null,
       role_run_sha256: identity(entry.role_run_id), target_sha256: identity(entry.target),
       influenced_run_sha256: identity(entry.influenced_run_id),
-      applied: entry.applied === true, dry_run: entry.dry_run === true,
-      authorized: entry.authorized === true, synced: entry.link_result?.synced === true,
+      applied: recordedBoolean(entry.applied), dry_run: recordedBoolean(entry.dry_run),
+      authorized: recordedBoolean(entry.authorized), accepted: recordedBoolean(entry.accepted),
+      linked: recordedBoolean(entry.link_result?.linked), synced: recordedBoolean(entry.link_result?.synced),
+      authorization_block_sha256: refusalHashes(entry.authorization?.blocks),
+      apply_refused_sha256: identity(entry.apply_result?.refused),
+      link_failure_reason_sha256: entry.kind === 'redirect_outcome_link_failed'
+        ? identity(entry.reason) : null,
     }));
   const source = path.resolve(__dirname, '../src/redirect_apply.py');
   result.screen_source_sha256 = read(source).sha256 || null;

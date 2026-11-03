@@ -436,3 +436,40 @@ is on a read-only filesystem, so no commit was created. The connector rejected
 the production-task checkbox correction, blocker comment and additive
 `needs-human` label with `MCP tool call requires approval, but approval policy is
 never`. No remote update succeeded.
+
+## Persisted refusal and outcome-link dispositions
+
+At `2026-11-03T17:38:43Z`, the first task remains blocked: the private corpus
+and original receipts are unavailable, and the fetched #582/#595 discussions
+do not expose their contents or a genuine October 20 receipt. The runtime
+observation again returns `owner_corpus_unavailable`; blocking, drainable and
+eligible-candidate counts remain **unknown**, not candidates 0.
+
+The observer dropped persisted apply-refusal details and outcome-link acceptance,
+and represented absent boolean facts as false. Two new regressions failed before
+the correction. It now retains accepted/rejected and linked/synced dispositions,
+with absent or malformed boolean facts represented as null. Authorization blocks,
+apply refusals and outcome-link failure reasons are retained as hashes alongside
+the existing source-line, entry, role and downstream-run bindings. Persisted
+refusals remain separate from current-screen refusals; a stored link is not proof
+of acceptance or resolution. All **42** scoped Node checks pass without failures
+or skips, including privacy and read-only assertions. Both changed JavaScript
+files pass syntax checks, and `git diff --check` passes. No Python or workflow
+files changed. These manufactured controls establish observer behavior only.
+
+The exact-revision verifier was also rerun on merged
+`8f596dc01e1ede350724c1b88bc36610380af79b` using the selected Python 3.14
+interpreter. Both pytest invocations still exit 1 before collection because
+pytest is unavailable; a temporary installation attempt could not obtain it.
+Replay exits 0 and prints `authorized 12/12 with named agents (dry-run)`, with
+`EPERM` also reported by the subprocess layer. The aggregate remains blocked.
+No production-chain defect, attributable live apply, resolution timing or
+control comparison was established. No new task checkbox is completed, and
+operational acceptance remains incomplete. These are new runner observations,
+not an October 20 receipt or a capture of the owner's November 3 production chain.
+
+Staging these three validated files failed with `.git/index.lock: Read-only file
+system`, so no commit was created. The connector rejected the production-task
+checkbox correction, blocker comment and additive `needs-human` label with
+`MCP tool call requires approval, but approval policy is never`. No remote update
+succeeded. PR #1089 remains open and ready for review at `a28d88e`.

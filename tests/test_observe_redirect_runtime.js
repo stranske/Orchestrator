@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -97,7 +98,7 @@ test('retains private refusal and lineage bindings without promoting recorded ap
   assert.equal(result.refusals.length, 1);
   assert.equal(result.recorded_lineage[0].target_sha256, result.refusals[0].target_sha256);
   assert.equal(result.recorded_lineage[0].applied, true);
-  assert.equal(result.recorded_lineage[0].synced, false);
+  assert.equal(result.recorded_lineage[0].synced, null);
   assert.equal(result.logged_runs.latest[0].recorded_at, '2026-11-03T00:00:00Z');
   assert.equal(result.logged_runs.latest[0].summaries.length, 2);
   assert.match(result.flag_scope, /deployed_tick_flag_not_established/);
@@ -117,6 +118,79 @@ test('unavailable populations and invalid corpora cannot become demand-derived c
   const invalid = observe({ ...s, run() { assert.fail('invalid corpus must not be screened'); } });
   assert.deepEqual(invalid.limitations, ['corpus_invalid']);
   assert.doesNotMatch(JSON.stringify(invalid), /PRIVATE-/);
+});
+
+test('retains accepted and rejected outcome-link dispositions under the same role binding', (t) => {
+  const s = sandbox(t);
+  const events = [
+    { kind: 'redirect_apply', ts: 1793664000, role_run_id: 'PRIVATE-role',
+      target: 'PRIVATE-target', applied: true, authorized: true, dry_run: false },
+    { kind: 'redirect_outcome_link', ts: 1793664060, role_run_id: 'PRIVATE-role',
+      influenced_run_id: 'PRIVATE-run', accepted: true,
+      link_result: { linked: true, synced: true, notes: 'PRIVATE-notes' } },
+    { kind: 'redirect_outcome_link', ts: 1793664120, role_run_id: 'PRIVATE-role',
+      influenced_run_id: 'PRIVATE-run', accepted: false,
+      link_result: { linked: true, synced: false } },
+  ];
+  fs.writeFileSync(s.corpus, events.map((event) => JSON.stringify(event)).join('\n') + '\n');
+  const before = snapshot(s.root);
+  const result = observe(control(s));
+  const [apply, accepted, rejected] = result.recorded_lineage;
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.linked, true);
+  assert.equal(accepted.synced, true);
+  assert.equal(rejected.accepted, false, 'a later rejection must remain inspectable');
+  assert.equal(rejected.linked, true, 'a stored link alone does not establish acceptance');
+  assert.equal(rejected.synced, false);
+  assert.equal(accepted.role_run_sha256, apply.role_run_sha256);
+  assert.equal(rejected.role_run_sha256, apply.role_run_sha256);
+  assert.equal(accepted.influenced_run_sha256, rejected.influenced_run_sha256);
+  assert.equal(apply.accepted, null, 'an apply event has no link acceptance disposition');
+  assert.equal(accepted.applied, null, 'a link event does not itself report an apply');
+  assert.equal(result.operational_acceptance, 'not_established');
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+  assert.deepEqual(snapshot(s.root), before);
+});
+
+test('retains persisted authorization and apply refusals without turning absent facts into false', (t) => {
+  const s = sandbox(t);
+  const events = [
+    { kind: 'redirect_apply', role_run_id: 'PRIVATE-refused-role', target: 'PRIVATE-target',
+      applied: false, authorized: false, dry_run: true,
+      authorization: { blocks: ['PRIVATE-daily-bound'] },
+      apply_result: { applied: false, refused: 'PRIVATE-lane-reclaimed' } },
+    { kind: 'redirect_apply', role_run_id: 'PRIVATE-legacy-role' },
+    { kind: 'redirect_outcome_link_failed', role_run_id: 'PRIVATE-failed-role',
+      influenced_run_id: 'PRIVATE-run', reason: 'PRIVATE-error', error_type: 'ValueError' },
+    { kind: 'redirect_apply', applied: 'true', authorized: 1, dry_run: 0,
+      accepted: 'false', link_result: { linked: 1, synced: 'true' },
+      authorization: { blocks: ['PRIVATE-block', { reason: 'PRIVATE-malformed' }] },
+      apply_result: { refused: { reason: 'PRIVATE-malformed' } } },
+  ];
+  fs.writeFileSync(s.corpus, events.map((event) => JSON.stringify(event)).join('\n') + '\n');
+  const before = snapshot(s.root);
+  const result = observe(control(s));
+  const [refused, legacy, failed, malformed] = result.recorded_lineage;
+  const hash = (value) => createHash('sha256').update(value).digest('hex');
+  assert.deepEqual(refused.authorization_block_sha256, [hash('PRIVATE-daily-bound')]);
+  assert.equal(refused.apply_refused_sha256, hash('PRIVATE-lane-reclaimed'));
+  assert.equal(failed.link_failure_reason_sha256, hash('PRIVATE-error'));
+  assert.equal(refused.authorized, false);
+  assert.equal(refused.applied, false);
+  assert.equal(refused.dry_run, true);
+  assert.equal(legacy.authorization_block_sha256, null);
+  assert.equal(legacy.apply_refused_sha256, null);
+  assert.equal(malformed.authorization_block_sha256, null);
+  assert.equal(malformed.apply_refused_sha256, null);
+  for (const row of [legacy, failed, malformed]) {
+    for (const field of ['applied', 'authorized', 'dry_run', 'accepted', 'linked', 'synced']) {
+      assert.equal(row[field], null, `${row.kind}: ${field} was not recorded`);
+    }
+  }
+  assert.equal(result.refusals.length, 0, 'current-screen refusals are a different population');
+  assert.equal(result.operational_acceptance, 'not_established');
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+  assert.deepEqual(snapshot(s.root), before);
 });
 
 test('changing input, failed processes and malformed screen output invalidate capture', (t) => {
