@@ -1491,11 +1491,10 @@ def _selftest() -> None:
         assert all(not r["enforced"] for r in legacy_rows), "legacy rows must not block the suite"
 
     # A waiver must EXPIRE. An exception with no end date is how "temporary" became a month.
+    waiver_targets = set(ledger) | set(capabilities.declared_row_ids())
     for cid, waiver in WAIVERS.items():
         assert "expires" in waiver and "reason" in waiver, f"waiver for {cid} needs expiry+reason"
-        assert cid in ledger or cid in capabilities.declared_row_ids(), (
-            f"waiver names unknown capability {cid}"
-        )
+        assert cid in waiver_targets, f"waiver names unknown capability {cid}"
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
     # The LIVE verdict is asserted in test_capability_admission.test_dated_promises_left_an_artifact
