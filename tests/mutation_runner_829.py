@@ -18,9 +18,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tests"))
@@ -68,11 +67,7 @@ def collect_node_ids() -> list[str]:
         timeout=TIMEOUT,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            "pytest collection failed\n"
-            + proc.stdout
-            + proc.stderr
-        )
+        raise RuntimeError("pytest collection failed\n" + proc.stdout + proc.stderr)
     nodes: list[str] = []
     for line in proc.stdout.splitlines():
         m = NODE_LINE.match(line.strip())

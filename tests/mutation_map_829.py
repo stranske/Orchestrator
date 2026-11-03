@@ -11,8 +11,8 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     },
     "test_run_gh_and_bytes_use_token_file_and_surface_failures": {
         "target": "src/consumer_sync_artifact_ingest.py",
-        "old": "    r = subprocess.run(args, capture_output=True, text=True, env=env)\n    if r.returncode != 0:\n        raise Exception(f\"gh command failed: {r.stderr}\")\n    return r.stdout",
-        "new": "    r = subprocess.run(args, capture_output=True, text=True, env=env)\n    if r.returncode != 0:\n        raise Exception(f\"gh command failed: {r.stderr}\")\n    return \"not-ok-text\"",
+        "old": '    r = subprocess.run(args, capture_output=True, text=True, env=env)\n    if r.returncode != 0:\n        raise Exception(f"gh command failed: {r.stderr}")\n    return r.stdout',
+        "new": '    r = subprocess.run(args, capture_output=True, text=True, env=env)\n    if r.returncode != 0:\n        raise Exception(f"gh command failed: {r.stderr}")\n    return "not-ok-text"',
     },
     "test_discover_artifact_rejects_bad_payloads_and_lookup_errors": {
         "target": "src/consumer_sync_artifact_ingest.py",
@@ -41,13 +41,13 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     },
     "test_load_state_schema_guards": {
         "target": "src/consumer_sync_artifact_ingest.py",
-        "old": "data.get(\"schema_version\") != 1",
-        "new": "data.get(\"schema_version\") != 99",
+        "old": 'data.get("schema_version") != 1',
+        "new": 'data.get("schema_version") != 99',
     },
     "test_hygiene_skips_nested_large_dir_already_covered": {
         "target": "src/consumer_sync_artifact_ingest.py",
-        "old": "if any(parent == f[\"path\"] or parent.startswith(f[\"path\"] + \"/\") for f in findings):",
-        "new": "if False and any(parent == f[\"path\"] or parent.startswith(f[\"path\"] + \"/\") for f in findings):",
+        "old": 'if any(parent == f["path"] or parent.startswith(f["path"] + "/") for f in findings):',
+        "new": 'if False and any(parent == f["path"] or parent.startswith(f["path"] + "/") for f in findings):',
     },
     "test_record_hygiene_escalation_records_success": {
         "target": "src/consumer_sync_artifact_ingest.py",
@@ -92,7 +92,7 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     "test_token_file_read_errors_are_swallowed": {
         "target": "src/consumer_sync_artifact_ingest.py",
         "old": "            except Exception:\n                pass\n    r = subprocess.run(args, capture_output=True, text=True, env=env)",
-        "new": "            except Exception:\n                env[\"GH_TOKEN\"] = \"from-failed-read\"\n    r = subprocess.run(args, capture_output=True, text=True, env=env)",
+        "new": '            except Exception:\n                env["GH_TOKEN"] = "from-failed-read"\n    r = subprocess.run(args, capture_output=True, text=True, env=env)',
     },
     "test_blob_sha256_rejects_oversized_decoded_content": {
         "target": "src/consumer_sync_artifact_ingest.py",
@@ -101,8 +101,8 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     },
     "test_get_maint_68_repos_stops_at_next_env_key": {
         "target": "src/consumer_sync_artifact_ingest.py",
-        "old": "                    and \":\" in line",
-        "new": "                    and \":\" not in line",
+        "old": '                    and ":" in line',
+        "new": '                    and ":" not in line',
     },
     "test_main_defaults_missing_command_to_ingest": {
         "target": "src/consumer_sync_artifact_ingest.py",
@@ -121,8 +121,8 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     },
     "test_text_and_json_helpers_cover_none_empty_and_path_reads": {
         "target": "src/redirect_shadow.py",
-        "old": "    if text is None:\n        return None\n    return hashlib.sha256(text.encode(\"utf-8\")).hexdigest()",
-        "new": "    if text is None:\n        return None\n    return \"broken-sha\"",
+        "old": '    if text is None:\n        return None\n    return hashlib.sha256(text.encode("utf-8")).hexdigest()',
+        "new": '    if text is None:\n        return None\n    return "broken-sha"',
     },
     "test_read_json_from_stdin": {
         "target": "src/redirect_shadow.py",
@@ -146,8 +146,8 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     },
     "test_main_falls_through_when_cmd_is_unhandled": {
         "target": "src/redirect_shadow.py",
-        "old": "    return 0\n\n\nif __name__ == \"__main__\":",
-        "new": "    return 1\n\n\nif __name__ == \"__main__\":",
+        "old": '    return 0\n\n\nif __name__ == "__main__":',
+        "new": '    return 1\n\n\nif __name__ == "__main__":',
     },
     "test_historical_candidates_counts_missing_target": {
         "target": "src/redirect_shadow.py",
@@ -166,8 +166,8 @@ MUTATIONS_BY_TEST_NAME: dict[str, dict[str, str]] = {
     },
     "test_main_record_and_link_outcome_cli_paths": {
         "target": "src/redirect_shadow.py",
-        "old": 'f"recorded {entry[\'entry_id\']} backend={entry.get(\'backend\') or \'-\'} "',
-        "new": 'f"broken {entry[\'entry_id\']} backend={entry.get(\'backend\') or \'-\'} "',
+        "old": "f\"recorded {entry['entry_id']} backend={entry.get('backend') or '-'} \"",
+        "new": "f\"broken {entry['entry_id']} backend={entry.get('backend') or '-'} \"",
     },
     "test_historical_candidates_rank_failures_and_keep_calibration_opt_in": {
         "target": "src/redirect_shadow.py",
