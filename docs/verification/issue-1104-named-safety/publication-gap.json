@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "repository": "stranske/Orchestrator",
+  "pr": 1105,
+  "publication_verified": false,
+  "lifecycle": {
+    "state": "closed",
+    "merged": true,
+    "draft": false,
+    "merged_at": "2026-11-03T22:20:06Z",
+    "observed_by": "authenticated GitHub get_pr_info connector"
+  },
+  "requested_correction": {
+    "old": "- [ ] Retain the merged generator and prior productive tooling. Retrieve the complete metadata test file and verify its narrowly claimed behavior.",
+    "new": "- [x] Retain the merged generator and prior productive tooling. Retrieve the complete metadata test file and verify its narrowly claimed behavior.",
+    "expected_occurrences": 1
+  },
+  "other_tasks_complete": false,
+  "write_attempts": {
+    "pr_body": "rejected: MCP tool call requires approval, but approval policy is never",
+    "blocker_comment": "rejected: MCP tool call requires approval, but approval policy is never",
+    "needs_human_label": "rejected: MCP tool call requires approval, but approval policy is never"
+  },
+  "source_issue": {
+    "number": 1104,
+    "state": "closed",
+    "closed_at": "2026-11-03T22:20:08Z"
+  },
+  "delivery": "This iteration was not included in the external merge. No terminal merge was performed by this agent."
+}
