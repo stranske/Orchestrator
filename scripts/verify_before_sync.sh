@@ -299,7 +299,18 @@ fi
 mkdir -p "$scratch/home/.codex/orchestrator"
 
 say "== scratch mirror of $src @ $head_short ($dirty uncommitted) -> $scratch/mirror"
-if ! GH_CONFIG_DIR="$gh_config" GH_NO_UPDATE_NOTIFIER=1 ORCH_PRIVATE_COPY_ROOT="$scratch" HOME="$scratch/home" \
+mkdir -p "$scratch/mirror"
+if [[ -n "${VERIFY_BEFORE_SYNC_PREBUILT_MIRROR:-}" ]]; then
+  if [[ ! -f "$VERIFY_BEFORE_SYNC_PREBUILT_MIRROR/verify.py" ]]; then
+    fail "NOTHING VERIFIED: prebuilt mirror missing verify.py at $VERIFY_BEFORE_SYNC_PREBUILT_MIRROR"
+    exit 2
+  fi
+  say "   using CI prebuilt mirror from $VERIFY_BEFORE_SYNC_PREBUILT_MIRROR (skipping sync build)"
+  if ! cp -a "$VERIFY_BEFORE_SYNC_PREBUILT_MIRROR/." "$scratch/mirror/"; then
+    fail "NOTHING VERIFIED: could not copy the prebuilt mirror into $scratch/mirror"
+    exit 2
+  fi
+elif ! GH_CONFIG_DIR="$gh_config" GH_NO_UPDATE_NOTIFIER=1 ORCH_PRIVATE_COPY_ROOT="$scratch" HOME="$scratch/home" \
   ORCH_MIRROR="$scratch/mirror" bash "$sync_script" "$src"; then
   fail "NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched"
   exit 2

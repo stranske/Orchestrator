@@ -19,9 +19,13 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 
 
-def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
+def make_plan(
+    junit: pathlib.Path, root: pathlib.Path, count: int, *, workers: int = 4
+) -> dict:
     if count < 1:
         raise ValueError("--shards must be positive")
+    if workers < 1:
+        raise ValueError("--workers must be positive")
     seconds: dict[str, float] = defaultdict(float)
     for case in ET.parse(junit).getroot().iter("testcase"):
         duration = float(case.get("time", "0"))
@@ -59,12 +63,16 @@ def make_plan(junit: pathlib.Path, root: pathlib.Path, count: int) -> dict:
     default = statistics.median(seconds.values())
     shards: list[list[str]] = [[] for _ in range(count)]
     loads = [0.0] * count
-    for module in sorted(modules, key=lambda name: (-seconds.get(name, default), name)):
+    def wall_seconds(module: str) -> float:
+        return seconds.get(module, default) / workers
+
+    for module in sorted(modules, key=lambda name: (-wall_seconds(name), name)):
         index = min(range(count), key=lambda i: (loads[i], i))
         shards[index].append(module)
-        loads[index] += seconds.get(module, default)
+        loads[index] += wall_seconds(module)
     return {
         "timing_source": junit.name,
+        "pytest_workers": workers,
         "estimated_test_seconds": [round(load, 3) for load in loads],
         "untimed_modules": sorted(set(modules) - seconds.keys()),
         "shards": [sorted(shard) for shard in shards],
@@ -76,12 +84,23 @@ def main() -> None:
     parser.add_argument("junit", type=pathlib.Path)
     parser.add_argument("--shards", type=int, default=6)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="pytest-xdist workers per shard (loads are wall-time estimates)",
+    )
+    parser.add_argument(
         "--output", type=pathlib.Path, default=pathlib.Path("config/test-shards.json")
     )
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[1]
     args.output.write_text(
-        json.dumps(make_plan(args.junit, root, args.shards), indent=2, allow_nan=False) + "\n"
+        json.dumps(
+            make_plan(args.junit, root, args.shards, workers=args.workers),
+            indent=2,
+            allow_nan=False,
+        )
+        + "\n"
     )
 
 
