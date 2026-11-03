@@ -1,0 +1,13 @@
+{
+  "schema": "optional-producer-audit-deferral-ast/v1",
+  "before_source": "a71505904143db5864d9f94d95dd65868535bfbe",
+  "before_pipeline_ast_sha256": "45f06dbd0dc2571d1720c0ed868bd54d606727ae4b603145e5f7a62747ea3936",
+  "after_prepare_ast_sha256": "b1784257fa27d0b229f8d830e371cfa20495aa5cc2d795d4704cc4304f4a0e2b",
+  "after_unreserved_pipeline_ast_sha256": "9fe9149817326695be311db1a88fa642336d19cd0028d5d288e5f39920a17030",
+  "restore_only": {
+    "generation": "audit_generation = int(time.time())",
+    "cache_if": "if audit_due and isinstance(semantic_cache_key, str):\n    semantic_cache_key = 'closer-evidence-semantic/v1:' + hashlib.sha256(f'{semantic_cache_key}:drift:{audit_generation}'.encode()).hexdigest()",
+    "selection_with": "with drift_lock:\n    nonlocal drift_claimed\n    if drift_due and (not drift_claimed) and (not collection_mode):\n        drift_claimed = True\n        run_drift = True",
+    "producer_status": "('complete' if valid and drift_complete else 'pending') if run_drift else 'deferred_prompt_budget' if drift_deferred_for_budget else 'not_due'"
+  }
+}

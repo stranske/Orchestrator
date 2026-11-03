@@ -32,6 +32,8 @@ import collections
 import hashlib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import time
@@ -47,6 +49,12 @@ LIVE_SWITCH = "ORCH_ADJUDICATOR_LIVE_SHADOW"
 LIVE_LIMIT = "ORCH_ADJUDICATOR_LIVE_LIMIT"
 DEFAULT_LIMIT = 3
 OFF_WORDS = frozenset({"0", "false", "no", "off"})
+CHECK_RUN_PAGE_SIZE = 100
+CHECK_RUN_LOG_TAIL_BYTES = 4_096
+EXECUTION_EVIDENCE_BYTES = 65_536
+FAILED_CHECK_CONCLUSIONS = frozenset(
+    {"action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"}
+)
 
 
 def report_path() -> Path:
@@ -92,7 +100,290 @@ def _changed_paths(repository: Path, sha: str) -> list[str]:
     return [path for _status, path in entries]
 
 
-def certify(row: dict, repository: Path, snapshot: dict) -> roles.CollectedAdjudicationCase:
+def _named_test_commands(criteria: list[str]) -> list[str]:
+    """Return explicit test invocations or pytest node IDs, excluding ordinary code spans."""
+    commands: list[str] = []
+    for criterion in criteria:
+        literals = re.findall(r"(?<!`)`([^`\n]+)`(?!`)", criterion)
+        for block in re.findall(r"```[^\n]*\n(.*?)```", criterion, re.DOTALL):
+            literals.extend(block.splitlines())
+        for command in literals:
+            command = command.strip()
+            try:
+                tokens = shlex.split(command)
+            except ValueError:
+                continue
+            if tokens[:2] in (["uv", "run"], ["poetry", "run"], ["pipenv", "run"]):
+                tokens = tokens[2:]
+            executable = Path(tokens[0]).name if tokens else ""
+            invocation = executable == "pytest" or (
+                re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", executable)
+                and tokens[1:3] in (["-m", "pytest"], ["-m", "unittest"])
+            )
+            if (invocation or re.fullmatch(r"\S+\.py::\S+", command)) and command not in commands:
+                commands.append(command)
+    return commands
+
+
+def _tail(value: object, limit: int) -> str:
+    """Keep a valid UTF-8 log suffix within the byte budget, including its marker."""
+    if limit <= 0:
+        return ""
+    text = str(value or "")
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    marker = "[... truncated ...]\n"
+    # Prefer useful log bytes when the remaining budget cannot hold a marker and a suffix.
+    if limit <= len(marker):
+        marker = ""
+    suffix = encoded[-(limit - len(marker)) :].decode("utf-8", errors="ignore")
+    return marker + suffix
+
+
+def _actions_log_endpoint(repo: str, details_url: object) -> str | None:
+    if not isinstance(details_url, str):
+        return None
+    match = re.fullmatch(
+        rf"https://github\.com/{re.escape(repo)}/actions/runs/\d+/job/(\d+)/?", details_url
+    )
+    if match is None:
+        return None
+    return f"https://api.github.com/repos/{repo}/actions/jobs/{match[1]}/logs"
+
+
+def _github_log_tail(endpoint: str) -> str:
+    result = subprocess.run(
+        ["gh", "api", endpoint, "--method", "GET"],
+        capture_output=True,
+        check=True,
+        timeout=120,
+    )
+    return _tail(result.stdout.decode("utf-8", errors="replace"), CHECK_RUN_LOG_TAIL_BYTES)
+
+
+def _check_run_evidence(
+    target: str,
+    sha: str,
+    reader: Callable[[list[str]], dict],
+    log_reader: Callable[[str], str],
+) -> list[dict]:
+    """Read every exact-SHA check run and only bounded failure output from GitHub."""
+    repo, separator, _number = target.partition("#")
+    if not separator or repo.count("/") != 1:
+        raise ValueError("live execution evidence requires a PR target")
+    runs: list[dict] = []
+    total: int | None = None
+    page = 1
+    log_bytes = 0
+    while total is None or len(runs) < total:
+        endpoint = (
+            f"repos/{repo}/commits/{sha}/check-runs?filter=all"
+            f"&per_page={CHECK_RUN_PAGE_SIZE}&page={page}"
+        )
+        response = reader(["api", endpoint])
+        page_runs = response.get("check_runs") if isinstance(response, dict) else None
+        if not isinstance(page_runs, list):
+            raise ValueError("GitHub check-run page is malformed")
+        if total is None:
+            raw_total = response.get("total_count")
+            if type(raw_total) is not int or raw_total < 0:
+                raise ValueError("GitHub check-run total is unavailable")
+            total = raw_total
+        for check in page_runs:
+            if not isinstance(check, dict):
+                raise ValueError("GitHub check-run entry is malformed")
+            if check.get("head_sha") != sha:
+                raise ValueError("GitHub check-run revision differs from evaluated commit")
+            name = check.get("name")
+            conclusion = check.get("conclusion")
+            if (
+                not isinstance(name, str)
+                or not name.strip()
+                or not (isinstance(conclusion, str) or conclusion is None)
+            ):
+                raise ValueError("GitHub check-run lacks name or conclusion")
+            api_url = check.get("url")
+            if not isinstance(api_url, str) or not api_url.strip():
+                check_id = check.get("id")
+                if type(check_id) is not int:
+                    raise ValueError("GitHub check-run lacks API provenance")
+                api_url = f"https://api.github.com/repos/{repo}/check-runs/{check_id}"
+            item: dict[str, Any] = {
+                "name": name,
+                "conclusion": conclusion,
+                "sha": sha,
+                "api_url": api_url,
+            }
+            if isinstance(conclusion, str) and conclusion.lower() in FAILED_CHECK_CONCLUSIONS:
+                remaining = max(0, EXECUTION_EVIDENCE_BYTES - log_bytes)
+                if not remaining:
+                    item["log_unavailable"] = "execution evidence budget exhausted"
+                    runs.append(item)
+                    continue
+                try:
+                    detail = reader(["api", api_url])
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    item["log_unavailable"] = "check-run detail unavailable"
+                    runs.append(item)
+                    continue
+                if not isinstance(detail, dict) or detail.get("head_sha") != sha:
+                    raise ValueError(
+                        "GitHub check-run detail revision differs from evaluated commit"
+                    )
+                details_url = detail.get("details_url")
+                log_endpoint = _actions_log_endpoint(repo, details_url)
+                if log_endpoint is None:
+                    item["log_unavailable"] = "Actions job URL unavailable"
+                else:
+                    item["log_provenance"] = {"api_url": log_endpoint, "sha": sha}
+                    if remaining:
+                        try:
+                            log_tail = _tail(
+                                log_reader(log_endpoint), min(remaining, CHECK_RUN_LOG_TAIL_BYTES)
+                            )
+                        except (OSError, RuntimeError, subprocess.SubprocessError):
+                            item["log_unavailable"] = "Actions job log unavailable"
+                        else:
+                            item["log_tail"] = log_tail
+                            log_bytes += len(log_tail.encode("utf-8"))
+                    else:
+                        item["log_unavailable"] = "execution evidence budget exhausted"
+            runs.append(item)
+            if total is not None and len(runs) >= total:
+                break
+        if len(runs) >= total:
+            break
+        if not page_runs:
+            raise ValueError("GitHub check-run pagination ended before total_count")
+        page += 1
+    return runs
+
+
+def _runtime_events_for_sha(target: str, sha: str) -> list[dict]:
+    """Read matching completion events without the reporting API's global 1,000-row window."""
+    events = []
+    with feedback._conn() as conn:
+        rows = conn.execute(
+            "SELECT event_id,payload_json FROM completion_events "
+            "WHERE producer='runtime_ac_gate' ORDER BY updated_ts DESC,event_id DESC"
+        )
+        for event_id, raw in rows:
+            try:
+                payload = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            gate = payload.get("runtime_ac_gate") if isinstance(payload, dict) else None
+            if (
+                isinstance(gate, dict)
+                and gate.get("target") == target
+                and gate.get("observed_head_sha") == sha
+            ):
+                events.append({**gate, "event_id": event_id, "producer": "runtime_ac_gate"})
+    return events
+
+
+def _command_result(command: str, events: list[dict], target: str, sha: str) -> dict | None:
+    """Find the newest exact-head runtime-AC result for a documented command."""
+    for event in events:
+        if event.get("target") != target or event.get("observed_head_sha") != sha:
+            continue
+        for audit in event.get("audit_evidence") or []:
+            observed = audit.get("command") if isinstance(audit, dict) else None
+            if not isinstance(observed, str):
+                continue
+            if not _same_named_test_command(command, observed):
+                continue
+            return {
+                "command": command,
+                "status": audit.get("status"),
+                "returncode": audit.get("returncode"),
+                "event_id": event.get("event_id"),
+                "producer": "runtime_ac_gate",
+                "target": target,
+                "sha": sha,
+            }
+    return None
+
+
+def _same_named_test_command(command: str, observed: str) -> bool:
+    """Match a documented command exactly, or a bare node as pytest's sole test target."""
+    if observed.strip() == command:
+        return True
+    if any(char.isspace() for char in command):
+        return False
+    try:
+        tokens = shlex.split(observed)
+    except ValueError:
+        return False
+    try:
+        pytest_at = tokens.index("pytest")
+    except ValueError:
+        return False
+    return tokens[:pytest_at] in (
+        [],
+        ["python"],
+        ["python3"],
+        ["python", "-m"],
+        ["python3", "-m"],
+    ) and tokens[pytest_at + 1 :] == [command]
+
+
+def _execution_evidence(
+    row: dict,
+    sha: str,
+    criteria: list[str],
+    *,
+    body: str | None = None,
+    github_reader: Callable[[list[str]], dict] | None = None,
+    runtime_events_reader: Callable[[], list[dict]] | None = None,
+    log_reader: Callable[[str], str] | None = None,
+) -> dict:
+    """Attach live execution facts while preserving explicit UNKNOWNs for absent named tests."""
+    github_reader = retro._gh_json if github_reader is None else github_reader
+    log_reader = _github_log_tail if log_reader is None else log_reader
+    target = str(row.get("target") or "")
+    commands = _named_test_commands([body] if body is not None else criteria)
+    events = []
+    if commands:
+        events = (
+            _runtime_events_for_sha(target, sha)
+            if runtime_events_reader is None
+            else runtime_events_reader()
+        )
+    if not isinstance(events, list):
+        raise ValueError("runtime-AC event reader returned malformed evidence")
+    command_results = []
+    unknowns = []
+    for command in commands:
+        result = _command_result(command, events, target, sha)
+        if result is None:
+            unknowns.append(command)
+        else:
+            command_results.append(result)
+    return {
+        "evaluated_sha": sha,
+        "runtime_ac_provenance": {
+            "producer": "runtime_ac_gate",
+            "target": target,
+            "sha": sha,
+            "source": "completion_events",
+        },
+        "check_runs": _check_run_evidence(target, sha, github_reader, log_reader),
+        "runtime_ac_command_results": command_results,
+        "unknowns": unknowns,
+    }
+
+
+def certify(
+    row: dict,
+    repository: Path,
+    snapshot: dict,
+    *,
+    github_reader: Callable[[list[str]], dict] | None = None,
+    runtime_events_reader: Callable[[], list[dict]] | None = None,
+    log_reader: Callable[[str], str] | None = None,
+) -> roles.CollectedAdjudicationCase:
     """Certify a live case deterministically: every changed path, every criterion to the diff.
 
     No judgement is made about which file proves which criterion — the role sees the whole diff
@@ -110,6 +401,19 @@ def certify(row: dict, repository: Path, snapshot: dict) -> roles.CollectedAdjud
     if not paths:
         raise ValueError("merged commit changes no add/modify blobs")
     criteria = retro._criterion_texts(body)
+    packet = row.get("packet")
+    ground_truth = packet.get("ground_truth_evidence") if isinstance(packet, dict) else None
+    if not isinstance(ground_truth, dict):
+        raise ValueError("live case packet lacks ground-truth evidence")
+    ground_truth["live_execution_evidence"] = _execution_evidence(
+        row,
+        sha,
+        criteria,
+        body=body,
+        github_reader=github_reader,
+        runtime_events_reader=runtime_events_reader,
+        log_reader=log_reader,
+    )
     row["collection_requirements"] = {
         "source_paths": paths,
         "acceptance": [
@@ -170,6 +474,7 @@ def run_live(
     runner: Callable[..., dict] | None = None,
     provider: Callable[[str, str], Any] | None = None,
     snapshot_reader: Callable[[str], dict] | None = None,
+    github_reader: Callable[[list[str]], dict] | None = None,
     timeout: int = retro.DISPATCH_TIMEOUT_S,
 ) -> dict:
     """One bounded live pass; idempotent per dispute (case id = run + both verdicts)."""
@@ -222,7 +527,12 @@ def run_live(
                 raise ValueError("dispute carries no exact evaluated commit")
             with provider(dispute["target"], sha) as repository:
                 repository = Path(repository)
-                case = certify(entry, repository, snapshot_reader(dispute["target"]))
+                case = certify(
+                    entry,
+                    repository,
+                    snapshot_reader(dispute["target"]),
+                    github_reader=github_reader,
+                )
                 entry["certification"] = {
                     "status": "certified",
                     "evaluated_sha": sha,
@@ -480,6 +790,12 @@ def _selftest() -> None:
                 calls.append(kw)
                 assert kw["source"] == "live" and kw["dispatch"] is True
                 assert isinstance(kw["case"], roles.CollectedAdjudicationCase)
+                execution = roles._collected_snapshot(kw["case"])["ground_truth_evidence"][
+                    "live_execution_evidence"
+                ]
+                assert execution["check_runs"][0]["sha"] == sha
+                assert execution["check_runs"][0]["name"] == "selftest-unit"
+                assert execution["unknowns"] == ["tests/test_proof.py::test_proof"]
                 return {
                     "backend_run_id": "backend-live",
                     "backend": "stub",
@@ -502,6 +818,17 @@ def _selftest() -> None:
                 evidence_reader=lambda _row: _evidence_for(sha),
                 runner=runner,
                 provider=provider,
+                github_reader=lambda _args: {
+                    "total_count": 1,
+                    "check_runs": [
+                        {
+                            "id": 1,
+                            "head_sha": sha,
+                            "name": "selftest-unit",
+                            "conclusion": "success",
+                        }
+                    ],
+                },
             )
             first = run_live(snapshot_reader=lambda _t: snapshot, **common)
             assert (first["attempted"], first["advised"], first["uncertified"]) == (1, 1, 0), first

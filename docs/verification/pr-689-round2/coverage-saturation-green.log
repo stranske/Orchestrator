@@ -1,0 +1,6 @@
+RESTORED_SHA256=1fd2deabcdfe7b586fa80d8ec36e1abd106c1247228715474d1f5d785a7bbcc3
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_shed_agent_does_not_latch_firing_launch[fresh_warn]
+.                                                                        [100%]
+1 passed in 0.46s
+
+EXIT=0

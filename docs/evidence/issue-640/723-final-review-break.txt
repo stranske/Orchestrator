@@ -1,0 +1,101 @@
+NONFINITE DEADLINE GUARD DISCONNECTED
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_binding_ineligible_validates_skill_package_once _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1089058e0>
+
+    def test_binding_ineligible_validates_skill_package_once(
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: list[str] = []
+    
+        def _counting_validate(path: Path) -> dict:
+            calls.append(str(path))
+            return {"name": "counted-skill", "expires_at": 9999999999}
+    
+        monkeypatch.setattr(compiler, "validate_skill_package", _counting_validate)
+        binding = {
+            "kind": "skill",
+            "artifact": "/tmp/counted-skill-package",
+            "lifecycle_policy": {},
+            "rollback": None,
+        }
+        assert capability_targets._binding_ineligible(binding, 100, {}) is None
+        assert len(calls) == 1, calls
+    
+        def _failing_validate(path: Path) -> dict:
+            calls.append(str(path))
+            raise ValueError("broken package")
+    
+        monkeypatch.setattr(compiler, "validate_skill_package", _failing_validate)
+        calls.clear()
+        assert capability_targets._binding_ineligible(binding, 100, {}) == "artifact_invalid"
+        assert len(calls) == 1, calls
+    
+        # Malformed declarations refuse before Path or package validation. They must
+        # not appear eligible and then raise in the selector's skill match.
+        calls.clear()
+        for artifact in (None, 17, {}, []):
+            malformed = {**binding, "artifact": artifact}
+            assert capability_targets._binding_artifact(malformed) == ({}, True)
+            assert capability_targets._binding_ineligible(malformed, 100, {}) == "artifact_invalid"
+        missing = {k: v for k, v in binding.items() if k != "artifact"}
+        assert capability_targets._binding_ineligible(missing, 100, {}) == "artifact_invalid"
+        assert calls == []
+        for deadline in (float("inf"), float("-inf"), float("nan")):
+            invalid_deadline = {"kind": "workflow", "artifact": {"expires_at": deadline}}
+>           assert capability_targets._binding_ineligible(invalid_deadline, 100, {}) == "expired"
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_capability_lifecycle_e2e.py:845: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/capability_targets.py:328: in _binding_ineligible
+    unparseable, expires_at = _binding_deadlines(artifact, binding)
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+artifact = {'expires_at': inf}
+binding = {'kind': 'workflow', 'artifact': {'expires_at': inf}}
+
+    def _binding_deadlines(
+        artifact: Mapping[str, Any], binding: Mapping[str, Any]
+    ) -> tuple[bool, int | None]:
+        """One pass over the deadline fields: (any unparseable, earliest deadline)."""
+        lifecycle_raw = artifact.get("lifecycle")
+        lifecycle: Mapping[str, Any] = lifecycle_raw if isinstance(lifecycle_raw, Mapping) else {}
+        policy_raw = binding.get("lifecycle_policy")
+        policy: Mapping[str, Any] = policy_raw if isinstance(policy_raw, Mapping) else {}
+        deadlines: list[int] = []
+        for value in (
+            artifact.get("expires_at"),
+            lifecycle.get("expires_at"),
+            policy.get("expires_at"),
+            policy.get("expiry"),
+        ):
+            if value is None:
+                continue
+            try:
+>               deadlines.append(int(value))
+                                 ^^^^^^^^^^
+E               OverflowError: cannot convert float infinity to integer
+
+src/capability_targets.py:283: OverflowError
+=========================== short test summary info ============================
+FAILED tests/test_capability_lifecycle_e2e.py::test_binding_ineligible_validates_skill_package_once
+1 failed, 37 deselected in 6.70s
+
+MALFORMED SKILL GUARD DISCONNECTED
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/Orchestrator-723-reconciliation/src/capability_targets.py", line 678, in <module>
+    _selftest()
+  File "/Users/teacher/.codex/automations/pd-workloop-resume/worktrees/Orchestrator-723-reconciliation/src/capability_targets.py", line 643, in _selftest
+    assert (
+AssertionError
+
+EXACT RESTORE GREEN
+.                                                                        [100%]
+1 passed, 37 deselected in 0.22s
+
+EXACT RESTORE GREEN
+capability_targets.py selftest: OK

@@ -1,0 +1,122 @@
+[
+  {
+    "target": "stranske/Manager-Database#1771",
+    "collection_causes": [
+      {
+        "section": "native_merge_verifier",
+        "kind": "unknown",
+        "reason": "Both artifacts report 'no native input snapshot in artifact', and the evaluated SHA differs from head. This could be a producer omission, a collector contract mismatch, or a legitimately earlier-evaluated SHA, and the supplied evidence does not distinguish them."
+      },
+      {
+        "section": "ci_artifacts",
+        "kind": "legitimate_absence",
+        "reason": "The only artifacts are langsmith-fleet.ndjson telemetry, not test or coverage receipts. Required-check topology is unknown, so this is not a confirmed defect."
+      },
+      {
+        "section": "test_coverage_artifacts",
+        "kind": "unknown",
+        "reason": "Content is null for 8 runs with a complete inventory, and required test job topology is unknown. It is unclear whether CI never produced receipts or the collector did not recognize them."
+      },
+      {
+        "section": "source",
+        "kind": "competing_pr_ambiguity",
+        "reason": "The issue body's top-level contract targets the lifecycle chunk and states 1771 is already merged. The governing contract for this PR is only in nested history."
+      },
+      {
+        "section": "prior_dispositions",
+        "kind": "unknown",
+        "reason": "The section is missing, but the source claims 1771 was dispositioned. This cannot be confirmed or refuted from supplied evidence."
+      }
+    ]
+  },
+  {
+    "target": "stranske/Orchestrator#498",
+    "collection_causes": [
+      {
+        "section": "native_merge_verifier",
+        "kind": "unknown",
+        "reason": "Both agents-verifier runs succeeded at the current head, but the native comparison corpus is missing or ambiguous and no artifacts were produced. The evidence does not show whether the producer omitted the corpus or the collector failed to match it."
+      },
+      {
+        "section": "diff_files",
+        "kind": "collector_contract",
+        "reason": "The section byte limit was exceeded and the retained content is null instead of a bounded partial patch. A per-file or paged retrieval is needed to get raw patch excerpts."
+      },
+      {
+        "section": "ci_artifacts",
+        "kind": "collector_contract",
+        "reason": "The section is truncated and the required-check topology is not supplied to the collector, so retrieval cannot certify complete CI proof. The run inventory is complete (15 runs)."
+      },
+      {
+        "section": "ci_artifacts",
+        "kind": "parser_failure",
+        "reason": "The gate-coverage-trend artifact's coverage-trend.json was reported as 'JSON format is not a recognized test or coverage receipt'. This may be an unsupported format rather than a defect, so it needs a single grouped upstream check."
+      },
+      {
+        "section": "test_coverage_artifacts",
+        "kind": "collector_contract",
+        "reason": "The tests list is empty and only a coverage summary was extracted. No JUnit or test-result receipt was identified, and it is unknown whether CI emits one."
+      },
+      {
+        "section": "prior_dispositions",
+        "kind": "legitimate_absence",
+        "reason": "No prior disposition is recorded and none was operator-supplied."
+      }
+    ]
+  },
+  {
+    "target": "stranske/Orchestrator#501",
+    "collection_causes": [
+      {
+        "section": "native_merge_verifier",
+        "kind": "unknown",
+        "reason": "Artifact agents-verifier-metrics exists but contains no native input snapshot; evaluated_sha 930cc9c6 differs from head. Could be a producer omission or a stale evaluation of an earlier commit; cannot be distinguished from supplied evidence."
+      },
+      {
+        "section": "ci_artifacts",
+        "kind": "collector_contract",
+        "reason": "backplane-conformance-report and gate-coverage-trend JSON were retrieved but not recognized as test/coverage receipts; likely a classification limit rather than a defect. Not by itself a bug."
+      },
+      {
+        "section": "test_coverage_artifacts",
+        "kind": "legitimate_absence",
+        "reason": "No junit/pytest receipt in the retained artifacts; required test job topology unknown, so absence may be legitimate."
+      },
+      {
+        "section": "diff_files",
+        "kind": "collector_contract",
+        "reason": "Per-file patch bound reached for src/strategy_experiment.py (truncated)."
+      },
+      {
+        "section": "prior_dispositions",
+        "kind": "legitimate_absence",
+        "reason": "No prior disposition recorded."
+      }
+    ]
+  },
+  {
+    "target": "stranske/Orchestrator#502",
+    "collection_causes": [
+      {
+        "section": "native_merge_verifier",
+        "kind": "producer_omission",
+        "reason": "The agents-verifier-metrics artifact contains no native input snapshot, and its evaluated_sha differs from the PR head. This is a probable producer defect or a stale verifier run, not yet confirmed. Group with similar cases upstream; the coordinator owns the idempotent filing."
+      },
+      {
+        "section": "test_coverage_artifacts",
+        "kind": "collector_contract",
+        "reason": "Coverage receipts parsed, but no test-result receipt was extracted and the required test-job topology is unknown. The collector may not recognize this repo's test output format. Unconfirmed."
+      },
+      {
+        "section": "ci_artifacts",
+        "kind": "collector_contract",
+        "reason": "Two JSON artifacts (conformance-report, coverage-trend) were not recognized as test/coverage receipts. These are probably legitimate non-test artifacts, so this is likely benign."
+      },
+      {
+        "section": "prior_dispositions",
+        "kind": "legitimate_absence",
+        "reason": "No prior dispositions exist for this target."
+      }
+    ]
+  }
+]

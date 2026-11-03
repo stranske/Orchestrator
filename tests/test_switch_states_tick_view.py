@@ -121,6 +121,13 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(
         switch_review, "_capability_heartbeat", lambda *a, **k: reached["heartbeat"].append(a)
     )
+    # This suite tests switch environment provenance, not live credential scanning.
+    # The CLI collects that scan separately from review(); keep it fixture-owned too.
+    monkeypatch.setattr(
+        switch_review,
+        "credential_exposure",
+        lambda **_k: {"status": "unmeasured", "reason": "outside switch-source fixture"},
+    )
     monkeypatch.setattr(switch_review, "stale_runners", lambda **_k: [])
     monkeypatch.setattr(switch_review, "mirror_drift", lambda **_k: {"status": "ok"})
     monkeypatch.setattr(switch_review, "_exploration_gate", lambda: {"suspect": False})

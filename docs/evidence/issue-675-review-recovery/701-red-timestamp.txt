@@ -1,0 +1,216 @@
+FF....                                                                   [100%]
+=================================== FAILURES ===================================
+___ test_close_records_real_private_brain_monitor_outcome_once[PASS-None-1] ____
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6231/test_close_records_real_privat0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105b72f60>
+capsys = <_pytest.capture.CaptureFixture object at 0x105bac590>
+verdict = 'PASS', blocker = None, expected = 1
+
+    @pytest.mark.parametrize(
+        "verdict,blocker,expected",
+        [
+            ("PASS", None, 1),
+            ("MISSING", None, 1),
+            ("CONCERNS", None, 0),
+            ("MISSING", "ci not green", 0),
+            ("MISSING", "no gate commands", 0),
+            ("PASS", "unconfirmed", 0),
+        ],
+    )
+    def test_close_records_real_private_brain_monitor_outcome_once(
+        tmp_path, monkeypatch, capsys, verdict, blocker, expected
+    ):
+        import time
+    
+        import capabilities
+        import feedback
+        import value_chain_monitor as monitor
+    
+        now = 1_792_238_400
+        capability = "live-keepalive-supervisor"
+        ledger = tmp_path / "capabilities.json"
+        cap = capabilities._blank_capability(capability)
+        cap.update(status="wired", capability_version_id="cv:supervisor-close")
+        capabilities.save({capability: cap}, ledger)
+        monkeypatch.setattr(capabilities, "REG", ledger)
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+        monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *args, **kwargs: None)
+        monkeypatch.setattr(time, "time", lambda: float(now))
+        # Initialize a private schema so zero outcomes is measured, not an unread Brain.
+        with feedback._conn():
+            pass
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path, verdict)
+        options["record"] = supervisor._closure_record
+        options["ci_green"] = lambda *args: blocker != "ci not green"
+    
+        def gate(*args):
+            if blocker:
+                return {"result": "UNRUNNABLE", "reason": blocker}
+            return {"result": "PASS"}
+    
+        options["gate"] = gate
+        if blocker == "unconfirmed":
+            original = options["gh"]
+            options["gh"] = lambda args: {} if "PATCH" in args else original(args)
+    
+        def monitor_row():
+            inputs = monitor._brain(feedback.DB_PATH, now - monitor.WINDOW_DAYS * 86400, now)
+            assert not inputs["errors"]
+            report = monitor.report(now=now, path=ledger, env={}, inputs=inputs)
+            row = next(row for row in report["rows"] if row["capability"] == capability)
+            lines = monitor.format_lines(report)
+            line = next(line for line in lines if line.startswith(f"  {capability}:"))
+            assert f"; outcome {row['outcome']};" in line
+            return row
+    
+        assert monitor_row()["outcome"] == 0
+        before = monitor.supervisor_closure_acceptance(now, now=now)
+        assert before["outcome"] == 0 and before["status"] == "pending"
+        assert monitor.main(["--supervisor-enabled-at", str(now)]) == 1
+        assert json.loads(capsys.readouterr().out)["status"] == "pending"
+        assert supervisor.close_verified_issues(**options)["closed"] == expected
+        row = monitor_row()
+        assert row["outcome"] == row["acted_on"] == expected
+        # Closure credit must not claim a new successful implementation merge.
+        assert row["outcome_success"] == 0
+        database_before = feedback.DB_PATH.read_bytes()
+        receipt = monitor.supervisor_closure_acceptance(now, now=now)
+        assert receipt["outcome"] == expected
+        assert receipt["status"] == ("met" if expected else "pending")
+        assert monitor.main(["--supervisor-enabled-at", str(now)]) == (0 if expected else 1)
+        assert json.loads(capsys.readouterr().out) == receipt
+        assert feedback.DB_PATH.read_bytes() == database_before
+        # Checking after the deadline retains timely evidence; an older closure does
+        # not satisfy a later enablement window, even while the rolling row is positive.
+        assert monitor.supervisor_closure_acceptance(now, now=now + 86401)["status"] == (
+            "met" if expected else "deadline_missed"
+        )
+        later = monitor.supervisor_closure_acceptance(now + 1, now=now + 86401)
+        assert later["outcome"] == 0 and later["status"] == "deadline_missed"
+        missing = tmp_path / "missing.db"
+        unread = monitor.supervisor_closure_acceptance(now, now=now, db=missing)
+        assert unread["outcome"] is None and unread["status"] == "unmeasured"
+        assert unread["errors"] and not missing.exists()
+        for invalid in (0, -1, now + 1):
+            with pytest.raises(ValueError, match="enablement time"):
+                monitor.supervisor_closure_acceptance(invalid, now=now)
+        if expected:
+            rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
+            # A repeat after the deadline must retain the original timely receipt.
+            monkeypatch.setattr(time, "time", lambda: float(now + 86401))
+            supervisor._closure_record(REPO + "#7", SHA, rule)
+            with feedback._conn() as conn:
+>               assert conn.execute("SELECT durability_checked_ts FROM outcomes").fetchone()[0] == now
+E               assert 1792324801 == 1792238400
+
+tests/test_keepalive_supervisor.py:359: AssertionError
+__ test_close_records_real_private_brain_monitor_outcome_once[MISSING-None-1] __
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6231/test_close_records_real_privat1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x105b70d40>
+capsys = <_pytest.capture.CaptureFixture object at 0x105b73170>
+verdict = 'MISSING', blocker = None, expected = 1
+
+    @pytest.mark.parametrize(
+        "verdict,blocker,expected",
+        [
+            ("PASS", None, 1),
+            ("MISSING", None, 1),
+            ("CONCERNS", None, 0),
+            ("MISSING", "ci not green", 0),
+            ("MISSING", "no gate commands", 0),
+            ("PASS", "unconfirmed", 0),
+        ],
+    )
+    def test_close_records_real_private_brain_monitor_outcome_once(
+        tmp_path, monkeypatch, capsys, verdict, blocker, expected
+    ):
+        import time
+    
+        import capabilities
+        import feedback
+        import value_chain_monitor as monitor
+    
+        now = 1_792_238_400
+        capability = "live-keepalive-supervisor"
+        ledger = tmp_path / "capabilities.json"
+        cap = capabilities._blank_capability(capability)
+        cap.update(status="wired", capability_version_id="cv:supervisor-close")
+        capabilities.save({capability: cap}, ledger)
+        monkeypatch.setattr(capabilities, "REG", ledger)
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "brain.db")
+        monkeypatch.setattr(feedback, "_capability_daily_heartbeat", lambda *args, **kwargs: None)
+        monkeypatch.setattr(time, "time", lambda: float(now))
+        # Initialize a private schema so zero outcomes is measured, not an unread Brain.
+        with feedback._conn():
+            pass
+        pr, issue, calls, recorded, options = closure_fixture(tmp_path, verdict)
+        options["record"] = supervisor._closure_record
+        options["ci_green"] = lambda *args: blocker != "ci not green"
+    
+        def gate(*args):
+            if blocker:
+                return {"result": "UNRUNNABLE", "reason": blocker}
+            return {"result": "PASS"}
+    
+        options["gate"] = gate
+        if blocker == "unconfirmed":
+            original = options["gh"]
+            options["gh"] = lambda args: {} if "PATCH" in args else original(args)
+    
+        def monitor_row():
+            inputs = monitor._brain(feedback.DB_PATH, now - monitor.WINDOW_DAYS * 86400, now)
+            assert not inputs["errors"]
+            report = monitor.report(now=now, path=ledger, env={}, inputs=inputs)
+            row = next(row for row in report["rows"] if row["capability"] == capability)
+            lines = monitor.format_lines(report)
+            line = next(line for line in lines if line.startswith(f"  {capability}:"))
+            assert f"; outcome {row['outcome']};" in line
+            return row
+    
+        assert monitor_row()["outcome"] == 0
+        before = monitor.supervisor_closure_acceptance(now, now=now)
+        assert before["outcome"] == 0 and before["status"] == "pending"
+        assert monitor.main(["--supervisor-enabled-at", str(now)]) == 1
+        assert json.loads(capsys.readouterr().out)["status"] == "pending"
+        assert supervisor.close_verified_issues(**options)["closed"] == expected
+        row = monitor_row()
+        assert row["outcome"] == row["acted_on"] == expected
+        # Closure credit must not claim a new successful implementation merge.
+        assert row["outcome_success"] == 0
+        database_before = feedback.DB_PATH.read_bytes()
+        receipt = monitor.supervisor_closure_acceptance(now, now=now)
+        assert receipt["outcome"] == expected
+        assert receipt["status"] == ("met" if expected else "pending")
+        assert monitor.main(["--supervisor-enabled-at", str(now)]) == (0 if expected else 1)
+        assert json.loads(capsys.readouterr().out) == receipt
+        assert feedback.DB_PATH.read_bytes() == database_before
+        # Checking after the deadline retains timely evidence; an older closure does
+        # not satisfy a later enablement window, even while the rolling row is positive.
+        assert monitor.supervisor_closure_acceptance(now, now=now + 86401)["status"] == (
+            "met" if expected else "deadline_missed"
+        )
+        later = monitor.supervisor_closure_acceptance(now + 1, now=now + 86401)
+        assert later["outcome"] == 0 and later["status"] == "deadline_missed"
+        missing = tmp_path / "missing.db"
+        unread = monitor.supervisor_closure_acceptance(now, now=now, db=missing)
+        assert unread["outcome"] is None and unread["status"] == "unmeasured"
+        assert unread["errors"] and not missing.exists()
+        for invalid in (0, -1, now + 1):
+            with pytest.raises(ValueError, match="enablement time"):
+                monitor.supervisor_closure_acceptance(invalid, now=now)
+        if expected:
+            rule = "verifier PASS" if verdict == "PASS" else "merge-SHA acceptance gates and green CI"
+            # A repeat after the deadline must retain the original timely receipt.
+            monkeypatch.setattr(time, "time", lambda: float(now + 86401))
+            supervisor._closure_record(REPO + "#7", SHA, rule)
+            with feedback._conn() as conn:
+>               assert conn.execute("SELECT durability_checked_ts FROM outcomes").fetchone()[0] == now
+E               assert 1792324801 == 1792238400
+
+tests/test_keepalive_supervisor.py:359: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_keepalive_supervisor.py::test_close_records_real_private_brain_monitor_outcome_once[PASS-None-1]
+FAILED tests/test_keepalive_supervisor.py::test_close_records_real_private_brain_monitor_outcome_once[MISSING-None-1]
+2 failed, 4 passed, 43 deselected in 0.45s

@@ -1,0 +1,29 @@
+{
+  "base_commit": "d4ca8c8cf144d51d7b8b67a5beb1935e4c66a694",
+  "files": {
+    "closer_correction_native_effects.py": {
+      "after_file_sha256": "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76",
+      "after_module_ast_sha256": "cb0a4167a4e9f3b817422ee5b1facaf848de476a9d8893a73791994db3df5468",
+      "before_file_sha256": "a11c6f91b462c22225465337f4fb4b028a86b69bd81914b8cb30f7df78ebbc4f",
+      "before_module_ast_sha256": "71ae4434202db50b14b84325a2755804a419ea1410a632fecfa3a6a68d92b5ff",
+      "constant_delta": {},
+      "function_delta": {"NativeHTTPTransport": {"after": "2489834304bb3996fe5ff316b09f9a3add3ec81fda0b30f50e8c934b86c517fa", "before": "43e222650879da460212b3e82b127099043600f1eb563c7bc48bd1b638eb6855"}},
+      "outside_reviewed_changes_ast_sha256": "63e06f1748501075886aafca56705b2c738895a69059f561a62990a9287c4e1d"
+    },
+    "closer_native_source_upgrade.py": {
+      "after_file_sha256": "ff1da95563afdb5db761ad56caa1bdadd5bb94c48410a267d5660d796f0f4c17",
+      "after_module_ast_sha256": "14e3be691c6e01ea25a62327985d0bd4ef67788fbf05484541c0c6f60ea4ffbc",
+      "before_file_sha256": "f8901501ffccada174b52d5c9de9e9bb6a77615f11cbb7d050d6baff7ee520d0",
+      "before_module_ast_sha256": "863c5ce271d3f9edbbef89d985f2398432108859769a8520c5a7a0184ca66837",
+      "constant_delta": {
+        "REVIEWED_PAGINATION_ACTION_SHA256": {"after": "1969fc36c936c1590bb11ce1a815b0d9a2e05eac0905a54b9b3a83d9b517973d", "before": null}, "REVIEWED_PAGINATION_CANDIDATE": {"after": "847f73178e0fc22fb87a7a5ec3da195d058464c26790690e97e2cd74abeaa75a", "before": null}, "REVIEWED_PAGINATION_COHORT_SHA256": {"after": "d762d47b6e03763d39d339878c6cf5a4c5bf46f94aee97cfa2e4ffbd670656ed", "before": null}, "REVIEWED_PAGINATION_DESCRIPTOR_SHA256": {"after": "573a8f0daff5e2ad3399fb099d1173cb7067ffe05485728d58e8f8862b4ee7dd", "before": null}, "REVIEWED_PAGINATION_EFFECTS_SHA256": {"after": "765ca782a9bc155dc5dde58078df19743d3799c8dabaaa7f2e2d4ecdf1d55173", "before": null}, "REVIEWED_PAGINATION_MANIFEST_SHA256": {"after": "75d00267dda4c7c74fdc1e8bb956c788a6a7d4a93c4de0f2f68b25ba7a732abe", "before": null}, "REVIEWED_PAGINATION_MODULES_SHA256": {"after": "3a303f772a462639b8593768136fa8261533e0a9f915072fd1724e76ccf82d6c", "before": null}, "REVIEWED_PAGINATION_NONCE": {"after": "d2ce8f6bd569227e85985db85dceb719722ea5ab3df5681b4ef04e0a9e9a6c1b", "before": null}, "REVIEWED_PAGINATION_OPERATION_ID": {"after": "5df4f72787b36f7ebbf8ecf62e6a506f5d7b0c57b68a4b5cb1dae9ff82328282", "before": null}, "REVIEWED_PAGINATION_OWNERSHIP_SHA256": {"after": "b0b41ccdb8f216b557669918593598493951023172396502dcf9ca8c0e737ef3", "before": null}, "REVIEWED_PAGINATION_RESULT_SHA256": {"after": "1761044dac506634b7becbe915dfba195fe9c907dcc4087b3d6b33c5652102ce", "before": null}, "REVIEWED_PAGINATION_ROUND_ID": {"after": "9b6eb84581c20c8f16675244e6c5ae3eb41432988027ce8a15669f8c9d52e350", "before": null}, "REVIEWED_PAGINATION_ROUND_SHA256": {"after": "1195e9659a2bd8438503e3873d526703b067cb54c98f3ce399173298f3d2c70f", "before": null}, "REVIEWED_PAGINATION_TARGET_STATE_SHA256": {"after": "3714d9acebcc3dd58dd9e660cb7d09af8d81a5f0468931e0cca86d03b07cf1bf", "before": null}, "REVIEWED_PAGINATION_WORKER_ID": {"after": "ccb3ff4c620f781cd4c57d0e08c2788d752ed6e100575cd6eff6e372d54db76d", "before": null}
+      },
+      "function_delta": {
+        "_old_diagnostic": {"after": "4246bec77d4fd1a807cfbe10c251e7188a64ff8724f12eed2dd18caebec1959b", "before": "1cd0b7f47a4c496c36e25b8585e6e049f157660ae01a649ea830ca733ab81c50"}, "_old_reference": {"after": "321e184b77978d778028090b0665b720401eae71c5ca7e3175a1c40b5e2eb863", "before": "b25474dc5fd2671c0da55b6e474355704ef420fe0e8998a72d239d24ac26d0d1"}, "_pagination_preinstruction_diagnostic": {"after": "152f41767e8998d7ab6c12b35bd2e98ff7920164ed780499bf3c59150fcaa00a", "before": null}, "_pagination_reference": {"after": "191d32387ff1da6596afd737bfaf8e33e42b8de14b6fc456455f9985970ae364", "before": null}, "_reviewed_old_metadata": {"after": "573783a6bbab3723c4ad53f2fde669c957b116cce7a9164687d303552ccf6b2b", "before": "c5da96d435aa9365e28c46a0beeed0d24f4f587807c4a3e3e7be66f0f9f77d0c"}, "plan": {"after": "53f66c3b9a74eb5f93ba831965eb59322754e024daa1617fe0b9e1afccd222c0", "before": "e8fad73f4cf473637db905a942202364bd8d9884a1288eee738ee0e4d13aadd0"}
+      },
+      "outside_reviewed_changes_ast_sha256": "fec7a2d1954b3d220824046baf1572fcd553b82d79c2764052edf3cf8013931d"
+    }
+  },
+  "schema": "pagination-source-successor/v1",
+  "scope": "literal ownership pagination transport and d4ca immutable held-predecessor; preserve every other AST family"
+}

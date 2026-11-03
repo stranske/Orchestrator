@@ -363,7 +363,10 @@ def worktree_activity_age(worktree: str | Path | None, now: float | None = None)
     if not worktree:
         return None
     root = Path(worktree)
-    if not root.is_dir():
+    try:
+        if not root.is_dir():
+            return None
+    except OSError:
         return None
     ts = now if now is not None else time.time()
     newest: float | None = None
@@ -371,9 +374,9 @@ def worktree_activity_age(worktree: str | Path | None, now: float | None = None)
         status = _git(root, ["status", "--short", "--untracked-files=all"]).stdout.rstrip("\n")
         for rel in _status_paths(status):
             path = root / rel
-            if not path.is_file():
-                continue
             try:
+                if not path.is_file():
+                    continue
                 mtime = path.stat().st_mtime
             except OSError:
                 continue

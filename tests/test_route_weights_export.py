@@ -283,6 +283,12 @@ def test_shed_pool_marker_flips_state_within_one_export(tmp_path: Path, monkeypa
     monkeypatch.setattr(capacity, "_tier_models", lambda agent: {})
     monkeypatch.setattr(capacity, "_tier_ceiling", lambda agent: None)
     monkeypatch.setattr(capacity, "_capability_heartbeat", lambda *a, **k: None)
+    # The pacing model (#680) reads this machine's live codex/claude usage; isolate it, or a busy
+    # seat is already shed before the marker exists and the test measures the machine, not the code.
+    import pacing_usage
+
+    monkeypatch.setattr(pacing_usage, "usage_snapshot", lambda now: {})
+    monkeypatch.setattr(pacing_usage, "integrate", lambda agents, **kw: [])
 
     before = export.build_document(database, now=100)
     assert before["capacity"]["codex"]["state"] != capacity.SHED
@@ -315,8 +321,8 @@ def test_legacy_export_without_capacity_is_republished_when_capacity_is_added(
     assert set(published["capacity"]) == set(capacity.AGENTS)
 
 
-def test_semantic_compare_keeps_state_and_window_drops_observed_at() -> None:
-    """Publish when state/window move; tick-only observed_at refresh stays silent."""
+def test_semantic_compare_keeps_state_drops_window_and_observed_at() -> None:
+    """State changes trigger; window and observation clocks stay silent."""
     base = {
         "schema": export.SCHEMA,
         "generated_at": "2026-10-16T00:00:00Z",
@@ -345,7 +351,7 @@ def test_semantic_compare_keeps_state_and_window_drops_observed_at() -> None:
     }
     assert export._semantic_for_compare(base) == export._semantic_for_compare(later_observed)
     assert export._semantic_for_compare(base) != export._semantic_for_compare(shed)
-    assert export._semantic_for_compare(base) != export._semantic_for_compare(window)
+    assert export._semantic_for_compare(base) == export._semantic_for_compare(window)
 
 
 def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_path: Path) -> None:
@@ -369,7 +375,7 @@ def test_capacity_observed_at_only_change_does_not_trigger_write_document(tmp_pa
     )
 
 
-def test_capacity_window_change_triggers_write_document(tmp_path: Path) -> None:
+def test_capacity_window_change_does_not_trigger_write_document(tmp_path: Path) -> None:
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     target = tmp_path / "route-weights.json"
@@ -390,7 +396,7 @@ def test_capacity_window_change_triggers_write_document(tmp_path: Path) -> None:
         export.write_document(
             target, export.build_document(database, now=100, capacity_snapshot=second)
         )
-        is True
+        is False
     )
 
 
@@ -421,6 +427,7 @@ def test_export_includes_capacity_block(tmp_path: Path) -> None:
 
 
 def test_completed_publication_survives_success_heartbeat_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(export, "_current_capacity_snapshot", _capacity_fixture)
     database = tmp_path / "weights.db"
     export._fixture_db(database)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
@@ -572,6 +579,15 @@ def test_publish_guard_preserves_remote_until_explicit_override(
             return cls.fromtimestamp(200000, tz=tz)
 
     monkeypatch.setattr(export.dt, "datetime", FixedDateTime)
+    if regression == "capacity-only":
+        # State-only publication still obeys the independent two-tick latch.
+        local = tmp_path / "capacity.json"
+        monkeypatch.setattr(export.capacity, "OUT", local)
+        for timestamp in (196400, 200000):
+            local.write_text(
+                json.dumps({"generated_at": timestamp, "agents": {"muse": {"state": "shed"}}})
+            )
+            assert export.record_capacity_tick(tmp_path / "state", now=timestamp)
     hold_path = tmp_path / "state" / "route-weights-regression-hold.json"
     if aged:
         export.write_document(
@@ -585,7 +601,7 @@ def test_publish_guard_preserves_remote_until_explicit_override(
     monkeypatch.setattr(export.provision, "ensure_canonical", lambda *a: checkout)
     monkeypatch.setenv("ORCH_ROUTE_WEIGHTS_PUBLISH", "1")
     monkeypatch.setattr(export.capabilities, "daily_heartbeat", lambda *a, **k: None)
-    monkeypatch.setattr(export, "build_document", lambda *a: document)
+    monkeypatch.setattr(export, "build_document", lambda *a, **kw: document)
     argv = [
         "route_weights_export.py",
         "--publish",
@@ -825,7 +841,7 @@ def test_failed_build_is_never_credited_as_invocation(tmp_path, monkeypatch):
         export.capabilities, "daily_heartbeat", lambda *a, **k: heartbeats.append(a)
     )
 
-    def failed_build(*args):
+    def failed_build(*args, **kwargs):
         raise RuntimeError("fixture build failed")
 
     monkeypatch.setattr(export, "build_document", failed_build)

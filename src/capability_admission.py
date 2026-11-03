@@ -34,6 +34,10 @@ So this module enforces two things the others cannot:
      decision record that was never written, or a trial deadline that passed with nothing recorded,
      fails here instead of rotting quietly.
 
+Important-capability checklist (advisory, not a blocking requirement): add a
+feature_goals.FEATURES entry with a named measuring function, or an explicit
+"unmeasured — would need <query>". Missing sources must not count as zero.
+
 Zero-owner by construction: every failure names a machine-checkable fix an agent performs. Nothing
 here queues anything for a human.
 """

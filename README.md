@@ -21,6 +21,9 @@ The existing codemod/range rails accept a versioned add-only gitignore campaign:
 per-repo work orders, exact-target previews, guarded one-off dispatch, and attributed outcome
 reporting. See [the campaign contract](docs/CODEMOD_CAMPAIGN.md).
 
+Local infrastructure delegates default to `orch/` branches; product delegates retain agent
+prefixes. See [branch overrides and stale-worktree recovery](docs/DELEGATE_PROVISIONING.md).
+
 ## How it runs (execution topology)
 
 ```
@@ -85,9 +88,13 @@ LIVENESS:  the LAST block of a completed --active tick runs ~/.codex/bin/hc-ping
   selftests run eight at a time, and the two gates that are test files report the verdicts pytest
   reached in the same run instead of re-running them. The summary's `state:` and `time:` lines say
   what the run used; `ORCH_VERIFY_LIVE_STATE=1` and `ORCH_VERIFY_JOBS=1` restore the old behaviour.
-- **The remote Gate checks three of four python-ci legs, and says so.** `pr-00-gate.yml` calls the
-  fleet's shared Python CI. Ruff lint, Black format, coverage and the pytest matrix are ON and
-  green; `typecheck-mypy` is OFF, annotated at the single place the toggles are computed with its
+- **The remote Gate shards runtime checks without pretending subsets are coverage.**
+  `pr-00-gate.yml` calls the fleet's shared Python CI for Ruff, Black, typing and the pytest
+  matrix. Coverage is deliberately OFF on every Gate shard because each sees only one sixth of
+  the suite. Whole-tree coverage comes from `ci.yml`'s `verify.py aggregate + combined coverage`
+  job, which combines all shard, selftest and gate subprocess data; the Gate summary reads and
+  validates that exact-head payload and trend. `typecheck-mypy` was historically OFF, annotated
+  at the single place the toggles are computed with its
   BLOCKING and its DRAINABLE quantity — 604 mypy errors, drainable 0 per PR. `coverage` was the
   second OFF leg until 2026-08-23: its one startup error was not drainable from inside this repo at
   all, and it cleared when the named UPSTREAM drain landed (`stranske/Workflows#3202` made
@@ -125,6 +132,19 @@ registered by that production caller, with a heartbeat on the executed path, and
 offered at `tick` and `rail-exercise:audit`. Source deployment remains manual.
 
 ## Important functionality (what actually runs, grouped by job)
+
+Local `dispatcher.py delegate --review-loop` adds an independent review after the
+implementation writer exits. It checks local claims and every native reservation
+across PR heads, reviews the issue's Tasks/Acceptance Criteria and gate-clearing
+paths, and publishes the verdict as an exact-head GitHub status. `FIX-FIRST`
+returns verbatim findings to the same implementer for at most three reviews and
+two repair dispatches. The loop never merges; ordinary checks and review gates
+still apply. Brain `review_rounds` feed the first-pass share in `switch_review.py`.
+An unavailable review or unknown writer remains ineligible, with an explicit
+status and reason. The existing merge guard also reads the launch's opt-in and
+exact PR/head evidence from the Brain, so a missing PR marker or failed status
+publication cannot turn into approval. Omit `--review-loop` for future launches
+to disable this optional step; it does not waive a previously opted-in PR's gate.
 
 The **rail exercise cadence** runs the committed fixture-backed read-only/dry-run rail contracts weekly in shadow mode, reports every pass, failed counterexample, and named skip in `rail-exercise-report.json`, and records zero-weight `fixture_observed` verdicts separately from production usefulness only when `ORCH_RAIL_EXERCISE_RECORD=1` explicitly arms it.
 
@@ -555,6 +575,10 @@ Live execution is observable only after the normal manual mirror sync.
   expiry/rollback validation. `repo_knowledge.py` preserves user-authored `AGENTS.md` content,
   reports managed blocks as `absent`, `stale`, `mismatched`, or `current`, and can merge the hashed
   rule into an optional Workflows capability bundle without replacing unrelated bundle content.
+  The writable registry defaults to `$ORCH_LOCAL_RUNTIME/experiments/repo_knowledge.json`
+  (`~/.codex/orchestrator/experiments/repo_knowledge.json` without that override).
+  `ORCH_REPO_KNOWLEDGE_PATH` still selects an explicit registry. Loading may seed or migrate
+  operational state; it never defaults to writing beside code in a verified mirror generation.
   Matches, injections, acceptances, counterfactual rejections, and downstream outcomes reuse the
   existing completion-event and capability-influence planes.
 
@@ -704,6 +728,20 @@ and the row's own activity. It refuses without both, never stacks, and never und
 retirement, but a row its EXPIRY retired comes back to the status the timeout interrupted. Nothing
 renews on a schedule. `switch_review.py`'s weekly sweep only names the rows within two review
 windows of their expiry, or retired by it that recently, with the command (`gate_expiry`, FYI only).
+
+**Invocation refuses at the effective deadline, read-only.** Routing and compiled invocation do
+not wait for that sweep: `capabilities.capability_expired` (the same `now >= expiry` boundary the
+timeout uses, applied without mutating the row) makes `capability_routing_decision` reject an
+expired row as `expired` with the baseline fallback, and `capability_lifecycle.invoke_compiled_target`
+refuses before any producer runs. The effective deadline for a compiled target is the stricter of
+the ledger `expiry` and the artifact `expires_at` on its binding. The same entrypoint also refuses
+when the ledger row's declared `kill_switch` env var carries its declared value (`kill_switch`),
+when the ledger marks `rollback_pending`, or while the target's `rollback.phase` is `pending`
+(both `rollback_pending`); `capability_targets.invoke_target` applies the same expiry, kill-switch
+and pending-rollback refusals to direct callers. A ledger that cannot be read at all fails
+closed as `ledger_unreadable` on both entrypoints rather than raising or masquerading as
+`expired` (renewal cannot repair a corrupt ledger). A refusal returns `invoked: False` with that
+reason, writes no registry/binding invocation and records no consumption edge.
 
 Do not maintain a second static list of supposedly active or gated features here. Generate the
 current inventory with `python3 src/capabilities.py inventory` (or inspect

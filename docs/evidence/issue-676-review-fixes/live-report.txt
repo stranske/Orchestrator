@@ -1,0 +1,7 @@
+implement: posterior_top=claude comparative_top=None hours_differing=None max_lambda=None unmet_demand=None
+review: posterior_top=codex comparative_top=None hours_differing=None max_lambda=None unmet_demand=None
+testgen: posterior_top=codex comparative_top=None hours_differing=None max_lambda=None unmet_demand=None
+classes_differing None
+status inputs_unmeasured; hours_measured 0/0
+/private/tmp/orch-686-report-o05c_0ex/state/capacity-ledger.ndjson: no event=pacing_snapshot rows in window (ts required)
+/private/tmp/orch-686-report-o05c_0ex/state/capacity-ledger.ndjson: pacing_snapshot input unavailable (No such file or directory)

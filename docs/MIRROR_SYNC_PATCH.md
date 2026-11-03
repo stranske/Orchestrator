@@ -363,6 +363,19 @@ on the exact tree about to go live.
    snapshot change before mutating the live mirror. It never re-reads mutable `SRC` or fetches the
    registry a second time.
 
+On a failed full local verdict, the script also supplies `verify.py`'s optional
+`--failure-evidence-out` path in retained scratch staging. It creates one 32 KiB maximum,
+failure-only JSON record: up to four redacted JUnit failure traces (4 KiB each), with bounded
+redacted pytest output when JUnit is missing or unusable. The file is create-only and fsynced;
+green, shard, and aggregate runs create no failure artifact.
+
+The automatic wrapper captures the incumbent generation before verification and supplies that opaque
+identity to the installer. Under the publication lock, a changed incumbent rejects automatic
+publication before any live generation or registry mutation. Reconcile the competing publisher and
+verify again; do not retry with a refreshed token from the completed old verification. Direct installer
+use without the optional token retains deliberate operator rollback behavior. This prevents late
+automatic publication without imposing source-commit ordering on manual installation.
+
 The installer first builds a private deployment payload and checks its complete digest against
 the receipt, including permissions and symlink targets. It validates the copied docs manifest and
 registry JSON before removing any live deployment files. Installation and the separate registry
@@ -452,13 +465,30 @@ if [[ ! -f "$PRE" ]]; then
   exit 3
 fi
 
+# Automatic publication is conditional on the incumbent observed BEFORE verification.
+# Direct installer use without this optional token still permits deliberate rollback.
+CAPTURE_INSTALLER="$SRC/scripts/install_verified_snapshot.py"
+if ! EXPECTED_GENERATION="$(python3 -I "$CAPTURE_INSTALLER" "$MIRROR" --generation-token)"; then
+  echo "NOT SYNCED: cannot capture incumbent mirror generation." >&2
+  exit 3
+fi
+if [[ ! "$EXPECTED_GENERATION" =~ ^generation-v1:[0-9a-f]{64}$ ]]; then
+  echo "NOT SYNCED: invalid incumbent generation token." >&2
+  exit 3
+fi
+
 STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/orch-verified-sync.XXXXXX")"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 SNAPSHOT="$STAGE_ROOT/mirror"
 DIGEST_RECEIPT="$STAGE_ROOT/verified-payload.sha256"
 echo
 echo "== verdict BEFORE the live copy, from a scratch mirror of $SRC"
-if ! bash "$PRE" --snapshot-out "$SNAPSHOT" --digest-out "$DIGEST_RECEIPT" "$SRC"; then
+# Same shared byte ledger and stable logical publication key as closer_release.py.
+# Reconcile legacy verifiers explicitly before using this cooperating protocol.
+STORAGE_LEDGER="${ORCH_STORAGE_STATE_DIR:-${ORCH_LOCAL_RUNTIME:-$HOME/.codex/orchestrator}/.storage-lifecycle}"
+PUBLICATION_KEY="$(python3 -I -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]).expanduser().absolute(); print("publication:" + str(p.parent.resolve() / p.name))' "$MIRROR")" || exit 3
+if ! ORCH_STORAGE_STATE_DIR="$STORAGE_LEDGER" VERIFY_BEFORE_SYNC_OWNER_KEY="$PUBLICATION_KEY" \
+  bash "$PRE" --snapshot-out "$SNAPSHOT" --digest-out "$DIGEST_RECEIPT" "$SRC"; then
   echo >&2
   echo "NOT SYNCED: the live mirror still runs the code it ran before this command." >&2
   print_unverified_override
@@ -488,6 +518,7 @@ echo
 echo "== installing the verified snapshot (SRC is not read again)"
 if python3 -I "$INSTALLER" "$SNAPSHOT" "$MIRROR" \
   --expected-digest "$EXPECTED_DIGEST" \
+  --expected-generation "$EXPECTED_GENERATION" \
   --runtime-registry "$HOME/.codex/orchestrator/repo_review_registry.json"; then
   :
 else

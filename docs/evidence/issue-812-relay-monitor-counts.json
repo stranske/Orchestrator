@@ -1,0 +1,54 @@
+{
+  "source_issue": "stranske/Orchestrator#812",
+  "scope": "Monitor correction following owner production observation at 2026-10-23T03:55Z; post-merge runtime and 2026-10-27 acceptance remain pending",
+  "method": "Controlled relay decision/round fixtures and real production counter disconnections; instance-specific read-only comparison retained outside the repository",
+  "causal_proof": {
+    "source_sha256": "2b6358838b4360925e294d3115e13e1db0630fb7a137626ed7ff42314dc31c2a",
+    "results": [
+      {
+        "mutation": "demand-disconnected",
+        "exit": 1,
+        "summary": "9 failed in 0.82s"
+      },
+      {
+        "mutation": "usable-disconnected",
+        "exit": 1,
+        "summary": "9 failed in 0.60s"
+      },
+      {
+        "mutation": "success-disconnected",
+        "exit": 1,
+        "summary": "3 failed, 6 passed in 0.72s"
+      },
+      {
+        "mutation": "exact-source-restored",
+        "exit": 0,
+        "summary": "9 passed in 0.77s"
+      }
+    ]
+  },
+  "validation": {
+    "focused_tests_prior": 89,
+    "focused_and_missing_prerequisite_tests": 259,
+    "full_previous_run": {
+      "passed": 8375,
+      "failed": 0,
+      "skipped": 80,
+      "final_verdict": "FAIL: missing Closer Core checkout caused 79 core-sibling skips above ceiling 19"
+    },
+    "prerequisite_recheck": "CLOSER_CORE_SOURCE set to the existing canonical Workflows checkout; 259 tests PASS with no skipped tests",
+    "floor": "Unchanged byte-for-byte from origin/main",
+    "hosted_full_verdict": "PENDING"
+  },
+  "router_receipt": {
+    "commit": "0050d01",
+    "change": "Cursor-top beside measured Codex/Claude attaches unmeasured-preferred pacing receipt instead of legacy",
+    "tests": "126 pacing tests PASS including warn/shed/ok Cursor-top cases",
+    "status": "Historical only: router behavior from 0050d01 is absent from the reviewed head; src/router.py matches main. Cursor-top pick changes belong to #891."
+  },
+  "acceptance": {
+    "post_merge_acted_on": "pending merge+mirror sync (production already acted_on 57 from #827)",
+    "weekly_pass_2026_10_27": "pending check date; monitor and formatter/log-field paths included; Cursor-top pick behavior remains #891",
+    "relay_log_fields": "pick-agent stderr log_fields and format-relay-pacing-fields format supplied receipt weights; numeric Cursor-top receipts depend on #891"
+  }
+}

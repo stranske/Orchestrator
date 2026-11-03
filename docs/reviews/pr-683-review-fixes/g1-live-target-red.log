@@ -1,0 +1,77 @@
+Deliberate mutation:             match = re.search(r"(?<![\w./-])([\w.-]+/[\w.-]+)#(\d+)", target)
+Replaced with:             match = re.fullmatch(r"([^/#]+/[^/#]+)#(\d+)", _target or "")
+Command: /opt/anaconda3/bin/python3 -m pytest tests/test_feature_goals.py::test_multi_source_feedback_live_targets_and_metadata -q
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_multi_source_feedback_live_targets_and_metadata _____________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2728/test_multi_source_feedback_liv0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10a13c680>
+
+    def test_multi_source_feedback_live_targets_and_metadata(tmp_path, monkeypatch):
+        import exp_abcd
+        import feedback
+
+        db = tmp_path / "brain.db"
+        monkeypatch.setattr(feedback, "DB_PATH", db)
+        monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path / "experiments")
+        fixtures = {
+            "a": {"subject": {"target": "stranske/Orchestrator#1 (feature)"}},
+            "b": {"subject": {"target": "unresolved subject"}, "target": "stranske/Orchestrator#2"},
+            "c": {"subject": {"target": "stranske/Orchestrator#3"}},
+            "missing": None,
+            "invalid": {"subject": None},
+            "bad-json": "{",
+            "excluded": {"subject": {"target": next(iter(fg.EXCLUDED_REPOS)) + "#1"}},
+        }
+        for experiment, meta in fixtures.items():
+            directory = exp_abcd.exp_paths(experiment)
+            directory.mkdir(parents=True)
+            if meta is not None:
+                (directory / "meta.json").write_text(
+                    meta if isinstance(meta, str) else json.dumps(meta)
+                )
+        with sqlite3.connect(db) as conn:
+            conn.executescript(
+                "CREATE TABLE runs(experiment_id TEXT,target TEXT);"
+                "CREATE TABLE evaluations_v2(experiment_id TEXT,ts INT,score REAL,evaluator_id TEXT);"
+            )
+            for experiment in fixtures:
+                conn.execute(
+                    "INSERT INTO runs VALUES(?,?)",
+                    (experiment, f"stranske/Orchestrator [exp {experiment} arm default member codex]"),
+                )
+                for judge in ("judge1", "judge2"):
+                    conn.execute(
+                        "INSERT INTO evaluations_v2 VALUES(?,?,?,?)", (experiment, NOW, 1, judge)
+                    )
+            conn.execute(
+                "INSERT INTO runs VALUES('a','stranske/Orchestrator [exp a arm second member y]')"
+            )
+            conn.execute(
+                "INSERT INTO runs VALUES('single','stranske/Orchestrator [exp single arm x member y]')"
+            )
+            conn.execute("INSERT INTO evaluations_v2 VALUES('single',?,1,'judge1')", (NOW,))
+        calls = []
+
+        def issue(args):
+            calls.append(args)
+            assert args[0] == "api"
+            if args[1].endswith("/1"):
+                return json.dumps({"body": "- [ ] goal\n" * 9, "labels": []})
+            if args[1].endswith("/2"):
+                return json.dumps({"body": None, "labels": [{"name": "experiment:forum"}]})
+            raise RuntimeError("HTTP 404")
+
+        monkeypatch.setattr(fg, "_gh", issue)
+        result = fg.multi_source_feedback(NOW)
+>       assert result.value == 2.0
+E       AssertionError: assert 0.0 == 2.0
+E        +  where 0.0 = Measurement(value=0.0, evidence_class='Brain evaluations_v2 + experiment metadata + GitHub REST issues', as_of=1800000000, reason='unattributable 7; issue reads failed 0', inactive_since=1798790400).value
+
+tests/test_feature_goals.py:290: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_feature_goals.py::test_multi_source_feedback_live_targets_and_metadata
+1 failed in 1.47s
+
+EXIT_CODE=1

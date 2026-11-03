@@ -1,0 +1,66 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_______________ test_capacity_sheds_seat_when_model_unresolvable _______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1088af770>
+
+    def test_capacity_sheds_seat_when_model_unresolvable(monkeypatch):
+        """capacity.py must stop reporting `ok` for a seat that cannot dispatch."""
+        monkeypatch.setattr(
+            capacity,
+            "_model_health",
+            lambda agent, tier="full": {
+                "agent": agent,
+                "tier": tier,
+                "model": "gemini-2.5-pro",
+                "resolvable": False,
+                "source": "pinned_default",
+                "advertised": ["gemini-3.1-pro-high"],
+                "reason": "gemini-2.5-pro is not advertised by gemini",
+            },
+        )
+        state, reason, meta = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
+        assert state == capacity.SHED, (state, reason)
+>       assert meta["availability"] == "unavailable_model_unresolved", meta
+E       AssertionError: {'policy': 'auth-failed', 'availability': 'unavailable_auth_failed', 'next_action': 'Refresh gemini credentials, then re-check with `python3 capacity.py --json`. The fleet reads the credential FILE, not an interactive login session.'}
+E       assert 'unavailable_auth_failed' == 'unavailable_model_unresolved'
+E         
+E         - unavailable_model_unresolved
+E         + unavailable_auth_failed
+
+tests/test_model_tier_resolution.py:420: AssertionError
+__________________ test_capacity_stays_ok_when_model_resolves __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1087f8cb0>
+
+    def test_capacity_stays_ok_when_model_resolves(monkeypatch):
+        """Control arm: same ledger, resolvable model => the seat is usable and names its model.
+    
+        Host shed state matters MORE here than in the positive case, and fixed arity does not help:
+        this is the control arm, so a shed machine would make it agree with the positive case for the
+        wrong reason and say nothing. `_neutralise_host_shed_state` is what prevents that.
+        """
+        monkeypatch.setattr(
+            capacity,
+            "_model_health",
+            lambda agent, tier="full": {
+                "agent": agent,
+                "tier": tier,
+                "model": "gemini-3.1-pro-high",
+                "resolvable": True,
+                "source": "pinned_default",
+                "advertised": ["gemini-3.1-pro-high"],
+                "reason": "advertised",
+            },
+        )
+        state, _reason, meta = capacity.compute("gemini", capacity.AGENTS["gemini"], None)
+>       assert state != capacity.SHED, state
+E       AssertionError: shed
+E       assert 'shed' != 'shed'
+E        +  where 'shed' = capacity.SHED
+
+tests/test_model_tier_resolution.py:474: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+FAILED tests/test_model_tier_resolution.py::test_capacity_stays_ok_when_model_resolves
+2 failed in 1.58s

@@ -1,0 +1,5 @@
+Clean origin/main checkout: b5de92e82cdcd675c2a576505a7c2609986670e5
+command: python3 -m pytest tests/test_muse_backend.py::test_muse_missing_keychain_refuses_before_provider_or_prompt -q
+exit: 0
+.                                                                        [100%]
+1 passed in 1.36s

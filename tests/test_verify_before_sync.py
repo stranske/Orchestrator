@@ -84,6 +84,9 @@ seen = {
     "saw_stamp": str((runtime / ".last-periodic-report").is_file()),
     "saw_docs": str((runtime / "local-docs" / "a.md").is_file()),
     "saw_big": str((runtime / "agent-runtime").exists()),
+    "saw_gemini_catalog": str((runtime / "agent-runtime" / "gemini" / "advertised-models.json").is_file()),
+    "saw_big_payload": str((runtime / "agent-runtime" / "big.bin").exists()),
+    "verify_path": env.get("PATH", ""),
     "saw_rows": str(brain.execute("select count(*) from t").fetchone()[0]),
     "verify_args": " ".join(sys.argv[1:]),
 }
@@ -160,6 +163,9 @@ def world(tmp_path: Path) -> dict:
     (state / "local-docs" / "a.md").write_text("policy\n")
     (state / "agent-runtime").mkdir()
     (state / "agent-runtime" / "big.bin").write_bytes(b"x" * (2 * 1024 * 1024))  # over 1 MB
+    catalog = state / "agent-runtime" / "gemini" / "advertised-models.json"
+    catalog.parent.mkdir()
+    catalog.write_text('{"models": ["gemini-4-argon-high"]}\n')
     (state / ".last-periodic-report").write_text("")
     (state / "capabilities.json").write_text('{"capabilities": {"x": {}}}')
     (state / "feedback").mkdir()
@@ -172,6 +178,16 @@ def world(tmp_path: Path) -> dict:
     src.mkdir()
     (src / "orchestrate.sh").write_text("echo tick\n")
     (src / "base.py").write_text("BASE = True\n")
+    # Stand in for storage admission like the copy/verification stand-ins above.
+    # Real storage concurrency, capacity and retirement are tested independently.
+    (src / "storage_lifecycle.py").write_text("""import os, subprocess, sys
+if sys.argv[1] == "staged":
+    sys.exit(0)
+command = sys.argv[sys.argv.index("--") + 1:]
+env = dict(os.environ, ORCH_STORAGE_RUN_ID="fake")
+sys.exit(subprocess.run(["bash", "-c", 'export ORCH_STORAGE_ENTRY_PID=$$; exec "$@"',
+                        "storage-entry", *command], env=env).returncode)
+""")
     _git(src, "init", "-q")
     _git(src, "add", "-A")
     _git(src, "commit", "-q", "-m", "init")
@@ -218,6 +234,102 @@ def _run(world: dict, *args: str, **env: str) -> tuple[subprocess.CompletedProce
     return result, record
 
 
+def test_ci_shard_passes_arguments_without_claiming_a_full_verdict(world):
+    output = str(world["tmp"] / "shards")
+    result, record = _run(
+        world,
+        VERIFY_BEFORE_SYNC_PYTEST_SHARD="2/3",
+        VERIFY_BEFORE_SYNC_SHARD_OUTPUT=output,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_args"] == f"--pytest-shard 2/3 --shard-output {output}"
+    assert "SHARD COMPLETED (2/3; full verdict awaits aggregate)" in result.stdout
+    assert "== verify-before-sync: VERIFIED" not in result.stdout
+
+
+def test_ci_aggregate_passes_evidence_and_keeps_the_full_verdict(world):
+    evidence = str(world["tmp"] / "evidence")
+    result, record = _run(world, VERIFY_BEFORE_SYNC_AGGREGATE=evidence)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_args"] == f"--aggregate {evidence}"
+    assert "== verify-before-sync: VERIFIED" in result.stdout
+
+
+def test_a_shard_cannot_publish_a_verified_snapshot(world):
+    target = world["tmp"] / "published"
+    result, _ = _run(
+        world,
+        "--snapshot-out",
+        str(target),
+        str(world["src"]),
+        VERIFY_BEFORE_SYNC_PYTEST_SHARD="1/3",
+    )
+    assert result.returncode == 2
+    assert "a pytest shard cannot publish a verified snapshot" in result.stderr
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("code", [0, 7])
+def test_real_storage_supervisor_wraps_bash_copy_stage_and_terminal_result(world, code):
+    # Exercise the real supervisor/admission/staged CLI with the existing tiny
+    # copier/verifier. Only host-wide inspection is injected (unit-tested in
+    # test_storage_lifecycle); no test requires OS process-list privileges.
+    implementation = str(paths.MODULE_DIR / "storage_lifecycle.py")
+    helper = world["src"] / "storage_lifecycle.py"
+    helper.write_text(f"""import importlib.util, functools
+spec = importlib.util.spec_from_file_location("real_storage", {implementation!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.run_job = functools.partial(module.run_job, probe=lambda _: None)
+raise SystemExit(module.main())
+""")
+    _git(world["src"], "add", "-A")
+    _git(world["src"], "commit", "-qm", "real supervisor fixture")
+    before = (world["state"] / "capabilities.json").read_bytes()
+    result, record = _run(
+        world,
+        PYTHON=sys.executable,
+        VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR",
+        CI="true",
+        FAKE_TREE="BARE EXEC MIRROR",
+        FAKE_VERIFY_RC=str(code),
+    )
+    assert result.returncode == (0 if code == 0 else 1), result.stdout + result.stderr
+    files = list((world["state"] / ".storage-lifecycle/receipts").glob("*.json"))
+    assert len(files) == 1
+    saved = json.loads(files[0].read_text())
+    assert saved["remaining"] == saved["peak"]  # real authenticated staged callback
+    assert saved["source_unchanged"] is True
+    assert not (Path(saved["root"]) / "tmp").exists()
+    assert (world["state"] / "capabilities.json").read_bytes() == before
+    if code == 0:
+        assert saved["status"] == "retired" and not Path(saved["root"]).exists()
+    else:
+        assert saved["status"] == "fixtures_retired_failure_retained"
+        assert Path(record["verify_runtime"]).is_dir()
+
+
+@pytest.mark.parametrize("ci,expected_floor", [("", 27 * 1024**3), ("true", 0)])
+def test_bare_label_alone_does_not_bypass_local_launch_floor(world, ci, expected_floor):
+    implementation = str(paths.MODULE_DIR / "storage_lifecycle.py")
+    helper = world["src"] / "storage_lifecycle.py"
+    helper.write_text(f"""import importlib.util, functools
+spec = importlib.util.spec_from_file_location("real_storage", {implementation!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.run_job = functools.partial(module.run_job, free=lambda _: 0)
+raise SystemExit(module.main())
+""")
+    _git(world["src"], "add", "-A")
+    _git(world["src"], "commit", "-qm", "admission-only fixture")
+    result, record = _run(
+        world, PYTHON=sys.executable, CI=ci, VERIFY_BEFORE_SYNC_TREE="BARE EXEC MIRROR"
+    )
+    assert result.returncode != 0
+    assert f'"floor_bytes": {expected_floor}' in result.stderr
+    assert not record  # Never starts the copier or verifier.
+
+
 def test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched(world):
     result, record = _run(world)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -238,6 +350,24 @@ def test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched(world):
     assert list(world["tmpdir"].iterdir()) == [], list(world["tmpdir"].iterdir())
 
 
+def test_detached_path_keeps_agent_clis_and_copies_only_the_small_model_catalog(world):
+    """The authenticated launcher resets PATH, and the live agent-runtime directory is too large
+    for the general state copy. Restore the user's local CLI directory and the one small catalog
+    the strict verifier needs, while leaving the rest of agent-runtime out of the scratch state."""
+    user_bin = world["home"] / ".local" / "bin"
+    user_bin.mkdir(parents=True)
+    result, record = _run(
+        world,
+        PATH="/usr/bin:/bin",
+        PYTHON=sys.executable,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert record["verify_path"].split(":")[0] == str(user_bin), record
+    assert record["saw_gemini_catalog"] == "True", record
+    assert record["saw_big_payload"] == "False", record
+    assert "not copied, over 1 MB" in result.stdout, result.stdout
+
+
 def test_verify_py_reads_and_writes_only_a_copy_of_the_live_state(world):
     """The `ledger validate` gate rewrites the ledger it loads. Taken before the copy, on the live
     paths, it would write the declarations of a tree that is not deployed into the live ledger,
@@ -256,8 +386,9 @@ def test_verify_py_reads_and_writes_only_a_copy_of_the_live_state(world):
     assert (record["saw_rows"], record["saw_stamp"], record["saw_docs"]) == ("1", "True", "True")
     for key in ("verify_runtime", "verify_statedir", "verify_ledger", "verify_brain"):
         assert world["tmpdir"] in Path(record[key]).parents, (key, record)
-    # A directory over the size bound is skipped and NAMED, never silently absent.
-    assert record["saw_big"] == "False", record
+    # The oversized directory stays out except for the one targeted catalog file.
+    assert record["saw_gemini_catalog"] == "True", record
+    assert record["saw_big_payload"] == "False", record
     assert "not copied, over 1 MB" in result.stdout and "agent-runtime (2 MB)" in result.stdout
 
 
@@ -463,7 +594,13 @@ def test_floor_may_lag_reaches_verify_py_only_when_asked(world, flag, args):
     extra = {"VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG": flag} if flag else {}
     result, record = _run(world, **extra)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert record["verify_args"] == args, record
+    pieces = record["verify_args"].split()
+    if args:
+        assert pieces.pop(0) == args
+    assert pieces[0] == "--failure-evidence-out"
+    evidence = Path(pieces[1])
+    assert evidence.name == "pytest-failure-evidence.json"
+    assert evidence.parent.name.startswith("verify-before-sync.")
 
 
 def test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on(world):
@@ -591,6 +728,7 @@ def test_keep_leaves_the_scratch_mirror_for_inspection(world):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "scratch directory kept: " in result.stdout, result.stdout
     assert (Path(record["sync_mirror"]) / "verify.py").is_file(), record
+    assert not (Path(record["sync_mirror"]).parent / "pytest-failure-evidence.json").exists()
 
 
 def test_the_script_feeds_no_here_document_to_anything():
@@ -665,6 +803,8 @@ def test_the_real_first_load_registers_a_declared_row_the_live_ledger_lacks(worl
     import capabilities
 
     for module in paths.MODULE_DIR.glob("*.py"):
+        if module.name == "storage_lifecycle.py":
+            continue  # keep this fixture's storage-admission stand-in
         (world["src"] / module.name).write_bytes(module.read_bytes())
     _git(world["src"], "add", "-A")
     _git(world["src"], "commit", "-q", "-m", "the real modules")
@@ -685,3 +825,16 @@ def test_the_real_first_load_registers_a_declared_row_the_live_ledger_lacks(worl
     assert "(value-chain-monitor)" in result.stdout, result.stdout
     assert record["saw_expected_row"] == "True", record
     assert ledger.read_bytes() == before, "the live ledger was written"
+
+
+@pytest.mark.parametrize("output", ["", "relative/shards"])
+def test_shard_output_must_be_absolute_before_scratch_copy(world, output):
+    result, record = _run(
+        world,
+        VERIFY_BEFORE_SYNC_PYTEST_SHARD="2/3",
+        VERIFY_BEFORE_SYNC_SHARD_OUTPUT=output,
+    )
+    assert result.returncode == 2
+    assert "VERIFY_BEFORE_SYNC_SHARD_OUTPUT must be an absolute path" in result.stderr
+    assert "scratch mirror of" not in result.stdout
+    assert not record

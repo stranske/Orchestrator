@@ -93,7 +93,13 @@ AGENT_MODE = {
 # and (b) yield more signal on each evaluator's own strengths/weaknesses. Generalizes the docsdrift1
 # N=2 fragility finding (a 2-implementer A/B had no counted neutral judge). Top up in this order:
 # most-reliable-neutral first; gemini last since _winner_and_harvest excludes it from the ranking mean.
-EVALUATOR_TOPUP_ORDER = ("claude", "codex", "cursor", "vibe", "gemini")
+EVALUATOR_TOPUP_ORDER = ("claude", "codex", "cursor", "vibe", "gemini", "muse")
+# Judges with no reliability record yet (gemini after its model change, muse never fielded). A judge is
+# only top-up material when the panel is short, so left alone these two would almost never run and could
+# never earn the record that lets them count: a gate whose drain is the thing it blocks. One probationer
+# rides every DEFAULT panel instead. `_winner_and_harvest` gives a judge without a ready record weight 0
+# (PROBATION_EVALUATORS is also its fallback exclusion), so a probationer can never move a ranking.
+PROBATION_EVALUATORS = ("gemini", "muse")
 MIN_EVALUATORS = 4
 
 AUTH_FILES = {  # same as dispatcher: PATH resolves the binary, auth lets it actually run
@@ -442,6 +448,43 @@ def _completion_cmd(
     return shlex.join(argv)
 
 
+def member_environment():
+    """Git config via env outranks repository config, without modifying shared git state."""
+    env = dict(os.environ)
+    count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    env.update(
+        {
+            "GIT_CONFIG_COUNT": str(count + 1),
+            f"GIT_CONFIG_KEY_{count}": "remote.origin.pushurl",
+            f"GIT_CONFIG_VALUE_{count}": "file:///dev/null/orch-no-push",
+        }
+    )
+    return env
+
+
+def assert_no_member_push(repo, exp_id, *, run_fn=None):
+    canon = provision.ensure_canonical(repo)
+    try:
+        result = (run_fn or subprocess.run)(
+            [
+                "git",
+                "-C",
+                str(canon),
+                "ls-remote",
+                "origin",
+                f"refs/heads/exp/{_identity_slug(exp_id)}-*",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return "remote_unknown"
+    if result.returncode:
+        return "remote_unknown"
+    return "member_pushed" if result.stdout.strip() else None
+
+
 def _spawn(
     agent: str,
     mode: str,
@@ -517,6 +560,7 @@ def _spawn(
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
+                env=member_environment(),
             )
         except Exception:
             if profile:
@@ -734,6 +778,8 @@ def prepare_arms(
     exp_id: str,
     arms: list[dict[str, Any]],
     task_type: str = "implement",
+    *,
+    producer_metadata: dict | None = None,
 ) -> dict:
     """Prepare every member independently and persist one immutable v2 manifest."""
     spec = Path(spec_file).read_text()
@@ -758,6 +804,31 @@ def prepare_arms(
         "arms": normalized_arms,
         "members": members,
     }
+    if producer_metadata:
+        if producer_metadata.get("producer") != "experiment_producer":
+            raise ValueError("unknown producer")
+        if not spec.strip() or spec_provenance.is_missing_spec({}, spec):
+            raise MissingSpecNotEvaluableError("producer requires frozen issue body")
+        import experiment_producer
+
+        try:
+            frozen = experiment_producer.freeze_test(
+                repo,
+                spec,
+                exp_id,
+                members[0]["agent"],
+                base_sha,
+                root=edir,
+            )
+        except Exception as exc:
+            raise experiment_producer.FrozenTestError(
+                f"could not freeze named test: {exc}"
+            ) from exc
+        meta.update(producer_metadata)
+        meta.update(frozen)
+        spec += "\n\nFrozen judging command: `" + frozen["named_test"] + "`\n"
+        (edir / "spec.md").write_text(spec)
+        meta["spec_sha256"] = hashlib.sha256(spec.encode()).hexdigest()
     (edir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
     launched = []
@@ -783,10 +854,26 @@ def prepare_arms(
                     "-b",
                     br,
                     str(wt),
-                    f"origin/{base}",
+                    (
+                        str(meta.get("test_commit") or base_sha)
+                        if producer_metadata
+                        else f"origin/{base}"
+                    ),
                 ]
             )
+        frozen_hashes = meta.get("test_sha256")
+        if isinstance(frozen_hashes, dict):
+            for path, digest in frozen_hashes.items():
+                if hashlib.sha256((wt / path).read_bytes()).hexdigest() != digest:
+                    raise ValueError("frozen test differs in comparison worktree")
         prompt = implement_prompt(spec)
+        if meta.get("test_commit"):
+            prompt += "\nThe committed named test is frozen. Do not edit or remove it."
+
+        if brief := next(
+            (a.get("brief") for a in normalized_arms if a["arm_id"] == member["arm_id"]), None
+        ):
+            prompt += "\n\nAlternative brief: " + brief
         profile_id = member.get("profile_id")
         execution_profile_id = (
             profile_id if profile_id in execution_profiles.PROFILE_REGISTRY else None
@@ -856,6 +943,7 @@ def prepare_arms(
         "base_sha": base_sha or None,
         "launched": launched,
         "arms": normalized_arms,
+        **({"test_source": meta["test_source"]} if producer_metadata else {}),
     }
 
 
@@ -1345,6 +1433,25 @@ def _eval_command(agent: str, promptfile: str, workspace: str | Path | None = No
         "gemini": f"agy -p {P} --dangerously-skip-permissions --add-dir {gemini_add_dir} --print-timeout 40m",
         "vibe": f"vibe --prompt {P} --auto-approve --output text --trust",
     }
+    if agent == "muse":
+        # An evaluator judges and never acts: the empty preset gives it no tools, contributor mode is
+        # off because the prompt holds diffs, and the JSONL run protocol is reduced to its terminal
+        # text by the same reader the dispatcher uses (fails closed to empty output on a bad stream).
+        rule_file = Path(promptfile).with_suffix(".muse.txt")
+        rule_file.write_text(
+            Path(promptfile).read_text()
+            + f"\n\nREAD-ONLY EVALUATION: {dispatcher.GH_READ_ONLY_RULE}"
+        )
+        reader = (
+            "import sys; sys.path.insert(0, "
+            + repr(str(Path(adapters.__file__).resolve().parent))
+            + "); import adapters; sys.stdout.write(adapters.muse_terminal_text(sys.stdin.read()))"
+        )
+        cmds["muse"] = (
+            "muse exec --json --preset empty --contributor-mode off --no-foreign-personal-context "
+            f"--no-session-log --disable-approval --prompt-file {shlex.quote(str(rule_file))} "
+            f"| python3 -c {shlex.quote(reader)}"
+        )
     cmds["gemini"] = (
         f"agy --gemini_dir {shlex.quote(gemini_dir)}{gemini_model_arg} "
         f"--print {P} --dangerously-skip-permissions --add-dir {gemini_add_dir} "
@@ -1407,6 +1514,33 @@ def _ensure_min_evaluators(
     return out
 
 
+def _unproven_judges(names=PROBATION_EVALUATORS) -> list[str]:
+    """Probation candidates that do not yet have a ready reliability record (all, when unreadable)."""
+    try:
+        judges = judge_reliability.summarize().get("judges") or {}
+    except Exception:
+        judges = {}
+    return [n for n in names if not (judges.get(n) or {}).get("ready")]
+
+
+def _with_probation(agents, *, protected=(), rng=None, unproven=None) -> list[str]:
+    """Make ONE top-up seat of a default panel a probationary judge, keeping the panel size.
+
+    The default panel is pinned at MIN_EVALUATORS (test_evaluator_panel_size_semantics), so the
+    probationer REPLACES the last seat that the caller did not name rather than adding a fifth. A
+    panel that already holds a probationer, or has no top-up seat, is returned unchanged.
+    """
+    out = list(agents)
+    pool = [a for a in (_unproven_judges() if unproven is None else unproven) if a not in out]
+    if not pool or any(a in out for a in PROBATION_EVALUATORS):
+        return out
+    for index in range(len(out) - 1, -1, -1):
+        if out[index] not in protected:
+            out[index] = (rng or random).choice(pool)
+            return out
+    return out
+
+
 def _normalize_evaluator_specs(
     requested: list[Any] | None,
     *,
@@ -1447,6 +1581,8 @@ def _normalize_evaluator_specs(
         capacity=_capacity_map(),
     )
     represented = {spec["agent"] for spec in explicit}
+    if requested is None:
+        topped_agents = _with_probation(topped_agents, protected=represented)
     explicit.extend(
         {"agent": agent, "evaluator_id": agent}
         for agent in topped_agents
@@ -1745,6 +1881,163 @@ def _collected_candidate_diffs(collected: dict) -> dict[str, str]:
     return out
 
 
+def producer_followup(
+    edir,
+    meta,
+    *,
+    now,
+    min_idle_s,
+    eval_timeout,
+    collect_fn,
+    evaluate_fn,
+    allow_evaluate=True,
+    verify_fn=None,
+    deliver_fn=None,
+    push_check_fn=None,
+    gh_fn=None,
+):
+    """Resume producer judging/delivery; never enter the synthesis controller."""
+    import experiment_producer as producer
+
+    result = {"exp_id": edir.name, "evaluated_now": False}
+    delivery_path = edir / "producer-delivery.json"
+    delivery = json.loads(delivery_path.read_text()) if delivery_path.exists() else {}
+    target = meta.get("subject")
+    if delivery.get("status") in producer.TERMINAL_STATUSES:
+        producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        return {**result, **delivery}
+    if delivery.get("pr_url"):
+        if synthesis_promotion.state_path(edir).exists():
+            result["delivery_link"] = synthesis_promotion.reconcile_producer_delivery(
+                edir, gh_fn=gh_fn
+            )
+        if "error" in delivery.get("label_result", {"error": "not_applied"}):
+            label = (
+                delivery.get("winner")
+                if delivery.get("winner") in __import__("router").KEEPALIVE_AGENTS
+                else "codex"
+            )
+            delivery["label_result"] = (gh_fn or producer.gh_call)(
+                [
+                    "gh",
+                    "api",
+                    "-X",
+                    "POST",
+                    f"repos/{meta['repo']}/issues/{delivery['pr_number']}/labels",
+                    "-f",
+                    f"labels[]=agent:{label}",
+                ]
+            )
+            fleet_shapes.write_json_atomic(delivery_path, delivery)
+        link = result.get("delivery_link") or {}
+        phase = (link.get("state") or {}).get("delivery_phase")
+        canonical = (link.get("state") or {}).get("canonical_state")
+        if phase in {"merged", "durable"} or canonical == "merged":
+            delivery["status"] = "merged"
+        elif phase in {"discarded", "expired"}:
+            delivery["status"] = phase
+        if delivery.get("status") in producer.TERMINAL_STATUSES:
+            producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        fleet_shapes.write_json_atomic(delivery_path, delivery)
+        return {**result, **delivery}
+    age = now - meta.get("launched_ts", (edir / "meta.json").stat().st_mtime)
+    if age >= producer.PRODUCER_LOCK_MAX_HOURS * 3600:
+        delivery.update(status="discarded", reason="72h_without_pr")
+        producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        fleet_shapes.write_json_atomic(delivery_path, delivery)
+        return {**result, **delivery}
+    spec_path = edir / "spec.md"
+    spec = spec_path.read_text() if spec_path.exists() else ""
+    if (
+        not spec.strip()
+        or spec_provenance.is_missing_spec(meta, spec)
+        or meta.get("spec_provenance") != "issue_body"
+        or meta.get("spec_sha256") != hashlib.sha256(spec.encode()).hexdigest()
+    ):
+        delivery.update(status="discarded", reason="missing_spec_recovery_refused")
+        fleet_shapes.write_json_atomic(delivery_path, delivery)
+        producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        return {**result, **delivery}
+    members = experiment_members(meta)
+    logs = [
+        edir / exp_log_path(m["agent"], None if m["legacy"] else m["member_id"]) for m in members
+    ]
+    if not logs or any(not p.exists() or now - p.stat().st_mtime < min_idle_s for p in logs):
+        return {**result, "status": "still_running"}
+    violation = (push_check_fn or assert_no_member_push)(meta["repo"], edir.name)
+    if violation:
+        delivery.update(status=violation)
+        fleet_shapes.write_json_atomic(delivery_path, delivery)
+        if violation == "member_pushed":
+            producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+        return {**result, **delivery}
+    if not (edir / "producer-evaluation.json").exists():
+        if not allow_evaluate:
+            return {**result, "status": "per_call_cap"}
+        collected = collect_fn(meta["repo"], edir.name)
+        diffs = _collected_candidate_diffs(collected)
+        if not any(diffs.values()):
+            delivery.update(status="no_winner", reason="no_diffs")
+            fleet_shapes.write_json_atomic(delivery_path, delivery)
+            producer.release_lock(edir, target, delivery, gh_fn=gh_fn, now=now)
+            return {**result, **delivery}
+        judges = [a for a in EVALUATOR_TOPUP_ORDER if a not in {m["agent"] for m in members}][:2]
+        if len(judges) < 2:
+            return {**result, "status": "insufficient_neutral_judges"}
+        opp = research_usage_guard.assess_and_record_opportunity(
+            exp_id=edir.name,
+            repo=meta["repo"],
+            subject=target,
+            spec_text=spec,
+            base_sha=meta.get("base_sha"),
+            candidate_diffs=diffs,
+            evaluator_agents=judges,
+            evaluator_count=2,
+        )
+        if not opp["eligible"]:
+            return {**result, "status": opp["decision"]}
+        try:
+            evaluation = evaluate_fn(
+                meta["repo"], str(spec_path), edir.name, judges, timeout=eval_timeout
+            )
+            # eval-maps is retained by evaluate; scores are keyed by exact member id.
+            import credential_redaction
+
+            verdicts = {
+                j: _extract_json(
+                    credential_redaction.scrub_and_read(
+                        edir / f"eval-out-{_eval_artifact_token(j)}.txt", who="experiment-producer"
+                    )
+                )
+                for j in judges
+            }
+            maps = json.loads((edir / "eval-maps.json").read_text())
+            harvest = _winner_and_harvest(verdicts, maps, fallback_exclude_judges=())
+            scored = [
+                (member_id, score)
+                for member_id, score in harvest["ranking"]
+                if all(
+                    any(
+                        mapped == member_id and letter in (verdicts.get(j) or {}).get("scores", {})
+                        for letter, mapped in maps.get(j, {}).items()
+                    )
+                    for j in judges
+                )
+            ]
+            evaluation.update(ranking=scored if len(scored) >= 2 else [])
+            fleet_shapes.write_json_atomic(edir / "producer-evaluation.json", evaluation)
+            research_usage_guard.update_opportunity_outcome(opp["opportunity_id"], "completed")
+        except Exception:
+            research_usage_guard.update_opportunity_outcome(opp["opportunity_id"], "failed")
+            raise
+        result["evaluated_now"] = True
+    evaluation = json.loads((edir / "producer-evaluation.json").read_text())
+    delivery = (deliver_fn or synthesis_promotion.deliver_producer_winner)(
+        edir, meta, evaluation, verify_fn=verify_fn, gh_fn=gh_fn
+    )
+    return {**result, **delivery}
+
+
 def followup(
     *,
     max_experiments: int = 1,
@@ -1882,7 +2175,45 @@ def followup(
     # could launch a second synthesis in the same run; the hourly re-touch of the stamp hid that
     # by never letting a launch happen at all.
     promotions = []
+    import experiment_producer as producer
+
     for edir in dirs:
+        try:
+            producer_meta = json.loads((edir / "meta.json").read_text())
+        except (OSError, ValueError):
+            # A producer receipt also identifies the rail if meta becomes unreadable.
+            if (edir / "producer-delivery.json").exists():
+                out["processed"].append({"exp_id": edir.name, "error": "unreadable producer meta"})
+                continue
+            producer_meta = {}
+        if producer_meta.get("producer") == "experiment_producer":
+            if now - producer_meta.get("launched_ts", 0) > producer.PRODUCER_FOLLOWUP_DAYS * 86400:
+                continue
+            try:
+                result = producer_followup(
+                    edir,
+                    producer_meta,
+                    now=now,
+                    min_idle_s=min_idle_s,
+                    eval_timeout=eval_timeout,
+                    collect_fn=collect_fn,
+                    evaluate_fn=evaluate_fn,
+                    allow_evaluate=evaluator_dispatches < max_experiments,
+                )
+                evaluator_dispatches += int(result.get("evaluated_now", False))
+                out["processed"].append(result)
+            except Exception as exc:
+                delivery_path = edir / "producer-delivery.json"
+                try:
+                    delivery = (
+                        json.loads(delivery_path.read_text()) if delivery_path.exists() else {}
+                    )
+                except (ValueError, OSError):
+                    delivery = {}
+                delivery.update(error=str(exc)[:500], ts=now)
+                fleet_shapes.write_json_atomic(delivery_path, delivery)
+                out["processed"].append({"exp_id": edir.name, "error": str(exc)[:500]})
+            continue
         try:
             state = synthesis_promotion.load_state(edir)
         except Exception as exc:
@@ -1960,6 +2291,11 @@ def followup(
     for edir in dirs:
         meta_p, spec_p = edir / "meta.json", edir / "spec.md"
         if not meta_p.exists() or not spec_p.exists():
+            continue
+        try:
+            if json.loads(meta_p.read_text()).get("producer") == "experiment_producer":
+                continue
+        except (OSError, ValueError):
             continue
         if edir.name in refresh_trials:
             try:
@@ -2316,7 +2652,7 @@ def _winner_and_harvest(
     verdicts: dict,
     maps: dict,
     reliability: dict | None = None,
-    fallback_exclude_judges=("gemini",),
+    fallback_exclude_judges=PROBATION_EVALUATORS,
 ) -> dict:
     """Compute weighted ranking and harvest material from per-judge verdicts.
 

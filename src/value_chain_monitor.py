@@ -12,7 +12,11 @@ edge onto a role run is not acted on; it is counted beside `acted_on`. Only a te
 outcome is the `outcome` step, and a learning-excluded one, one awaiting the sweep, one that never
 merges and an open one are counted beside it. A run that never merges is scored by verdict in
 `capability_effectiveness` (owner decision 2026-10-12), never at this merges-only step. `works` needs a durable
-success (`outcome_success`). The tick writes the readable section to
+success (`outcome_success`). Relay-pacing edges in windowed-capacity-policy count the
+observed lane-round terminal result; successful rounds require exit=0. Those operational
+results sit beside durable-delivery successes on non-relay edges in the same total and
+never synthesize a durable-delivery claim from a lane exit.
+The tick writes the readable section to
 `switch-review.md`, the file a capability verdict cites (CLAUDE.md §6).
 """
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -27,7 +32,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +42,10 @@ import feedback
 
 CAPABILITY_ID = "value-chain-monitor"
 WINDOW_DAYS = 90
+# #812 weekly pass: relay_acted_on vs independent log demand within ±5% (check date 2026-10-27).
+RELAY_PASS_TOLERANCE = 0.05
+RELAY_PASS_CHECK_TS = int(datetime(2026, 10, 27, tzinfo=timezone.utc).timestamp())
+RELAY_PASS_CHECK_LABEL = "2026-10-27"
 # What an accepted edge's target can say, as `capability_effectiveness._classify` names it, and the
 # row field each class is counted in. An association is set aside at the `acted_on` step (2026-10-12,
 # owner decision): an edge onto a role run is not a run acting on the capability's output, because
@@ -163,6 +172,150 @@ def _stall_situations(inputs: dict[str, Any]) -> int | None:
     return None if targets is None else len(targets)
 
 
+def _relay_situations(inputs: dict[str, Any]) -> int | None:
+    return inputs.get("relay_decision_count")
+
+
+def _relay_decisions(log: Path, end: int) -> dict[str, tuple[int, dict[str, Any]]] | None:
+    """Independent decisions; None means the source could not be read."""
+    try:
+        if not log.is_file():
+            return None
+        return feedback.read_relay_pacing_decisions(log, end=end)
+    except (OSError, UnicodeError):
+        return None
+
+
+def _relay_decision_population(log: Path, start: int, end: int) -> int | None:
+    """Independent demand: valid distinct log decisions, including unjoined rounds."""
+    decisions = _relay_decisions(log, end)
+    return (
+        None if decisions is None else sum(start <= stamp <= end for stamp, _ in decisions.values())
+    )
+
+
+def _relay_usable(inputs: dict[str, Any], start: int, end: int) -> int | None:
+    """Accepted decision events prove usability even after the source log rotates."""
+    events = inputs.get("completion_events")
+    if events is None:
+        return None
+    return len(
+        {
+            e["run_id"]
+            for e in events
+            if e.get("capability_id") == feedback.RELAY_PACING_CAPABILITY
+            and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+            and e.get("producer") == "feedback.relay_pacing"
+            and e.get("phase") == "decision"
+            and e.get("validation_status") == "accepted"
+            and start <= e.get("created_ts", -1) <= end
+        }
+    )
+
+
+def _relay_joined_edges(own_edges: list[dict] | None) -> list[dict]:
+    """Version-exact accepted joins; durable-delivery edges on the same row are excluded."""
+    if own_edges is None:
+        return []
+    return [
+        e
+        for e in own_edges
+        if e.get("accepted") == 1
+        and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+        and e.get("relay_round_status") in {"completed", "failed", "rate-limited"}
+    ]
+
+
+def relay_pass_number(row: Mapping[str, Any], *, now: int) -> dict[str, Any]:
+    """#812 weekly criterion: relay joins cover log demand within ±5%.
+
+    Compares version-exact relay joins to independent log demand, not the row's total
+    `acted_on` (which may include durable-delivery edges). Both populations start at
+    feedback.RELAY_PACING_BACKLOG_CUTOFF, using the source decision timestamp for
+    joins; retired legacy orphans are displayed separately. Before the check date the
+    status is `pending`; missing demand or join counts stay `unmeasured`.
+    """
+    demand = row.get("situation_count")
+    relay_acted = row.get("relay_acted_on")
+    retired_unjoinable = None
+    if "relay_decisions" in row:
+        decisions = row["relay_decisions"]
+        joins = row["relay_joined_edges"]
+        start = max(now - WINDOW_DAYS * 86400, feedback.RELAY_PACING_BACKLOG_CUTOFF)
+        demand = (
+            None
+            if decisions is None
+            else sum(start <= stamp <= now for stamp, _ in decisions.values())
+        )
+        relay_acted = (
+            None if joins is None else sum(start <= e["relay_decision_ts"] <= now for e in joins)
+        )
+        if decisions is not None and joins is not None:
+            joined_ids = {e["source_run_id"] for e in joins}
+            retired_unjoinable = sum(
+                now - WINDOW_DAYS * 86400 <= stamp < feedback.RELAY_PACING_BACKLOG_CUTOFF
+                and decision_id not in joined_ids
+                for decision_id, (stamp, _) in decisions.items()
+            )
+    usable = row.get("usable")
+    outcome = row.get("outcome")
+    success = row.get("outcome_success")
+    result: dict[str, Any] = {
+        "check_date": RELAY_PASS_CHECK_LABEL,
+        "tolerance": RELAY_PASS_TOLERANCE,
+        "demand": demand,
+        "retired_unjoinable": retired_unjoinable,
+        "relay_acted_on": relay_acted,
+        "acted_on_floor": None,
+        "usable": usable,
+        "outcome": outcome,
+        "outcome_success": success,
+        "status": "pending",
+        "reason": f"check date {RELAY_PASS_CHECK_LABEL} not reached",
+    }
+    if now < RELAY_PASS_CHECK_TS:
+        return result
+    if demand is None or relay_acted is None:
+        result["status"] = "unmeasured"
+        result["reason"] = "demand or relay joins unread"
+        return result
+    # Joins are whole rounds: rounding down would admit less than 95% coverage,
+    # including zero joins for a single logged decision.
+    floor = math.ceil(demand * (1.0 - RELAY_PASS_TOLERANCE))
+    result["acted_on_floor"] = floor
+    if demand <= 0:
+        result["status"] = "fail"
+        result["reason"] = "demand 0 on check date"
+        return result
+    if usable is None or outcome is None:
+        result["status"] = "unmeasured"
+        result["reason"] = "usable or outcome unread"
+        return result
+    if relay_acted < floor:
+        result["status"] = "fail"
+        result["reason"] = f"relay_acted_on {relay_acted} < floor {floor} (demand {demand} ±5%)"
+        return result
+    ceiling = math.floor(demand * (1.0 + RELAY_PASS_TOLERANCE))
+    if relay_acted > ceiling:
+        result["status"] = "fail"
+        result["reason"] = f"relay_acted_on {relay_acted} > ceiling {ceiling} (demand {demand} ±5%)"
+        return result
+    if usable < relay_acted:
+        result["status"] = "fail"
+        result["reason"] = f"usable {usable} < relay_acted_on {relay_acted}"
+        return result
+    if outcome < relay_acted:
+        result["status"] = "fail"
+        result["reason"] = f"outcome {outcome} < relay_acted_on {relay_acted}"
+        return result
+    result["status"] = "pass"
+    result["reason"] = (
+        f"relay_acted_on {relay_acted} ≥ floor {floor}; usable {usable}; "
+        f"outcome {outcome}; success {success}"
+    )
+    return result
+
+
 def _prompt_batches(inputs: dict[str, Any]) -> int | None:
     issues = inputs.get("fleet_issues")
     if issues is None:
@@ -194,13 +347,101 @@ def _disputes(inputs: dict[str, Any]) -> int | None:
     return inputs.get("disputes")
 
 
+def _closer_core_rounds(now: int, path: Path | None = None) -> dict[str, Any] | None:
+    """Existing journal: latest fleet + scope demand, windowed rounds and dispositions."""
+    usable_actions = {
+        "close-pass",
+        "close-met",
+        "followup",
+        "request-verify",
+        "rerequest-verify",
+        "await-verdict",
+        "complete",
+    }
+    try:
+        rounds = []
+        for line in (path or _state_dir() / "closer-core/rounds.jsonl").read_text().splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            stamp = int(datetime.fromisoformat(row["ts"].replace("Z", "+00:00")).timestamp())
+            if now - WINDOW_DAYS * 86400 <= stamp <= now:
+                if not isinstance(row["items"], list) or any(
+                    not isinstance(item, dict) for item in row["items"]
+                ):
+                    return None
+                rounds.append((stamp, row))
+        demand = None
+        if rounds:
+            latest = max(rounds, key=lambda entry: entry[0])[1]
+            summary = latest["summary"]
+            fleet = re.search(r"\bfleet demand (\d+)\b", summary)
+            scope = re.search(r"\btargets (\d+)\b", summary)
+            errors = re.search(r"\bread errors (\d+)\b", summary)
+            if fleet and scope and errors and int(errors[1]) == 0:
+                demand = int(fleet[1]) + int(scope[1])
+        return {
+            "demand": demand,
+            "invocation_count": sum(bool(row["items"]) for _, row in rounds),
+            "usable": sum(
+                item.get("action") in usable_actions for _, row in rounds for item in row["items"]
+            ),
+        }
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _closer_core_situations(inputs: dict[str, Any]) -> int | None:
+    return (inputs.get("closer_core") or {}).get("demand")
+
+
+def _closer_core_outcomes(db: Path, since: int, now: int) -> dict[str, int] | None:
+    """record_outcomes tags validated decisions; these are closures, not PR-delivery edges."""
+    try:
+        with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
+            con.row_factory = sqlite3.Row
+            rows = [
+                dict(row)
+                for row in con.execute(
+                    "SELECT r.run_id, o.adjudicated_verdict, o.verifier_verdict, "
+                    "o.durability, o.merged, o.failure_class FROM runs r "
+                    "LEFT JOIN outcomes o ON o.run_id=r.run_id "
+                    "WHERE r.run_id GLOB 'closer-core:*' AND r.task_type='issue_closure' "
+                    "AND r.source='orchestrator_local' AND r.mode='deterministic' "
+                    "AND r.ts BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM completion_events ce "
+                    "WHERE ce.run_id=r.run_id AND ce.capability_id='closer-core' "
+                    "AND ce.capability_version_id IS NOT NULL AND ce.capability_version_id!='' "
+                    "AND ce.validation_status='accepted' AND ce.event_type='decision' "
+                    "AND ce.phase='decision')",
+                    (since, now),
+                )
+            ]
+        classified = [(capability_effectiveness._classify(row), row) for row in rows]
+        classes = Counter(kind for kind, _ in classified)
+        return {
+            "acted_on": len(rows),
+            **{field: classes[kind] for kind, field in CLASS_FIELDS.items()},
+            "outcome_success": sum(
+                kind == "terminal"
+                and row["adjudicated_verdict"] == "PASS"
+                and row["durability"] == "durable"
+                and row["verifier_verdict"] not in feedback.VERIFIER_FAILURES
+                for kind, row in classified
+            ),
+        }
+    except (OSError, sqlite3.Error):
+        return None
+
+
 # Callables can be replaced/extended without changing reporting or adding telemetry.
 SITUATION_QUERIES: dict[str, Callable[[dict[str, Any]], int | None]] = {
+    "closer-core": _closer_core_situations,
     "role-prompt": _prompt_batches,
     "role-decomposer": _large_issues,
     "role-triage": _open_issues,
     "role-adjudicator": _disputes,
     "role-redirect": _stall_situations,
+    feedback.RELAY_PACING_CAPABILITY: _relay_situations,
 }
 
 
@@ -278,13 +519,24 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
     set aside beside `acted_on`. `outcome` counts acted-on runs whose outcome is TERMINAL, good or
     bad, and `outcome_success` those of them that are a durable success
     (`feedback.outcome_is_durable_success`, the lifecycle's predicate). Every class has its own
-    field, so nothing set aside is hidden in a smaller count. None when the edges are unread:
+    field, so nothing set aside is hidden in a smaller count. The capacity row also counts
+    version-exact relay round completions (including failure), and completed exit=0 round
+    successes, without inventing PR outcomes.
+    None when the edges are unread:
     unmeasured, never zero.
     """
     fields = ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
     if own_edges is None:
         return {field: None for field in fields}
     accepted = [e for e in own_edges if e.get("accepted") == 1]
+    relay = [
+        e
+        for e in accepted
+        if cid == feedback.RELAY_PACING_CAPABILITY
+        and e.get("capability_version_id") == feedback.RELAY_PACING_VERSION
+        and e.get("relay_round_status") in {"completed", "failed", "rate-limited"}
+    ]
+    accepted_delivery = [e for e in accepted if e not in relay]
     classified = [
         (
             capability_effectiveness._classify(
@@ -301,13 +553,20 @@ def outcome_counts(cid: str, own_edges: list[dict] | None) -> dict[str, int | No
             ),
             e,
         )
-        for e in accepted
+        for e in accepted_delivery
     ]
     classes = Counter(c for c, _ in classified)
     return {
         "acted_on": len(accepted) - sum(classes[c] for c in ACTED_ON_SET_ASIDE),
-        **{field: classes[c] for c, field in CLASS_FIELDS.items()},
+        **{
+            field: classes[c] + (len(relay) if c == "terminal" else 0)
+            for c, field in CLASS_FIELDS.items()
+        },
         "outcome_success": sum(
+            e.get("relay_round_status") == "completed" and e.get("relay_round_exit_status") == 0
+            for e in relay
+        )
+        + sum(
             c == "terminal"
             and feedback.outcome_is_durable_success(**capability_effectiveness._outcome_fields(e))
             for c, e in classified
@@ -366,6 +625,57 @@ def acted_on_window_index(
     return index, "value-chain monitor, first-invocation deadline windows"
 
 
+def supervisor_closure_acceptance(
+    enabled_at: int, *, now: int | None = None, db: Path | None = None
+) -> dict[str, Any]:
+    """Read closure credit within 24 hours of an operator-supplied enablement time.
+
+    This does not enable the actor or write evidence. A rolling monitor count alone
+    cannot establish the deadline: both the action edge and its recorded outcome
+    must fall inside the enablement window. Unread evidence remains unmeasured.
+    """
+    now = int(time.time()) if now is None else now
+    if enabled_at <= 0 or enabled_at > now:
+        raise ValueError("enablement time must be positive and no later than now")
+    deadline = enabled_at + 86400
+    end = min(now, deadline)
+    inputs = _brain(db or feedback.DB_PATH, enabled_at, end)
+    return _supervisor_closure_result(enabled_at, now, inputs)
+
+
+def _supervisor_closure_result(enabled_at: int, now: int, inputs: dict) -> dict[str, Any]:
+    deadline = enabled_at + 86400
+    end = min(now, deadline)
+    cid = "live-keepalive-supervisor"
+    own = own_edges_of(inputs["edges"], cid)
+    bounded = (
+        None
+        if own is None
+        else [
+            edge
+            for edge in own
+            if str(edge.get("target_run_id") or "").startswith("supervisor-close:")
+            and enabled_at <= (edge.get("outcome_recorded_ts") or 0) <= end
+        ]
+    )
+    count = outcome_counts(cid, bounded)["outcome"]
+    if count is None:
+        status = "unmeasured"
+    elif count >= 1:
+        status = "met"
+    else:
+        status = "pending" if now < deadline else "deadline_missed"
+    return {
+        "capability": cid,
+        "enabled_at": enabled_at,
+        "deadline": deadline,
+        "generated_at": now,
+        "outcome": count,
+        "status": status,
+        "errors": inputs["errors"],
+    }
+
+
 def _dispute_count(db: Path, now: int) -> int | None:
     """Persisted verifier disputes in the window, from the one definition of a dispute.
 
@@ -412,13 +722,25 @@ def _brain(db: Path, since: int, now: int) -> dict[str, Any]:
                 "SELECT ie.*, o.adjudicated_verdict AS outcome_adjudicated, "
                 "o.verifier_verdict AS outcome_verifier, o.durability AS outcome_durability, "
                 "o.merged AS outcome_merged, o.failure_class AS outcome_failure_class, "
+                "o.durability_checked_ts AS outcome_recorded_ts, "
                 "r.role_name AS target_role_name, r.mode AS target_mode, "
                 "r.pr_number AS target_pr_number, "
-                "r.routing_metadata AS target_routing_metadata FROM influence_edges ie "
+                "r.routing_metadata AS target_routing_metadata, "
+                "source_ce.created_ts AS relay_decision_ts, "
+                "CASE WHEN ce.producer='feedback.relay_pacing' "
+                "AND ce.validation_status='accepted' AND ce.created_ts<=? "
+                "AND ce.run_id=ie.target_run_id "
+                "AND ce.capability_id=ie.capability_id "
+                "AND ce.capability_version_id=ie.capability_version_id THEN "
+                "json_extract(ce.payload_json,'$.relay_pacing.status') END AS relay_round_status, "
+                "json_extract(ce.payload_json,'$.relay_pacing.exit_status') AS relay_round_exit_status "
+                "FROM influence_edges ie "
                 "LEFT JOIN outcomes o ON o.run_id = ie.target_run_id "
                 "LEFT JOIN runs r ON r.run_id = ie.target_run_id "
+                "LEFT JOIN completion_events ce ON ce.event_id = ie.target_event_id "
+                "LEFT JOIN completion_events source_ce ON source_ce.event_id = ie.source_event_id "
                 "WHERE ie.created_ts BETWEEN ? AND ?",
-                (since, now),
+                (now, since, now),
             ):
                 edge = dict(r)
                 adjudicated = edge["adjudicated_verdict"] = edge.pop("outcome_adjudicated")
@@ -500,9 +822,38 @@ def fleet_issues(gh_fn: Callable, since: int, now: int, repos: list[str]) -> lis
 
 
 def collect_inputs(
-    *, now: int, gh_fn: Callable, repos: list[str], db: Path, stall_log: Path | None = None
+    *,
+    now: int,
+    gh_fn: Callable,
+    repos: list[str],
+    db: Path,
+    stall_log: Path | None = None,
+    relay_log: Path | None = None,
 ) -> dict[str, Any]:
     inputs = _brain(db, now - WINDOW_DAYS * 86400, now)
+    inputs["closer_core"] = _closer_core_rounds(now)
+    if inputs["closer_core"] is None:
+        inputs["errors"].append("closer-core round population unavailable")
+    inputs["closer_core_outcomes"] = _closer_core_outcomes(db, now - WINDOW_DAYS * 86400, now)
+    if inputs["closer_core_outcomes"] is None:
+        inputs["errors"].append("closer-core Brain outcomes unavailable")
+    inputs["relay_decisions"] = _relay_decisions(
+        relay_log
+        or Path(
+            os.environ.get(
+                "HANDOFF_PACING_LOG", str(Path.home() / ".codex/handoff/relay-pacing.log")
+            )
+        ),
+        now,
+    )
+    decisions = inputs["relay_decisions"]
+    inputs["relay_decision_count"] = (
+        None
+        if decisions is None
+        else sum(now - WINDOW_DAYS * 86400 <= stamp <= now for stamp, _ in decisions.values())
+    )
+    if inputs["relay_decision_count"] is None:
+        inputs["errors"].append("relay pacing population unavailable (decision log unread)")
     inputs["stall_targets"] = _stall_sweep_targets(
         stall_log or _state_dir() / STALL_SWEEP_LOG, now - WINDOW_DAYS * 86400, now
     )
@@ -581,6 +932,39 @@ def report(
             # Every class set aside from `outcome` has its own count beside it.
             **outcome_counts(cid, own_edges),
         }
+        if cid == "closer-core":
+            rounds = inputs.get("closer_core") or {}
+            counts["invocation_count"] = rounds.get("invocation_count")
+            counts["usable"] = rounds.get("usable")
+            counts.update(
+                inputs.get("closer_core_outcomes")
+                or {
+                    field: None for field in ("acted_on", *CLASS_FIELDS.values(), "outcome_success")
+                }
+            )
+            counts["success_scope"] = "durable issue closures (PASS)"
+        if cid == feedback.RELAY_PACING_CAPABILITY:
+            usable = _relay_usable(inputs, now - WINDOW_DAYS * 86400, now)
+            counts["usable"] = None if usable is None else counts["usable"] + usable
+            # Relay exit=0 and durable-delivery edges both land in outcome_success;
+            # the scope must name both so a mixed row is not misread as exit=0 alone.
+            counts["success_scope"] = (
+                "completed lane rounds (exit=0) and durable-delivery successes"
+            )
+            # Weekly ±5% pass compares these joins to log demand, not total acted_on.
+            counts["relay_acted_on"] = (
+                None if own_edges is None else len(_relay_joined_edges(own_edges))
+            )
+            counts["relay_pass"] = relay_pass_number(
+                {
+                    **counts,
+                    "relay_decisions": inputs.get("relay_decisions"),
+                    "relay_joined_edges": (
+                        None if own_edges is None else _relay_joined_edges(own_edges)
+                    ),
+                },
+                now=now,
+            )
         dependencies = set(INPUT_FLAGS.get(cid, ())) | set(cap.get("input_flags", []))
 
         # Declared defaults can be grouped by caller (module/orchestrate/commands).
@@ -623,6 +1007,7 @@ def format_lines(section: dict) -> list[str]:
             else f"demand {row['situation_count']}"
         )
         first = row["first_break"] or "unmeasured"
+        success_scope = f" ({row['success_scope']})" if row.get("success_scope") else ""
 
         def aside(step: str) -> str:
             parts = [
@@ -633,10 +1018,25 @@ def format_lines(section: dict) -> list[str]:
         lines.append(
             f"  {row['capability']}: {demand}; invocation {row['invocation_count']}; usable {row['usable']}; "
             f"acted_on {row['acted_on']}{aside('acted_on')}; "
-            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}; "
+            f"outcome {row['outcome']}{aside('outcome')}; success {row.get('outcome_success')}{success_scope}; "
             f"first_break {first}"
             + ("; " + ", ".join(row["input_off"]) if row["input_off"] else "")
         )
+        relay_pass = row.get("relay_pass")
+        if isinstance(relay_pass, Mapping):
+            floor = relay_pass.get("acted_on_floor")
+            floor_s = "unmeasured" if floor is None else str(floor)
+            demand_s = relay_pass.get("demand")
+            if demand_s is None:
+                demand_s = "unmeasured"
+            retired = relay_pass.get("retired_unjoinable")
+            retired_s = "unmeasured" if retired is None else str(retired)
+            lines.append(
+                f"    relay pass ({relay_pass.get('check_date')}): {relay_pass.get('status')}; "
+                f"joins {relay_pass.get('relay_acted_on')} / demand {demand_s} "
+                f"(floor {floor_s}; retired_unjoinable {retired_s} excluded); "
+                f"{relay_pass.get('reason')}"
+            )
     # One legend line per label that appears, so a count is never printed without its meaning.
     lines.extend(
         f"  `{label}`: {meaning}"
@@ -648,6 +1048,8 @@ def format_lines(section: dict) -> list[str]:
 
 
 def recurrence_fixture() -> bool:
+    assert situation_count("closer-core", {"closer_core": {"demand": 3}}) == 3
+    assert situation_count("closer-core", {}) is None
     assert (
         situation_count(
             "generic-probe",
@@ -701,13 +1103,49 @@ def recurrence_fixture() -> bool:
     row.update(outcome_counts("cap", [{"accepted": 1}]))  # acted on, nothing recorded yet
     assert first_break(row) == "no_outcome"
     assert all(v is None for v in outcome_counts("cap", None).values())
+    # Exercise the same deadline/prefix reducer as the read-only Brain API.
+    enabled = 100
+    deadline = enabled + 86400
+    closure = {
+        **done,
+        "capability_id": "live-keepalive-supervisor",
+        "target_run_id": "supervisor-close:fixture",
+        "outcome_recorded_ts": deadline,
+    }
+    inputs = {"edges": [closure], "errors": []}
+    assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "met"
+    assert _supervisor_closure_result(enabled, deadline + 1, inputs)["status"] == "met"
+    for excluded in (
+        {**closure, "target_run_id": "ordinary:fixture"},
+        {**closure, "outcome_recorded_ts": enabled - 1},
+        {**closure, "outcome_recorded_ts": deadline + 1},
+    ):
+        inputs = {"edges": [excluded], "errors": []}
+        assert _supervisor_closure_result(enabled, deadline - 1, inputs)["status"] == "pending"
+        assert _supervisor_closure_result(enabled, deadline, inputs)["status"] == "deadline_missed"
+    unknown = _supervisor_closure_result(enabled, deadline, {"edges": None, "errors": ["unread"]})
+    assert unknown["status"] == "unmeasured" and unknown["errors"] == ["unread"]
     return True
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument(
+        "--supervisor-enabled-at",
+        type=int,
+        help="read-only closure acceptance check; enablement time as Unix seconds",
+    )
     args = ap.parse_args(argv)
+    if args.supervisor_enabled_at is not None:
+        if args.selftest:
+            ap.error("--selftest cannot be combined with --supervisor-enabled-at")
+        try:
+            acceptance = supervisor_closure_acceptance(args.supervisor_enabled_at)
+        except ValueError as exc:
+            ap.error(str(exc))
+        print(json.dumps(acceptance, indent=2))
+        return 0 if acceptance["status"] == "met" else 1
     if args.selftest:
         recurrence_fixture()
         print("value_chain_monitor selftest PASS")

@@ -255,7 +255,7 @@ def test_interrupted_invocation_journals_before_completion(stores, monkeypatch, 
     monkeypatch.setattr(
         dispatcher.adapters, "record_ledger", lambda *a, **kw: order.append(kw.get("event"))
     )
-    with pytest.raises(RuntimeError if receipt_failure else KeyboardInterrupt):
+    with pytest.raises(KeyboardInterrupt) as cancelled:
         dispatcher.offload(
             "gemini",
             "test",
@@ -265,6 +265,9 @@ def test_interrupted_invocation_journals_before_completion(stores, monkeypatch, 
         )
     assert "receipt" in order
     if receipt_failure:
+        assert isinstance(cancelled.value.__cause__, RuntimeError)
+        assert str(cancelled.value.__cause__) == "journal unavailable"
+        assert cancelled.value.completion_error == "RuntimeError"
         assert "complete" not in order
     else:
         assert order.index("receipt") < order.index("complete")
@@ -293,7 +296,7 @@ def test_callback_failure_always_scrubs_agy_log(stores, monkeypatch, interrupted
         raise RuntimeError("synthetic journal failure")
 
     monkeypatch.setattr(dispatcher.subprocess, "run", provider)
-    with pytest.raises(RuntimeError, match="synthetic journal"):
+    with pytest.raises(KeyboardInterrupt if interrupted else RuntimeError) as failure:
         dispatcher.offload(
             "gemini",
             "test",
@@ -301,6 +304,12 @@ def test_callback_failure_always_scrubs_agy_log(stores, monkeypatch, interrupted
             max_network_retries=0,
             attempt_receipt_callback=failed_receipt,
         )
+    if interrupted:
+        assert isinstance(failure.value.__cause__, RuntimeError)
+        assert str(failure.value.__cause__) == "synthetic journal failure"
+        assert failure.value.completion_error == "RuntimeError"
+    else:
+        assert str(failure.value) == "synthetic journal failure"
     assert synthetic_secret not in log.read_text()
     assert "complete" not in order
 

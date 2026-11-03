@@ -1,0 +1,2121 @@
+FFFFFFFFFFFF.......FFFFFFFFFFFFFFFF                                      [100%]
+=================================== FAILURES ===================================
+______ test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe] _______
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_every_evaluator_runs_in_a0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10915e1e0>
+agent = 'vibe'
+
+    @pytest.mark.parametrize("agent", ["claude", "codex", "cursor", "gemini", "vibe"])
+    def test_every_evaluator_runs_in_a_scratch_workspace_of_its_own(tmp_path, monkeypatch, agent):
+        """exp_abcd.evaluate and ux_review start evaluators with Popen and no cwd, so the command
+        itself must move them: the tick's cwd is `/`, and agy's `--add-dir` used to name this module's
+        directory, which in the mirror is the dispatcher's own code."""
+        import exp_abcd
+    
+        _isolated_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+        monkeypatch.chdir(tmp_path)
+>       command = exp_abcd._eval_command(agent, "prompt.txt")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/private/tmp/pr696-main-control/tests/test_agent_workspace_never_broad.py:376: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/private/tmp/pr696-main-control/src/exp_abcd.py:1323: in _eval_command
+    prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/private/tmp/pr696-main-control/src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/private/tmp/pr696-main-control/src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+/private/tmp/pr696-main-control/src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: PermissionError
+____________ test_the_documented_copier_builds_through_the_builder _____________
+
+source = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_documented_copier_bui0/source')
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_documented_copier_bui0')
+
+    def test_the_documented_copier_builds_through_the_builder(source: Path, tmp_path: Path) -> None:
+        copier = tmp_path / "orch-sync-mirror.sh"
+        copier.write_text(_documented_copier())
+        root = tmp_path / "stage"
+        (root / "home" / ".codex" / "orchestrator").mkdir(parents=True)
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        path = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+        staged = dict(PATH=path, HOME=str(root / "home"), ORCH_MIRROR=str(root / "mirror"))
+        proc = subprocess.run(
+            ["bash", str(copier), str(source)],
+            env=_env(ORCH_PRIVATE_COPY_ROOT=str(root), **staged),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+>       assert proc.returncode == 0, proc.stderr
+E       AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.aDzofcej0r: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_documented_cop...the_documented_copier_bui0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+
+tests/test_build_exec_mirror.py:348: AssertionError
+____________ test_the_390_guard_composes_with_the_documented_copier ____________
+
+source = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_390_guard_composes_wi0/source')
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_390_guard_composes_wi0')
+
+    def test_the_390_guard_composes_with_the_documented_copier(source: Path, tmp_path: Path) -> None:
+        """The documented copier leaves #390's guard out (it is #389's deployment step), so inserting
+        it where that section says must still work, and must leave the exact bytes the
+        deployment-evidence collector looks for."""
+        assert _documented_guard() not in _documented_copier(), "the guard is #389's step, not this one"
+        composed = _with_390_guard(_documented_copier())
+        assert _documented_guard() in composed
+        copier = tmp_path / "orch-sync-mirror.sh"
+        copier.write_text(composed)
+        _write(
+            source / "scripts" / "publish_unverified_snapshot.sh",
+            '#!/usr/bin/env bash\nprintf "publisher %s %s\\n" "$1" "$2" > "$FAKE_RECORD"\n',
+        )
+        record, live = tmp_path / "record.txt", tmp_path / "live-mirror"
+        direct = subprocess.run(
+            ["bash", str(copier), str(source)],
+            env=_env(HOME=str(tmp_path), ORCH_MIRROR=str(live), FAKE_RECORD=str(record)),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert direct.returncode == 0, direct.stderr
+        assert record.read_text() == f"publisher {source} {live}\n"
+        assert not live.exists(), "the guard must route a direct call away from an in-place copy"
+        # A staging call (the verifier's and the publisher's own) still builds through the builder.
+        root = tmp_path / "stage"
+        (root / "home").mkdir(parents=True)
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        staged = subprocess.run(
+            ["bash", str(copier), str(source)],
+            env=_env(
+                PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                HOME=str(root / "home"),
+                ORCH_MIRROR=str(root / "mirror"),
+                ORCH_PRIVATE_COPY_ROOT=str(root),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+>       assert staged.returncode == 0, staged.stderr
+E       AssertionError: mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.CiQNOwnRWF: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 38 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_390_guard_comp...the_390_guard_composes_wi0/stage/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.\n').returncode
+
+tests/test_build_exec_mirror.py:417: AssertionError
+______ test_presync_says_whether_ci_verified_the_shipped_tree[documented] ______
+
+source = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/source')
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0')
+copier = 'documented'
+
+    @pytest.mark.parametrize("copier", ["builder", "documented", "drifted"])
+    def test_presync_says_whether_ci_verified_the_shipped_tree(
+        source: Path, tmp_path: Path, copier: str
+    ) -> None:
+        """FYI only: the verdict stays the copier's own, whatever this line says."""
+        _write(source / "src" / "verify.py", FAKE_VERIFY)
+        _git(source, "add", "-A")
+        _git(source, "commit", "-q", "-m", "fake verify")
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        if copier == "builder":
+            script = source / "scripts" / "build_exec_mirror.sh"
+        else:
+            script = tmp_path / "copier.sh"
+            body = _documented_copier()
+            if copier == "drifted":
+                body += 'printf "only here\\n" > "$MIRROR/extra.txt"\n'
+            script.write_text(body)
+        home, runtime = tmp_path / "home", tmp_path / "runtime"
+        home.mkdir()
+        runtime.mkdir()
+        proc = subprocess.run(
+            ["bash", str(PRESYNC), str(source)],
+            env=_env(
+                PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                HOME=str(home),
+                TMPDIR=str(tmp_path),
+                ORCH_SYNC_SCRIPT=str(script),
+                ORCH_LOCAL_RUNTIME=str(runtime),
+                ORCH_STATE_DIR=str(runtime),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+>       assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+E       AssertionError: == scratch mirror of /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/source @ 16e174d (0 uncommitted) -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/verify-before-sync.6rhFRw/mirror
+E         tests/ shipped from git HEAD 16e174d (2 files) — uncommitted test edits are NOT shipped
+E         scripts/ shipped from git HEAD (4 entries)
+E         .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+E         docs/ shipped from git HEAD (1 files, merged beside run-time output)
+E         built 3 .py (from /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/verify-before-sync.6rhFRw/mirror
+E         mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.5LUPzv8xTh: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v0/verify-before-sync.6rhFRw/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E         verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control/scripts/verify_before_sync.sh', '/private/tmp/pr696-ma...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+
+tests/test_build_exec_mirror.py:488: AssertionError
+_______ test_presync_says_whether_ci_verified_the_shipped_tree[drifted] ________
+
+source = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/source')
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1')
+copier = 'drifted'
+
+    @pytest.mark.parametrize("copier", ["builder", "documented", "drifted"])
+    def test_presync_says_whether_ci_verified_the_shipped_tree(
+        source: Path, tmp_path: Path, copier: str
+    ) -> None:
+        """FYI only: the verdict stays the copier's own, whatever this line says."""
+        _write(source / "src" / "verify.py", FAKE_VERIFY)
+        _git(source, "add", "-A")
+        _git(source, "commit", "-q", "-m", "fake verify")
+        bin_dir = tmp_path / "bin"
+        _gh_stub(bin_dir, '{"repos": []}')
+        if copier == "builder":
+            script = source / "scripts" / "build_exec_mirror.sh"
+        else:
+            script = tmp_path / "copier.sh"
+            body = _documented_copier()
+            if copier == "drifted":
+                body += 'printf "only here\\n" > "$MIRROR/extra.txt"\n'
+            script.write_text(body)
+        home, runtime = tmp_path / "home", tmp_path / "runtime"
+        home.mkdir()
+        runtime.mkdir()
+        proc = subprocess.run(
+            ["bash", str(PRESYNC), str(source)],
+            env=_env(
+                PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                HOME=str(home),
+                TMPDIR=str(tmp_path),
+                ORCH_SYNC_SCRIPT=str(script),
+                ORCH_LOCAL_RUNTIME=str(runtime),
+                ORCH_STATE_DIR=str(runtime),
+            ),
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+>       assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
+E       AssertionError: == scratch mirror of /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/source @ 58eede3 (0 uncommitted) -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/verify-before-sync.LLFGjA/mirror
+E         tests/ shipped from git HEAD 58eede3 (2 files) — uncommitted test edits are NOT shipped
+E         scripts/ shipped from git HEAD (4 entries)
+E         .github/ shipped from git HEAD (1 files) with .gitignore ruff.toml
+E         docs/ shipped from git HEAD (1 files, merged beside run-time output)
+E         built 3 .py (from /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/source/src) + orchestrate.sh + 1 test file(s) + 11 data/config entries -> /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/verify-before-sync.LLFGjA/mirror
+E         mktemp: mkstemp failed on /var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/tmp.YzKc7AH4IL: Operation not permitted
+E         ERR: orch-sync-mirror.sh aborted at line 33 (rc 1): /private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_presync_says_whether_ci_v1/verify-before-sync.LLFGjA/mirror is HALF-SYNCED -- fix the cause and re-run before trusting a mirror verify.
+E         verify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched
+E         
+E       assert 2 == 0
+E        +  where 2 = CompletedProcess(args=['bash', '/private/tmp/pr696-main-control/scripts/verify_before_sync.sh', '/private/tmp/pr696-ma...verify.\nverify-before-sync: NOTHING VERIFIED: the scratch copy failed (see above); the live mirror was not touched\n').returncode
+
+tests/test_build_exec_mirror.py:488: AssertionError
+_ test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[works] _
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_an_experiment_evaluators_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1092317c0>
+capsys = <_pytest.capture.CaptureFixture object at 0x1092320f0>, scrub = 'works'
+
+    @pytest.mark.parametrize("scrub", ["works", "fails"])
+    def test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain(
+        tmp_path, monkeypatch, capsys, scrub
+    ):
+        """The parse reads the output masked in memory, so even a scrub that failed (it reports a
+        status and never raises) cannot hand the Brain the unmasked file (CodeRabbit on #496)."""
+        if scrub == "fails":
+            monkeypatch.setattr(
+                cr,
+                "scrub_file",
+                lambda path, **_k: {"path": str(path), "status": "error", "error": "OSError"},
+            )
+        token = minted("o")
+        exp_id = "mask-eval"
+        meta = _v2_meta(
+            exp_id,
+            [
+                {"arm_id": "sol", "agents": ["codex"], "profile_id": "sol"},
+                {"arm_id": "terra", "agents": ["codex"], "profile_id": "terra"},
+            ],
+        )
+        edir = tmp_path / exp_id
+        edir.mkdir()
+        (edir / "meta.json").write_text(json.dumps(meta))
+        spec = edir / "spec.md"
+        spec.write_text("frozen")
+        for member in meta["members"]:
+            (edir / exp_abcd.exp_diff_path(member["agent"], member["member_id"])).write_text(
+                f"diff --git a/{member['member_id']} b/{member['member_id']}\n"
+            )
+        monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+        monkeypatch.setenv("ORCH_OBJECTIVE_ANCHOR", "0")
+        monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+        monkeypatch.setattr(exp_abcd.adapters, "_ADVERTISED_MEMO", {})
+        monkeypatch.setattr(exp_abcd, "_record_execution_start", lambda *a, **kw: 1)
+        monkeypatch.setattr(exp_abcd, "_record_execution_complete", lambda *a, **kw: None)
+        verdict = {"scores": {"A": 8.0, "B": 6.0}, "notes": {"A": f"the diff prints {token}"}}
+        payload = f"ran gh auth token: {token}\n" + json.dumps(verdict)
+        monkeypatch.setattr(exp_abcd.subprocess, "Popen", _fake_popen(payload))
+>       exp_abcd.evaluate("o/r", str(spec), exp_id, ["claude", "codex", "cursor", "vibe"], timeout=1)
+
+tests/test_credential_redaction.py:630: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:1552: in evaluate
+    ["bash", "-lc", _eval_command(agent, str(pf))],
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:1323: in _eval_command
+    prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: PermissionError
+_ test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[fails] _
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_an_experiment_evaluators_1')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109230cb0>
+capsys = <_pytest.capture.CaptureFixture object at 0x1092305c0>, scrub = 'fails'
+
+    @pytest.mark.parametrize("scrub", ["works", "fails"])
+    def test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain(
+        tmp_path, monkeypatch, capsys, scrub
+    ):
+        """The parse reads the output masked in memory, so even a scrub that failed (it reports a
+        status and never raises) cannot hand the Brain the unmasked file (CodeRabbit on #496)."""
+        if scrub == "fails":
+            monkeypatch.setattr(
+                cr,
+                "scrub_file",
+                lambda path, **_k: {"path": str(path), "status": "error", "error": "OSError"},
+            )
+        token = minted("o")
+        exp_id = "mask-eval"
+        meta = _v2_meta(
+            exp_id,
+            [
+                {"arm_id": "sol", "agents": ["codex"], "profile_id": "sol"},
+                {"arm_id": "terra", "agents": ["codex"], "profile_id": "terra"},
+            ],
+        )
+        edir = tmp_path / exp_id
+        edir.mkdir()
+        (edir / "meta.json").write_text(json.dumps(meta))
+        spec = edir / "spec.md"
+        spec.write_text("frozen")
+        for member in meta["members"]:
+            (edir / exp_abcd.exp_diff_path(member["agent"], member["member_id"])).write_text(
+                f"diff --git a/{member['member_id']} b/{member['member_id']}\n"
+            )
+        monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+        monkeypatch.setenv("ORCH_OBJECTIVE_ANCHOR", "0")
+        monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+        monkeypatch.setattr(exp_abcd.adapters, "_ADVERTISED_MEMO", {})
+        monkeypatch.setattr(exp_abcd, "_record_execution_start", lambda *a, **kw: 1)
+        monkeypatch.setattr(exp_abcd, "_record_execution_complete", lambda *a, **kw: None)
+        verdict = {"scores": {"A": 8.0, "B": 6.0}, "notes": {"A": f"the diff prints {token}"}}
+        payload = f"ran gh auth token: {token}\n" + json.dumps(verdict)
+        monkeypatch.setattr(exp_abcd.subprocess, "Popen", _fake_popen(payload))
+>       exp_abcd.evaluate("o/r", str(spec), exp_id, ["claude", "codex", "cursor", "vibe"], timeout=1)
+
+tests/test_credential_redaction.py:630: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:1552: in evaluate
+    ["bash", "-lc", _eval_command(agent, str(pf))],
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:1323: in _eval_command
+    prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: PermissionError
+______ test_every_brain_connection_in_the_selftest_opens_a_private_store _______
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_every_brain_connection_in0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109239550>
+
+    def test_every_brain_connection_in_the_selftest_opens_a_private_store(tmp_path, monkeypatch):
+        live = tmp_path / "inherited-runtime"
+        inherited = live / "feedback" / "orchestrator.db"
+        monkeypatch.setattr(feedback, "DB_PATH", inherited)
+        real_conn = feedback._conn
+        calls: list[tuple[Path, str]] = []
+    
+        def traced_conn():
+            chain = " -> ".join(
+                f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+                for frame in traceback.extract_stack()[:-1]
+                if Path(frame.filename).name in ("exp_abcd.py", "feedback.py")
+            )
+            calls.append((feedback.DB_PATH, chain))
+            return real_conn()
+    
+        # feedback's own functions resolve `_conn` through the module's globals at call time, so this
+        # catches `active_evidence_types()` as well as the selftest's direct `feedback._conn()`.
+        monkeypatch.setattr(feedback, "_conn", traced_conn)
+>       exp_abcd._selftest()
+
+tests/test_exp_abcd_selftest_private_brain.py:52: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:2761: in _selftest
+    _selftest_checks()
+src/exp_abcd.py:2781: in _selftest_checks
+    wv = _wrapped("vibe", ["vibe", "--prompt", "x"])
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:328: in _wrapped
+    f"({dispatcher._agent_runtime_prelude(agent)}"
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: PermissionError
+___________ test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy ___________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_arm_evaluate_dual_writes_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10923e750>
+
+    def test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy(tmp_path, monkeypatch) -> None:
+        exp_id = "evaluate-v2"
+        meta = _v2_meta(
+            exp_id,
+            [
+                {"arm_id": "sol", "agents": ["codex"], "profile_id": "sol"},
+                {"arm_id": "terra", "agents": ["codex"], "profile_id": "terra"},
+            ],
+        )
+        edir = tmp_path / exp_id
+        edir.mkdir()
+        (edir / "meta.json").write_text(json.dumps(meta))
+        spec = edir / "spec.md"
+        spec.write_text("frozen")
+        for member in meta["members"]:
+            (edir / exp_abcd.exp_diff_path(member["agent"], member["member_id"])).write_text(
+                f"diff --git a/{member['member_id']} b/{member['member_id']}\n"
+            )
+        monkeypatch.setattr(exp_abcd, "EXP_DIR", tmp_path)
+        monkeypatch.setattr(feedback, "DB_PATH", tmp_path / "feedback.db")
+        monkeypatch.setenv("ORCH_OBJECTIVE_ANCHOR", "0")
+        monkeypatch.setattr(exp_abcd, "_record_execution_start", lambda *a, **kw: 1)
+        monkeypatch.setattr(exp_abcd, "_record_execution_complete", lambda *a, **kw: None)
+        # ISOLATION, not a skip. FakePopen below replaces subprocess.Popen for the whole call, and
+        # `_eval_command` resolves each seat's model on the way — which spawns a CLI catalog probe
+        # when the advertised-model cache is cold. That probe then hits FakePopen, whose `stdout` is
+        # PIPE (an int), and dies on `stdout.write`. Warm cache here, cold on a fresh machine: it is
+        # why this test was red on the first CI run and green locally.
+        #
+        # ORCH_MODEL_PROBE=0 is adapters' own documented kill-switch — catalog probes off, pinned
+        # models only, no subprocess — so the test becomes hermetic instead of skipping. It asserts
+        # exactly what it asserted before, and now asserts it on every machine.
+        monkeypatch.setenv("ORCH_MODEL_PROBE", "0")
+        monkeypatch.setattr(exp_abcd.adapters, "_ADVERTISED_MEMO", {})
+        # Each evaluator gets a scratch workspace under the state dir; keep them out of the live one.
+        monkeypatch.setenv("ORCH_STATE_DIR", str(tmp_path / "state"))
+    
+        class FakePopen:
+            def __init__(self, *_args, stdout=None, **_kwargs):
+                stdout.write(json.dumps({"scores": {"A": 8.0, "B": 6.0}, "notes": {}}))
+                stdout.flush()
+    
+            def poll(self):
+                return 0
+    
+            def wait(self, timeout=None):
+                return 0
+    
+            def kill(self):
+                raise AssertionError("completed deterministic evaluator must not be killed")
+    
+        monkeypatch.setattr(exp_abcd.subprocess, "Popen", FakePopen)
+>       result = exp_abcd.evaluate(
+            "o/r", str(spec), exp_id, ["claude", "codex", "cursor", "vibe"], timeout=1
+        )
+
+tests/test_experiment_arm_identity.py:320: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/exp_abcd.py:1552: in evaluate
+    ["bash", "-lc", _eval_command(agent, str(pf))],
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/exp_abcd.py:1323: in _eval_command
+    prelude = dispatcher._agent_runtime_prelude(agent) + dispatcher._auth_prelude(agent)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:797: in _agent_runtime_prelude
+    base = _ensure_agent_runtime(agent)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/dispatcher.py:578: in _ensure_agent_runtime
+    _write_vibe_runtime_config(
+src/dispatcher.py:542: in _write_vibe_runtime_config
+    dst.unlink()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml')
+missing_ok = False
+
+    def unlink(self, missing_ok=False):
+        """
+        Remove this file or link.
+        If the path is a directory, use rmdir() instead.
+        """
+        try:
+>           os.unlink(self)
+E           PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/agent-runtime/vibe/.vibe/config.toml'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1342: PermissionError
+_____________ test_three_profiles_create_distinct_worker_attempts ______________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_three_profiles_create_dis0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10923e870>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+
+    def test_three_profiles_create_distinct_worker_attempts(
+        tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+    ):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        state_path = tmp_path / "state" / "model-profile-trial.json"
+>       state = model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            now=2_000,
+        )
+
+tests/test_model_profile_trial.py:115: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/model_profile_trial.py:822: in finalize_trial
+    _write_capability_program_trial_summary(
+src/model_profile_trial.py:757: in _write_capability_program_trial_summary
+    _atomic_json(out_dir / "profile-trial.json", payload)
+src/model_profile_trial.py:202: in _atomic_json
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+dir = '/Users/teacher/.codex/orchestrator/capability-program'
+pre = 'profile-trial.json.', suf = '.tmp', flags = 2818
+output_type = <class 'str'>
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+>               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.690uymdx.tmp'
+
+/opt/anaconda3/lib/python3.12/tempfile.py:256: PermissionError
+_____________________ test_evaluator_trace_stays_separate ______________________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_evaluator_trace_stays_sep0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1092424b0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+
+    def test_evaluator_trace_stays_separate(
+        tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+    ):
+        _use_temp_feedback(tmp_path, monkeypatch)
+>       model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            record_feedback=True,
+            now=2_000,
+        )
+
+tests/test_model_profile_trial.py:156: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/model_profile_trial.py:822: in finalize_trial
+    _write_capability_program_trial_summary(
+src/model_profile_trial.py:757: in _write_capability_program_trial_summary
+    _atomic_json(out_dir / "profile-trial.json", payload)
+src/model_profile_trial.py:202: in _atomic_json
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+dir = '/Users/teacher/.codex/orchestrator/capability-program'
+pre = 'profile-trial.json.', suf = '.tmp', flags = 2818
+output_type = <class 'str'>
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+>               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.i0xe4q0i.tmp'
+
+/opt/anaconda3/lib/python3.12/tempfile.py:256: PermissionError
+____________ test_trial_readiness_surfaces_in_reports_and_lifecycle ____________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_trial_readiness_surfaces_0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1092327e0>
+trial_manifest = {'schema': 'orchestrator.model-profile-trial', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'created_at': 1000, ...}
+trial_attempt_fixture = {'schema': 'orchestrator.model-profile-trial-results', 'version': 1, 'trial_id': 'model-profile-trial:e35bf8ecf843d4e6dc867e1c', 'packet_hash': 'sha256:343604df7f0b27aa9df5507a34fd48beffdc1627987439c7b89e72af715a7605', ...}
+
+    def test_trial_readiness_surfaces_in_reports_and_lifecycle(
+        tmp_path, monkeypatch, trial_manifest, trial_attempt_fixture
+    ):
+        _use_temp_feedback(tmp_path, monkeypatch)
+        state_path = tmp_path / "state.json"
+>       model_profile_trial.finalize_trial(
+            trial_manifest,
+            trial_attempt_fixture,
+            state_path=state_path,
+            record_feedback=True,
+            now=2_000,
+        )
+
+tests/test_model_profile_trial.py:287: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/model_profile_trial.py:822: in finalize_trial
+    _write_capability_program_trial_summary(
+src/model_profile_trial.py:757: in _write_capability_program_trial_summary
+    _atomic_json(out_dir / "profile-trial.json", payload)
+src/model_profile_trial.py:202: in _atomic_json
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+dir = '/Users/teacher/.codex/orchestrator/capability-program'
+pre = 'profile-trial.json.', suf = '.tmp', flags = 2818
+output_type = <class 'str'>
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+>               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capability-program/profile-trial.json.zwabpk_d.tmp'
+
+/opt/anaconda3/lib/python3.12/tempfile.py:256: PermissionError
+__________________ test_offload_survives_a_heartbeat_failure ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10923c770>
+
+    def test_offload_survives_a_heartbeat_failure(monkeypatch):
+        """Same protection on the dispatch path: recording that a capability ran must never be able
+        to prevent the work itself."""
+        import capabilities as C
+        import dispatcher
+    
+        monkeypatch.setenv("ORCH_CAPABILITY_HEARTBEATS", "1")
+        monkeypatch.setattr(
+            C,
+            "production_heartbeat",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("ledger down")),
+        )
+        # Harmless command so the test exercises the guard, not a real agent.
+        monkeypatch.setattr(dispatcher.adapters, "build_command", lambda *a, **k: ["printf", "ok"])
+>       out = dispatcher.offload("cursor", "x", cwd="/tmp", timeout=30)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_model_tier_resolution.py:853: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/dispatcher.py:2051: in offload
+    run_id, logf = _claim_offload_log(agent)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+agent = 'cursor'
+
+    def _claim_offload_log(agent: str) -> tuple[str, Path]:
+        """One offload's run_id and log file, claimed together so that no other offload holds either.
+    
+        Both used to be read from `time.time_ns()` separately, and that clock is microsecond-granular on
+        macOS (every value ends in 000), so two offloads started in the same microsecond shared them.
+        Measured from the capacity ledger on 2026-10-05: 4 of 4,517 offload logs were written by two
+        runs, and 3 offload run_ids were carried by 7 runs. A shared log holds both run headers before
+        either run's output, so `ledger_reconcile._log_segment` read nothing for the run whose header
+        came first and both outputs for the other. A shared run_id is one `runs` row in the Brain
+        (INSERT OR REPLACE), so the second run replaced the first.
+    
+        The log is created with O_EXCL, so a name belongs to whichever offload creates it first, in this
+        process or another one, and a name already on disk moves the claim one nanosecond on. The run_id
+        is built from the same number, so it is as unique as the log name, and either one names the
+        other.
+        """
+        DISPATCH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        ns = time.time_ns()
+        for _ in range(OFFLOAD_LOG_CLAIM_ATTEMPTS):
+            logf = DISPATCH_LOG_DIR / f"offload.{agent}.{ns}.log"
+            try:
+>               os.close(os.open(logf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/handoff/dispatch-logs/offload.cursor.1792260865109515000.log'
+
+src/dispatcher.py:1756: PermissionError
+______________ test_muse_seat_is_reported_and_never_reads_as_free ______________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_muse_seat_is_reported_and0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1092403e0>
+capsys = <_pytest.capture.CaptureFixture object at 0x109242270>
+
+    def test_muse_seat_is_reported_and_never_reads_as_free(tmp_path, monkeypatch, capsys):
+        seat = capacity.AGENTS["muse"]
+        assert seat["model"] == "metered" and seat["account"] == "meta-muse-code-sub", seat
+        # The immutable execution pool retains its paid subscription pricing tier. The capacity
+        # model describes allowance metering; neither field claims an unlimited/free seat.
+        assert capacity.agent_tiers()["muse"] == "flat"
+        # Backup-only: reachable on explicit demand (`--agent muse`) and never by routine selection,
+        # until measured outcomes earn it a prior. The same mechanism aider uses.
+        assert "muse" in router.BACKUP_AGENTS, router.BACKUP_AGENTS
+    
+        # Exercise the JSON entry point offline, with an authenticated seat and private state.
+        # Checking AGENTS alone misses a model omitted from the snapshot consumed by callers.
+        monkeypatch.setattr(capacity, "HANDOFF", tmp_path)
+        monkeypatch.setattr(capacity, "OUT", tmp_path / "capacity.json")
+        monkeypatch.setattr(capacity, "LEDGER", tmp_path / "capacity-ledger.ndjson")
+        monkeypatch.setattr(capacity, "SHED_DIR", tmp_path / "capacity-shed")
+        monkeypatch.setattr(capacity, "_ccusage_active_block", lambda: None)
+        monkeypatch.setattr(capacity, "_capability_heartbeat", lambda *args, **kwargs: None)
+        monkeypatch.setattr(capacity, "_model_health", lambda *args: None)
+        monkeypatch.setattr(
+            capacity, "_auth_health", lambda agent: {"checked": True, "authenticated": True}
+        )
+>       assert capacity.main(["--json"]) == 0
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_muse_backend.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/capacity.py:1417: in main
+    snap = build(record_pacing=True)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+src/capacity.py:1072: in build
+    pacing_fyi = pacing_usage.integrate(
+src/pacing_usage.py:577: in integrate
+    messages.extend(consume_detected_resets(inventory, datum, now=now, record=record))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/pacing_usage.py:314: in consume_detected_resets
+    temporary.write_text(json.dumps(inventory, indent=2) + "\n")
+/opt/anaconda3/lib/python3.12/pathlib.py:1047: in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = PosixPath('/Users/teacher/.codex/orchestrator/capacity-resets.tmp')
+mode = 'w', buffering = -1, encoding = 'locale', errors = None, newline = None
+
+    def open(self, mode='r', buffering=-1, encoding=None,
+             errors=None, newline=None):
+        """
+        Open the file pointed by this path and return a file object, as
+        the built-in open() function does.
+        """
+        if "b" not in mode:
+            encoding = io.text_encoding(encoding)
+>       return io.open(self, mode, buffering, encoding, errors, newline)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capacity-resets.tmp'
+
+/opt/anaconda3/lib/python3.12/pathlib.py:1013: PermissionError
+----------------------------- Captured stderr call -----------------------------
+FYI codex rollout scan: duration_seconds=5.5256, files_read=300, files_cached=0, bytes_read=3635399582, total_files=560, omitted=260, malformed=0, unreadable_files=0
+___________________ SeatbeltRegexQuotingTests.test_backslash ___________________
+
+self = <test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_backslash>
+
+    def test_backslash(self):
+>       self.check_root(r"back\slash")
+
+tests/test_seatbelt_regex_quoting.py:39: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/seatbelt-regression-gamc8bq0')
+name = 'back\\slash'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+>       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout: 
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E         
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py:151: AssertionError
+___________________ SeatbeltRegexQuotingTests.test_combined ____________________
+
+self = <test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_combined>
+
+    def test_combined(self):
+>       self.check_root('mixed"back\\slash.[x]+(a){2}^$|?* space')
+
+tests/test_seatbelt_regex_quoting.py:45: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/seatbelt-regression-29v39_ug')
+name = 'mixed"back\\slash.[x]+(a){2}^$|?* space'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+>       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout: 
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E         
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py:151: AssertionError
+_____________________ SeatbeltRegexQuotingTests.test_quote _____________________
+
+self = <test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_quote>
+
+    def test_quote(self):
+>       self.check_root('odd"root')
+
+tests/test_seatbelt_regex_quoting.py:36: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/seatbelt-regression-dgm0fb8n')
+name = 'odd"root'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+>       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout: 
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E         
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py:151: AssertionError
+_____________ SeatbeltRegexQuotingTests.test_regex_metacharacters ______________
+
+self = <test_seatbelt_regex_quoting.SeatbeltRegexQuotingTests testMethod=test_regex_metacharacters>
+
+    def test_regex_metacharacters(self):
+>       self.check_root("meta.[x]+(a){2}^$|?*")
+
+tests/test_seatbelt_regex_quoting.py:42: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_seatbelt_regex_quoting.py:28: in check_root
+    _assert_native_profile_enforces_unusual_allowed_roots(root, name)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/seatbelt-regression-gstmq5eh')
+name = 'meta.[x]+(a){2}^$|?*'
+
+    def _assert_native_profile_enforces_unusual_allowed_roots(tmp_path, name):
+        protected = tmp_path.resolve() / ("protected-" + name)
+        root = protected / name
+        allowed = [
+            root / "source.py",
+            root / "nested" / "source.py",
+            root / ".gitignore",
+            root / ".git-other" / "config",
+            # Outside the protected tree: an overbroad/underescaped root regex must not deny this.
+            tmp_path.resolve() / ("protected-" + name + "-sibling") / name / ".git" / "config",
+        ]
+        denied = [
+            protected / "driver.py",
+            protected / (name + "-sibling") / "source.py",
+            root / ".git" / "config",
+            root / "nested" / ".git" / "hooks" / "pre-commit",
+        ]
+        for path in [*allowed, *denied]:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("original")
+        protect, allow = adapters.write_boundary_roots([protected], [], root, agent="vibe")
+        profile = adapters.seatbelt_write_profile(protect, allow)
+        # Execute the production profile, not a hand-written equivalent. All attempts stay in tmp_path.
+        probe = r"""
+    import json, pathlib, sys
+    allowed, denied = json.loads(sys.argv[1])
+    for name in allowed:
+        path = pathlib.Path(name)
+        path.write_text("changed")
+        path.with_name(path.name + ".new").write_text("created")
+        moved = path.with_name(path.name + ".moved")
+        path.rename(moved)
+        moved.rename(path)
+    for name in denied:
+        path = pathlib.Path(name)
+        for target in (path, path.with_name(path.name + ".new")):
+            try:
+                target.write_text("forbidden")
+            except PermissionError:
+                continue
+            raise AssertionError("write allowed: " + str(target))
+        try:
+            path.rename(path.with_name(path.name + ".moved"))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("rename allowed: " + str(path))
+        try:
+            path.unlink()
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unlink allowed: " + str(path))
+    print("native Seatbelt probe: OK")
+    """
+        proc = subprocess.run(
+            [
+                adapters.SANDBOX_EXEC,
+                "-p",
+                profile,
+                sys.executable,
+                "-I",
+                "-c",
+                probe,
+                json.dumps([[str(p) for p in allowed], [str(p) for p in denied]]),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+>       assert proc.returncode == 0, f"stdout: {proc.stdout}\nstderr: {proc.stderr}"
+E       AssertionError: stdout: 
+E         stderr: sandbox-exec: sandbox_apply: Operation not permitted
+E         
+E       assert 71 == 0
+E        +  where 71 = CompletedProcess(args=['/usr/bin/sandbox-exec', '-p', '(version 1)(allow default)(deny file-write* (subpath "/private/.../.git/hooks/pre-commit"]]'], returncode=71, stdout='', stderr='sandbox-exec: sandbox_apply: Operation not permitted\n').returncode
+
+tests/test_seatbelt_regex_quoting.py:151: AssertionError
+__________ test_a_stuck_tick_is_reported_with_the_kill_that_frees_it ___________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_stuck_tick_is_reported_0')
+
+    def test_a_stuck_tick_is_reported_with_the_kill_that_frees_it(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        tick = tmp_path / "tick.sh"
+        tick.write_text(
+            "set -euo pipefail\n"
+            f'{shlex.quote(sys.executable)} {shlex.quote(str(WATCHDOG))} start --state-dir "$STATE" '
+            '--tick-pid "$$"\n'
+            f"{shlex.quote(sys.executable)} -c {shlex.quote(DEADLOCKED)} "
+            '|| echo "STEP-FAILED rc=$?"\n'
+            'echo "TICK-REACHED-ITS-END"\n',
+            encoding="utf-8",
+        )
+        proc = subprocess.Popen(
+            ["bash", str(tick)],
+            env=_fast_env(STATE=str(state)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        stuck_pid = None
+        try:
+            # The child is caught as soon as it forks; wait until it has exec'd, so the record names
+            # the command rather than the fork (same pid either way -- `kill` frees it in both cases).
+>           rec = _wait_for(
+                lambda: "os.pipe()" in (_record(state).get("oldest_command") or {}).get("command", "")
+                and _record(state).get("drain")
+                and _record(state),
+                "a drain naming the stuck command",
+                state=state,
+            )
+
+tests/test_tick_watchdog.py:116: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+predicate = <function test_a_stuck_tick_is_reported_with_the_kill_that_frees_it.<locals>.<lambda> at 0x1093a42c0>
+what = 'a drain naming the stuck command', timeout = 60.0
+state = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_stuck_tick_is_reported_0/state')
+
+    def _wait_for(predicate, what: str, timeout: float = WAIT_S, state: Path | None = None):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            value = predicate()
+            if value:
+                return value
+            time.sleep(0.05)
+        # Say what the watcher DID record: a timeout alone told the first Linux CI failure nothing.
+        seen = ""
+        if state is not None:
+            history = state / tick_watchdog.HISTORY_NAME
+            seen = f"; record={_record(state)!r}; history=" + (
+                history.read_text(encoding="utf-8") if history.exists() else "<none>"
+            )
+>       raise AssertionError(f"timed out after {timeout:.0f}s waiting for {what}{seen}")
+E       AssertionError: timed out after 60s waiting for a drain naming the stuck command; record={}; history=<none>
+
+tests/test_tick_watchdog.py:59: AssertionError
+_______________ test_the_process_table_keeps_whole_command_lines _______________
+
+    def test_the_process_table_keeps_whole_command_lines() -> None:
+        """Linux procps cuts every line to 80 columns when its output is a pipe, which left the first
+        Linux CI run's record naming the stuck command as `/opt/hostedtoolcache/Python/3.12.1`: the
+        ALERT could not say what was stuck. A command line far wider than any terminal must survive."""
+        tail = "y" * 300
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)  # " + tail], stdin=subprocess.DEVNULL
+        )
+        try:
+>           row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:266: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:266: in <lambda>
+    row = _wait_for(lambda: tick_watchdog.snapshot().get(child.pid), "the child in ps")
+                            ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...>
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'AI_AGENT': 'claude-code_2-1-299_agent', 'ANTHROPIC_BASE_URL': 'https://api.anthropic.com', 'API_TIMEOUT_MS': '900000...blic_key=2f98127cbffe4740b1f767a2de77d23b,sentry-trace_id=159acb68b1b0429794b073861404e17a,sentry-org_id=1158394', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 18, c2pwrite = 19, errread = 20, errwrite = 21
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+_________________ test_the_drained_line_is_reachable_and_exact _________________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_drained_line_is_reach0')
+
+    def test_the_drained_line_is_reachable_and_exact(tmp_path: Path) -> None:
+        """Latched-gate question 4: what the watchdog prints when everything is healthy. Most ticks
+        print this line, so it is pinned whole -- a good-news branch no input reaches is a latch."""
+        state = tmp_path / "state"
+        armed = time.time() - 3600
+        tick_watchdog.write_record(
+            state,
+            {
+                "status": "exited",
+                "armed_at": tick_watchdog._iso(armed),
+                "awake_duration_s": 842,
+                "crossings": [],
+            },
+        )
+        _stamp(state, ".last-durability-sweep", 25 * 60)
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:313: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_drained_line_is_reach0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+_______________ test_a_tick_that_reaches_no_cadence_step_alerts ________________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_tick_that_reaches_no_ca0')
+
+    def test_a_tick_that_reaches_no_cadence_step_alerts(tmp_path: Path) -> None:
+        """Every tick aborting before its first cadence step is never long-running, so the thresholds
+        cannot see it -- the newest outcome of ANY step going stale can."""
+        state = tmp_path / "state"
+        _stamp(state, ".last-durability-sweep", 3 * 86400)
+        _stamp(state, ".fail-pattern-miner", 2 * 86400)  # a failure is an outcome too
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:330: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_tick_that_reaches_no_ca0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+__________ test_a_previous_tick_that_left_no_end_is_unknown_and_kept ___________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_previous_tick_that_left0')
+
+    def test_a_previous_tick_that_left_no_end_is_unknown_and_kept(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        tick_watchdog.write_record(
+            state,
+            {
+                "status": "running",
+                "tick_pid": 2**22 + 12345,  # above any pid either platform hands out
+                "tick_started": "Fri Oct 2 01:36:00 2026",
+                "watchdog_pid": None,
+                "armed_at": "2026-10-02T01:36:01Z",
+            },
+        )
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:365: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_previous_tick_that_left0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+________________ test_an_unreadable_record_is_unknown_not_clean ________________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_an_unreadable_record_is_u0')
+
+    def test_an_unreadable_record_is_unknown_not_clean(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        state.mkdir()
+        (state / tick_watchdog.RECORD_NAME).write_text("{not json", encoding="utf-8")
+>       assert "fate is UNKNOWN, not clean" in _start(state)[0]
+                                               ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:375: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_an_unreadable_record_is_u0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+__________ test_the_arming_block_as_written_arms_and_records_the_tick __________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_the_arming_block_as_writt0')
+
+    def test_the_arming_block_as_written_arms_and_records_the_tick(tmp_path: Path) -> None:
+        state = tmp_path / "state"
+        proc = _run_block(state, ORCH_DISABLE_STEPS="")
+        assert proc.returncode == 0, proc.stderr
+>       assert proc.stdout.startswith("  tick-watchdog: armed"), proc.stdout
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E           WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)
+E         
+E       assert False
+E        +  where False = <built-in method startswith of str object at 0x108974300>('  tick-watchdog: armed')
+E        +    where <built-in method startswith of str object at 0x108974300> = "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n".startswith
+E        +      where "  WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n" = CompletedProcess(args=['bash', '-c', 'set -euo pipefail\nORCH=/private/tmp/pr696-main-control/src\nSTAMP_DIR=/private/...s'); not armed\n  WARN: tick-watchdog did not arm -- nothing watches this tick (the line above says why)\n", stderr='').stdout
+
+tests/test_tick_watchdog.py:466: AssertionError
+__________________ test_fleet_summary_carries_the_tick_record __________________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_fleet_summary_carries_the0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1091af740>
+
+    def test_fleet_summary_carries_the_tick_record(tmp_path: Path, monkeypatch) -> None:
+        import mcp_server
+    
+>       me = _me()  # a target that IS still the process the record named
+             ^^^^^
+
+tests/test_tick_watchdog.py:494: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:488: in <lambda>
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...>
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'AI_AGENT': 'claude-code_2-1-299_agent', 'ANTHROPIC_BASE_URL': 'https://api.anthropic.com', 'API_TIMEOUT_MS': '900000...blic_key=2f98127cbffe4740b1f767a2de77d23b,sentry-trace_id=159acb68b1b0429794b073861404e17a,sentry-org_id=1158394', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+___________ test_a_drain_whose_target_has_exited_is_never_advertised ___________
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_a_drain_whose_target_has_0')
+
+    def test_a_drain_whose_target_has_exited_is_never_advertised(tmp_path: Path) -> None:
+        """A record outlives its watcher. If the target exited and its pid was handed to an unrelated
+        process, printing the recorded `kill` would hand a reader the command that kills the wrong
+        process -- so the drain is re-checked against a fresh process table every time it is shown."""
+        tick_watchdog.write_record(tmp_path, _stuck_record(2**22 + 999, "Fri Oct 2 01:40:00 2026"))
+        report = tick_watchdog.summary(tmp_path)
+        assert report["drain"] is None, report
+        assert "kill" not in report["line"] and "no longer applies" in report["line"], report
+>       me = _me()  # same pid as a live process, but NOT the start time the record named: recycled
+             ^^^^^
+
+tests/test_tick_watchdog.py:527: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_tick_watchdog.py:488: in _me
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_tick_watchdog.py:48: in _wait_for
+    value = predicate()
+            ^^^^^^^^^^^
+tests/test_tick_watchdog.py:488: in <lambda>
+    return _wait_for(lambda: tick_watchdog.snapshot().get(os.getpid()), "this process in ps")
+                             ^^^^^^^^^^^^^^^^^^^^^^^^
+src/tick_watchdog.py:149: in snapshot
+    out = subprocess.run(
+/opt/anaconda3/lib/python3.12/subprocess.py:548: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/anaconda3/lib/python3.12/subprocess.py:1026: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: 255 args: ('ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,ls...>
+args = ['ps', '-A', '-ww', '-o', 'pid=,ppid=,stat=,lstart=,command=']
+executable = b'ps', preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = None
+env = {'AI_AGENT': 'claude-code_2-1-299_agent', 'ANTHROPIC_BASE_URL': 'https://api.anthropic.com', 'API_TIMEOUT_MS': '900000...blic_key=2f98127cbffe4740b1f767a2de77d23b,sentry-trace_id=159acb68b1b0429794b073861404e17a,sentry-org_id=1158394', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = 12
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and not close_fds
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn, _USE_VFORK)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+                os.close(errpipe_write)
+    
+            self._close_pipe_fds(p2cread, p2cwrite,
+                                 c2pread, c2pwrite,
+                                 errread, errwrite)
+    
+            # Wait for exec to fail or succeed; possibly raising an
+            # exception (limited in size)
+            errpipe_data = bytearray()
+            while True:
+                part = os.read(errpipe_read, 50000)
+                errpipe_data += part
+                if not part or len(errpipe_data) > 50000:
+                    break
+        finally:
+            # be sure the FD is closed no matter what
+            os.close(errpipe_read)
+    
+        if errpipe_data:
+            try:
+                pid, sts = os.waitpid(self.pid, 0)
+                if pid == self.pid:
+                    self._handle_exitstatus(sts)
+                else:
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+    
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   PermissionError: [Errno 1] Operation not permitted: 'ps'
+
+/opt/anaconda3/lib/python3.12/subprocess.py:1953: PermissionError
+______ test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming ______
+
+tmp_path = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_ticks_that_never_reach_a_0')
+
+    def test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming(tmp_path: Path) -> None:
+        """A machine that has NEVER recorded a cadence outcome has no newest outcome to age, so the
+        alert needs a baseline: the first tick the watchdog armed here."""
+        state = tmp_path / "state"
+        two_days_ago = tick_watchdog._iso(time.time() - 2 * 86400)
+        tick_watchdog.write_record(
+            state, {"status": "exited", "armed_at": two_days_ago, "first_armed_at": two_days_ago}
+        )
+>       lines = _start(state)
+                ^^^^^^^^^^^^^
+
+tests/test_tick_watchdog.py:540: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+state = PosixPath('/private/tmp/pr696-main-control-tmp/pytest-of-teacher/pytest-0/test_ticks_that_never_reach_a_0/state')
+env = None
+
+    def _start(state: Path, env: dict[str, str] | None = None) -> list[str]:
+        out = io.StringIO()
+        rc = tick_watchdog.start(
+            state_dir=state, tick_pid=os.getpid(), env=env or {}, out=out, spawn=lambda _argv: None
+        )
+>       assert rc == 0, out.getvalue()
+E       AssertionError:   WARN: tick-watchdog: cannot read the process table ([Errno 1] Operation not permitted: 'ps'); not armed
+E         
+E       assert 2 == 0
+
+tests/test_tick_watchdog.py:294: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_agent_workspace_never_broad.py::test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe]
+FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+FAILED tests/test_build_exec_mirror.py::test_the_390_guard_composes_with_the_documented_copier
+FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+FAILED tests/test_credential_redaction.py::test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[works]
+FAILED tests/test_credential_redaction.py::test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[fails]
+FAILED tests/test_exp_abcd_selftest_private_brain.py::test_every_brain_connection_in_the_selftest_opens_a_private_store
+FAILED tests/test_experiment_arm_identity.py::test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy
+FAILED tests/test_model_profile_trial.py::test_three_profiles_create_distinct_worker_attempts
+FAILED tests/test_model_profile_trial.py::test_evaluator_trace_stays_separate
+FAILED tests/test_model_profile_trial.py::test_trial_readiness_surfaces_in_reports_and_lifecycle
+FAILED tests/test_model_tier_resolution.py::test_offload_survives_a_heartbeat_failure
+FAILED tests/test_muse_backend.py::test_muse_seat_is_reported_and_never_reads_as_free
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_combined
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_quote
+FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+28 failed, 7 passed in 73.51s (0:01:13)

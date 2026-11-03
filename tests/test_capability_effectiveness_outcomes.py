@@ -79,6 +79,7 @@ def _consumed(n: int, cap_id: str = "role-triage", **outcome) -> str:
         source_run_id=f"capability-producer:{cap_id}:{n}",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     if outcome:
         feedback.record_outcome(run, **outcome)

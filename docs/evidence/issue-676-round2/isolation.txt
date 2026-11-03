@@ -1,0 +1,7 @@
+live DB opened mode=ro, backed up to /private/tmp/orch-686-round2-3qawyrv9/runtime/feedback/orchestrator.db
+absent: /Users/teacher/.codex/orchestrator/capacity-ledger.ndjson
+absent: /Users/teacher/.codex/orchestrator/pacing-history.ndjson
+copied live capabilities.json to private runtime
+ORCH_STATE_DIR=/private/tmp/orch-686-round2-3qawyrv9/state
+ORCH_LOCAL_RUNTIME=/private/tmp/orch-686-round2-3qawyrv9/runtime
+ORCH_FEEDBACK_DB=/private/tmp/orch-686-round2-3qawyrv9/runtime/feedback/orchestrator.db

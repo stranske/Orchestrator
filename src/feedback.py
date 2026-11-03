@@ -33,8 +33,11 @@ import re
 import sqlite3
 import sys
 import time
+from bisect import bisect_left, bisect_right
+from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +52,30 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 # Named once, for the same two consumers as `capabilities.LEDGER_PATH_ENV`.
 DB_PATH_ENV = "ORCH_FEEDBACK_DB"
 DB_PATH = Path(os.environ.get(DB_PATH_ENV, LOCAL_RUNTIME / "feedback" / "orchestrator.db"))
+
+# Instrumented built-in paths, independently of compiled target selection:
+# dispatcher._exercised_capability_ids, record_role_run (proposal + backend),
+# exp_abcd.prepare_arms/promotion, keepalive_supervisor and this store's selftest.
+# A routed/compiled capability is deliberately absent: it needs a consumption receipt.
+RECORD_RUN_INSTRUMENTED_CAPABILITIES = frozenset(
+    {
+        "agy-runtime-isolation",
+        "thompson-hybrid-routing",
+        "testgen-lane",
+        "codemod-campaign",
+        "cross-repo-coordination",
+        "role-triage",
+        "role-prompt",
+        "role-redirect",
+        "role-decomposer",
+        "role-adjudicator",
+        "offload",
+        "abcd-experiment",
+        "live-keepalive-supervisor",
+        "feedback-store",
+        "adversarial-review",
+    }
+)
 
 
 def resolve_db_path(explicit: Path | None = None, state_dir: Path | None = None) -> Path:
@@ -186,6 +213,11 @@ CREATE TABLE IF NOT EXISTS evaluations (
   score REAL, rank INTEGER, verdict TEXT, ts INTEGER,
   PRIMARY KEY (experiment_id, implementer, evaluator)
 );
+CREATE TABLE IF NOT EXISTS review_rounds (
+  run_id TEXT NOT NULL, pr TEXT NOT NULL, round INTEGER NOT NULL,
+  verdict TEXT NOT NULL, reviewer_agent TEXT NOT NULL, first_pass INTEGER NOT NULL DEFAULT 0,
+  recorded_ts INTEGER NOT NULL, head_sha TEXT, PRIMARY KEY (run_id, round)
+);
 -- Additive causal evaluation identity.  The legacy table remains the agent-level
 -- compatibility/learning projection; v2 retains the exact arm, member, profile,
 -- and evaluator attempt that produced the observation.
@@ -316,7 +348,9 @@ def model_epoch_floor(agent: str, since: int, path: Path | None = None) -> int:
         if not entry:
             return since
         epoch = utc_epoch.from_iso(str(entry["since"]))
-        return max(since, epoch) if epoch is not None else since
+        if epoch is None:
+            return since
+        return max(since, epoch)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return since
 
@@ -505,6 +539,8 @@ MAX_COMPLETION_LIST_ITEMS = 32
 MAX_COMPLETION_STRING_CHARS = 256
 MAX_COMPLETION_ARTIFACTS = 16
 COMPLETION_PAYLOAD_FIELDS = {
+    "closer_stage",
+    "relay_pacing",
     "changed_path_classes",
     "command_ids",
     "test_ids",
@@ -546,6 +582,7 @@ VALID_INFLUENCE_TYPES = {
     "experiment",
 }
 VALID_COMPLETION_EVENT_TYPES = {
+    "closer_stage",
     "decision",
     "attempt",
     "completion",
@@ -569,6 +606,11 @@ VALID_COMPLETION_PHASES = {
     "durability",
 }
 VALID_COMPLETION_PRODUCERS = {
+    "verifier_evidence",
+    "closer_disposition.integrate_ordinary",
+    "closer_dispatcher.response_binding",
+    "closer_dispatcher.worker",
+    "feedback.relay_pacing",
     "feedback.record_run",
     "feedback.execution_attempt",
     "feedback.record_outcome",
@@ -618,7 +660,52 @@ VALID_COMPLETION_STATUSES = {
     "unknown",
 }
 COMPLETION_NESTED_FIELDS = {
+    "relay_pacing": {
+        "source",
+        "chosen",
+        "candidates",
+        "states",
+        "weights",
+        "fallback",
+        "lane",
+        "round_id",
+        "exit_status",
+        "error_class",
+        "status",
+        "decision_id",
+        "unjoined_reason",
+    },
+    "closer_stage": {
+        "validation_status",
+        "task_category",
+        "served_model",
+        "source_completion",
+        "parent_run_id",
+        "guarded_operation_success",
+        "attempts",
+        "target",
+        "capacity_ledger_run_id",
+        "actual_marginal_dollars",
+        "capacity_pool_ids",
+        "measured_usage",
+        "observed_cost_usd",
+        "opportunity_cost",
+        "requested_reasoning_effort",
+        "head_sha",
+        "independent_validation",
+        "basis_digest",
+        "requested_profile_id",
+        "elapsed_seconds",
+        "agent",
+        "requested_model",
+        "served_model_status",
+        "capacity_context",
+        "accepted",
+        "repair_review_overhead_seconds",
+        "validator",
+    },
     "verification": {
+        "decision",
         "verifier_verdict",
         "adjudicated_verdict",
         "verifier_ids",
@@ -658,6 +745,8 @@ COMPLETION_NESTED_FIELDS = {
     },
     "skill": {"skill_id", "version_hash", "phase", "result", "accepted"},
     "runtime_ac_post_merge": {
+        "interpreter",
+        "already_open",
         "result",
         # Why an UNRUNNABLE recheck could not run: one of runtime_ac_gate.UNRUNNABLE_REASONS,
         # or null for PASS/FAIL. Counted on the weekly line beside the total (2026-10-16).
@@ -717,20 +806,66 @@ COMPLETION_RETRY_FIELDS = {
 }
 
 
-def _conn() -> sqlite3.Connection:
+def _conn(*, timeout: float = 5.0) -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(DB_PATH))
-    c.executescript(SCHEMA)
-    _migrate_schema(c)
-    # Additive v2 profile tables live in the same durable Brain.  Import lazily
-    # to keep execution_profiles independent from this connection factory.
-    execution_profiles.ensure_schema(c)
-    c.commit()
+    c = sqlite3.connect(str(DB_PATH), timeout=timeout)
+    try:
+        c.executescript(SCHEMA)
+        _migrate_schema(c)
+        # Additive v2 profile tables live in the same durable Brain.  Import lazily
+        # to keep execution_profiles independent from this connection factory.
+        execution_profiles.ensure_schema(c)
+        c.commit()
+    except BaseException:
+        c.close()
+        raise
     return c
+
+
+def record_review_round(
+    run_id: str,
+    pr: str,
+    round_number: int,
+    verdict: str,
+    reviewer_agent: str,
+    head_sha: str | None = None,
+) -> None:
+    """Persist one exact-head advisory review result for the delivery loop."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO review_rounds "
+            "(run_id, pr, round, verdict, reviewer_agent, first_pass, recorded_ts, head_sha) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                pr,
+                round_number,
+                verdict,
+                reviewer_agent,
+                int(round_number == 1),
+                int(time.time()),
+                head_sha,
+            ),
+        )
+
+
+def review_round_rows() -> list[tuple[str, str, int, str, str, int]]:
+    """Read advisory review evidence for switch-review reporting."""
+    conn = sqlite3.connect(Path(DB_PATH).resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+    try:
+        return conn.execute(
+            "SELECT run_id, pr, round, verdict, reviewer_agent, first_pass FROM review_rounds "
+            "ORDER BY recorded_ts, rowid"
+        ).fetchall()
+    finally:
+        conn.close()
 
 
 def _migrate_schema(c: sqlite3.Connection) -> None:
     """Guarded migrations for existing local feedback stores."""
+    review_cols = {row[1] for row in c.execute("PRAGMA table_info(review_rounds)").fetchall()}
+    if review_cols and "head_sha" not in review_cols:
+        c.execute("ALTER TABLE review_rounds ADD COLUMN head_sha TEXT")
     cols = {row[1] for row in c.execute("PRAGMA table_info(runs)").fetchall()}
     if "model" not in cols:
         c.execute("ALTER TABLE runs ADD COLUMN model TEXT")
@@ -2263,6 +2398,7 @@ def _record_influence_edge_in_conn(
     acceptance_gate_id: str | None = None,
     metadata: dict | None = None,
     allow_unlinked: bool = False,
+    timestamp: int | None = None,
 ) -> dict:
     kind = str(influence_type or "").strip().lower()
     if kind not in VALID_INFLUENCE_TYPES:
@@ -2308,7 +2444,7 @@ def _record_influence_edge_in_conn(
     edge_id = "edge:" + hashlib.sha256(edge_identity.encode()).hexdigest()[:32]
     safe_meta, _, _ = _sanitize_completion_payload({"result": metadata or {}})
     metadata_hash = _completion_hash(safe_meta)
-    now = int(time.time())
+    now = int(timestamp if timestamp is not None else time.time())
     c.execute(
         "INSERT INTO influence_edges "
         "(edge_id,schema_version,source_event_id,source_run_id,target_event_id,target_run_id,"
@@ -2364,6 +2500,7 @@ def record_capability_consumption(
     producer: str = "orchestrator",
     acceptance_gate_id: str | None = None,
     attempt_id: str | None = None,
+    receipt_ref: str | None = None,
 ) -> dict:
     """Record a version-exact producer-to-consumer edge.
 
@@ -2371,6 +2508,8 @@ def record_capability_consumption(
     consumption for an unobserved downstream run. Later outcomes reconcile over
     this exact edge without rewriting it.
     """
+    if accepted and not receipt_ref:
+        raise ValueError("compiled capability consumption requires a consumer receipt")
     with _conn() as c:
         target_event_id = _latest_completion_event_id(c, target_run_id)
         if not target_event_id:
@@ -2390,6 +2529,11 @@ def record_capability_consumption(
             payload={
                 "capability_ids": [capability_id],
                 "result": {"version_hash": capability_version_id, "accepted": accepted},
+                "artifact_refs": (
+                    [{"artifact_id": receipt_ref, "kind": "consumer_receipt"}]
+                    if receipt_ref
+                    else []
+                ),
             },
         )
         edge = _record_influence_edge_in_conn(
@@ -2545,6 +2689,53 @@ def outcome_is_terminal(*, verifier_verdict, adjudicated_verdict, merged, durabi
         or verdict.startswith("FAIL")
         or str(verifier_verdict or "").upper() in VERIFIER_FAILURES
     )
+
+
+def _closer_stage_rewards(conn: sqlite3.Connection, task_type: str) -> dict[str, float]:
+    """Independent stage acceptance, separate from merge/durability labels.
+
+    Only registered closer categories and native validator events qualify. Raw
+    completion, provider failures, uncertainty and missing measurements do not.
+    """
+    if task_type not in {"closer_interpret", "closer_exception", "closer_repair"}:
+        return {}
+    rewards: dict[str, float] = {}
+    rows = conn.execute(
+        "SELECT e.run_id,e.producer,e.status,e.payload_json,r.routing_metadata,r.agent "
+        "FROM completion_events e JOIN runs r ON r.run_id=e.run_id "
+        "WHERE r.task_type=? AND e.event_type='closer_stage' AND e.phase='verification' "
+        "AND e.validation_status='accepted' ORDER BY e.updated_ts DESC,e.event_id DESC",
+        (task_type,),
+    )
+    for run_id, producer, status, raw, raw_metadata, agent in rows:
+        if run_id in rewards or producer not in {
+            "closer_disposition.integrate_ordinary",
+            "closer_dispatcher.response_binding",
+        }:
+            continue
+        try:
+            payload = json.loads(raw).get("closer_stage", {})
+            metadata = json.loads(raw_metadata or "{}")
+            accepted = payload.get("accepted")
+            if (
+                type(accepted) is not bool
+                or payload.get("independent_validation") is not True
+                or payload.get("validator") != producer
+                or payload.get("task_category") != task_type
+                or payload.get("agent") != agent
+                or payload.get("requested_profile_id") != metadata.get("selected_profile_id")
+                or str(payload.get("target", "")).casefold()
+                != str(metadata.get("subject_id", "")).casefold()
+                or not metadata.get("subject_id")
+                or not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("head_sha", "")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("basis_digest", "")))
+                or status != ("pass" if accepted else "fail")
+            ):
+                continue
+        except (ValueError, TypeError, AttributeError):
+            continue
+        rewards[run_id] = float(accepted)
+    return rewards
 
 
 def outcome_is_durable_success(
@@ -3210,8 +3401,17 @@ def _record_run_in_conn(
     # only in the one-capability case — which meant a run declaring TWO capabilities recorded
     # attribution for NEITHER (the multi-capability case was the worst-served one, 2026-08-09).
     # Edges are the many-to-many surface, and `capability` is already a valid influence type.
+    # Compiled capabilities earn accepted credit only through record_capability_consumption
+    # (producer/consumer receipt). record_run may still tag independently proven infrastructure.
+    selected_id = (
+        routing_metadata.get("selected_capability_id")
+        if isinstance(routing_metadata, dict)
+        else None
+    )
     if len(capability_ids) == len(capability_version_ids):
         for cap_id, cap_version in zip(capability_ids, capability_version_ids):
+            if str(cap_id) not in RECORD_RUN_INSTRUMENTED_CAPABILITIES or cap_id == selected_id:
+                continue
             _record_influence_edge_in_conn(
                 c,
                 target_run_id=run_id,
@@ -4062,7 +4262,13 @@ def _record_outcome_in_conn(
                 sets.append(f"{k}=?")
                 vals.append(int(v) if isinstance(v, bool) else v)
         if durability is not None:
-            sets.append("durability_checked_ts=?")
+            # A closure receipt is a first-action deadline fact, not a fresh sweep.
+            # Keep its first timestamp even when the deterministic receipt is retried.
+            sets.append(
+                "durability_checked_ts=COALESCE(durability_checked_ts,?)"
+                if str(run_id).startswith("supervisor-close:")
+                else "durability_checked_ts=?"
+            )
             vals.append(int(time.time()))
         if not sets:
             return
@@ -4480,7 +4686,9 @@ def role_activation_metrics(*, conn: sqlite3.Connection | None = None) -> dict:
             status = result.get("selector_status")
             if status in out:
                 out[status] += 1
-            for key in ("matched", "invoked", "disagreement"):
+            # ``invoked`` is already represented by the selector status above.
+            # Counting its redundant payload boolean would report every invocation twice.
+            for key in ("matched", "disagreement"):
                 if result.get(key) is True:
                     out[key] += 1
             if result.get("accepted") is True:
@@ -5603,6 +5811,7 @@ def complete_profile_attempt(
     resolved_model: str,
     status: str = "complete",
     completed_ts: int | None = None,
+    lock_timeout_s: float = 5.0,
 ) -> str:
     """Complete the pre-dispatch profile attempt with observed resolved identity.
 
@@ -5618,7 +5827,7 @@ def complete_profile_attempt(
     # deliberate refusal into an empty string, which broke three provenance tests.
     validated_model: str | None = validate_resolved_worker_model(resolved_model)
     attempt_id = f"attempt:profile:{run_id}"
-    with _conn() as c:
+    with _conn() if lock_timeout_s == 5.0 else _conn(timeout=lock_timeout_s) as c:
         row = c.execute(
             "SELECT profile_id FROM execution_attempts WHERE attempt_id=? AND run_id=? "
             "AND operation_role='worker'",
@@ -5657,6 +5866,7 @@ def complete_profile_attempt_unresolved(
     fallback_reason: str = "resolved_model_not_reported",
     status: str = "unresolved",
     completed_ts: int | None = None,
+    lock_timeout_s: float = 5.0,
 ) -> str:
     """Close a selected profile attempt without inventing resolved identity.
 
@@ -5670,7 +5880,7 @@ def complete_profile_attempt_unresolved(
     if not reason:
         raise ValueError("unresolved profile completion requires fallback_reason")
     attempt_id = f"attempt:profile:{run_id}"
-    with _conn() as c:
+    with _conn() if lock_timeout_s == 5.0 else _conn(timeout=lock_timeout_s) as c:
         row = c.execute(
             "SELECT profile_id,resolved_model FROM execution_attempts "
             "WHERE attempt_id=? AND run_id=? AND operation_role='worker'",
@@ -6218,11 +6428,23 @@ def record_lane_round(
     exit_status: int,
     error_class: str,
     ts: int,
+    relay_decision_id: str | None = None,
 ) -> str:
     """Record observed relay facts in the v2 decision plane, without a fake profile."""
-    if agent not in {"codex", "claude"} or not lane or not error_class:
+    if agent not in {"codex", "claude", "cursor", "muse"} or not lane or not error_class:
         raise ValueError("agent, lane and error_class must describe a lane round")
     facts = [agent, lane, receiver_reason, int(exit_status), error_class, int(ts)]
+    if relay_decision_id is not None:
+        if (
+            not relay_decision_id
+            or len(relay_decision_id) > RELAY_DECISION_ID_MAX_CHARS
+            or any(char.isspace() for char in relay_decision_id)
+        ):
+            raise ValueError(
+                "relay_decision_id must be a nonempty token of at most "
+                f"{RELAY_DECISION_ID_MAX_CHARS} characters"
+            )
+        facts.append(relay_decision_id)
     decision_id = (
         "lane-round:"
         + hashlib.sha256(json.dumps(facts, separators=(",", ":")).encode("utf-8")).hexdigest()[:24]
@@ -6230,11 +6452,297 @@ def record_lane_round(
     with _conn() as c:
         c.execute(
             "INSERT OR IGNORE INTO routing_decisions_v2 "
-            "(decision_id,ts,record_kind,agent,lane,receiver_reason,exit_status,error_class) "
-            "VALUES (?,?, 'lane_round',?,?,?,?,?)",
-            (decision_id, int(ts), agent, lane, receiver_reason, int(exit_status), error_class),
+            "(decision_id,ts,record_kind,agent,lane,receiver_reason,exit_status,error_class,"
+            "causal_context_json) VALUES (?,?, 'lane_round',?,?,?,?,?,?)",
+            (
+                decision_id,
+                int(ts),
+                agent,
+                lane,
+                receiver_reason,
+                int(exit_status),
+                error_class,
+                json.dumps({"relay_decision_id": relay_decision_id}) if relay_decision_id else None,
+            ),
         )
     return decision_id
+
+
+# Relay consumption grades on the existing capacity row — no second relay-pacing capability (#812).
+RELAY_PACING_CAPABILITY = "windowed-capacity-policy"
+RELAY_PACING_VERSION = "relay-pacing-v1"
+RELAY_PACING_BACKLOG_CUTOFF = int(datetime(2026, 10, 20, 11, 58, tzinfo=timezone.utc).timestamp())
+RELAY_PACING_UNJOINED_REASON = "no round recorded (pre-2026-10-20T11:58Z relay subshell bug)"
+# Explicit-join run_ids are ``{prefix}{token}``. `_safe_identifier` allows at most 192
+# characters, so the token budget is the remainder after the prefix (payload strings
+# still clear MAX_COMPLETION_STRING_CHARS=256).
+RELAY_PACING_ID_RUN_PREFIX = "relay-pacing:id:"
+RELAY_DECISION_ID_MAX_CHARS = 192 - len(RELAY_PACING_ID_RUN_PREFIX)
+
+
+def read_relay_pacing_decisions(log: Path, *, end: int) -> dict[str, tuple[int, dict[str, Any]]]:
+    """Read validated, deduplicated log decisions without writing Brain state."""
+    log_exists = log.exists()
+    decisions: dict[str, tuple[int, dict[str, Any]]] = {}
+    for line in log.read_text(encoding="utf-8").splitlines() if log_exists else []:
+        try:
+            raw_stamp, *parts = line.split()
+            facts: dict[str, Any] = dict(part.split("=", 1) for part in parts)
+            ts = int(
+                datetime.strptime(raw_stamp, "%Y-%m-%dT%H:%M:%SZ")
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
+            required = {"source", "lane", "candidates", "chosen", "weights", "states", "fallback"}
+            if not required <= facts.keys() or ts > end:
+                continue
+            agents = {"codex", "claude", "claude_code", "cursor", "muse"}
+            candidates = facts["candidates"].split(",")
+            if (
+                facts["source"] not in agents
+                or facts["chosen"] not in candidates
+                or not set(candidates) <= agents
+                or facts["lane"] not in {"opener", "closer"}
+                or facts["fallback"] not in {"yes", "no"}
+            ):
+                continue
+            decision_id = "relay-pacing:" + hashlib.sha256(line.strip().encode()).hexdigest()[:24]
+            relay_id = facts.get("decision_id")
+            if relay_id is not None:
+                # Match record_lane_round: reject empty, oversized, or whitespace tokens.
+                if (
+                    not relay_id
+                    or len(relay_id) > RELAY_DECISION_ID_MAX_CHARS
+                    or any(char.isspace() for char in relay_id)
+                ):
+                    continue
+                decision_id = RELAY_PACING_ID_RUN_PREFIX + relay_id
+            facts = {key: facts[key] for key in required}
+            if relay_id is not None:
+                facts["decision_id"] = relay_id
+            facts["candidates"] = candidates
+            facts["fallback"] = facts["fallback"] == "yes"
+            decisions[decision_id] = (ts, facts)
+        except (ValueError, OverflowError):
+            continue  # incomplete trailing lines and unrelated log prose are not evidence
+    return decisions
+
+
+def ingest_relay_pacing(log: Path, *, now: int | None = None) -> dict:
+    """Join explicit relay IDs first, with serial adjacency only for legacy records.
+
+    A legacy join requires exactly one decision between consecutive exits for that lane,
+    matching the chosen agent.
+    Same-second exits, multiple decisions (including preflight retries), mismatches and unfinished
+    rounds retain their decision event but earn no accepted edge. Re-reading is idempotent.
+    """
+    end = int(time.time()) if now is None else now
+    log_exists = log.exists()
+    decisions = read_relay_pacing_decisions(log, end=end)
+    with _conn() as c:
+        # Serialize binding even when the decision event was saved by an earlier invocation.
+        c.execute("BEGIN IMMEDIATE")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_relay_lane_round "
+            "ON routing_decisions_v2(record_kind,lane,ts)"
+        )
+        events = {}
+        for key, event_id, ts, payload in c.execute(
+            "SELECT run_id,event_id,created_ts,payload_json FROM completion_events "
+            "WHERE capability_id=? AND capability_version_id=? AND phase='decision' "
+            "AND producer='feedback.relay_pacing' AND validation_status='accepted' "
+            "AND created_ts<=?",
+            (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION, end),
+        ):
+            events[key] = event_id
+            # A saved but unbound decision can outlive a rotated/missing log.
+            decisions[key] = (ts, json.loads(payload)["relay_pacing"])
+        bound = dict(
+            c.execute(
+                "SELECT source_run_id,target_run_id FROM influence_edges "
+                "WHERE capability_id=? AND capability_version_id=? AND accepted=1",
+                (RELAY_PACING_CAPABILITY, RELAY_PACING_VERSION),
+            )
+        )
+        bound_targets = set(bound.values())
+        joined = len(set(bound) & decisions.keys())
+        for decision_id, (ts, facts) in decisions.items():
+            if decision_id not in events:
+                events[decision_id] = _record_completion_event_in_conn(
+                    c,
+                    decision_id,
+                    event_type="decision",
+                    phase="decision",
+                    producer="feedback.relay_pacing",
+                    capability_id=RELAY_PACING_CAPABILITY,
+                    capability_version_id=RELAY_PACING_VERSION,
+                    status="recorded",
+                    payload={"relay_pacing": facts},
+                    timestamp=ts,
+                )["event_id"]
+        retired = {
+            key for key, (_, facts) in decisions.items() if facts.get("status") == "unjoined"
+        }
+
+        def bind_round(key: str, stamp: int, facts: dict[str, Any], row: tuple) -> None:
+            nonlocal joined
+            round_id, ts, agent, lane, exit_status, error_class = row
+            if key in bound or key in retired or round_id in bound_targets:
+                return
+            if facts["lane"] != lane or facts["chosen"].replace("claude_code", "claude") != agent:
+                return
+            if stamp > ts:
+                return
+            status = (
+                "completed"
+                if exit_status == 0
+                else (
+                    "rate-limited"
+                    if error_class
+                    in {
+                        "quota_exhausted",
+                        "resource_exhausted",
+                        "http_429",
+                        "rate_limit_exhausted",
+                    }
+                    else "failed"
+                )
+            )
+            outcome = {
+                **facts,
+                "round_id": round_id,
+                "exit_status": exit_status,
+                "error_class": error_class,
+                "status": status,
+            }
+            target = _record_completion_event_in_conn(
+                c,
+                round_id,
+                event_type="completion",
+                phase="outcome",
+                producer="feedback.relay_pacing",
+                capability_id=RELAY_PACING_CAPABILITY,
+                capability_version_id=RELAY_PACING_VERSION,
+                status="succeeded" if exit_status == 0 else "failed",
+                payload={"relay_pacing": outcome},
+                timestamp=ts,
+            )
+            _record_influence_edge_in_conn(
+                c,
+                source_event_id=events[key],
+                source_run_id=key,
+                target_event_id=target["event_id"],
+                target_run_id=round_id,
+                capability_id=RELAY_PACING_CAPABILITY,
+                capability_version_id=RELAY_PACING_VERSION,
+                influence_type="capability",
+                influence_id=RELAY_PACING_VERSION,
+                accepted=True,
+                timestamp=stamp,
+            )
+            bound[key] = round_id
+            bound_targets.add(round_id)
+            joined += 1
+
+        explicit_rounds: dict[str, list[tuple]] = {}
+        for row in c.execute(
+            "SELECT decision_id,ts,agent,lane,exit_status,error_class,causal_context_json "
+            "FROM routing_decisions_v2 WHERE record_kind='lane_round' AND ts<=? "
+            "AND causal_context_json IS NOT NULL",
+            (end,),
+        ):
+            relay_id = json.loads(row[-1]).get("relay_decision_id")
+            if relay_id:
+                explicit_rounds.setdefault(relay_id, []).append(row[:-1])
+        for key, (stamp, facts) in decisions.items():
+            matches = explicit_rounds.get(facts.get("decision_id", ""), [])
+            if len(matches) == 1:
+                bind_round(key, stamp, facts, matches[0])
+
+        def join_legacy_rounds() -> None:
+            for lane in ("opener", "closer"):
+                unbound = [
+                    ts
+                    for key, (ts, facts) in decisions.items()
+                    if key not in bound
+                    and key not in retired
+                    and not facts.get("decision_id")
+                    and facts["lane"] == lane
+                ]
+                if not unbound:
+                    continue
+                oldest = min(unbound)
+                previous = c.execute(
+                    "SELECT MAX(ts) FROM routing_decisions_v2 "
+                    "WHERE record_kind='lane_round' AND lane=? AND ts<?",
+                    (lane, oldest),
+                ).fetchone()[0]
+                previous = -1 if previous is None else previous
+                lane_rounds = c.execute(
+                    "SELECT decision_id,ts,agent,lane,exit_status,error_class,causal_context_json "
+                    "FROM routing_decisions_v2 WHERE record_kind='lane_round' "
+                    "AND lane=? AND ts>=? AND ts<=? ORDER BY ts,decision_id",
+                    (lane, oldest, end),
+                ).fetchall()
+                ties = Counter(r[1] for r in lane_rounds)
+                lane_decisions = sorted(
+                    (ts, key, facts)
+                    for key, (ts, facts) in decisions.items()
+                    if facts["lane"] == lane and not facts.get("decision_id") and key not in retired
+                )
+                stamps = [item[0] for item in lane_decisions]
+                for row in lane_rounds:
+                    ts = row[1]
+                    lo, hi = bisect_right(stamps, previous), bisect_left(stamps, ts)
+                    previous = ts
+                    if row[-1] and json.loads(row[-1]).get("relay_decision_id"):
+                        continue
+                    if ties[ts] != 1 or hi - lo != 1:
+                        continue
+                    stamp, key, facts = lane_decisions[lo]
+                    bind_round(key, stamp, facts, row[:-1])
+
+        join_legacy_rounds()
+
+        # A known pre-fix orphan is terminal telemetry, not an observed outcome. Save its
+        # disposition on the decision once so it cannot keep extending the legacy scan.
+        # Retire after the join attempt above: any still-unbound pre-cutoff legacy decision
+        # is proven unmatched, including ones that follow an earlier exit on the same lane.
+        retired_before = len(retired)
+        for key, (stamp, facts) in decisions.items():
+            if key in bound or key in retired or facts.get("decision_id"):
+                continue
+            if end < RELAY_PACING_BACKLOG_CUTOFF or stamp >= RELAY_PACING_BACKLOG_CUTOFF:
+                continue
+            _record_completion_event_in_conn(
+                c,
+                key,
+                event_type="decision",
+                phase="decision",
+                producer="feedback.relay_pacing",
+                capability_id=RELAY_PACING_CAPABILITY,
+                capability_version_id=RELAY_PACING_VERSION,
+                status="skipped",
+                payload={
+                    "relay_pacing": {
+                        **facts,
+                        "status": "unjoined",
+                        "unjoined_reason": RELAY_PACING_UNJOINED_REASON,
+                    }
+                },
+                timestamp=end,
+            )
+            retired.add(key)
+
+        if len(retired) > retired_before:
+            join_legacy_rounds()  # Settle newly unblocked legacy decisions in this import.
+
+    return {
+        "status": "recorded" if log_exists or decisions else "absent",
+        "decisions": len(decisions),
+        "joined": joined,
+        "unjoined": len(retired),
+    }
 
 
 def attach_profile_attempt_to_decision(decision_id: str, attempt_id: str) -> list[str]:
@@ -6532,6 +7040,7 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                 )
             except Exception:
                 subject_weights = {}
+            stage_rewards = _closer_stage_rewards(c, task_type)
             for agent, prior in priors.items():
                 current_model = _latest_model_for_agent(c, agent)
                 model_expr = _run_model_expr()
@@ -6602,6 +7111,12 @@ def relearn_quality(task_type_priors: dict, window_days: int = RELEARN_WINDOW_DA
                         # eval scores stay usable even on infra-classified runs (judges scored
                         # the arm's real diff); only the OUTCOME label below is infra noise.
                         q, run_model = eval_q_by_run[run_id]
+                        raw_n += 1
+                    elif run_id in stage_rewards:
+                        # Closer response quality is learned under its own task
+                        # category. It does not mark the implementation merged,
+                        # source criteria complete, or a native action accepted.
+                        q = stage_rewards[run_id]
                         raw_n += 1
                     elif _has_outcome_evidence(
                         durability, adjudicated, verifier, failure_class=failure_class
@@ -7133,6 +7648,25 @@ def _selftest_resolve_db_path() -> None:
                 os.environ[key] = value
 
 
+def _selftest_closure_timestamp() -> None:
+    with _conn() as conn:
+        conn.execute("SAVEPOINT closure_timestamp_fixture")
+        try:
+            for run_id in ("supervisor-close:selftest-time", "ordinary-selftest-time"):
+                _record_outcome_in_conn(conn, run_id, durability="durable", propagate_lineage=False)
+                conn.execute(
+                    "UPDATE outcomes SET durability_checked_ts=1 WHERE run_id=?", (run_id,)
+                )
+                _record_outcome_in_conn(conn, run_id, durability="durable", propagate_lineage=False)
+                stamp = conn.execute(
+                    "SELECT durability_checked_ts FROM outcomes WHERE run_id=?", (run_id,)
+                ).fetchone()[0]
+                assert (stamp == 1) if run_id.startswith("supervisor-close:") else (stamp > 1)
+        finally:
+            conn.execute("ROLLBACK TO closure_timestamp_fixture")
+            conn.execute("RELEASE closure_timestamp_fixture")
+
+
 def _selftest():
     import tempfile
 
@@ -7211,6 +7745,7 @@ def _selftest():
             )
         finally:
             legacy.close()
+        _selftest_closure_timestamp()
         _selftest_resolve_db_path()
         _selftest_agent_switches_utc()
         _selftest_refusal_role_edges()

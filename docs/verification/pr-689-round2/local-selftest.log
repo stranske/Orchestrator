@@ -1,0 +1,2 @@
+local_verify.py selftest: OK (green/red deliberate-break PASS, hollow, broken, per-node hollow attribution w/ break->revert, named-prerequisite INDETERMINATE, feedback record, quotable transcript w/ verbatim console + copy-scope guard + overlay-scope guard + fence escape)
+EXIT=0

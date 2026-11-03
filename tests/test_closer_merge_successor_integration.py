@@ -1,0 +1,1198 @@
+"""Caller composition using inert durable operation fixtures, never live effects."""
+
+from __future__ import annotations
+
+import copy
+import inspect
+import json
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from test_closer_reasoning_boundary import native_world as native_world
+from test_closer_runtime_binding import bundle as bundle
+from test_closer_stage_continuation import case as _successor_case
+
+import closer_dispatcher as dispatcher
+import closer_frontier_policy as policy
+import closer_pipeline as pipeline
+import closer_queue as queue
+import closer_resources as resources
+import closer_stage_continuation as continuation
+
+_REAL_STAGED_PIPELINE = dispatcher._run_staged_pipeline
+_REAL_VALIDATE_STOP = queue.validate_stop
+_REAL_RUN_ROUND = queue.run_round
+
+
+@pytest.fixture
+def successor_case(tmp_path, monkeypatch):
+    return _successor_case.__wrapped__(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def caller(successor_case, tmp_path, monkeypatch):
+    _, action_path, source_args, qstate, document = successor_case
+    target = source_args["target"]
+    binding = {"pr_target": target, "source_targets": [], "head": "exact-head"}
+    predecessor = policy.make_frontier_from_observations(
+        {
+            target: {
+                "target": target,
+                "revision": "r1",
+                "action": "merge",
+                "eligible": True,
+                "operation_binding": binding,
+            }
+        },
+        owner="frozen-cohort",
+        frontier_id="predecessor",
+    )
+    document["frontiers"]["predecessor"]["finite_frontier"] = predecessor
+    bucket = qstate["frontiers"]["predecessor"]
+    bucket["policy"] = predecessor
+    bucket["round"]["finite_frontier"] = predecessor
+    operation = bucket["items"][target]["operation"]
+    operation.update(binding=binding, finite_frontier=predecessor)
+    raw_state = tmp_path / "native-queue.json"
+    root_path = dispatcher._pipeline_state_path(raw_state)
+    shard = resources.shard_dir(resources.scoped_root(root_path), target) / "state.json"
+    shard.parent.mkdir(parents=True)
+    pipeline._save(shard, document)
+    action = shard.parent / "state.actions" / f"{pipeline._digest(target)}.json"
+    action.parent.mkdir()
+    action.write_text(json.dumps(qstate))
+    args = SimpleNamespace(
+        finite_frontier=predecessor,
+        shadow=False,
+        coordinator_mode="resource_scoped",
+        state=str(raw_state),
+        assignment=source_args["canonical_path"],
+        request_timeout_seconds=120,
+    )
+    observed = {
+        **source_args["observation"],
+        "state": "MERGED",
+        "head": "exact-head",
+        "merge": "merge-sha",
+        "action": "post_merge_verify",
+        "operation_binding": binding,
+    }
+    calls = []
+    backend = SimpleNamespace(
+        gh=SimpleNamespace(deadline=0),
+        local_first=True,
+        assignment_rows={target: source_args["canonical_row"]},
+    )
+
+    def observe(name):
+        assert backend.local_first is False and backend.gh.deadline > 0
+        calls.append(("observe", name))
+        return copy.deepcopy(observed)
+
+    backend.observe = observe
+    real_helper = continuation.create_successor
+
+    def create(*positional, **kwargs):
+        calls.append(("successor", kwargs["target"]))
+        return real_helper(*positional, **kwargs)
+
+    monkeypatch.setattr(continuation, "create_successor", create)
+
+    def run(child_args, targets, child_backend, deadline):
+        assert child_backend is backend and deadline is None
+        policy.validate_frontier(child_args.finite_frontier, targets=targets)
+        assert targets == [target]
+        calls.append(("normal_pipeline", targets))
+        return {"round_id": "child-round", "valid": True}
+
+    monkeypatch.setattr(dispatcher, "_run_staged_pipeline", run)
+    monkeypatch.setattr(
+        pipeline, "validate_stop_scoped", lambda *_a: {"valid": True, "stop_valid": True}
+    )
+    result = {"validation": {"valid": True, "stop_valid": True}, "round_id": "original-round"}
+    return SimpleNamespace(
+        args=args,
+        backend=backend,
+        result=result,
+        target=target,
+        calls=calls,
+        observation=observed,
+        shard=shard,
+        action=action,
+        qstate=qstate,
+        document=document,
+    )
+
+
+def invoke(caller):
+    return dispatcher._run_merge_verification_successors(
+        caller.args, caller.backend, caller.result, [caller.target]
+    )
+
+
+def test_confirmed_merge_fresh_same_head_reenters_normal_pipeline(caller):
+    before = copy.deepcopy(caller.document["frontiers"]["predecessor"])
+    result = invoke(caller)
+    assert caller.calls == [
+        ("observe", caller.target),
+        ("successor", caller.target),
+        ("normal_pipeline", [caller.target]),
+    ]
+    continuation_result = result["merge_verification_successors"][caller.target]
+    assert continuation_result["status"] == "verification_successor"
+    assert continuation_result["native_result"]["validation"]["valid"]
+    assert pipeline._load(caller.shard)["frontiers"]["predecessor"] == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "uncompleted_merge",
+        "different_operation",
+        "not_merged",
+        "wrong_head",
+        "active_verifier",
+        "verify_label",
+        "pause",
+        "assignment_drift",
+        "live_lease",
+        "read_failure",
+    ],
+)
+def test_nonactionable_or_unproven_cases_never_dispatch_verification(caller, change):
+    if change in {"uncompleted_merge", "different_operation"}:
+        op = caller.qstate["frontiers"]["predecessor"]["items"][caller.target]["operation"]
+        op["status" if change == "uncompleted_merge" else "action"] = (
+            "uncertain" if change == "uncompleted_merge" else "review"
+        )
+        caller.action.write_text(json.dumps(caller.qstate))
+    elif change == "not_merged":
+        caller.observation["state"] = "OPEN"
+    elif change == "wrong_head":
+        caller.observation["head"] = "foreign-head"
+    elif change in {"active_verifier", "verify_label"}:
+        caller.observation.update(action="wait", reason=change, next_trigger="verifier_terminal")
+    elif change == "pause":
+        caller.observation["eligible"] = False
+    elif change == "assignment_drift":
+        caller.args.assignment.write_text(
+            json.dumps(
+                {
+                    "targets": [
+                        {
+                            "target": caller.target,
+                            "fingerprint": "changed",
+                            "execution_state": "held",
+                        }
+                    ]
+                }
+            )
+        )
+    elif change == "read_failure":
+        caller.backend.observe = lambda *_a: (_ for _ in ()).throw(OSError("read failed"))
+    if change == "live_lease":
+        import fcntl
+
+        with (caller.shard.parent / "lease.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            invoke(caller)
+    else:
+        invoke(caller)
+    assert not any(call[0] == "normal_pipeline" for call in caller.calls)
+    assert "stage_successors" not in pipeline._load(caller.shard)
+
+
+def test_child_invalid_validation_propagates_to_overall_result(caller, monkeypatch):
+    monkeypatch.setattr(
+        pipeline,
+        "validate_stop_scoped",
+        lambda *_a: {"valid": False, "stop_valid": False, "reasons": ["child_unknown"]},
+    )
+    result = invoke(caller)
+    assert result["validation"]["valid"] is False
+    assert result["validation"]["stop_valid"] is False
+    assert result["validation"]["continuation_required"] is True
+
+
+def test_child_round_failure_does_not_launder_predecessor_validity(caller, monkeypatch):
+    monkeypatch.setattr(
+        dispatcher,
+        "_run_staged_pipeline",
+        lambda *_a: {"round_id": None, "valid": False, "continuation_required": True},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "validate_stop_scoped",
+        lambda *_a: {"valid": False, "stop_valid": False, "reasons": ["missing_child_round"]},
+    )
+    result = invoke(caller)
+    assert result["validation"]["valid"] is False
+    assert result["validation"]["continuation_required"] is True
+
+
+def test_active_assignment_fingerprint_metadata_churn_uses_normal_native_admission(caller):
+    caller.args.assignment.write_text(
+        json.dumps(
+            {
+                "targets": [
+                    {"target": caller.target, "lane": "closer", "fingerprint": "metadata-refreshed"}
+                ]
+            }
+        )
+    )
+    invoke(caller)
+    assert any(call[0] == "normal_pipeline" for call in caller.calls)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "unchanged_action",
+        "missing_advance",
+        "foreign_advance",
+        "missing_submitted",
+        "foreign_submitted",
+        "wrong_operation_id",
+    ],
+    ids=[
+        "valid-r1-r2",
+        "unchanged-action",
+        "missing-advance",
+        "foreign-advance",
+        "missing-submitted",
+        "foreign-submitted",
+        "wrong-operation-id",
+    ],
+)
+def test_real_queue_intermediate_and_final_revisions_dispatch_verification(
+    caller, monkeypatch, mutation
+):
+    """Native validator + actual durable queue, with only external effects inert."""
+    target = caller.target
+    frontier = caller.args.finite_frontier
+    binding = {"pr_target": target, "source_targets": [], "head": "exact-head"}
+    state = {"merged": False, "reads_after_merge": 0, "effects": 0}
+
+    def observe(_target):
+        revision, action = "r1", "merge"
+        if state["merged"]:
+            state["reads_after_merge"] += 1
+            revision = "post-merge-first" if state["reads_after_merge"] == 1 else "post-merge-final"
+            action = "post_merge_verify"
+        return {
+            "target": target,
+            "revision": revision,
+            "action": action,
+            "eligible": True,
+            "operation_binding": binding,
+        }
+
+    def execute(_target, action, _observation, operation):
+        assert action == "merge" and operation["finite_frontier"] == frontier
+        state["effects"] += 1
+        state["merged"] = True
+        return {"status": "completed", "advanced": True, "result": {"merge_sha": "merged-sha"}}
+
+    caller.action.unlink()
+    monkeypatch.setattr(queue, "validate_stop", _REAL_VALIDATE_STOP)
+    receipt = queue.run_round(
+        caller.action,
+        [target],
+        observe,
+        execute,
+        deadline=None,
+        finite_frontier=frontier,
+        frontier_target=target,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+        max_workers=1,
+        max_passes=1,
+        claim_fn=lambda *_: True,
+        release_fn=lambda *_: True,
+        holder_fn=lambda *_: None,
+    )
+    row = receipt["accounting"][0]
+    advanced = next(e for e in receipt["events"] if e["kind"] == "action_advanced")
+    assert advanced["revision"] == "post-merge-first"
+    assert row["revision"] == "post-merge-final" and row["action"] == "post_merge_verify"
+    assert receipt["stop_valid"] and row["reason"] == "pass_limit" and state["effects"] == 1
+
+    if mutation:
+        if mutation == "unchanged_action":
+            row["action"] = "merge"
+        elif mutation.startswith("missing_"):
+            kind = "action_advanced" if mutation == "missing_advance" else "operation_submitted"
+            receipt["events"] = [event for event in receipt["events"] if event["kind"] != kind]
+        else:
+            kind = "action_advanced" if mutation == "foreign_advance" else "operation_submitted"
+            event = next(event for event in receipt["events"] if event["kind"] == kind)
+            if mutation == "wrong_operation_id":
+                event["operation_id"] = "another-operation"
+            else:
+                event["target"] = "foreign/repo#99"
+        # Preserve exact durable receipt readback; negatives exercise witness checks,
+        # rather than merely failing a mismatched supplied/stored receipt.
+        data = queue._read_state(caller.action)
+        bucket = data["frontiers"][frontier["frontier_id"]]
+        bucket["round"]["receipt"] = copy.deepcopy(receipt)
+        if mutation == "unchanged_action":
+            bucket["items"][target]["action"] = "merge"
+        caller.action.write_text(json.dumps(data))
+
+    captured = {}
+
+    class CapturedCallbacks(Exception):
+        pass
+
+    def capture_pipeline(callbacks):
+        captured.update(callbacks)
+        raise CapturedCallbacks
+
+    native_backend = dispatcher.Closer(
+        SimpleNamespace(),
+        state_path=caller.args.state,
+        assignment_rows=caller.backend.assignment_rows,
+        workspaces={},
+        apply=True,
+        workers=True,
+    )
+    caller.args.max_workers = 1
+    with monkeypatch.context() as context:
+        # Stop before registration/admission; inspect an actual production closure only.
+        context.setattr(pipeline, "_register_dispatcher_finite_callbacks", capture_pipeline)
+        context.setattr(dispatcher, "_run_staged_pipeline", _REAL_STAGED_PIPELINE)
+        with pytest.raises(CapturedCallbacks):
+            _REAL_STAGED_PIPELINE(caller.args, [target], native_backend, None)
+    # Capture the actual registered production callback closure, not a copied predicate.
+    validator = inspect.getclosurevars(captured["act"]).nonlocals[
+        "verified_finite_partial_progress"
+    ]
+    progress = validator(target, caller.action, row, receipt)
+    if mutation:
+        assert progress is None
+        assert state["effects"] == 1
+        return
+    assert (
+        progress is not None
+    ), "completed native merge must survive final observation revision drift"
+    assert progress["status"] == "completed" and progress["target_complete"] is False
+    original = pipeline._load(caller.shard)
+    item = original["frontiers"]["predecessor"]["items"][target]
+    item.update(
+        status="held",
+        stage="act",
+        stage_status="completed",
+        deferred_next_trigger="new_frontier_required",
+        progress_key=progress["progress_key"],
+    )
+    item["results"]["act"] = progress
+    pipeline._save(caller.shard, original)
+    result = invoke(caller)
+    assert result["merge_verification_successors"][target]["status"] == "verification_successor"
+    assert ("normal_pipeline", [target]) in caller.calls
+    assert state["effects"] == 1, "successor must not repeat the merge"
+
+
+@pytest.fixture
+def public_merge_world(native_world, monkeypatch):
+    """Real public CLI/registered callbacks/queue; fake external GitHub/guard only."""
+    import closer_dispatcher as native
+
+    w = native_world
+    w.ad.unlink()
+    w.snapshot.update(state="OPEN", merge=None, verifier=None)
+    w.originals.pop(w.ad)
+    monkeypatch.setattr(queue, "run_round", _REAL_RUN_ROUND)
+    transport = native.gh_capacity.gh_run
+    w.merges = []
+    w.verifies = []
+    w.guard_mode = "merge"
+
+    def github_transport(args, **kwargs):
+        endpoint = args[3]
+        if "/actions/workflows/agents-verifier.yml/runs" in endpoint:
+            return 0, {"total_count": 0, "workflow_runs": []}
+        if endpoint == "repos/owner/repo":
+            return 0, {"default_branch": "main"}
+        if endpoint.endswith("/issues/12/labels") or endpoint.endswith(
+            "/actions/workflows/agents-verifier.yml/dispatches"
+        ):
+            assert args[:3] == ["api", "--method", "POST"]
+            w.verifies.append(tuple(args))
+            w.snapshot["labels"] = ["verify:compare"]
+            w.snapshot["revision"] = "verify-requested"
+            w.snapshot["verifier_history_complete"] = True
+            w.snapshot["verifier_run_identity_unknown"] = False
+            w.snapshot["verifier_runs"] = [
+                {
+                    "id": 42,
+                    "status": "in_progress",
+                    "conclusion": None,
+                    "linked_pr": "owner/repo#12",
+                    "head_sha": w.snapshot["head"],
+                    "path": ".github/workflows/agents-verifier.yml",
+                    "event": "pull_request_target",
+                    "run_attempt": 1,
+                    "created_at": "2026-10-22T00:00:01Z",
+                }
+            ]
+            return 0, [{"name": "verify:compare"}]
+        return transport(args, **kwargs)
+
+    def merge_transport(command, *, timeout):
+        assert Path(command[1]).name == "merge_guard.py"
+        assert "--confirm-merge" in command and "--remote-only" in command
+        w.merges.append(command)
+        resources.finite_pool_no_start()
+        if w.guard_mode == "blocked":
+            return SimpleNamespace(
+                returncode=1, stdout=json.dumps({"merge_executed": False, "blocked": True})
+            )
+        if w.guard_mode == "uncertain":
+            raise RuntimeError("external guard outcome unavailable")
+        w.snapshot.update(
+            state="MERGED",
+            merge="d" * 40,
+            merged_at="2026-10-22T00:00:00Z",
+            revision="merged-current",
+            verifier_history_complete=True,
+        )
+        resources.finite_pool_no_start()
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"merge_executed": True, "blocked": False, "merge_sha": "d" * 40}),
+        )
+
+    monkeypatch.setattr(native.gh_capacity, "gh_run", github_transport)
+    monkeypatch.setattr(native, "bounded_run", merge_transport)
+    observer = native.Closer(
+        native.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=True, workers=True
+    )
+    w.frontier = policy.make_frontier_from_observations(
+        {"owner/repo#12": observer.observe("owner/repo#12")},
+        owner=w.frontier["owner"],
+        frontier_id=w.frontier["frontier_id"],
+    )
+    w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(w.frontier)
+    return w
+
+
+def test_public_finite_main_verifies_selected_merge_despite_foreign_history(
+    public_merge_world, capsys
+):
+    w = public_merge_world
+    assert dispatcher.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert len(w.merges) == 1, result
+    assert len(w.verifies) == 1, result.get("merge_verification_successors", result["validation"])
+    assert w.events["provider"] == 0
+    assert result["validation"]["valid"] is False
+    assert result["validation"]["global_stop_valid"] is False
+    assert all(path.read_bytes() == original for path, original in w.originals.items())
+    successor = result["merge_verification_successors"]["owner/repo#12"]
+    assert successor["status"] == "verification_successor", successor
+    native = successor["native_result"]
+    assert native["validation"]["scoped_completion_valid"] is True, native
+    assert native["validation"]["admitted_domain_valid"] is True, native
+    binding = successor["lineage"]["finite_frontier"]["bindings"]["owner/repo#12"]
+    assert binding["revision"] != w.frontier["bindings"]["owner/repo#12"]["revision"]
+
+
+def test_public_cli_continues_accepted_request_after_result_without_replaying_post(
+    public_merge_world, capsys, monkeypatch, bundle
+):
+    from test_closer_runtime_binding import Contents
+
+    import closer_runtime_binding as runtime
+
+    w = public_merge_world
+    monkeypatch.setattr(bundle.runtime, "fetch_live_pr_labels", lambda *_: [])
+    contents = Contents()
+
+    def core_transport(method, path, body):
+        if method == "GET" and path == "/repos/owner/repo/pulls/12":
+            return {
+                "head": {"sha": w.snapshot["head"]},
+                "merged": w.snapshot["state"] == "MERGED",
+                "merge_commit_sha": w.snapshot["merge"],
+            }
+        return contents(method, path, body)
+
+    worker_toml = w.root / "core-worker.toml"
+    worker_toml.write_text('status = "ACTIVE"\n')
+    monkeypatch.setattr(runtime, "_POLICY_READERS", {})
+    runtime.register_policy_reader(
+        "followup-fixture",
+        lambda: {
+            "source": "controller-app-readback",
+            "observed_at": time.time(),
+            "worker_toml_digests": {str(worker_toml): runtime._hash(worker_toml)},
+            "controller_status": "ACTIVE",
+            "worker_statuses": ["ACTIVE"],
+        },
+    )
+    core_binding = runtime.RuntimeBinding(
+        bundle,
+        {"worker_tomls": [str(worker_toml)], "reader_id": "followup-fixture"},
+        transport=core_transport,
+    )
+    monkeypatch.setattr(runtime, "binding_from_manifest", lambda *_: core_binding)
+    manifest_file = w.root / "test-runtime.json"
+    manifest_file.write_text("{}")
+    w.argv += ["--runtime-manifest", str(manifest_file)]
+    w.argv[w.argv.index("--coordinator-contract-pin") + 1] = json.dumps(
+        pipeline.scoped_capability()
+    )
+    dispatcher.main(w.argv)
+    initial = json.loads(capsys.readouterr().out)
+    requested = initial["merge_verification_successors"]["owner/repo#12"]
+    accepted_frontier = requested["lineage"]["finite_frontier"]
+    # The registered merge -> verification successor already produced this
+    # accepted wait and its own shared context. Resume that real row directly;
+    # do not synthesize another frontier by copying its original lane context.
+    target = "owner/repo#12"
+    shard = (
+        resources.shard_dir(resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target)
+        / "state.json"
+    )
+    action_path = shard.parent / "state.actions" / f"{pipeline._digest(target)}.json"
+    stored_queue = queue._read_state(action_path)
+    original_queue_bucket = copy.deepcopy(
+        stored_queue["frontiers"][accepted_frontier["frontier_id"]]
+    )
+    operation = original_queue_bucket["items"][target]["operation"]
+    state = pipeline._load(shard)
+    row = state["frontiers"][accepted_frontier["frontier_id"]]["items"][target]
+    assert row["stage"] == "act" and row["status"] == "held", row
+    assert row["deferred_reason"] == "accepted_verifier_request", requested
+    action = row["results"]["act"]
+    assert action["status"] == "pending" and action["pending_kind"] == "external_event"
+    proof = queue.accepted_verifier_wait_proof(
+        action_path,
+        target,
+        frontier=accepted_frontier,
+        receipt=action["queue_receipt"],
+        evidence=action["pending_evidence"],
+    )
+    assert proof is not None and proof["operation_id"] == operation["id"]
+    assert proof["event_id"] == operation["result"]["verification_request_basis"]
+    assert proof["head"] == operation["binding"]["head"] == w.snapshot["head"]
+    assert proof["merge"] == operation["binding"]["merge"] == w.snapshot["merge"]
+    assert proof["operation_frontier"] == operation["finite_frontier"]["frontier_id"]
+    context = copy.deepcopy(row["shared_lane_context"])
+    initial_context = copy.deepcopy(
+        state["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
+    )
+    assert context["frontier_sha256"] == pipeline._digest(accepted_frontier)
+    assert context["frontier_sha256"] != initial_context["frontier_sha256"]
+    assert len(w.merges) == len(w.verifies) == 1
+    w.argv[w.argv.index("--finite-frontier-json") + 1] = json.dumps(accepted_frontier)
+    w.snapshot["verifier"] = {
+        "schema": "verifier-corpus-decision/v1",
+        "verdict": "NON_PASS",
+        "repo": "owner/repo",
+        "pr": 12,
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "run_id": 42,
+        "run_attempt": 1,
+        "provider_verdicts": ["CONCERNS"],
+        "ci_failed": False,
+    }
+    import verification_events
+
+    marker = w.snapshot["verifier"]
+    event = {
+        "schema": verification_events.SCHEMA,
+        "repo": "owner/repo",
+        "pr": "12",
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "request_sha256": "c" * 64,
+        "material_sha256": "e" * 64,
+    }
+    event["event_id"] = verification_events.event_id(event)
+    marker["verification_event"] = event
+    marker["verification_request_basis"] = operation["result"]["verification_request_basis"]
+    marker["assessment_identity"] = {
+        "canonical": True,
+        "mode": "compare",
+        "provider": "",
+        "model": "",
+        "model2": "",
+    }
+    w.snapshot["verifier_lifecycle"] = copy.deepcopy(marker)
+    correlation = operation["result"]["core_request_correlation"]
+    assert correlation["operation_id"] == operation["id"]
+    assert correlation["native_binding"]["queue_operation_id"] == operation["id"]
+    assert (
+        operation["result"]["verification_post_accepted"]["correlation_input"]
+        == marker["verification_request_basis"]
+    )
+    w.snapshot["verifier_runs"][0].update(status="completed", conclusion="success")
+    w.snapshot["revision"] = "authenticated-terminal-result"
+    original_transport = dispatcher.gh_capacity.gh_run
+
+    def completed_transport(args, **kwargs):
+        if args[3] == "repos/owner/repo/actions/runs/42":
+            return 0, {
+                "id": 42,
+                "run_attempt": 1,
+                "event": "pull_request_target",
+                "path": ".github/workflows/agents-verifier.yml",
+                "status": "completed",
+                "repository": {"full_name": "owner/repo"},
+            }
+        if args[3] == "repos/owner/repo/actions/runs/42/artifacts?per_page=100":
+            return 0, {"artifacts": []}
+        return original_transport(args, **kwargs)
+
+    monkeypatch.setattr(dispatcher.gh_capacity, "gh_run", completed_transport)
+    dispatcher.main(w.argv)
+    observed = json.loads(capsys.readouterr().out)
+    assert "merge_verification_successors" in observed, observed
+    following = observed["merge_verification_successors"]["owner/repo#12"]
+    assert following["status"] == "verification_successor", following
+    assert following["predecessor_kind"] == "accepted_verifier_request"
+    assert following["lineage"]["finite_frontier"] != accepted_frontier
+    assert len(w.merges) == len(w.verifies) == 1
+    retained = pipeline._load(shard)
+    assert (
+        retained["frontiers"][accepted_frontier["frontier_id"]]["items"][target][
+            "shared_lane_context"
+        ]
+        == context
+    )
+    assert (
+        retained["frontiers"][w.frontier["frontier_id"]]["items"][target]["shared_lane_context"]
+        == initial_context
+    )
+    assert (
+        queue._read_state(action_path)["frontiers"][accepted_frontier["frontier_id"]]
+        == original_queue_bucket
+    )
+    assert all(path.read_bytes() == original for path, original in w.originals.items())
+    child_id = following["lineage"]["finite_frontier"]["frontier_id"]
+    before_restart = pipeline._load(shard)
+    dispatcher.main(w.argv)
+    restarted = json.loads(capsys.readouterr().out)
+    assert len(w.merges) == len(w.verifies) == 1
+    after_restart = pipeline._load(shard)
+    assert after_restart["stage_successors"] == before_restart["stage_successors"]
+    assert after_restart["frontiers"][child_id] == before_restart["frontiers"][child_id]
+    # A held active descendant can stop ordinary root admission before the
+    # continuation callback. Its exact existing child still owns the work.
+    assert restarted["validation"]["global_stop_valid"] is False
+
+
+@pytest.mark.parametrize("guard_mode", ["blocked", "uncertain"])
+def test_public_main_without_confirmed_merge_never_requests_successor(
+    public_merge_world, capsys, guard_mode
+):
+    w = public_merge_world
+    w.guard_mode = guard_mode
+    assert dispatcher.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    assert len(w.merges) == 1
+    assert w.verifies == [] and w.snapshot["state"] == "OPEN"
+    assert w.events["provider"] == 0
+    assert "merge_verification_successors" not in result
+    assert all(path.read_bytes() == original for path, original in w.originals.items())
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "nonfinite",
+        "legacy",
+        "shadow",
+        "preview",
+        "selected_unknown",
+        "domain_unknown",
+        "global_integrity",
+        "global_missing",
+        "global_malformed",
+        "quarantine_missing",
+        "nonboolean_selected",
+    ],
+)
+def test_successor_caller_requires_exact_finite_selected_integrity(change):
+    args = SimpleNamespace(
+        pipeline=True,
+        finite_frontier={"frontier_id": "frozen"},
+        coordinator_mode="resource_scoped",
+        shadow=False,
+    )
+    validation = {
+        "valid": False,
+        "global_stop_valid": False,
+        "scoped_completion_valid": True,
+        "admitted_domain_valid": True,
+        "historical_quarantine": {"global_reasons": []},
+    }
+    assert dispatcher._successor_caller_admitted(args, validation) is True
+    if change == "nonfinite":
+        args.finite_frontier = None
+    elif change == "legacy":
+        args.coordinator_mode = "legacy"
+    elif change == "shadow":
+        args.shadow = True
+    elif change == "preview":
+        args.pipeline = False
+    elif change == "selected_unknown":
+        validation["scoped_completion_valid"] = False
+    elif change == "domain_unknown":
+        validation["admitted_domain_valid"] = False
+    elif change == "global_integrity":
+        validation["historical_quarantine"]["global_reasons"] = ["unreadable_ledger"]
+    elif change == "global_missing":
+        validation["historical_quarantine"] = {}
+    elif change == "global_malformed":
+        validation["historical_quarantine"]["global_reasons"] = None
+    elif change == "quarantine_missing":
+        validation.pop("historical_quarantine")
+    else:
+        validation["scoped_completion_valid"] = 1
+    before = copy.deepcopy(validation)
+    assert dispatcher._successor_caller_admitted(args, validation) is False
+    assert validation == before
+
+
+def test_successor_caller_preserves_existing_aggregate_valid_path():
+    args = SimpleNamespace(
+        pipeline=True, finite_frontier=None, coordinator_mode="legacy", shadow=False
+    )
+    assert dispatcher._successor_caller_admitted(args, {"valid": True}) is True
+    args.pipeline = False
+    assert dispatcher._successor_caller_admitted(args, {"valid": True}) is False
+
+
+@pytest.mark.parametrize(
+    "change,refusal",
+    [
+        ("arguments", "finite successor requires the exact CLI-owned child/backend"),
+        ("transport", "finite dispatcher backend contains an unsupported transport override"),
+        ("backend", "finite callbacks require the exact CLI-constructed dispatcher backend"),
+    ],
+)
+def test_public_successor_registry_rejects_changed_child_or_backend(
+    public_merge_world, monkeypatch, capsys, change, refusal
+):
+    w = public_merge_world
+    original_copy = copy.copy
+
+    class ForeignBackend(dispatcher.Closer):
+        pass
+
+    def child_copy(value):
+        following = original_copy(value)
+        caller_frame = inspect.currentframe().f_back
+        if caller_frame.f_code is dispatcher._run_merge_verification_successors.__code__:
+            if change == "arguments":
+                following.max_workers += 1
+            elif change == "transport":
+                caller_frame.f_locals["backend"].offload_fn = lambda *_a, **_kw: None
+            else:
+                caller_frame.f_locals["backend"].__class__ = ForeignBackend
+        return following
+
+    monkeypatch.setattr(copy, "copy", child_copy)
+    assert dispatcher.main(w.argv) == 78
+    result = json.loads(capsys.readouterr().out)
+    outcome = result["merge_verification_successors"]["owner/repo#12"]
+    assert outcome["status"] == "unknown" and refusal in outcome["reason"], outcome
+    assert len(w.merges) == 1 and not w.verifies and w.events["provider"] == 0
+    assert all(path.read_bytes() == original for path, original in w.originals.items())
+
+
+def test_registered_backend_cannot_launch_child_from_external_caller(
+    public_merge_world, monkeypatch, capsys
+):
+    w = public_merge_world
+    original_copy = copy.copy
+    captured = {}
+
+    def child_copy(value):
+        following = original_copy(value)
+        caller_frame = inspect.currentframe().f_back
+        if caller_frame.f_code is dispatcher._run_merge_verification_successors.__code__:
+            captured.update(args=following, backend=caller_frame.f_locals["backend"])
+        return following
+
+    monkeypatch.setattr(copy, "copy", child_copy)
+    assert dispatcher.main(w.argv) == 78
+    capsys.readouterr()
+    assert len(w.merges) == 1 and len(w.verifies) == 1
+    with pytest.raises(
+        ValueError, match="^finite callbacks require the exact CLI-constructed dispatcher backend$"
+    ):
+        _REAL_STAGED_PIPELINE(captured["args"], ["owner/repo#12"], captured["backend"], None)
+    assert len(w.merges) == 1 and len(w.verifies) == 1 and w.events["provider"] == 0
+
+
+def test_public_post_produces_authenticated_accepted_wait_without_normalization(
+    public_merge_world, capsys
+):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    child = produced["merge_verification_successors"]["owner/repo#12"]
+    row = child["native_result"]["targets"]["owner/repo#12"]
+    assert len(w.merges) == len(w.verifies) == 1
+    assert row.get("deferred_reason") == "accepted_verifier_request", {
+        "status": row.get("status"),
+        "stage": row.get("stage"),
+        "deferred_reason": row.get("deferred_reason"),
+        "act": row.get("results", {}).get("act", {}),
+    }
+    action = row["results"]["act"]
+    assert action["status"] == "pending" and action["pending_kind"] == "external_event"
+    assert (
+        row["resource_evidence"]["accepted_verifier_request"]["operation_id"]
+        == action["pending_evidence"]["operation_id"]
+    )
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing_submit",
+        "missing_advance",
+        "wrong_submit_id",
+        "wrong_advance_id",
+        "foreign_namespace",
+        "stale_head",
+        "unknown",
+        "no_effect",
+        "missing_ack",
+        "not_started_422",
+        "provider_unknown",
+    ],
+)
+@pytest.mark.parametrize("wait_shape", ["ineligible", "historical_progress"])
+def test_actual_completed_request_wait_rejects_unbound_progress(
+    public_merge_world, capsys, damage, wait_shape
+):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    child = produced["merge_verification_successors"]["owner/repo#12"]
+    frontier = child["lineage"]["finite_frontier"]
+    row = child["native_result"]["targets"]["owner/repo#12"]
+    action = row["results"]["act"]
+    root = resources.scoped_root(dispatcher._pipeline_state_path(w.raw))
+    shard = resources.shard_dir(root, "owner/repo#12") / "state.json"
+    path = shard.parent / "state.actions" / f"{pipeline._digest('owner/repo#12')}.json"
+    document = queue._read_state(path)
+    bucket = document["frontiers"][frontier["frontier_id"]]
+    item = bucket["items"]["owner/repo#12"]
+    operation = item["operation"]
+    receipt = bucket["round"]["receipt"]
+    evidence = action["pending_evidence"]
+    if wait_shape == "historical_progress":
+        # Historical eligible collection remains supported, but cannot bypass
+        # either the original POST provenance or the uncertainty barriers.
+        item.update(eligible=True, deferred_reason="pass_limit")
+        receipt["accounting"] = [queue._account_row("owner/repo#12", item)]
+        receipt["deferred"] = copy.deepcopy(receipt["accounting"])
+        receipt["eligible_remaining"] = ["owner/repo#12"]
+        receipt["continuation_required"] = True
+        path.write_text(json.dumps(document))
+        assert (
+            queue.accepted_verifier_wait_proof(
+                path, "owner/repo#12", frontier=frontier, receipt=receipt, evidence=evidence
+            )
+            is not None
+        )
+    if damage in {"missing_submit", "missing_advance"}:
+        kind = "operation_submitted" if damage == "missing_submit" else "action_advanced"
+        receipt["events"] = [event for event in receipt["events"] if event.get("kind") != kind]
+    elif damage in {"wrong_submit_id", "wrong_advance_id"}:
+        kind = "operation_submitted" if damage == "wrong_submit_id" else "action_advanced"
+        next(event for event in receipt["events"] if event.get("kind") == kind)[
+            "operation_id"
+        ] = "foreign-operation"
+    elif damage == "foreign_namespace":
+        foreign = copy.deepcopy(bucket)
+        document["frontiers"]["unrelated"] = foreign
+    elif damage == "stale_head":
+        item["evidence"]["head"] = "f" * 40
+    elif damage == "unknown":
+        operation["status"] = "uncertain"
+    elif damage == "no_effect":
+        operation["result"]["no_effect"] = True
+    elif damage == "provider_unknown":
+        item["provider_outcome_uncertain"] = {"run_id": "original-unknown-run"}
+    elif damage == "missing_ack":
+        operation["result"].pop("verification_post_accepted")
+    else:
+        operation.update(status="completed", result={"no_effect": True, "http_status": 422})
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    assert (
+        queue.accepted_verifier_wait_proof(
+            path, "owner/repo#12", frontier=frontier, receipt=receipt, evidence=evidence
+        )
+        is None
+    )
+    assert path.read_bytes() == before and len(w.merges) == len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "missing_submit",
+        "missing_advance",
+        "wrong_submit_id",
+        "wrong_advance_id",
+        "provider_unknown",
+        "outcome_unknown",
+        "recovery_barrier",
+    ],
+)
+def test_cross_frontier_wait_checks_original_post_receipt(public_merge_world, capsys, damage):
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    target = "owner/repo#12"
+    child = produced["merge_verification_successors"][target]
+    origin = child["lineage"]["finite_frontier"]
+    shard = resources.shard_dir(
+        resources.scoped_root(dispatcher._pipeline_state_path(w.raw)), target
+    )
+    path = shard / "state.actions" / f"{pipeline._digest(target)}.json"
+    # Actual per-target state.actions is beside state.json in the shard.
+    document = queue._read_state(path)
+    bucket = document["frontiers"][origin["frontier_id"]]
+    original_item = bucket["items"][target]
+    operation = original_item["operation"]
+    following = policy.make_frontier(
+        [target],
+        owner=origin["owner"],
+        frontier_id="later-accepted-observation",
+        bindings={
+            target: {
+                "revision": w.snapshot["revision"],
+                "action_id": policy.action_identity(
+                    target, w.snapshot["revision"], "wait", operation["binding"]
+                ),
+            }
+        },
+    )
+    receipt = queue.run_round(
+        path,
+        [target],
+        lambda _target: {
+            "target": target,
+            "revision": w.snapshot["revision"],
+            "action": "wait",
+            "eligible": False,
+            "reason": "same verification request already accepted",
+            "next_trigger": "authenticated result",
+            "operation_binding": operation["binding"],
+            "evidence": {"target": target, **copy.deepcopy(w.snapshot)},
+        },
+        lambda *_: pytest.fail("a later wait must never issue another POST"),
+        finite_frontier=following,
+        frontier_target=target,
+        deadline=None,
+        request_timeout_seconds=25,
+        receipt_reserve_seconds=0,
+        max_operation_retries=0,
+    )
+    evidence = {
+        "target": target,
+        "observed_revision": w.snapshot["revision"],
+        "head": w.snapshot["head"],
+        "merge": w.snapshot["merge"],
+        "operation_id": operation["id"],
+        "event_id": operation["result"]["verification_request_basis"],
+    }
+    assert (
+        queue.accepted_verifier_wait_proof(
+            path, target, frontier=following, receipt=receipt, evidence=evidence
+        )
+        is not None
+    )
+    document = queue._read_state(path)
+    bucket = document["frontiers"][origin["frontier_id"]]
+    original_item = bucket["items"][target]
+    if damage in {"missing_submit", "missing_advance", "wrong_submit_id", "wrong_advance_id"}:
+        kind = "operation_submitted" if "submit" in damage else "action_advanced"
+        # Keep both copies consistent: refusal must check actual causal binding,
+        # not merely detect different round/receipt serializations.
+        for record in (bucket["round"], bucket["round"]["receipt"]):
+            if damage.startswith("missing"):
+                record["events"] = [event for event in record["events"] if event["kind"] != kind]
+            else:
+                next(event for event in record["events"] if event["kind"] == kind)[
+                    "operation_id"
+                ] = "foreign"
+    elif damage == "provider_unknown":
+        original_item["provider_outcome_uncertain"] = {"run_id": "unknown-original"}
+    elif damage == "outcome_unknown":
+        original_item["operation"]["result"]["outcome_uncertain"] = True
+    elif damage == "recovery_barrier":
+        original_item["recovery_barrier"] = {"run_id": "unknown-original"}
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    checked = queue.accepted_verifier_wait_proof(
+        path, target, frontier=following, receipt=receipt, evidence=evidence
+    )
+    assert (checked is not None) is (damage is None)
+    assert path.read_bytes() == before and len(w.merges) == len(w.verifies) == 1
+    assert w.events["provider"] == 0
+
+
+@pytest.mark.parametrize("remove_progress", [False, True])
+def test_static_ack_action_change_requires_original_progress_event(
+    tmp_path, monkeypatch, remove_progress
+):
+    import test_closer_accepted_request_wait as static_wait
+
+    backend, remote, path, frontier = static_wait.world.__wrapped__(tmp_path, monkeypatch)
+    receipt = static_wait.run(
+        backend, path, frontier, lambda *_: static_wait.submit(backend, remote)
+    )
+    assert static_wait.proof(path, frontier, receipt, backend, remote) is not None
+    document = queue._read_state(path)
+    bucket = document["frontiers"][frontier["frontier_id"]]
+    item = bucket["items"][static_wait.TARGET]
+    operation = item["operation"]
+    assert item["revision"] == operation["revision"] == remote.current["revision"]
+    assert operation["action"] == "post_merge_verify" and item["action"] == "collect_evidence"
+    if remove_progress:
+        # Remove both redundant copies consistently. The accounting action
+        # change still claims progress even when the remote revision is static.
+        for record in (bucket["round"], bucket["round"]["receipt"]):
+            record["events"] = [
+                event for event in record["events"] if event["kind"] != "action_advanced"
+            ]
+            record["progress"] = []
+    receipt = bucket["round"]["receipt"]
+    path.write_text(json.dumps(document))
+    before = path.read_bytes()
+    checked = static_wait.proof(path, frontier, receipt, backend, remote)
+    assert (checked is not None) is (not remove_progress)
+    assert path.read_bytes() == before and len(remote.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "change", [None, "head", "merge"], ids=["compact-positive", "changed-head", "changed-merge"]
+)
+def test_actual_compact_prepare_wait_uses_authenticated_request_merge_identity(
+    public_merge_world, capsys, monkeypatch, change
+):
+    import closer_hold_followup as holds
+
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    produced = json.loads(capsys.readouterr().out)
+    child = produced["merge_verification_successors"]["owner/repo#12"]
+    row = child["native_result"]["targets"]["owner/repo#12"]
+    assert "merge" not in row["results"]["prepare"]["snapshot"]
+    root = resources.scoped_root(dispatcher._pipeline_state_path(w.raw))
+    shard = resources.shard_dir(root, "owner/repo#12") / "state.json"
+    queue_path = shard.parent / "state.actions" / f"{pipeline._digest('owner/repo#12')}.json"
+    before_queue = queue_path.read_bytes()
+    if change is not None:
+        w.snapshot[change] = "f" * 40
+    observer = dispatcher.Closer(
+        dispatcher.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=False, workers=False
+    )
+    monkeypatch.setattr(holds, "_backend", lambda *_: observer)
+
+    def probe():
+        return holds._probe_ci(
+            {
+                "target": "owner/repo#12",
+                "frontier": child["lineage"]["finite_frontier"],
+                "release_proof": {"kind": "accepted_verifier_terminal"},
+                "source": {"state_path": str(shard)},
+            },
+            "unused",
+            {},
+            row,
+        )
+
+    if change is not None:
+        with pytest.raises(ValueError, match="head or merge identity changed"):
+            probe()
+    else:
+        assert probe() == {
+            "status": "waiting",
+            "reason": "original sent correlation lacks a current authenticated terminal event/run/attempt",
+        }
+    assert queue_path.read_bytes() == before_queue
+    assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0
+
+
+def test_followup_reader_evaluates_nonpass_route_without_execution(
+    public_merge_world, capsys, monkeypatch
+):
+    import hashlib
+
+    import closer_hold_followup as holds
+    import dispatcher as offloader
+
+    w = public_merge_world
+    dispatcher.main(w.argv)
+    capsys.readouterr()
+    w.snapshot["verifier"] = {
+        "schema": "verifier-corpus-decision/v1",
+        "verdict": "NON_PASS",
+        "repo": "owner/repo",
+        "pr": 12,
+        "head_sha": w.snapshot["head"],
+        "evaluated_sha": w.snapshot["merge"],
+        "run_id": 42,
+        "run_attempt": 1,
+        "provider_verdicts": ["CONCERNS"],
+        "ci_failed": False,
+    }
+    w.snapshot["verifier_lifecycle"] = copy.deepcopy(w.snapshot["verifier"])
+    w.snapshot["verifier_runs"][0].update(status="completed", conclusion="success")
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("read-only applicability check attempted a provider call")
+
+    monkeypatch.setattr(offloader, "offload", forbidden)
+    control = dispatcher.Closer(
+        dispatcher.GitHub(deadline=time.time() + 25), state_path=w.raw, apply=False, workers=False
+    )
+    before = control.observe("owner/repo#12")
+    assert before["eligible"] is False and before["action"] == "disposition"
+    reader = holds._backend(
+        str(w.root / "no-execution-manifest.json"),
+        {"worker_config": {"dispatch_state": str(w.raw)}},
+    )
+    after = reader.observe("owner/repo#12")
+    assert reader.apply is False and reader.workers is True
+    assert after["eligible"] is True and after["action"] == "disposition"
+    assert reader.execute("owner/repo#12", "disposition", after, {"id": "reader-tripwire"}) == {
+        "status": "deferred",
+        "reason": "inventory only",
+        "next_trigger": "authorized apply",
+    }
+    witness = {
+        "schema": "closer-reader-applicability-witness/v1",
+        "fixture": "actual public CLI originalPOST, synthetic external transports; no provider calls",
+        "source_sha256": hashlib.sha256(Path(holds.__file__).read_bytes()).hexdigest(),
+        "control_workers_false": {
+            key: before.get(key) for key in ("action", "eligible", "reason", "next_trigger")
+        },
+        "collector_workers_true_apply_false": {
+            key: after.get(key) for key in ("action", "eligible", "reason", "next_trigger")
+        },
+        "new_effect_count": 0,
+        "new_provider_call_count": 0,
+        "authority": False,
+    }
+    (w.root / "reader-applicability-witness.json").write_text(json.dumps(witness, sort_keys=True))
+    assert len(w.merges) == len(w.verifies) == 1 and w.events["provider"] == 0

@@ -49,6 +49,7 @@ Design notes:
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import os
 import shutil
@@ -61,6 +62,19 @@ from pathlib import Path
 import pytest
 
 TESTS_DIR = Path(__file__).parent
+
+
+@pytest.fixture(autouse=True)
+def isolate_provision_events(tmp_path, monkeypatch):
+    """Provision tests and their subprocesses must never append to the production ledger."""
+    path = tmp_path / "provision-events.ndjson"
+    monkeypatch.setenv("ORCH_PROVISION_EVENTS_PATH", str(path))
+    # This conftest is also copied into standalone guard-test repos with no src/.
+    # Patch an already imported module; later imports read the temporary env path.
+    loaded = sys.modules.get("provision")
+    if loaded is not None:
+        monkeypatch.setattr(loaded, "PROVISION_EVENTS_PATH", path)
+
 
 WHY = {
     "untracked": "not tracked by git: `git add` it",
@@ -289,6 +303,11 @@ def _charge(report: pytest.TestReport | pytest.CollectReport) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     global _GUARD, _HOOK_INSTALLED
+    config.addinivalue_line(
+        "markers",
+        "needs_coverage_module: runs `python -m coverage`; skipped where the module is not installed "
+        "(Gate's coverage-off shards), a failure where ORCH_REQUIRE_COVERAGE=1 (CI coverage shards)",
+    )
     _GUARD = arm(TESTS_DIR)
     _WATCHED.clear()
     _WATCHED.update(_GUARD.watched)
@@ -320,6 +339,75 @@ def pytest_terminal_summary(terminalreporter) -> None:
     if _GUARD is not None and (not _GUARD.armed or _GUARD.watched):
         state = "armed" if _GUARD.armed else "NOT CHECKED"
         terminalreporter.write_line(f"tracked test inputs: {state} -- {_GUARD.detail}")
+
+
+# Repo-specific full-suite storage evidence. Copied standalone guard fixtures may omit
+# this helper; their original guard behavior and test outcome stay unchanged.
+def pytest_sessionstart(session):
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    session.config._owned_storage_rows = {
+        "start": {"status": "unavailable", "reason": "helper_or_base_unavailable"}
+    }
+    try:
+        import runpy
+
+        helper = TESTS_DIR / "ci_storage_diagnostics.py"
+        if helper.is_file():
+            probe = runpy.run_path(str(helper))["snapshot"]
+            base = session.config._tmp_path_factory.getbasetemp()
+            session.config._owned_storage_probe = (probe, base)
+            session.config._owned_storage_rows = {"start": probe(base)}
+    except Exception:
+        pass  # Diagnostics cannot change pytest admission or its original exit.
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    try:
+        config = session.config
+        rows = getattr(config, "_owned_storage_rows", None)
+        if rows is None:
+            return
+        state = getattr(config, "_owned_storage_probe", None)
+        rows["finish"] = {"status": "unavailable", "reason": "helper_or_base_unavailable"}
+        if state is not None:
+            probe, base = state
+            rows["finish"] = probe(base)
+        rows["exitstatus"] = int(exitstatus)
+        if hasattr(config, "workeroutput"):
+            config.workeroutput["owned_storage"] = rows
+        else:
+            import json
+
+            reporter = config.pluginmanager.getplugin("terminalreporter")
+            if reporter:
+                reporter.write_line("CI_STORAGE_DIAGNOSTIC " + json.dumps(rows, sort_keys=True))
+    except Exception:
+        pass
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    try:
+        import json
+
+        rows = getattr(node, "workeroutput", {}).get("owned_storage")
+        reporter = node.config.pluginmanager.getplugin("terminalreporter")
+        if reporter:
+            reporter.write_line(
+                "CI_STORAGE_WORKER "
+                + json.dumps(
+                    {
+                        "worker": node.gateway.id,
+                        "diagnostic": rows,
+                        "worker_error_present": error is not None,
+                    },
+                    sort_keys=True,
+                )
+            )
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -369,3 +457,36 @@ def isolate_claude_token_history(monkeypatch, _claude_token_test_root):
 
     monkeypatch.setattr(pacing_usage, "CLAUDE_PROJECTS", _claude_token_test_root)
     monkeypatch.setenv("ORCH_CLAUDE_PROJECTS", str(_claude_token_test_root))
+
+
+@pytest.fixture(autouse=True)
+def isolate_feature_goals(request, tmp_path, monkeypatch):
+    """Every test owns its goal-ledger history; only marked goal-ledger tests execute real reports.
+
+    The history gets its own path override rather than a replaced `ORCH_STATE_DIR`: other tests use
+    `tmp_path` as an agent workspace, and `adapters` refuses a workspace that IS the state dir.
+    """
+    import feature_goals
+
+    monkeypatch.setenv(
+        feature_goals.HISTORY_PATH_ENV, str(tmp_path / "feature-goals-history.jsonl")
+    )
+    if request.node.get_closest_marker("feature_goals_real") is None:
+        monkeypatch.setattr(
+            feature_goals, "report", lambda now=None, **kw: feature_goals.drift([], now)
+        )
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Gate's sharded Python legs run with coverage OFF and do not install the tool.
+
+    The CI coverage shards install it and set ORCH_REQUIRE_COVERAGE=1, so a missing module there is
+    a failure rather than a silent loss of these tests.
+    """
+    if item.get_closest_marker("needs_coverage_module") is None:
+        return
+    if importlib.util.find_spec("coverage") is not None:
+        return
+    if os.environ.get("ORCH_REQUIRE_COVERAGE") == "1":
+        pytest.fail("ORCH_REQUIRE_COVERAGE=1 but the coverage module is not installed")
+    pytest.skip("coverage is not installed in this environment (coverage-off shard)")

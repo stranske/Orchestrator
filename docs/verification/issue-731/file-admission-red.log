@@ -1,0 +1,25 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______________ test_producer_named_test_admission_and_derivation _______________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-3387/test_producer_named_test_admis0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109d4ddf0>
+
+    def test_producer_named_test_admission_and_derivation(tmp_path, monkeypatch):
+        assert producer.named_test("`pytest -q`") is None
+        cap, kwargs = plan_fixture(monkeypatch)
+        plan = producer.build_plan([{"target": "a/b#3", "body": "Implement a feature"}], cap, **kwargs)
+        assert plan["planned"] == []
+        assert {"target": "a/b#3", "reason": "no_named_test", "test_class": "none"} in plan["skipped"]
+        for body in ("Run `tests/test_x.py`", "Run tests/test_x.py"):
+>           assert producer.named_test(body) == "pytest tests/test_x.py"
+E           AssertionError: assert None == 'pytest tests/test_x.py'
+E            +  where None = <function named_test at 0x10aeffba0>('Run `tests/test_x.py`')
+E            +    where <function named_test at 0x10aeffba0> = producer.named_test
+
+tests/test_experiment_producer.py:750: AssertionError
+----------------------------- Captured stderr call -----------------------------
+pacing claude=shed; coverage debt 5 cells > 21d, drainable 0
+=========================== short test summary info ============================
+FAILED tests/test_experiment_producer.py::test_producer_named_test_admission_and_derivation
+1 failed, 70 deselected in 0.60s

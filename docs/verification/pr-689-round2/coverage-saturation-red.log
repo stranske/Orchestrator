@@ -1,0 +1,15 @@
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_shed_agent_does_not_latch_firing_launch[fresh_warn]
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________ test_shed_agent_does_not_latch_firing_launch[fresh_warn] ___________
+tests/test_experiment_producer.py:730: in test_shed_agent_does_not_latch_firing_launch
+    assert result["active"] is True
+E   assert False is True
+----------------------------- Captured stderr call -----------------------------
+[experiment producer] deployed; trial end 20261107
+pacing claude=warn; coverage debt 0 cells > 21d, drainable 0
+=========================== short test summary info ============================
+FAILED tests/test_experiment_producer.py::test_shed_agent_does_not_latch_firing_launch[fresh_warn]
+1 failed in 0.55s
+
+EXIT=1

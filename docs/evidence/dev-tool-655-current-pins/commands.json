@@ -1,0 +1,137 @@
+[
+  {
+    "command": [
+      "ruff",
+      "--version"
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "ruff 0.17.1\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--extend-exclude",
+      ".workflows-lib",
+      "--output-format",
+      "concise",
+      "."
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--fix",
+      "--exit-zero",
+      "."
+    ],
+    "cwd": "scratch-copy",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--fix",
+      "--exit-zero",
+      "--unsafe-fixes",
+      "."
+    ],
+    "cwd": "scratch-copy",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "ruff",
+      "check",
+      "--extend-exclude",
+      ".workflows-lib",
+      "--output-format",
+      "concise",
+      "."
+    ],
+    "cwd": "scratch-copy",
+    "returncode": 0,
+    "stdout": "All checks passed!\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "black",
+      "--version"
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "black, 26.10.1 (compiled: yes)\nPython (CPython) 3.12.2\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "black",
+      "--check",
+      "--line-length",
+      "100",
+      "--exclude",
+      "(\\.venv|\\.workflows-lib|node_modules)",
+      "."
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "All done! \u2728 \ud83c\udf70 \u2728\n501 files would be left unchanged.\n"
+  },
+  {
+    "command": [
+      "mypy",
+      "--version"
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "mypy 2.4.0 (compiled: yes)\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "mypy",
+      "--config-file",
+      "pyproject.toml",
+      "--exclude",
+      ".workflows-lib",
+      "src"
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "src/gh_capacity.py:951: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/gh_capacity.py:1081: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/feedback.py:7263: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5098: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/capability_propensity.py:5107: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nsrc/exp_abcd.py:3227: note: By default the bodies of untyped functions are not checked, consider using --check-untyped-defs  [annotation-unchecked]\nSuccess: no issues found in 136 source files\n",
+    "stderr": ""
+  },
+  {
+    "command": [
+      "/Users/teacher/.codex/automations/sync-dependency-pr-closer/worktrees/orchestrator655-measure/.venv/bin/python",
+      "-m",
+      "pytest",
+      "--cov",
+      "--cov-config=pyproject.toml",
+      "--collect-only",
+      "-q",
+      "-p",
+      "no:cacheprovider"
+    ],
+    "cwd": "repository",
+    "returncode": 0,
+    "stdout": "    593    541   8.8%\nsrc/redirect_sweep.py                    437    394   9.8%\nsrc/relearn_report.py                    260    232  10.8%\nsrc/repo_knowledge.py                   1335   1223   8.4%\nsrc/research_scheduler.py                508    459   9.6%\nsrc/research_subjects.py                 677    617   8.9%\nsrc/research_usage_guard.py              406    360  11.3%\nsrc/review_loop.py                       318    281  11.6%\nsrc/review_writer_gate.py                117    106   9.4%\nsrc/roles.py                            1793   1658   7.5%\nsrc/route_weights_export.py              454    401  11.7%\nsrc/router.py                            680    596  12.4%\nsrc/runner_effect_bridge.py               73     57  21.9%\nsrc/runtime_ac.py                        953    881   7.6%\nsrc/runtime_ac_flow_monitor.py           246    208  15.4%\nsrc/runtime_ac_gate.py                   722    658   8.9%\nsrc/runtime_ac_panel.py                  338    302  10.7%\nsrc/spec_provenance.py                    13      9  30.8%\nsrc/strategy_experiment.py               572    513  10.3%\nsrc/switch_review.py                    1504   1401   6.8%\nsrc/synthesis_promotion.py               984    895   9.0%\nsrc/testgen_gate.py                      395    395   0.0%\nsrc/testgen_lane.py                      181    159  12.2%\nsrc/tick.py                              583    533   8.6%\nsrc/tick_watchdog.py                     549    446  18.8%\nsrc/triage_shadow.py                     319    282  11.6%\nsrc/utc_epoch.py                         116     93  19.8%\nsrc/ux_review.py                         682    617   9.5%\nsrc/value_chain_monitor.py               352    302  14.2%\nsrc/verifier_evidence.py                  90     78  13.3%\nsrc/watch.py                             486    439   9.7%\nsrc/worktree_git.py                      148    118  20.3%\n----------------------------------------------------------\nTOTAL                                  74319  67222   9.5%\n5463 tests collected in 21.59s\n",
+    "stderr": "",
+    "stdout_sha256": "8958f5dff81e17def05e40e01eefeb3714971d2a2272ca6bf4e08f480a1ff458",
+    "stdout_note": "Final collection summary retained here; full stdout retained by the run receipt."
+  }
+]

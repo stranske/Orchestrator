@@ -1,0 +1,25 @@
+{
+  "base": "a14c0fb4a0086fc6b78bc88b7e8be4d78dd334ae",
+  "dispatcher_function_delta": {
+    "_controlled_launch_inputs": {
+      "after": "1918225ad23ff34c7241d00366d9e45a07d1bd7f85583f3fb956b4967fd2dd27",
+      "before": "e27468fad7d7ebc14a962aecd2cf2d6fe5a796c46bc5578ed20a59c553999805"
+    }
+  },
+  "physical_qualification_performed": false,
+  "production_result_revalidation_AST_unchanged": true,
+  "role_module": {
+    "added_ast": {
+      "_CLOSED_SONNET_SOURCE_ADMISSION": "f4beba3ef0d2d15497cb98fc3c8ed39fb38cbb714779f0be0ef051daa5fbc974",
+      "_source_digest": "18cf9bff735a7f0b68a5a22bdea2f3ec5663c965f39fd31b807d9e56e08df1b6",
+      "execution_record_matches": "3cadb3267fc1717d6cce4334d5f29b98650c7e4418f916600e3900dd7870e5c6",
+      "execution_source_support": "f67b7ea43640c4e4c73591837ff9086d64fca18560fb2f30c8aae2f85e4b2bbf"
+    },
+    "after_file_sha256": "3443e7a8cb95bcdab61b8d3fb12a1b3a225f29afc011b36b393070bdd5a0887e",
+    "before_complete_ast_sha256": "d3f12a913b3a25e0a59b03fa188872b01f1f80d2505d3ef0cdab9869dd33074c",
+    "before_file_sha256": "c08e70a12269aca514f5ba46c0fdb923be97b34d8d8bdfc016b9cd2272c220a0",
+    "registry_node_unchanged": true
+  },
+  "schema": "closed-current-source-admission-audit/v1",
+  "scope": "Prospective exact policy/wiring successor only; historical model qualification and audit fixtures unchanged."
+}
