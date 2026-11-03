@@ -230,3 +230,62 @@ succeeded. Staging these three changed files failed with
 `.git/index.lock: Read-only file system`, so this iteration could not create the
 required source commit. The changes remain in the working tree for collection
 by the automation's committing process.
+
+## Read-only production observation collector
+
+`scripts/observe_redirect_runtime.js` advances the third task by collecting the
+existing free screen together with runtime artifact hashes, without running a
+role, linking outcomes, taking writer locks, or changing cadence or caps. Run
+from the source checkout being observed on the owner's host:
+
+```sh
+node scripts/observe_redirect_runtime.js /path/to/owner-runtime /path/to/stamp-state /opt/anaconda3/bin/python3
+```
+
+The first path is required; state defaults to that path and Python defaults to
+`python3`. Existing corpus, stage-2 plan and report-directory environment overrides
+are honored. The sweep is read from the selected state directory. The collector
+uses `redirect_apply.py --screen --json`, whose candidate population and refusal
+rules remain authoritative. It avoids `--status`, since its default outcome-link
+preview can create or migrate the Brain. The source hash identifies the observer
+checkout, not an independently authenticated deployed revision.
+
+Blocking deficits and drainable/current candidate counts come from that screen.
+Unavailable or invalid corpora stop observation; stale or missing populations
+remain unknown. Inputs are hashed before and after execution, including cadence
+stamp modification times; changes invalidate the counts without blocking the
+writer. The collector hashes private target, role and refusal identities and
+retains corpus line bindings. Logged numeric summaries retain their original
+run timestamps separately from the new observation timestamp. Only the latest
+twenty log runs are summarized, with the total retained run count printed.
+Recorded applies/links are not qualified influence edges or stall resolution.
+The invoking process's flag is explicitly distinguished from the deployed tick's
+unknown flag; source defaults supply no production evidence.
+
+The actual runner invocation is retained in
+[`issue-1088-runtime-observation.json`](issue-1088-runtime-observation.json).
+Corpus, plan, sweep, cadence success/failure markers, apply log and switch-review
+artifact are missing here. Blocking count: **unknown**; drainable count:
+**unknown**; current candidates: **unknown**, not candidates 0. No November 3
+production break, attributed apply, resolution timing or control was established.
+Private historical receipts remain unavailable. The selected interpreter still
+lacks pytest; a fresh temporary installation attempt found no available pytest
+distribution. The first four tasks remain unchecked and operational acceptance
+remains incomplete. This capture is a new runner observation, not a historical
+replay or an owner-host observation.
+
+All **30** scoped Node checks pass without skips, including seven new collector
+checks. Real screen executions against manufactured empty, refused and stale
+populations confirmed the corresponding zero, blocked and unknown results and
+unchanged runtime bytes. They establish no production population. This runner
+again returned `EPERM` alongside zero child exits; the collector rejects those
+executions rather than promoting their output to verified counts. Tests also
+cover sanitized lineage/refusal bindings, changing inputs, malformed corpus and
+screen output, process failures, and missing owner state. Both new JavaScript
+files pass syntax checks. No Python or workflow files changed.
+
+The source commit was attempted, but staging again failed with
+`.git/index.lock: Read-only file system`. The connector rejected both the blocker
+comment and additive `needs-human` label with `MCP tool call requires approval,
+but approval policy is never`. No commit or remote mutation succeeded; these
+changes remain for the automation's committing process.
