@@ -95,6 +95,12 @@ def _ledger(case) -> dict:
     return json.loads((case["state"] / "reservations.json").read_text())["jobs"]
 
 
+def _uncertain(case):
+    storage.Reservations(case["state"], case["root"].parent, floor=0).finish(
+        JOB, {"job": JOB, "status": "retained_uncertain"}, terminal=False
+    )
+
+
 def test_sweep_reports_then_releases_the_interrupted_reservation_and_retires_its_root(interrupted):
     report = storage.release_interrupted(interrupted["state"], apply=False)
     assert report["staged"] == 1 and report["charged_bytes"] == 1
@@ -120,15 +126,29 @@ def test_sweep_reports_then_releases_the_interrupted_reservation_and_retires_its
 
 
 def test_single_job_apply_requires_the_exact_plan(interrupted):
+    _uncertain(interrupted)
     plan = storage.plan_interrupted_release(interrupted["state"], JOB)
-    assert plan["action"] == "retire_root_finish_terminal"
+    assert plan["action"] == "finish_terminal_retain_root"
     with pytest.raises(storage.StorageBlocked, match="plan changed"):
         storage.apply_interrupted_release(interrupted["state"], JOB, expected_plan_sha256="0" * 64)
     assert JOB in _ledger(interrupted)
+    receipt_path = interrupted["state"] / "receipts" / f"{JOB}.json"
+    prior = json.loads(receipt_path.read_text())
+    _write(receipt_path, {**prior, "new_evidence": True})
+    with pytest.raises(storage.StorageBlocked, match="plan changed"):
+        storage.apply_interrupted_release(
+            interrupted["state"], JOB, expected_plan_sha256=plan["sha256"]
+        )
+    plan = storage.plan_interrupted_release(interrupted["state"], JOB)
     out = storage.apply_interrupted_release(
         interrupted["state"], JOB, expected_plan_sha256=plan["sha256"]
     )
-    assert out["status"] == "released" and JOB not in _ledger(interrupted)
+    assert out["status"] == "released_root_retained" and JOB not in _ledger(interrupted)
+    assert interrupted["root"].is_dir()
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["prior_receipt"]["status"] == "retained_uncertain"
+    assert receipt["prior_receipt"]["new_evidence"] is True
+    assert receipt["verified"] is False and receipt["calibration_updated"] is False
 
 
 @pytest.mark.parametrize("who", ["owner", "child", "parent_pid", "parent_pgid"])
@@ -141,10 +161,13 @@ def test_any_live_process_in_the_recorded_tree_holds_the_reservation(interrupted
             "parent_pgid": 29242,
         }[who]
     )
-    report = storage.release_interrupted(interrupted["state"], apply=True)
-    assert report["released"] == [] and report["held"][0]["job"] == JOB
-    assert "still live" in report["held"][0]["reason"]
-    assert JOB in _ledger(interrupted) and interrupted["root"].is_dir()
+    for uncertain in (False, True):
+        if uncertain:
+            _uncertain(interrupted)
+        report = storage.release_interrupted(interrupted["state"], apply=True)
+        assert report["released"] == [] and report["held"][0]["job"] == JOB
+        assert "still live" in report["held"][0]["reason"]
+        assert JOB in _ledger(interrupted) and interrupted["root"].is_dir()
 
 
 def test_a_busy_or_blind_probe_holds_the_reservation(interrupted, monkeypatch):
@@ -159,6 +182,11 @@ def test_a_busy_or_blind_probe_holds_the_reservation(interrupted, monkeypatch):
     report = storage.release_interrupted(interrupted["state"], apply=True)
     assert report["held"] == [{"job": JOB, "reason": "open file in owned storage"}]
     assert interrupted["root"].is_dir()
+    _uncertain(interrupted)
+    report = storage.release_interrupted(interrupted["state"], apply=True)
+    assert report["released"] == []
+    assert report["held"] == [{"job": JOB, "reason": "open file in owned storage"}]
+    assert JOB in _ledger(interrupted)
 
 
 def test_a_run_that_reached_completion_is_not_released_here(interrupted):
@@ -172,11 +200,22 @@ def test_a_run_that_reached_completion_is_not_released_here(interrupted):
 def test_only_staged_rows_are_candidates(interrupted):
     path = interrupted["state"] / "reservations.json"
     ledger = json.loads(path.read_text())
-    ledger["jobs"][JOB]["status"] = "uncertain"
+    ledger["jobs"][JOB]["status"] = "admitted"
     _write(path, ledger)
     assert storage.release_interrupted(interrupted["state"], apply=True)["staged"] == 0
-    with pytest.raises(storage.StorageBlocked, match="only a staged reservation"):
+    with pytest.raises(storage.StorageBlocked, match="only a staged or uncertain reservation"):
         storage.plan_interrupted_release(interrupted["state"], JOB)
+    _uncertain(interrupted)
+    report = storage.release_interrupted(interrupted["state"], apply=False)
+    assert report["staged"] == 0 and report["uncertain"] == 1
+    assert report["charged_bytes"] == 1 and len(report["releasable"]) == 1
+    receipt = interrupted["state"] / "receipts" / f"{JOB}.json"
+    prior = json.loads(receipt.read_text())
+    _write(receipt, {**prior, "job": "another-job"})
+    assert (
+        "does not bind"
+        in storage.release_interrupted(interrupted["state"], apply=False)["held"][0]["reason"]
+    )
 
 
 def test_a_marker_that_does_not_bind_the_row_holds_it(interrupted):
