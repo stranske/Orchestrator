@@ -1768,6 +1768,8 @@ def renew(
 DECLARATION_FIELDS: tuple[str, ...] = (
     "status",
     "entrypoint",
+    "external_caller",
+    "external_heartbeat_max_age_seconds",
     "matcher",
     "trigger_cadence",
     "flags_defaults",
@@ -1822,6 +1824,13 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
     "closer-core": {
         "status": "wired",
         "entrypoint": str(Path.home() / ".codex/closer-core/closer_core.py"),
+        "external_caller": {
+            "path": str(
+                Path.home() / ".codex/automations/reviewed-repo-automation-controller/controller.py"
+            ),
+            "function": "start_closer_core",
+        },
+        "external_heartbeat_max_age_seconds": 86400,
         "matcher": {"kind": "tick_phase", "equals": "closer-core"},
         "trigger_cadence": "Luna controller start_closer_core(), once per 15-minute tick",
         "output_artifact": "~/.codex/orchestrator/closer-core/rounds.jsonl",
@@ -1839,7 +1848,7 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
             "Caller: ~/.codex/automations/reviewed-repo-automation-controller/"
             "controller.py:start_closer_core(). Heartbeat source: "
             "~/.codex/orchestrator/closer-core/rounds.jsonl, one JSON line per round. "
-            "Both producers intentionally live outside the in-tree activation audit."
+            "The caller is declared explicitly; recent runtime invocation events prove heartbeat."
         ),
     },
     "testgen-lane": {

@@ -102,20 +102,7 @@ GRANDFATHERED_BEFORE = 1787270400  # 2026-08-21T00:00:00Z, the day this gate lan
 # a permanent exemption look like a temporary one — the same shape as a bounded trial that quietly
 # became permanent. So an expiry must also be within MAX_WAIVER_DAYS.
 MAX_WAIVER_DAYS = 90
-WAIVERS: dict[str, dict] = {
-    "closer-core": {
-        "expires": 1794268800,  # 2026-11-10T00:00:00Z; fixed, never renewed by loading
-        "reason": (
-            "Local external entrypoint: the audit only scans in-tree drivers or sibling CI "
-            "workflows. The real caller is ~/.codex/automations/"
-            "reviewed-repo-automation-controller/controller.py:start_closer_core, once per "
-            "15-minute tick. Its heartbeat source is ~/.codex/orchestrator/closer-core/"
-            "rounds.jsonl, one line per round, already consumed by value_chain_monitor. "
-            "Only caller_exists/heartbeat proof is unrecognized; remove this waiver when "
-            "the audit can verify those external sources. The core and controller stay running."
-        ),
-    },
-}
+WAIVERS: dict[str, dict] = {}
 
 
 def waiver_problems() -> list[str]:
@@ -171,6 +158,11 @@ def req_dedup_recorded(cap: dict, ctx: dict) -> tuple[bool, str]:
 def req_caller_exists(cap: dict, ctx: dict) -> tuple[bool, str]:
     """Something must actually invoke it. This is the defect that produced six dormant subsystems."""
     row = ctx["audit_rows"].get(cap["capability_id"]) or {}
+    if cap.get("external_caller") is not None:
+        import capability_activation_audit as audit
+
+        proof = row.get("external_caller") or audit.external_caller(cap) or {}
+        return bool(proof.get("exists")), proof.get("detail", "external caller not verified")
     if row.get("reachable"):
         return True, "entrypoint reachable"
     return False, f"unreachable: {', '.join(row.get('defects') or ['unknown'])}"
