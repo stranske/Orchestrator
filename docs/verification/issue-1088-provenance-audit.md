@@ -473,3 +473,44 @@ system`, so no commit was created. The connector rejected the production-task
 checkbox correction, blocker comment and additive `needs-human` label with
 `MCP tool call requires approval, but approval policy is never`. No remote update
 succeeded. PR #1089 remains open and ready for review at `a28d88e`.
+
+## Byte-preserving provenance validation
+
+The first recovery task remains blocked. Re-reading the #582 and #595 discussions
+recovered only the already documented private receipt paths and owner assertions;
+the private files and any genuine October 20 execution receipt remain unavailable.
+No new task checkbox is complete.
+
+A concrete auditor defect was reproduced with manufactured controls: invalid
+UTF-8 in private targets or a fixture target was silently replaced during decoding,
+and the CLI returned success. Source-entry hashes could consequently describe
+replacement bytes instead of the supplied source-line bytes. The corpus regression
+failed first; after the corpus correction, the fixture regression failed separately.
+The auditor now validates UTF-8 before decoding either input. Invalid corpora
+return `unavailable` with `invalid_source_corpus_utf8`; invalid fixtures cannot
+receive bindings. The original corpus byte hash remains available for diagnosis.
+No source contents, private targets, or replacement strings are printed.
+
+All **44** scoped Node checks pass without failures or skips, including the new
+invalid-byte and valid multibyte controls, privacy and immutability assertions.
+Both changed JavaScript files pass syntax checks; `git diff --check` passes.
+No Python or workflow files changed. This corrects audit integrity and establishes
+neither historical bindings nor a production-chain failure.
+
+At `2026-11-03T18:36:50.812Z`, merged revision
+`8f596dc01e1ede350724c1b88bc36610380af79b` was re-evaluated with the selected
+Python 3.14 interpreter. Both named tests and both focused files remain blocked
+before collection by missing pytest; installation into `/tmp` failed with no
+available distribution. Replay printed `authorized 12/12 with named agents
+(dry-run)` and exited zero, while the subprocess layer also retained `EPERM`.
+The aggregate remains blocked. At `2026-11-03T18:36:58.431Z`, the owner runtime
+observation returned `owner_corpus_unavailable`: blocking, drainable and eligible
+candidate counts remain **unknown**, not candidates 0. No live apply, resolution
+timing or control comparison was established. These are current runner observations,
+not an October 20 receipt or the owner's November 3 production-chain capture.
+
+Staging the validated source, tests and report failed because `.git/index.lock`
+is on a read-only filesystem; no commit was created. The GitHub connector rejected
+the unverified production-task checkbox correction, blocker comment and additive
+`needs-human` label with `MCP tool call requires approval, but approval policy is
+never`. No remote mutation succeeded.

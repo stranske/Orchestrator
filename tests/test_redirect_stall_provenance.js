@@ -253,6 +253,68 @@ test('fails closed on malformed private input and missing fixture files', (t) =>
   assert.equal(result.verified_bindings, 0);
 });
 
+test('rejects invalid UTF-8 rather than binding silently replaced source or fixture bytes', (t) => {
+  const s = sandbox(t);
+  const corrupt = (bytes, label) => {
+    const at = bytes.indexOf(Buffer.from(label));
+    assert.ok(at >= 0);
+    return Buffer.concat([bytes.subarray(0, at), Buffer.from([0xff]), bytes.subarray(at + 1)]);
+  };
+  // All occurrences retain the target mapping after permissive decoding, so
+  // retained-fact and anonymization checks alone would accept the corruption.
+  const source = fs.readFileSync(s.corpus);
+  // Corrupt every target label, leaving identical repeated labels after decode.
+  let malformed = source;
+  while (malformed.includes(Buffer.from('PRIVATE-TARGET-'))) {
+    malformed = corrupt(malformed, 'PRIVATE-TARGET-');
+  }
+  fs.writeFileSync(s.corpus, malformed);
+  const before = fs.readFileSync(s.corpus);
+  let run = cli(t, [s.corpus, s.copy]);
+  assert.equal(run.status, 1);
+  let result = JSON.parse(run.stdout);
+  assert.equal(result.status, 'unavailable');
+  assert.equal(result.verified_bindings, 0);
+  assert.deepEqual(result.limitations, ['invalid_source_corpus_utf8']);
+  assert.equal(result.corpus_sha256, digest(before));
+  assert.equal(result.historical_replay_receipt, 'not_established');
+  assert.deepEqual(fs.readFileSync(s.corpus), before);
+  assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-|\ufffd/);
+
+  fs.writeFileSync(s.corpus, source);
+  const file = path.join(s.copy, fixtureNames[0]);
+  const fixture = fs.readFileSync(file);
+  const target = JSON.parse(fixture).target;
+  const invalidFixture = corrupt(fixture, target);
+  fs.writeFileSync(file, invalidFixture);
+  run = cli(t, [s.corpus, s.copy]);
+  assert.equal(run.status, 1);
+  result = JSON.parse(run.stdout);
+  assert.equal(result.status, 'mismatch');
+  assert.equal(result.verified_bindings, 11);
+  assert.deepEqual(result.limitations, [`${fixtureNames[0]}: fixture_unreadable`]);
+  assert.ok(result.bindings.every((row) => row.fixture !== fixtureNames[0]));
+  assert.deepEqual(fs.readFileSync(file), invalidFixture);
+  assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-|\ufffd/);
+});
+
+test('valid multibyte private identities retain exact source-entry byte hashes', (t) => {
+  const s = sandbox(t);
+  for (const entry of s.entries) entry.report.target += '-caf\u00e9-\u8def\u5f84-\ud83d\ude00';
+  s.save();
+  const before = fs.readFileSync(s.corpus);
+  const run = cli(t, [s.corpus, s.copy]);
+  assert.equal(run.status, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.status, 'verified');
+  assert.equal(result.verified_bindings, 12);
+  assert.equal(result.corpus_sha256, digest(before));
+  assert.deepEqual(result.bindings.map((row) => row.source_entry_sha256),
+    s.entries.map((entry) => digest(Buffer.from(JSON.stringify(entry)))));
+  assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-|caf|\u8def\u5f84|\ud83d\ude00/);
+  assert.deepEqual(fs.readFileSync(s.corpus), before);
+});
+
 test('successful CLI audits remain current observations with no replay receipt credit', (t) => {
   const s = sandbox(t);
   const run = cli(t, [s.corpus, s.copy]);

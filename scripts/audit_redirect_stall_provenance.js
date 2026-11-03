@@ -3,6 +3,7 @@
 // Read-only comparison with the owner's private corpus. This does not authenticate
 // that corpus, recover an old replay receipt, or turn fixture replay into live action.
 const crypto = require('node:crypto');
+const { isUtf8 } = require('node:buffer');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isDeepStrictEqual } = require('node:util');
@@ -43,6 +44,12 @@ function audit(corpus, fixtures = defaultFixtures) {
     return result;
   }
   result.corpus_sha256 = sha256(corpusBytes);
+  // Permissive decoding replaces invalid bytes before line hashing and target
+  // comparison. A binding must describe the supplied bytes without replacement.
+  if (!isUtf8(corpusBytes)) {
+    result.limitations.push('invalid_source_corpus_utf8');
+    return result;
+  }
   const sources = new Map();
   const originalTargets = new Set();
   let stalled = 0;
@@ -89,6 +96,10 @@ function audit(corpus, fixtures = defaultFixtures) {
     let fixture;
     try {
       bytes = fs.readFileSync(path.join(fixtures, name));
+      if (!isUtf8(bytes)) {
+        result.limitations.push(`${name}: fixture_unreadable`);
+        continue;
+      }
       fixture = JSON.parse(bytes.toString('utf8'));
     } catch {
       result.limitations.push(`${name}: fixture_unreadable`);
