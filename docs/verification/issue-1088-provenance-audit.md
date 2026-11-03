@@ -289,3 +289,33 @@ The source commit was attempted, but staging again failed with
 comment and additive `needs-human` label with `MCP tool call requires approval,
 but approval policy is never`. No commit or remote mutation succeeded; these
 changes remain for the automation's committing process.
+
+## Source-target permutation regression
+
+On November 3, reviewed commits `1df14c5` through `89608f6` and reran the
+30 existing scoped Node checks successfully. Reconciliation remains the local
+checklist above: private recovery and the first four distinct tasks are still
+open. The PR-body update, blocker comment and additive `needs-human` label were
+each rejected with `MCP tool call requires approval, but approval policy is never`.
+No remote checklist change succeeded. Both named private receipts and the runner's
+expected corpus path remain absent, and the repository-selected interpreter still
+reports `No module named pytest`.
+
+A manufactured control exposed another binding-validation failure: rotating
+the original source targets across fixtures retained a one-to-one mapping and
+changed every individual target, yet the auditor exited 0. The regression failed
+on that exit status before the correction. The auditor now rejects any fixture
+target present in the stalled-source target set, including targets belonging to
+additional unbound source reports. It reports `target_not_anonymized` without
+printing those targets. The permutation control also verifies corpus and fixture
+bytes remain unchanged. These controls establish no historical provenance.
+
+The five-file Node command (the four-file command above plus
+`tests/test_observe_redirect_runtime.js`) now passes **32/32**, without skips.
+JavaScript syntax checks and `git diff --check` pass. No Python or workflow files
+changed. Historical provenance, an October 20 receipt, and operational acceptance
+remain unestablished; blocking, drainable and candidate counts remain **unknown**.
+This correction does not establish a production failure or a live action.
+
+Staging the validated source, tests and report failed with
+`.git/index.lock: Read-only file system`; no commit was created by this iteration.

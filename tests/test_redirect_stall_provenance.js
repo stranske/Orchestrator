@@ -189,6 +189,54 @@ test('rejects unchanged source targets even when the mapping is one-to-one', (t)
   assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
 });
 
+test('rejects original source targets reused as anonymous labels for other bindings', (t) => {
+  const s = sandbox(t);
+  const targets = [...new Set(s.entries.map((entry) => entry.report.target))];
+  assert.ok(targets.length > 1);
+  // Rotating every distinct target preserves a bijection and changes every
+  // individual label, but still discloses the original source target set.
+  for (let i = 0; i < fixtureNames.length; i++) {
+    const file = path.join(s.copy, fixtureNames[i]);
+    const fixture = JSON.parse(fs.readFileSync(file));
+    const original = s.entries[i].report.target;
+    fixture.target = targets[(targets.indexOf(original) + 1) % targets.length];
+    assert.notEqual(fixture.target, original);
+    fs.writeFileSync(file, JSON.stringify(fixture));
+  }
+  const files = [s.corpus, ...fixtureNames.map((name) => path.join(s.copy, name))];
+  const before = files.map((file) => fs.readFileSync(file));
+  const run = cli(t, [s.corpus, s.copy]);
+  assert.equal(run.status, 1);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.status, 'mismatch');
+  assert.equal(result.verified_bindings, 0);
+  assert.deepEqual(result.bindings, []);
+  assert.deepEqual(result.limitations,
+    fixtureNames.map((name) => `${name}: target_not_anonymized`));
+  assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-/);
+  assert.equal(result.historical_replay_receipt, 'not_established');
+  assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+});
+
+test('also rejects source targets from additional unbound stalled reports', (t) => {
+  const s = sandbox(t);
+  const file = path.join(s.copy, fixtureNames[0]);
+  const fixture = JSON.parse(fs.readFileSync(file));
+  fixture.target = 'PRIVATE-unbound-source-target';
+  fs.writeFileSync(file, JSON.stringify(fixture));
+  s.entries.push({ kind: 'redirect_proposal', report: {
+    state: 'stalled', target: fixture.target, sweep_fingerprint: 'PRIVATE-unbound-fingerprint',
+  } });
+  s.save();
+  const result = audit(s.corpus, s.copy);
+  assert.equal(result.status, 'mismatch');
+  assert.equal(result.stalled_source_reports, 13);
+  assert.equal(result.verified_bindings, 11);
+  assert.deepEqual(result.limitations, [`${fixtureNames[0]}: target_not_anonymized`]);
+  assert.ok(result.bindings.every((row) => row.fixture !== fixtureNames[0]));
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+});
+
 test('fails closed on malformed private input and missing fixture files', (t) => {
   const s = sandbox(t);
   fs.appendFileSync(s.corpus, 'PRIVATE-invalid-json\n');

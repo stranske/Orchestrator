@@ -44,6 +44,7 @@ function audit(corpus, fixtures = defaultFixtures) {
   }
   result.corpus_sha256 = sha256(corpusBytes);
   const sources = new Map();
+  const originalTargets = new Set();
   let stalled = 0;
   const lines = corpusBytes.toString('utf8').split('\n');
   for (let i = 0; i < lines.length; i++) {
@@ -61,6 +62,7 @@ function audit(corpus, fixtures = defaultFixtures) {
     }
     if (entry.kind !== 'redirect_proposal' || entry.report?.state !== 'stalled') continue;
     stalled++;
+    if (typeof entry.report.target === 'string') originalTargets.add(entry.report.target);
     const fingerprint = entry.report.sweep_fingerprint;
     const rows = sources.get(fingerprint) || [];
     rows.push({ report: entry.report, line: i + 1, bytes: lines[i] });
@@ -123,7 +125,9 @@ function audit(corpus, fixtures = defaultFixtures) {
       result.limitations.push(`${name}: target_anonymization_not_one_to_one`);
       continue;
     }
-    if (original === anonymous) {
+    // A different binding's original target is still a source identity. A
+    // permutation is one-to-one but does not anonymize the source target set.
+    if (originalTargets.has(anonymous)) {
       result.limitations.push(`${name}: target_not_anonymized`);
       continue;
     }
