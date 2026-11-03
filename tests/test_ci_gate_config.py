@@ -264,10 +264,10 @@ def test_every_bounded_or_disabled_toggle_states_blocking_and_drainable():
 
 
 def test_the_with_block_holds_no_second_toggle_literal():
-    """One literal per toggle, so the call site cannot drift from the summary job's view."""
+    """Reusable checks follow detect, except subset coverage which must stay hard-disabled."""
     require_checkout()
     block = python_ci_with_block()
-    for name in ("lint", "format_check", "typecheck", "run-mypy", "coverage"):
+    for name in ("lint", "format_check", "typecheck", "run-mypy"):
         match = re.search(rf"^      {re.escape(name)}: (.+)$", block, re.M)
         assert match, f"the python-ci `with:` block no longer passes `{name}`"
         value = match.group(1).strip()
@@ -277,6 +277,10 @@ def test_the_with_block_holds_no_second_toggle_literal():
             "output — two literals for one decision is how the measuring window stops matching the "
             "draining window."
         )
+    assert re.search(r"^      coverage: false$", block, re.M)
+    assert re.search(r"^      enable-soft-gate: false$", block, re.M)
+    assert "coverage-python-version:" not in block
+    assert "verify.py aggregate" in block
 
 
 def test_baseline_doc_records_every_disabled_check_with_both_quantities():

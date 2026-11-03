@@ -37,6 +37,7 @@
 #          or the tree's first writing load failed on the copy of the ledger
 #        2 NOTHING VERIFIED: SRC is not a checkout, or the scratch copy failed
 #        3 VOID: SRC changed while verify.py ran, so the verdict is about a tree nobody would copy
+#       78 storage admission/terminal retirement refused; inspect the private storage receipt
 # Env:   ORCH_SYNC_SCRIPT  the copy script (default ~/.codex/bin/orch-sync-mirror.sh)
 #        PYTHON            the interpreter for verify.py (default python3)
 #        ORCH_LOCAL_RUNTIME, ORCH_STATE_DIR, ORCH_CAPABILITIES_PATH, ORCH_FEEDBACK_DB
@@ -44,6 +45,9 @@
 #                          verify.py is handed the copies, never these
 #        VERIFY_BEFORE_SYNC_MAX_DIR_MB  largest state directory copied (default 50)
 #        VERIFY_BEFORE_SYNC_KEEP=1  keep the scratch directory and print its path
+#        ORCH_STORAGE_STATE_DIR  shared private admission state (default runtime/.storage-lifecycle)
+#        VERIFY_BEFORE_SYNC_PEAK_BYTES  larger producer forecast for expected temporary growth
+#        VERIFY_BEFORE_SYNC_OWNER_KEY  stable publication target key; excludes superseded candidates
 #        VERIFY_BEFORE_SYNC_TREE  the `tree:` label verify.py must print for a verdict (default
 #                          `EXEC MIRROR`, the owner's provisioned mirror). CI's exec-mirror job sets
 #                          `BARE EXEC MIRROR`: it runs this same script on a runner, with
@@ -53,12 +57,23 @@
 #        VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG=1  pass --floor-may-lag to verify.py. CI sets it: a floor
 #                          lagging behind reality is the checkout job's business, and a collection
 #                          DROP still fails either way.
+#        VERIFY_BEFORE_SYNC_PYTEST_SHARD=i/N, VERIFY_BEFORE_SYNC_SHARD_OUTPUT=absolute-path
+#                          CI shard evidence only; no whole-tree VERIFIED verdict is issued.
+#        VERIFY_BEFORE_SYNC_AGGREGATE=absolute-path  CI aggregate, with the usual full verdict.
 #
 # No here-documents or here-strings: bash 5.3 feeds them through a pipe, and a pipe can block
 # forever once system pipe memory is exhausted (tests/test_orchestrate_no_heredoc.py).
 set -uo pipefail
 
 real_home="$HOME"
+# Authenticated detached launchers replace PATH to keep their CLI environment deterministic. The
+# installed agent CLIs used by this machine's verification (agy and cursor-agent) live in the
+# standard per-user bin directory, so restore that one location without disturbing the selected
+# Python shim or the launcher's tool ordering.
+if [[ -d "$real_home/.local/bin" ]]; then
+  PATH="$real_home/.local/bin:$PATH"
+  export PATH
+fi
 mode="verify"
 if [[ "${1:-}" == "--identity" ]]; then
   mode="identity"
@@ -90,11 +105,22 @@ statedir_src="${ORCH_STATE_DIR:-$real_home/.codex/orchestrator}"
 ledger_src="${ORCH_CAPABILITIES_PATH:-$runtime_src/capabilities.json}"
 brain_src="${ORCH_FEEDBACK_DB:-$runtime_src/feedback/orchestrator.db}"
 max_dir_mb="${VERIFY_BEFORE_SYNC_MAX_DIR_MB:-50}"
+storage_state="${ORCH_STORAGE_STATE_DIR:-$runtime_src/.storage-lifecycle}"
 skipped_dirs=""
 expected_tree="${VERIFY_BEFORE_SYNC_TREE:-EXEC MIRROR}"
 # A scalar, not an array: an empty array under `set -u` is an unbound variable in bash 3.2.
 floor_flag=""
 [[ "${VERIFY_BEFORE_SYNC_FLOOR_MAY_LAG:-0}" == "1" ]] && floor_flag="--floor-may-lag"
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" && -n "$snapshot_out" ]]; then
+  printf 'verify-before-sync: a pytest shard cannot publish a verified snapshot; run the aggregate\n' >&2
+  exit 2
+fi
+
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" &&
+      "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:-}" != /* ]]; then
+  printf 'verify-before-sync: VERIFY_BEFORE_SYNC_SHARD_OUTPUT must be an absolute path\n' >&2
+  exit 2
+fi
 
 say() { printf '%s\n' "$*"; }
 fail() { printf 'verify-before-sync: %s\n' "$*" >&2; }
@@ -117,6 +143,9 @@ copy_state() {
   [[ -d "$from" ]] || return 0
   for entry in "$from"/* "$from"/.[!.]*; do
     [[ -e "$entry" ]] || continue
+    # Admission receipts/claims are control metadata, never input state. Copying
+    # them into another managed run recursively reproduces cleanup evidence.
+    [[ "$entry" == "$storage_state" || "$(basename "$entry")" == ".storage-lifecycle" ]] && continue
     name="$(basename "$entry")"
     if [[ -f "$entry" ]]; then
       case "$name" in
@@ -136,6 +165,17 @@ copy_state() {
       fi
     fi
   done
+}
+
+# The agent-runtime tree is intentionally too large to copy wholesale. This small model catalog is
+# a prerequisite for the strict local verifier, though, so carry just that file into the private
+# state copy when it exists. No model cache is written or refreshed by the copy step.
+copy_verifier_prerequisites() {
+  local from="$1" to="$2" cache="agent-runtime/gemini/advertised-models.json"
+  if [[ -f "$from/$cache" ]]; then
+    mkdir -p "$to/$(dirname "$cache")" || return 1
+    cp -p "$from/$cache" "$to/$cache" || return 1
+  fi
 }
 
 # What the sync copies: a non-recursive module glob and selected root files from the WORKING TREE,
@@ -164,6 +204,9 @@ for label, path in (
     ("mirror/experiments/repo_knowledge.json", src / "experiments/repo_knowledge.json"),
     ("mirror/data/feedback-snapshot.json", src / "data/feedback-snapshot.json"),
     ("mirror/config/coverage-baseline.json", src / "config/coverage-baseline.json"),
+    ("mirror/config/test-shards.json", src / "config/test-shards.json"),
+    ("mirror/config/model_epochs.json", src / "config/model_epochs.json"),
+    ("mirror/closer_role_selection.json", src / "config/closer_role_selection.json"),
     ("mirror/.verify-floor.json", src / ".verify-floor.json"),
     ("mirror/CLAUDE.md", src / "CLAUDE.md"),
     ("mirror/AGENTS.md", src / "AGENTS.md"),
@@ -207,7 +250,33 @@ fi
 head_short="$(git -C "$src" rev-parse --short HEAD)"
 dirty="$(git -C "$src" status --porcelain | wc -l | tr -d ' ')"
 
-if ! scratch="$(mktemp -d "${TMPDIR:-/tmp}/verify-before-sync.XXXXXX")"; then
+storage_helper="$src/src/storage_lifecycle.py"
+[[ -f "$storage_helper" ]] || storage_helper="$src/storage_lifecycle.py"
+if [[ "${ORCH_STORAGE_ENTRY_PID:-}" != "$$" ]]; then
+  [[ -f "$storage_helper" ]] || { fail "NOTHING VERIFIED: storage lifecycle helper missing from source"; exit 2; }
+  # Drain first: a staged reservation whose run was interrupted before its verify ended (owner,
+  # child group and release parent dead, no receipt, nothing open in its root) has no other way
+  # to be finished, and its charge would refuse this admission forever. Held rows print a reason;
+  # the sweep never fails the verify.
+  if [[ -d "$storage_state" ]]; then
+    release_report="$("$python_bin" "$storage_helper" release-interrupted --state-dir "$storage_state" --apply 2>&1)" \
+      || release_report="release-interrupted unavailable: ${release_report:0:300}"
+    say "== storage: interrupted reservations: $release_report"
+  fi
+  storage_args=(run --state-dir "$storage_state" --source "$src" --runtime "$runtime_src"
+    --state-source "$statedir_src" --temp-parent "${TMPDIR:-/tmp}" --max-dir-mb "$max_dir_mb"
+    --profile "$expected_tree" --peak-bytes "${VERIFY_BEFORE_SYNC_PEAK_BYTES:-0}")
+  # The supervisor selects the reviewed fixture contract or the conservative
+  # 27 GiB fallback. CI's deliberately different BARE shape is not a local release.
+  [[ "$expected_tree" == "BARE EXEC MIRROR" && "${CI:-}" == "true" ]] || storage_args+=(--local-strict)
+  verify_args=()
+  [[ -z "$snapshot_out" ]] || verify_args+=(--snapshot-out "$snapshot_out")
+  [[ -z "$digest_out" ]] || verify_args+=(--digest-out "$digest_out")
+  verify_args+=("$src")
+  exec "$python_bin" "$storage_helper" "${storage_args[@]}" -- bash "${BASH_SOURCE[0]}" "${verify_args[@]}"
+fi
+
+if ! scratch="$(mktemp -d "${VERIFY_BEFORE_SYNC_TMP_PARENT:-${TMPDIR:-/tmp}}/verify-before-sync.XXXXXX")"; then
   fail "NOTHING VERIFIED: could not create a scratch directory"
   exit 2
 fi
@@ -224,7 +293,7 @@ fi
 scratch="$scratch_real"
 if [[ "${VERIFY_BEFORE_SYNC_KEEP:-0}" == "1" ]]; then
   say "scratch directory kept: $scratch"
-else
+elif [[ -z "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
   trap 'rm -rf "$scratch"' EXIT
 fi
 mkdir -p "$scratch/home/.codex/orchestrator"
@@ -281,6 +350,10 @@ statedir_copy="$runtime_copy"
 say "== scratch copy of the live state ($runtime_src), which verify.py may read AND write"
 if ! copy_state "$runtime_src" "$runtime_copy"; then
   fail "NOTHING VERIFIED: could not copy the live state from $runtime_src"
+  exit 2
+fi
+if ! copy_verifier_prerequisites "$runtime_src" "$runtime_copy"; then
+  fail "NOTHING VERIFIED: could not copy the small agent model catalog to the state copy"
   exit 2
 fi
 if [[ "$statedir_src" != "$runtime_src" ]]; then
@@ -361,7 +434,23 @@ fi
 say "   $seed_line"
 
 say "== verify.py in the scratch mirror, on the state copy (HOME stays real for the installed CLIs)"
-(cd "$scratch/mirror" && in_state_copy "$python_bin" verify.py ${floor_flag:+"$floor_flag"}) 2>&1 | tee "$scratch/verify.log"
+if [[ -n "${ORCH_STORAGE_RUN_ROOT:-}" ]]; then
+  "$python_bin" "$storage_helper" staged --state-dir "$storage_state" --job "$ORCH_STORAGE_RUN_ID" || exit 2
+fi
+verify_args=()
+[[ -n "$floor_flag" ]] && verify_args+=("$floor_flag")
+if [[ -z "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" && -z "${VERIFY_BEFORE_SYNC_AGGREGATE:-}" ]]; then
+  # The storage supervisor retains staging on a failed local full verdict.  Keep only the
+  # redacted failure record there before verify.py's private JUnit directory disappears.
+  verify_args+=(--failure-evidence-out "$scratch/pytest-failure-evidence.json")
+fi
+if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" ]]; then
+  verify_args+=(--pytest-shard "$VERIFY_BEFORE_SYNC_PYTEST_SHARD" --shard-output "${VERIFY_BEFORE_SYNC_SHARD_OUTPUT:?absolute evidence directory required}")
+fi
+if [[ -n "${VERIFY_BEFORE_SYNC_AGGREGATE:-}" ]]; then
+  verify_args+=(--aggregate "$VERIFY_BEFORE_SYNC_AGGREGATE")
+fi
+(cd "$scratch/mirror" && in_state_copy "$python_bin" verify.py ${verify_args[@]+"${verify_args[@]}"}) 2>&1 | tee "$scratch/verify.log"
 pipe_status=("${PIPESTATUS[@]}")
 rc=${pipe_status[0]}
 tee_rc=${pipe_status[1]}
@@ -397,6 +486,9 @@ fi
 
 if [[ "$rc" == "0" && "$shape_ok" == "1" ]]; then
   verdict="VERIFIED"
+  if [[ -n "${VERIFY_BEFORE_SYNC_PYTEST_SHARD:-}" ]]; then
+    verdict="SHARD COMPLETED ($VERIFY_BEFORE_SYNC_PYTEST_SHARD; full verdict awaits aggregate)"
+  fi
 elif [[ "$rc" == "0" ]]; then
   verdict="NOT VERIFIED (verify.py passed, but not in the $expected_tree shape)"
 else

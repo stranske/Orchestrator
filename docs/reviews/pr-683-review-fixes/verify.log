@@ -1,0 +1,91 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 22.6 MB; Brain absent at the source, so it bootstraps privately
+  time:       pytest 13m48s, selftests 1m02s (8 at a time), gates 1m01s
+  pytest:     3954 passed, 42 failed, 0/31 max skipped (3996 collected; floor 3996)
+  selftests:  102 of 106 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   48 of 48 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  47 of 53
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 49 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 24 admission checks passed — 12 enforced, 27 legacy debt, commitments clean (24 of 24 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 18 rows this tree declares are registered in the ledger judged
+  entrypoints: NOT CHECKED (PermissionError: [Errno 1] Operation not permitted: '/Users/teacher/.codex/orchestrator/capabilities.json.lock')
+  mypy ratchet: 0/0 max of 125 module(s) exempt, 125 checked — fully drained
+
+  PROBLEMS:
+    - 42 pytest failure(s)/error(s)
+    - executed-or-skipped count dropped: 3954 passed + 0 skipped < floor 3996 — a test stopped being run without becoming a named skip
+    - 4 module selftest(s) failed: adapters, capability_propensity, exp_abcd, tick_watchdog
+    selftest adapters: ason and "default state dir" in reason, reason
+AssertionError: /Users/teacher/.codex/orchestrator contains the user's ho
+    selftest capability_propensity:  root {nested}"
+AssertionError: the private store /Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/propensity-
+    selftest exp_abcd: onda3/lib/python3.12/pathlib.py", line 1342, in unlink
+    os.unlink(self)
+PermissionError: [Errno 1] Operation not perm
+    selftest tick_watchdog: le "/opt/anaconda3/lib/python3.12/subprocess.py", line 1953, in _execute_child
+    raise child_exception_type(errno_num,
+
+  pytest failures (42):
+    FAILED tests/test_agent_gh_config.py::test_both_experiment_paths_pin_gh - ada...
+    FAILED tests/test_agent_workspace_never_broad.py::test_every_evaluator_runs_in_a_scratch_workspace_of_its_own[vibe]
+    FAILED tests/test_agent_workspace_never_broad.py::test_every_homes_control_plane_is_refused_when_home_is_moved
+    FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+    FAILED tests/test_build_exec_mirror.py::test_the_390_guard_composes_with_the_documented_copier
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+    FAILED tests/test_credential_redaction.py::test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[works]
+    FAILED tests/test_credential_redaction.py::test_an_experiment_evaluators_output_is_masked_before_it_reaches_the_brain[fails]
+    FAILED tests/test_exp_abcd_selftest_private_brain.py::test_every_brain_connection_in_the_selftest_opens_a_private_store
+    FAILED tests/test_experiment_arm_identity.py::test_arm_evaluate_dual_writes_exact_v2_and_parent_legacy
+    FAILED tests/test_gemini_large_prompt_transport.py::test_compact_gemini_prompt_retains_the_established_argv_shape
+    FAILED tests/test_model_tier_resolution.py::test_build_command_honours_every_tier
+    FAILED tests/test_model_tier_resolution.py::test_non_tier_modes_do_not_pin_a_model
+    FAILED tests/test_model_tier_resolution.py::test_capacity_sheds_seat_when_model_unresolvable
+    FAILED tests/test_model_tier_resolution.py::test_capacity_stays_ok_when_model_resolves
+    FAILED tests/test_model_tier_resolution.py::test_offload_survives_a_heartbeat_failure
+    FAILED tests/test_model_tier_resolution.py::test_argon_successor_tiers_reach_matching_offload_profiles
+    FAILED tests/test_offload_failure_evidence.py::test_the_synchronous_adapter_applies_the_same_rule[measured]
+    FAILED tests/test_offload_failure_evidence.py::test_the_synchronous_adapter_applies_the_same_rule[refusal]
+    FAILED tests/test_propensity_selftest_private_state.py::test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores
+    FAILED tests/test_propensity_selftest_private_state.py::test_production_heartbeats_cannot_fire_inside_and_the_flag_is_restored
+    FAILED tests/test_propensity_selftest_private_state.py::test_record_overrides_are_watched_as_records_not_as_their_directory
+    FAILED tests/test_rate_incidents.py::test_synchronous_adapter_hook_records_structured_evidence
+    FAILED tests/test_rate_incidents.py::test_synchronous_adapter_repeated_failures_get_distinct_run_ids
+    FAILED tests/test_rate_incidents.py::test_synchronous_adapter_preserves_classification_when_recording_fails
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_backslash
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_combined
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_quote
+    FAILED tests/test_seatbelt_regex_quoting.py::SeatbeltRegexQuotingTests::test_regex_metacharacters
+    FAILED tests/test_shed_names_its_drain.py::test_the_synchronous_adapter_passes_the_reset
+    FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+    FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+    FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+    FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+    FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+    FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+    FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+    FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+    FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+    FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+    FAILED tests/test_tracked_test_inputs.py::test_reading_an_input_the_mirror_lacks_fails_that_test
+
+  pytest tail:
+    FAILED tests/test_tick_watchdog.py::test_a_stuck_tick_is_reported_with_the_kill_that_frees_it
+    FAILED tests/test_tick_watchdog.py::test_the_process_table_keeps_whole_command_lines
+    FAILED tests/test_tick_watchdog.py::test_the_drained_line_is_reachable_and_exact
+    FAILED tests/test_tick_watchdog.py::test_a_tick_that_reaches_no_cadence_step_alerts
+    FAILED tests/test_tick_watchdog.py::test_a_previous_tick_that_left_no_end_is_unknown_and_kept
+    FAILED tests/test_tick_watchdog.py::test_an_unreadable_record_is_unknown_not_clean
+    FAILED tests/test_tick_watchdog.py::test_the_arming_block_as_written_arms_and_records_the_tick
+    FAILED tests/test_tick_watchdog.py::test_fleet_summary_carries_the_tick_record
+    FAILED tests/test_tick_watchdog.py::test_a_drain_whose_target_has_exited_is_never_advertised
+    FAILED tests/test_tick_watchdog.py::test_ticks_that_never_reach_a_cadence_step_alert_from_first_arming
+    FAILED tests/test_tracked_test_inputs.py::test_reading_an_input_the_mirror_lacks_fails_that_test
+    42 failed, 3954 passed, 4 warnings, 314 subtests passed in 822.95s (0:13:42)
+
+EXIT_CODE=1
+
+Follow-up: the tracked-input scratch fixture now includes the feature_goals module required by copied conftest.py; its five tests pass (tracked-inputs-green.log). No subsequent full PASS is claimed.

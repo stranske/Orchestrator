@@ -20,9 +20,23 @@ import time
 from pathlib import Path
 from typing import Any
 
+import mutable_registry
+import paths
+
 ORCH = Path(__file__).resolve().parent
-REG = Path(os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json"))
+REG = Path(
+    os.environ.get("ORCH_FEATURES_PATH", paths.runtime_state_path("experiments", "features.json"))
+)
 LADDER = ["ad-hoc", "reused", "hardened"]
+# Historical capability migrations consumed "new" as observed, never active.
+# Keep that stored value intact; only maturity comparisons project it to ad-hoc.
+LEGACY_MATURITIES = {"new": "ad-hoc"}
+
+
+def _maturity(item: dict) -> str:
+    value = item.get("maturity", "ad-hoc")
+    return LEGACY_MATURITIES.get(value, value)
+
 
 # Seeded with what already emerged building this system — honest current state.
 SEED = {
@@ -150,26 +164,77 @@ SEED = {
 }
 
 
-def load(path: Path = REG) -> dict:
-    if path.exists():
-        return json.loads(path.read_text())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    seed = {
-        k: {**v, "first_seen": int(time.time()), "count": len(v.get("uses", []))}
+def _validate_registry(reg: Any) -> None:
+    if not isinstance(reg, dict):
+        raise ValueError("feature registry must be an object")
+    for name, item in reg.items():
+        if not isinstance(name, str) or not isinstance(item, dict):
+            raise ValueError("feature records must be named objects")
+        if "maturity" in item and item["maturity"] not in (*LADDER, *LEGACY_MATURITIES):
+            raise ValueError("unsupported feature maturity")
+        if "uses" in item and (
+            not isinstance(item["uses"], list)
+            or any(not isinstance(use, str) for use in item["uses"])
+        ):
+            raise ValueError("feature uses must be strings")
+        if "count" in item and (type(item["count"]) is not int or item["count"] < 0):
+            raise ValueError("feature count must be a nonnegative integer")
+
+
+def _seed(*, initialize: bool = False) -> dict:
+    # Pure reads of an absent registry never manufacture a durable first-seen time.
+    return {
+        k: {
+            **v,
+            "first_seen": int(time.time()) if initialize else 0,
+            "count": len(v.get("uses", [])),
+        }
         for k, v in SEED.items()
     }
-    path.write_text(json.dumps(seed, indent=2))
-    return seed
+
+
+def _normalized_seed(reg: dict) -> dict:
+    normalized = {}
+    for name, item in reg.items():
+        value = dict(item)
+        value.pop("first_seen", None)
+        value.setdefault("count", len(value.get("uses", [])))
+        normalized[name] = value
+    return normalized
+
+
+def _default_seed(path: Path, *, initialize: bool = False) -> dict:
+    def factory():
+        return _seed(initialize=initialize)
+
+    if "ORCH_FEATURES_PATH" in os.environ or Path(path) != REG:
+        return factory()
+    return mutable_registry.seed_default(
+        path,
+        ORCH / "experiments" / "features.json",
+        factory,
+        _validate_registry,
+        normalize=_normalized_seed,
+    )
+
+
+def load(path: Path = REG, *, create: bool = False) -> dict:
+    """Read without mutation; initialization requires an explicit create=True."""
+    if create:
+        return mutable_registry.initialize(
+            path, lambda: _default_seed(path, initialize=True), _validate_registry
+        )
+    return mutable_registry.read(path, lambda: _default_seed(path), _validate_registry)
 
 
 def save(reg: dict, path: Path = REG) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(reg, indent=2))
+    """Explicit complete replacement; record_use/mark_hardened transact their edits."""
+    mutable_registry.write(path, reg, _validate_registry)
 
 
 def _read_registry(path: Path, *, create: bool) -> dict:
     if create or path.exists():
-        return load(path)
+        return load(path, create=create)
     return {}
 
 
@@ -187,55 +252,65 @@ def record_use(
     """
     if maturity is not None and maturity not in LADDER:
         raise ValueError(f"invalid maturity: {maturity}")
-    reg = load(path)
-    f = reg.get(name) or {
-        "problem": problem,
-        "maturity": "ad-hoc",
-        "module": None,
-        "uses": [],
-        "first_seen": int(time.time()),
-        "count": 0,
-    }
-    if problem and not f.get("problem"):
-        f["problem"] = problem
-    if module:
-        f["module"] = module
-    if where not in f["uses"]:
-        f["uses"].append(where)
-    f["count"] = len(f["uses"])
-    if f["maturity"] == "ad-hoc" and f["count"] >= 2:
-        f["maturity"] = "reused"
-    if maturity:
-        f["maturity"] = maturity
-    reg[name] = f
-    save(reg, path)
-    return f
+    selected = {}
+
+    def mutate(reg):
+        f = reg.get(name) or {
+            "problem": problem,
+            "maturity": "ad-hoc",
+            "module": None,
+            "uses": [],
+            "first_seen": int(time.time()),
+            "count": 0,
+        }
+        if problem and not f.get("problem"):
+            f["problem"] = problem
+        if module:
+            f["module"] = module
+        f.setdefault("uses", [])
+        if where not in f["uses"]:
+            f["uses"].append(where)
+        f["count"] = len(f["uses"])
+        if _maturity(f) == "ad-hoc" and f["count"] >= 2:
+            f["maturity"] = "reused"
+        if maturity:
+            f["maturity"] = maturity
+        reg[name] = f
+        selected.update(f)
+
+    mutable_registry.update(
+        path, lambda: _default_seed(path, initialize=True), _validate_registry, mutate
+    )
+    return selected
 
 
-def promotion_candidates(path: Path = REG, *, create: bool = True) -> list:
+def promotion_candidates(path: Path = REG, *, create: bool = False) -> list:
     """Features used >=3 times but not yet hardened into a selftested module — the rule of three firing."""
     reg = _read_registry(path, create=create)
     return [
-        {"name": n, "count": f["count"], "problem": f["problem"]}
+        {"name": n, "count": f.get("count", 0), "problem": f.get("problem", "")}
         for n, f in reg.items()
-        if f["maturity"] != "hardened" and f["count"] >= 3
+        if _maturity(f) != "hardened" and f.get("count", 0) >= 3
     ]
 
 
 def mark_hardened(name: str, module: str, path: Path = REG) -> None:
-    reg = load(path)
-    if name not in reg:
-        raise ValueError(f"unknown feature: {name}; record it before hardening")
-    reg[name]["maturity"] = "hardened"
-    reg[name]["module"] = module
-    save(reg, path)
+    def mutate(reg):
+        if name not in reg:
+            raise ValueError(f"unknown feature: {name}; record it before hardening")
+        reg[name]["maturity"] = "hardened"
+        reg[name]["module"] = module
+
+    mutable_registry.update(
+        path, lambda: _default_seed(path, initialize=True), _validate_registry, mutate
+    )
 
 
-def summary(path: Path = REG, *, create: bool = True) -> dict:
+def summary(path: Path = REG, *, create: bool = False) -> dict:
     reg = _read_registry(path, create=create)
     counts = {m: 0 for m in LADDER}
     for item in reg.values():
-        maturity = item.get("maturity", "ad-hoc")
+        maturity = _maturity(item)
         counts[maturity] = counts.get(maturity, 0) + 1
     candidates = promotion_candidates(path, create=create)
     lifecycle: dict[str, Any] = {
@@ -426,9 +501,12 @@ def main(argv):
                 print(f"  - {c['name']} (used {c['count']}x): {c['problem']}")
         return 0
     reg = load()
-    for name, f in sorted(reg.items(), key=lambda kv: LADDER.index(kv[1]["maturity"])):
+    for name, f in sorted(reg.items(), key=lambda kv: LADDER.index(_maturity(kv[1]))):
         mod = f.get("module") or "(inline)"
-        print(f"  {f['maturity']:9} x{f['count']:<2} {name:20} {mod:24} — {f['problem']}")
+        print(
+            f"  {f.get('maturity', 'ad-hoc'):9} x{f.get('count', 0):<2} "
+            f"{name:20} {mod:24} — {f.get('problem', '')}"
+        )
     cands = promotion_candidates()
     if cands:
         print("\nPROMOTION CANDIDATES (rule of three):")

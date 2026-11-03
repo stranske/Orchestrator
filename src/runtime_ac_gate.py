@@ -14,10 +14,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -196,6 +198,53 @@ def author_keepalive_spec(
         return {"status": "error", "spec_authored": False, "error": str(exc)}
 
 
+SHADOW_BUDGET_FLAG = "ORCH_RUNTIME_AC_SHADOW_BUDGET"
+DEFAULT_EXECUTION_BUDGET = 3  # per ingest or sweep when the flag is unset; the tick exports 12
+
+
+def execution_budget(env=None, *, default: int = DEFAULT_EXECUTION_BUDGET) -> int:
+    """Disposable exact-head executions one ingest or one sweep may run; one flag for both.
+
+    Three a day measured 9 of 166 shadow specs in a week (112 PRs refused for budget on
+    2026-10-16 alone), so orchestrate.sh exports ORCH_RUNTIME_AC_SHADOW_BUDGET=12. A caller
+    without the flag, tests included, keeps the old bound.
+    """
+    resolved = os.environ if env is None else env
+    raw = str(resolved.get(SHADOW_BUDGET_FLAG, "") or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(0, value)
+
+
+REOPEN_FLAG = "ORCH_RUNTIME_AC_REOPEN"
+REOPEN_EXECUTED_FLOOR = 10
+
+
+def reopen_policy(env=None, summary: dict | None = None) -> dict:
+    """Whether a post-merge FAIL may reopen its issue: decided by evidence, not by a date.
+
+    `ORCH_RUNTIME_AC_REOPEN=1` forces on and `=0` is the kill switch. Unset or `auto` allows
+    reopening once at least REOPEN_EXECUTED_FLOOR rechecks have EXECUTED (PASS plus FAIL): ten
+    runs that reached a verdict show the runner works, and a FAIL caused by the runner itself is
+    already classified UNRUNNABLE (commands_disabled, tool_error, ...) rather than FAIL, so the
+    FAILs that remain are about the delivery. Until 2026-10-17 this was a flag that expired on a
+    calendar date, which timed the decision instead of the evidence (owner, 2026-10-17).
+    """
+    resolved = os.environ if env is None else env
+    raw = str(resolved.get(REOPEN_FLAG, "auto") or "auto").strip().lower()
+    section = summary or {}
+    executed = int(section.get("passed") or 0) + int(section.get("failed") or 0)
+    if raw in {"1", "on", "true", "yes"}:
+        mode, allowed = "forced_on", True
+    elif raw in {"0", "off", "false", "no"}:
+        mode, allowed = "off", False
+    else:
+        mode, allowed = "auto", executed >= REOPEN_EXECUTED_FLOOR
+    return {"mode": mode, "allowed": allowed, "executed": executed, "floor": REOPEN_EXECUTED_FLOOR}
+
+
 def shadow_summary(*, now: int, events=None) -> dict:
     """Count distinct PRs; retain unknown execution/audit evidence as unknown."""
     try:
@@ -223,19 +272,30 @@ def shadow_summary(*, now: int, events=None) -> dict:
             reason = row.get("terminal_reason") or "unrecorded"
             unmeasured_reasons.setdefault(reason, set()).add(row["target"])
     failed = {target for target, row in latest.items() if row.get("verifier_verdict") == "FAIL"}
+    # The LATEST observation per unmeasured PR: a window that mixes a pre-fix cause with a
+    # later budget refusal reports what stands now beside every cause ever recorded.
+    latest_planned: dict[str, str] = {}
+    for row in sorted(rows, key=lambda row: row.get("created_ts", 0)):
+        if row["target"] not in executed and row.get("gate_status") == "planned":
+            latest_planned[row["target"]] = row.get("terminal_reason") or "unrecorded"
+    latest_counts: dict[str, int] = {}
+    for reason in latest_planned.values():
+        latest_counts[reason] = latest_counts.get(reason, 0) + 1
+    merged_unmet = {
+        row["target"]
+        for row in rows
+        if row["target"] in failed and row.get("downstream_merged") is True
+    }
     audited = [row for row in latest.values() if row.get("false_fail_audit") is not None]
     return {
         "prs": len(targets),
         "specs_authored": len(authored),
         "executed": len(executed),
         "would_fail": len(failed),
-        "merged_with_unmet": len(
-            {
-                row["target"]
-                for row in rows
-                if row["target"] in failed and row.get("downstream_merged") is True
-            }
-        ),
+        "merged_with_unmet": len(merged_unmet),
+        "would_fail_targets": sorted(failed),
+        "merged_with_unmet_targets": sorted(merged_unmet),
+        "latest_reason_per_pr": dict(sorted(latest_counts.items())),
         "false_fail_count": sum(row["false_fail_audit"] is True for row in audited),
         "audit_sample": sorted({row["target"] for row in audited}),
         "execution_unmeasured": len(targets - executed),
@@ -334,8 +394,99 @@ def observe_shadow_spec(
     return {"status": status, "blocks": False, "gate_event": event}
 
 
+def _worktree_interpreter(worktree: str | Path) -> str:
+    """Use a repository venv, provisioning one from this checkout when absent.
+
+    Disposable git worktrees do not inherit the canonical checkout's untracked
+    environment. Bootstrap with the scheduler's interpreter, but never run checks
+    with it or expose its site-packages to the repository.
+    """
+    root = Path(worktree).resolve()
+    for name in (".venv", "venv"):
+        environment = root / name
+        interpreter = environment / "bin" / "python"
+        if interpreter.is_file():
+            return str(interpreter)
+        if environment.exists() or environment.is_symlink():
+            raise RuntimeError(f"selected repository interpreter is unavailable: {interpreter}")
+    environment = root / ".venv"
+    interpreter = environment / "bin" / "python"
+    metadata = root / "pyproject.toml"
+    project = tomllib.loads(metadata.read_text(encoding="utf-8")) if metadata.is_file() else {}
+    distribution = any(key in project for key in ("project", "build-system")) or bool(
+        project.get("tool", {}).get("poetry")
+    )
+    distribution = distribution or any(
+        (root / name).is_file() for name in ("setup.py", "setup.cfg")
+    )
+    requirements = ["pytest"]
+    for name in ("requirements.txt", "requirements-dev.txt", "requirements-test.txt"):
+        if (root / name).is_file():
+            requirements.extend(["-r", str(root / name)])
+    if distribution:
+        extras = project.get("project", {}).get("optional-dependencies", {})
+        selected = sorted(set(extras) & {"dev", "test", "tests"})
+        requirements.append(".[" + ",".join(selected) + "]" if selected else ".")
+    setup_env = os.environ.copy()
+    # Scheduler install destinations can redirect pip outside this venv or force
+    # an unsupported user install. Retain index settings for repository dependencies.
+    for key in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "PIP_TARGET", "PIP_PREFIX", "PIP_USER"):
+        setup_env.pop(key, None)
+    # Build backends and dependency installers can launch Python by name too.
+    # Keep their children in this venv, just like the subsequent command checks.
+    setup_env["PATH"] = str(interpreter.parent) + os.pathsep + setup_env.get("PATH", "")
+    try:
+        for command in (
+            [sys.executable, "-m", "venv", str(environment)],
+            [
+                str(interpreter),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                *requirements,
+            ],
+        ):
+            completed = subprocess.run(
+                command,
+                cwd=str(root),
+                env=setup_env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if completed.returncode:
+                raise RuntimeError("repository environment setup failed")
+    except Exception:
+        # A partially installed environment must never be selected by a retry.
+        shutil.rmtree(environment, ignore_errors=True)
+        raise
+    return str(interpreter)
+
+
+def _deliberate_break_proof(row):
+    """Read the runner's bounded result; old complete display JSON is legacy only."""
+    if "deliberate_break_result" in row:
+        proof = row["deliberate_break_result"]
+        normalized = runtime_ac.bounded_deliberate_break_result(proof)
+        return normalized if normalized is not None and normalized == proof else None
+    text = row.get("stdout_tail")
+    if not isinstance(text, str) or len(text) > runtime_ac.TAIL_CHARS:
+        return None
+    try:
+        proof = json.loads(text)
+    except ValueError:
+        return None
+    return runtime_ac.bounded_deliberate_break_result(proof)
+
+
 def recheck_merged(
-    spec: dict, merged_worktree: str | Path, *, allow_command_checks: bool | None = None
+    spec: dict,
+    merged_worktree: str | Path,
+    *,
+    allow_command_checks: bool | None = None,
+    merge_ci_green: bool = False,
 ) -> dict:
     """Run the existing named-check/break runner; manual or missing evidence is unknown.
 
@@ -349,9 +500,13 @@ def recheck_merged(
         if allow_command_checks is None
         else bool(allow_command_checks)
     )
+    interpreter = None
     try:
         current = copy.deepcopy(spec)
-        current.setdefault("runtime_context", {})["worktree"] = str(merged_worktree)
+        context = current.setdefault("runtime_context", {})
+        context["worktree"] = str(merged_worktree)
+        interpreter = _worktree_interpreter(merged_worktree)
+        context["python_interpreter"] = interpreter
         for criterion in current.get("acceptance_criteria", []):
             for check in criterion.get("checks", []):
                 if check.get("type") == "deliberate_break":
@@ -377,13 +532,10 @@ def recheck_merged(
             )
 
         def delivery_failed(row):
-            if row.get("status") != "FAIL":
+            if row.get("status") != "FAIL" or environment_mismatch(row):
                 return False
             if row.get("type") == "deliberate_break":
-                try:
-                    proof = json.loads(row.get("stdout_tail") or "{}")
-                except ValueError:
-                    return False
+                proof = _deliberate_break_proof(row)
                 # local_verify distinguishes a broken candidate from a hollow
                 # comparison. Confirm the candidate's assertion failure too:
                 # FAIL_BROKEN alone can also describe a failed test launcher.
@@ -398,11 +550,51 @@ def recheck_merged(
             # failures must not reopen a delivered issue.
             return assertion_failed(row)
 
+        def environment_mismatch(row):
+            """Recognize the runner's child-Python import failure, not a product assertion."""
+            if not merge_ci_green or row.get("status") != "FAIL":
+                return False
+            candidate = row
+            if row.get("type") == "deliberate_break":
+                proof = _deliberate_break_proof(row)
+                if not isinstance(proof, dict) or proof.get("verdict") != "FAIL_BROKEN":
+                    return False
+                candidate = proof.get("green") or {}
+            if not isinstance(candidate, dict) or not assertion_failed(candidate):
+                return False
+            output = "\n".join(
+                str(candidate.get(key) or "") for key in ("stdout_tail", "stderr_tail")
+            )
+            # A real failed assertion wins when both signals occur in one test run. The
+            # environment classification is only for the isolated child-launcher failure.
+            if re.search(r"\bAssertionError\b|\bassert(?:ion)?\s", output, re.I):
+                return False
+            return bool(
+                re.search(
+                    r"CalledProcessError[^\n]*(?:python|Python)|"
+                    r"(?:subprocess\.|sys\.executable)[\s\S]*ModuleNotFoundError",
+                    output,
+                    re.I,
+                )
+            )
+
         if any(delivery_failed(r) for r in executable):
             result = "FAIL"
         elif (
             executable
-            and all(r.get("status") == "PASS" for r in executable)
+            and all(
+                r.get("status") == "PASS"
+                and (
+                    r.get("type") != "deliberate_break"
+                    or (
+                        (proof := _deliberate_break_proof(r)) is not None
+                        and proof["verdict"] == "PASS"
+                        and not proof["error"]
+                        and proof["green"]["returncode"] in (None, 0)
+                    )
+                )
+                for r in executable
+            )
             # Manual criteria cannot be supplied to a machine recheck, so the gate's own verdict
             # reads NEEDS_REVIEW for every spec that mixes named tests with manual items: all
             # three rechecks of 2026-10-16 ran their named tests green and were still
@@ -419,10 +611,7 @@ def recheck_merged(
             def hollow(row):
                 if row.get("type") != "deliberate_break":
                     return False
-                try:
-                    proof = json.loads(row.get("stdout_tail") or "{}")
-                except ValueError:
-                    return False
+                proof = _deliberate_break_proof(row)
                 return isinstance(proof, dict) and proof.get("verdict") == "FAIL_HOLLOW"
 
             if not executable:
@@ -434,15 +623,23 @@ def recheck_merged(
                 reason = "commands_disabled"
             elif any(hollow(r) for r in executable):
                 reason = "hollow_break"
+            elif any(environment_mismatch(r) for r in executable):
+                reason = "environment_mismatch"
             else:
                 reason = "incomplete"
         return {
             "result": result,
             "reason": reason,
+            "interpreter": context["python_interpreter"],
             "transcript": json.dumps(run, indent=2, default=str),
         }
     except Exception as exc:
-        return {"result": "UNRUNNABLE", "reason": "tool_error", "transcript": str(exc)}
+        return {
+            "result": "UNRUNNABLE",
+            "reason": "tool_error",
+            "interpreter": interpreter,
+            "transcript": str(exc),
+        }
 
 
 def post_merge_summary() -> dict:
@@ -495,6 +692,9 @@ def post_merge_summary() -> dict:
 def format_post_merge_summary(section: dict) -> str:
     if section.get("error"):
         return f"runtime-AC post-merge: unmeasured ({section['error']})"
+    # The reopen policy is a function of the switch and this section's executed count; it is
+    # computed here, where it is printed, so the summary dict keeps the shape its readers pin.
+    policy = reopen_policy(os.environ, section)
     reasons = section.get("unrunnable_reasons") or {}
     reason_bit = (
         " (" + ", ".join(f"{name} {count}" for name, count in sorted(reasons.items())) + ")"
@@ -507,6 +707,7 @@ def format_post_merge_summary(section: dict) -> str:
         f"failed {section['failed']}, reopened {section['reopened']}, "
         f"unrunnable {section['unrunnable']}{reason_bit}"
         + (f", malformed {section['malformed']}" if section.get("malformed") else "")
+        + f", reopen {policy['mode']} (executed {policy['executed']} of {policy['floor']})"
     )
 
 
@@ -526,11 +727,20 @@ def format_shadow_summary(section: dict) -> str:
         if reasons
         else ""
     )
+    targets = section.get("would_fail_targets") or []
+    unmet = " (unmet ACs: " + ", ".join(targets) + ")" if targets else " (unmet ACs)"
+    latest = section.get("latest_reason_per_pr") or {}
+    latest_text = (
+        "; latest unmeasured state (PRs): "
+        + ", ".join(f"{reason} {count}" for reason, count in sorted(latest.items()))
+        if latest and latest != reasons
+        else ""
+    )
     return (
         f"runtime-AC shadow: PRs {section['prs']}, specs authored {section['specs_authored']}, "
-        f"executed {section['executed']}, would-FAIL {section['would_fail']} (unmet ACs), "
+        f"executed {section['executed']}, would-FAIL {section['would_fail']}{unmet}, "
         f"merged with unmet ACs {section['merged_with_unmet']}, false-FAIL audit {audit}; "
-        f"execution unmeasured {section['execution_unmeasured']}{reason_text}"
+        f"execution unmeasured {section['execution_unmeasured']}{reason_text}{latest_text}"
     )
 
 
@@ -615,8 +825,11 @@ UNRUNNABLE_REASONS = (
     "hollow_break",
     "tool_error",
     "incomplete",
+    "environment_mismatch",
 )
-RUNNER_SIDE_UNRUNNABLE = frozenset({"commands_disabled", "tool_error", "incomplete"})
+RUNNER_SIDE_UNRUNNABLE = frozenset(
+    {"commands_disabled", "tool_error", "incomplete", "environment_mismatch"}
+)
 
 
 def post_merge_commands_allowed(env: Mapping[str, Any]) -> bool:
@@ -1441,6 +1654,8 @@ def _selftest() -> None:
         # non-PASS executable result under that same gate, or any other gate verdict, is
         # UNRUNNABLE (incomplete). Measured 2026-10-16: three green rechecks read UNRUNNABLE
         # because the rule demanded a gate PASS no mixed spec can produce.
+        # The stubbed runner needs no dependency installation or network access.
+        (Path(tmp) / ".venv").symlink_to(sys.prefix, target_is_directory=True)
         saved_run_verification = runtime_ac.run_verification
 
         def stub(payload):

@@ -65,7 +65,16 @@ class Panel:
         return {"verdict": self.verdict, "blockers": [{"severity": "high", "finding": "x"}]}
 
 
-def _merge(panel=None, *, labels=("risk:major",), env=ON, head=HEAD, merges=None, spawned=None):
+def _merge(
+    panel=None,
+    *,
+    labels=("risk:major",),
+    env=ON,
+    head=HEAD,
+    merges=None,
+    spawned=None,
+    skip_immediate_advisory=False,
+):
     merges = [] if merges is None else merges
     spawned = [] if spawned is None else spawned
 
@@ -86,6 +95,7 @@ def _merge(panel=None, *, labels=("risk:major",), env=ON, head=HEAD, merges=None
         "o/r#41",
         expected_head=head,
         confirm_merge=head is not None,
+        skip_immediate_advisory=skip_immediate_advisory,
         env=env,
         metadata_fn=_meta,
         gate_fn=lambda item, **kwargs: None,
@@ -319,3 +329,184 @@ def test_disabled_panel_never_schedules_cached_blocker(brain):
     assert out["merge_executed"] is True
     assert spawned == []
     assert "post_merge" not in out["adversarial_review"]
+
+
+def test_closer_explicitly_skips_optional_immediate_panel_without_acceptance_authority(
+    brain, monkeypatch
+):
+    def forbidden(*args, **kwargs):
+        pytest.fail("deferred advisory work was invoked")
+
+    monkeypatch.setattr(merge_guard, "adversarial_review_status", forbidden)
+    monkeypatch.setattr(merge_guard, "adjudicate_disagreement", forbidden)
+    merges, spawned = [], []
+    out = _merge(merges=merges, spawned=spawned, skip_immediate_advisory=True)
+    assert out["merge_executed"] is True and out["blocked"] is False
+    assert len(merges) == 1 and spawned == []
+    panel = out["adversarial_review"]
+    assert panel["status"] == "not_requested"
+    assert panel["acceptance_authority"] is False and "verdict" not in panel
+    assert "bound verifier and post-response acceptance" in panel["detail"]
+    assert "adjudication" not in out
+    assert "--match-head-commit" in merges[0] and HEAD in merges[0]
+
+
+@pytest.mark.parametrize(
+    "boundary", ["missing_head", "final_preflight", "runtime_gate", "review_loop"]
+)
+def test_advisory_deferral_preserves_objective_merge_refusals(brain, boundary):
+    calls = []
+
+    def preflight(target, *, expected_head):
+        calls.append(expected_head)
+        if boundary == "final_preflight" and len(calls) == 2:
+            return {"blocked": True, "reason": "head changed"}
+        return _clean(target, expected_head=expected_head)
+
+    out = merge_guard.guarded_merge(
+        "o/r#41",
+        expected_head=None if boundary == "missing_head" else HEAD,
+        confirm_merge=True,
+        skip_immediate_advisory=True,
+        metadata_fn=_meta,
+        gate_fn=lambda *args, **kwargs: (
+            {"status": "executed", "verdict": "FAIL", "blocks": True}
+            if boundary == "runtime_gate"
+            else None
+        ),
+        preflight_fn=preflight,
+        review_loop_fn=lambda *args, **kwargs: {
+            "required": boundary == "review_loop",
+            "eligible": False,
+            "reason": "review floor pending",
+        },
+        merge_fn=lambda *args, **kwargs: pytest.fail("merge bypassed objective refusal"),
+        spawn_fn=lambda *args, **kwargs: pytest.fail("spawned optional immediate advisory"),
+    )
+    assert out["blocked"] is True and out["merge_executed"] is False
+
+
+def test_immediate_advisory_opt_out_cli_is_explicit_and_defaults_off(monkeypatch, capsys):
+    received = []
+    monkeypatch.setattr(
+        merge_guard,
+        "guarded_merge",
+        lambda *args, **kwargs: received.append(kwargs) or {"blocked": False},
+    )
+    assert merge_guard.main(["o/r#41", "--expected-head", HEAD, "--skip-immediate-advisory"]) == 0
+    assert merge_guard.main(["o/r#41", "--expected-head", HEAD]) == 0
+    assert [row["skip_immediate_advisory"] for row in received] == [True, False]
+
+
+@pytest.mark.parametrize(
+    "required_by", ["label", "forced", "spec", "broken_spec", "broken_symlink"]
+)
+def test_remote_only_refuses_local_runtime_footprints_before_any_execution(brain, required_by):
+    import runtime_ac_gate
+
+    path = runtime_ac_gate.spec_path("o/r#41")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if required_by in {"spec", "broken_spec"}:
+        path.write_text("{}" if required_by == "spec" else "not JSON")
+    if required_by == "broken_symlink":
+        path.symlink_to(brain / "missing-spec")
+    meta = _meta("o/r#41")
+    if required_by == "label":
+        meta["labels"].append("runtime-ac")
+    out = merge_guard.guarded_merge(
+        "o/r#41",
+        expected_head=HEAD,
+        confirm_merge=True,
+        remote_only=True,
+        require_runtime_ac=required_by == "forced",
+        metadata_fn=lambda target: meta,
+        preflight_fn=_clean,
+        gate_fn=lambda *args, **kwargs: pytest.fail("remote-only ran runtime commands"),
+        merge_fn=lambda *args, **kwargs: pytest.fail("remote-only bypassed required gate"),
+        panel_fn=lambda *args, **kwargs: pytest.fail("remote-only invoked advisory"),
+    )
+    assert out["blocked"] is True and out["merge_executed"] is False
+    assert out["reason"] == "footprint_requires_local_runtime_ac"
+
+
+def test_remote_only_keeps_exact_head_guard_and_never_runs_local_advisory(brain):
+    merges, metadata_calls = [], []
+
+    def metadata(target):
+        metadata_calls.append(target)
+        return _meta(target, title="security: high stakes")
+
+    out = merge_guard.guarded_merge(
+        "o/r#41",
+        expected_head=HEAD,
+        confirm_merge=True,
+        remote_only=True,
+        metadata_fn=metadata,
+        preflight_fn=_clean,
+        gate_fn=lambda *args, **kwargs: pytest.fail("remote-only called command-capable gate"),
+        review_loop_fn=lambda *args, **kwargs: {"required": False},
+        panel_fn=lambda *args, **kwargs: pytest.fail("remote-only invoked panel"),
+        adjudicate_fn=lambda *args, **kwargs: pytest.fail("remote-only invoked adjudicator"),
+        spawn_fn=lambda *args, **kwargs: pytest.fail("remote-only spawned advisory"),
+        merge_fn=lambda command, **kwargs: merges.append(command)
+        or subprocess.CompletedProcess(command, 0, "merged", ""),
+        remote_runs_fn=lambda *args, **kwargs: [],
+    )
+    assert out["blocked"] is False and out["merge_executed"] is True
+    assert len(metadata_calls) == 2
+    assert out["remote_only_guard_final"]["remote_only"] is True
+    assert "--match-head-commit" in merges[0] and HEAD in merges[0]
+    assert out["adversarial_review"]["status"] == "not_requested"
+
+
+@pytest.mark.parametrize(
+    "change", ["required_spec", "broken_spec", "shadow_spec", "required_label"]
+)
+def test_remote_only_rechecks_live_metadata_and_spec_immediately_before_merge(brain, change):
+    import runtime_ac_gate
+
+    calls = []
+
+    def metadata(target):
+        calls.append(target)
+        meta = _meta(target)
+        if len(calls) == 2:
+            if change == "required_label":
+                meta["labels"].append("runtime-ac")
+            else:
+                path = runtime_ac_gate.spec_path(target)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    {
+                        "required_spec": "{}",
+                        "broken_spec": "broken",
+                        "shadow_spec": '{"verification":{"shadow_only":true}}',
+                    }[change]
+                )
+        return meta
+
+    out = merge_guard.guarded_merge(
+        "o/r#41",
+        expected_head=HEAD,
+        confirm_merge=True,
+        remote_only=True,
+        metadata_fn=metadata,
+        preflight_fn=_clean,
+        review_loop_fn=lambda *args, **kwargs: {"required": False},
+        gate_fn=lambda *args, **kwargs: pytest.fail("runtime command executed"),
+        merge_fn=lambda *args, **kwargs: pytest.fail("merge ignored footprint drift"),
+    )
+    assert out["blocked"] is True and out["merge_executed"] is False
+    assert out["reason"] == "footprint_requires_local_runtime_ac"
+
+
+def test_remote_only_cli_is_explicit(monkeypatch):
+    received = []
+    monkeypatch.setattr(
+        merge_guard,
+        "guarded_merge",
+        lambda *args, **kwargs: received.append(kwargs) or {"blocked": False},
+    )
+    merge_guard.main(["o/r#41", "--remote-only"])
+    merge_guard.main(["o/r#41"])
+    assert [row["remote_only"] for row in received] == [True, False]

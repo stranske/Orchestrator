@@ -1,0 +1,48 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______________________ test_close_gate_bounds_git_probe _______________________
+
+tmp_path = PosixPath('/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6232/test_close_gate_bounds_git_pro0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x102fbd1c0>
+
+    def test_close_gate_bounds_git_probe(tmp_path, monkeypatch):
+        import subprocess
+        import provision
+    
+        @contextmanager
+        def exact(*args):
+            yield tmp_path
+    
+        def timed_out(args, **kwargs):
+            assert args == ["git", "-C", str(tmp_path), "rev-parse", "HEAD"]
+            assert kwargs["timeout"] == 120
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+    
+        monkeypatch.setattr(provision, "temporary_exact_head_worktree", exact)
+        monkeypatch.setattr(supervisor.subprocess, "run", timed_out)
+        with pytest.raises(subprocess.TimeoutExpired):
+>           supervisor._closure_gate(
+                TARGET,
+                {"target": REPO + "#7", "body": "## Acceptance Criteria\n- `pytest tests/test_contract.py` passes."},
+                SHA,
+            )
+
+tests/test_keepalive_supervisor.py:595: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/keepalive_supervisor.py:151: in _closure_gate
+    actual = subprocess.run(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+args = ['git', '-C', '/private/var/folders/qm/w0dtc0j132gd6ymf1hxtd2p00000gp/T/pytest-of-teacher/pytest-6232/test_close_gate_bounds_git_pro0', 'rev-parse', 'HEAD']
+kwargs = {'capture_output': True, 'text': True, 'check': False}
+
+    def timed_out(args, **kwargs):
+        assert args == ["git", "-C", str(tmp_path), "rev-parse", "HEAD"]
+>       assert kwargs["timeout"] == 120
+               ^^^^^^^^^^^^^^^^^
+E       KeyError: 'timeout'
+
+tests/test_keepalive_supervisor.py:589: KeyError
+=========================== short test summary info ============================
+FAILED tests/test_keepalive_supervisor.py::test_close_gate_bounds_git_probe
+1 failed in 0.35s

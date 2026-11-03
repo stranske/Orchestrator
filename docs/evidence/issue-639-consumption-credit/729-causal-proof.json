@@ -1,0 +1,22 @@
+{
+  "shape": "isolated export from actual repository copy contract; exact byte restoration",
+  "source_commit": "f36f7fb7",
+  "results": [
+    {
+      "probe": "729-router-RED",
+      "exit": 1
+    },
+    {
+      "probe": "729-router-GREEN",
+      "exit": 0
+    },
+    {
+      "probe": "729-dispatcher-RED",
+      "exit": 1
+    },
+    {
+      "probe": "729-dispatcher-GREEN",
+      "exit": 0
+    }
+  ]
+}

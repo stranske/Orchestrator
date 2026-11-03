@@ -29,9 +29,34 @@ import feedback
 import redirect_apply as ra
 import redirect_plan
 import redirect_shadow
+import redirect_sweep
 import roles
 
 OPEN_GATE = {"bootstrap_needed": True, "disagreements_needed": 3}
+
+
+def test_selftest_ignores_ambient_current_sweep(
+    stores: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ambient = stores["tmp"] / "ambient-redirect-sweep.json"
+    ambient.write_text(
+        json.dumps(
+            {
+                "generated_at": stores["now"],
+                "actionable": [
+                    {"target": "ambient/repo#1", "state": "stalled", "agent": "keepalive"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(redirect_sweep, "DEFAULT_REPORT", ambient)
+
+    ra._selftest()
+
+    assert redirect_sweep.DEFAULT_REPORT == ambient
+
+
 # A keepalive lane exactly as keepalive_supervisor.build_redirect_report writes it: no pid at all.
 LANE = {"agent": "keepalive", "lane": "closer", "task_type": "implement"}
 # The shape of every one of the 30 live reports on 2026-10-02 (one of them verbatim but the target).

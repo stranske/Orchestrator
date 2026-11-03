@@ -256,7 +256,9 @@ def _analyse_nodes(base_root: Path, test_cmd: str, test_paths: list[str], timeou
     returns its own `verdict` and never touches the rolled-up one.
     """
     candidates = [
-        path for path in test_paths if path.endswith(".py") or (base_root / path).is_dir()
+        path
+        for path in test_paths
+        if path.split("::", 1)[0].endswith(".py") or (base_root / path).is_dir()
     ]
     if not candidates:
         named = ", ".join(test_paths[:5]) or "none supplied"
@@ -363,20 +365,13 @@ def _rc(run: dict | None) -> str:
 
 
 def uncopied_test_paths(result: dict) -> list[str]:
-    """Declared `--test-path`s that never reached the base tree, so RED proves nothing about them.
-
-    `_copy_candidate_paths` copies a path only when it resolves to a real file or directory, and it
-    reports what it copied. A pytest NODE ID (`tests/test_x.py::test_y`) resolves to neither, so it
-    is silently skipped -- the base tree then has no candidate test at all, the command fails with
-    "file or directory not found", and `red["ok"]` is False for the wrong reason. The rolled-up
-    verdict is PASS and it means "the test is ABSENT from the base", not "the test FAILS against the
-    base". Those read identically in a JSON verdict and differently in a transcript somebody quotes
-    into a permanent record, which is why the transcript names them and the verdict is left alone.
-    """
+    """Declared test files missing from the base overlay (node IDs name their file)."""
     if not result.get("red"):
         return []
     copied = {str(p) for p in result.get("copied_test_paths") or []}
-    return [str(p) for p in result.get("test_paths") or [] if str(p) not in copied]
+    return [
+        str(p) for p in result.get("test_paths") or [] if str(p).split("::", 1)[0] not in copied
+    ]
 
 
 def _path_covered(path: str, copied: list[str]) -> bool:
@@ -636,7 +631,8 @@ def verify(
     # `overlay_covers_every_change` needs the whole of it. Deriving the two from separate git calls
     # would let them disagree about what changed.
     changed = _changed_paths(wt, base_ref)
-    tests = test_paths or [path for path in changed if _looks_like_test(path)]
+    selections = test_paths or [path for path in changed if _looks_like_test(path)]
+    tests = list(dict.fromkeys(path.split("::", 1)[0] for path in selections))
     if not tests:
         return {
             "verdict": "ERROR",
@@ -703,7 +699,7 @@ def verify(
         red = _run(test_cmd, red_root, timeout)
         # Inside the temporary directory on purpose: the probe needs the SAME extracted base the
         # red run used, and that base stops existing when this block exits.
-        nodes = _analyse_nodes(red_root, test_cmd, tests, timeout)
+        nodes = _analyse_nodes(red_root, test_cmd, selections, timeout)
 
     if red["ok"]:
         verdict = "FAIL_HOLLOW"
@@ -959,21 +955,16 @@ class TestMixed(unittest.TestCase):
         assert "no tautology is riding along" in sound_text, sound_text
         assert "no part of this proof" not in sound_text, sound_text
 
-        # ---- THE COPY-SCOPE GUARD. `--test-path` takes files and directories; a pytest NODE ID is
-        # silently not copied, so the base runs without the test, red is red because it is ABSENT,
-        # and the rolled-up verdict is PASS. REPORTED, never gated: the verdict below is asserted
-        # UNCHANGED, because a rendering flag that could move a gate would make the artifact and
-        # the gate two different answers.
+        # Node IDs copy the containing test file and therefore carry a valid RED proof.
         node_id_path = "tests/test_math_utils.py::TestAdd::test_add"
         node_scoped = verify(
             sound, base_ref="HEAD", test_cmd=cmd, test_paths=[node_id_path], timeout=30
         )
         assert node_scoped["verdict"] == "PASS", node_scoped
-        assert node_scoped["copied_test_paths"] == [], node_scoped["copied_test_paths"]
-        assert uncopied_test_paths(node_scoped) == [node_id_path], node_scoped
+        assert node_scoped["copied_test_paths"] == ["tests/test_math_utils.py"], node_scoped
+        assert uncopied_test_paths(node_scoped) == [], node_scoped
         node_text = break_transcript(node_scoped)
-        assert "THIS IS NOT A VALID DEMONSTRATION" in node_text, node_text
-        assert node_id_path in node_text, node_text
+        assert "THIS IS NOT A VALID DEMONSTRATION" not in node_text, node_text
         # A real file path is copied, so the guard must stay silent there -- a warning on every run
         # is a warning nobody reads.
         assert uncopied_test_paths(sound_out) == [], sound_out

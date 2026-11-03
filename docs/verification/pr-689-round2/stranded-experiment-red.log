@@ -1,0 +1,13 @@
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis[0]
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis[0] _
+tests/test_experiment_producer.py:406: in test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis
+    assert len(dispatched) == 2
+E   assert 0 == 2
+E    +  where 0 = len([])
+=========================== short test summary info ============================
+FAILED tests/test_experiment_producer.py::test_producer_judges_are_two_neutral_agents_and_delivery_bypasses_synthesis[0]
+1 failed in 0.47s
+
+EXIT=1

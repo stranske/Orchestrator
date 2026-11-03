@@ -26,6 +26,7 @@ import tarfile
 from pathlib import Path
 
 import env_prereq
+import feature_goals
 
 CONFTEST = Path(__file__).resolve().parent / "conftest.py"
 _spec = importlib.util.spec_from_file_location("tracked_inputs_guard_under_test", CONFTEST)
@@ -141,6 +142,9 @@ def build_checkout(root: Path, env: dict[str, str]) -> Path:
         "tests/slash_held/ export-ignore\n",
     )
     put(tests / "conftest.py", CONFTEST.read_text())
+    # The real suite-wide isolation fixture imports this report module, even in
+    # the miniature checkout used to exercise the independent input guard.
+    put(root / "feature_goals.py", Path(feature_goals.__file__).read_text())
     put(tests / "test_reads.py", READS)
     put(tests / "test_reads_at_import.py", AT_IMPORT)
     put(tests / "fixtures" / "tracked.txt", "tracked\n")

@@ -1,0 +1,81 @@
+{
+  "schema": "closer-result-wait-metrics-review/v1",
+  "source_base": "cb0e9c23ae7a64d79b0ba3aee26a3d1a46d19fbb",
+  "branch": "codex/category46-result-wait",
+  "worktree": "/tmp/orchestrator-category46-result-wait",
+  "causal_change": "8e5d0eed persists completed POST result before observation, producing authenticated ineligible collect-terminal result wait immediately. Eligibility to rerun differs from whether original POST ran.",
+  "before": {
+    "denominator": 1,
+    "excluded_waits": 2
+  },
+  "after": {
+    "denominator": 2,
+    "deterministic_zero_reasoning": 2,
+    "excluded_waits": 1,
+    "model_runs": 0
+  },
+  "accepted_accounting_shapes": [
+    {
+      "status": "deferred",
+      "action": "collect_evidence",
+      "operation_status": "completed",
+      "eligible": true,
+      "reason": "pass_limit"
+    },
+    {
+      "status": "deferred",
+      "action": "collect_evidence",
+      "operation_status": "completed",
+      "eligible": false,
+      "reason": "same verification request already accepted"
+    },
+    {
+      "status": "deferred",
+      "action": "collect_evidence",
+      "operation_status": "completed",
+      "eligible": false,
+      "reason": "collect terminal or unattributed verifier evidence; do not rerun"
+    }
+  ],
+  "retained_guards": [
+    "resource producer proof",
+    "exact queue hash and row copy",
+    "validated frontier schema/targets/bindings/owner/digests",
+    "exact branch revision",
+    "request/head/merge/original operation",
+    "submitted and advanced causal events",
+    "mandatory completed operation",
+    "no acceptance or ACT authority"
+  ],
+  "focused_tests": {
+    "passed": 62,
+    "seconds": 10.75,
+    "junit": "focused.xml",
+    "negative_joins": 27,
+    "original_expectation_unchanged": true
+  },
+  "static_checks": {
+    "mypy": "Success no issues found in 1 source file; --follow-imports=silent",
+    "ruff": "pass",
+    "black": "pass",
+    "git_diff_check": "pass"
+  },
+  "source_sha256": {
+    "src/closer_stage_feedback.py": "20ee23de70a0d207dddeac727bfd31ff6ec3e517b38ac1142fb8c46ff4284b6f",
+    "tests/test_closer_acceptance_metrics_composition.py": "ec02e6140da10356caecc88b230edf61f3c8cb197cf575478dc9e7cd86e7c54c",
+    "tests/test_closer_hold_descendant_boundary.py": "03a96ff60a558c1b946538f7971a96141f4eaac22d22bcaa48c832da0db3cf44",
+    "src/closer_queue.py": "9a368bd80cd92b3cfb0df74a326f4d0eb1cd4bc45a64d9f473e7405081c9f1e3"
+  },
+  "source_edits_only": [
+    "src/closer_stage_feedback.py"
+  ],
+  "dedicated_test_edits_only": [
+    "tests/test_closer_acceptance_metrics_composition.py"
+  ],
+  "provider_calls": 0,
+  "live_edits": 0,
+  "broad_suite": false,
+  "authority": false,
+  "independent_review": "pending parent exact-source review",
+  "outcome_limits": "Completed POST is counted; downstream verifier outcome/cost, live savings and independent false acceptance remain unknown."
+}

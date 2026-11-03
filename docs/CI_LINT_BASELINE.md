@@ -1,5 +1,48 @@
 # Gate python-ci baseline — what is checked, what is deferred, and what would clear it
 
+## Measured dependency closeout toolchain — 2026-10-22
+
+<!-- measured-with: black=26.10.1 ruff=0.17.2 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.17.0 -->
+
+The complete selected nine-pin bundle was installed in an isolated Python 3.12.2
+virtual environment and strictly measured against source
+`c28b6c3ab24ab3db06b2834d3fc383bfac44bd91`.
+Ruff reported zero findings, Black left 652 files unchanged, mypy checked 158
+source files with no errors, and the collector's Coverage startup probe reported
+zero errors. The collector reported no version or setup problems.
+
+[Strict report](evidence/dev-tool-876-current-pins/report.json),
+[actual commands and output](evidence/dev-tool-876-current-pins/commands.json),
+and [source and tool provenance](evidence/dev-tool-876-current-pins/provenance.json)
+retain the measurements. The startup probe does not establish full-suite or
+combined-coverage acceptance; those remain required native CI checks. Earlier
+measurements and all enforcement settings remain intact.
+
+## Measured dependency PR #655 toolchain — 2026-10-18
+
+<!-- measured-with: black=26.10.1 ruff=0.17.1 isort=9.0.2 docformatter=1.7.8 mypy=2.4.0 pytest=9.1.1 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->
+
+The exact proposed nine-pin bundle was installed in an isolated Python 3.12
+virtual environment and strictly measured against source
+`6f9fff13673bbc5c53bd76cca5ac2b0a49f32a41`. The existing collector reported:
+
+| Check | Blocking | Drainable |
+| --- | ---: | ---: |
+| Ruff | 0 findings | 0 |
+| Black | 0 files | 0 |
+| mypy | 0 errors | 0 |
+| Coverage startup | 0 errors | 0 |
+
+[Report](evidence/dev-tool-655-current-pins/report.json),
+[captured lint commands and output](evidence/dev-tool-655-current-pins/commands.json),
+and [source/tool provenance](evidence/dev-tool-655-current-pins/provenance.json)
+retain the actual measurement, installed versions and collector/pin hashes.
+All captured lint commands exited zero. Coverage startup is the collector's
+configuration probe; it does not establish full-suite, execution-mirror or
+combined-coverage acceptance. Native PR CI retains those checks. No pins,
+thresholds, baseline matcher or enforcement settings were changed by this
+measurement. Previous dated measurements remain below.
+
 ## Measured unchanged repository toolchain — 2026-10-15
 
 <!-- measured-with: ruff=0.16.10 black=26.10.0 mypy=2.4.0 pytest=9.1.1 isort=9.0.2 docformatter=1.7.8 pytest-cov=7.1.0 pytest-xdist=3.8.0 coverage=7.16.2 -->
@@ -125,7 +168,9 @@ So the sync delivered a Gate that hard-requires a file the sync deliberately nev
 repo never performed the documented copy step. The fix is that copy.
 
 A second blocker was hidden behind the first, and only became visible once the pins landed:
-**coverage**. It was drained upstream on 2026-08-23 and is now ON — see below.
+**coverage**. Its startup defect was drained upstream on 2026-08-23. Since 2026-10-27 it is OFF
+on the Gate's sharded subset calls and ON only in `ci.yml`'s whole-tree `verify.py aggregate +
+combined coverage` job; a shard percentage cannot stand in for the suite.
 
 ## Current state
 
@@ -136,15 +181,16 @@ Measured 2026-08-23 with the pinned versions, after the drain described below.
 | `lint-ruff` | `ruff check --extend-exclude .workflows-lib .` | **0 findings** | 0 | **ON, green** |
 | `lint-format` | `black --check --line-length 100 --exclude '(\.venv\|\.workflows-lib\|node_modules)' .` | **0 files** | 0 | **ON, green** |
 | `typecheck-mypy` | `mypy --exclude .workflows-lib .` | **608 errors in 89 of 189 files** | **0 per PR** | OFF |
-| `coverage` | `pytest --cov` | **0 startup errors** | 0 | **ON, green** |
+| `coverage` | `verify.py --aggregate … --coverage` | **0 startup errors** | 0 | **ON in combined CI; OFF on Gate subsets** |
 | `python 3.12` / `python 3.13` | `pytest -m 'not quarantine and not slow' -n auto --dist=loadgroup` | **0 failures** (393 passed, 9 skipped) | 0 | **ON, green** |
 
 One OFF row remains, and it states both quantities on purpose. An error count alone reads as
 *be patient*; the same count with `drainable 0 per PR` beside it reads as what it is. (`coverage` was the second such
 row until 2026-08-23; the entry below records how it drained rather than deleting the history.) The authoritative
 copy of each of those annotations lives beside the toggle itself, in the `Compute Python CI toggles`
-step of `.github/workflows/pr-00-gate.yml` — one place, so the call site and the `summary` job's
-coverage branch cannot drift apart.
+step of `.github/workflows/pr-00-gate.yml`. The Gate coverage literals are now intentionally
+separate: the reusable subset calls are hard-disabled while the summary consumes the exact-head
+combined CI artifacts, with tests binding both sides.
 
 ## The loop this closes, and why the drain landed here
 

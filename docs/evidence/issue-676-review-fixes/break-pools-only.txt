@@ -1,0 +1,22 @@
+Isolated source/test copy: /private/tmp/orch-686-mutations-m7ikta6j
+exit=1
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_agents_shape_preferred_over_pool_fallback ________________
+
+agents_fixture = (PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-2772/test_agents_shape...wed_fraction': 1.0, 'period_end': 1800086400, ...}}}, 'pools': {'old': {'agent': 'codex', 'pacing': {'stale': True}}}})
+
+    def test_agents_shape_preferred_over_pool_fallback(agents_fixture):
+        db, snapshot = agents_fixture
+        snapshot["pools"] = {"old": {"agent": "codex", "pacing": {"stale": True}}}
+        r = comparative.measure(db, snapshot, now=NOW)
+>       assert r["status"] == "optimal"
+E       AssertionError: assert 'inputs_unmeasured' == 'optimal'
+E         
+E         - optimal
+E         + inputs_unmeasured
+
+tests/test_route_weights_export_comparative.py:314: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_route_weights_export_comparative.py::test_agents_shape_preferred_over_pool_fallback
+1 failed in 1.42s

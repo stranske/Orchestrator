@@ -1,0 +1,11 @@
+{
+  "schema": "orchestrator-model-epochs/v1",
+  "note": "A model epoch is the first instant an agent's CURRENT generation served work. Routing weights and judge reliability for that agent are learned only from runs at or after it, so a major model change does not inherit the previous model's record. Priors stay hand-set. Remove an entry only when the new model has earned its own record.",
+  "epochs": {
+    "gemini": {
+      "since": "2026-10-16T00:00:00Z",
+      "model": "gemini-4-argon-high",
+      "reason": "Argon is a major update with unknown strengths; 3.1 Pro and Flash-tier history must not set its weights (owner, 2026-10-17)."
+    }
+  }
+}

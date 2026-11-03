@@ -204,7 +204,7 @@ def test_coverage_never_changes_the_exit_code():
         f"coverage is being passed into verify() ({call_args.strip()!r}). The verdict may not "
         "depend on a measurement — that is the threshold nobody agreed to."
     )
-    report_at = main_src.find("coverage_combine_and_report()")
+    report_at = main_src.find("coverage_combine_and_report(")
     return_at = main_src.find("return code")
     assert report_at != -1 and return_at != -1 and report_at < return_at, (
         "coverage_combine_and_report must run after the verdict is computed and must not alter "
@@ -285,6 +285,7 @@ def _instrumented(root):
     )
 
 
+@pytest.mark.needs_coverage_module
 def test_the_combined_run_also_writes_the_machine_readable_report(tmp_path):
     """The whole point of the change: a ranker cannot read a table meant for a person.
 
@@ -303,6 +304,7 @@ def test_the_combined_run_also_writes_the_machine_readable_report(tmp_path):
     assert "run.py" in payload["files"], sorted(payload["files"])
 
 
+@pytest.mark.needs_coverage_module
 def test_a_json_that_could_not_be_written_is_named_and_not_silent(tmp_path, monkeypatch):
     """An absent report that reads as 'nothing uncovered' is this repo's founding defect.
 

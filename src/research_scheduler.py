@@ -15,7 +15,6 @@ Plus a hypothesis registry (the queue of comparative-advantage questions, seeded
 
 from __future__ import annotations
 
-import json
 import os
 import random
 import time
@@ -23,10 +22,14 @@ from pathlib import Path
 
 import capacity
 import feedback
+import mutable_registry
+import paths
 import research_subjects
 
 ORCH = Path(__file__).resolve().parent
-HYP_PATH = Path(os.environ.get("ORCH_HYP_PATH", ORCH / "experiments" / "hypotheses.json"))
+HYP_PATH = Path(
+    os.environ.get("ORCH_HYP_PATH", paths.runtime_state_path("experiments", "hypotheses.json"))
+)
 
 # Spare-capacity budget per tier when a seat is `ok` (use-it-or-lose-it: free/flat are cheap to spend on
 # science; metered reasoning is spent cautiously; paygo not at all by default). Scaled down on `warn`.
@@ -337,17 +340,44 @@ SEED_HYPOTHESES = [
 ]
 
 
-def load_hypotheses(path: Path = HYP_PATH) -> list:
-    if path.exists():
-        return json.loads(path.read_text())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(SEED_HYPOTHESES, indent=2))
-    return list(SEED_HYPOTHESES)
+def _validate_hypotheses(hyps) -> None:
+    if not isinstance(hyps, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("id"), str) for item in hyps
+    ):
+        raise ValueError("hypothesis registry must be a list of identified objects")
+    if len({item["id"] for item in hyps}) != len(hyps):
+        raise ValueError("duplicate hypothesis identity")
+
+
+def _default_hypotheses(path: Path) -> list:
+    if "ORCH_HYP_PATH" in os.environ or Path(path) != HYP_PATH:
+        return SEED_HYPOTHESES
+    return mutable_registry.seed_default(
+        path,
+        ORCH / "experiments" / "hypotheses.json",
+        lambda: SEED_HYPOTHESES,
+        _validate_hypotheses,
+    )
+
+
+def load_hypotheses(path: Path = HYP_PATH, *, create: bool = False) -> list:
+    def factory():
+        return _default_hypotheses(path)
+
+    if create:
+        return mutable_registry.initialize(path, factory, _validate_hypotheses)
+    return mutable_registry.read(path, factory, _validate_hypotheses)
 
 
 def save_hypotheses(hyps: list, path: Path = HYP_PATH) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(hyps, indent=2))
+    """Explicit complete replacement; incremental callers use update_hypotheses."""
+    mutable_registry.write(path, hyps, _validate_hypotheses)
+
+
+def update_hypotheses(mutate, path: Path = HYP_PATH) -> list:
+    return mutable_registry.update(
+        path, lambda: _default_hypotheses(path), _validate_hypotheses, mutate
+    )
 
 
 # --- 1. WHEN: spare-capacity gate -------------------------------------------

@@ -1,0 +1,2 @@
+cold {"duration_seconds": 9.7006, "files_read": 300, "files_cached": 0, "bytes_read": 3606291682, "total_files": 545, "omitted": 245, "malformed": 0, "unreadable_files": 0}
+warm {"duration_seconds": 0.3488, "files_read": 7, "files_cached": 293, "bytes_read": 463088, "total_files": 545, "omitted": 245, "malformed": 0, "unreadable_files": 0}

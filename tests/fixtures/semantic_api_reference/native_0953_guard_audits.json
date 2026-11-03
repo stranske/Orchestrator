@@ -1,0 +1,23 @@
+{
+  "schema": "native-semantic-reviewed-source-baseline/v1",
+  "native_commit": "0953f9bd6bc79681d8f6bcfa76e5dc7644126b8f",
+  "native_package_sha256": "48b4bba582af2b80bab76998ac9390309fc8defee659dc60d5d1dce05eb01f78",
+  "native_top_level_ast": {
+    "main": "b565eab0059da2114b8360776a4849eb78af0dbe933c029deab31d10e9bd93b7",
+    "_main_admitted": "7daf3f64bf316ff8658416f6d079293d48c2d10fbd8153bc9626bb3513e536f7"
+  },
+  "native_custody_guard_ast": "d5ce0ef7ae104dfd58dc30492b012fd14ebe916f50980a143a96473b83045884",
+  "retained_dir_name": "ci_retained_root",
+  "protected_native_source_sha256": {
+    "closer_correction_controller.py": "50690714b0a014a1a9db623cae6bd5e9bafb0200552156ab3beff1470fbb034d",
+    "closer_campaign.py": "f3f002e2ebe9f34baef5910c0b5dac9a860f5c7bc5679127ad324fc766e25d82",
+    "closer_correction_native_effects.py": "978f25e36e72535460417042c9dc85a86031a1b6ca9e82968ed677a79c040059",
+    "closer_source_installation.py": "971564fb359cc51ca392cbb5b31955b0e1990c500d214280f7a2e051c94189eb",
+    "closer_native_observer.py": "be5f5e04ea91cb6cbea02ad39addbe9b0b7c1dc1728a0b929671eff10df72f81",
+    "closer_runtime_binding.py": "6396bb07fe960c4c2b1e8ebdc48fb0e4bdb2b6a26c515efc858f63ce2129808a",
+    "closer_coding_worker.py": "29d50ce4e54cd6c18292937815069986e5109ff2780d85e1c0e2b23775b55f5a",
+    "closer_queue.py": "b05fb1b8c5efa3f11c97059a15a6396a975e31b900bd9bd3903d18527601fc27",
+    "closer_coding_delivery.py": "e204d167a628292f1fed24889e37d4acfdb11610fd546ab44f40fc8796082ffd",
+    "closer_coding_route_v2.py": "5efa8fc8f549288a3d548b42a63c9fc8e373651b58a74ff8a3f6956ed602d40a"
+  }
+}

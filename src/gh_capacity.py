@@ -50,6 +50,7 @@ import re
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,7 @@ TRACKED = ("core", "search", "graphql")
 # Ledger row `source`s whose figures are the x-ratelimit-* headers of a call that drew from the
 # bucket: the bucket's own count. The other source, `probe`, is not always one (below).
 REAL_SOURCES = frozenset({"call", "preflight", "gate"})
+_DEFAULT_GH_RUNNER = subprocess.run
 # The resources `gh api rate_limit` has been MEASURED misreporting, each with the one real call that
 # reads it instead. That endpoint is exempt from the limit and answers from another count: core and
 # graphql 5000/5000 while every real call was refused (2026-09-23); core 5000/5000 used 0 while a
@@ -278,7 +280,14 @@ def _ratelimit_row_from_headers(headers: dict, *, fallback_resource: str) -> dic
     }
 
 
-def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runner=subprocess.run):
+def gh_run(
+    args: list[str],
+    *,
+    resource: str = "core",
+    timeout_s: int = 30,
+    runner=subprocess.run,
+    raw_body: bool = False,
+):
     """Run a `gh api` call with header capture, feed the rate ledger from `x-ratelimit-*` for FREE,
     and return (returncode, parsed_body). `args` is the gh argv WITHOUT a leading 'gh'. Only `gh api`
     surfaces rate headers, so this is the per-call ledger feed for CORE/GRAPHQL work; SEARCH budget is
@@ -287,7 +296,38 @@ def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runn
     if "api" in cmd and "--include" not in cmd and "-i" not in cmd:
         cmd.insert(cmd.index("api") + 1, "--include")
     try:
-        r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
+        if runner is _DEFAULT_GH_RUNNER:
+            try:
+                import closer_resources
+
+                binding = closer_resources.finite_pool_current_binding()
+            except ImportError:
+                binding = None
+            if binding:
+                import dispatcher
+
+                run_id = "gh-" + uuid.uuid4().hex
+                r = dispatcher.run_observed_offload(
+                    cmd,
+                    callback=closer_resources.finite_pool_process_started,
+                    finished_callback=closer_resources.finite_pool_process_finished,
+                    starting_callback=closer_resources.finite_pool_prepare_request,
+                    observation={
+                        "run_id": run_id,
+                        "agent": "github",
+                        "profile_id": "github-api",
+                        "finite_frontier_id": binding["frontier_id"],
+                        "finite_frontier_target": binding["target"],
+                        "provider_argv": list(cmd),
+                    },
+                    cwd=None,
+                    timeout=timeout_s,
+                    stdin=subprocess.DEVNULL,
+                )
+            else:
+                r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
+        else:
+            r = runner(cmd, capture_output=True, text=True, timeout=timeout_s)
     except Exception:
         return 1, None
     headers, body = _split_headers_body(getattr(r, "stdout", "") or "")
@@ -295,7 +335,9 @@ def gh_run(args: list[str], *, resource: str = "core", timeout_s: int = 30, runn
     if row is not None:
         _append_ledger([row])
     parsed = None
-    if body:
+    if raw_body:
+        parsed = body
+    elif body:
         try:
             parsed = json.loads(body)
         except Exception:
@@ -869,6 +911,12 @@ def _selftest():
             ["api", "repos/o/r/commits"], resource="core", runner=lambda *a, **k: FakeApi()
         )
         assert rc == 0 and body == {"sha": "abc"}, (rc, body)
+        raw_rc, raw = gh_run(
+            ["api", "repos/o/r/actions/jobs/1/logs"],
+            runner=lambda *a, **k: FakeApi(),
+            raw_body=True,
+        )
+        assert raw_rc == 0 and isinstance(raw, str) and json.loads(raw) == {"sha": "abc"}, raw
         latest = _latest_ledger("core")
         assert latest["remaining"] == 4321 and latest["source"] == "call", latest
         # gh_run inserted --include after 'api'

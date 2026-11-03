@@ -36,6 +36,7 @@ pythonpath = ["src", "."]
 # narrows discovery would read as tests silently ceasing to run. Discovery stays as it was.
 minversion = "7.0"
 markers = [
+    "feature_goals_real: exercise real goal reports inside per-test temporary state",
     "quarantine: excluded from the PR gate by the fleet's marker expression",
     "slow: excluded from the PR gate by the fleet's marker expression",
 ]
@@ -55,6 +56,8 @@ markers = [
 # file; `coverage combine` merges them. `verify.py --coverage` does both.
 [tool.coverage.run]
 parallel = true
+# Shards run in separate checkouts; their data must name the same source files on aggregation.
+relative_files = true
 # `src`, not `.`: the modules moved, and pointing at the checkout root would measure the tests and
 # the tooling instead of the code under test.
 source = ["src"]

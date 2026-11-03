@@ -1,0 +1,18 @@
+{
+  "profile_id": "offline-candidate-low",
+  "agent": "claude",
+  "provider": "offline-provider",
+  "requested_model": "offline-model",
+  "reasoning_effort": "low",
+  "permission_mode": "read-only",
+  "adapter_version": "offline-adapter-v1",
+  "prompt_version": "offline-prompt-v1",
+  "lifecycle_status": "active",
+  "transport_support": [
+    "offload"
+  ],
+  "capacity_pool_ids": [
+    "offline-shared-account"
+  ],
+  "requires_explicit_selection": false
+}

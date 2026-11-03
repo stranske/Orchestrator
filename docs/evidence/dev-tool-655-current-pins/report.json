@@ -1,0 +1,67 @@
+{
+  "pins": {
+    "BLACK_VERSION": "26.10.1",
+    "RUFF_VERSION": "0.17.1",
+    "ISORT_VERSION": "9.0.2",
+    "DOCFORMATTER_VERSION": "1.7.8",
+    "MYPY_VERSION": "2.4.0",
+    "PYTEST_VERSION": "9.1.1",
+    "PYTEST_COV_VERSION": "7.1.0",
+    "PYTEST_XDIST_VERSION": "3.8.0",
+    "COVERAGE_VERSION": "7.16.2"
+  },
+  "installed_versions": {
+    "black": "26.10.1",
+    "ruff": "0.17.1",
+    "isort": "9.0.2",
+    "docformatter": "1.7.8",
+    "mypy": "2.4.0",
+    "pytest": "9.1.1",
+    "pytest-cov": "7.1.0",
+    "pytest-xdist": "3.8.0",
+    "coverage": "7.16.2"
+  },
+  "checks": [
+    {
+      "check": "lint-ruff",
+      "command": "ruff check --extend-exclude .workflows-lib --output-format concise .",
+      "blocking": 0,
+      "blocking_unit": "findings",
+      "drainable": 0,
+      "drain": "`ruff check --fix` for the mechanical share; hand edits for the rest",
+      "by_code": {}
+    },
+    {
+      "check": "lint-format",
+      "command": "black --check --line-length 100 --exclude (\\.venv|\\.workflows-lib|node_modules) .",
+      "blocking": 0,
+      "blocking_unit": "files",
+      "drainable": 0,
+      "drain": "one `black --line-length 100 .` run",
+      "by_code": {}
+    },
+    {
+      "check": "typecheck-mypy",
+      "command": "mypy --config-file pyproject.toml --exclude .workflows-lib src",
+      "blocking": 0,
+      "blocking_unit": "errors",
+      "behind_exempt_list": 0,
+      "exempt_modules": 0,
+      "drainable": 0,
+      "drain": "typed modules landing incrementally; there is no mechanical fixer",
+      "files": null,
+      "setup_abort": false,
+      "by_code": {}
+    },
+    {
+      "check": "coverage",
+      "command": "pytest --cov --cov-config=pyproject.toml (arguments built by the reusable workflow)",
+      "blocking": 0,
+      "blocking_unit": "startup errors",
+      "drainable": 0,
+      "drain": "nothing to drain while this reads 0. It was 1 until stranske/Workflows#3202 (merged 2026-08-23) made `--cov-config` conditional on the file existing and gated the editable install on real packaging metadata; if it goes back to 1, the drain is upstream again",
+      "by_code": {}
+    }
+  ],
+  "problems": []
+}

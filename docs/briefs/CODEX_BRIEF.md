@@ -163,6 +163,10 @@ weight. Scores (0–10) are human-facing context only, never the ship gate.
   prompt documents solely to satisfy an offload command, and do not ask for per-file approval for routine
   Orchestrator code/doc edits inside the writable workspace; escalate only for sandbox-required,
   destructive, credential, or irreversible actions.
+- **Fix-round delegation:** pass `--continue-pr <PR>` to `dispatcher.py delegate` when a brief
+  continues an existing PR for the target issue. The dispatcher checks open PR bodies, agent issue
+  branches and GitHub closing references before claiming; the named PR must be confirmed linked.
+  Failed or incomplete GitHub reads refuse delegation; retry when reads recover.
 - **Local agent runtime isolation (fixed 2026-06-16):** child CLIs write mutable state under
   `~/.codex/orchestrator/agent-runtime/`, not real-home dotdirs that Codex may not be allowed to write.
   Cursor keeps real `HOME` for shell/keychain semantics but uses `AGENT_CLI_CREDENTIAL_STORE=memory`,

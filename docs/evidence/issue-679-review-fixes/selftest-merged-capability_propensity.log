@@ -1,0 +1,23 @@
+capability_propensity.py selftest: OK (natural experiments with a reported control arm, usefulness orders recommendation, no-evidence stays drainable, window shared)
+capability_propensity provenance selftest: OK (self-reports weigh a quarter, one judge arm totals one observation, a corroborated outcome outweighs three correlated opinions, unlabelled rows classify as self-reported, the strongest classes are not self-certifying, an unstated provenance is refused without writing anything, declines stay inert, and the caller receives the mix)
+capability_propensity fixture provenance selftest: OK (zero weight, separate evidence)
+capability_propensity idempotent-verdict selftest: OK (the first verdict on a trial is the only one, a stronger or contradicting second is dropped without touching the ledger and says so, and a different trial still records)
+capability_propensity late-outcome selftest: OK (a later outcome earns the real tier and carries its judge, refuting lowers on the same terms so the channel is not a ratchet, a self-assessed tier cannot attach, an orphan is reported and invents no trial, one attachment per trial, and the report shows both directions)
+capability_propensity deliverable-amendments selftest: OK (one attachment per (trial, deliverable) with the bare slot still singular, every amendment visible in the assembly, one verdict adjustment per trial with refutes winning conflicts and no weight stacking, non-kebab slugs refused, and consult outcomes recorded/deduped/joined without touching any bucket)
+capability_propensity reoffer selftest: OK (a re-offer echoes declared facts and can compose nothing, an empty fact set routes to the offer axis instead of asking again, structural kinds are never re-offered, one round only, conversion is derived, and the grace window drains the two-round hold)
+capability_propensity finds selftest: OK (a claimed find with no artifact is refused, a surface find feeds binding quality and scores nothing, a capability find is defect_found outcome evidence, replays do not inflate, and ten finds from one arm are still one observation)
+capability_propensity repair selftest: OK (worth-having-and-broken is expressible, a correct match is never proposed, precondition_unmet finally has an action, the evidence travels with the proposal, recording the repair drains it while the evidence is still in window, new evidence re-opens it, and nothing is applied or queued)
+capability_propensity decline selftest: OK (a decline is a candidate, never an outcome, never moves the posterior, partitions the third state, and drains a binding)
+capability_propensity detection selftest: OK (hand work promotes above a floor, evidenced use at an unbound surface promotes and one use does not, the control arm never promotes, demotion drains, promotions must state why)
+capability_propensity tick-evidence selftest: OK (baseline first, identical output is NOT useful, moving counters are projected away, non-observers get no output verdict, shape change reported not scored, one verdict per capability per day, kill switch inert)
+Traceback (most recent call last):
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/capability_propensity.py", line 8646, in <module>
+    raise SystemExit(main(sys.argv[1:]))
+                     ^^^^^^^^^^^^^^^^^^
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/capability_propensity.py", line 7667, in main
+    with _private_live_state():
+  File "/opt/anaconda3/lib/python3.12/contextlib.py", line 144, in __exit__
+    next(self.gen)
+  File "/Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/capability_propensity.py", line 5141, in _private_live_state
+    assert not reached, (
+AssertionError: a propensity selftest touched 21 live location(s), first ['open /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/__pycache__/research_subjects.cpython-312.pyc', 'open /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/__pycache__/capability_advisor.cpython-312.pyc', 'open /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/capability_advisor.py', 'open /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/__pycache__/env_prereq.cpython-312.pyc', 'open /Users/teacher/.codex/orchestrator/worktrees/stranske__Orchestrator__679__opener/src/__pycache__/fleet_shapes.cpython-312.pyc']; give that path the private store instead (see _private_live_state)

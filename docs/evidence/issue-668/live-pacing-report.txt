@@ -1,0 +1,12 @@
+Weekly pacing check: python3 src/capacity.py pacing-report
+Evidence class: usage store + rate-limit ledger (dispatch share: capacity-ledger dispatch starts)
+FYI resets=unknown: capacity-resets.json absent or unreadable
+FYI codex rollout scan: duration_seconds=0.4569, files_read=8, files_cached=292, bytes_read=1501810, total_files=545, omitted=245, malformed=0, unreadable_files=0
+pool codex: resets=unknown; conservative reserve=0.15
+pool claude: resets=unknown; conservative reserve=0.15
+pool codex: u=0.08 ũ=unmeasured state=ok w_p=0.9058823529411765 resets=unknown source=codex-rollout:rate_limits.primary ts=1792256587.912 stale=False; codex: u=0.08 vs g(e)+δ=0.11; ũ=unmeasured; ok; w_p=0.906; clears in fresh samples or schedule advancing or on reset
+1 codex: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
+pool claude: u=0.37 ũ=unmeasured state=unknown w_p=unmeasured resets=unknown source=claude-desktop:plan-usage-history.json:u.sd ts=1792198800.402 stale=True; pool claude: usage stale; unknown; clears on fresh usage or reset at 1792299540
+1 claude: unmeasured — would need a fresh usage sample at completed T1 [usage store + rate-limit ledger]
+2: unmeasured — would need completed-period snapshots and rate-limit ledger coverage; coverage=0/unknown ticks; observed incidents=287 [usage store + rate-limit ledger]
+3: unmeasured — would need dispatches in both codex ok and warn/shed hours; coverage=0/unknown ticks; observed dispatches=8630 [usage store + rate-limit ledger]

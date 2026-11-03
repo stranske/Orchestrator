@@ -1,0 +1,13 @@
+{
+  "base_pr_head": "5b934d01519b0ce6020e8fb94cc83c1425bea15b",
+  "red": "5 failed, 2 passed: five substantive regression cases catch current findings; two reporting cases already pass",
+  "green": "98 focused tests pass",
+  "collection": 4354,
+  "floor": "full-pass expectation only; skip/selftest/gate/mypy ceilings unchanged",
+  "hashes": {
+    "src/review_loop.py": "dfbebbc75a7bad6ec156bc468a97da1974ca7b93ae3e468c38db6b2982dfa817",
+    "src/dispatcher.py": "252770a05bb3b04971b15b80abe4ffde86b120c2602d5475e4afea2ded6e1f59",
+    "src/feedback.py": "9b17c40413f13592217f09a14d79f7fdab946c81dfef7e3208ed04903706eb9a"
+  },
+  "runtime": "No real reviewer/worker/closure was launched by offline tests; production acceptance remains source671-owned."
+}

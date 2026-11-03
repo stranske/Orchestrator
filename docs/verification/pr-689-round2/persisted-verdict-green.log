@@ -1,0 +1,6 @@
+RESTORED_SHA256=1fd2deabcdfe7b586fa80d8ec36e1abd106c1247228715474d1f5d785a7bbcc3
+$ /opt/anaconda3/bin/python3 -m pytest -q --tb=short tests/test_experiment_producer.py::test_verdict_flake_does_not_overwrite_pass
+.                                                                        [100%]
+1 passed in 0.42s
+
+EXIT=0

@@ -1,0 +1,20 @@
+{
+  "base_commit": "dd8d71119b92e15ff85836cc44ad40e20207ac6f",
+  "files": {
+    "closer_dispatcher.py": {
+      "after_file_sha256": "324922795a0c03fd4b1ba408b85c482fba1a27a97f9351506b3518d3ac5b45a4",
+      "after_module_ast_sha256": "220c31150335704842bcb3fa6ec0425e0b63c64c47bb79526c47801b68d9bd38",
+      "before_file_sha256": "1367d696c19aaa1b3b3931b452a8c719ece9b6d25d5ec245b373a745c19b6ac1",
+      "before_module_ast_sha256": "ca97abca6bb910c9f9f5c8f94368fc853ea27b275bb0b95b84370799d3053600",
+      "changed_top_level_after_ast_sha256": "bc6840dd1f207d784afeac8866d1d3fcfeeac9fe87a7ef595a18ac6ce2c5ee0e",
+      "changed_top_level_before_ast_sha256": "84f36d495bc9f3f60c72109836b6781c1c7c820c0cf1090598177c9daa287c1c",
+      "outside_changed_top_level_ast_sha256": "1041029e439791b667095a3cdef7053d5e99e510e11b8f5b35b3688def6c8b2c",
+      "historical_reversal": {
+        "after_fragment": "if __name__ == \"__main__\":\n    # A sealed Runtime must remain byte-for-byte closed while this physical\n    # entrypoint imports its canonical module.  This has to precede that\n    # self-import: a later campaign-level setting cannot prevent CPython from\n    # already creating ``closer_dispatcher`` bytecode beside the pinned tree.\n    import sys as _bootstrap_sys\n\n    _bootstrap_sys.dont_write_bytecode = True\n    from closer_dispatcher import main as _canonical_main\n",
+        "before_fragment": "if __name__ == \"__main__\":\n    from closer_dispatcher import main as _canonical_main\n"
+      }
+    }
+  },
+  "schema": "dispatcher-bytecode-bootstrap-source-successor/v1",
+  "scope": "sealed physical dispatcher bootstrap only; suppress bytecode before the canonical self-import without changing native command or pipeline authority"
+}

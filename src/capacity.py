@@ -24,7 +24,26 @@ Corrections baked in:
     does NOT cover API calls (aider uses the API) — if the user's paid tier is
     the chat-only Pro, set plan_limit=0 and aider degrades to pure-credit.
 
-Read-only and safe; `--selftest` runs fully offline. Simple-first + legible by
+Pacing sources: freshest weekly observation wins. Codex uses the scheduled
+~/.codex/orchestrator/usage-poll/codex-usage.json app-server account/rateLimits/read
+poll or session rollout rate_limits.primary (10080 minutes). Claude uses the
+scheduled claude-usage.json /usage all-models weekly bucket or desktop
+plan-usage-history.json samples[].u.sd with original samples[].t timestamps.
+Poll weekly resets_at is authoritative T1; T0=T1-7d. Other Claude weekly buckets
+are informational. Marker recovery also requires fresh short-window headroom:
+Claude poll session (5h), Codex secondary (300 minutes), each with its own ts.
+Fresh Codex poll credits (available and unexpired) define reset inventory; the
+hand capacity-resets.json is a stale/absent-poll fallback, never debited against a
+fresh provider inventory. No credit/account identifiers enter pacing output.
+Sources expire after STALE_AFTER_SECONDS (three 600-second poll ticks, 30 min),
+defined in pacing.py. Poll health prints age, missed ticks and allowance.
+Both report pass numbers 2 and 3 share the same actual poll-slot coverage counter.
+Agent-specific calibrated ccusage remains the fallback; mixed-agent totals cannot
+measure weekly consumption. Unknown pacing retains native capacity state.
+One sanitized usage snapshot per build feeds marker recovery and integration;
+rollout scan failures are counted and cannot discard the remaining evidence.
+
+Read-only build; `--selftest` runs fully offline. Simple-first + legible by
 design (PR #2350 §11 anti-over-engineering): no scoring, no learning here — this
 module only answers "does agent X have headroom right now?".
 """
@@ -39,6 +58,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextvars import ContextVar
 from pathlib import Path
 
 import execution_profiles
@@ -137,6 +157,71 @@ def _env_float_or_none(name: str):
 #   COMPUTE lever on a compute-metered seat (router/adapters proposal still open from the 2026-08-01
 #   recheck). No auth-flag change on any CLI this cycle.
 #   See ~/.claude/.../memory/orchestrator_local_build.md.
+# 2026-11-01: all seats re-verified against current public pricing/limits. Again NO cap-VALUE changes
+#   (the soft caps / plan_limit below are local placeholders; nothing published to swap in). PUBLIC
+#   vendor facts only here — this installation's observations (lockouts, lane readiness, installed CLI
+#   versions, backup-seat state) live in CAPACITY_RECHECK.local.md (gitignored) per the tool/evidence
+#   boundary at the top of CLAUDE.md.
+#   - gemini = Antigravity AI Pro. MODEL LINEUP CHANGED 2026-10-12..15: Gemini 3.1 Pro, 3.6 and 3.7
+#              Flash were withdrawn from individual plans (Free/Plus/Pro/Ultra; Enterprise keeps
+#              them); the individual lineup is Gemini 3.8 Flash + Gemini 4 Argon (low/medium/high
+#              effort ids), with third-party models alongside. adapters.MODEL_TIERS was re-pinned in
+#              #616/#618: cheap/mid = 3.8 Flash, full = Argon High. THE QUOTA SHAPE CHANGED WITH IT:
+#              Google (2026-10-15) gives AI Pro a SEPARATE WEEKLY-ONLY Argon quota on top of the
+#              5h-refreshing baseline; the plans page still says baseline quota is "refreshed every
+#              five hours until the weekly limit is reached" and publishes NO numbers.
+#              window="5h+weekly" below therefore stays right for the SEAT, but the `full` rung now
+#              drains a weekly-only bucket, so an Argon 429 sheds the whole seat for up to 7 days
+#              while the Flash rungs' 5h bucket may be untouched. PROPOSAL (not applied): shed per
+#              bucket (argon vs flash) so cheap/mid stay routable through an Argon weekly lockout.
+#              AI credits remain overage-only (Never/Always setting). Paid tiers are now named
+#              Pro $19.99 / Ultra 5x $99.99 / Ultra 20x $199.99 (same multiples, cosmetic).
+#              [antigravity.google/docs/plans; 429-shed authoritative]
+#   - cursor = PLAN LINEUP REPLACED 2026-10-12 ("The X Subscription", sold with Grok + X Premium):
+#              Plus $8 / Premium $30 (4x) / Super $100 (15x) / Ultra $200 (50x) draw ONE pool that
+#              refreshes WEEKLY, and third-party models (Claude/GPT/Gemini) are NOT covered — API
+#              list price from the first request, paid from prepaid credit. Legacy Pro $20 / Pro+ $60
+#              / Ultra $200 "keep working as they are" with TWO MONTHLY pools ("Cursor Models" = Grok
+#              4.5-4.7 + Composer 2.5; "Other Models" = third-party at API price), no end date, and
+#              switching is "optional and permanent"; the docs no longer state Pro+ = 3x Pro (only
+#              "more of each pool than Pro"). The seat modeled below is a legacy plan
+#              (LOCAL_POLICY.md), so window="monthly" stays correct; a switch to the new lineup means
+#              re-modeling (weekly window, no third-party cover). Composer 2.5 is $0.50/M in, $0.20
+#              cache read, $2.50/M out (Fast $3/$15) — unchanged, so Auto+Composer stays the cheap
+#              lane. [cursor.com/pricing; cursor.com/docs/account/pricing; .../legacy-cursor-plans]
+#   - codex  = ChatGPT Pro. Pro tiers now $100 / $200 / $500 (Ultrafast only on $500); Plus $20.
+#              learn.chatgpt.com/docs/pricing still says "Pro plans currently have no five-hour
+#              limit" → the weekly cap remains the only binding limit on a Pro seat and window="5h"
+#              is kept for the 2026-09-01 reason. Credits purchasable past the limit; Fast mode
+#              bills 2.5x, Ultrafast 8x included usage. GPT-5.5 retired from Codex-with-ChatGPT
+#              2026-10-14. [learn.chatgpt.com/docs/pricing]
+#   - claude = Max $100 (5x Pro, 5h + weekly + a separate Fable weekly at 50% of weekly). The $200
+#              tier is now sold as "Ultra" (10x Pro weekly, NO 5h limit for verified accounts, $200
+#              API credit); the Max 20x label is gone from the pricing page. A "wrap-up allowance"
+#              is rolling out (an in-flight turn may finish past a 5h limit, charged to weekly). No
+#              dated limit change since the 2026-09-14 permanent +25%. [support.claude.com 11049741
+#              + 11145838; claude.com/pricing]
+#   - vibe   = Mistral Vibe Pro $14.99 (student $5.99; Team $24.99/user, $50 min) UNCHANGED: "all-day
+#              coding in the CLI, IDE, or on web", fair-use, PAYG overflow "at API rate". NEW on the
+#              pricing page: a Pro-card bullet "$15 /mo in API credits" (a second card shows $25.5)
+#              — card attribution is ambiguous in the markup, so UNVERIFIED; if real, Pro now partly
+#              covers API calls and the aider note above ("Pro does NOT cover API calls") is stale.
+#              Only published number: Flash answers 150/day on Pro. [mistral.ai/pricing]
+#   - aider  = Codestral $0.30/$0.90 per 1M (cached input $0.03), 256K ctx — UNCHANGED per third-party
+#              rate cards (mistral.ai/pricing no longer lists Codestral). NB on retiring a backup
+#              seat: router.BACKUP_AGENTS is an EXCLUSION set (router.py skips its members in ordinary
+#              selection), so removing a seat from it would ENABLE auto-dispatch, not retire it.
+#              Retirement means removing the seat's routing candidates from the route table (and
+#              its AGENTS entry here) while the exclusion stays. A seat with no model catalog cannot
+#              be caught by `_unresolvable_tier`, so an absent backend still reads `ok` here.
+#   CLI surface this cycle (public release notes): agy 1.4.x keeps every headless flag (-p,
+#   --output-format json|stream-json, --dangerously-skip-permissions, --json-schema, --mode,
+#   --sandbox, --input-format stream-json); --effort now spans low|medium|high|xhigh|max; NEW
+#   `finished_reason` in json/stream-json results (print_timeout|interrupted|error, absent on a
+#   normal finish) — adapters could use it to tell a truncated offload from a complete one
+#   (PROPOSAL, not applied); 1.4.11 adds a Gemini-subscription vs Pay-As-You-Go billing choice at
+#   Google Cloud sign-in — keep the subscription path, PAYG would bill silently. No auth-flag change
+#   on the other CLIs. No re-tiering warranted beyond the gemini per-bucket shed proposal.
 AGENTS = {
     # block_token_limit (optional): projected-tokens ceiling for the active 5h block. Unset =>
     # the seat is OK (usable) and 429-shed is the authoritative limiter; set it (env, from your
@@ -465,6 +550,9 @@ def shed_marker(
     return {**found, "expires_at": expires_at, "state": "active" if expires_at > now else "expired"}
 
 
+_BUILD_PACING_USAGE: ContextVar[dict | None] = ContextVar("build_pacing_usage", default=None)
+
+
 def _shed(agent: str) -> bool:
     """Honor legacy empty flags; expire only well-formed JSON cooldown flags.
 
@@ -476,7 +564,85 @@ def _shed(agent: str) -> bool:
     if marker is None:
         return False
     if marker["state"] != "expired":
-        return True
+        # A confirmed banked reset clears only a dated provider quota incident.
+        # Continue through ordinary auth/model checks after removal. Manual and
+        # unreadable markers are never reset by an allowance inventory change.
+        import pacing
+        import pacing_usage
+
+        inventory = pacing_usage.read_json(pacing_usage.RESETS_FILE) or {}
+        entries = inventory.get(agent, []) if isinstance(inventory, dict) else []
+        created = marker.get("created_at")
+        reset_events = (
+            [
+                stamp
+                for entry in entries
+                if isinstance(entry, dict)
+                and (stamp := pacing.timestamp(entry.get("consumed_at"))) is not None
+                and stamp <= time.time()
+            ]
+            if isinstance(entries, list)
+            else []
+        )
+        if agent == "codex":
+            snapshot = _BUILD_PACING_USAGE.get()
+            poll = (
+                (snapshot.get(agent) or {}).get("poll")
+                if snapshot is not None
+                else pacing_usage.polled_usage(agent, time.time())["poll"]
+            ) or {}
+            if poll.get("fresh"):
+                # The hand inventory may contain a false rollover debit. Fresh
+                # provider inventory cannot establish that consumption timestamp.
+                reset_events = []
+        reset_clears = (
+            marker["state"] == "active"
+            and marker.get("category") in ("quota", "rate_limit", "capacity")
+            and created is not None
+            and any(stamp > created for stamp in reset_events)
+        )
+        sample_clears = False
+        if (
+            agent in ("codex", "claude")
+            and marker["state"] == "active"
+            and marker.get("category") in ("quota", "rate_limit", "capacity")
+            and created is not None
+            and not reset_clears
+        ):
+            now = time.time()
+            snapshot = _BUILD_PACING_USAGE.get()
+            datum = (
+                snapshot[agent]
+                if snapshot is not None
+                else pacing_usage.usage(
+                    agent, now, pacing_usage.read_json(pacing_usage.CALIBRATION_FILE) or {}
+                )
+            )
+            used, observed = datum.get("used_fraction"), datum.get("ts")
+            short = datum.get("short_used_fraction")
+            short_ts = datum.get("short_ts", observed)
+            sample_clears = (
+                used is not None
+                and 0 <= used < 1
+                and short is not None
+                and 0 <= short < 1
+                and observed is not None
+                and short_ts is not None
+                and created < short_ts <= now
+                and now - short_ts <= pacing.STALE_AFTER_SECONDS
+                and created < observed <= now
+                and now - observed <= pacing.STALE_AFTER_SECONDS
+            )
+            if not sample_clears:
+                print(
+                    f"pool {agent}: quota marker age={now - created:.0f}s; weekly u={used}; "
+                    f"short-window u={short if short is not None else 'unmeasured'}; "
+                    f"drain: fresh post-incident weekly AND short-window u<1, confirmed reset, "
+                    f"or cooldown in {marker['expires_at'] - now:.0f}s",
+                    file=sys.stderr,
+                )
+        if not (reset_clears or sample_clears):
+            return True
     try:
         Path(marker["path"]).unlink()
     except OSError:
@@ -953,30 +1119,68 @@ def _capability_heartbeat(event_type: str, **kw) -> None:
         pass
 
 
-def build(ccusage_block=None) -> dict:
+def experiment_pacing(snapshot: dict) -> dict[str, str]:
+    """Consume #668 pacing if present; preserve shared-pool limits otherwise."""
+    result = {}
+    for agent, row in (snapshot.get("agents") or {}).items():
+        state = row.get("pacing_state", row.get("pacing", row.get("state", "unknown")))
+        if isinstance(state, dict):
+            state = state.get("state", "unknown")
+        if row.get("state", "ok") != "ok":
+            state = row["state"]
+        pool_ids = [
+            key
+            for key, definition in execution_profiles.CAPACITY_POOLS.items()
+            if definition.get("agent") == agent
+        ]
+        for pool_id in pool_ids:
+            pool = (snapshot.get("pools") or {}).get(pool_id, {})
+            pool_state = pool.get("pacing_state", pool.get("state", "ok"))
+            if pool_state != "ok":
+                state = f"{pool_id}={pool_state}"
+        result[agent] = state
+    return result
+
+
+def build(ccusage_block=None, *, record_pacing: bool = False) -> dict:
     # Infrastructure capability: exercised once per tick as a PHASE, never selected for a task, so
     # it records use here rather than through a routing matcher. Inert outside an active tick.
     _capability_heartbeat("invocation", ref="capacity.build")
     if ccusage_block is None:
         ccusage_block = _ccusage_active_block()
-    agents = {}
-    for agent, cfg in AGENTS.items():
-        state, reason, meta = compute(agent, cfg, ccusage_block)
-        agents[agent] = {
-            "state": state,
-            "reason": reason,
-            "account": cfg["account"],
-            "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
-            "window": cfg["window"],
-            # What a dispatch would actually send, per tier — so a rotted pin is visible in the
-            # snapshot itself rather than only at dispatch time. None => CLI default applies.
-            "tier_models": _tier_models(agent),
-            "tier_ceiling": _tier_ceiling(agent),  # None => uncapped; else routine spend stops here
-            "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
-            **(meta or {}),
-        }
+    import pacing_usage
+
+    now = time.time()
+    usage_data = pacing_usage.usage_snapshot(now)
+    # Per-build context preserves the single-argument _shed seam and isolates concurrent builds.
+    token = _BUILD_PACING_USAGE.set(usage_data)
+    try:
+        agents = {}
+        for agent, cfg in AGENTS.items():
+            state, reason, meta = compute(agent, cfg, ccusage_block)
+            agents[agent] = {
+                "state": state,
+                "reason": reason,
+                "account": cfg["account"],
+                "model": cfg["model"],  # Capacity accounting model; CLI models live in tier_models.
+                "window": cfg["window"],
+                # What a dispatch would actually send, per tier — so a rotted pin is visible in the
+                # snapshot itself rather than only at dispatch time. None => CLI default applies.
+                "tier_models": _tier_models(agent),
+                "tier_ceiling": _tier_ceiling(
+                    agent
+                ),  # None => uncapped; else routine spend stops here
+                "auth": (_auth_health(agent) or {}),  # {} => not evaluable; never read as a failure
+                **(meta or {}),
+            }
+    finally:
+        _BUILD_PACING_USAGE.reset(token)
+    pacing_fyi = pacing_usage.integrate(
+        agents, now=now, handoff=HANDOFF, record=record_pacing, usage_data=usage_data
+    )
     proj = (ccusage_block or {}).get("projection") or {}
     base = {
+        "pacing_fyi": pacing_fyi,
         "generated_at": int(time.time()),
         "ccusage_active": (
             {"proj_tokens": proj.get("totalTokens"), "proj_cost": proj.get("totalCost")}
@@ -1264,11 +1468,85 @@ def main(argv):
     if "--selftest" in argv:
         _selftest()
         return 0
+    if argv and argv[0] == "calibrate-codex":
+        import pacing_usage
+
+        ok, message = pacing_usage.calibrate(
+            pacing_usage.read_rows(HANDOFF / "rate-limit-incidents.ndjson"),
+            pacing_usage.read_rows(HANDOFF / "pacing-usage-samples.ndjson"),
+            pacing_usage.CALIBRATION_FILE,
+        )
+        print(message)
+        return 0 if ok else 1
+    if argv and argv[0] == "pacing-report":
+        import pacing_usage
+
+        now = time.time()
+        previous = pacing_usage.read_json(HANDOFF / "capacity.json") or {}
+        current = {
+            "agents": {
+                pool: {"state": "ok", "reason": "pacing report"} for pool in ("codex", "claude")
+            }
+        }
+        current["pacing_fyi"] = pacing_usage.integrate(
+            current["agents"], now=now, handoff=HANDOFF, previous=previous
+        )
+        print(pacing_usage.report(HANDOFF, now=now, current=current, previous=previous))
+        return 0
+    if argv and argv[0] == "pick-agent":
+        import argparse
+
+        import router
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--candidates", required=True)
+        parser.add_argument("--task-type", default="implement")
+        args = parser.parse_args(argv[1:])
+        snapshot = build()
+        choice = router.select_agent(
+            args.task_type,
+            snapshot,
+            only=set(args.candidates.split(",")),
+            learned=(router.learned_ranks() or {}).get(args.task_type),
+        )
+        if choice is None:
+            print("unmeasured: no dispatchable candidate", file=sys.stderr)
+            return 1
+        print(choice["agent"])
+        decision = choice.get("pacing_decision") or {
+            "policy": "legacy (pacing unmeasured in selected tier)",
+            "candidates": [
+                {"agent": agent, **snapshot.get("agents", {}).get(agent, {})}
+                for agent in args.candidates.split(",")
+            ],
+        }
+        # Host relay must use these tokens (not nested pacing alone): #891's neutral
+        # Cursor puts routing_weight on the candidate while pacing is absent.
+        import rate_incidents
+
+        try:
+            decision["log_fields"] = rate_incidents.relay_log_fields_from_decision(
+                decision, candidates=args.candidates
+            )
+        except ValueError as exc:
+            # Log formatting must not turn a valid non-relay selection into failure.
+            print(f"Relay log fields unavailable: {exc}", file=sys.stderr)
+        print(json.dumps(decision), file=sys.stderr)
+        return 0
     HANDOFF.mkdir(parents=True, exist_ok=True)
-    snap = build()
+    snap = build(record_pacing=True)
     OUT.write_text(json.dumps(snap, indent=2) + "\n")
+    for message in snap.get("pacing_fyi", []):
+        print(message, file=sys.stderr)
     print(json.dumps(snap, indent=2))
     return 0
+
+
+def pacing_report(now: float | None = None) -> dict:
+    """The #668 pass numbers as data (read-only; no integrate, no ledger write)."""
+    import pacing_usage
+
+    return pacing_usage.pass_numbers(HANDOFF, time.time() if now is None else now)
 
 
 if __name__ == "__main__":

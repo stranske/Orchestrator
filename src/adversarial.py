@@ -1147,7 +1147,9 @@ def _write_followup_record(path: Path, value: dict) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def _find_followup(run, repo: str, title: str, key: str) -> int | None:
+def _find_followup(
+    run, repo: str, title: str, key: str, *, marker_prefix="adversarial-panel"
+) -> int | None:
     """Only a successful, complete, well-formed search can establish absence."""
     found = run(
         [
@@ -1178,7 +1180,7 @@ def _find_followup(run, repo: str, title: str, key: str) -> int | None:
         for row in rows
     ):
         raise RuntimeError("malformed follow-up search; no create permitted")
-    marker = f"<!-- adversarial-panel:{key} -->"
+    marker = f"<!-- {marker_prefix}:{key} -->"
     matches = [row["number"] for row in rows if row["title"] == title and marker in row["body"]]
     if len(matches) > 1:
         raise RuntimeError("multiple follow-ups for panel key; no create permitted")

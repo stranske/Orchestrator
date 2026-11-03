@@ -1,0 +1,2 @@
+command: python3 -m pytest --collect-only -q | tail -1
+4133 tests collected in 8.78s

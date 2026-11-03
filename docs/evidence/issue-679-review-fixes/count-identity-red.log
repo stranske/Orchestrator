@@ -1,0 +1,47 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_policy_source_counts_sum_equals_policy_switches _____________
+
+tmp_path = PosixPath('/private/tmp/pytest-of-teacher/pytest-157/test_policy_source_counts_sum_0')
+
+    def test_policy_source_counts_sum_equals_policy_switches(tmp_path):
+        import json
+    
+        entries = [
+            {
+                "previous_agent": "codex",
+                "chosen_agent": "claude",
+                "timestamp": f"2026-10-17T00:00:0{i}Z",
+                "delegation_source": source,
+                "iteration": i,
+            }
+            for i, source in enumerate(agent_switches.DELEGATION_SOURCES)
+        ]
+        fact = {
+            "label_events": [],
+            "commit_ts": [],
+            "keepalive_state": {"read": "marker", "delegation_log": entries},
+        }
+        pr = {"ref": "example/repo#1", "repo": "example/repo", "number": 1, "merged": True}
+        payload, _ = agent_switches.aggregate([pr], {pr["ref"]: fact}, now=200, window_days=1)
+        counts = payload["counts"]
+>       assert (
+            sum(
+                counts.get(key, 0)
+                for key in (
+                    "policy_route_weights",
+                    "policy_route_weights_exploration",
+                    "policy_static",
+                    "policy_source_unknown",
+                )
+            )
+            == counts["policy_switches"]
+            == 4
+        )
+E       assert 3 == 4
+E        +  where 3 = sum(<generator object test_policy_source_counts_sum_equals_policy_switches.<locals>.<genexpr> at 0x10d536ea0>)
+
+tests/test_agent_switches_delegation_source.py:40: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_agent_switches_delegation_source.py::test_policy_source_counts_sum_equals_policy_switches
+1 failed in 0.33s

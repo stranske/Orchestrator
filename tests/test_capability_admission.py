@@ -14,6 +14,7 @@ next mistake, keep the old debt visible.
 
 from __future__ import annotations
 
+import inspect
 import pathlib
 import sys
 import tempfile
@@ -483,6 +484,7 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
         if d.get("findability_category") == admission.EXERCISE_CATEGORY
     }
     assert exercise_bound == {
+        "closer-core",
         "capability-admission-gate",
         "docs-drift-fix-agent",
         "agy-runtime-isolation",
@@ -638,7 +640,7 @@ def test_consumer_acts_fails_a_declared_consumer_that_never_acted(tmp_path):
     ok, detail = admission.req_consumer_acts(
         _consumer_cap("t-never", "x.py:consume", first_invocation=old), ctx
     )
-    assert not ok and "never acted" in detail
+    assert not ok and "not acting" in detail and "trailing window" in detail
     ok, detail = admission.req_consumer_acts(
         _consumer_cap("t-grace", "x.py:consume", first_invocation=fresh), ctx
     )
@@ -724,6 +726,41 @@ def test_consumer_report_excludes_waived_rows_and_names_the_drained_states(tmp_p
     assert "unmeasured 1" in drained_line and "has acted" not in drained_line
 
 
+def _run_standalone_check(check, verdicts) -> None:
+    """Replay unchanged, or supply this gate's two disposable pytest fixtures.
+
+    The script runner has no pytest fixture resolver. Never turn an unsupported
+    dependency or fixture error into a pass/skip, and never borrow machine state.
+    Normal pytest still resolves the original check signatures itself.
+    """
+    if check.__name__ in verdicts:
+        env_prereq.run_or_replay(check, verdicts)
+        return
+    parameters = inspect.signature(check).parameters
+    if not parameters:
+        env_prereq.run_or_replay(check, verdicts)
+        return
+    unsupported = [
+        name
+        for name, parameter in parameters.items()
+        if name not in {"tmp_path", "monkeypatch"}
+        or parameter.kind
+        not in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    ]
+    if unsupported:
+        raise TypeError("unsupported standalone fixtures: " + ", ".join(unsupported))
+    import pytest
+
+    # Keep a nested root: the confinement test deliberately writes a sibling
+    # outside tmp_path, which must also disappear at the end of this check.
+    with tempfile.TemporaryDirectory(prefix="admission-check-") as scratch:
+        tmp_path = pathlib.Path(scratch) / "tmp"
+        tmp_path.mkdir()
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            fixtures = {"tmp_path": tmp_path, "monkeypatch": monkeypatch}
+            check(**{name: fixtures[name] for name in parameters})
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     # verify.py hands over the verdicts its pytest run just reached on these same checks, so they
@@ -735,7 +772,7 @@ def main() -> int:
     for fn in tests:
         via = "  (pytest verdict, this run)" if fn.__name__ in verdicts else ""
         try:
-            env_prereq.run_or_replay(fn, verdicts)
+            _run_standalone_check(fn, verdicts)
             print(f"  OK   {fn.__name__}{via}")
         # A skip is not a pass and not a failure. Catching it BEFORE AssertionError matters:
         # MissingPrerequisite is a SkipTest, not an AssertionError, so an uncaught one would
@@ -805,14 +842,20 @@ def _deadline_evidence(monkeypatch, tmp_path, *, action_day, now_day):
     return admission.consumer_class(cap, ctx)
 
 
-def test_consumer_deadline_rejects_first_action_on_day_fifteen(monkeypatch, tmp_path):
+def test_consumer_acting_is_the_trailing_window_not_a_first_invocation_deadline(
+    monkeypatch, tmp_path
+):
+    # An act on day 15 counts: the 14-day deadline after first invocation is gone (owner
+    # decision 2026-10-17, M1 restated); acting is read from the monitor's rolling window.
     category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=15, now_day=16)
-    assert category == "never_acted" and not ok
-
-
-def test_consumer_deadline_retains_timely_action_after_monitor_window(monkeypatch, tmp_path):
-    category, ok, _ = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
     assert category == "acting" and ok
+
+
+def test_an_act_outside_the_trailing_window_is_not_acting_now(monkeypatch, tmp_path):
+    # Day 1's act is outside a 90-day window read on day 100: the row is not acting NOW, which is
+    # the renewal currency, and the label says trailing window, never NEVER ACTED.
+    category, ok, detail = _deadline_evidence(monkeypatch, tmp_path, action_day=1, now_day=100)
+    assert category == "not_acting" and not ok and "trailing window" in detail
 
 
 def test_declared_consumers_resolve_in_the_tree():

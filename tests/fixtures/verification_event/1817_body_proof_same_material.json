@@ -1,0 +1,64 @@
+{
+  "repo": "stranske/manager-database",
+  "pr": {
+    "number": 1817,
+    "headRefOid": "0b4d8ea8e41f8af8022218916de7b4d214c8939d",
+    "mergeCommit": {
+      "oid": "7f27a4a0f8de5ba200461a9753102723b5d3253d"
+    },
+    "comments": {
+      "nodes": [
+        {
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"run_id\":\"40021352989\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"request_sha256\":\"09056ad14d8087640b9110f39c0ad675cc213c1bc3c52145c1c3c7fb1c3f60d3\",\"material_sha256\":\"498b187fb47d3fd5855e143204ccefb64e31123f0d7fa4c492cca68b875d1712\",\"event_id\":\"43b3c679d75a61d98b57a413a3497568b5c9cb0f3b75f757846b48cd725280df\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run multi-provider comparison\"}} -->",
+          "url": "https://github.com/stranske/Manager-Database/pull/1817#issuecomment-6374363328",
+          "author": {
+            "login": "github-actions"
+          }
+        },
+        {
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"run_id\":\"40021352989\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"retained_provider_evaluation\",\"retry_kind\":\"recover_existing_evaluation\",\"retryable\":false,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"request_sha256\":\"09056ad14d8087640b9110f39c0ad675cc213c1bc3c52145c1c3c7fb1c3f60d3\",\"material_sha256\":\"498b187fb47d3fd5855e143204ccefb64e31123f0d7fa4c492cca68b875d1712\",\"event_id\":\"43b3c679d75a61d98b57a413a3497568b5c9cb0f3b75f757846b48cd725280df\"},\"assessment_identity\":{\"mode\":\"compare\",\"provider\":\"\",\"model\":\"\",\"model2\":\"\",\"canonical\":true}} -->",
+          "url": "https://github.com/stranske/Manager-Database/pull/1817#issuecomment-6374386615",
+          "author": {
+            "login": "github-actions"
+          }
+        },
+        {
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"run_id\":\"40139136326\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"request_sha256\":\"53e76f2a354b53d8b5c7cac99609a8b380e370c14dee705cde688fcb4ca0b872\",\"material_sha256\":\"498b187fb47d3fd5855e143204ccefb64e31123f0d7fa4c492cca68b875d1712\",\"event_id\":\"1f83acb99686154be2b56a198450c83a48c2e42782237d88aa21c71c466e54e6\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"anthropic\",\"model\":\"claude-sonnet-5-5\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\"}} -->",
+          "url": "https://github.com/stranske/Manager-Database/pull/1817#issuecomment-6390391985",
+          "author": {
+            "login": "github-actions"
+          }
+        },
+        {
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"run_id\":\"40139136326\",\"run_attempt\":\"1\",\"status\":\"incomplete\",\"failure_cause\":\"validated_no_evaluation\",\"retry_kind\":\"known_no_evaluation\",\"retryable\":true,\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"request_sha256\":\"53e76f2a354b53d8b5c7cac99609a8b380e370c14dee705cde688fcb4ca0b872\",\"material_sha256\":\"498b187fb47d3fd5855e143204ccefb64e31123f0d7fa4c492cca68b875d1712\",\"event_id\":\"1f83acb99686154be2b56a198450c83a48c2e42782237d88aa21c71c466e54e6\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"anthropic\",\"model\":\"claude-sonnet-5-5\",\"model2\":\"\",\"canonical\":true}} -->",
+          "url": "https://github.com/stranske/Manager-Database/pull/1817#issuecomment-6390397316",
+          "author": {
+            "login": "github-actions"
+          }
+        },
+        {
+          "body": "<!-- verifier-event-state/v1 {\"schema\":\"verifier-event-state/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"run_id\":\"40142437626\",\"run_attempt\":\"1\",\"status\":\"pending\",\"verification_event\":{\"schema\":\"verification-event/v1\",\"repo\":\"stranske/manager-database\",\"pr\":\"1817\",\"head_sha\":\"0b4d8ea8e41f8af8022218916de7b4d214c8939d\",\"evaluated_sha\":\"7f27a4a0f8de5ba200461a9753102723b5d3253d\",\"request_sha256\":\"53e76f2a354b53d8b5c7cac99609a8b380e370c14dee705cde688fcb4ca0b872\",\"material_sha256\":\"498b187fb47d3fd5855e143204ccefb64e31123f0d7fa4c492cca68b875d1712\",\"event_id\":\"1f83acb99686154be2b56a198450c83a48c2e42782237d88aa21c71c466e54e6\"},\"assessment_identity\":{\"mode\":\"evaluate\",\"provider\":\"anthropic\",\"model\":\"claude-sonnet-5-5\",\"model2\":\"\",\"canonical\":true},\"execution_binding\":{\"schema\":\"verifier-execution-binding/v1\",\"workflow_path\":\".github/workflows/agents-verifier.yml\",\"job_name\":\"Run post-merge verifier\",\"pending_step\":\"Record verification event pending\",\"evaluator_step\":\"Run LLM evaluation\"}} -->",
+          "url": "https://github.com/stranske/Manager-Database/pull/1817#issuecomment-6390829772",
+          "author": {
+            "login": "github-actions"
+          }
+        },
+        {
+          "body": "<!-- verifier-corpus-decision/v1 {\"assessment_identity\": {\"canonical\": true, \"mode\": \"evaluate\", \"model\": \"claude-sonnet-5-5\", \"model2\": \"\", \"provider\": \"anthropic\"}, \"ci_failed\": false, \"evaluated_sha\": \"7f27a4a0f8de5ba200461a9753102723b5d3253d\", \"head_sha\": \"0b4d8ea8e41f8af8022218916de7b4d214c8939d\", \"pr\": \"1817\", \"provider_verdicts\": [\"PASS\"], \"repo\": \"stranske/Manager-Database\", \"result_admission\": {\"execution_receipt_sha256\": \"f4aa24608d7106381d5e2b41971c4111ded8bd5b09f852a49b882b9de6a490b5\", \"mode\": \"evaluate\", \"payload_sha256\": \"664b7baa2dca6a071426f013d6d4671ea49936f3a8c1bcb2ce037ca815284dc8\", \"schema\": \"verifier-result-admission/v1\"}, \"run_attempt\": \"1\", \"run_id\": \"40142437626\", \"schema\": \"verifier-corpus-decision/v1\", \"verdict\": \"PASS\", \"verification_event\": {\"evaluated_sha\": \"7f27a4a0f8de5ba200461a9753102723b5d3253d\", \"event_id\": \"1f83acb99686154be2b56a198450c83a48c2e42782237d88aa21c71c466e54e6\", \"head_sha\": \"0b4d8ea8e41f8af8022218916de7b4d214c8939d\", \"material_sha256\": \"498b187fb47d3fd5855e143204ccefb64e31123f0d7fa4c492cca68b875d1712\", \"pr\": \"1817\", \"repo\": \"stranske/manager-database\", \"request_sha256\": \"53e76f2a354b53d8b5c7cac99609a8b380e370c14dee705cde688fcb4ca0b872\", \"schema\": \"verification-event/v1\"}} -->",
+          "url": "https://github.com/stranske/Manager-Database/pull/1817#issuecomment-6390836952",
+          "author": {
+            "login": "github-actions"
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasPreviousPage": false
+      }
+    }
+  },
+  "provenance": {
+    "source": "https://github.com/stranske/Manager-Database/pull/1817",
+    "capture": "2026-10-24",
+    "retention": "Only exact public machine markers, author login, comment URL, delivery IDs and complete-page flag retained. Human comments and incidental report prose excluded; no events rewritten."
+  }
+}

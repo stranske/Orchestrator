@@ -28,7 +28,9 @@ from pathlib import Path
 from typing import Any
 
 import cadence_registry
+import features as feature_registry
 import feedback
+import paths
 
 ORCH = Path(__file__).resolve().parent
 LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex" / "orchestrator"))
@@ -36,9 +38,10 @@ LOCAL_RUNTIME = Path(os.environ.get("ORCH_LOCAL_RUNTIME", Path.home() / ".codex"
 # that moves ORCH_LOCAL_RUNTIME must drop it, because an explicit path wins over that default.
 LEDGER_PATH_ENV = "ORCH_CAPABILITIES_PATH"
 REG = Path(os.environ.get(LEDGER_PATH_ENV, LOCAL_RUNTIME / "capabilities.json"))
-FEATURES_REG = Path(os.environ.get("ORCH_FEATURES_PATH", ORCH / "experiments" / "features.json"))
+FEATURES_REG = Path(
+    os.environ.get("ORCH_FEATURES_PATH", paths.runtime_state_path("experiments", "features.json"))
+)
 SCHEMA_VERSION = 1
-RUNTIME_AC_REOPEN_EXPIRY = "2026-10-28T00:00:00+00:00"  # inclusive Oct 27 review date
 GATED_TTL_DAYS = 90
 # Kinds the COMPILER emits and `capability_targets` can bind/roll back at runtime. This set is a
 # contract with capability_targets.TARGET_KINDS and must stay identical to it.
@@ -315,36 +318,29 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         "evidence_threshold": "distinct durable subjects retain complete non-orphan lineage without redaction regressions",
     },
     "live-keepalive-supervisor": {
-        "downstream_consumer": "redirect_shadow.py:record_redirect; periodic_report.py:format_human",
+        "downstream_consumer": "keepalive_supervisor.py:close_verified_issues; redirect_shadow.py:record_redirect; periodic_report.py:format_human",
+        "learning_sink": "feedback.outcomes via supervisor-close runs and capability influence edges",
+        "notes": "dedup: supervisor CLI/cadence, trusted verifier_evidence parser, runtime_ac_gate merge recheck and feedback outcome store already exist. Extend those rails for opt-in post-merge closure; no second verifier, registry or event store. Improvement log and historical dormancy inventory checked for issue675.",
+        "kill_switch": "ORCH_SUPERVISOR_CLOSE=0",
+        "rollback": "Unset ORCH_SUPERVISOR_CLOSE; retain prior closure evidence, never reopen automatically.",
         # Findability, declared ON THE GATE ENTRY. A twin entry in the declarations
         # table is forbidden: reconciliation merges the two dicts and the twin CLOBBERS
         # the gate's own fields (measured: the canary status vanished from the summary
         # view the moment a twin existed).
         "findability_category": "exercise_bound",
         "findability_rationale": (
-            "a staged planner over already-escalated keepalive PRs that refuses live action under the "
-            "single-authority rule; runs as the keepalive-stage2-plan cadence step. "
+            "the existing keepalive-stage2-plan cadence plans post-escalation recovery and, "
+            "only with ORCH_SUPERVISOR_CLOSE=1, closes verified post-merge source issues. "
         ),
         "status": "wired",
         "entrypoint": "keepalive_supervisor.py",
-        # MATCHER CORRECTED 2026-08-21. It declared `evidence_gate/ready_for_supervised_apply`,
-        # which is what this module REPORTS ON, not what makes it fire. What makes it fire is the
-        # daily `keepalive-stage2-plan` cadence step, and `keepalive_supervisor.main`'s own parser
-        # says "no live action": it plans and reports, and its heartbeat fires unconditionally at CLI
-        # entry with ref="keepalive_supervisor.main". A report cannot merge a PR, so demanding a
-        # delivery outcome from it was the observer category error — 11 invocations stuck in
-        # `invoked_without_outcomes` with advice ("fix outcome linkage") describing work that does
-        # not exist for it. `tick_phase` is already an observer kind, so the classification follows
-        # from the corrected declaration with NO change to is_observer or classify_liveness.
-        # Deliberately NOT done: adding `evidence_gate` to OBSERVER_MATCHER_KINDS. That kind is
-        # shared with `redirect-apply-bootstrap`, which really does deliver (it applies a plan that
-        # dispatches a run), so widening the set would hide a linkage gap that is genuinely expected
-        # there. The kind does not carry the distinction; the cadence declaration does.
+        # The planner remains a cadence observer. Only a confirmed closure writes an
+        # issue_closure outcome; planner invocations never fabricate delivery credit.
         "matcher": {"kind": "tick_phase", "name": "keepalive-stage2-plan"},
-        "trigger_cadence": "daily shadow evidence",
-        "flags_defaults": {"live_supervisor_allowed": False},
-        "gate_reason": "supervised apply remains disabled",
-        "gate_evidence": "live_supervisor_allowed=false",
+        "trigger_cadence": "existing keepalive-stage2-plan tick",
+        "flags_defaults": {"live_supervisor_allowed": False, "ORCH_SUPERVISOR_CLOSE": "0"},
+        "gate_reason": "redirect apply remains disabled; post-merge closure requires ORCH_SUPERVISOR_CLOSE=1",
+        "gate_evidence": "only verified closure actions record outcomes",
         "evidence_threshold": "linked live role outcomes and disagreements satisfy the Stage 2 gate",
     },
     "thompson-hybrid-routing": {
@@ -444,7 +440,8 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
             "orchestrate_default": {"ORCH_RUN_RUNTIME_AC": "1"},
             "command_execution_default": {"ORCH_RUNTIME_AC_ALLOW_COMMANDS": "0"},
             "post_merge_commands_default": {"ORCH_RUNTIME_AC_POST_MERGE_COMMANDS": "1"},
-            "post_merge_reopen_default": {"ORCH_RUNTIME_AC_REOPEN": "0"},
+            "post_merge_reopen_default": {"ORCH_RUNTIME_AC_REOPEN": "auto"},
+            "shadow_budget_default": {"ORCH_RUNTIME_AC_SHADOW_BUDGET": "12"},
         },
         "gate_reason": (
             "advisory canary is limited to explicit runtime-AC items; the keepalive ingest's "
@@ -454,8 +451,9 @@ KNOWN_GATES: dict[str, dict[str, Any]] = {
         ),
         "gate_evidence": (
             "required closer must carry a runtime-AC label or spec; "
-            f"ORCH_RUNTIME_AC_REOPEN defaults OFF, expires {RUNTIME_AC_REOPEN_EXPIRY}; "
-            "rollback: unset ORCH_RUNTIME_AC_REOPEN; comments remain"
+            "ORCH_RUNTIME_AC_REOPEN defaults auto: a FAIL reopens its issue once 10 post-merge "
+            "rechecks have executed (runtime_ac_gate.reopen_policy); =0 is the kill switch, =1 "
+            "forces; rollback: ORCH_RUNTIME_AC_REOPEN=0; comments remain"
         ),
         "evidence_threshold": "joined gate artifacts and durable outcomes demonstrate useful discrimination",
     },
@@ -1029,11 +1027,30 @@ def _matches_trigger(cap: dict[str, Any], trigger: dict[str, Any]) -> tuple[bool
     return not reasons, reasons
 
 
+def capability_expired(cap: Mapping[str, Any], now: int | None = None) -> bool:
+    """Whether a row's ledger ``expiry`` has been reached at ``now`` (read-only).
+
+    Uses the same boundary as ``_expire_in_place`` (``now >= expiry``) but never
+    mutates the row, so raw ``load(create=False)`` readers can refuse expired
+    rows before any sweep retires them. A present but unparseable ``expiry``
+    fails closed (treated as expired); only a missing expiry is not expired.
+    """
+    expiry = cap.get("expiry")
+    if expiry is None:
+        return False
+    current = int(time.time()) if now is None else int(now)
+    try:
+        return current >= int(expiry)
+    except (TypeError, ValueError, OverflowError):
+        return True
+
+
 def capability_routing_decision(
     trigger: dict[str, Any],
     *,
     capabilities_by_id: dict[str, dict[str, Any]],
     seed: int,
+    now: int | None = None,
 ) -> dict[str, Any]:
     """Select active versions deterministically, independent of execution profile."""
     eligible, rejected = [], {}
@@ -1044,6 +1061,9 @@ def capability_routing_decision(
             continue
         if cap.get("rollback_pending"):
             rejected[capability_id] = ["rollback_pending"]
+            continue
+        if capability_expired(cap, now):
+            rejected[capability_id] = ["expired"]
             continue
         if cap.get("status") != "active":
             rejected[capability_id] = [f"status:{cap.get('status')}"]
@@ -1356,6 +1376,17 @@ def _write_ledger_unlocked(path: Path, capabilities: dict[str, dict[str, Any]]) 
             os.unlink(tmp_name)
 
 
+def _feature_snapshot(path: Path) -> tuple[dict, dict]:
+    value = feature_registry.load(path, create=False)
+    # Hash the parsed snapshot actually consumed; do not reread a possibly newer file.
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return value, {
+        "source_path": str(path),
+        "source_json_digest": hashlib.sha256(encoded).hexdigest(),
+        "source_kind": "registry_or_builtin_defaults",
+    }
+
+
 def migrate_features_to_capabilities(
     features_path: Path = FEATURES_REG,
     caps_path: Path = REG,
@@ -1364,9 +1395,7 @@ def migrate_features_to_capabilities(
 ) -> dict[str, Any]:
     """Conservatively migrate feature names without inferring activation."""
     ts = _now() if now is None else now
-    features: dict[str, Any] = {}
-    if features_path.exists():
-        features = json.loads(features_path.read_text())
+    features, source_evidence = _feature_snapshot(features_path)
     capabilities: dict[str, dict[str, Any]] = {}
     for name, feature in features.items():
         cap = _blank_capability(name)
@@ -1377,6 +1406,7 @@ def migrate_features_to_capabilities(
                 "timestamp": ts,
                 "type": "migrated",
                 "source": "experiments/features.json",
+                **source_evidence,
                 "legacy_maturity": feature.get("maturity"),
                 "activation_inferred": False,
             }
@@ -1533,8 +1563,32 @@ def artifact_lifecycle(cap: dict[str, Any]) -> str | None:
     return f"artifact {', '.join(keys)}" if keys else None
 
 
-def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
-    """Why `renew` would refuse this row, or None when it would renew it."""
+FIX_REF_PATTERN = re.compile(
+    r"(?:[\w.-]+/[\w.-]+#\d+|https://github\.com/[\w.-]+/[\w.-]+/(?:issues|pull)/\d+)"
+)
+
+
+def names_a_fix(refs: list[str] | None) -> bool:
+    """A dated fix ref is an issue or PR (`owner/repo#N` or its GitHub URL), not a run id or prose."""
+    return any(FIX_REF_PATTERN.search(str(ref or "")) for ref in refs or [])
+
+
+def renewal_blocker(
+    cap: dict[str, Any],
+    *,
+    now: int,
+    acting: int | None = None,
+    evidence_refs: list[str] | None = None,
+) -> str | None:
+    """Why `renew` would refuse this row, or None when it would renew it.
+
+    `acting` is the value-chain monitor's `acted_on` for this row over its rolling window (None
+    when unmeasured, which never blocks). ACTING IS THE RENEWAL CURRENCY (owner decision
+    2026-10-17, M1 restated): a row that is invoked but has not acted in the trailing window
+    renews only with a dated fix ref for the first break the weekly row names; otherwise the
+    expiry retires it, the zero-attention default. Measured when decided: 9 of 48 rows acting in
+    the rolling window, 16 of 21 expiries on 2027-01-02, and no renewal had ever consulted acting.
+    """
     expiry = cap.get("expiry")
     if expiry is None:
         return "it carries no expiry, so no timeout will retire it and there is nothing to renew"
@@ -1560,7 +1614,26 @@ def renewal_blocker(cap: dict[str, Any], *, now: int) -> str | None:
             f"it already runs to {utc_date(int(expiry))}, at or past a fresh "
             f"{GATED_TTL_DAYS}-day window, so a renewal would not extend it"
         )
+    if acting == 0 and cap.get("last_invocation") and not names_a_fix(evidence_refs):
+        return (
+            "it is invoked but nothing acted on its output in the trailing window (value-chain "
+            "monitor acted_on 0): a renewal needs a dated fix ref (owner/repo#N or a GitHub "
+            "issue/PR URL) for the first break the weekly row names, or the expiry retires it"
+        )
     return None
+
+
+def acting_in_trailing_window(capability_id: str, *, now: int | None = None) -> int | None:
+    """The monitor's rolling `acted_on` for one row; None when the Brain cannot be read."""
+    try:
+        import value_chain_monitor as monitor
+
+        index, _reason = monitor.acted_on_index(
+            feedback.DB_PATH, _now() if now is None else int(now), [capability_id]
+        )
+    except Exception:  # noqa: BLE001 — unmeasured is a word, never a zero
+        return None
+    return None if index is None else int(index.get(capability_id, 0))
 
 
 def renew_command(capability_id: str) -> str:
@@ -1587,8 +1660,12 @@ def renew(
     evidence_refs: list[str] | None,
     path: Path = REG,
     timestamp: int | None = None,
+    acting: int | None = None,
 ) -> dict[str, Any]:
     """Hold a row past its expiry for one more GATED_TTL_DAYS, as a recorded, evidenced decision.
+
+    `acting` is the monitor's rolling `acted_on` for the row (the CLI reads it; None is
+    unmeasured and never blocks): see `renewal_blocker`.
 
     Refuses, writing nothing, without a reason and at least one evidence ref, and for any row
     `renewal_blocker` names. A row retired BY ITS EXPIRY comes back to the status the timeout
@@ -1612,7 +1689,7 @@ def renew(
         cap = capabilities.get(capability_id)
         if cap is None:
             raise ValueError(f"unknown capability: {capability_id}")
-        blocker = renewal_blocker(cap, now=ts)
+        blocker = renewal_blocker(cap, now=ts, acting=acting, evidence_refs=refs)
         if blocker:
             raise ValueError(f"cannot renew {capability_id}: {blocker}")
         previous_expiry = int(cap["expiry"])
@@ -1632,6 +1709,7 @@ def renew(
                 "last_invocation": cap.get("last_invocation"),
                 "last_success": cap.get("last_success"),
                 "outcome_links": len(cap.get("outcome_links") or []),
+                "acting_trailing_window": acting,
             },
         }
         # An activation deadline seeded WITH the expiry moves with it; one set on its own is a
@@ -1741,6 +1819,25 @@ DECLARATION_FIELDS: tuple[str, ...] = (
 # registering caller was refused on every attempt. `rail-exercise-cadence` had no registering caller
 # at all, so a fresh machine never got its row.
 KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
+    "closer-core": {
+        "status": "wired",
+        "entrypoint": str(Path.home() / ".codex/closer-core/closer_core.py"),
+        "matcher": {"kind": "tick_phase", "equals": "closer-core"},
+        "trigger_cadence": "existing external controller hook",
+        "output_artifact": "~/.codex/orchestrator/closer-core/rounds.jsonl",
+        "downstream_consumer": "value_chain_monitor.py:report via switch_review.py",
+        "learning_sink": "feedback.py runs and durable issue_closure outcomes",
+        "kill_switch": "remove the closer-core hook from the external controller",
+        "rollback": {"restore": "rebuild/controller.py.before-closer-core"},
+        "findability_category": "exercise_bound",
+        "findability_rationale": "The external controller invokes the core; rail-exercise:brain offers its read-only accounting fixture.",
+        "notes": (
+            "dedup: the external thin core already closes merged-PR source issues; "
+            "the existing closer construction remains idle. This declaration adds accounting, "
+            "not activation. Read demand and target dispositions from its existing round journal "
+            "and accepted outcomes from the Brain; no additional event store or advisor surface."
+        ),
+    },
     "testgen-lane": {
         "downstream_consumer": "testgen_gate.py:main consumes candidate tests for the acceptance gate",
         "notes": (
@@ -1799,7 +1896,8 @@ KNOWN_DECLARATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "windowed-capacity-policy": {
-        "downstream_consumer": "router.py:select_agent; range_lane_rollout.py:build_rollout",
+        "downstream_consumer": "router.py:select_agent; range_lane_rollout.py:build_rollout; "
+        "rate_incidents.py:record_lane_round",
         "kill_switch_category": "compute_only",
         "control_point": "ORCH_DISABLE_STEPS",
         "kill_switch_rationale": (
@@ -2005,7 +2103,12 @@ KNOWN_EXISTING_DECLARATIONS: dict[str, dict[str, Any]] = {
         "notes": (
             "source599 declaration drain: offload already exists in the live ledger; "
             "its role consumers and run binding already exist. Reconcile only the consumer "
-            "declaration; do not register a capability, promote lifecycle or grant acting credit."
+            "declaration; do not register a capability, promote lifecycle or grant acting credit. "
+            "Issue671 dedup: dispatcher.delegate, advisory offload and Brain feedback already "
+            "exist; extend that dispatch path with terminal-writer exact-head review and "
+            "bounded same-agent repair, not a second role, model registry or capability. "
+            "Concept search, dormancy inventory and improvement-log review found no existing "
+            "bounded post-delegate review/redispatch consumer. No activation credit claimed."
         ),
     },
 }
@@ -2231,9 +2334,7 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
         return _parse_ledger_cached(path, raw)["capabilities"]
     with _locked(path):
         if not path.exists():
-            features: dict[str, Any] = {}
-            if FEATURES_REG.exists():
-                features = json.loads(FEATURES_REG.read_text())
+            features, source_evidence = _feature_snapshot(FEATURES_REG)
             now = _now()
             capabilities: dict[str, dict[str, Any]] = {}
             for name, feature in features.items():
@@ -2241,7 +2342,13 @@ def load(path: Path = REG, *, create: bool = True) -> dict[str, dict[str, Any]]:
                 cap["status"] = "generated" if feature.get("maturity") == "hardened" else "observed"
                 cap["entrypoint"] = feature.get("module")
                 cap["event_history"].append(
-                    {"timestamp": now, "type": "migrated", "activation_inferred": False}
+                    {
+                        "timestamp": now,
+                        "type": "migrated",
+                        "activation_inferred": False,
+                        "legacy_maturity": feature.get("maturity"),
+                        **source_evidence,
+                    }
                 )
                 capabilities[name] = cap
             expiry = now + GATED_TTL_DAYS * 86400
@@ -4759,7 +4866,12 @@ def main(argv: list[str]) -> int:
         return 0
     if args.command == "renew":
         try:
-            result = renew(args.name, reason=args.reason, evidence_refs=args.evidence_ref)
+            result = renew(
+                args.name,
+                reason=args.reason,
+                evidence_refs=args.evidence_ref,
+                acting=acting_in_trailing_window(args.name),
+            )
         except (AssertionError, ValueError) as exc:
             # A refusal is an expected answer, not a crash, and it writes nothing.
             result = {"capability_id": args.name, "renewed": False, "refused": str(exc)}

@@ -1,0 +1,3226 @@
+"""Bounded no-native-ACT source upgrade preparation.
+
+This is intentionally *not* a retry or a retirement override.  It recognizes
+only a completed, non-accepted source disposition that stopped before source
+ownership collection and before a native correction intent could be issued.
+The old campaign remains an immutable witness; a different current source may
+later create one fresh held campaign after its own qualification.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, cast
+
+import closer_host_restore_contract as host
+
+SCHEMA = "closer-native-source-upgrade/v1"
+# This route is deliberately scoped to the reviewed predecessor whose owner
+# criterion stopped before Native ACT. A manifest that merely self-describes a
+# matching shape is not enough to establish that control-flow ordering.
+REVIEWED_OLD_CANDIDATE = "f858dc3857ad7a90461126abd945edc0d380d9b3"
+# Canonical SHA-256 of the sorted 191-entry module map reviewed from f858.
+# This is checked before an old module is imported; the old validator is only
+# a second, version-aware validation fence.
+REVIEWED_OLD_MODULES_SHA256 = "c5dea1b0710044385caa0f0baf0490b7a61aa49b10b49496b03dd2f258371add"
+REVIEWED_OLD_DESCRIPTOR_SHA256 = "019d7bc8010dd5e921d194ad6e073d5ab90ab13299996c82463a5b0356a63ea6"
+REVIEWED_OLD_INTERPRETER_SHA256 = "d01b09973b5bd3ff617e7849ce9c0bdb8991256f495ce190720ccc976cdaaee7"
+# A second reviewed predecessor stopped in the generic exception router before
+# selecting a provider. Its signed round is a capacity disposition, not the
+# earlier owner-criterion disposition and never a no-B/accepted result.
+REVIEWED_CAPACITY_CANDIDATE = "4e8ae9de575bc1108498933fb0cd0ee495a42aa8"
+REVIEWED_CAPACITY_MODULES_SHA256 = (
+    "2fed5eaa7da160068d4655cb4358cfa8459719d29be8a17d7564c5e7f77db041"
+)
+REVIEWED_CAPACITY_DESCRIPTOR_SHA256 = (
+    "d785039a57ef32c7ea7e2f72f349802b75658ebba1b40917c856c9ab5a3c1f58"
+)
+# The source17be CSV canary stopped after its bound STRONG adjudication but
+# before ownership collection.  It is deliberately a separate literal branch:
+# it is neither the generic f858 owner-criterion stop nor the 4e8 capacity
+# stop, and it must never turn an arbitrary owned_unknown/OK result into a
+# source-upgrade candidate.
+REVIEWED_CLOCK_CANDIDATE = "17be674425c41f619f38325c4266c5983366094f"
+REVIEWED_CLOCK_WORKER_ID = "59dfb3c05e55"
+REVIEWED_CLOCK_RESULT_SHA256 = "3d308ef44bbc979ed2a83b4578f4f334f793dd9b2600c73cea20fb3e00b1d30e"
+REVIEWED_CLOCK_MODULES_SHA256 = "a74ae76eb426482d528e695926d12a53311081925e75c939181fdbdb20508791"
+REVIEWED_CLOCK_DESCRIPTOR_SHA256 = (
+    "8deaf7d76cd0965f44f031521121d03f7f104147b99fc34bdbe0f71cc7fef5b2"
+)
+# The source8a CSV cohort reached its bound STRONG adjudication, then stopped
+# before ACT when the native ownership collector exhausted its bounded response
+# budget.  It is a separate exact predecessor: no general owned_unknown route
+# is eligible for migration.
+REVIEWED_OWNERSHIP_BUDGET_CANDIDATE = "8a4716f844fe002c6606b6bad4104c74be83d32c"
+REVIEWED_OWNERSHIP_BUDGET_WORKER_ID = "5483c1e719d7"
+REVIEWED_OWNERSHIP_BUDGET_RESULT_SHA256 = (
+    "8be4cd9e69839a7e58cf83577f90bc47ee2212e9c9285e77f960385ecd4dc44d"
+)
+REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256 = (
+    "5e08da1685bad96c649085ec32fa069ba8c61cadc14ff79fe8c53321bb7233ca"
+)
+REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256 = (
+    "6ca0c539632157b1315f9e5d941661b7dff1117ef99ff556c0b759b01cb549f6"
+)
+# The installed source701d CSV cohort completed A0/B0/C0 but its Source
+# assessment identity was invalid before ACT.  This is a literal predecessor,
+# not a general permission to migrate an ``ok`` / ``accepted=false`` result.
+REVIEWED_SEED_ASSESSMENT_CANDIDATE = "701d55df99694c16cdcd5b4c3d657b3ab419bd53"
+REVIEWED_SEED_ASSESSMENT_WORKER_ID = "04a0dd18e549"
+REVIEWED_SEED_ASSESSMENT_RESULT_SHA256 = (
+    "8f97d7e5b4f5aa54d44e2fefb3565f3caa58ba50e73c1948d973296e0a0e52a7"
+)
+REVIEWED_SEED_ASSESSMENT_ROUND_ID = "043705f7c001301b114b150c93acad5b"
+REVIEWED_SEED_ASSESSMENT_ROUND_SHA256 = (
+    "6393e24d40b05ad1cca9a424b1db146359d904b65ee3ecf67a52375370649077"
+)
+REVIEWED_SEED_ASSESSMENT_MODULES_SHA256 = (
+    "eb0c1aada1031b7fd267b0c96bced40b105e9ac03b1c80ecfdaea8b545914431"
+)
+REVIEWED_SEED_ASSESSMENT_DESCRIPTOR_SHA256 = (
+    "2ccb3a98cf59015ec4405ae311183472bfe6ada4d09798dcf7981e69441dbfa4"
+)
+# This predecessor is deliberately unlike the completed no-ACT cohort above.
+# Its original operation is still UNKNOWN; the only authority here is to carry
+# an immutable, proven pre-instruction failure into a *new held* campaign.
+REVIEWED_PAGINATION_CANDIDATE = "d4ca8c8cf144d51d7b8b67a5beb1935e4c66a694"
+REVIEWED_PAGINATION_MANIFEST_SHA256 = (
+    "9b4e6067ca40c96f59a7c3459e353c25d9825377d3e3f1a709a99abe375ea48a"
+)
+REVIEWED_PAGINATION_MODULES_SHA256 = (
+    "1abf1fa4c901ea00bf8b60650630722ba449fd2b849b47a478efdc7173287a9c"
+)
+REVIEWED_PAGINATION_DESCRIPTOR_SHA256 = (
+    "e264c0623bb838f9c13a4db2b19593ed98e69504c159c16020eb07ec2a5b9ee3"
+)
+REVIEWED_PAGINATION_WORKER_ID = "0f450560fbcf"
+REVIEWED_PAGINATION_NONCE = "ba10a43ca9fe4682b6b1aaa3b7318d44"
+REVIEWED_PAGINATION_RESULT_SHA256 = (
+    "9b0d25c4ed56925fb49e3683d4a52285d2696cd843cb4758549ffcea50ba73da"
+)
+REVIEWED_PAGINATION_COHORT_SHA256 = (
+    "dd5d00625a1d36d8e0362919d6392b72495075c33448e43b78e0b20935467ea8"
+)
+REVIEWED_PAGINATION_ROUND_ID = "a7d4627e9c3a8f712ecbbb0c25ee5ee0"
+REVIEWED_PAGINATION_ROUND_SHA256 = (
+    "1b3eaced9cb6578569b089484ff245b0c6cec2a30c75d999aae8f95be60a2fd0"
+)
+REVIEWED_PAGINATION_TARGET_STATE_SHA256 = (
+    "4d15088bc40853c5f6848447c1a303719f68a3f88af91bed50f70c38aeaf1fdc"
+)
+REVIEWED_PAGINATION_ACTION_SHA256 = (
+    "9247f487b4c717eabe3de90ba5d16cfe1b9603accdf9eb6a8ee5b9a138738a76"
+)
+REVIEWED_PAGINATION_OPERATION_ID = "bbac752de4c0a614edc16cca9f241ce7"
+REVIEWED_PAGINATION_EFFECTS_SHA256 = (
+    "a11c6f91b462c22225465337f4fb4b028a86b69bd81914b8cb30f7df78ebbc4f"
+)
+REVIEWED_PAGINATION_OWNERSHIP_SHA256 = (
+    "04c7d745039e2f410d7a6ced2fdd923aed1d9b40fd9074b1e75e693fb71af4df"
+)
+# This literal consumer is the only reviewed CSV continuation registration in
+# the source8a predecessor.  The predecessor's controller writer is the
+# GitHub principal for issue/PR ownership, while the original registration
+# named the local Codex executable.  A future current-source ownership helper
+# authenticates the issue assignee and PR author independently; this static
+# rebind merely prevents the copied registration from contradicting that
+# controller identity before that helper can run.
+REVIEWED_OWNERSHIP_BUDGET_REPOSITORY = "stranske/orchestrator"
+REVIEWED_OWNERSHIP_BUDGET_REPOSITORY_ID = 1342306972
+REVIEWED_OWNERSHIP_BUDGET_WRITER_ID = 23046322
+REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN = "stranske"
+REVIEWED_OWNERSHIP_BUDGET_WRITER_TYPE = "User"
+REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID = "test-csv-followup988-codex"
+REVIEWED_OWNERSHIP_BUDGET_PRE_REBIND_OWNER = "codex"
+REVIEWED_OWNERSHIP_BUDGET_ALLOWED_PATHS = [
+    "tests/fixtures/closer_real_csv_canary/v1/csv_export.py",
+    "tests/fixtures/closer_real_csv_canary/v1/verify_csv_contract.py",
+]
+REVIEWED_OWNERSHIP_BUDGET_TRUSTED_CONTEXT_SHA256 = (
+    "73df9369a51ec4d515c1dfcabec4bb0ee657ce9f0d93161b53c458f34a543745"
+)
+# Deliberately literal: the inspector is executed before any installed-release
+# fact can be trusted.  This is the clean reviewed f858 source file, not a
+# digest supplied by a release journal or the inspected generation.
+REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256 = (
+    "98775accf1ce81aead5c99eec4bf7e3e802774b2397440dd356bf9ff7649c966"
+)
+# The source-publisher closure release delegates its snapshot digest to this
+# pure helper.  Its installer deliberately adds the mirror to sys.path, so a
+# pin on the installer alone would still let a mutable helper affect the
+# pre-release readback.  These are reviewed Source bytes, never journal facts.
+REVIEWED_SHARED_DIGEST_INSTALLER_SHA256 = (
+    "8cdb2241df0a7fba7cac5736c1ce18663801a6b407c0e02f7f7c1f10e7e7adb6"
+)
+REVIEWED_SHARED_DIGEST_HELPER_SHA256 = (
+    "0fe7e3d60e333cb8cc7bb974705e09254a2d5ada503a6493ae60cc4537b34968"
+)
+_SEAL_NAME = "source-upgrade-current-disposition.json"
+_INTENT_NAME = "source-upgrade-intent.json"
+_KNOWN_NAME = "source-upgrade-known.json"
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+class SourceUpgradeHeld(RuntimeError):
+    pass
+
+
+def _sha(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _plan_sha(plan: dict[str, Any]) -> str:
+    body = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"plan_sha256", "stage", "status", "at"}
+    }
+    return _sha(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
+
+
+def _need(value: object, reason: str) -> None:
+    if not value:
+        raise SourceUpgradeHeld(reason)
+
+
+def _canonical(path: str | Path) -> Path:
+    value = Path(path).absolute()
+    _need(not value.is_symlink() and value.resolve(strict=False) == value, "aliased path")
+    return value
+
+
+def _object(path: str | Path, label: str) -> tuple[Path, bytes, dict[str, Any]]:
+    try:
+        value, raw, doc = host._obj(path)
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        raise SourceUpgradeHeld(label + " unavailable") from exc
+    return value, raw, doc
+
+
+def _exact_ref(value: object, label: str) -> tuple[Path, bytes, dict[str, Any]]:
+    try:
+        path, doc = host._json_ref(value, label)
+        raw = host._read(path)[1]
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        raise SourceUpgradeHeld(label + " reference invalid") from exc
+    return path, raw, doc
+
+
+def _pinned_object(
+    path: str | Path, sha256: object, label: str
+) -> tuple[Path, bytes, dict[str, Any]]:
+    """Parse an old witness only after binding the exact bytes first."""
+    value, raw, doc = _object(path, label)
+    _need(isinstance(sha256, str) and _sha(raw) == sha256, label + " changed")
+    return value, raw, doc
+
+
+def _source_upgrade_root(manifest: dict[str, Any]) -> Path:
+    import closer_mechanisms as mechanisms
+
+    try:
+        # This is the mechanism's owned 0700 root check, not merely a
+        # canonical-path check. It must run before any key read or creation.
+        root = mechanisms._root(manifest)
+    except (KeyError, TypeError, OSError, ValueError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source observation root unavailable") from exc
+    return _canonical(root)
+
+
+def _upgrade_path(manifest: dict[str, Any], name: str) -> Path:
+    root = _source_upgrade_root(manifest)
+    path = _canonical(root / name)
+    _need(path.parent == root and path.name == name, "source upgrade record path differs")
+    return path
+
+
+def _signed_upgrade_record(manifest: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    """Sign a source-owned disposition with the existing observer key domain."""
+    import closer_mechanisms as mechanisms
+
+    root = _source_upgrade_root(manifest)
+    try:
+        # Deliberately never create a key: installation/qualification owns it.
+        key = mechanisms._key(root)
+    except (OSError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source signing key unavailable") from exc
+    return {"record": record, "signature": mechanisms._signature(record, key)}
+
+
+def _provision_upgrade_key(manifest: dict[str, Any]) -> None:
+    """Provision the current observer key only for a brand-new sealed route.
+
+    This is source-owned installation bookkeeping, not an admission, native
+    entry, or business authority.  Recovery never calls this helper: it must
+    authenticate the original signed records with the key that already exists.
+    """
+    import closer_mechanisms as mechanisms
+
+    try:
+        mechanisms._key(_source_upgrade_root(manifest), create=True)
+    except (OSError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld("current source signing key unavailable") from exc
+
+
+def _read_signed_upgrade(
+    path: str | Path,
+    manifest: dict[str, Any],
+    *,
+    name: str,
+    label: str,
+    manifest_sha256: str,
+) -> tuple[Path, bytes, dict[str, Any]]:
+    """Read only a canonical, current-source signed upgrade record."""
+    import closer_mechanisms as mechanisms
+
+    expected = _upgrade_path(manifest, name)
+    value, raw, envelope = _object(path, label)
+    _need(value == expected, label + " path differs")
+    try:
+        record = mechanisms.verify_signed_record(_source_upgrade_root(manifest), envelope)
+    except (OSError, ValueError, KeyError, TypeError, mechanisms.MechanismError) as exc:
+        raise SourceUpgradeHeld(label + " signature differs") from exc
+    producer = _sha(Path(__file__).read_bytes())
+    _need(
+        record.get("producer_sha256") == producer
+        and manifest.get("modules", {}).get(Path(__file__).name) == producer,
+        label + " producer differs",
+    )
+    new = record.get("new")
+    _need(
+        isinstance(new, dict) and new.get("manifest_sha256") == manifest_sha256,
+        label + " manifest differs",
+    )
+    return value, raw, record
+
+
+def _no_act(correction: dict[str, Any], queue: dict[str, Any]) -> None:
+    """Require the precise early owner-criterion branch, not merely a failure."""
+    if not isinstance(correction, dict):
+        raise SourceUpgradeHeld("source disposition has no correction")
+    _need(correction.get("status") == "owned_unknown", "source disposition is not owned_unknown")
+    _need(
+        correction.get("reason") == "owner source criterion differs from seed",
+        "source disposition reason is not the isolated owner criterion",
+    )
+    for key in ("remote_authenticated", "act_authorized", "source_closure_authorized"):
+        _need(correction.get(key) is False, "source disposition permits native ACT")
+    if not isinstance(queue, dict):
+        raise SourceUpgradeHeld("source ACT queue is not empty")
+    _need(queue.get("events") == [], "source ACT queue is not empty")
+    accounting = queue.get("accounting")
+    _need(
+        isinstance(accounting, list)
+        and len(accounting) == 1
+        and isinstance(accounting[0], dict)
+        and accounting[0].get("operation_id") is None
+        and accounting[0].get("operation_status") is None,
+        "source deferred accounting is not sole/null",
+    )
+
+
+def _clock_no_act(
+    correction: dict[str, Any],
+    queue: dict[str, Any],
+    *,
+    strong_as_of: object,
+    disposition: object,
+) -> None:
+    """Accept only the reviewed source17be pre-ACT clock refusal."""
+    _need(isinstance(correction, dict), "clock disposition has no correction")
+    _need(
+        correction
+        == {
+            "status": "owned_unknown",
+            "reason": "native observation clock is not current",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "clock disposition is not the isolated ownership observation stop",
+    )
+    _need(
+        disposition
+        == {
+            "workers": 1,
+            "coding_continuations": None,
+            "result_stages": ["act", "exception", "interpret", "prepare"],
+            "native_effect_contract": None,
+        },
+        "clock disposition is not the isolated one-worker pre-ACT branch",
+    )
+    _need(
+        isinstance(queue, dict) and queue.get("events") == [] and queue.get("progress") == [],
+        "clock ACT queue is not empty",
+    )
+    _need(
+        strong_as_of is True,
+        "clock disposition lacks successful bound STRONG historical qualification",
+    )
+    accounting = queue.get("accounting")
+    _need(
+        isinstance(accounting, list)
+        and len(accounting) == 1
+        and isinstance(accounting[0], dict)
+        and accounting[0].get("reason") == "observation_failed"
+        and accounting[0].get("next_trigger") == "retry_observation_next_round"
+        and accounting[0].get("operation_id") is None
+        and accounting[0].get("operation_status") is None,
+        "clock deferred accounting is not sole/null observation retry",
+    )
+
+
+def _ownership_budget_no_act(
+    correction: dict[str, Any],
+    queue: dict[str, Any],
+    *,
+    strong_as_of: object,
+    disposition: object,
+) -> None:
+    """Accept only source8a's reviewed pre-ACT ownership-budget refusal."""
+    _need(
+        correction
+        == {
+            "status": "owned_unknown",
+            "reason": "native ownership response budget exhausted",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "ownership-budget disposition is not the isolated pre-ACT stop",
+    )
+    _need(
+        disposition
+        == {
+            "workers": 1,
+            "coding_continuations": None,
+            "result_stages": ["act", "exception", "interpret", "prepare"],
+            "native_effect_contract": None,
+        },
+        "ownership-budget disposition is not the isolated one-worker pre-ACT branch",
+    )
+    _need(strong_as_of is True, "ownership-budget disposition lacks bound STRONG qualification")
+    _need(isinstance(queue, dict), "ownership-budget ACT queue is not empty")
+    _need(
+        queue.get("events") == []
+        and queue.get("progress") == []
+        and queue.get("integration_required") == []
+        and queue.get("reasons") == []
+        and queue.get("warnings") == []
+        and queue.get("valid") is True
+        and queue.get("stop_valid") is True
+        and queue.get("continuation_required") is True,
+        "ownership-budget ACT queue contains an effect or invalid continuation",
+    )
+    accounting = queue.get("accounting")
+    deferred = queue.get("deferred")
+    _need(
+        isinstance(accounting, list)
+        and len(accounting) == 1
+        and deferred == accounting
+        and isinstance(accounting[0], dict)
+        and accounting[0]
+        == {
+            "action": "wait",
+            "eligible": True,
+            "next_trigger": "retry_observation_next_round",
+            "observation_freshness": "fresh",
+            "operation_id": None,
+            "operation_status": None,
+            "reason": "observation_failed",
+            "requires_coordinator": False,
+            "revision": None,
+            "status": "deferred",
+            "target": "stranske/Orchestrator#984",
+        },
+        "ownership-budget deferred accounting is not sole/null observation retry",
+    )
+
+
+def _seed_assessment_no_act(
+    correction: dict[str, Any],
+    queue: dict[str, Any],
+    *,
+    strong_as_of: object,
+    disposition: object,
+) -> None:
+    """Accept only source701d's pinned pre-ACT seed-identity refusal."""
+    _need(
+        correction
+        == {
+            "status": "owned_unknown",
+            "reason": "seed_assessment_identity_invalid",
+            "remote_authenticated": False,
+            "retry_safe": False,
+            "act_authorized": False,
+            "source_closure_authorized": False,
+        },
+        "seed-assessment disposition is not the isolated pre-ACT stop",
+    )
+    # The queue and bound-qualification shape is identical to the separately
+    # reviewed ownership-budget witness, but this literal correction reason is
+    # deliberately checked above before reusing that structural fence.
+    _ownership_budget_no_act(
+        {**correction, "reason": "native ownership response budget exhausted"},
+        queue,
+        strong_as_of=strong_as_of,
+        disposition=disposition,
+    )
+
+
+def _incomplete_cohort(cohort: dict[str, Any], proof: dict[str, Any]) -> None:
+    """Keep retirement's incomplete-cohort refusal intact and separate."""
+    _need(
+        cohort.get("completed") is False and proof.get("accepted") is False,
+        "cohort is completion authority",
+    )
+
+
+def _capacity_no_act(value: object) -> None:
+    """Recognize only the reviewed pre-route exception-capacity branch."""
+    _need(isinstance(value, dict), "capacity disposition unavailable")
+    row = cast(dict[str, Any], value)
+    _need(
+        row.get("row_status") == "capacity_blocked"
+        and row.get("row_error") == "worker_capacity"
+        and row.get("row_next_trigger") == "fresh shared-pool capacity snapshot"
+        and row.get("result_stages") == ["exception", "interpret", "prepare"]
+        and row.get("native_effect_contract") is None,
+        "capacity disposition is not the isolated pre-route branch",
+    )
+    exception = row.get("exception")
+    _need(isinstance(exception, dict), "capacity exception unavailable")
+    exception = cast(dict[str, Any], exception)
+    evidence = exception.get("resource_evidence")
+    _need(isinstance(evidence, dict), "capacity evidence unavailable")
+    capacity = cast(dict[str, Any], evidence).get("capacity")
+    _need(isinstance(capacity, dict), "capacity evidence unavailable")
+    capacity = cast(dict[str, Any], capacity)
+    sampled = capacity.get("sampled_at")
+    _need(
+        set(exception) == {"status", "reason", "next_trigger", "resource_evidence"}
+        and exception.get("status") == "deferred"
+        and exception.get("reason") == "worker_capacity"
+        and exception.get("next_trigger") == "fresh shared-pool capacity snapshot"
+        and evidence == {"capacity": capacity}
+        and set(capacity) == {"lane", "available", "required", "sampled_at"}
+        and capacity.get("lane") == "exception"
+        and type(capacity.get("available")) is int
+        and capacity.get("available") == 0
+        and type(capacity.get("required")) is int
+        and capacity.get("required") == 1
+        and isinstance(sampled, (int, float))
+        and not isinstance(sampled, bool)
+        and 0 < sampled < float("inf"),
+        "capacity exception contains effects or a different stop",
+    )
+    interpretation = row.get("interpretation")
+    _need(isinstance(interpretation, dict), "capacity interpretation unavailable")
+    interpretation = cast(dict[str, Any], interpretation)
+    actual = interpretation.get("actual")
+    _need(
+        isinstance(actual, dict)
+        and set(actual) == {"kind", "provider_generation_performed", "host_intake_ref"}
+        and actual.get("kind") == "source_native_conservative_inventory"
+        and actual.get("provider_generation_performed") is False,
+        "capacity disposition has prior provider work",
+    )
+    reference = cast(dict[str, Any], actual).get("host_intake_ref")
+    _need(
+        isinstance(reference, dict)
+        and set(reference) == {"path", "sha256", "bytes"}
+        and isinstance(reference.get("path"), str)
+        and Path(reference["path"]).is_absolute()
+        and isinstance(reference.get("sha256"), str)
+        and _DIGEST.fullmatch(reference["sha256"])
+        and type(reference.get("bytes")) is int
+        and 0 < reference["bytes"] <= 128 * 1024,
+        "capacity source intake reference invalid",
+    )
+    _need(
+        interpretation
+        == {
+            "classification": "source_native_conservative_inventory",
+            "authority": False,
+            "actual": actual,
+            "requested_agent": None,
+            "requested_profile": None,
+        },
+        "capacity disposition has prior provider work",
+    )
+
+
+def _diagnostic_no_act(candidate: str, diagnostic: dict[str, Any]) -> None:
+    if candidate == REVIEWED_CAPACITY_CANDIDATE:
+        _capacity_no_act(diagnostic.get("capacity_disposition"))
+    else:
+        _need(
+            candidate
+            in {
+                REVIEWED_OLD_CANDIDATE,
+                REVIEWED_CLOCK_CANDIDATE,
+                REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+                REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+            },
+            "unreviewed no-ACT predecessor",
+        )
+        correction, queue = diagnostic.get("correction"), diagnostic.get("queue_receipt")
+        _need(
+            isinstance(correction, dict) and isinstance(queue, dict), "old diagnostic shape invalid"
+        )
+        if candidate == REVIEWED_CLOCK_CANDIDATE:
+            _clock_no_act(
+                cast(dict[str, Any], correction),
+                cast(dict[str, Any], queue),
+                strong_as_of=diagnostic.get("strong_as_of"),
+                disposition=diagnostic.get("clock_disposition"),
+            )
+        elif candidate == REVIEWED_OWNERSHIP_BUDGET_CANDIDATE:
+            _ownership_budget_no_act(
+                cast(dict[str, Any], correction),
+                cast(dict[str, Any], queue),
+                strong_as_of=diagnostic.get("strong_as_of"),
+                disposition=diagnostic.get("ownership_budget_disposition"),
+            )
+        elif candidate == REVIEWED_SEED_ASSESSMENT_CANDIDATE:
+            _seed_assessment_no_act(
+                cast(dict[str, Any], correction),
+                cast(dict[str, Any], queue),
+                strong_as_of=diagnostic.get("strong_as_of"),
+                disposition=diagnostic.get("seed_assessment_disposition"),
+            )
+        else:
+            _no_act(cast(dict[str, Any], correction), cast(dict[str, Any], queue))
+
+
+def _reviewed_old_metadata(doc: dict[str, Any], descriptor_raw: bytes) -> dict[str, str]:
+    """Validate literal pre-import f858 identity metadata without filesystem effects."""
+    modules = doc.get("modules")
+    _need(
+        doc.get("candidate_sha")
+        in {
+            REVIEWED_OLD_CANDIDATE,
+            REVIEWED_CAPACITY_CANDIDATE,
+            REVIEWED_CLOCK_CANDIDATE,
+            REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+            REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+            REVIEWED_PAGINATION_CANDIDATE,
+        },
+        "old release is not reviewed no-ACT predecessor",
+    )
+    candidate = cast(str, doc.get("candidate_sha"))
+    expected_modules = {
+        REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_MODULES_SHA256,
+        REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_MODULES_SHA256,
+        REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_MODULES_SHA256,
+        REVIEWED_OWNERSHIP_BUDGET_CANDIDATE: REVIEWED_OWNERSHIP_BUDGET_MODULES_SHA256,
+        REVIEWED_SEED_ASSESSMENT_CANDIDATE: REVIEWED_SEED_ASSESSMENT_MODULES_SHA256,
+        REVIEWED_PAGINATION_CANDIDATE: REVIEWED_PAGINATION_MODULES_SHA256,
+    }[candidate]
+    expected_descriptor = {
+        REVIEWED_OLD_CANDIDATE: REVIEWED_OLD_DESCRIPTOR_SHA256,
+        REVIEWED_CAPACITY_CANDIDATE: REVIEWED_CAPACITY_DESCRIPTOR_SHA256,
+        REVIEWED_CLOCK_CANDIDATE: REVIEWED_CLOCK_DESCRIPTOR_SHA256,
+        REVIEWED_OWNERSHIP_BUDGET_CANDIDATE: REVIEWED_OWNERSHIP_BUDGET_DESCRIPTOR_SHA256,
+        REVIEWED_SEED_ASSESSMENT_CANDIDATE: REVIEWED_SEED_ASSESSMENT_DESCRIPTOR_SHA256,
+        REVIEWED_PAGINATION_CANDIDATE: REVIEWED_PAGINATION_DESCRIPTOR_SHA256,
+    }[candidate]
+    _need(
+        isinstance(modules, dict)
+        and bool(modules)
+        and all(
+            isinstance(name, str)
+            and Path(name).name == name
+            and isinstance(digest, str)
+            and _DIGEST.fullmatch(digest)
+            for name, digest in modules.items()
+        ),
+        "old manifest closure invalid",
+    )
+    _need(
+        _sha(json.dumps(modules, sort_keys=True, separators=(",", ":")).encode())
+        == expected_modules,
+        "old manifest closure is not the reviewed predecessor",
+    )
+    _need(
+        doc.get("public_runtime_descriptor") == "closer-runtime-package.json"
+        and _sha(descriptor_raw) == expected_descriptor,
+        "old public descriptor is not the reviewed predecessor",
+    )
+    try:
+        descriptor = json.loads(descriptor_raw)
+    except ValueError as exc:
+        raise SourceUpgradeHeld("old public descriptor invalid") from exc
+    _need(isinstance(descriptor, dict), "old public descriptor invalid")
+    for field in ("candidate_sha", "modules", "package_digest", "state_versions"):
+        _need(descriptor.get(field) == doc.get(field), "old public descriptor binding differs")
+    return dict(cast(dict[str, str], modules))
+
+
+def _old_module_bytes(doc: dict[str, Any]) -> tuple[bytes, dict[str, bytes]]:
+    """Capture a reviewed old closure without importing any of its code."""
+    try:
+        base = _canonical(doc["module_dir"])
+        _need(
+            _canonical(doc["module_path"]) == base / "closer_campaign.py",
+            "old runtime entrypoint differs",
+        )
+        descriptor_raw = host._read(base / "closer-runtime-package.json")[1]
+        modules = _reviewed_old_metadata(doc, descriptor_raw)
+        executable = {
+            str(path.relative_to(base))
+            for path in base.rglob("*")
+            if path.is_file() and path.suffix in {".py", ".pyc", ".pyo"}
+        }
+        _need(executable == set(modules), "old runtime contains undeclared executable code")
+        captured = {}
+        for name, digest in modules.items():
+            raw = host._read(base / name)[1]
+            _need(_sha(raw) == digest, "old manifest module differs")
+            captured[name] = raw
+        return descriptor_raw, captured
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, SourceUpgradeHeld):
+            raise
+        raise SourceUpgradeHeld("old runtime closure unavailable") from exc
+
+
+def _historical_clock_reader_program() -> str:
+    """Return the literal, facts-only 17be cohort reader for the staged old closure."""
+    return r"""import copy,hmac,math,os,re
+import closer_mechanisms as mech
+import closer_pipeline as pipeline
+from closer_dispatcher import targets_from_assignment
+if w != %r or len(d['workers']) != 1 or d.get('coding_continuations') is not None: raise SystemExit(38)
+x=next(x for x in d['workers'] if x['worker_id']==w)
+result_path=c.result_path(s,w); result_raw=c._cohort_read(result_path,c.COHORT_RECORD_LIMIT,[128*1024*1024])
+if hashlib.sha256(result_raw).hexdigest()!=%r: raise SystemExit(58)
+result=json.loads(result_raw); context=result['native_admission']
+policy=n.capacity_contract(m,control_plane_only=True); root=n.contract(m)[3]; nonce=context.get('nonce'); directory=root/nonce if isinstance(nonce,str) else None
+if not policy or not isinstance(directory,pathlib.Path) or not re.fullmatch(r'[0-9a-f]{32}',nonce) or directory.is_symlink() or directory.resolve()!=directory: raise SystemExit(39)
+signed=n._read(directory/'admission.json'); admission_record={'binding':n.binding(m),'context':context}
+if signed.get('record')!=admission_record or not hmac.compare_digest(signed.get('signature',''),mech._signature(admission_record,mech._key(root))): raise SystemExit(40)
+started=context.get('started_at')
+if context.get('schema')!='native-invocation-admission/v2' or type(started) not in (int,float) or not math.isfinite(started) or started < 0: raise SystemExit(41)
+for key,name in (('assignment','assignment.json'),('report','scoped-capacity.json')):
+ pin=context.get(key); path=directory/name
+ if not isinstance(pin,dict) or pin.get('path')!=str(path) or path.is_symlink() or n._hash(path)!=pin.get('sha256'): raise SystemExit(42)
+from closer_frontier_policy import validate_frontier
+frontier=validate_frontier(context.get('finite_frontier'),targets=targets_from_assignment(pathlib.Path(context['assignment']['path'])))
+if policy.get('schema')!='native-scoped-capacity/v2' or frontier!=context.get('finite_frontier') or frontier.get('owner')!=context.get('campaign',{}).get('owner') or context.get('request_timeout_seconds')!=policy.get('request_timeout_seconds') or 'original_deadline' in context or d['worker_config'].get('finite_frontier')!=frontier or d['worker_config'].get('request_timeout_seconds')!=context.get('request_timeout_seconds'): raise SystemExit(54)
+if 'demand_assignment' in context:
+ demand_source,demand_raw=n._demand_assignment_bytes(m,context['demand_assignment'],context['campaign'],continuations=context.get('demand_continuations',[]),finite_frontier=frontier)
+ if context['assignment'].get('source_path')!=str(demand_source) or hashlib.sha256(demand_raw).hexdigest()!=context['assignment'].get('sha256'): raise SystemExit(55)
+elif context['assignment'].get('source_path')!=str(n.private_test_assignment_source(m)): raise SystemExit(56)
+workspace=context.get('workspace_config')
+if workspace is not None:
+ path=directory/'workspaces.json'
+ if not isinstance(workspace,dict) or set(workspace)!={'path','sha256','source_path'} or workspace.get('path')!=str(path) or path.is_symlink() or hashlib.sha256(n._bounded_bytes(path,1024*1024)).hexdigest()!=workspace.get('sha256') or not isinstance(workspace.get('source_path'),str) or not pathlib.Path(workspace['source_path']).is_absolute(): raise SystemExit(57)
+manifest_path=pathlib.Path(context.get('runtime_manifest',''))
+historical_manifest=c.load_manifest(manifest_path)
+if manifest_path.resolve()!=manifest_path or n._hash(manifest_path)!=context.get('runtime_manifest_sha256') or historical_manifest.get('package_digest')!=d.get('release_pin') or (d['worker_config'].get('runtime_manifest') is not None and str(pathlib.Path(d['worker_config']['runtime_manifest']).resolve())!=context['runtime_manifest']): raise SystemExit(43)
+original={**d,'generation':context.get('campaign',{}).get('generation')}
+if result.get('worker_id')!=w or result.get('target')!=c.ROUND_UNIT or result.get('mechanism')!='native-handoff/v1' or result.get('outcome')!=x.get('outcome') or x.get('state')!='terminal' or x.get('outcome')!='ok' or 'coding_continuation' in context or context.get('demand_assignment')!=d.get('demand_assignment') or context.get('demand_continuations',[])!=d.get('demand_continuations',[]) or context.get('campaign')!=n._campaign_identity(s,original) or d.get('release_pin')!=m.get('package_digest'): raise SystemExit(44)
+fields={'state':str(s),'target':x['target'],'owner':d['owner'],'generation':str(context['campaign']['generation']),'result':str(pathlib.Path(str(s)+'.results')/(w+'.json')),'runtime-manifest':context['runtime_manifest'],'mechanism':mech.NATIVE}
+handoff=n._read(directory/('worker-'+w+'.json')); handoff_record=handoff.get('record')
+if not isinstance(handoff_record,dict) or handoff_record.get('binding')!=n.binding(m) or handoff_record.get('admission')!=context or handoff_record.get('fields')!=fields or not hmac.compare_digest(handoff.get('signature',''),mech._signature(handoff_record,mech._key(root))): raise SystemExit(45)
+cfg=copy.deepcopy(d['worker_config']); cfg['assignment']=context['assignment']['path']; cfg['capacity_json']=cfg['capacity_report']=context['report']['path']; cfg['native_admission']=context; cfg['native_worker']=fields
+if workspace is not None: cfg['workspaces']={key:workspace[key] for key in ('path','sha256')}
+else: cfg.pop('workspaces',None)
+detail=json.loads(result['detail']); terminal_path=directory/('completed-cohort-'+w+'.json'); terminal,terminal_raw=c._signed_cohort_record(detail.get('cohort_terminal'),terminal_path,root,[128*1024*1024])
+if terminal.get('schema')!='closer-terminal-cohort-worker/v1' or terminal.get('binding')!=n.binding(m) or terminal.get('admission')!=context or terminal.get('campaign')!=context['campaign'] or terminal.get('worker')!=fields or terminal.get('worker_id')!=w or terminal.get('outcome')!='ok' or terminal.get('completed') is not False or terminal.get('native_execution')!=detail.get('native_execution') or terminal.get('completed_round')!=detail.get('completed_round') or terminal.get('proof')!=detail.get('proof') or terminal.get('descendant_bundle')!=detail.get('descendant_bundle'): raise SystemExit(46)
+execution=c._completion_cleanup(cfg,terminal,'ok')
+if execution.get('admission_started_at')!=started: raise SystemExit(47)
+candidate=detail.get('completed_round'); round_id=candidate.get('round_id') if isinstance(candidate,dict) else None
+if not isinstance(round_id,str) or not re.fullmatch(r'[0-9a-f]{16,64}',round_id): raise SystemExit(48)
+state=pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'); proof_root=z.scoped_root(state); receipt_path=proof_root/'rounds'/(round_id+'.json')
+if receipt_path.is_symlink() or receipt_path.resolve()!=receipt_path or candidate.get('receipt_path')!=str(receipt_path): raise SystemExit(49)
+round_raw=n._bounded_bytes(receipt_path,32*1024*1024); round_sha=hashlib.sha256(round_raw).hexdigest(); aggregate=json.loads(round_raw); frontier=context.get('finite_frontier')
+if candidate.get('receipt_sha256',round_sha)!=round_sha or aggregate.get('finite_frontier')!=frontier or candidate.get('finite_frontier')!=frontier: raise SystemExit(50)
+targets=targets_from_assignment(pathlib.Path(cfg['assignment'])); verdict=z.validate_stop(state,round_id,targets)
+if verdict.get('round_id')!=round_id or verdict.get('receipt_sha256')!=round_sha or verdict.get('scoped_completion_valid') is not True or verdict.get('admitted_domain_valid') is not True or verdict.get('admitted_domain_reasons') or set(verdict.get('run_ids',{}))!=set(targets) or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(51)
+rows={}
+for target,run_id in verdict['run_ids'].items():
+ shard=pipeline._load(z.shard_dir(proof_root,target)/'state.json'); row=shard['frontiers'][frontier['frontier_id']]['items'][target]
+ if aggregate['targets'][target]!=row or aggregate['run_ids'][target]!=run_id: raise SystemExit(52)
+ rows[target]=mech.digest(row)
+p={'schema':'native-completed-round/v1','round_id':round_id,'receipt_path':str(receipt_path),'receipt_sha256':round_sha,'run_ids':verdict['run_ids'],'row_sha256':rows,'assignment_sha256':context['assignment']['sha256'],'admission_nonce':nonce,'boundary_global_stop_valid':True,'accepted':False,'finite_frontier':frontier}
+boundary=n._read(directory/('completed-round-'+round_id+'.json')); boundary_record={'binding':n.binding(m),'proof':p}
+if boundary.get('record')!=boundary_record or not hmac.compare_digest(boundary.get('signature',''),mech._signature(boundary_record,mech._key(root))) or candidate!=p or p!=detail.get('completed_round'): raise SystemExit(53)
+e={'worker_id':w,'result':{'path':str(result_path),'sha256':hashlib.sha256(result_raw).hexdigest()},'result_bytes':result_raw.decode('utf-8'),'terminal':detail['cohort_terminal'],'terminal_bytes':terminal_raw.decode('utf-8')}
+""" % (REVIEWED_CLOCK_WORKER_ID, REVIEWED_CLOCK_RESULT_SHA256)
+
+
+def _historical_ownership_budget_reader_program() -> str:
+    """Reuse the sealed reader only for source8a's separately pinned witness."""
+    program = _historical_clock_reader_program()
+    old_worker = repr(REVIEWED_CLOCK_WORKER_ID)
+    old_result = repr(REVIEWED_CLOCK_RESULT_SHA256)
+    _need(
+        program.count(old_worker) == 1,
+        "historical clock reader worker pin differs",
+    )
+    _need(
+        program.count(old_result) == 1,
+        "historical clock reader result pin differs",
+    )
+    return program.replace(old_worker, repr(REVIEWED_OWNERSHIP_BUDGET_WORKER_ID), 1).replace(
+        old_result, repr(REVIEWED_OWNERSHIP_BUDGET_RESULT_SHA256), 1
+    )
+
+
+def _old_diagnostic(
+    manifest: Path, state: Path, worker_id: str, *, interpreter: Path
+) -> dict[str, Any]:
+    """Run a fixed read-only validator under the old physical interpreter.
+
+    Imports use privately staged, already verified bytes. Original manifest,
+    state and proof paths remain unchanged. Native entry/providers are never called.
+    """
+    _, raw, doc = _object(manifest, "old manifest")
+    state, state_raw, _state_doc = _object(state, "old campaign state")
+    try:
+        _need(
+            _sha(host._read(_canonical(interpreter))[1]) == REVIEWED_OLD_INTERPRETER_SHA256,
+            "old interpreter differs from reviewed predecessor",
+        )
+    except OSError as exc:
+        raise SourceUpgradeHeld("old interpreter unavailable") from exc
+    descriptor_raw, captured = _old_module_bytes(doc)
+    modules = doc["modules"]
+    program = (
+        "import hashlib,json,pathlib,sys\n"
+        "r=pathlib.Path(sys.argv[1]); s=pathlib.Path(sys.argv[2]); w=sys.argv[3]; stage=pathlib.Path(sys.argv[4]); raw=sys.stdin.buffer.read(); m=json.loads(raw); out=m['modules']\n"
+        "for name,digest in out.items():\n"
+        " if hashlib.sha256((stage/name).read_bytes()).hexdigest()!=digest: raise SystemExit(31)\n"
+        "sys.path.insert(0,str(stage)); import closer_campaign as c, closer_native_observer as n, closer_resources as z\n"
+        "if c.validate_manifest(m) or c.verify_modules(m): raise SystemExit(35)\n"
+        "from closer_mechanisms import mechanism; mechanism(m)\n"
+        # apply() already holds the real campaign lock. The old reader may
+        # take its own lock only on this private byte-identical snapshot;
+        # cohort/proof validation still uses the original campaign path.
+        "snapshot=stage/'old-campaign-snapshot.json'; d=c.Campaign(snapshot).read();\n"
+        f"if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}: exec({_historical_clock_reader_program()!r})\n"
+        f"elif m['candidate_sha']=={REVIEWED_OWNERSHIP_BUDGET_CANDIDATE!r}: exec({_historical_ownership_budget_reader_program()!r})\n"
+        "else:\n"
+        " x=next(x for x in d['workers'] if x['worker_id']==w); e,cfg,detail,terminal=c._cohort_worker_evidence(s,d,x,m,[128*1024*1024])\n"
+        f" if m['candidate_sha']=={REVIEWED_PAGINATION_CANDIDATE!r}:\n"
+        "  import closer_runtime_binding as rb\n"
+        "  proof=detail.get('proof')\n"
+        "  if rb.scoped_continuation_proof(cfg,proof)!=proof: raise SystemExit(59)\n"
+        "  print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'pagination_scoped_continuation':True},sort_keys=True,separators=(',',':'))); raise SystemExit(0)\n"
+        " p=n.completed_round_proof(m,cfg,detail['completed_round'])\n"
+        "if not isinstance(p,dict): raise SystemExit(34)\n"
+        "rd=pathlib.Path(p['receipt_path']).read_bytes(); a=json.loads(rd); targets=p['finite_frontier']['targets'];\n"
+        "if not isinstance(targets,list) or len(targets)!=1 or set(a['targets'])!=set(targets) or set(p['row_sha256'])!=set(targets): raise SystemExit(33)\n"
+        "source_target=targets[0]; row=a['targets'][source_target]; results=row['results']; correction=None; queue=None; capacity=None; clock=None; ownership_budget=None; seed_assessment=None; strong_as_of=None\n"
+        f"if m['candidate_sha']=={REVIEWED_CAPACITY_CANDIDATE!r}:\n"
+        " if len(d['workers'])!=1 or d.get('coding_continuations'): raise SystemExit(36)\n"
+        " i=results['interpret']; ref=i['actual']['host_intake_ref']; ip=pathlib.Path(ref['path']); ir=ip.read_bytes()\n"
+        " if ip.is_symlink() or ip.resolve()!=ip or len(ir)>128*1024 or len(ir)!=ref['bytes'] or hashlib.sha256(ir).hexdigest()!=ref['sha256']: raise SystemExit(37)\n"
+        " capacity={'row_status':row.get('status'),'row_error':row.get('error'),'row_next_trigger':row.get('deferred_next_trigger'),'result_stages':sorted(results),'native_effect_contract':results['prepare']['native_effect_contract'],'exception':results['exception'],'interpretation':{'classification':i.get('classification'),'authority':i.get('authority'),'actual':i['actual'],'requested_agent':i['requested_agent'],'requested_profile':i['requested_profile']}}\n"
+        "else:\n"
+        " correction=results['exception']['correction']; queue=results['act']['queue_receipt']\n"
+        f" if m['candidate_sha'] in {{{REVIEWED_CLOCK_CANDIDATE!r},{REVIEWED_OWNERSHIP_BUDGET_CANDIDATE!r},{REVIEWED_SEED_ASSESSMENT_CANDIDATE!r}}}:\n"
+        "  context=json.loads(e['result_bytes'])['native_admission']\n"
+        "  disposition={'workers':len(d['workers']),'coding_continuations':d.get('coding_continuations'),'result_stages':sorted(results),'native_effect_contract':results['prepare'].get('native_effect_contract')}\n"
+        f"  if m['candidate_sha']=={REVIEWED_CLOCK_CANDIDATE!r}: clock=disposition\n"
+        f"  elif m['candidate_sha']=={REVIEWED_OWNERSHIP_BUDGET_CANDIDATE!r}: ownership_budget=disposition\n"
+        "  else: seed_assessment=disposition\n"
+        "  import closer_dispatcher as cd, closer_role_qualification as roles, dispatcher as dispatch, execution_profiles as profiles\n"
+        "  stage=results['exception']; prepare=results['prepare']; actual=stage['actual']; proof=actual['_closer_controlled_proof']; expected=proof['expected']; basis=expected.get('basis'); prepared_snapshot=prepare.get('snapshot'); packet_ref=prepare.get('packet_ref'); prepared_basis={'target':prepared_snapshot.get('target'),'revision':prepare.get('revision'),'head':prepared_snapshot.get('head'),'base':prepared_snapshot.get('base'),'packet_sha256':packet_ref.get('sha256')} if isinstance(prepared_snapshot,dict) and isinstance(packet_ref,dict) else None; proved=cd._revalidate_controlled_proof(proof,run_id=actual['run_id'],basis=basis,receipt_root=dispatch.DISPATCH_LOG_DIR); receipt=cd._read_controlled_receipt(proof['provider_result_ref'],dispatch.DISPATCH_LOG_DIR); at=receipt['completed_at']; execution=detail['native_execution']['phases']['B']; profile=profiles.get_profile(expected['profile_id']); role=roles.TASK_ROLES['closer_exception']; record=roles.qualified_record(profile,role,now=at); admission_record=roles.qualified_record(profile,role,now=context['started_at']); identity=roles.profile_identity(profile)\n"
+        "  strong_as_of=bool(actual.get('run_id')==proof.get('run_id')==proved.get('run_id')==receipt.get('run_id') and expected.get('task_type')=='closer_exception' and isinstance(basis,dict) and isinstance(prepared_basis,dict) and all(basis.get(k)==prepared_basis.get(k) for k in ('target','revision','head','base','packet_sha256')) and basis.get('target')==source_target and expected.get('operation_id') and stage.get('requested_agent')=='claude' and stage.get('requested_profile')==expected.get('profile_id') and execution['started_at']<=at<=execution['finished_at'] and record is not None and admission_record is not None and expected.get('profile_identity')==identity==record.get('profile_identity')==admission_record.get('profile_identity') and record.get('qualification_id')==admission_record.get('qualification_id')==expected.get('qualification_id') and cd._contract_digest(record)==cd._contract_digest(admission_record)==expected.get('qualification_record_sha256') and roles.execution_record_matches(record,expected,checked_at=at) and roles.execution_record_matches(admission_record,expected,checked_at=context['started_at']) and actual.get('exit')==0 and proved.get('exit')==0)\n"
+        "verdict=z.validate_stop(pathlib.Path(str(cfg['dispatch_state'])+'.pipeline.json'),p['round_id'],targets)\n"
+        "if p!=detail['completed_round'] or terminal.get('completed') is not False or p.get('accepted') is not False or verdict.get('valid') is not True or verdict.get('global_stop_valid') is not True: raise SystemExit(32)\n"
+        "print(json.dumps({'schema':'old-source-diagnostic/v3','manifest_sha256':hashlib.sha256(raw).hexdigest(),'state_sha256':hashlib.sha256(snapshot.read_bytes()).hexdigest(),'modules':out,'result':e['result'],'cohort':terminal,'completed_round':p,'round_sha256':hashlib.sha256(rd).hexdigest(),'worker_target':x['target'],'source_target':source_target,'correction':correction,'queue_receipt':queue,'strong_as_of':strong_as_of,'capacity_disposition':capacity,'clock_disposition':clock,'ownership_budget_disposition':ownership_budget,'seed_assessment_disposition':seed_assessment,'stop':verdict},sort_keys=True,separators=(',',':')))\n"
+    )
+    with tempfile.TemporaryDirectory(prefix="old-source-diagnostic-") as stage_name:
+        stage = Path(stage_name)
+        stage.chmod(0o700)
+        try:
+            for name, module_raw in captured.items():
+                target = stage / name
+                target.write_bytes(module_raw)
+                target.chmod(0o600)
+            (stage / "closer-runtime-package.json").write_bytes(descriptor_raw)
+            snapshot = stage / "old-campaign-snapshot.json"
+            snapshot.write_bytes(state_raw)
+            snapshot.chmod(0o600)
+            policy_raw = host._read(Path(doc["module_dir"]) / "closer_role_selection.json")[1]
+            (stage / "closer_role_selection.json").write_bytes(policy_raw)
+            run = subprocess.run(
+                [
+                    str(interpreter),
+                    "-I",
+                    "-B",
+                    "-c",
+                    program,
+                    str(manifest),
+                    str(state),
+                    worker_id,
+                    str(stage),
+                ],
+                input=raw.decode(),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            _need(
+                run.returncode == 0 and len(run.stdout) <= 65536,
+                "old source diagnostic failed: " + run.stderr[-500:],
+            )
+            answer = json.loads(run.stdout)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            raise SourceUpgradeHeld("old source diagnostic unavailable") from exc
+    _old_module_bytes(doc)
+    _need(
+        answer.get("manifest_sha256") == _sha(raw)
+        and answer.get("state_sha256") == _sha(state_raw)
+        and answer.get("modules") == modules
+        and host._read(manifest)[1] == raw,
+        "old source diagnostic differs",
+    )
+    _need(host._read(state)[1] == state_raw, "old campaign changed during diagnostic")
+    return answer
+
+
+def _manifest(path: str | Path, *, old: bool = False) -> tuple[Path, bytes, dict[str, Any]]:
+    import closer_campaign as campaign
+
+    value, raw, doc = _object(path, "manifest")
+    if old:
+        _old_module_bytes(doc)
+        contract = doc.get("mechanism_contract")
+        interpreter = contract.get("interpreter") if isinstance(contract, dict) else None
+        _need(
+            isinstance(interpreter, dict)
+            and interpreter.get("sha256") == REVIEWED_OLD_INTERPRETER_SHA256,
+            "old interpreter is not the reviewed predecessor",
+        )
+    else:
+        _need(
+            not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
+            "manifest closure invalid",
+        )
+    return value, raw, doc
+
+
+def _generic_pre_effect_manifest(path: str | Path) -> tuple[Path, bytes, dict[str, Any]]:
+    """Validate a physically present predecessor without admitting it as a release.
+
+    This is deliberately narrower than ``_manifest(old=True)``: it is usable
+    only by the forensic source-selection reader below, and never imports the
+    predecessor or treats its candidate name as authority.
+    """
+    import closer_campaign as campaign
+
+    value, raw, doc = _object(path, "old manifest")
+    _need(
+        not campaign.validate_manifest(doc) and not campaign.verify_modules(doc),
+        "old closure invalid",
+    )
+    modules = doc.get("modules")
+    base = _canonical(doc.get("module_dir", ""))
+    _need(isinstance(modules, dict) and modules, "old closure invalid")
+    modules = cast(dict[str, Any], modules)
+    for name, digest in modules.items():
+        _need(
+            isinstance(name, str)
+            and Path(name).name == name
+            and isinstance(digest, str)
+            and _DIGEST.fullmatch(digest)
+            and _sha(host._read(base / name)[1]) == digest,
+            "old qualified module differs",
+        )
+    # The recorded stage is evidence only under the reviewed producer whose
+    # writer ordering and durable pre-write records this reader understands.
+    for name in (
+        "closer_correction_controller.py",
+        "closer_correction_native_effects.py",
+        "closer_correction_source_record.py",
+        "closer_source_installation.py",
+    ):
+        # This exact prior reader also failed before instruction publication.
+        # Its completed-assessment deadline can expire during the live ACT.
+        prior_invitation_producer = modules.get(
+            "closer_correction_source_record.py"
+        ) == "6a2ef7c959726d60c808a598695e1cea0dfa92215a01e05d2681196901b8c575" and (
+            name == "closer_correction_source_record.py"
+            or (
+                name == "closer_correction_native_effects.py"
+                and modules.get(name)
+                == "fd2a1d0d18a981a8fedd8b39c4a35eea8c5c396b3055718d3f14d0fc37e2fc76"
+            )
+        )
+        _need(
+            modules.get(name) == _sha(host._read(Path(__file__).with_name(name))[1])
+            or prior_invitation_producer,
+            "old source-selection producer semantics differ",
+        )
+    return value, raw, doc
+
+
+def _installed_release(path: str | Path, candidate: str) -> dict[str, Any]:
+    """Bind the replacement to an actually installed, verified generation."""
+    import closer_release
+
+    journal = _canonical(path)
+    try:
+        record = closer_release.ReleaseRecord(journal).read()
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("new release journal unavailable") from exc
+    if not isinstance(record, dict):
+        raise SourceUpgradeHeld("new release journal unavailable")
+    verification = record.get("verification")
+    _need(
+        record.get("stage") == "installed"
+        and record.get("candidate_sha") == candidate
+        and isinstance(record.get("installed_generation"), str)
+        and isinstance(verification, dict)
+        and verification.get("verified") is True
+        and isinstance(verification.get("snapshot_digest"), str),
+        "new candidate is not fully installed/verified",
+    )
+    verified = cast(dict[str, Any], verification)
+    _canonical(verified["snapshot_path"])
+    mirror = (Path.home() / ".codex/orchestrator-mirror").parent.resolve() / "orchestrator-mirror"
+    physical_mirror = mirror.resolve()
+    inspector = physical_mirror / "scripts/install_verified_snapshot.py"
+    try:
+        inspector_raw = host._read(inspector)[1]
+    except (OSError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
+    inspector_sha256 = _sha(inspector_raw)
+    helper: Path | None = None
+    helper_raw: bytes | None = None
+    if inspector_sha256 == REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256:
+        expected_inspector_sha256 = REVIEWED_INSTALL_VERIFIED_SNAPSHOT_SHA256
+        runner_input: str = inspector_raw.decode("utf-8")
+        runner = (
+            "import sys\n"
+            "code=sys.stdin.buffer.read()\n"
+            "sys.argv=[sys.argv[1],*sys.argv[2:]]\n"
+            "exec(compile(code,sys.argv[0],'exec'),{'__name__':'__main__','__file__':sys.argv[0]})\n"
+        )
+        runner_prefix = [str(inspector)]
+    elif inspector_sha256 == REVIEWED_SHARED_DIGEST_INSTALLER_SHA256:
+        expected_inspector_sha256 = REVIEWED_SHARED_DIGEST_INSTALLER_SHA256
+        # Verified snapshots flatten source modules into the installed mirror;
+        # this is intentionally not the Source checkout's ``src/`` path.
+        helper = physical_mirror / "source_snapshot_digest.py"
+        try:
+            helper_raw = host._read(helper)[1]
+        except (OSError, RuntimeError) as exc:
+            raise SourceUpgradeHeld("installed generation digest helper unavailable") from exc
+        _need(
+            _sha(helper_raw) == REVIEWED_SHARED_DIGEST_HELPER_SHA256,
+            "installed generation digest helper differs",
+        )
+        # Preload only the captured, literal-pinned helper before executing the
+        # captured installer.  Its own sys.path changes then cannot select
+        # mutable mirror bytes for this import.
+        runner_input = json.dumps(
+            {
+                "helper": helper_raw.decode("utf-8"),
+                "inspector": inspector_raw.decode("utf-8"),
+            },
+            sort_keys=True,
+        )
+        runner = (
+            "import json,sys,types\n"
+            "payload=json.loads(sys.stdin.buffer.read())\n"
+            "helper=types.ModuleType('source_snapshot_digest')\n"
+            "helper.__file__=sys.argv[2]\n"
+            "helper.__package__=''\n"
+            "sys.modules['source_snapshot_digest']=helper\n"
+            "exec(compile(payload['helper'],sys.argv[2],'exec'),helper.__dict__)\n"
+            "code=payload['inspector']\n"
+            "sys.argv=[sys.argv[1],*sys.argv[3:]]\n"
+            "exec(compile(code,sys.argv[0],'exec'),{'__name__':'__main__','__file__':sys.argv[0]})\n"
+        )
+        runner_prefix = [str(inspector), str(helper)]
+    else:
+        raise SourceUpgradeHeld("installed generation inspector differs")
+    # Execute the already-pinned bytes, not the mutable pathname that supplied
+    # them.  The physical pathname remains __file__ for the inspector's own
+    # structural checks; the logical mirror remains the generation identity.
+    python = str(Path(sys.executable).resolve())
+    try:
+        generation = subprocess.run(
+            [
+                python,
+                "-I",
+                "-B",
+                "-c",
+                runner,
+                *runner_prefix,
+                str(mirror),
+                "--generation-token",
+            ],
+            text=True,
+            input=runner_input,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+        digest = subprocess.run(
+            [
+                python,
+                "-I",
+                "-B",
+                "-c",
+                runner,
+                *runner_prefix,
+                str(physical_mirror),
+                "--digest",
+            ],
+            text=True,
+            input=runner_input,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
+    _need(generation.returncode == digest.returncode == 0, "installed generation inspector failed")
+    try:
+        inspector_after = host._read(inspector)[1]
+    except (OSError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("installed generation inspector unavailable") from exc
+    _need(
+        _sha(inspector_after) == expected_inspector_sha256,
+        "installed generation inspector changed",
+    )
+    if helper is not None and helper_raw is not None:
+        try:
+            helper_after = host._read(helper)[1]
+        except (OSError, RuntimeError) as exc:
+            raise SourceUpgradeHeld("installed generation digest helper unavailable") from exc
+        _need(
+            _sha(helper_after) == REVIEWED_SHARED_DIGEST_HELPER_SHA256,
+            "installed generation digest helper changed",
+        )
+    _need(
+        generation.stdout.strip() == record["installed_generation"]
+        and digest.stdout.strip() == verified["snapshot_digest"],
+        "installed generation/digest readback differs",
+    )
+    return {
+        "path": str(journal),
+        "sha256": _sha(host._read(journal)[1]),
+        "candidate_sha": candidate,
+        "installed_generation": record["installed_generation"],
+        "snapshot_digest": verified["snapshot_digest"],
+        "mirror": str(mirror),
+        "physical_mirror": str(physical_mirror),
+        "python": python,
+        "inspector": str(inspector),
+        "inspector_sha256": _sha(inspector_after),
+        "digest_helper": str(helper) if helper is not None else None,
+        "digest_helper_sha256": _sha(helper_raw) if helper_raw is not None else None,
+    }
+
+
+def _completed_reference(
+    manifest_path: Path,
+    state_path: str | Path,
+    worker_id: str,
+    *,
+    manifest_sha256: str | None = None,
+    state_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Read an actual terminal worker without importing no-start authority."""
+    import closer_campaign as campaign
+
+    manifest_path = _canonical(manifest_path)
+    manifest_value, manifest_raw, manifest = _object(manifest_path, "old manifest")
+    if manifest_sha256 is not None:
+        _need(_sha(manifest_raw) == manifest_sha256, "old manifest changed")
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    if state_sha256 is not None:
+        _need(_sha(state_raw) == state_sha256, "old state changed")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "done"},
+        "old campaign is not terminal exact round state",
+    )
+    workers = document.get("workers")
+    if not isinstance(workers, list):
+        raise SourceUpgradeHeld("old campaign worker list missing")
+    worker = next(
+        (row for row in workers if isinstance(row, dict) and row.get("worker_id") == worker_id),
+        None,
+    )
+    if not isinstance(worker, dict):
+        raise SourceUpgradeHeld("old worker is not terminal")
+    _need(worker.get("state") == "terminal", "old worker is not terminal")
+    if worker.get("pid"):
+        host._dead(worker["pid"])
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    _need(
+        result.get("worker_id") == worker_id and result.get("target") == worker.get("target"),
+        "old result does not join terminal worker",
+    )
+    _need(
+        worker.get("outcome") == result.get("outcome") == "ok",
+        "old completed worker is not exact OK",
+    )
+    return {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+    }
+
+
+def _source_selection_pre_effect_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Current forensic reading of one signed, pre-instruction source failure.
+
+    The old UNKNOWN remains untouched.  This reader establishes only that the
+    authenticated finite row reached source selection, that the original queue
+    retained the single uncertain operation, and that its source-owned result
+    denied every effect/retry authority before a controller transaction existed.
+    """
+    import closer_campaign as campaign
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+    import closer_pipeline as pipeline
+
+    manifest_value, manifest_raw, manifest = _generic_pre_effect_manifest(manifest_path)
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "old campaign is not retained finite reconciliation",
+    )
+    worker = next(
+        (
+            x
+            for x in document.get("workers", [])
+            if isinstance(x, dict) and x.get("worker_id") == worker_id
+        ),
+        None,
+    )
+    _need(
+        isinstance(worker, dict)
+        and worker.get("state") == "terminal"
+        and worker.get("outcome") == "scoped_continuation",
+        "old worker is not retained source-selection failure",
+    )
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    _need(
+        result.get("worker_id") == worker_id and result.get("outcome") == "scoped_continuation",
+        "old result differs",
+    )
+    # Do not use native.contract()/completed_round_proof() here: after a
+    # wrapper CAS they correctly reject the *old* runtime.  Re-read only the
+    # old HMAC-sealed admission/handoff/cohort records instead.
+    import hmac
+
+    context = result.get("native_admission")
+    detail = json.loads(result.get("detail", ""))
+    _need(isinstance(context, dict) and isinstance(detail, dict), "old native result differs")
+    context = cast(dict[str, Any], context)
+    detail = cast(dict[str, Any], detail)
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    nonce = context.get("nonce")
+    _need(
+        isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce),
+        "old admission nonce differs",
+    )
+    nonce = cast(str, nonce)
+    directory = root / nonce
+    admission = native._read(directory / "admission.json")
+    handoff = native._read(directory / ("worker-" + worker_id + ".json"))
+    _need(
+        admission.get("record") == {"binding": binding, "context": context}
+        and hmac.compare_digest(
+            str(admission.get("signature", "")),
+            mechanisms._signature(admission["record"], mechanisms._key(root)),
+        )
+        and handoff.get("record", {}).get("binding") == binding
+        and handoff["record"].get("admission") == context
+        and hmac.compare_digest(
+            str(handoff.get("signature", "")),
+            mechanisms._signature(handoff["record"], mechanisms._key(root)),
+        ),
+        "old signed admission or handoff differs",
+    )
+    cfg = document.get("worker_config")
+    _need(isinstance(cfg, dict), "old worker configuration differs")
+    cfg = cast(dict[str, Any], cfg)
+    worker = cast(dict[str, Any], worker)
+    _need(
+        context.get("runtime_manifest") == str(manifest_value)
+        and context.get("runtime_manifest_sha256") == _sha(manifest_raw)
+        and context.get("demand_assignment") == document.get("demand_assignment")
+        and context.get("finite_frontier") == cfg.get("finite_frontier")
+        and context.get("request_timeout_seconds") == cfg.get("request_timeout_seconds"),
+        "old admission context differs",
+    )
+    for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
+        pin = context.get(key)
+        raw = host._read(directory / name)[1]
+        _need(
+            isinstance(pin, dict)
+            and pin.get("path") == str(directory / name)
+            and pin.get("sha256") == _sha(raw),
+            "old admission pin differs",
+        )
+    fields = {
+        "state": str(state),
+        "target": worker["target"],
+        "owner": document["owner"],
+        "generation": str(context["campaign"]["generation"]),
+        "result": str(result_path),
+        "runtime-manifest": context["runtime_manifest"],
+        "mechanism": mechanisms.NATIVE,
+    }
+    _need(
+        handoff["record"].get("fields") == fields
+        and context.get("campaign")
+        == native._campaign_identity(
+            state, {**document, "generation": context["campaign"]["generation"]}
+        ),
+        "old signed handoff fields differ",
+    )
+    cohort_path = directory / ("completed-cohort-" + worker_id + ".json")
+    terminal, _terminal_raw = campaign._signed_cohort_record(
+        detail.get("cohort_terminal"), cohort_path, root, [128 * 1024 * 1024]
+    )
+    _need(
+        isinstance(terminal, dict) and terminal.get("completed") is False,
+        "old terminal is completion authority",
+    )
+    proof = detail.get("proof")
+    _need(
+        terminal.get("binding") == binding
+        and terminal.get("admission") == context
+        and terminal.get("proof") == proof
+        and terminal.get("native_execution") == detail.get("native_execution"),
+        "old signed cohort differs",
+    )
+    execution = detail.get("native_execution")
+    _need(
+        isinstance(execution, dict)
+        and execution.get("phases", {}).get("A", {}).get("exit_code") == 0
+        and execution.get("phases", {}).get("B", {}).get("exit_code") == 78
+        and execution.get("phases", {}).get("C", {}).get("exit_code") == 65
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("exact_token_matched")
+        is True
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("released") is True,
+        "old native execution is not exact quarantined cleanup",
+    )
+    frontier = cfg.get("finite_frontier")
+    _need(
+        isinstance(frontier, dict)
+        and frontier.get("targets") == [next(iter(frontier.get("targets", [])), None)],
+        "old finite target is ambiguous",
+    )
+    frontier = cast(dict[str, Any], frontier)
+    target = frontier["targets"][0]
+    _need(
+        isinstance(proof, dict)
+        and proof.get("schema") == "native-scoped-continuation/v1"
+        and proof.get("accepted") is False
+        and proof.get("global_stop_valid") is False
+        and proof.get("domain_outcome") == "quarantined"
+        and proof.get("finite_frontier") == frontier
+        and proof.get("run_ids", {}).get(target),
+        "old scoped quarantine proof differs",
+    )
+    proof = cast(dict[str, Any], proof)
+    items = proof.get("quarantined_admitted_items")
+    _need(
+        isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict),
+        "old quarantine item differs",
+    )
+    items = cast(list[Any], items)
+    item = items[0]
+    item = cast(dict[str, Any], item)
+    shard = _canonical(str(item.get("source_path")))
+    _need(
+        isinstance(item.get("target"), str)
+        and item["target"].lower() == target.lower()
+        and shard.name == "state.json",
+        "old quarantine target differs",
+    )
+    shard_raw = host._read(shard)[1]
+    shard_doc = json.loads(shard_raw)
+    _need(isinstance(shard_doc, dict), "old quarantined shard differs")
+    shard_doc = cast(dict[str, Any], shard_doc)
+    try:
+        row = shard_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+    except (KeyError, TypeError) as exc:
+        raise SourceUpgradeHeld("old quarantined frontier row is unavailable") from exc
+    _need(item.get("item_sha256") == mechanisms.digest(row), "old signed quarantine row differs")
+    action = shard.parent / "state.actions" / (pipeline._digest(target) + ".json")
+    _action_path, action_raw, action_doc = _object(action, "old action queue")
+    action_sha = _sha(action_raw)
+    found = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if isinstance(value.get("operation"), dict):
+                found.append(value["operation"])
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(action_doc)
+    _need(len(found) == 1, "old source operation is absent or ambiguous")
+    operation = found[0]
+    failure = operation.get("result")
+    _need(
+        operation.get("status") == "uncertain"
+        and operation.get("attempts") == 1
+        and isinstance(failure, dict)
+        and failure.get("failure_diagnostic")
+        in (
+            {
+                "stage": "source_selection",
+                "code": "full_source_validation_unavailable",
+                "exception": "ValueError",
+            },
+            {
+                "stage": "source_selection",
+                "code": "unclassified_error",
+                "exception": "SourceRecordUnavailable",
+            },
+        )
+        and all(
+            failure.get(key) is False
+            for key in ("act_authorized", "source_closure_authorized", "retry_safe")
+        )
+        and failure.get("outcome_uncertain") is True,
+        "old operation is not exact pre-effect source-selection failure",
+    )
+    return {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "detail": detail,
+        "terminal": terminal,
+        "forensic": {
+            "schema": "source-selection-pre-effect-forensic/v1",
+            "authority": False,
+            "operation_id": operation.get("id"),
+            "operation_sha256": _sha(
+                json.dumps(operation, sort_keys=True, separators=(",", ":")).encode()
+            ),
+            "quarantined_item_sha256": item["item_sha256"],
+            "action_path": str(action),
+            "action_sha256": action_sha,
+        },
+    }
+
+
+def _seed_assessment_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Bind source701d's one completed, no-ACT witness before diagnostics."""
+    _need(
+        worker_id == REVIEWED_SEED_ASSESSMENT_WORKER_ID,
+        "seed-assessment worker is not the reviewed witness",
+    )
+    reference = _completed_reference(manifest_path, state_path, worker_id)
+    try:
+        detail = json.loads(reference["result"].get("detail"))
+    except (TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("seed-assessment result detail is invalid") from exc
+    _need(isinstance(detail, dict), "seed-assessment result detail is invalid")
+    completed_round = detail.get("completed_round")
+    _need(
+        reference["manifest"].get("candidate_sha") == REVIEWED_SEED_ASSESSMENT_CANDIDATE
+        and reference["result_sha256"] == REVIEWED_SEED_ASSESSMENT_RESULT_SHA256,
+        "seed-assessment completed witness differs",
+    )
+    _need(
+        isinstance(completed_round, dict)
+        and completed_round.get("round_id") == REVIEWED_SEED_ASSESSMENT_ROUND_ID
+        and completed_round.get("receipt_sha256") == REVIEWED_SEED_ASSESSMENT_ROUND_SHA256,
+        "seed-assessment completed-round witness differs",
+    )
+    return reference
+
+
+def _pagination_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Capture d4ca's terminal UNKNOWN witness without recasting it as OK."""
+    import closer_campaign as campaign
+
+    _need(worker_id == REVIEWED_PAGINATION_WORKER_ID, "pagination worker differs")
+    manifest_value, manifest_raw, manifest = _object(manifest_path, "old manifest")
+    _need(
+        manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
+        and _sha(manifest_raw) == REVIEWED_PAGINATION_MANIFEST_SHA256,
+        "pagination manifest differs",
+    )
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "pagination campaign is not retained reconcile state",
+    )
+    workers = document.get("workers")
+    _need(isinstance(workers, list), "pagination worker list missing")
+    workers = cast(list[Any], workers)
+    worker = next(
+        (row for row in workers if isinstance(row, dict) and row.get("worker_id") == worker_id),
+        None,
+    )
+    _need(isinstance(worker, dict), "pagination worker missing")
+    worker = cast(dict[str, Any], worker)
+    _need(
+        worker.get("state") == "terminal" and worker.get("outcome") == "scoped_continuation",
+        "pagination worker is not retained scoped continuation",
+    )
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    result = cast(dict[str, Any], result)
+    _need(
+        _sha(result_raw) == REVIEWED_PAGINATION_RESULT_SHA256
+        and result.get("worker_id") == worker_id
+        and result.get("target") == worker.get("target") == campaign.ROUND_UNIT
+        and result.get("outcome") == "scoped_continuation",
+        "pagination result differs",
+    )
+    # Reuse the original campaign's signed cohort/handoff and result-admission
+    # reader.  Unlike a file-hash comparison this revalidates the signed
+    # terminal producer record, exact native handoff, and original admission.
+    try:
+        evidence, original_cfg, detail, terminal = campaign._cohort_worker_evidence(
+            state, document, worker, manifest, [128 * 1024 * 1024]
+        )
+        import closer_runtime_binding as binding
+
+        _need(
+            evidence.get("result", {}).get("sha256") == REVIEWED_PAGINATION_RESULT_SHA256
+            and isinstance(detail, dict)
+            and isinstance(terminal, dict)
+            and detail.get("cohort_terminal", {}).get("sha256") == REVIEWED_PAGINATION_COHORT_SHA256
+            and binding.scoped_continuation_proof(original_cfg, detail.get("proof"))
+            == detail.get("proof"),
+            "pagination signed cohort or scoped continuation differs",
+        )
+    except (KeyError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("pagination original admission unavailable") from exc
+    return {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "original_config": original_cfg,
+        "detail": detail,
+        "terminal": terminal,
+    }
+
+
+def _sealed_pagination_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Read d4ca's signed pre-CAS evidence without its replaced wrapper pin."""
+    import hmac
+
+    import closer_campaign as campaign
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+
+    _need(worker_id == REVIEWED_PAGINATION_WORKER_ID, "sealed pagination worker differs")
+    manifest_value, manifest_raw, manifest = _object(manifest_path, "old manifest")
+    _need(
+        manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
+        and _sha(manifest_raw) == REVIEWED_PAGINATION_MANIFEST_SHA256,
+        "sealed pagination manifest differs",
+    )
+    state = _canonical(state_path)
+    _, state_raw, document = _object(state, "old campaign state")
+    _need(
+        document.get("phase") == "work"
+        and document.get("hold") is None
+        and document.get("targets") == {campaign.ROUND_UNIT: "reconcile"},
+        "sealed pagination campaign differs",
+    )
+    workers = document.get("workers")
+    _need(isinstance(workers, list), "sealed pagination workers missing")
+    workers = cast(list[Any], workers)
+    worker = next(
+        (x for x in workers if isinstance(x, dict) and x.get("worker_id") == worker_id), None
+    )
+    _need(
+        isinstance(worker, dict)
+        and worker.get("state") == "terminal"
+        and worker.get("outcome") == "scoped_continuation",
+        "sealed pagination worker differs",
+    )
+    worker = cast(dict[str, Any], worker)
+    result_path = campaign.result_path(state, worker_id)
+    _, result_raw, result = _object(result_path, "old result")
+    result = cast(dict[str, Any], result)
+    _need(
+        _sha(result_raw) == REVIEWED_PAGINATION_RESULT_SHA256
+        and result.get("worker_id") == worker_id
+        and result.get("target") == worker["target"] == campaign.ROUND_UNIT
+        and result.get("mechanism") == mechanisms.NATIVE
+        and result.get("outcome") == "scoped_continuation",
+        "sealed pagination result differs",
+    )
+    context = result.get("native_admission")
+    _need(isinstance(context, dict), "sealed pagination context differs")
+    context = cast(dict[str, Any], context)
+    detail = json.loads(result.get("detail", ""))
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    nonce = context.get("nonce") if isinstance(context, dict) else None
+    _need(
+        isinstance(nonce, str)
+        and nonce == REVIEWED_PAGINATION_NONCE
+        and re.fullmatch(r"[0-9a-f]{32}", nonce),
+        "sealed pagination admission differs",
+    )
+    nonce = cast(str, nonce)
+    directory = root / nonce
+    _need(
+        directory.resolve() == directory and not directory.is_symlink(),
+        "sealed pagination root differs",
+    )
+    expected_binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    _active_path, _active_raw, active = _object(root / "native-active.json", "sealed native active")
+    binding = active.get("binding")
+    _need(
+        isinstance(binding, dict) and binding == expected_binding,
+        "sealed pagination binding differs",
+    )
+    admission = native._read(directory / "admission.json")
+    _need(
+        admission.get("record") == {"binding": binding, "context": context}
+        and hmac.compare_digest(
+            admission.get("signature", ""),
+            mechanisms._signature(admission["record"], mechanisms._key(root)),
+        ),
+        "sealed pagination admission signature differs",
+    )
+    _need(
+        context.get("runtime_manifest") == str(manifest_value)
+        and context.get("runtime_manifest_sha256") == _sha(manifest_raw)
+        and context.get("campaign")
+        == native._campaign_identity(
+            state, {**document, "generation": context["campaign"]["generation"]}
+        )
+        and context.get("demand_assignment") == document.get("demand_assignment"),
+        "sealed pagination context differs",
+    )
+    cfg = document.get("worker_config")
+    _need(
+        isinstance(cfg, dict)
+        and cfg.get("finite_frontier") == context.get("finite_frontier")
+        and cfg.get("request_timeout_seconds") == context.get("request_timeout_seconds"),
+        "sealed pagination configuration differs",
+    )
+    for key, name in (("assignment", "assignment.json"), ("report", "scoped-capacity.json")):
+        pin = context.get(key)
+        path = directory / name
+        raw = host._read(path)[1]
+        _need(
+            isinstance(pin, dict)
+            and pin.get("path") == str(path)
+            and _sha(raw) == pin.get("sha256"),
+            "sealed pagination admission pin differs",
+        )
+    fields = {
+        "state": str(state),
+        "target": worker["target"],
+        "owner": document["owner"],
+        "generation": str(context["campaign"]["generation"]),
+        "result": str(result_path),
+        "runtime-manifest": context["runtime_manifest"],
+        "mechanism": mechanisms.NATIVE,
+    }
+    handoff = native._read(directory / ("worker-" + worker_id + ".json"))
+    _need(
+        handoff.get("record", {}).get("binding") == binding
+        and handoff["record"].get("admission") == context
+        and handoff["record"].get("fields") == fields
+        and hmac.compare_digest(
+            handoff.get("signature", ""),
+            mechanisms._signature(handoff["record"], mechanisms._key(root)),
+        ),
+        "sealed pagination handoff differs",
+    )
+    cohort_path = directory / ("completed-cohort-" + worker_id + ".json")
+    terminal, _raw = campaign._signed_cohort_record(
+        detail.get("cohort_terminal"), cohort_path, root, [128 * 1024 * 1024]
+    )
+    _need(
+        detail.get("cohort_terminal", {}).get("sha256") == REVIEWED_PAGINATION_COHORT_SHA256
+        and terminal.get("schema") == "closer-terminal-cohort-worker/v1"
+        and terminal.get("binding") == expected_binding
+        and terminal.get("admission") == context
+        and terminal.get("campaign") == context["campaign"]
+        and terminal.get("worker_id") == worker_id
+        and terminal.get("completed") is False
+        and terminal.get("worker") == fields
+        and terminal.get("native_execution") == detail.get("native_execution")
+        and terminal.get("proof") == detail.get("proof")
+        and terminal.get("completed_round") == detail.get("completed_round")
+        and terminal.get("descendant_bundle") == detail.get("descendant_bundle")
+        and terminal.get("outcome") == "scoped_continuation",
+        "sealed pagination cohort differs",
+    )
+    reference = {
+        "manifest_path": str(manifest_value),
+        "manifest": manifest,
+        "state_path": str(state),
+        "state_sha256": _sha(state_raw),
+        "state": document,
+        "worker": worker,
+        "result_path": str(result_path),
+        "result_sha256": _sha(result_raw),
+        "result": result,
+        "detail": detail,
+        "terminal": terminal,
+    }
+    _pagination_preinstruction_diagnostic(reference)
+    return reference
+
+
+def _pagination_preinstruction_diagnostic(reference: dict[str, Any]) -> dict[str, Any]:
+    """Prove d4ca's pinned local rejection; retain, never retire, its operation."""
+    manifest = cast(dict[str, Any], reference["manifest"])
+    result = cast(dict[str, Any], reference["result"])
+    detail = reference.get("detail")
+    _need(isinstance(detail, dict), "pagination result detail invalid")
+    detail = cast(dict[str, Any], detail)
+    execution = detail.get("native_execution")
+    proof = detail.get("proof")
+    cohort = reference.get("terminal")
+    _need(
+        isinstance(execution, dict) and isinstance(proof, dict) and isinstance(cohort, dict),
+        "pagination terminal proof invalid",
+    )
+    execution = cast(dict[str, Any], execution)
+    proof = cast(dict[str, Any], proof)
+    cohort = cast(dict[str, Any], cohort)
+    _need(
+        execution.get("admission_nonce") == REVIEWED_PAGINATION_NONCE
+        and execution.get("phases", {}).get("A", {}).get("exit_code") == 0
+        and execution.get("phases", {}).get("B", {}).get("exit_code") == 78
+        and execution.get("phases", {}).get("C", {}).get("exit_code") == 65
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("exact_token_matched")
+        is True
+        and execution.get("phases", {}).get("C", {}).get("cleanup", {}).get("released") is True,
+        "pagination native cleanup differs",
+    )
+    _need(
+        cohort.get("outcome") == "scoped_continuation"
+        and cohort.get("completed") is False
+        and proof.get("schema") == "native-scoped-continuation/v1"
+        and proof.get("accepted") is False
+        and proof.get("domain_outcome") == "quarantined"
+        and proof.get("global_stop_valid") is False
+        and proof.get("round_id") == REVIEWED_PAGINATION_ROUND_ID
+        and proof.get("receipt_sha256") == REVIEWED_PAGINATION_ROUND_SHA256,
+        "pagination scoped continuation proof differs",
+    )
+    item = proof.get("quarantined_admitted_items")
+    _need(
+        isinstance(item, list) and len(item) == 1 and isinstance(item[0], dict),
+        "pagination quarantined item differs",
+    )
+    item = cast(list[Any], item)
+    quarantined = cast(dict[str, Any], item[0])
+    target_path = _canonical(cast(str, quarantined.get("source_path")))
+    target_raw = host._read(target_path)[1]
+    _need(
+        _sha(target_raw) == REVIEWED_PAGINATION_TARGET_STATE_SHA256,
+        "pagination target state differs",
+    )
+    target_doc = json.loads(target_raw)
+    action_path = (
+        target_path.parent
+        / "state.actions"
+        / "2b35bacc11232a5dd5ca270d97d2f850243f6a72f641fa18b991e28c6fb5b5af.json"
+    )
+    action_raw = host._read(action_path)[1]
+    _need(
+        _sha(action_raw) == REVIEWED_PAGINATION_ACTION_SHA256, "pagination action witness differs"
+    )
+    action = json.loads(action_raw)
+
+    def find_operation(value: object) -> list[dict[str, Any]]:
+        if isinstance(value, dict):
+            found = [value] if value.get("id") == REVIEWED_PAGINATION_OPERATION_ID else []
+            for child in value.values():
+                found.extend(find_operation(child))
+            return found
+        if isinstance(value, list):
+            return [row for child in value for row in find_operation(child)]
+        return []
+
+    operations = find_operation(action)
+    _need(len(operations) == 1, "pagination original operation missing or ambiguous")
+    operation = operations[0]
+    result_frame = operation.get("result")
+    _need(
+        operation.get("status") == "uncertain"
+        and operation.get("attempts") == 1
+        and isinstance(result_frame, dict)
+        and result_frame.get("act_authorized") is False
+        and result_frame.get("source_closure_authorized") is False
+        and result_frame.get("retry_safe") is False
+        and result_frame.get("outcome_uncertain") is True
+        and result_frame.get("failure_diagnostic")
+        == {
+            "code": "unclassified_error",
+            "exception": "ControllerUnknown",
+            "stage": "source_selection",
+        },
+        "pagination source-selection frame differs",
+    )
+    # Bind the earlier, successful bounded strong adjudication.  It is not an
+    # authorization for the uncertain operation; it merely proves the exact
+    # source-selection call chain began from the retained qualified result.
+    try:
+        import closer_dispatcher as dispatcher_reader
+        import closer_role_qualification as roles
+        import dispatcher
+        import execution_profiles
+
+        admission = result["native_admission"]
+        frontier = admission["finite_frontier"]
+        target = frontier["targets"][0]
+        _need(
+            quarantined["target"].casefold() == target.casefold(), "pagination proof target differs"
+        )
+        row = target_doc["frontiers"][frontier["frontier_id"]]["items"][target]
+        exception = row["results"]["exception"]
+        actual = exception["actual"]
+        controlled = actual["_closer_controlled_proof"]
+        expected = controlled["expected"]
+        basis = expected["basis"]
+        prepared = row["results"]["prepare"]
+        snapshot, packet = prepared["snapshot"], prepared["packet_ref"]
+        prepared_basis = {
+            "target": snapshot["target"],
+            "revision": prepared["revision"],
+            "head": snapshot["head"],
+            "base": snapshot["base"],
+            "packet_sha256": packet["sha256"],
+        }
+        proved = dispatcher_reader._revalidate_controlled_proof(
+            controlled,
+            run_id=actual["run_id"],
+            basis=basis,
+            receipt_root=dispatcher.DISPATCH_LOG_DIR,
+        )
+        receipt = dispatcher_reader._read_controlled_receipt(
+            controlled["provider_result_ref"], dispatcher.DISPATCH_LOG_DIR
+        )
+        at = receipt["completed_at"]
+        profile = execution_profiles.get_profile(expected["profile_id"])
+        role = roles.TASK_ROLES["closer_exception"]
+        qualification_id = expected.get("qualification_id")
+        qualified = (
+            roles.ROLE_QUALIFICATIONS.get(qualification_id)
+            if isinstance(qualification_id, str)
+            else None
+        )
+        historical_records = {qualification_id: qualified} if isinstance(qualified, dict) else None
+        current_record = roles.qualified_record(profile, role, now=at, records=historical_records)
+        admission_record = roles.qualified_record(
+            profile, role, now=admission["started_at"], records=historical_records
+        )
+        strong = bool(
+            actual.get("run_id")
+            == controlled.get("run_id")
+            == proved.get("run_id")
+            == receipt.get("run_id")
+            and expected.get("task_type") == "closer_exception"
+            and all(basis.get(k) == prepared_basis.get(k) for k in prepared_basis)
+            and basis.get("target") == target
+            and actual.get("exit") == proved.get("exit") == 0
+            and current_record is not None
+            and admission_record is not None
+            and roles.execution_record_matches(current_record, expected, checked_at=at)
+            and roles.execution_record_matches(
+                admission_record, expected, checked_at=admission["started_at"]
+            )
+        )
+    except (KeyError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("pagination original strong qualification unavailable") from exc
+    _need(strong, "pagination original strong qualification differs")
+    module_dir = _canonical(manifest["module_dir"])
+    ownership = module_dir / "closer_correction_ownership.py"
+    ownership_raw = host._read(ownership)[1]
+    _need(
+        _sha(ownership_raw) == REVIEWED_PAGINATION_OWNERSHIP_SHA256
+        and manifest.get("modules", {}).get("closer_correction_ownership.py")
+        == REVIEWED_PAGINATION_OWNERSHIP_SHA256
+        and b"PAGE_SIZE = 15" in ownership_raw
+        and b"?per_page={PAGE_SIZE}&page={page}" in ownership_raw,
+        "pagination ownership closure differs",
+    )
+    effects = module_dir / "closer_correction_native_effects.py"
+    effects_raw = host._read(effects)[1]
+    _need(
+        _sha(effects_raw) == REVIEWED_PAGINATION_EFFECTS_SHA256
+        and manifest.get("modules", {}).get("closer_correction_native_effects.py")
+        == REVIEWED_PAGINATION_EFFECTS_SHA256
+        and b"per_page=100&page=" in effects_raw
+        and b"per_page=100&page=[1-4]" in effects_raw,
+        "pagination native transport closure differs",
+    )
+    return {
+        "schema": "pagination-preinstruction-diagnostic/v1",
+        "original_operation": "uncertain",
+        "pre_instruction_proven": True,
+        "strong_as_of": True,
+    }
+
+
+def _failed_before_pipeline_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> dict[str, Any]:
+    """Read only the one reviewed UNKNOWN cohort that never created a pipeline.
+
+    This route is intentionally separate from ``_completed_reference``: the
+    old campaign remains active/UNKNOWN and no completed-round proof is
+    manufactured. The imported reader owns every literal witness pin,
+    including the contamination that makes the generic old-closure reader
+    correctly refuse this historical Runtime.
+    """
+    try:
+        import closer_failed_predecessor_readback as failed
+
+        reference = failed.read_dd8_fa4_failed_before_pipeline(manifest_path, state_path, worker_id)
+    except (ImportError, OSError, TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("failed-before-pipeline predecessor unavailable") from exc
+    _need(
+        reference.get("authority") is False
+        and reference.get("accepted") is False
+        and reference.get("retry_authority") is False
+        and reference.get("outcome") == "unknown"
+        and reference.get("worker", {}).get("worker_id") == worker_id,
+        "failed-before-pipeline predecessor differs",
+    )
+    return reference
+
+
+def _old_reference(
+    manifest_path: Path, state_path: str | Path, worker_id: str
+) -> tuple[dict[str, Any], bool]:
+    """Choose the exact failed witness or the unchanged completed route."""
+    _value, _raw, manifest = _object(manifest_path, "old manifest")
+    if manifest.get("candidate_sha") == "dd8d71119b92e15ff85836cc44ad40e20207ac6f":
+        return _failed_before_pipeline_reference(manifest_path, state_path, worker_id), True
+    if manifest.get("candidate_sha") == REVIEWED_SEED_ASSESSMENT_CANDIDATE:
+        return _seed_assessment_reference(manifest_path, state_path, worker_id), False
+    if manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+        return _sealed_pagination_reference(manifest_path, state_path, worker_id), False
+    return _completed_reference(manifest_path, state_path, worker_id), False
+
+
+def _old_native_terminal(manifest: dict[str, Any]) -> None:
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    _path, _raw, active = _object(root / "native-active.json", "old native active record")
+    _need(active.get("status") == "terminal", "old native parent is not terminal")
+    for key in ("pid", "process_group"):
+        value = active.get(key)
+        if value is not None:
+            host._dead(value)
+
+
+def _generic_old_native_quiescent(manifest: dict[str, Any]) -> None:
+    """Read a stopped, pre-admission submitted wrapper without rewriting it."""
+    import hmac
+
+    import closer_mechanisms as mechanisms
+    import closer_native_observer as native
+
+    root = _canonical(manifest["mechanism_contract"]["observation_root"])
+    _path, _raw, active = _object(root / "native-active.json", "old native active record")
+    if active.get("status") == "terminal":
+        _old_native_terminal(manifest)
+        return
+    binding = native._binding_from_contract(manifest, manifest["mechanism_contract"])
+    _need(
+        active.get("binding") == binding and active.get("status") == "submitted",
+        "old native submission differs",
+    )
+    nonce = active.get("nonce")
+    _need(
+        isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{32}", nonce), "old native nonce differs"
+    )
+    directory = root / cast(str, nonce)
+    names = set(os.listdir(directory))
+    _need(
+        names == {"startup.json", "terminal.json"},
+        "old submitted native entry lacks exact stopped terminal",
+    )
+    _startup_path, _startup_raw, startup = _object(directory / "startup.json", "old native startup")
+    _need(
+        startup.get("schema") == "native-wrapper-lifecycle/v1"
+        and startup.get("source") == "owned-native-wrapper-process"
+        and startup.get("nonce") == nonce
+        and startup.get("binding") == binding
+        and startup.get("actor") == "cursor",
+        "old native startup differs",
+    )
+    for key in ("entry", "wrapper"):
+        identity = startup.get(key)
+        _need(
+            isinstance(identity, dict)
+            and isinstance(identity.get("pid"), int)
+            and isinstance(identity.get("started"), str)
+            and isinstance(identity.get("argv_sha256"), str)
+            and _DIGEST.fullmatch(identity["argv_sha256"]),
+            "old native startup identity differs",
+        )
+        identity = cast(dict[str, Any], identity)
+        host._dead(identity["pid"])
+    terminal = native._read(directory / "terminal.json")
+    record = terminal.get("record")
+    _need(
+        isinstance(record, dict)
+        and record.get("schema") == "native-wrapper-lifecycle/v1"
+        and record.get("binding") == binding
+        and record.get("nonce") == nonce
+        and record.get("entry") == startup.get("entry")
+        and record.get("wrapper") == startup.get("wrapper")
+        and record.get("unknown") is True
+        and record.get("passed") is False
+        and record.get("error", {}).get("type") == "KeyboardInterrupt"
+        and hmac.compare_digest(
+            str(terminal.get("signature", "")),
+            mechanisms._signature(record, mechanisms._key(root)),
+        ),
+        "old submitted native terminal differs",
+    )
+
+
+def _same_identity(old: dict[str, Any], new: dict[str, Any]) -> None:
+    """Pin target/owner/principal/epoch semantics across the source upgrade."""
+    old_config = old["policy"]["correction_controller_installation"]["config"]
+    new_config = new["policy"]["correction_controller_installation"]["config"]
+    for key in (
+        "repository",
+        "repository_id",
+        "epoch",
+        "writer_id",
+        "writer_login",
+        "writer_type",
+        "bootstrap_anchor_sha256",
+    ):
+        _need(old_config.get(key) == new_config.get(key), "source upgrade identity changed: " + key)
+
+
+def _ownership_budget_rebound_coding_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    """Return the sole reviewed source8a CSV owner correction, or a copy.
+
+    This is deliberately a pure policy projection.  It does not authenticate
+    GitHub identity and does not create a coding session; the current-source
+    ownership helper must still authenticate the issue and PR principals before
+    any effect.  Keeping the projection here lets the external preparer and
+    the policy-CAS calculation use identical, closed input validation.
+    """
+    try:
+        projected = json.loads(json.dumps(policy, sort_keys=True))
+        config = projected["correction_controller_installation"]["config"]
+    except (KeyError, TypeError) as exc:
+        raise SourceUpgradeHeld("policy lacks reviewed ownership-budget rebind structure") from exc
+    _need(isinstance(config, dict), "policy lacks reviewed ownership-budget rebind structure")
+    if config.get("source_sha") != REVIEWED_OWNERSHIP_BUDGET_CANDIDATE:
+        return projected
+    _need(
+        config.get("repository") == REVIEWED_OWNERSHIP_BUDGET_REPOSITORY
+        and config.get("repository_id") == REVIEWED_OWNERSHIP_BUDGET_REPOSITORY_ID
+        and config.get("writer_id") == REVIEWED_OWNERSHIP_BUDGET_WRITER_ID
+        and config.get("writer_login") == REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN
+        and config.get("writer_type") == REVIEWED_OWNERSHIP_BUDGET_WRITER_TYPE,
+        "ownership-budget controller GitHub identity differs",
+    )
+    consumers = config.get("consumers")
+    _need(
+        isinstance(consumers, dict) and set(consumers) == {REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID},
+        "ownership-budget coding consumer differs",
+    )
+    consumer = consumers[REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID]
+    _need(isinstance(consumer, dict), "ownership-budget coding consumer invalid")
+    _need(
+        consumer.get("runner") == "existing-local-controller"
+        and consumer.get("agent") == "codex"
+        and consumer.get("owner_login") == REVIEWED_OWNERSHIP_BUDGET_PRE_REBIND_OWNER,
+        "ownership-budget coding consumer owner differs",
+    )
+    try:
+        import closer_coding_publication as publication
+        import closer_coding_session_v2 as coding_session
+
+        coding_policy = coding_session.validate_policy(consumer[coding_session.POLICY_FIELD])
+        publication_policy = publication.validate_consumer_mode(
+            REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID, consumer
+        )
+    except (ImportError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("ownership-budget coding consumer policy invalid") from exc
+    _need(
+        coding_policy.get("consumer_id") == REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+        and coding_policy.get("agent") == "codex"
+        and consumer.get("profile_id") == coding_policy.get("profile_id")
+        and consumer.get("profile_sha256") == coding_policy.get("profile_sha256")
+        and publication_policy is not None
+        and publication_policy.get("schema") == "closer-owned-pr-publication-policy/v2"
+        and publication_policy.get("consumer_id") == REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+        and publication_policy.get("allowed_path_prefixes")
+        == REVIEWED_OWNERSHIP_BUDGET_ALLOWED_PATHS
+        and publication_policy.get("trusted_context_sha256")
+        == REVIEWED_OWNERSHIP_BUDGET_TRUSTED_CONTEXT_SHA256,
+        "ownership-budget coding publication scope differs",
+    )
+    consumer["owner_login"] = REVIEWED_OWNERSHIP_BUDGET_WRITER_LOGIN
+    return projected
+
+
+def _derived_coding_capability(policy: dict[str, Any]) -> dict[str, str] | None:
+    """Derive, never caller-select, the static coding capability.
+
+    The old f858 policy predates the continuation field.  It is safe to add the
+    field only when the currently materialized controller installation already
+    has exactly one complete Source-owned Codex coding/publication consumer.
+    This function is data validation only; it does not create an admission,
+    alter controller custody, or invoke a provider.
+    """
+    try:
+        import closer_coding_continuation as continuation
+        import closer_coding_publication as publication
+        import closer_coding_session_runtime as coding_runtime
+        import closer_coding_session_v2 as coding_session
+        import closer_correction_controller as controller
+        import execution_profiles
+
+        config = policy["correction_controller_installation"]["config"]
+        consumers = config["consumers"]
+        if not isinstance(consumers, dict):
+            return None
+        draft = coding_session.prepare_admission_policy(consumers)
+        if draft.snapshot_utf8 is None:
+            return None
+        snapshot = coding_session.validate_admission_snapshot(json.loads(draft.snapshot_utf8))
+        consumer_id = snapshot["consumer_id"]
+        consumer = consumers.get(consumer_id)
+        if not isinstance(consumer, dict):
+            return None
+        # A continuation cannot lawfully create a coding worker without the
+        # existing publication path and its independent current-budget ceiling.
+        if publication.validate_consumer_mode(consumer_id, consumer) is None:
+            return None
+        coding_session.validate_budget(consumer[coding_runtime.CURRENT_FIELD])
+        profile = execution_profiles.get_profile(coding_session.PROFILE)
+        if not (
+            consumer.get("runner") == "existing-local-controller"
+            and consumer.get("agent") == "codex"
+            and consumer.get("profile_id") == coding_session.PROFILE
+            and consumer.get("profile_sha256")
+            == snapshot["profile_sha256"]
+            == controller.source_digest(profile)
+            and isinstance(consumer.get("owner_login"), str)
+            and bool(consumer["owner_login"])
+        ):
+            return None
+        return continuation.validate_capability(
+            {"schema": continuation.CAPABILITY_SCHEMA, "consumer_id": consumer_id}
+        )
+    except (ImportError, KeyError, TypeError, ValueError, RuntimeError):
+        return None
+
+
+def _rebased_policy(old: dict[str, Any], new: dict[str, Any], new_state: Path) -> dict[str, Any]:
+    """The sole lawful policy transformation for this reviewed source upgrade."""
+    expected = _ownership_budget_rebound_coding_policy(old["policy"])
+    try:
+        config = expected["correction_controller_installation"]["config"]
+        if (
+            old["policy"]["correction_controller_installation"]["config"].get("source_sha")
+            == REVIEWED_OWNERSHIP_BUDGET_CANDIDATE
+        ):
+            consumer_id = REVIEWED_OWNERSHIP_BUDGET_CONSUMER_ID
+            private_environment_root = (
+                new_state.parent.parent / "controller-private" / "publication-environment"
+            )
+            consumer = config["consumers"][consumer_id]
+            bootstrap = consumer["native_bootstrap"]
+            try:
+                import closer_coding_git_environment as git_environment
+            except ImportError as exc:
+                raise SourceUpgradeHeld("reviewed Git-environment rebase unavailable") from exc
+
+            try:
+                expected = git_environment.rebase_private_git_environment(
+                    expected,
+                    old_source_sha=REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+                    consumer_id=consumer_id,
+                    private_root=private_environment_root,
+                    gh_path=bootstrap["gh_path"],
+                )
+            except git_environment.GitEnvironmentHeld as exc:
+                raise SourceUpgradeHeld("policy lacks reviewed Git-environment rebase") from exc
+
+            config = expected["correction_controller_installation"]["config"]
+        config["source_sha"] = new["candidate_sha"]
+        config["state_path"] = str(new_state)
+        config["native_transport_source_sha256"] = new["modules"][
+            "closer_correction_native_effects.py"
+        ]
+        consumers = config.get("consumers", {})
+        for consumer in consumers.values():
+            bootstrap = consumer["native_bootstrap"]
+            bootstrap["private_root"] = str(new_state.parent.parent / "controller-private")
+            confinement = bootstrap["confinement"]
+            helper = _canonical(new["module_dir"]) / "closer_codex_confinement_probe.py"
+            confinement["helper_path"] = str(helper)
+            confinement["helper_sha256"] = new["modules"][helper.name]
+            if consumer.get("reader_entrypoint") == "closer_codex_owned_stdio.SourceReader":
+                reader_sha256 = new["modules"].get("closer_codex_owned_stdio.py")
+                _need(
+                    isinstance(reader_sha256, str) and _DIGEST.fullmatch(reader_sha256),
+                    "owned stdio reader source unavailable",
+                )
+                consumer["reader_source_sha256"] = reader_sha256
+    except (KeyError, TypeError) as exc:
+        raise SourceUpgradeHeld("policy lacks reviewed rebase structure") from exc
+    try:
+        import closer_coding_continuation as continuation
+
+        derived = _derived_coding_capability(expected)
+        existing = expected.get(continuation.POLICY_FIELD)
+        if existing is None:
+            if derived is not None:
+                expected[continuation.POLICY_FIELD] = derived
+        else:
+            _need(
+                derived is not None and continuation.validate_capability(existing) == derived,
+                "existing coding capability no longer matches qualified source consumer",
+            )
+    except ImportError as exc:
+        raise SourceUpgradeHeld("coding capability validator unavailable") from exc
+    _need(new.get("policy") == expected, "new policy changes fields outside lawful rebase")
+    return expected
+
+
+def _physical_recipe(
+    old_cfg: dict[str, Any],
+    old_doc: dict[str, Any],
+    old_policy: dict[str, Any],
+    old_state: Path,
+    new: dict[str, Any],
+    new_path: Path,
+    new_state: Path,
+    frontier: dict[str, Any],
+) -> dict[str, Any]:
+    """Known-f858 rebind: retain data knobs, derive every executable path."""
+    import closer_pipeline
+
+    allowed = {
+        "runtime_manifest",
+        "finite_frontier",
+        "assignment",
+        "dispatch_state",
+        "policy",
+        "granularity",
+        "mechanism",
+        "execution_policy",
+        "dispatch_workers",
+        "coordinator_mode",
+        "coordinator_contract_pin",
+        "request_timeout_seconds",
+        "handoff_agent",
+        "handoff_dir",
+        "native_hooks",
+        "receipt_reserve_seconds",
+        "apply",
+    }
+    _need(set(old_cfg) <= allowed, "old worker config has unknown executable field")
+    _need(
+        set(old_cfg)
+        >= {"assignment", "dispatch_state", "native_hooks", "handoff_dir", "handoff_agent"},
+        "old worker config lacks physical recipe fields",
+    )
+    old_root = old_state.parent
+    dispatch = _canonical(old_cfg["dispatch_state"])
+    _need(dispatch.parent == old_root, "old dispatch path is outside old campaign root")
+    assignment = _canonical(old_cfg["assignment"])
+    demand = old_doc.get("demand_assignment")
+    admission = old_doc.get("demand_admission")
+    _need(
+        isinstance(demand, dict)
+        and isinstance(admission, dict)
+        and assignment.parent == old_root / (old_state.name + ".demand")
+        and assignment.name == str(demand.get("sha256", "")) + ".json"
+        and demand.get("path") == str(assignment)
+        and _sha(host._read(assignment)[1]) == demand.get("sha256")
+        and admission.get("assignment_sha256") == demand.get("sha256")
+        and admission.get("campaign_id") == old_doc.get("campaign_id")
+        and admission.get("owner") == old_doc.get("owner")
+        and admission.get("campaign_generation") == old_doc.get("generation"),
+        "old source demand assignment binding differs",
+    )
+    cfg = json.loads(json.dumps(old_cfg, sort_keys=True))
+    expected_handoff = (Path.home() / ".codex/handoff").resolve()
+    _need(
+        _canonical(cfg["handoff_dir"]) == expected_handoff and cfg.get("handoff_agent") == "codex",
+        "old handoff identity/path differs",
+    )
+    cfg["runtime_manifest"] = str(new_path)
+    cfg["finite_frontier"] = frontier
+    cfg["assignment"] = str(new_state.parent / assignment.name)
+    cfg["dispatch_state"] = str(new_state.parent / Path(old_cfg["dispatch_state"]).name)
+    cfg["policy"] = _rebased_policy({"policy": old_policy}, new, new_state)
+    cfg["coordinator_contract_pin"] = closer_pipeline.scoped_capability()
+    _need(
+        cfg.get("granularity", "round") == "round"
+        and cfg.get("mechanism") == "native-handoff/v1"
+        and cfg.get("execution_policy") == "finite-frontier/v2"
+        and cfg.get("dispatch_workers") == 1
+        and cfg.get("coordinator_mode") == "resource_scoped"
+        and cfg.get("apply") is True
+        and cfg.get("request_timeout_seconds") == 120,
+        "physical recipe mode differs",
+    )
+    old_hooks = old_cfg["native_hooks"]
+    _need(isinstance(old_hooks, dict), "old native hooks invalid")
+    hook_root = new_state.parent.parent / "native-hooks"
+    hooks: dict[str, Any] = {"bounded_no_new_relay": True}
+    for phase in ("prerun", "postrun"):
+        old_hook = old_hooks.get(phase)
+        path = hook_root / ("handoff-" + phase + ".sh")
+        _need(
+            isinstance(old_hook, dict) and _sha(host._read(path)[1]) == old_hook.get("sha256"),
+            "new hook differs from old reviewed hook",
+        )
+        hooks[phase] = {"path": str(path), "sha256": old_hook["sha256"]}
+    module_dir = _canonical(new["module_dir"])
+    lease = module_dir / "closer_native_lease.py"
+    _need(
+        _sha(host._read(lease)[1]) == new["modules"].get(lease.name), "new lease module pin differs"
+    )
+    hooks["lease_module"] = {"path": str(lease), "sha256": new["modules"][lease.name]}
+    interpreter = new["mechanism_contract"]["interpreter"]
+    _need(isinstance(interpreter, dict), "new interpreter physical pin missing")
+    mirror = (Path.home() / ".codex/orchestrator-mirror/closer_dispatcher.py").resolve()
+    _need(
+        _sha(host._read(mirror)[1]) == new["modules"].get(mirror.name),
+        "current dispatcher pin differs",
+    )
+    hooks["postrun_dependencies"] = {
+        "interpreter": {"path": interpreter["path"], "sha256": interpreter["sha256"]},
+        "dispatcher": {"path": str(mirror), "sha256": new["modules"][mirror.name]},
+    }
+    cfg["native_hooks"] = hooks
+    return cfg
+
+
+def _old_custody_quiet(old: dict[str, Any]) -> dict[str, Any]:
+    """Physical custody is evidence, not a JSON claim from a caller."""
+    import closer_correction_controller as controller
+
+    controller_file = Path(controller.__file__).resolve()
+    _need(
+        old.get("modules", {}).get(controller_file.name) == _sha(host._read(controller_file)[1]),
+        "current controller differs from old pinned controller",
+    )
+    config = old["policy"]["correction_controller_installation"]["config"]
+    try:
+        inspection = controller.inspect_provisioned_custody(config)
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("old physical custody unavailable") from exc
+    _need(
+        not inspection["highwater"]["pending_transactions"], "old custody has pending transaction"
+    )
+    custody_path = _canonical(inspection["identity"]["custody_path"])
+    _need(
+        set(os.listdir(custody_path))
+        == {"namespace.json", "highwater-0000000000000000.json", "writer.lock"},
+        "old custody inventory is not pristine no-ACT state",
+    )
+    _need(
+        inspection["highwater"]["anchor"].get("revision") == 0, "old custody revision is not zero"
+    )
+    _need(
+        controller.inspect_provisioned_custody(config) == inspection,
+        "old custody changed during recheck",
+    )
+    return inspection
+
+
+def fresh_read_native_index(config: dict[str, Any], inspection: dict[str, Any]) -> dict[str, Any]:
+    """Bounded GET-only proof that remote native index still is the old anchor."""
+    import closer_correction_controller as controller
+
+    anchor = inspection["highwater"]["anchor"]
+    repository = config.get("repository")
+    if not isinstance(repository, str) or not repository:
+        raise SourceUpgradeHeld("controller repository unavailable")
+
+    def get(endpoint: str) -> dict[str, Any]:
+        try:
+            call = subprocess.run(
+                ["gh", "api", endpoint], capture_output=True, text=True, timeout=10, check=False
+            )
+            _need(
+                call.returncode == 0 and len(call.stdout) <= 1024 * 1024,
+                "native index GET unavailable",
+            )
+            value = json.loads(call.stdout)
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            raise SourceUpgradeHeld("native index GET unavailable") from exc
+        if not isinstance(value, dict):
+            raise SourceUpgradeHeld("native index GET response invalid")
+        return value
+
+    ref = get("repos/" + repository + "/git/ref/heads/" + controller.BRANCH)
+    _need(ref.get("object", {}).get("sha") == anchor["commit_sha"], "native index head changed")
+    contents = get(
+        "repos/"
+        + repository
+        + "/contents/"
+        + controller.INDEX_PATH
+        + "?ref="
+        + anchor["commit_sha"]
+    )
+    _need(
+        contents.get("sha") == anchor["blob_sha"] and contents.get("encoding") == "base64",
+        "native index blob changed",
+    )
+    principal, repo = get("user"), get("repos/" + repository)
+    _need(
+        {key: principal.get(key) for key in ("id", "login", "type")}
+        == {
+            "id": config.get("writer_id"),
+            "login": config.get("writer_login"),
+            "type": config.get("writer_type"),
+        },
+        "native index principal changed",
+    )
+    _need(
+        repo.get("id") == config.get("repository_id")
+        and controller.native_repository_name(repo.get("full_name"), repository.lower()),
+        "native index repository changed",
+    )
+    try:
+        raw = base64.b64decode(str(contents.get("content", "")).replace("\n", ""), validate=True)
+        data = json.loads(raw)
+        _need(
+            controller.validate_index(data, controller.ControllerConfig(**config)) == data,
+            "native index source validation failed",
+        )
+    except (ValueError, TypeError, RuntimeError) as exc:
+        raise SourceUpgradeHeld("native index payload invalid") from exc
+    _need(controller.digest(data) == anchor["state_sha256"], "native index state changed")
+    _need(data.get("revision") == 0 and data.get("entries") == [], "native index not pristine")
+    return {
+        "commit_sha": anchor["commit_sha"],
+        "blob_sha": anchor["blob_sha"],
+        "state_sha256": anchor["state_sha256"],
+        "principal": {key: principal[key] for key in ("id", "login", "type")},
+        "repository_id": repo["id"],
+        "repository": repo["full_name"],
+    }
+
+
+def _inert_new_custody(
+    manifest: dict[str, Any], state: Path, anchor: dict[str, Any]
+) -> dict[str, Any]:
+    """Inspect only pre-provisioned metadata while the new campaign is absent.
+
+    The controller's full inspector intentionally requires an existing campaign.
+    This check grants no controller authority; normal admission uses that full
+    inspector after the producer has created and sealed the held campaign.
+    """
+    import closer_correction_controller as controller
+
+    config = controller.ControllerConfig(
+        **manifest["policy"]["correction_controller_installation"]["config"]
+    )
+    root = host._path(Path(str(state) + ".evidence") / config.namespace)
+    before = root.stat()
+    _need(
+        stat.S_ISDIR(before.st_mode)
+        and before.st_uid == os.getuid()
+        and stat.S_IMODE(before.st_mode) == 0o700,
+        "new inert custody is not private/owned",
+    )
+    expected = {
+        "namespace.json": controller.canonical(
+            {
+                "schema": "local-correction-controller-namespace/v1",
+                "config_sha256": controller.digest(config.source_binding()),
+            }
+        ),
+        "highwater-0000000000000000.json": controller.canonical(anchor),
+        "writer.lock": b"",
+    }
+    _need(set(os.listdir(root)) == set(expected), "new inert custody inventory differs")
+    files = {}
+    for name, raw in expected.items():
+        path, observed = host._read(root / name)
+        info = path.stat()
+        _need(observed == raw and not info.st_mode & 0o077, "new inert custody bytes/mode differ")
+        files[name] = {"sha256": _sha(raw), "device": info.st_dev, "inode": info.st_ino}
+    after = root.stat()
+    _need(
+        (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
+        and set(os.listdir(root)) == set(expected),
+        "new inert custody changed during inspection",
+    )
+    return {
+        "identity": {"custody_path": str(root), "device": before.st_dev, "inode": before.st_ino},
+        "files": files,
+    }
+
+
+def _wrapper_plan(
+    old_manifest: Path, old: dict[str, Any], new_manifest: Path, new: dict[str, Any], receipt: Path
+) -> dict[str, Any]:
+    """Delegate rendering/CAS shape to the reviewed installer, before the CAS."""
+    import closer_native_wrapper_install as install
+
+    restored, _ = install._restored_predecessor(receipt)
+    base = install._guard_source(install._archived_base(restored))
+    wrapper = Path.home() / ".codex/bin/cursor-lane.sh"
+    before = host._read(wrapper)[1]
+    _need(_sha(before) == old["mechanism_contract"]["wrapper"]["sha256"], "old wrapper pin differs")
+    _need(before == install._render(base, old, old_manifest), "old wrapper is not canonical render")
+    after = install._render(base, new, new_manifest)
+    _need(_sha(after) == new["mechanism_contract"]["wrapper"]["sha256"], "new wrapper pin differs")
+    return {"path": str(wrapper), "before_sha256": _sha(before), "after_sha256": _sha(after)}
+
+
+def plan(
+    old_manifest: str | Path,
+    old_state: str | Path,
+    worker_id: str,
+    new_manifest: str | Path,
+    new_state: str | Path,
+    restore_receipt: str | Path,
+    new_worker_config: dict[str, Any],
+    frontier: dict[str, Any],
+    new_release_journal: str | Path,
+) -> dict[str, Any]:
+    """Seal no-ACT old evidence and prepare a new source-owned wrapper CAS."""
+    import closer_native_wrapper_install as install
+
+    candidate_path, old_raw, candidate_old = _object(old_manifest, "old manifest")
+    failed_before_pipeline = (
+        candidate_old.get("candidate_sha") == "dd8d71119b92e15ff85836cc44ad40e20207ac6f"
+    )
+    generic_pre_effect = not failed_before_pipeline and candidate_old.get("candidate_sha") not in {
+        REVIEWED_OLD_CANDIDATE,
+        REVIEWED_CAPACITY_CANDIDATE,
+        REVIEWED_CLOCK_CANDIDATE,
+        REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+        REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+        REVIEWED_PAGINATION_CANDIDATE,
+    }
+    if failed_before_pipeline:
+        old_path, old = candidate_path, candidate_old
+    elif generic_pre_effect:
+        old_path, _validated_old_raw, old = _generic_pre_effect_manifest(old_manifest)
+        _need(_validated_old_raw == old_raw, "old manifest changed during validation")
+    else:
+        old_path, _validated_old_raw, old = _manifest(old_manifest, old=True)
+        _need(_validated_old_raw == old_raw, "old manifest changed during validation")
+    new_path, new_raw, new = _manifest(new_manifest)
+    _need(
+        generic_pre_effect
+        or old.get("candidate_sha")
+        in {
+            REVIEWED_OLD_CANDIDATE,
+            REVIEWED_CAPACITY_CANDIDATE,
+            REVIEWED_CLOCK_CANDIDATE,
+            REVIEWED_OWNERSHIP_BUDGET_CANDIDATE,
+            REVIEWED_SEED_ASSESSMENT_CANDIDATE,
+            REVIEWED_PAGINATION_CANDIDATE,
+            "dd8d71119b92e15ff85836cc44ad40e20207ac6f",
+        },
+        "old release is not reviewed no-ACT predecessor",
+    )
+    _need(
+        # An authenticated pre-effect failure can need fresh operational inputs,
+        # not new source. The forensic/quiescence checks below still apply.
+        generic_pre_effect or old.get("candidate_sha") != new.get("candidate_sha"),
+        "source candidate release is not different",
+    )
+    if old.get("candidate_sha") == new.get("candidate_sha"):
+        _need(
+            old.get("modules") == new.get("modules"),
+            "same-source recovery changed immutable source closure",
+        )
+    release = _installed_release(new_release_journal, new["candidate_sha"])
+    _need(
+        new.get("modules", {}).get(Path(__file__).name) == _sha(Path(__file__).read_bytes()),
+        "new manifest does not pin executing source-upgrade boundary",
+    )
+    reference = (
+        _source_selection_pre_effect_reference(old_path, old_state, worker_id)
+        if generic_pre_effect
+        else _old_reference(old_path, old_state, worker_id)[0]
+    )
+    pagination_preinstruction = old.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE
+    if generic_pre_effect:
+        diagnostic = reference["forensic"]
+    elif failed_before_pipeline:
+        _need(
+            _sha(old_raw) == reference["manifest_sha256"] and old == reference["manifest"],
+            "failed-before-pipeline old manifest changed during reader validation",
+        )
+    _same_identity(old, new)
+    (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old)
+    host._lane_absent()
+    custody = _old_custody_quiet(old)
+    index = fresh_read_native_index(
+        old["policy"]["correction_controller_installation"]["config"], custody
+    )
+    if failed_before_pipeline:
+        diagnostic = {
+            "schema": "failed-before-pipeline-readback/v1",
+            "authority": False,
+            "accepted": False,
+            "retry_authority": False,
+            "result_sha256": reference["result_sha256"],
+            "terminal_sha256": reference["terminal_sha256"],
+            "handoff_sha256": reference["handoff_sha256"],
+        }
+    elif generic_pre_effect:
+        # The sealed forensic reader above is deliberately post-CAS safe.
+        # Do not invoke the literal reviewed-predecessor diagnostic here.
+        _need(
+            diagnostic.get("schema") == "source-selection-pre-effect-forensic/v1"
+            and diagnostic.get("authority") is False,
+            "generic pre-effect diagnostic differs",
+        )
+    elif pagination_preinstruction:
+        # This validates an old-source closure and an immutable failure frame,
+        # but intentionally leaves its uncertain operation and reservations in
+        # place. It is not a completion proof and cannot authorize a replay.
+        _old_module_bytes(old)
+        diagnostic = _pagination_preinstruction_diagnostic(reference)
+        _need(
+            diagnostic.get("pre_instruction_proven") is True
+            and reference["state_sha256"] == _sha(host._read(Path(reference["state_path"]))[1])
+            and reference["result_sha256"] == REVIEWED_PAGINATION_RESULT_SHA256,
+            "pagination old-source diagnostic differs",
+        )
+    else:
+        interpreter = Path(old["mechanism_contract"]["interpreter"]["path"])
+        diagnostic = _old_diagnostic(
+            old_path, Path(reference["state_path"]), worker_id, interpreter=interpreter
+        )
+        _need(
+            diagnostic.get("state_sha256") == reference["state_sha256"],
+            "old diagnostic campaign differs from captured reference",
+        )
+        _need(
+            diagnostic.get("worker_target") == reference["worker"].get("target")
+            and diagnostic.get("source_target")
+            in reference["state"]["worker_config"]["finite_frontier"]["targets"],
+            "old diagnostic scopes differ",
+        )
+        cohort, completed = diagnostic.get("cohort"), diagnostic.get("completed_round")
+        if not all(isinstance(value, dict) for value in (cohort, completed)):
+            raise SourceUpgradeHeld("old diagnostic shape invalid")
+        _diagnostic_no_act(old["candidate_sha"], diagnostic)
+        _incomplete_cohort(cast(dict[str, Any], cohort), cast(dict[str, Any], completed))
+    state = _canonical(new_state)
+    _need(
+        not state.exists()
+        and state.parent == _canonical(new["mechanism_contract"]["campaign_root"]),
+        "new state is not fresh current campaign",
+    )
+    # Freeze the only proposed inputs before CAS. These remain non-authoritative
+    # until the later current-source admission path observes demand again.
+    import closer_frontier_policy as policy
+    import closer_native_readmission as readmission
+
+    try:
+        fresh = policy.validate_frontier(frontier, targets=frontier.get("targets"))
+        old_frontier = policy.validate_frontier(
+            reference["state"]["worker_config"]["finite_frontier"]
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("pre-CAS frontier invalid") from exc
+    cfg = _physical_recipe(
+        reference["state"]["worker_config"],
+        reference["state"],
+        old["policy"],
+        Path(reference["state_path"]),
+        new,
+        new_path,
+        state,
+        fresh,
+    )
+    supplied = json.loads(json.dumps(new_worker_config, sort_keys=True))
+    _need(supplied == cfg, "pre-CAS worker config is not strict old-to-new rebind")
+    new_custody = _inert_new_custody(new, state, custody["highwater"]["anchor"])
+    _need(
+        cfg.get("granularity", "round") == "round"
+        and cfg.get("mechanism") == "native-handoff/v1"
+        and cfg.get("execution_policy") == "finite-frontier/v2"
+        and cfg.get("dispatch_workers") == 1
+        and cfg.get("coordinator_mode") == "resource_scoped"
+        and isinstance(cfg.get("coordinator_contract_pin"), dict),
+        "strict rebind worker modes/coordinator differ",
+    )
+    hooks = cfg.get("native_hooks")
+    _need(
+        isinstance(hooks, dict)
+        and hooks.get("bounded_no_new_relay") is True
+        and isinstance(hooks.get("prerun"), dict)
+        and isinstance(hooks.get("postrun"), dict)
+        and isinstance(hooks.get("lease_module"), dict),
+        "strict rebind native hooks invalid",
+    )
+    readmission._guard_fresh(new, cfg, state, fresh, old_frontier)
+    receipt = _canonical(restore_receipt)
+    wrapper = _wrapper_plan(old_path, old, new_path, new, receipt)
+    _restored, predecessor = install._restored_predecessor(receipt)
+    rows = install._prospective_rows(predecessor, reference, new, state)
+    # The restore predecessor may be historical attempt13 rather than this
+    # stopped worker. Its custody fence cannot stand in for either current
+    # controller namespace.
+    for inspection in (custody, new_custody):
+        writer = str(Path(inspection["identity"]["custody_path"]) / "writer.lock")
+        if not any(row["path"] == writer for row in rows):
+            rows.append({"path": writer, "must_exist": True})
+    rows.sort(key=lambda row: row["path"])
+    result = {
+        "schema": SCHEMA,
+        "authority": False,
+        "eligible": True,
+        "producer_sha256": _sha(Path(__file__).read_bytes()),
+        "old": {
+            "manifest": str(old_path),
+            "manifest_sha256": _sha(old_raw),
+            "state": reference["state_path"],
+            "state_sha256": reference["state_sha256"],
+            "result": reference["result_path"],
+            "result_sha256": reference["result_sha256"],
+            "custody": custody,
+            "native_index": index,
+            "diagnostic": diagnostic,
+            "failed_before_pipeline": failed_before_pipeline,
+            "generic_pre_effect": generic_pre_effect,
+            "worker_id": worker_id,
+        },
+        "new": {
+            "manifest": str(new_path),
+            "manifest_sha256": _sha(new_raw),
+            "state": str(state),
+            "custody": new_custody,
+        },
+        "restore_receipt": {"path": str(receipt), "sha256": _sha(host._read(receipt)[1])},
+        "new_release": release,
+        "held_recipe": {
+            "worker_config": cfg,
+            "worker_config_sha256": _sha(
+                json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode()
+            ),
+            "frontier": fresh,
+            "frontier_sha256": _sha(
+                json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode()
+            ),
+        },
+        "wrapper": wrapper,
+        "locks": rows,
+        "seal": str(_upgrade_path(new, _SEAL_NAME)),
+    }
+    result["plan_sha256"] = _plan_sha(result)
+    return result
+
+
+def apply(
+    old_manifest,
+    old_state,
+    worker_id,
+    new_manifest,
+    new_state,
+    restore_receipt,
+    new_worker_config,
+    frontier,
+    new_release_journal,
+    *,
+    expected_plan_sha256: str,
+) -> dict[str, Any]:
+    """One-way CAS after a sealed intent; it creates no campaign or native work."""
+    import closer_native_wrapper_install as install
+
+    inputs = (
+        old_manifest,
+        old_state,
+        worker_id,
+        new_manifest,
+        new_state,
+        restore_receipt,
+        new_worker_config,
+        frontier,
+        new_release_journal,
+    )
+    first = plan(*inputs)
+    _need(first["plan_sha256"] == expected_plan_sha256, "plan changed")
+    with host._hold(first["locks"]):
+        second = plan(*inputs)
+        _need(second["plan_sha256"] == first["plan_sha256"], "plan changed under locks")
+        new_path = Path(first["new"]["manifest"])
+        _, new_raw, new = _manifest(new_path)
+        _need(_sha(new_raw) == first["new"]["manifest_sha256"], "new manifest changed before CAS")
+        seal = _upgrade_path(new, _SEAL_NAME)
+        _need(str(seal) == first["seal"], "source upgrade seal path differs")
+        intent = _upgrade_path(new, _INTENT_NAME)
+        known_path = _upgrade_path(new, _KNOWN_NAME)
+        _need(
+            not known_path.exists(),
+            "source upgrade already known",
+        )
+        _need(not intent.exists() or seal.exists(), "intent has no pre-CAS seal")
+        # A fully fresh observation root has no supervisor key yet.  Once any
+        # upgrade witness exists, recovery must verify it with the original
+        # key rather than minting or replacing one.
+        if not seal.exists() and not intent.exists():
+            _provision_upgrade_key(new)
+        if seal.exists():
+            _seal_path, _seal_raw, prior_seal = _read_signed_upgrade(
+                seal,
+                new,
+                name=_SEAL_NAME,
+                label="pre-CAS source upgrade seal",
+                manifest_sha256=_sha(new_raw),
+            )
+            _need(
+                prior_seal.get("stage") == "sealed_pre_cas"
+                and _plan_sha(prior_seal) == first["plan_sha256"]
+                and prior_seal.get("plan_sha256") == first["plan_sha256"],
+                "pre-CAS source upgrade records differ",
+            )
+        if intent.exists():
+            _intent_path, _intent_raw, prior_intent = _read_signed_upgrade(
+                intent,
+                new,
+                name=_INTENT_NAME,
+                label="pre-CAS source upgrade intent",
+                manifest_sha256=_sha(new_raw),
+            )
+            _need(
+                prior_intent.get("stage") == "intent"
+                and _plan_sha(prior_intent) == first["plan_sha256"]
+                and prior_intent.get("plan_sha256") == first["plan_sha256"],
+                "pre-CAS source upgrade records differ",
+            )
+        # Both records are immutable, and the seal intentionally precedes CAS:
+        # after the wrapper changes, old native.contract would be circular.
+        sealed = {**first, "stage": "sealed_pre_cas", "at": time.time()}
+        _need(_plan_sha(sealed) == first["plan_sha256"], "plan body differs before seal")
+        wrapper = Path(first["wrapper"]["path"])
+        _need(
+            _sha(host._read(wrapper)[1]) == first["wrapper"]["before_sha256"],
+            "wrapper CAS preimage changed",
+        )
+        # Re-read the archived base through the installer helper; no old
+        # contract is invoked after this point.
+        receipt_path, receipt_raw = host._ref(first["restore_receipt"], "sealed_restore_receipt")
+        _need(
+            _sha(receipt_raw) == first["restore_receipt"]["sha256"],
+            "sealed restore receipt changed",
+        )
+        restored_doc, _ = install._restored_predecessor(receipt_path)
+        data = install._render(
+            install._guard_source(install._archived_base(restored_doc)), new, new_path
+        )
+        _need(_sha(data) == first["wrapper"]["after_sha256"], "wrapper CAS render changed")
+        fd, tmp = tempfile.mkstemp(dir=wrapper.parent, prefix=".source-upgrade-wrapper-")
+        replaced = False
+        phase = "wrapper_readback"
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                fd = -1
+                stream.write(data)
+                stream.flush()
+                os.fchmod(stream.fileno(), 0o755)
+                os.fsync(stream.fileno())
+            # A valid seal without its later intent is recoverable only after
+            # plan() reauthenticates the exact old wrapper and all facts above.
+            # Partial or different existing records are never overwritten.
+            if not seal.exists():
+                host._write_once(seal, _signed_upgrade_record(new, sealed))
+            if not intent.exists():
+                host._write_once(
+                    intent,
+                    _signed_upgrade_record(new, {**first, "stage": "intent", "at": time.time()}),
+                )
+            os.replace(tmp, wrapper)
+            replaced = True
+            directory = os.open(wrapper.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            _need(
+                _sha(host._read(wrapper)[1]) == first["wrapper"]["after_sha256"],
+                "wrapper CAS readback failed",
+            )
+            # Current contract only: old contract is invalid by design now.
+            import closer_native_observer as native
+
+            phase = "native_contract"
+            native.contract(new)
+            phase = "wrapper_entry"
+            native._check_wrapper_entry(new, new_path)
+            # The only permitted post-CAS difference is the canonical wrapper.
+            # Re-read every new module/source pin after replacement.
+            phase = "module_closure"
+            _, verified_raw, verified = _manifest(new_path)
+            _need(
+                _sha(verified_raw) == first["new"]["manifest_sha256"] and verified == new,
+                "new source closure changed after wrapper CAS",
+            )
+            phase = "known_receipt_write"
+            host._write_once(
+                known_path,
+                _signed_upgrade_record(
+                    new,
+                    {**first, "stage": "cas_known", "status": "installed", "at": time.time()},
+                ),
+            )
+            return {**first, "status": "installed"}
+        except Exception as exc:
+            if replaced:
+                raise SourceUpgradeHeld(
+                    "post-CAS outcome uncertain: " + phase + ":" + type(exc).__name__
+                ) from None
+            raise
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                Path(tmp).unlink()
+            except FileNotFoundError:
+                pass
+
+
+def prepare_held(seal_path: str | Path, *, confirm_plan_sha256: str) -> dict[str, Any]:
+    """After CAS, consume a sealed upgrade once into a fresh held campaign.
+
+    This is deliberately a preparation record only.  It cannot issue typed
+    business demand, clear the source initialization hold, or invoke native
+    entry; those remain the current source's later admission boundary.
+    """
+    import closer_campaign as campaign
+    import closer_frontier_policy as policy
+    import closer_native_observer as native
+    import closer_native_readmission as readmission
+
+    # The envelope itself is untrusted until its referenced current manifest
+    # validates.  It is used only to locate that manifest, then immediately
+    # re-read through the existing source closure validator and HMAC domain.
+    candidate_seal, _candidate_raw, candidate_envelope = _object(seal_path, "source upgrade seal")
+    candidate_record = candidate_envelope.get("record")
+    if not isinstance(candidate_record, dict):
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    candidate_new = candidate_record.get("new")
+    if not isinstance(candidate_new, dict):
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    candidate_manifest = candidate_new.get("manifest")
+    if not isinstance(candidate_manifest, str) or not candidate_manifest:
+        raise SourceUpgradeHeld("upgrade seal invalid")
+    new_path = _canonical(candidate_manifest)
+    _, raw, manifest = _manifest(new_path)
+    manifest_sha = _sha(raw)
+    seal, seal_raw, record = _read_signed_upgrade(
+        candidate_seal,
+        manifest,
+        name=_SEAL_NAME,
+        label="source upgrade seal",
+        manifest_sha256=manifest_sha,
+    )
+    _need(
+        record.get("schema") == SCHEMA and record.get("stage") == "sealed_pre_cas",
+        "upgrade seal invalid",
+    )
+    _need(
+        record.get("plan_sha256") == confirm_plan_sha256,
+        "held confirmation differs from sealed upgrade",
+    )
+    _need(_plan_sha(record) == confirm_plan_sha256, "sealed plan body differs from digest")
+    _need(new_path == _canonical(record["new"]["manifest"]), "new manifest differs from seal")
+    known = _upgrade_path(manifest, _KNOWN_NAME)
+    _need(known.exists(), "wrapper CAS is not known")
+    _known_path, _known_raw, known_record = _read_signed_upgrade(
+        known,
+        manifest,
+        name=_KNOWN_NAME,
+        label="source upgrade known receipt",
+        manifest_sha256=manifest_sha,
+    )
+    _need(
+        known_record.get("plan_sha256") == confirm_plan_sha256
+        and _plan_sha(known_record) == confirm_plan_sha256
+        and known_record.get("status") == "installed",
+        "known receipt differs from sealed plan",
+    )
+    destination = _canonical(record["new"]["state"])
+    _need(not destination.exists(), "fresh held campaign already exists")
+    _need(manifest_sha == record["new"]["manifest_sha256"], "new manifest differs from seal")
+    release = _installed_release(record["new_release"]["path"], manifest["candidate_sha"])
+    _need(release == record["new_release"], "new installed release changed")
+    native.contract(manifest)  # current/new contract only, after CAS
+    _need(
+        _sha(host._read(record["wrapper"]["path"])[1]) == record["wrapper"]["after_sha256"],
+        "current wrapper differs from sealed new pin",
+    )
+    problems = campaign.qualify(manifest, new_path.parent)
+    _need(not problems, "new source qualification failed")
+    old_manifest_path = _canonical(record["old"]["manifest"])
+    _old_manifest_path, _old_manifest_raw, old_manifest = _pinned_object(
+        old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
+    )
+    old_state = _canonical(record["old"]["state"])
+    old_result = _canonical(record["old"]["result"])
+    old_worker_id = record["old"].get("worker_id")
+    _need(isinstance(old_worker_id, str), "sealed old worker unavailable")
+    failed_before_pipeline = record["old"].get("failed_before_pipeline") is True
+    generic_pre_effect = record["old"].get("generic_pre_effect") is True
+    if generic_pre_effect:
+        old_reference = _source_selection_pre_effect_reference(
+            old_manifest_path, old_state, old_worker_id
+        )
+    elif failed_before_pipeline:
+        old_reference = _failed_before_pipeline_reference(
+            old_manifest_path, old_state, old_worker_id
+        )
+    else:
+        _old_module_bytes(old_manifest)
+        if old_manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+            old_reference = _sealed_pagination_reference(
+                old_manifest_path, old_state, old_worker_id
+            )
+        else:
+            old_reference = _completed_reference(
+                old_manifest_path,
+                old_state,
+                old_worker_id,
+                manifest_sha256=record["old"]["manifest_sha256"],
+                state_sha256=record["old"]["state_sha256"],
+            )
+    _need(
+        old_reference["result_sha256"] == record["old"]["result_sha256"]
+        and old_reference["state_sha256"] == record["old"]["state_sha256"],
+        "old predecessor changed",
+    )
+    if generic_pre_effect:
+        _need(
+            old_reference.get("forensic") == record["old"].get("diagnostic"),
+            "generic pre-effect forensic evidence changed",
+        )
+    (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(old_manifest)
+    host._lane_absent()
+    inspection = _old_custody_quiet(old_manifest)
+    _need(
+        fresh_read_native_index(
+            old_manifest["policy"]["correction_controller_installation"]["config"], inspection
+        )
+        == record["old"]["native_index"],
+        "native index changed after source upgrade seal",
+    )
+    recipe = record.get("held_recipe")
+    if (
+        not isinstance(recipe, dict)
+        or not isinstance(recipe.get("worker_config"), dict)
+        or not isinstance(recipe.get("frontier"), dict)
+    ):
+        raise SourceUpgradeHeld("sealed held recipe unavailable")
+    cfg_path, _m, _raw, cfg = readmission._new_runtime(new_path, recipe["worker_config"])
+    _need(cfg_path == new_path, "new worker config runtime changed")
+    try:
+        fresh = policy.validate_frontier(
+            recipe["frontier"], targets=recipe["frontier"].get("targets")
+        )
+        _old_state_path, _old_state_raw, old_doc = _pinned_object(
+            old_state, record["old"]["state_sha256"], "old campaign state"
+        )
+        old_frontier = policy.validate_frontier(old_doc["worker_config"]["finite_frontier"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SourceUpgradeHeld("fresh held frontier invalid") from exc
+    _need(
+        _sha(json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode())
+        == recipe.get("worker_config_sha256"),
+        "sealed worker configuration changed",
+    )
+    _need(
+        _sha(json.dumps(fresh, sort_keys=True, separators=(",", ":")).encode())
+        == recipe.get("frontier_sha256"),
+        "sealed frontier changed",
+    )
+    readmission._guard_fresh(manifest, cfg, destination, fresh, old_frontier)
+    # Existing source initialization produces a held record; no demand is
+    # admitted here. A one-use marker prevents a second preparation.
+    marker = seal.with_name("source-upgrade-held-consumed.json")
+    _need(not marker.exists(), "sealed source upgrade already consumed")
+    sealed_locks = record.get("locks")
+    if not isinstance(sealed_locks, list) or not all(isinstance(row, dict) for row in sealed_locks):
+        raise SourceUpgradeHeld("sealed lock closure unavailable")
+    # Campaign.begin takes its own state lock; retain every other old/new/global
+    # fence from the pre-CAS plan across the final evidence reread.
+    rows = [row for row in sealed_locks if row.get("path") != str(destination) + ".lock"]
+    with host._hold(rows):
+        _locked_manifest_path, _locked_manifest_raw, locked_old_manifest = _pinned_object(
+            old_manifest_path, record["old"]["manifest_sha256"], "old manifest"
+        )
+        _need(locked_old_manifest == old_manifest, "old manifest changed under locks")
+        _locked_state_path, _locked_state_raw, old_doc = _pinned_object(
+            old_state, record["old"]["state_sha256"], "old campaign state"
+        )
+        if generic_pre_effect:
+            locked_reference = _source_selection_pre_effect_reference(
+                old_manifest_path, old_state, old_worker_id
+            )
+        elif failed_before_pipeline:
+            locked_reference = _failed_before_pipeline_reference(
+                old_manifest_path, old_state, old_worker_id
+            )
+        else:
+            _old_module_bytes(locked_old_manifest)
+            if locked_old_manifest.get("candidate_sha") == REVIEWED_PAGINATION_CANDIDATE:
+                locked_reference = _sealed_pagination_reference(
+                    old_manifest_path, old_state, old_worker_id
+                )
+            else:
+                locked_reference = _completed_reference(
+                    old_manifest_path,
+                    old_state,
+                    old_worker_id,
+                    manifest_sha256=record["old"]["manifest_sha256"],
+                    state_sha256=record["old"]["state_sha256"],
+                )
+        _need(
+            locked_reference["result_sha256"] == record["old"]["result_sha256"]
+            and locked_reference["state_sha256"] == record["old"]["state_sha256"],
+            "old predecessor changed under locks",
+        )
+        if generic_pre_effect:
+            _need(
+                locked_reference.get("forensic") == record["old"].get("diagnostic"),
+                "generic pre-effect forensic evidence changed under locks",
+            )
+        (_generic_old_native_quiescent if generic_pre_effect else _old_native_terminal)(
+            locked_old_manifest
+        )
+        host._lane_absent()
+        _need(
+            _old_custody_quiet(locked_old_manifest) == inspection,
+            "old custody changed under locks",
+        )
+        _need(
+            _inert_new_custody(manifest, destination, inspection["highwater"]["anchor"])
+            == record["new"]["custody"],
+            "new custody changed under locks",
+        )
+        _need(
+            fresh_read_native_index(
+                locked_old_manifest["policy"]["correction_controller_installation"]["config"],
+                inspection,
+            )
+            == record["old"]["native_index"],
+            "native index changed under locks",
+        )
+        _need(not destination.exists() and not marker.exists(), "fresh held state changed")
+        reference = {
+            "state_path": str(old_state),
+            "state_sha256": record["old"]["state_sha256"],
+            "worker": locked_reference["worker"],
+            "result_path": str(old_result),
+            "result_sha256": record["old"]["result_sha256"],
+            # This is a sealed no-ACT disposition reference, never a fabricated
+            # no-start proof; generic preparation only hashes it for provenance.
+            "proof": {
+                "schema": SCHEMA,
+                "plan_sha256": confirm_plan_sha256,
+                "diagnostic": record["old"]["diagnostic"],
+            },
+        }
+        plan_doc, readmission_sha = readmission._plan(
+            reference, new_path, raw, cfg, destination, fresh
+        )
+        token = readmission._intent_token(plan_doc, readmission_sha)
+        intent = seal.with_name("source-upgrade-readmission-intent.json")
+        known = readmission._recover_or_create(
+            campaign,
+            native,
+            destination,
+            manifest,
+            cfg,
+            fresh,
+            old_doc,
+            readmission_sha,
+            intent,
+            token,
+        )
+        created = campaign.Campaign(destination).read()
+        if created is None:
+            raise SourceUpgradeHeld("known preparation did not create held campaign")
+        host._write_once(
+            marker,
+            {
+                "schema": SCHEMA,
+                "seal_sha256": _sha(seal_raw),
+                "state": str(destination),
+                "revision": created["revision"],
+                "known": str(known),
+                "authority": False,
+            },
+        )
+    return {
+        "status": "fresh_held_prepared",
+        "authority": False,
+        "state": str(destination),
+        "revision": created["revision"],
+        "marker": str(marker),
+    }

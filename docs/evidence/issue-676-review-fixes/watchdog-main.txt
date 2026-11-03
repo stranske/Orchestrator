@@ -1,0 +1,24 @@
+Clean origin/main b5de92e82cdcd675c2a576505a7c2609986670e5
+command: python3 src/tick_watchdog.py --selftest
+exit=1
+Traceback (most recent call last):
+  File "/private/tmp/orch-686-main-853l6r72/repo/src/tick_watchdog.py", line 1112, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/private/tmp/orch-686-main-853l6r72/repo/src/tick_watchdog.py", line 1075, in main
+    return _selftest()
+           ^^^^^^^^^^^
+  File "/private/tmp/orch-686-main-853l6r72/repo/src/tick_watchdog.py", line 1019, in _selftest
+    table = snapshot()
+            ^^^^^^^^^^
+  File "/private/tmp/orch-686-main-853l6r72/repo/src/tick_watchdog.py", line 149, in snapshot
+    out = subprocess.run(
+          ^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.12/subprocess.py", line 548, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/anaconda3/lib/python3.12/subprocess.py", line 1026, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+  File "/opt/anaconda3/lib/python3.12/subprocess.py", line 1953, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+PermissionError: [Errno 1] Operation not permitted: 'ps'

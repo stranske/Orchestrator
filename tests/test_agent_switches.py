@@ -564,12 +564,14 @@ def test_report_and_tick_line_carry_label_policy_and_route_weights_counts(brain)
     )
     summary = agent_switches.summary_for_report(brain)
     policy = (
-        "policy switches 2 on 1 PRs, 1 via route_weights (1 static, 0 unknown), "
+        "policy switches 2 on 1 PRs, 1 via route_weights (0 exploration, 1 static, 0 unknown), "
         "from the keepalive state of 1 PRs (0 unread)"
     )
     lines = agent_switches.render_report_lines(summary)
     assert "(1 label switches; 0 facts missing); " + policy in lines[0]
-    assert "  policy codex->claude: 1 (1 via route_weights, merged 1, bad 0)" in lines
+    assert (
+        "  policy codex->claude: 1 (1 via route_weights, 0 exploration, merged 1, bad 0)" in lines
+    )
     tick = agent_switches.render_tick_line(summary)
     assert (
         tick.startswith("  SWITCHES: 1 of 1 keepalive PRs switched agents by label")

@@ -1,0 +1,20 @@
+{
+  "actual_report_ref": {
+    "bytes": 93085,
+    "path": "/Users/teacher/.codex/handoff/dispatch-logs/sonnet-role-qualification/3684a85ab6fbd09214c56898b42ee63ac6246d6ea741f615310f0c54b5c90cfe.result.json",
+    "sha256": "c99fd22744413a283a737811c5870f4b098e8a6928d6361d8188b1c1d75a0d3b"
+  },
+  "base_commit": "2a5aea7e257c7bae2f2dd729fd0d0245ad62540a",
+  "role_module": {
+    "after_file_sha256": "e8d9170e33aa101ce27f5f70e330340491c88fd8a0cc5b974d3d55748cf4ac2b",
+    "after_module_ast_sha256": "ef739d2322204c833dcdf50147bbdee93a63a6204543aa9ce6da52c1d5d84eaf",
+    "after_registry_ast_sha256": "41b5ecdd8b7444f2af9ebb2f35cec4c0426c265350678d2feac63c609420e140",
+    "before_file_sha256": "741622740e5558a8b9415d52b3a51f6825a73da9fe8b2814ca645981f1949696",
+    "before_module_ast_sha256": "fcb554b54dde4c1304d1dd3607ec43b0ff30dceacbdcc97e4ec61fbd142e7410",
+    "before_registry_ast_sha256": "6ed9dc26ddae7823f719791f83822a40ac6becdc87d5da0e1a4df358728a3c21",
+    "new_qualification_id": "sonnet-current-role-qualification:3684a85ab6fbd09214c56898b42ee63ac6246d6ea741f615310f0c54b5c90cfe",
+    "new_record_ast_sha256": "62ce912f69f292607927d05d8b3f5ab7984284360a957c3aeeba4a34bf07bfad"
+  },
+  "schema": "closer-current-role-renewal-overlay/v1",
+  "scope": "Append only the genuine finite current-role observation; keep every prior record and live selector unchanged."
+}

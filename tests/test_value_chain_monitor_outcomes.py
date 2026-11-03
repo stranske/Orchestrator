@@ -89,6 +89,7 @@ def _consumed(n: int, cap_id: str = CAP, **outcome) -> str:
         source_run_id=f"capability-producer:{cap_id}:{n}",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     if outcome:
         feedback.record_outcome(run, **outcome)
@@ -125,8 +126,9 @@ def _edge(run: str, cap_id: str = CAP) -> tuple:
 def _section(ledger, db=None) -> dict:
     inputs = monitor._brain(db or feedback.DB_PATH, NOW - monitor.WINDOW_DAYS * 86400, NOW)
     inputs["fleet_issues"] = [OPEN_ISSUE]  # role-triage's demand: open issues
-    # offload and role-redirect declare no situation query of their own.
-    inputs["cadence_inputs"] = {"offload": 1, "role-redirect": 1}
+    inputs["stall_targets"] = {"o/r#1"}  # role-redirect's demand: the sweep's actionable stalls
+    # offload declares no situation query of its own.
+    inputs["cadence_inputs"] = {"offload": 1}
     return monitor.report(now=NOW, path=ledger, env={}, inputs=inputs)
 
 
@@ -392,6 +394,7 @@ def test_a_proven_no_delivery_run_is_not_the_outcome_step(brain, verdict):
         source_run_id="capability-producer:research",
         target_run_id=run,
         accepted=True,
+        receipt_ref="fixture:consumed-output",
     )
     feedback.record_outcome(run, adjudicated_verdict=verdict, merged=0, durability="pending")
     row = _row(brain)
