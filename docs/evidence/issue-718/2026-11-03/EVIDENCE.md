@@ -15,8 +15,8 @@ deterministic suite and the new native witness below.
 
 ## Native acceptance (ORCH_PROVISION_NATIVE_ACCEPTANCE=1)
 
-See `pytest-native-acceptance.log` (47 passed). Tests are defined only when the env var is set so
-default CI collection stays at 43 tests.
+See `pytest-native-acceptance.log` (47 passed). Tests are always collected and skip without the env var,
+so default CI collection stays at 43 passed + 4 skipped = 47 collected.
 
 ## Reclaim disabled deliberate break
 

@@ -574,42 +574,46 @@ def test_pgrep_includes_ancestors_on_macos(monkeypatch):
     assert prov._pgrep_base() == ["pgrep"]
 
 
-if os.environ.get("ORCH_PROVISION_NATIVE_ACCEPTANCE") == "1":
+@pytest.mark.provision_native_acceptance
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
+    """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
+    if os.environ.get("ORCH_PROVISION_NATIVE_ACCEPTANCE") != "1":
+        pytest.skip("Native acceptance tests require ORCH_PROVISION_NATIVE_ACCEPTANCE=1")
+    canon, _ = layout
+    branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+    if lane == "opener":
+        git(canon, "branch", branch)
+    holder = hold(layout, branch)
+    wt = provision.provision(TARGET, lane)
+    assert (wt / ".git").is_file()
+    assert git(wt, "branch", "--show-current") == branch
+    assert not holder.exists()
+    assert (
+        f"provision: reclaimed stale worktree {holder} holding {branch}"
+        in capsys.readouterr().out
+    )
+    rows = events()
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "reclaimed"
+    assert rows[0]["cause"] == "branch-held"
+    assert rows[0]["holder_path"] == str(holder)
 
-    @pytest.mark.provision_native_acceptance
-    @pytest.mark.parametrize("lane", ["closer", "opener"])
-    def test_native_clean_idle_holder_is_reclaimed(layout, lane, capsys):
-        """Unmocked process probes on the dispatcher host; ledger isolated by conftest."""
-        canon, _ = layout
-        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
-        if lane == "opener":
-            git(canon, "branch", branch)
-        holder = hold(layout, branch)
-        wt = provision.provision(TARGET, lane)
-        assert (wt / ".git").is_file()
-        assert git(wt, "branch", "--show-current") == branch
-        assert not holder.exists()
-        assert (
-            f"provision: reclaimed stale worktree {holder} holding {branch}"
-            in capsys.readouterr().out
-        )
-        rows = events()
-        assert len(rows) == 1
-        assert rows[0]["outcome"] == "reclaimed"
-        assert rows[0]["cause"] == "branch-held"
-        assert rows[0]["holder_path"] == str(holder)
 
-    @pytest.mark.provision_native_acceptance
-    @pytest.mark.parametrize("lane", ["closer", "opener"])
-    def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
-        canon, _ = layout
-        branch = "pr-head" if lane == "closer" else OPENER_BRANCH
-        if lane == "opener":
-            git(canon, "branch", branch)
-        holder = hold(layout, branch)
-        monkeypatch.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
-        with pytest.raises(subprocess.CalledProcessError) as caught:
-            provision.provision(TARGET, lane)
-        assert caught.value.returncode == 128
-        assert str(holder) in (caught.value.stderr or "")
-        assert holder.exists()
+@pytest.mark.provision_native_acceptance
+@pytest.mark.parametrize("lane", ["closer", "opener"])
+def test_native_reclaim_disabled_exit_128_names_holder(layout, lane, monkeypatch):
+    """Capture git exit 128 when reclaim is disabled and holder path is visible."""
+    if os.environ.get("ORCH_PROVISION_NATIVE_ACCEPTANCE") != "1":
+        pytest.skip("Native acceptance tests require ORCH_PROVISION_NATIVE_ACCEPTANCE=1")
+    canon, _ = layout
+    branch = "pr-head" if lane == "closer" else OPENER_BRANCH
+    if lane == "opener":
+        git(canon, "branch", branch)
+    holder = hold(layout, branch)
+    monkeypatch.setattr(provision, "_reclaim_branch_holder", lambda *args, **kwargs: None)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        provision.provision(TARGET, lane)
+    assert caught.value.returncode == 128
+    assert str(holder) in (caught.value.stderr or "")
+    assert holder.exists()
