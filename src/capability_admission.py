@@ -102,7 +102,20 @@ GRANDFATHERED_BEFORE = 1787270400  # 2026-08-21T00:00:00Z, the day this gate lan
 # a permanent exemption look like a temporary one — the same shape as a bounded trial that quietly
 # became permanent. So an expiry must also be within MAX_WAIVER_DAYS.
 MAX_WAIVER_DAYS = 90
-WAIVERS: dict[str, dict] = {}
+WAIVERS: dict[str, dict] = {
+    "closer-core": {
+        "expires": 1794268800,  # 2026-11-10T00:00:00Z; fixed, never renewed by loading
+        "reason": (
+            "Local external entrypoint: the audit only scans in-tree drivers or sibling CI "
+            "workflows. The real caller is ~/.codex/automations/"
+            "reviewed-repo-automation-controller/controller.py:start_closer_core, once per "
+            "15-minute tick. Its heartbeat source is ~/.codex/orchestrator/closer-core/"
+            "rounds.jsonl, one line per round, already consumed by value_chain_monitor. "
+            "Only caller_exists/heartbeat proof is unrecognized; remove this waiver when "
+            "the audit can verify those external sources. The core and controller stay running."
+        ),
+    },
+}
 
 
 def waiver_problems() -> list[str]:
@@ -1478,9 +1491,10 @@ def _selftest() -> None:
         assert all(not r["enforced"] for r in legacy_rows), "legacy rows must not block the suite"
 
     # A waiver must EXPIRE. An exception with no end date is how "temporary" became a month.
+    waiver_targets = set(ledger) | set(capabilities.declared_row_ids())
     for cid, waiver in WAIVERS.items():
         assert "expires" in waiver and "reason" in waiver, f"waiver for {cid} needs expiry+reason"
-        assert cid in ledger, f"waiver names unknown capability {cid}"
+        assert cid in waiver_targets, f"waiver names unknown capability {cid}"
 
     # COMMITMENTS: the real historical failure must be detected, not hypothetically detectable.
     # The LIVE verdict is asserted in test_capability_admission.test_dated_promises_left_an_artifact
