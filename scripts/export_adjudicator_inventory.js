@@ -149,6 +149,64 @@ function retainedTruth(attempt, location) {
     independent_truth_verified: false, next_evidence_step: nextStep };
 }
 
+// Explain the generic Python _row_metadata_only floor from packet contents.
+// This is not the native projection's admission rule: even a complete packet
+// must still have its native receipt and independent truth authenticated.
+function packetEvidence(attempt, location) {
+  const packet = attempt.packet;
+  const packetLocation = `${location}.packet`;
+  const reasons = [];
+  const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const nonblank = (value) => typeof value === 'string' && Boolean(value.trim());
+  // JSON truth values follow Python here, including empty lists/dicts. A
+  // string such as "false" remains truthy and cannot clear a truncation flag.
+  const pythonTruthy = (value) => object(value) ? Object.keys(value).length > 0
+    : Array.isArray(value) ? value.length > 0 : Boolean(value);
+  const add = (code, field) => reasons.push({ code, location: field });
+  const ground = object(packet) ? packet.ground_truth_evidence : null;
+  const groundLocation = `${packetLocation}.ground_truth_evidence`;
+  if (!object(packet)) {
+    add('packet_missing_or_invalid', packetLocation);
+  } else if (!object(ground)) {
+    add('ground_truth_evidence_missing_or_invalid', groundLocation);
+  } else {
+    // _row_metadata_only refuses serialized qualification even when the diff
+    // and criteria are complete. Presence matters, including a null value.
+    if (Object.hasOwn(ground, 'qualification')) {
+      add('serialized_qualification_not_native_admission', `${groundLocation}.qualification`);
+    }
+    const patch = ground.diff_patch;
+    const patchLocation = `${groundLocation}.diff_patch`;
+    if (!object(patch)) {
+      add('diff_patch_not_recorded', patchLocation);
+    } else {
+      if (!nonblank(patch.text)) add('diff_patch_text_missing_or_invalid', `${patchLocation}.text`);
+      if (!nonblank(patch.revision)) {
+        add('diff_patch_revision_missing_or_invalid', `${patchLocation}.revision`);
+      }
+      if (pythonTruthy(patch.truncated)) add('diff_patch_truncated', `${patchLocation}.truncated`);
+    }
+    const criteria = ground.acceptance_criteria;
+    if (!Array.isArray(criteria) || !criteria.length) {
+      add('acceptance_criteria_missing_or_invalid', `${groundLocation}.acceptance_criteria`);
+    } else {
+      criteria.forEach((item, index) => {
+        if (!object(item) || !nonblank(item.text) || !nonblank(item.revision)) {
+          add('acceptance_criterion_text_or_revision_missing_or_invalid',
+            `${groundLocation}.acceptance_criteria[${index}]`);
+        }
+      });
+    }
+  }
+  return { status: reasons.length ? 'metadata_only' : 'complete_packet_unverified',
+    floor_applies: reasons.length > 0, blocking_reasons: reasons,
+    location: packetLocation, json_value_sha256: packet === undefined ? null
+      : createHash('sha256').update(JSON.stringify(packet)).digest('hex'),
+    native_admission_verified: false,
+    next_evidence_step: reasons.length ? 'recover_packet_evidence_before_any_retry'
+      : 'authenticate_native_admission_without_redispatch' };
+}
+
 // These observations describe saved fields, never a freshly validated result.
 // Error prose can include private provider material. Bind it by JSON-value hash
 // and location so recovery can inspect the original without publishing the text.
@@ -187,6 +245,7 @@ function attemptObservation(attempt, caseId, location) {
     backend_run_id: attempt.backend_run_id ?? null,
     retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
     later_truth_observation: retainedTruth(attempt, location),
+    packet_evidence_observation: packetEvidence(attempt, location),
     failure_fields: failureFields, next_evidence_step: nextStep,
     ...retainedBreaks(attempt, location, (binary || abstained) && runFailed) };
 }

@@ -321,6 +321,22 @@
       "original_retry_manifest_recovered": false,
       "task_checkboxes_newly_verified_complete": 0,
       "limitation": "Retained truth diagnostics only. Missing and UNKNOWN truth are not retry permission; binary values are not authenticated independent truth or grades."
+    },
+    "packet_floor_followup": {
+      "checked_at": "2026-11-03T23:15:26.334842+00:00",
+      "source_commit": "b2151b6912b8c36e76013fb36d186b1f2fa67557",
+      "source_parent": "8bef6a28fce7b4eecbaa3fc08016d7bb505742b5",
+      "plan": "packet-floor-followup/plan.md",
+      "checks": "packet-floor-followup/acceptance-run/checks.json",
+      "validation": "packet-floor-followup/validation.json",
+      "historical_acquisition": "packet-floor-followup/historical-acquisition.json",
+      "required_tests_passed": false,
+      "authenticated_outcomes_verified": false,
+      "original_retry_manifest_recovered": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Fixture-verified packet floor diagnostics with production rule comparison. Historical field counts only; no new CLI execution on original report bytes, original retry identities, authenticated receipt, current truth or canonical grade.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never"
     }
   },
   "mirror_synchronization": [

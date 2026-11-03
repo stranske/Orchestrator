@@ -1,5 +1,15 @@
 # Acceptance evidence recovery for #1096
 
+## Packet evidence floor diagnostics, 2026-11-03 UTC
+
+The retained-report inventory now explains packet content gaps per attempt,
+including missing or clipped diffs, missing criteria and serialized qualification.
+All 119 focused checks pass, including parity against the Python floor across
+37 packet shapes. Required pytest execution still fails before collection.
+[Results and limitations](packet-floor-followup/results.md) preserve the plan,
+revision-bound failed commands, historical field counts and source/test hashes.
+Original retry reconciliation and operational acceptance remain incomplete.
+
 ## Per-attempt native receipt locators, 2026-11-03 UTC
 
 The report inventory now matches each retained attempt to native receipt

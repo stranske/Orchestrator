@@ -36,6 +36,120 @@ function retainedReport(t) {
     evidenceClass: 'historical_snapshot', evidenceReference: 'retained-source-reference' } };
 }
 
+function completePacket() {
+  return { metadata_only: true, ground_truth_evidence: {
+    diff_patch: { revision: 'evaluated-merge', text: 'private diff contents' },
+    acceptance_criteria: [{ revision: 'issue-revision', text: 'private criterion text' }],
+  } };
+}
+
+test('packet floor diagnostics match the production rule without trusting saved flags', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const packets = [undefined, null, 'invalid', [], {}, { ground_truth_evidence: [] },
+    { ground_truth_evidence: {} }, completePacket()];
+  for (const [field, values] of [
+    ['diff_patch', [undefined, null, [], {}, { text: 'patch' },
+      { revision: 'head', text: ' ' }, { revision: ' ', text: 'patch' }]],
+    ['acceptance_criteria', [undefined, null, {}, [], [null], ['criterion'], [{}],
+      [{ revision: 'head', text: ' ' }], [{ revision: ' ', text: 'criterion' }]]],
+  ]) {
+    for (const value of values) {
+      const packet = completePacket();
+      packet.ground_truth_evidence[field] = value;
+      packets.push(packet);
+    }
+  }
+  for (const truncated of [true, false, 1, 0, '', 'false', [], {}, [false]]) {
+    const packet = completePacket();
+    packet.ground_truth_evidence.diff_patch.truncated = truncated;
+    packets.push(packet);
+  }
+  for (const qualification of [null, false, {}, { persisted_admission: true }]) {
+    const packet = completePacket();
+    packet.ground_truth_evidence.qualification = qualification;
+    packets.push(packet);
+  }
+  saved.rows = packets.map((packet, index) => ({ case_id: `case-${index}`,
+    target: `owner/repo#${index}`, packet, metadata_only: false,
+    native_projection: { graded: 29 }, decision: 'reject_blocker', later_truth: 'PASS' }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const reference = execute(root, process.env.PYTHON || 'python3', ['-c', `
+import json, sys
+import adjudicator_retro as retro
+with open(sys.argv[1]) as stream:
+    rows = json.load(stream)["rows"]
+print(json.dumps([retro._row_metadata_only(row) for row in rows]))
+`, options.report]);
+  assert.equal(reference.status, 0, reference.stderr);
+  const result = reportInventory(options);
+  assert.deepEqual(result.retained_attempt_observations.map((row) =>
+    row.packet_evidence_observation.floor_applies), JSON.parse(reference.stdout));
+  assert.equal(result.retained_attempt_observations[7].packet_evidence_observation.status,
+    'complete_packet_unverified');
+  for (const row of result.retained_attempt_observations) {
+    assert.equal(row.packet_evidence_observation.native_admission_verified, false);
+    assert.equal(row.packet_evidence_observation.floor_applies,
+      row.packet_evidence_observation.blocking_reasons.length > 0);
+  }
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(Object.hasOwn(result, 'graded'), false);
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
+test('packet diagnostics identify missing and clipped evidence separately on parent and retries', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const clipped = completePacket();
+  clipped.ground_truth_evidence.diff_patch.truncated = true;
+  const counts = { metadata_only: false, ground_truth_evidence: {
+    diff_summary: 'private counts', gate_runs: ['private status'],
+  } };
+  saved.rows = [{ case_id: 'case-a', target: 'owner/repo#1', packet: completePacket(),
+    retry_attempts: [{ packet: clipped, retry_attempts: [{ packet: counts }] }, {}] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const before = fs.readFileSync(options.report);
+  const files = fs.readdirSync(root);
+  const result = reportInventory(options);
+  const observed = result.retained_attempt_observations.map((row) => row.packet_evidence_observation);
+  assert.deepEqual(observed.map((row) => row.blocking_reasons.map((reason) => reason.code)), [
+    [], ['diff_patch_truncated'], ['diff_patch_not_recorded', 'acceptance_criteria_missing_or_invalid'],
+    ['packet_missing_or_invalid'],
+  ]);
+  assert.equal(observed[1].blocking_reasons[0].location,
+    'rows[0].retry_attempts[0].packet.ground_truth_evidence.diff_patch.truncated');
+  assert.equal(observed[0].location, 'rows[0].packet');
+  assert.equal(observed[0].json_value_sha256,
+    createHash('sha256').update(JSON.stringify(saved.rows[0].packet)).digest('hex'));
+  assert.equal(observed[3].json_value_sha256, null);
+  assert.equal(observed[2].next_evidence_step, 'recover_packet_evidence_before_any_retry');
+  assert.equal(observed[0].next_evidence_step, 'authenticate_native_admission_without_redispatch');
+  assert.deepEqual(fs.readFileSync(options.report), before);
+  assert.deepEqual(fs.readdirSync(root), files);
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
+test('report CLI carries packet floor locators through unique requested-row reconciliation', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const identity = { run_id: 'original', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  const packet = completePacket();
+  packet.ground_truth_evidence.qualification = { persisted_admission: true };
+  saved.rows = [{ ...identity, case_id: 'original-case', packet }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity], 2);
+  const result = execute(root, process.execPath, [script, '--report', options.report,
+    '--observed-at', String(now), '--evidence-class', options.evidenceClass,
+    '--evidence-reference', options.evidenceReference, '--manifest', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  const observation = report.retained_attempt_observations[0].packet_evidence_observation;
+  assert.deepEqual(observation.blocking_reasons, [{ code: 'serialized_qualification_not_native_admission',
+    location: 'rows[0].packet.ground_truth_evidence.qualification' }]);
+  assert.deepEqual(report.manifest_reconciliation.cases[0].retained_attempt_locations, ['rows[0]']);
+  assert.equal(report.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.equal(report.requested_cohort_verified, false);
+  assert.equal(report.dispatch_authorized, false);
+});
+
 test('report recovery preserves ordered rows, recursive paid history and conflicting counts', (t) => {
   const { root, options } = retainedReport(t);
   const before = fs.readFileSync(options.report);
