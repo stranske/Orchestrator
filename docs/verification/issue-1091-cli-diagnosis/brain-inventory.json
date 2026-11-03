@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "scope": "observed_brain_window",
+  "database": "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+  "observed_at": 1793726565,
+  "days": 90,
+  "cutoff_inclusive": 1785950565,
+  "upper_time_bound": null,
+  "expected_count": 71,
+  "status": "unavailable",
+  "population_count": null,
+  "included_count": null,
+  "excluded_count": null,
+  "orphaned_outcome_count": null,
+  "count_delta": null,
+  "requested_cohort_verified": false,
+  "manifest_reconciliation": null,
+  "cases": null,
+  "exclusions": null,
+  "evidence_gaps": [
+    {
+      "kind": "requested_cohort_unverified",
+      "detail": "This window snapshot is not bound to the original requested case manifest; count equality alone cannot verify the cohort."
+    },
+    {
+      "kind": "brain_unavailable",
+      "detail": "unable to open database file"
+    }
+  ]
+}

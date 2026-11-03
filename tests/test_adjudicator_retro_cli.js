@@ -837,7 +837,10 @@ print(json.dumps({
     assert.ok(call.args[1].includes('gate-run'));
     assert.equal(call.kwargs.isolate, true, 'retrospective transport must isolate execution');
     assert.equal(call.kwargs.mode, 'full');
-    assert.equal(call.kwargs.timeout, 180);
+    // #609 unified the retrospective and role budgets at 600 seconds. Keep
+    // checking both the transport and persisted receipt against that contract.
+    assert.equal(call.kwargs.timeout, 600);
+    assert.equal(result.second.rows[index].dispatch_timeout_s, 600);
     assert.equal(call.kwargs.cwd, path.dirname(path.join(
       w.root, 'state/capability-program/adjudicator-retro.json',
     )));
@@ -1181,6 +1184,7 @@ print(json.dumps({"first": first, "second": second, "resumed": resumed,
     cost_usd: 4.75, cost_measured_cases: 4, cost_per_case: 1.1875,
     cost_attempted_cases: 4, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
     cost_scale: 'list_price_usd', estimated_cost_usd: 4.75,
+    retry_pending: 2, advice_graded: 0, advice_agree: 0, advice_disagree: 0,
   });
   assert.deepEqual(report.proposal_comparison, {
     evidence_basis: 'raw_metadata_proposals', cases: 4, proposed_decisions: 2,
@@ -1614,6 +1618,7 @@ test('retro CLI preserves raw proposals without grading metadata and refreshes m
     cost_usd: 4.5, cost_measured_cases: 4, cost_per_case: 1.125,
     cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 1,
     cost_scale: 'list_price_usd', estimated_cost_usd: 4.5,
+    retry_pending: 2, advice_graded: 0, advice_agree: 0, advice_disagree: 0,
   });
   const report = w.report();
   assert.deepEqual(report.proposal_comparison, {
@@ -1659,7 +1664,8 @@ print(json.dumps({"line": line, "rendered": rendered}))
 `]);
   assert.equal(line, 'adjudicator shadow: cases 6, agree 0, disagree 0, cost 4.5 '
     + '(graded 0; costs measured 4; cost measured 4 of 5, imputed 0, unmeasured 1; '
-    + 'estimated accounted USD 4.5; scale list_price_usd)');
+    + 'estimated accounted USD 4.5; scale list_price_usd; '
+    + 'retry pending 2; advice graded 0 (agree 0, disagree 0))');
   assert.equal(rendered.split('\n').filter((text) => text === line).length, 1);
 });
 
@@ -1739,6 +1745,7 @@ import feedback
 import roles
 import runtime_ac_gate
 import switch_review
+import feature_goals
 
 path = retro.report_path()
 path.parent.mkdir(parents=True)
@@ -1779,6 +1786,7 @@ with ExitStack() as stack:
         "held_off": [], "on_but_idle": [],
     }))
     stack.enter_context(patch.object(runtime_ac_gate, "shadow_summary", return_value=None))
+    stack.enter_context(patch.object(runtime_ac_gate, "post_merge_summary", return_value=None))
     for name, value in {
         "stale_runners": [], "adversarial_shape_population": {},
         "mirror_drift": {"status": "ok"}, "fleet_gates": {},
@@ -1799,7 +1807,13 @@ with ExitStack() as stack:
         else:
             path.write_text(payload)
         before = snapshot()
-        report = switch_review.review(now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"})
+        # The goals reporter intentionally persists its own history (#678).
+        # Isolate that unrelated producer using review's existing reader seam;
+        # keep the adjudicator reader, renderer and write prohibitions real.
+        report = switch_review.review(
+            now=1800000000, env={"ORCH_VALUE_CHAIN_MONITOR": "0"},
+            feature_goals_fn=lambda stamp: feature_goals.drift([], stamp),
+        )
         rendered = switch_review.format_report(report)
         assert snapshot() == before, "weekly review changed saved state"
         assert all(mock.call_count == 0 for mock in forbidden), "weekly review replayed evidence"
@@ -1811,16 +1825,20 @@ print(json.dumps(results))
   const knownLines = {
     measured: 'adjudicator shadow: cases 4, agree 2, disagree 1, cost 1.25 '
       + '(graded 3; costs measured 4; cost measured 4 of 4, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
+      + 'estimated accounted USD UNMEASURED; scale list_price_usd; '
+      + 'retry pending UNKNOWN; advice graded UNKNOWN)',
     measured_zero: 'adjudicator shadow: cases 1, agree 0, disagree 0, cost 0 '
       + '(graded 0; costs measured 1; cost measured 1 of 1, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD 0; scale list_price_usd)',
+      + 'estimated accounted USD 0; scale list_price_usd; '
+      + 'retry pending 1; advice graded 0 (agree 0, disagree 0))',
     partial_cost: 'adjudicator shadow: cases 3, agree 0, disagree 0, cost 1.25 '
       + '(graded 0; costs measured 2; cost measured 2 of 2, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD 1.25; scale list_price_usd)',
+      + 'estimated accounted USD 1.25; scale list_price_usd; '
+      + 'retry pending 1; advice graded 0 (agree 0, disagree 0))',
     unmeasured: 'adjudicator shadow: cases 0, agree 0, disagree 0, cost UNKNOWN '
       + '(graded 0; costs measured 0; cost measured 0 of 0, imputed 0, unmeasured 0; '
-      + 'estimated accounted USD UNMEASURED; scale list_price_usd)',
+      + 'estimated accounted USD UNMEASURED; scale list_price_usd; '
+      + 'retry pending UNKNOWN; advice graded UNKNOWN)',
   };
   for (const result of results) {
     const expected = knownLines[result.fixture]
@@ -1855,6 +1873,7 @@ print(json.dumps(True))
     cost_usd: 5.25, cost_measured_cases: 5, cost_per_case: 1.05,
     cost_attempted_cases: 5, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
     cost_scale: 'list_price_usd', estimated_cost_usd: 5.25,
+    retry_pending: 2, advice_graded: 0, advice_agree: 0, advice_disagree: 0,
   });
   assert.deepEqual(w.report().summary, summary);
   assert.deepEqual(w.report().proposal_comparison, {
@@ -2311,6 +2330,7 @@ test('retro CLI publishes an empty report without inventing agreement or cost', 
     cost_usd: null, cost_measured_cases: 0, cost_per_case: null,
     cost_attempted_cases: 0, cost_imputed_cases: 0, cost_unmeasured_cases: 0,
     cost_scale: 'list_price_usd', estimated_cost_usd: null,
+    retry_pending: 0, advice_graded: 0, advice_agree: 0, advice_disagree: 0,
   });
   assert.deepEqual(w.report().summary, summary);
   assert.deepEqual(w.report().rows, []);

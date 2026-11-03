@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "scope": "partial_cli_diagnosis_with_test_repairs",
+  "parent_revision": "4cd67511ae44bc7038d7e01de5feda5a63f06419",
+  "test": {
+    "path": "tests/test_adjudicator_retro_cli.js",
+    "before_sha256": "2b2eea6b16fae226639cda30498f716bc0f95441518eb97f868e8f81a2badd6f",
+    "after_sha256": "af32e2140633b299898a3da945c7ec143ecdc98326f9753b84cccfd6e851dcc6"
+  },
+  "unchanged_production_sha256": {
+    "src/adjudicator_retro.py": "ee172f96ddf0ca56f6c06fcf18bdaacccece5381de61a9896006d0b16a8fb0b8",
+    "src/feedback.py": "eafa930ec4cea9a239bc03a91a00b2ca7c618c40629690658f8276417946412d",
+    "src/verifier_evidence.py": "19b2342b6d9b4d097f6fef6b76089f54903dfbe36946dac6fa7467dec3afff59",
+    "src/switch_review.py": "7ec3abaaf7a0622e6ba7ad50635a6eb6c4a8ae9be90b1ebc792c74fe326ba6b9"
+  },
+  "command": "node tests/test_adjudicator_retro_cli.js",
+  "baseline": {
+    "tests": 67,
+    "passed": 51,
+    "failed": 16,
+    "exit_code": 1
+  },
+  "after": {
+    "tests": 67,
+    "passed": 57,
+    "failed": 10,
+    "exit_code": 1
+  },
+  "newly_passing": 6,
+  "failures": [
+    {
+      "test": "retro dispatch records shadow roles without writing outcomes (newest PR #1)",
+      "baseline": "failed",
+      "after": "passed",
+      "diagnosis": "obsolete_timeout_expectation",
+      "resolution": "Merged #609 requires 600 seconds; assert transport timeout and persisted dispatch_timeout_s."
+    },
+    {
+      "test": "retro replays each persisted dispute on the same PR (newest run 1)",
+      "baseline": "failed",
+      "after": "passed",
+      "diagnosis": "obsolete_timeout_expectation",
+      "resolution": "Merged #609 requires 600 seconds; assert transport timeout and persisted dispatch_timeout_s."
+    },
+    {
+      "test": "retro dispatch records shadow roles without writing outcomes (newest PR #2)",
+      "baseline": "failed",
+      "after": "passed",
+      "diagnosis": "obsolete_timeout_expectation",
+      "resolution": "Merged #609 requires 600 seconds; assert transport timeout and persisted dispatch_timeout_s."
+    },
+    {
+      "test": "retro replays each persisted dispute on the same PR (newest run 2)",
+      "baseline": "failed",
+      "after": "passed",
+      "diagnosis": "obsolete_timeout_expectation",
+      "resolution": "Merged #609 requires 600 seconds; assert transport timeout and persisted dispatch_timeout_s."
+    },
+    {
+      "test": "retro bounded batches count paid abstentions and invalid responses outside agreement rates",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "retro collects complete gate pages before shadow dispatch: numeric-run-order",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "finding_selection_history_equality",
+      "resolution": "UNRESOLVED: full-PR and single-comment decisions have different _lifecycle_history arrays; both tests stop before pagination with merge-bound verifier finding comment unavailable. Not evidence of lexicographic ordering."
+    },
+    {
+      "test": "retro collects complete gate pages before shadow dispatch: numeric-attempt-order",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "finding_selection_history_equality",
+      "resolution": "UNRESOLVED: full-PR and single-comment decisions have different _lifecycle_history arrays; both tests stop before pagination with merge-bound verifier finding comment unavailable. Not evidence of lexicographic ordering."
+    },
+    {
+      "test": "retro CLI preserves raw proposals without grading metadata and refreshes measured costs",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "switch review reads and renders saved adjudicator evidence without replay or writes",
+      "baseline": "failed",
+      "after": "passed",
+      "diagnosis": "unrelated_producers_and_obsolete_line_schema",
+      "resolution": "Isolate feature-goals persistence and runtime-AC post-merge reader; keep actual adjudicator reader, renderer, snapshots and forbidden-call checks. Assert retry/advice fields."
+    },
+    {
+      "test": "retro CLI reuses saved cases when later durability and costs arrive",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "retro CLI refreshes late abstention costs after its outcome leaves the Brain",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "retro CLI refreshes late invalid-response costs without grading or redispatch",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "retro CLI withdraws stale costs without changing the comparison cohort",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "retro CLI compares both rules on the same cases with mixed merge dispositions",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    },
+    {
+      "test": "retro CLI publishes an empty report without inventing agreement or cost",
+      "baseline": "failed",
+      "after": "passed",
+      "diagnosis": "obsolete_summary_schema",
+      "resolution": "Assert retry_pending and advice_* keys from #610 and #636; retain unknown rates/costs."
+    },
+    {
+      "test": "retro CLI removes stale comparisons until durability is judged again",
+      "baseline": "failed",
+      "after": "failed",
+      "diagnosis": "inconsistent_zero_cost_readers",
+      "resolution": "UNRESOLVED: measured_cost accepts complete-source zero; role_cost_report requires >0 and report persistence replaces it with null. Preserve the failing cost/denominator assertions; no new billing policy inferred."
+    }
+  ],
+  "related_checks": [
+    {
+      "command": "node tests/test_adjudicator_completion.js",
+      "passed": 7
+    },
+    {
+      "command": "node tests/test_adjudicator_inventory.js",
+      "passed": 26
+    },
+    {
+      "command": "node tests/test_adjudicator_receipts.js",
+      "passed": 9,
+      "scope": "historical_receipts_only"
+    },
+    {
+      "command": "PYTHONPATH=src python3 -m unittest discover -s tests -p test_adjudicator_retro_evidence.py",
+      "passed": 11
+    },
+    {
+      "command": "PYTHONPATH=src python3 src/adjudicator_retro.py --selftest",
+      "passed": 23,
+      "unit": "checks"
+    },
+    {
+      "command": "node --check tests/test_adjudicator_retro_cli.js",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "logs_sha256": {
+    "baseline.log": "09487b3cf20c9850e9e4eef379346e04cdb36023924f3d2159312592e5397ee5",
+    "after.log": "75dfb203ee12f75318b6f5520fc5143165af9baa30625539891c2f18727852e6",
+    "numeric-diagnosis.log": "febe5b82d499ad114a1df06dccbe9097572ef8df46213021b961eb3379b7a604",
+    "cost-readers.json": "f59b75aae3f56d8519fae4caa6b67bfb4143361af2d5433e66dc9cd14f6ed57b",
+    "brain-inventory.json": "1ff69b2da895a660a66e88a602c0b08a62902de575c116ea24b4aec694365735"
+  },
+  "blockers": [
+    "Original authenticated cohort manifest unavailable; historical aggregate counts do not establish membership.",
+    "Default Brain unavailable; no real replay or closer observation.",
+    "Black and pytest absent; temporary package installation failed. Python repairs and fresh named pytest controls remain pending.",
+    "Connector mutations require approval but policy is never; metadata updates, comment and label rejected.",
+    "Checkout Git metadata is read-only; separate commit metadata under /tmp/1091-cli-delivery."
+  ],
+  "pr_observation": {
+    "number": 1092,
+    "initial_state": "open",
+    "isDraft": false,
+    "final_state": "closed",
+    "merged": true,
+    "merged_at": "2026-11-03T17:21:37Z",
+    "head_sha": "4cd67511ae44bc7038d7e01de5feda5a63f06419",
+    "merged_by_this_run": false
+  },
+  "operational_acceptance_complete": false,
+  "cli_resolution_task_complete": false,
+  "task_checkboxes_completed": [],
+  "python_source_changed": false,
+  "fresh_named_pytest_attempt": {
+    "exit_code": 1,
+    "error": "No module named pytest"
+  },
+  "required_named_mutations_performed": false,
+  "raw_logs_sha256": {
+    "baseline.log": "8cda9799cb9f131fe2e9018ed6aa3d915919fc8212d5e155bbf617777ef22bf7",
+    "after.log": "d672ede0cf8aa599577434ad11bcf3cca594d2459779213b488550d51c7df1cc",
+    "numeric-diagnosis.log": "febe5b82d499ad114a1df06dccbe9097572ef8df46213021b961eb3379b7a604"
+  },
+  "log_normalization": "Trailing horizontal whitespace removed from retained test transcripts; raw hashes retained separately."
+}

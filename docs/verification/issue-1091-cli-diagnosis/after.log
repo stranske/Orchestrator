@@ -1,0 +1,378 @@
+✔ adjudicator validator distinguishes recommendation prose from mutation commands (395.679786ms)
+✔ adjudicator prose validation retains every forbidden terminal and mutating key (301.35488ms)
+✔ collection CLI preserves exact empty artifact bytes and provenance (414.193989ms)
+✔ collection CLI preserves exact unicode artifact bytes and provenance (408.054625ms)
+✔ collection CLI preserves exact CRLF artifact bytes and provenance (409.529993ms)
+✔ collection CLI preserves exact executable without final newline artifact bytes and provenance (400.851278ms)
+✔ collection CLI preserves exact embedded NUL artifact bytes and provenance (404.961463ms)
+✔ collection CLI reports every unresolved inventory slot alongside collected bytes (434.507667ms)
+✔ collection CLI rejects inventory claims that forge artifact provenance or completeness (392.336699ms)
+✔ collection CLI leaves failed acceptance and inventory exhaustiveness unassessed (396.115145ms)
+✔ dispute inventory preserves every synthetic case and excludes ineligible Brain rows read-only (360.196167ms)
+✔ dispute inventory distinguishes unavailable evidence from an empty Brain: missing (312.719373ms)
+✔ dispute inventory distinguishes unavailable evidence from an empty Brain: schema-less (318.884292ms)
+✔ dispute inventory distinguishes unavailable evidence from an empty Brain: empty (345.065148ms)
+✔ retro dispatch records shadow roles without writing outcomes (newest PR #1) (552.066323ms)
+✔ retro replays each persisted dispute on the same PR (newest run 1) (552.553653ms)
+✔ retro dispatch records shadow roles without writing outcomes (newest PR #2) (557.782299ms)
+✔ retro replays each persisted dispute on the same PR (newest run 2) (557.731017ms)
+✔ retro retries unavailable routing without recording a verdict or changing outcomes (551.374072ms)
+✔ retro repairs aged-out Brain records without redispatch (partial false, valid false) (398.639703ms)
+✔ retro repairs aged-out Brain records without redispatch (partial false, valid true) (405.500343ms)
+✔ retro repairs aged-out Brain records without redispatch (partial true, valid false) (407.932571ms)
+✔ retro repairs aged-out Brain records without redispatch (partial true, valid true) (404.741581ms)
+✖ retro bounded batches count paid abstentions and invalid responses outside agreement rates (516.858813ms)
+✔ retro collects complete gate pages before shadow dispatch: complete (586.459183ms)
+✔ retro collects complete gate pages before shadow dispatch: head-changed (571.482653ms)
+✔ retro collects complete gate pages before shadow dispatch: timeout (573.68941ms)
+✔ retro collects complete gate pages before shadow dispatch: no-gate (575.040195ms)
+✔ retro collects complete gate pages before shadow dispatch: unbounded (573.502732ms)
+✔ retro collects complete gate pages before shadow dispatch: truncated-comments (570.437023ms)
+✔ retro collects complete gate pages before shadow dispatch: truncated-files (570.330885ms)
+✔ retro collects complete gate pages before shadow dispatch: stale-verifier-head (571.061099ms)
+✔ retro collects complete gate pages before shadow dispatch: stale-verifier-merge (576.796702ms)
+✔ retro collects complete gate pages before shadow dispatch: wrong-verifier-pr (569.687987ms)
+✔ retro collects complete gate pages before shadow dispatch: untrusted-verifier-author (566.241123ms)
+✔ retro collects complete gate pages before shadow dispatch: newer-verifier-pass (578.347813ms)
+✔ retro collects complete gate pages before shadow dispatch: newer-attempt-pass (568.163091ms)
+✖ retro collects complete gate pages before shadow dispatch: numeric-run-order (466.741782ms)
+✖ retro collects complete gate pages before shadow dispatch: numeric-attempt-order (461.80035ms)
+✔ retro collects complete gate pages before shadow dispatch: invalid-newer-pass (590.047714ms)
+✔ retro collects complete gate pages before shadow dispatch: untrusted-newer-pass (587.277416ms)
+✔ retro collects complete gate pages before shadow dispatch: wrong-url-newer-pass (582.435133ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: missing-initial-commit (574.733741ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: missing-paginated-commit (571.664544ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: null-initial-rollup (574.705463ms)
+✔ retro saves Gate gaps, continues the batch and recovers only on retry: null-paginated-rollup (570.003622ms)
+✔ retro packet failures never reach routing, dispatch or Brain role recording (529.451217ms)
+✖ retro CLI preserves raw proposals without grading metadata and refreshes measured costs (795.49588ms)
+✔ native usage survives dispatch and role recording: {"input_tokens":4000,"output_tokens":200} (374.949447ms)
+✔ native usage survives dispatch and role recording: {"input_tokens":0,"output_tokens":0} (366.029921ms)
+✔ native usage survives dispatch and role recording: {"input_tokens":4000,"output_tokens":0} (374.450633ms)
+✔ native usage survives dispatch and role recording: {"input_tokens":0,"output_tokens":200} (378.344174ms)
+✔ native usage survives dispatch and role recording: {"input_tokens":0} (366.655661ms)
+✔ native usage survives dispatch and role recording: {"output_tokens":200} (375.938208ms)
+✔ missing usage displays imputation and pool withdrawal without null or another dispatch (2151.404949ms)
+✔ switch review reads and renders saved adjudicator evidence without replay or writes (700.171844ms)
+✖ retro CLI reuses saved cases when later durability and costs arrive (1213.085559ms)
+✖ retro CLI refreshes late abstention costs after its outcome leaves the Brain (838.456813ms)
+✖ retro CLI refreshes late invalid-response costs without grading or redispatch (904.145483ms)
+✖ retro CLI withdraws stale costs without changing the comparison cohort (1223.326783ms)
+✔ retro CLI rebuilds stale comparison caches from decisions and current Brain evidence (1511.052513ms)
+✖ retro CLI compares both rules on the same cases with mixed merge dispositions (834.127349ms)
+✔ retro CLI regrades saved durable cases when later failure signals arrive (3852.42004ms)
+✔ retro CLI publishes an empty report without inventing agreement or cost (548.294738ms)
+✔ retro CLI withdraws saved comparisons when their outcome is missing (1260.443211ms)
+✖ retro CLI removes stale comparisons until durability is judged again (1180.767861ms)
+✔ closer lane offers the adjudicator only when both verdicts establish a dispute (459.938001ms)
+ℹ tests 67
+ℹ suites 0
+ℹ pass 57
+ℹ fail 10
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 42884.268843
+
+✖ failing tests:
+
+test at tests/test_adjudicator_retro_cli.js:1106:1
+✖ retro bounded batches count paid abstentions and invalid responses outside agreement rates (516.858813ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+
+    {
+      adjudicated: 0,
+      advice_agree: 0,
+      advice_disagree: 0,
+      advice_graded: 0,
+  ...
+      cost_imputed_cases: 0,
+  +   cost_measured_cases: 3,
+  +   cost_per_case: 1.5833333333333333,
+  -   cost_measured_cases: 4,
+  -   cost_per_case: 1.1875,
+      cost_scale: 'list_price_usd',
+  +   cost_unmeasured_cases: 1,
+  -   cost_unmeasured_cases: 0,
+      cost_usd: 4.75,
+      disagree: 0,
+      estimated_cost_usd: 4.75,
+      graded: 0,
+      merge_rule_agreement_rate: null,
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:1180:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:1412:3
+✖ retro collects complete gate pages before shadow dispatch: numeric-run-order (466.741782ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 3
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:1419:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 3,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:1412:3
+✖ retro collects complete gate pages before shadow dispatch: numeric-attempt-order (461.80035ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 3
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:1419:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 3,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:1609:1
+✖ retro CLI preserves raw proposals without grading metadata and refreshes measured costs (795.49588ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+
+    {
+      adjudicated: 0,
+      advice_agree: 0,
+      advice_disagree: 0,
+      advice_graded: 0,
+  ...
+      cost_imputed_cases: 0,
+  +   cost_measured_cases: 3,
+  +   cost_per_case: 1.5,
+  -   cost_measured_cases: 4,
+  -   cost_per_case: 1.125,
+      cost_scale: 'list_price_usd',
+  +   cost_unmeasured_cases: 2,
+  -   cost_unmeasured_cases: 1,
+      cost_usd: 4.5,
+      disagree: 0,
+      estimated_cost_usd: 4.5,
+      graded: 0,
+      merge_rule_agreement_rate: null,
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:1614:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:1854:1
+✖ retro CLI reuses saved cases when later durability and costs arrive (1213.085559ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  ... Skipped lines
+
+    {
+      adjudicated: 0,
+      advice_agree: 0,
+      advice_disagree: 0,
+      advice_graded: 0,
+  ...
+      cost_imputed_cases: 0,
+  +   cost_measured_cases: 4,
+  +   cost_per_case: 1.3125,
+  -   cost_measured_cases: 5,
+  -   cost_per_case: 1.05,
+      cost_scale: 'list_price_usd',
+  +   cost_unmeasured_cases: 1,
+  -   cost_unmeasured_cases: 0,
+      cost_usd: 5.25,
+      disagree: 0,
+      estimated_cost_usd: 5.25,
+      graded: 0,
+      merge_rule_agreement_rate: null,
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:1869:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:1917:1
+✖ retro CLI refreshes late abstention costs after its outcome leaves the Brain (838.456813ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  2 !== 3
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:1933:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 2,
+    expected: 3,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:1981:1
+✖ retro CLI refreshes late invalid-response costs without grading or redispatch (904.145483ms)
+  AssertionError [ERR_ASSERTION]: late cost source ccusage with value 0
+
+  null !== 0
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:2058:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:2079:1
+✖ retro CLI withdraws stale costs without changing the comparison cohort (1223.326783ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+  1 !== 2
+
+      at checkCosts (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:2093:14)
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:2120:19)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 2,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:2205:1
+✖ retro CLI compares both rules on the same cases with mixed merge dispositions (834.127349ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+      abstained: 1,
+      agree: 3,
+      agreement_rate: 1,
+      cases: 6,
+      compared: 3,
+  +   cost_measured_cases: 3,
+  +   cost_per_case: 1.5,
+  -   cost_measured_cases: 4,
+  -   cost_per_case: 1.125,
+      cost_usd: 4.5,
+      disagree: 0,
+      evidence_basis: 'raw_metadata_proposals',
+      merge_rule_agree: 2,
+      merge_rule_agreement_rate: 0.6666666666666666,
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:2221:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_adjudicator_retro_cli.js:2379:1
+✖ retro CLI removes stale comparisons until durability is judged again (1180.767861ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+
+    {
+      abstained: 1,
+      agree: 0,
+      agreement_rate: 0,
+      cases: 6,
+      compared: 1,
+  +   cost_measured_cases: 3,
+  +   cost_per_case: 1.5,
+  -   cost_measured_cases: 4,
+  -   cost_per_case: 1.125,
+      cost_usd: 4.5,
+      disagree: 1,
+      evidence_basis: 'raw_metadata_proposals',
+      merge_rule_agree: 0,
+      merge_rule_agreement_rate: 0,
+
+      at TestContext.<anonymous> (/home/runner/work/Orchestrator/Orchestrator/tests/test_adjudicator_retro_cli.js:2402:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [Object],
+    expected: [Object],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

@@ -1,0 +1,75 @@
+{
+  "scope": "synthetic_reader_diagnosis",
+  "results": [
+    {
+      "backend": "zero",
+      "direct_reader": 0.0,
+      "role_cost_report": {
+        "scale": "list_price_usd",
+        "status": "unmeasured",
+        "cost_usd": null,
+        "imputed": false,
+        "source": "no_eligible_pool"
+      },
+      "saved_row_cost": null,
+      "summary": {
+        "cases": 1,
+        "adjudicated": 0,
+        "proposed_decisions": 0,
+        "metadata_only_cases": 1,
+        "graded": 0,
+        "agree": 0,
+        "disagree": 0,
+        "agreement_rate": null,
+        "merge_rule_agreement_rate": null,
+        "cost_usd": null,
+        "cost_attempted_cases": 1,
+        "cost_imputed_cases": 0,
+        "cost_unmeasured_cases": 1,
+        "cost_scale": "list_price_usd",
+        "estimated_cost_usd": null,
+        "cost_measured_cases": 0,
+        "cost_per_case": null,
+        "retry_pending": 1,
+        "advice_graded": 0,
+        "advice_agree": 0,
+        "advice_disagree": 0
+      }
+    },
+    {
+      "backend": "positive",
+      "direct_reader": 2.0,
+      "role_cost_report": {
+        "scale": "list_price_usd",
+        "status": "measured",
+        "cost_usd": 2.0,
+        "imputed": false,
+        "source": "ccusage"
+      },
+      "saved_row_cost": 2.0,
+      "summary": {
+        "cases": 1,
+        "adjudicated": 0,
+        "proposed_decisions": 0,
+        "metadata_only_cases": 1,
+        "graded": 0,
+        "agree": 0,
+        "disagree": 0,
+        "agreement_rate": null,
+        "merge_rule_agreement_rate": null,
+        "cost_usd": 2.0,
+        "cost_attempted_cases": 1,
+        "cost_imputed_cases": 0,
+        "cost_unmeasured_cases": 0,
+        "cost_scale": "list_price_usd",
+        "estimated_cost_usd": 2.0,
+        "cost_measured_cases": 1,
+        "cost_per_case": 2.0,
+        "retry_pending": 1,
+        "advice_graded": 0,
+        "advice_agree": 0,
+        "advice_disagree": 0
+      }
+    }
+  ]
+}

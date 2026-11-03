@@ -1,0 +1,12 @@
+{"scenario":"numeric-run-order","error":"merge-bound verifier finding comment unavailable","reads":1}
+{"scenario":"numeric-attempt-order","error":"merge-bound verifier finding comment unavailable","reads":1}
+✔ retro collects complete gate pages before shadow dispatch: numeric-run-order (893.488042ms)
+✔ retro collects complete gate pages before shadow dispatch: numeric-attempt-order (1074.734253ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1979.952289
