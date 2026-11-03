@@ -213,10 +213,13 @@ def test_route_weights_export_heartbeats_invocation_without_a_publish(
     assert export.write_document(artifact, document)
     os.utime(artifact, (NOW - 10 * DAY, NOW - 10 * DAY))
     beats = _export(tmp_path, monkeypatch)
-    assert capsys.readouterr().out == f"unchanged {artifact}\n"
+    excluded = (
+        f"hosted-unrunnable agents excluded: {', '.join(sorted(export.HOSTED_UNRUNNABLE_AGENTS))}"
+    )
+    assert capsys.readouterr().out == f"{excluded}\nunchanged {artifact}\n"
     monkeypatch.setattr(capabilities, "_now", lambda: NOW + DAY)
     assert export.main() == 0
-    assert capsys.readouterr().out == f"unchanged {artifact}\n"
+    assert capsys.readouterr().out == f"{excluded}\nunchanged {artifact}\n"
     assert [a[1] for a, _ in beats] == ["invocation", "invocation"]
     row = capabilities.load(tmp_path / "capabilities.json", create=False)["route-weights-export"]
     assert row["last_invocation"] == NOW + DAY

@@ -119,7 +119,7 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
         )
     document = export.build_document(database, now=2 * export.WEEK_SECONDS)
     assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
-    assert document["exploration"]["challengers"]["implement"] == "gemini"
+    assert document["exploration"]["challengers"]["implement"] == "cursor"
 
 
 def test_route_weights_schema_stays_v1_for_workflows_consumer() -> None:
