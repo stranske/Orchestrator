@@ -22,7 +22,89 @@ function hasTarget(row) {
   return typeof row.target === 'string' && Boolean(row.target.trim());
 }
 
-function reportInventory({ report, observedAt, evidenceClass, evidenceReference }) {
+// Observe native receipt locators in one read-only SQLite snapshot. This does
+// not instantiate NativeAttemptJournal, parse provider output, authenticate a
+// decision, acquire the publication lock, or establish live writer ownership.
+function journalInventory(journal) {
+  const base = { status: 'unavailable', path: journal ? path.resolve(journal) : null,
+    attempts: null, receipt_authority: 'not_authenticated_by_inventory' };
+  if (journal === undefined) return { ...base, reason: 'native_journal_not_supplied' };
+  if (typeof journal !== 'string' || !journal.trim()) throw new Error('journal path is required');
+  let connection;
+  try {
+    connection = new DatabaseSync(journal, { readOnly: true });
+    connection.exec('BEGIN');
+    if (connection.prepare('PRAGMA application_id').get().application_id !== 1313097550) {
+      return { ...base, reason: 'non_native_journal' };
+    }
+    const steps = new Map([
+      ['reserved', 'producer_must_prove_invocation_never_started'],
+      ['in_flight', 'UNKNOWN_recover_provider_receipt_before_any_retry'],
+      ['raw_persisted', 'resume_native_validation_without_redispatch'],
+      ['validated', 'reauthenticate_with_native_projection_before_grading'],
+    ]);
+    const attempts = connection.prepare(
+      'SELECT attempt_id,case_id,material_revision,case_digest,state,backend_run_id,' +
+      'report_sha256,created_at,updated_at,' +
+      '(raw_response IS NOT NULL) AS raw_receipt_present,' +
+      '(validated_json IS NOT NULL) AS validation_present FROM native_attempts ' +
+      'ORDER BY created_at,attempt_id').all().map((item) => ({ ...item,
+      raw_receipt_present: Boolean(item.raw_receipt_present),
+      validation_present: Boolean(item.validation_present),
+      recovery_step: steps.get(item.state) || 'unrecognized_state_requires_native_review',
+    }));
+    return { ...base, status: 'available', attempts };
+  } catch {
+    // SQLite messages and raw payloads can contain private provider material.
+    return { ...base, reason: 'native_journal_unreadable_or_schema_unavailable' };
+  } finally {
+    if (connection) connection.close();
+  }
+}
+
+function preDispatchInventory(saved, paid, journal) {
+  const native = journalInventory(journal);
+  const identities = new Set(paid.map((item) => item.backend_run_id));
+  const journalIdentities = new Set((native.attempts || [])
+    .map((item) => item.backend_run_id).filter(Boolean));
+  return {
+    requested_generic_command: '--dispatch --retry --limit 21',
+    generic_retry_route: Object.hasOwn(saved, 'native_publication')
+      ? 'refused_native_canonical_publication' : 'not_authorized_by_inventory',
+    native_route: 'admit_collected_retry_then_publish_native_cohort',
+    native_journal: native,
+    paid_identity_reconciliation: {
+      report_unique: identities.size,
+      journal_unique: native.status === 'available' ? journalIdentities.size : null,
+      union_unique: native.status === 'available'
+        ? new Set([...identities, ...journalIdentities]).size : null,
+      report_only: native.status === 'available'
+        ? [...identities].filter((item) => !journalIdentities.has(item)) : null,
+      journal_only: native.status === 'available'
+        ? [...journalIdentities].filter((item) => !identities.has(item)) : null,
+      // A started attempt without an id is still a possible paid invocation.
+      unresolved_without_backend_id: native.status === 'available'
+        ? native.attempts.filter((item) => item.state === 'in_flight' && !item.backend_run_id)
+          .map((item) => item.attempt_id) : null,
+    },
+    live_writer_ownership: 'unverified',
+    dispatch_authorized: false,
+    stop_reasons: [
+      ...(native.status === 'unavailable' ? [native.reason] : []),
+      ...((native.attempts || []).some((item) =>
+        ['reserved', 'in_flight', 'raw_persisted'].includes(item.state))
+        ? ['unresolved_native_attempts_require_recovery'] : []),
+      ...((native.attempts || []).some((item) =>
+        !['reserved', 'in_flight', 'raw_persisted', 'validated'].includes(item.state))
+        ? ['unrecognized_native_state_requires_review'] : []),
+      'live_writer_ownership_unverified', 'accepted_deployed_mirror_bindings_unverified',
+      'immutable_source_and_case_qualification_unverified',
+      'native_receipt_authentication_and_independent_truth_required',
+    ],
+  };
+}
+
+function reportInventory({ report, observedAt, evidenceClass, evidenceReference, journal }) {
   integer(observedAt, 'observedAt', 0);
   if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
   if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
@@ -79,6 +161,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference 
     occurrences.push(item.location);
     identities.set(item.backend_run_id, occurrences);
   }
+  const preDispatch = preDispatchInventory(saved, paid, journal);
   if (!fs.readFileSync(report).equals(bytes)) {
     throw new Error('report changed during inventory');
   }
@@ -93,6 +176,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference 
     retained_summary: saved.summary ?? null,
     native_publication_present: Object.hasOwn(saved, 'native_publication'),
     cases, case_count: cases.length, paid_attempts: paid,
+    pre_dispatch: preDispatch,
     paid_identity_summary: {
       records: paid.length, unique: identities.size,
       repeated: [...identities].filter(([, locations]) => locations.length > 1)
@@ -102,7 +186,9 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference 
     // label, saved native projection or matching count authenticates a grade.
     receipt_authority: 'not_authenticated_by_inventory',
     requested_cohort_verified: false, dispatch_authorized: false,
-    evidence_gaps: ['original_cohort_provenance_unverified', 'native_journal_not_observed',
+    evidence_gaps: ['original_cohort_provenance_unverified',
+      ...(preDispatch.native_journal.status === 'available'
+        ? ['native_journal_receipts_not_authenticated'] : ['native_journal_not_observed']),
       'independent_current_truth_not_observed', 'deployed_and_mirror_revisions_not_observed',
       'fixed_next_20_manifest_not_observed'],
   };
@@ -336,6 +422,7 @@ function main() {
     const { values, tokens } = parseArgs({ tokens: true, options: {
       db: { type: 'string' },
       report: { type: 'string' },
+      journal: { type: 'string' },
       'evidence-class': { type: 'string' },
       'evidence-reference': { type: 'string' },
       'observed-at': { type: 'string' },
@@ -345,7 +432,7 @@ function main() {
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
-      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
+      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE [--journal EXISTING_NATIVE_SQLITE]\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
     }
@@ -356,12 +443,13 @@ function main() {
       const result = reportInventory({
         report: values.report, observedAt: Number(values['observed-at']),
         evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
+        journal: values.journal,
       });
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return;
     }
-    if (values['evidence-class'] || values['evidence-reference']) {
-      throw new Error('--evidence-class and --evidence-reference require --report');
+    if (values.journal || values['evidence-class'] || values['evidence-reference']) {
+      throw new Error('--journal, --evidence-class and --evidence-reference require --report');
     }
     if (!values.db || !values['observed-at']) {
       throw new Error('--db and --observed-at are required');

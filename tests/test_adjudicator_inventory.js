@@ -134,6 +134,161 @@ test('report CLI never combines historical recovery with dispatch or current Bra
   }
 });
 
+function nativeJournal(t) {
+  const fixture = retainedReport(t);
+  const journal = path.join(fixture.root, 'native.sqlite3');
+  const connection = new DatabaseSync(journal);
+  connection.exec(`PRAGMA application_id=1313097550;
+    CREATE TABLE native_attempts (attempt_id TEXT PRIMARY KEY, case_id TEXT,
+      material_revision TEXT, case_digest TEXT, state TEXT, backend_run_id TEXT,
+      report_sha256 TEXT, created_at INTEGER, updated_at INTEGER,
+      raw_response TEXT, validated_json TEXT);`);
+  const insert = connection.prepare('INSERT INTO native_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+  for (const [id, state, backend, raw, validation] of [
+    ['a', 'reserved', null, null, null],
+    ['b', 'in_flight', null, null, null],
+    ['c', 'in_flight', 'started-provider', null, null],
+    ['d', 'raw_persisted', 'primary', 'private raw response', null],
+    ['e', 'validated', 'native-provider', 'private raw response', '{"private":"proposal"}'],
+    ['f', 'unrecognized', null, null, null],
+  ]) insert.run(id, 'case-a', `revision-${id}`, 'digest', state, backend, 'source-hash',
+    now - 1, now, raw, validation);
+  connection.close();
+  return { ...fixture, journal, options: { ...fixture.options, journal } };
+}
+
+test('pre-dispatch inventory reconciles report and native locators without exposing payloads', (t) => {
+  const { root, journal, options } = nativeJournal(t);
+  const before = fs.readFileSync(journal);
+  const files = fs.readdirSync(root);
+  const result = reportInventory(options).pre_dispatch;
+  assert.equal(result.generic_retry_route, 'refused_native_canonical_publication');
+  assert.equal(result.native_journal.status, 'available');
+  assert.equal(result.native_journal.receipt_authority, 'not_authenticated_by_inventory');
+  assert.deepEqual(result.paid_identity_reconciliation, {
+    report_unique: 3, journal_unique: 3, union_unique: 5,
+    report_only: ['prior', 'oldest'], journal_only: ['started-provider', 'native-provider'],
+    unresolved_without_backend_id: ['b'],
+  });
+  const attempts = result.native_journal.attempts;
+  assert.deepEqual(attempts.map((item) => item.attempt_id), ['a', 'b', 'c', 'd', 'e', 'f']);
+  assert.equal(attempts[0].recovery_step, 'producer_must_prove_invocation_never_started');
+  assert.equal(attempts[1].recovery_step, 'UNKNOWN_recover_provider_receipt_before_any_retry');
+  assert.equal(attempts[3].recovery_step, 'resume_native_validation_without_redispatch');
+  assert.equal(attempts[4].recovery_step, 'reauthenticate_with_native_projection_before_grading');
+  assert.equal(attempts[5].recovery_step, 'unrecognized_state_requires_native_review');
+  assert.equal(attempts[4].raw_receipt_present, true);
+  assert.equal(attempts[4].validation_present, true);
+  assert.equal(attempts[1].raw_receipt_present, false);
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.equal(result.live_writer_ownership, 'unverified');
+  assert.equal(result.dispatch_authorized, false);
+  assert.ok(result.stop_reasons.includes('unresolved_native_attempts_require_recovery'));
+  assert.deepEqual(fs.readFileSync(journal), before);
+  assert.deepEqual(fs.readdirSync(root), files, 'read-only observation creates no lock or runtime');
+  assert.ok(!reportInventory(options).evidence_gaps.includes('native_journal_not_observed'));
+  assert.ok(reportInventory(options).evidence_gaps.includes('native_journal_receipts_not_authenticated'));
+});
+
+test('all validated native rows still require authentication, independent truth and live writer proof', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const connection = new DatabaseSync(journal);
+  connection.exec("DELETE FROM native_attempts WHERE state != 'validated'");
+  connection.close();
+  const result = reportInventory(options).pre_dispatch;
+  assert.equal(result.dispatch_authorized, false);
+  assert.ok(!result.stop_reasons.includes('unresolved_native_attempts_require_recovery'));
+  assert.ok(result.stop_reasons.includes('live_writer_ownership_unverified'));
+  assert.ok(result.stop_reasons.includes('native_receipt_authentication_and_independent_truth_required'));
+  assert.equal(Object.hasOwn(result, 'graded'), false);
+});
+
+test('missing native evidence remains unavailable and never means zero attempts', (t) => {
+  const { root, options } = retainedReport(t);
+  for (const journal of [undefined, path.join(root, 'absent', 'native.sqlite3')]) {
+    const result = reportInventory({ ...options, journal }).pre_dispatch;
+    assert.equal(result.native_journal.status, 'unavailable');
+    assert.equal(result.native_journal.attempts, null);
+    assert.equal(result.paid_identity_reconciliation.journal_unique, null);
+    assert.equal(result.paid_identity_reconciliation.union_unique, null);
+    assert.equal(result.dispatch_authorized, false);
+  }
+  assert.equal(fs.existsSync(path.join(root, 'absent')), false);
+});
+
+test('an observed empty journal cannot establish writer ownership or authorize spending', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const connection = new DatabaseSync(journal);
+  connection.exec('DELETE FROM native_attempts');
+  connection.close();
+  const result = reportInventory(options).pre_dispatch;
+  assert.equal(result.native_journal.status, 'available');
+  assert.deepEqual(result.native_journal.attempts, []);
+  assert.equal(result.paid_identity_reconciliation.journal_unique, 0);
+  assert.equal(result.paid_identity_reconciliation.union_unique, 3);
+  assert.equal(result.live_writer_ownership, 'unverified');
+  assert.equal(result.dispatch_authorized, false);
+});
+
+test('an active journal writer does not make a read-only snapshot claim ownership', (t) => {
+  const { journal, options } = nativeJournal(t);
+  const connection = new DatabaseSync(journal);
+  connection.exec("BEGIN IMMEDIATE; DELETE FROM native_attempts");
+  try {
+    const result = reportInventory(options).pre_dispatch;
+    assert.equal(result.native_journal.status, 'available');
+    assert.equal(result.native_journal.attempts.length, 6, 'uncommitted changes are invisible');
+    assert.equal(result.live_writer_ownership, 'unverified');
+    assert.equal(result.dispatch_authorized, false);
+  } finally {
+    connection.exec('ROLLBACK');
+    connection.close();
+  }
+});
+
+test('foreign and incomplete journals are refused without schema repair', (t) => {
+  const { root, options } = retainedReport(t);
+  const journal = path.join(root, 'foreign.sqlite3');
+  const connection = new DatabaseSync(journal);
+  connection.exec('CREATE TABLE unrelated (id TEXT)');
+  connection.close();
+  for (const reason of ['non_native_journal', 'native_journal_unreadable_or_schema_unavailable']) {
+    const before = fs.readFileSync(journal);
+    const result = reportInventory({ ...options, journal }).pre_dispatch.native_journal;
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.reason, reason);
+    assert.equal(result.attempts, null);
+    assert.deepEqual(fs.readFileSync(journal), before);
+    const db = new DatabaseSync(journal);
+    db.exec('PRAGMA application_id=1313097550');
+    db.close();
+  }
+});
+
+test('report without native marker still cannot authorize generic retry', (t) => {
+  const { saved, options } = retainedReport(t);
+  delete saved.native_publication;
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options).pre_dispatch;
+  assert.equal(result.generic_retry_route, 'not_authorized_by_inventory');
+  assert.equal(result.dispatch_authorized, false);
+});
+
+test('journal CLI stays read-only and requires explicit report attribution', (t) => {
+  const { root, journal, options } = nativeJournal(t);
+  const args = [script, '--report', options.report, '--journal', journal,
+    '--observed-at', String(now), '--evidence-class', options.evidenceClass,
+    '--evidence-reference', options.evidenceReference];
+  const result = execute(root, process.execPath, args);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), reportInventory(options));
+  const refused = execute(root, process.execPath, [script, '--db', 'absent.db',
+    '--journal', journal, '--observed-at', String(now)]);
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stdout, '');
+  assert.match(refused.stderr, /require --report/);
+});
+
 function world(t, schema = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

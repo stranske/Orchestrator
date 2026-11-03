@@ -123,6 +123,22 @@
       "artifact_id": 13222981265,
       "github_archive_sha256": "22e550142cdcbe9ba4829d4620b62e4f056f01d144673a46176b356e4e7e81ef",
       "status": "GitHub artifact located; ZIP returned as remote file reference, not inspected locally"
+    },
+    "pre_dispatch_followup": {
+      "checked_at": "2026-11-03T18:51:58.245Z",
+      "observation": "pre-dispatch-observation.json",
+      "checks": "pre-dispatch-checks.json",
+      "plan": "pre-dispatch-plan.md",
+      "results": "pre-dispatch-results.md",
+      "historical_input_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
+      "inventory_tests_passed": 40,
+      "module_selftest_checks_passed": 23,
+      "evidence_tests_passed": 11,
+      "named_and_full_pytest_status": "blocked_before_collection_missing_pytest",
+      "native_journal": "unavailable",
+      "live_writer_ownership": "unverified",
+      "task_checkboxes_verified_complete": 0,
+      "pr_body_correction": "rejected_connector_requires_approval_policy_never"
     }
   },
   "mirror_synchronization": [
