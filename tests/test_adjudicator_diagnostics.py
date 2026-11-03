@@ -311,6 +311,48 @@ class InventoryCodeStabilityTests(unittest.TestCase):
                 self.assert_rejected_change(lambda: code.write_text("replacement code"))
                 code.write_text("original code")
 
+    def test_inventory_rejects_flat_mirror_dependency_change(self):
+        dependency = self.mirror / "roles.py"
+        dependency.write_text("original validator")
+        self.assert_rejected_change(lambda: dependency.write_text("changed validator"))
+
+    def test_inventory_rejects_dependency_change_in_already_dirty_checkout(self):
+        self.init_checkout()
+        dependency = self.deployed / "roles.py"
+        dependency.write_text("committed validator")
+        self.git("add", "roles.py")
+        self.git("commit", "-qm", "validator deployment")
+        dependency.write_text("first local validator")
+        self.assertFalse(retro._inventory_code(self.deployed)["tracked_files_clean"])
+        self.assert_rejected_change(lambda: dependency.write_text("second local validator"))
+        self.assertFalse(retro._inventory_code(self.deployed)["tracked_files_clean"])
+
+    def test_inventory_rejects_flat_mirror_module_addition_or_removal(self):
+        dependency = self.mirror / "roles.py"
+        self.assert_rejected_change(lambda: dependency.write_text("new validator"))
+        self.assert_rejected_change(dependency.unlink)
+
+    def test_runtime_module_hashes_pin_bytes_and_names_in_both_layouts(self):
+        for layout in ("flat", "src"):
+            with self.subTest(layout=layout):
+                root = self.root / layout
+                modules = root if layout == "flat" else root / "src"
+                modules.mkdir(parents=True)
+                expected = {}
+                for name, content in (
+                    ("roles.py", b"validator bytes"),
+                    ("adjudicator_retro.py", b"retrospective bytes"),
+                    ("feedback.py", b"feedback bytes"),
+                ):
+                    (modules / name).write_bytes(content)
+                    expected[name] = hashlib.sha256(content).hexdigest()
+                (modules / "observations.json").write_text("not runtime code")
+                observed = retro._inventory_code(root)
+                self.assertEqual(observed["runtime_module_sha256"], expected)
+                self.assertEqual(list(observed["runtime_module_sha256"]), sorted(expected))
+                self.assertEqual(observed["adjudicator_sha256"], expected["adjudicator_retro.py"])
+                self.assertEqual(observed["live_reader_binding"], "unverified")
+
     def test_inventory_rejects_mirror_generation_switch_with_identical_code(self):
         generation = self.root / "generation-a"
         self.mirror.rename(generation)

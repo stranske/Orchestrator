@@ -354,11 +354,19 @@ def _inventory_code(root: Path | None) -> dict:
     code = resolved / "src/adjudicator_retro.py"
     if not code.is_file():
         code = resolved / "adjudicator_retro.py"
-    result: dict[str, str | bool | None] = {
+    # HEAD and a dirty flag cannot identify changing local dependencies. Flat
+    # mirrors may have no Git metadata at all; pin their neighboring modules too.
+    module_hashes = {
+        module.name: hashlib.sha256(module.read_bytes()).hexdigest()
+        for module in sorted(code.parent.glob("*.py"))
+        if module.is_file()
+    }
+    result: dict[str, Any] = {
         "status": "observed",
         "path": str(root),
         "resolved_path": str(resolved),
         "adjudicator_sha256": hashlib.sha256(code.read_bytes()).hexdigest(),
+        "runtime_module_sha256": module_hashes,
         "git_revision": None,
         "tracked_files_clean": None,
         "live_reader_binding": "unverified",

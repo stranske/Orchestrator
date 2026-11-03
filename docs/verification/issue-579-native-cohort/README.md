@@ -1,5 +1,30 @@
 # Original-cohort native candidate
 
+Issue #1072 runtime-dependency inventory follow-up (base `8e2cb85`): the
+inventory now includes `runtime_module_sha256`, mapping each adjacent top-level
+Python module name to its content hash in either the checkout's `src/` or the
+flat mirror. A neighboring validator could previously change while the
+retrospective script, HEAD and dirty flag stayed identical. The existing final
+inventory comparison now rejects module changes, additions and removals too.
+This records the selected local module files; `live_reader_binding` remains
+unverified, and external dependencies and nested packages are outside this map.
+
+Four new standard-library regression tests produced three failures and two
+layout subtest errors before the repair. Afterward all 28 diagnostics, seven
+native replay/publication tests and 23 module self-checks pass. `git diff --check`
+passes. Full pytest execution/collection and both required Black commands remain
+unavailable; installing the validation tools into `/tmp` failed. The test floor
+needs fresh full collection when pytest is available. No commit or push was
+attempted because the mandatory Black gate cannot pass.
+
+Reconciliation of the prior commits found no newly satisfied operational task.
+Authentic deployment, mirror, original report and journal inputs remain absent;
+no production inventory or dispatch occurred. October 18 proof, current canonical
+grades and fixed next-20 decisions remain unavailable here. Attempts to update
+PR #1081's body with that reconciliation and add `needs-human` were rejected:
+the tools require approval while this run's policy is `never`. Checkboxes remain
+unchecked.
+
 Issue #1072 Git-location follow-up on 2026-11-03 (base `26bfc15`): both
 inventory Git reads now reuse the collector's `_local_git` environment isolation.
 Inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` or `GIT_COMMON_DIR` could
