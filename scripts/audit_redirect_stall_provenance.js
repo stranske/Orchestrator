@@ -54,7 +54,11 @@ function audit(corpus, fixtures = defaultFixtures) {
   const originalTargets = new Set();
   let stalled = 0;
   const lines = corpusBytes.toString('utf8').split('\n');
+  let byteOffset = 0;
   for (let i = 0; i < lines.length; i++) {
+    const offset = byteOffset;
+    const length = Buffer.byteLength(lines[i], 'utf8');
+    byteOffset += length + 1; // LF separator; CR is retained in the entry bytes.
     if (!lines[i].trim()) continue;
     let entry;
     try {
@@ -72,7 +76,8 @@ function audit(corpus, fixtures = defaultFixtures) {
     if (typeof entry.report.target === 'string') originalTargets.add(entry.report.target);
     const fingerprint = entry.report.sweep_fingerprint;
     const rows = sources.get(fingerprint) || [];
-    rows.push({ report: entry.report, line: i + 1, bytes: lines[i] });
+    rows.push({ report: entry.report, line: i + 1, offset, length,
+      bytes: corpusBytes.subarray(offset, offset + length) });
     sources.set(fingerprint, rows);
   }
   result.stalled_source_reports = stalled;
@@ -148,6 +153,8 @@ function audit(corpus, fixtures = defaultFixtures) {
       fixture: name,
       fixture_sha256: sha256(bytes),
       source_line: source.line,
+      source_byte_offset: source.offset,
+      source_byte_length: source.length,
       source_entry_sha256: sha256(source.bytes),
     });
   }

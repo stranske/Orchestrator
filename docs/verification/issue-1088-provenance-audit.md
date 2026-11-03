@@ -514,3 +514,42 @@ is on a read-only filesystem; no commit was created. The GitHub connector reject
 the unverified production-task checkbox correction, blocker comment and additive
 `needs-human` label with `MCP tool call requires approval, but approval policy is
 never`. No remote mutation succeeded.
+
+## Independently locatable source bindings
+
+Reviewed the recent implementation commits through `04d419d` and re-read the
+#582/#595 discussions. The original private corpus and both named private
+receipts remain unavailable. No genuine October 20 receipt was recovered, so the
+first task stays incomplete. The existing local reconciliation above still
+applies: the checked production-inspection task in the PR body is unsupported
+by owner evidence available here. A correction and reconciliation of duplicated
+checkboxes was attempted; the connector returned `MCP tool call requires approval,
+but approval policy is never`. No PR-body update succeeded.
+
+Each successful auditor binding now includes zero-based `source_byte_offset`
+and `source_byte_length`, alongside its source line and entry hash. An owner can
+independently slice those bytes from the corpus identified by `corpus_sha256`
+and compare their SHA256 to `source_entry_sha256`. Length excludes the LF
+separator and includes any original CR; whitespace is preserved. These coordinates
+do not disclose source targets or authenticate the corpus. The manufactured
+regression first failed for absent coordinates, then passed for LF and CRLF,
+leading blank lines, multibyte targets and an unterminated final entry. Privacy
+assertions match the full multibyte label rather than `caf`, which can also occur
+inside a SHA256 digest. All **45** scoped Node checks pass with no failures or
+skips; JavaScript syntax checks and `git diff --check` pass. No Python files changed.
+
+At `2026-11-03T18:48:20.912Z`, the exact-revision verifier again evaluated merged
+`8f596dc01e1ede350724c1b88bc36610380af79b` with the selected Python 3.14 interpreter.
+Both pytest invocations failed before collection because pytest is unavailable;
+installation into `/tmp` also failed with no available distribution. Offline
+replay exited zero and printed `authorized 12/12 with named agents (dry-run)`,
+while the subprocess layer also reported `EPERM`. Acceptance remains blocked.
+At `2026-11-03T18:48:50.071Z`, runtime observation returned
+`owner_corpus_unavailable`: blocking, drainable and eligible-candidate counts are
+**unknown**, not candidates 0. No live action, resolution or control was observed.
+These are current runner observations, not historical execution receipts.
+
+The required commit attempt failed at staging: `.git/index.lock: Read-only file
+system`. No commit or push occurred. The blocker comment and additive
+`needs-human` label were also rejected with the same approval-policy error;
+neither remote mutation succeeded. PR #1089 was verified open and ready for review.

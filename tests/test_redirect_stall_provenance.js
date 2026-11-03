@@ -311,8 +311,44 @@ test('valid multibyte private identities retain exact source-entry byte hashes',
   assert.equal(result.corpus_sha256, digest(before));
   assert.deepEqual(result.bindings.map((row) => row.source_entry_sha256),
     s.entries.map((entry) => digest(Buffer.from(JSON.stringify(entry)))));
-  assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-|caf|\u8def\u5f84|\ud83d\ude00/);
+  assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-|caf\u00e9|\u8def\u5f84|\ud83d\ude00/);
   assert.deepEqual(fs.readFileSync(s.corpus), before);
+});
+
+test('binding byte ranges independently locate original entries across JSONL encodings', (t) => {
+  const s = sandbox(t);
+  for (const entry of s.entries) entry.report.target += '-caf\u00e9-\u8def\u5f84-\ud83d\ude00';
+  for (const separator of ['\n', '\r\n']) {
+    // Whitespace-only lines count toward both coordinates. The last entry has
+    // no newline; multibyte targets distinguish byte offsets from string indices.
+    const lines = ['', '  ', ...s.entries.map((entry) => ` ${JSON.stringify(entry)} `)];
+    const bytes = Buffer.from(lines.join(separator));
+    fs.writeFileSync(s.corpus, bytes);
+    const run = cli(t, [s.corpus, s.copy]);
+    assert.equal(run.status, 0, run.stderr);
+    const result = JSON.parse(run.stdout);
+    assert.equal(result.corpus_sha256, digest(bytes));
+    assert.equal(result.verified_bindings, 12);
+    let offset = Buffer.byteLength(lines.slice(0, 2).join(separator) + separator);
+    for (let i = 0; i < result.bindings.length; i++) {
+      const binding = result.bindings[i];
+      // Entry hashes exclude LF, while a CR in CRLF remains an original byte.
+      const entryBytes = Buffer.from(lines[i + 2]
+        + (i < s.entries.length - 1 && separator === '\r\n' ? '\r' : ''));
+      assert.equal(binding.source_line, i + 3);
+      assert.equal(binding.source_byte_offset, offset);
+      assert.equal(binding.source_byte_length, entryBytes.length);
+      const located = bytes.subarray(binding.source_byte_offset,
+        binding.source_byte_offset + binding.source_byte_length);
+      assert.deepEqual(located, entryBytes);
+      assert.equal(digest(located), binding.source_entry_sha256);
+      assert.deepEqual(JSON.parse(located), s.entries[i]);
+      offset += entryBytes.length + 1;
+    }
+    assert.equal(result.historical_replay_receipt, 'not_established');
+    assert.doesNotMatch(run.stdout + run.stderr, /PRIVATE-|caf\u00e9|\u8def\u5f84|\ud83d\ude00/);
+    assert.deepEqual(fs.readFileSync(s.corpus), bytes);
+  }
 });
 
 test('successful CLI audits remain current observations with no replay receipt credit', (t) => {
