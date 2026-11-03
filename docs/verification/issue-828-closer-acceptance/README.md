@@ -86,5 +86,18 @@ for honest statement+branch totals (see PR body for current-main measurement out
   because coordinator exercise and sandbox subprocess paths dominate; issue-828 tests only cover
   `_break_ok` contract edges in `tests/test_issue828_coverage.py`.
 
-Current-main combined statement+branch counts are appended from `python3 src/verify.py --coverage`
-in the opening PR body (same command as issue contract).
+**Current main combined (`verify.py --coverage`, 2026-11-03, exit 0, ~92m wall):** missing
+statements per target from merged `coverage.json` (this run’s JSON has no branch counters):
+
+| Module | Issue ranked s+b (before) | Combined missing stmts (after) | Δ |
+|--------|-------------------------:|-------------------------------:|---:|
+| `src/keepalive_outcomes.py` | 74 | 45 | 29 |
+| `src/issue_quality.py` | 25 | 5 | 20 |
+| `src/experiment_recovery.py` | 29 | 9 | 20 |
+| `src/capability_compiler.py` | 10 | 10 | 0 |
+| `src/rail_exercise.py` | 20 | 20 | 0 |
+| `src/research_usage_guard.py` | 49 | 27 | 22 |
+| **Six-target total** | **207** | **116** | **91** |
+
+**max(0, 180 − 91) = 89** units still short of the ~180 combined-unit campaign delta
+(using statement misses as the measurable combined proxy here; ranked baseline counted s+b).
