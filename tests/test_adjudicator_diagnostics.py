@@ -172,9 +172,7 @@ class OriginalRowDiagnosticsTests(unittest.TestCase):
                 row = substantive_row()
                 row["proposal"] = value
                 result = retro.diagnose_original_rows([row], [])[0]
-                self.assertEqual(
-                    result["retained_first_break"], "saved_proposal_validator_failure"
-                )
+                self.assertEqual(result["retained_first_break"], "saved_proposal_validator_failure")
         row = substantive_row()
         row["decision"] = "uphold_blocker"
         result = retro.diagnose_original_rows([row], [])[0]

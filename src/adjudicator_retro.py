@@ -354,7 +354,7 @@ def _inventory_code(root: Path | None) -> dict:
     code = resolved / "src/adjudicator_retro.py"
     if not code.is_file():
         code = resolved / "adjudicator_retro.py"
-    result = {
+    result: dict[str, str | bool | None] = {
         "status": "observed",
         "path": str(root),
         "resolved_path": str(resolved),
@@ -3604,7 +3604,9 @@ def main() -> int:
         )
         return 0
     try:
-        result = run(dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout)
+        result = run(
+            dispatch=args.dispatch, limit=args.limit, retry=args.retry, timeout=args.timeout
+        )
     except ValueError as exc:
         parser.error(str(exc))
     print(json.dumps(result["summary"], indent=2))

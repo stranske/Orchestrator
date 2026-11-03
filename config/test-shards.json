@@ -9,6 +9,8 @@
     597.306
   ],
   "untimed_modules": [
+    "tests/test_adjudicator_diagnostics.py",
+    "tests/test_adjudicator_inventory.py",
     "tests/test_closer_correction_owner.py",
     "tests/test_gemini_flash_routing.py",
     "tests/test_python_floor.py",
@@ -19,6 +21,8 @@
   "shards": [
     [
       "tests/test_adjudicator_collected_input.py",
+      "tests/test_adjudicator_diagnostics.py",
+      "tests/test_adjudicator_inventory.py",
       "tests/test_adjudicator_native_publication.py",
       "tests/test_adjudicator_packet_binding.py",
       "tests/test_adjudicator_retro.py",

@@ -263,9 +263,7 @@ def test_observable_surface_bounds_large_walks_and_ignores_unreadable_dependency
     import pathlib
 
     with monkeypatch.context() as walk:
-        walk.setattr(
-            os, "walk", lambda _root: iter([(str(tmp_path), [], ["plain.txt"] * 40001)])
-        )
+        walk.setattr(os, "walk", lambda _root: iter([(str(tmp_path), [], ["plain.txt"] * 40001)]))
         truncated = advisor.detect_observable_surface(tmp_path)
     assert truncated == {
         "observable": False,
