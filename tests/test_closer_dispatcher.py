@@ -4230,8 +4230,14 @@ def test_cli_pipeline_budget_does_not_renew_or_inherit_stale_legacy_accounting(
     assert receipt["pipeline_admission_pass"] == adapter.pipeline_admission_pass_number(
         receipt, now=start
     )
-    check_at = adapter.PIPELINE_ADMISSION_PASS_CHECK_TS
-    assert adapter.pipeline_admission_pass_number(receipt, now=check_at - 1)["status"] == "pending"
+    # After the check date, grade at/after sampled_at so the stamp is not before admission.
+    check_at = max(adapter.PIPELINE_ADMISSION_PASS_CHECK_TS, start)
+    assert (
+        adapter.pipeline_admission_pass_number(
+            receipt, now=adapter.PIPELINE_ADMISSION_PASS_CHECK_TS - 1
+        )["status"]
+        == "pending"
+    )
     graded = adapter.pipeline_admission_pass_number(receipt, now=check_at)
     assert graded["scope"] == "receipt_conditions_only"
     assert graded["status"] == ("pass" if stop_valid else "fail")
@@ -4382,8 +4388,9 @@ def test_expired_admission_reports_drainable_zero_as_deadlock(tmp_path, monkeypa
     assert receipt["budget_admission"]["selected_deadline"] == state["round"]["deadline"]
     assert receipt["budget_admission"]["selected_deadline_expired"] is True
     assert receipt["budget_admission"]["selected_deadline_age_seconds"] > 0
+    sampled = float(receipt["budget_admission"]["sampled_at"])
     grade = adapter.pipeline_admission_pass_number(
-        receipt, now=adapter.PIPELINE_ADMISSION_PASS_CHECK_TS
+        receipt, now=max(adapter.PIPELINE_ADMISSION_PASS_CHECK_TS, sampled)
     )
     assert grade["status"] == "fail"
     assert grade["reason"] == "selected deadline already expired at admission"
