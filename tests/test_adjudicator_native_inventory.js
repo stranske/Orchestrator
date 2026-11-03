@@ -281,6 +281,88 @@ test('native inventory separates uncommitted provider changes from a later commi
   assert.equal(later.dispatch_authorized, false);
 });
 
+for (const transition of ['begin_invocation', 'persist_raw']) {
+  test(`native inventory rejects ${transition} committed to WAL during observation`, (t) => {
+    const w = world(t);
+    const before = w.snapshot();
+    const attemptId = w.ids[transition === 'begin_invocation' ? 0 : 1];
+    const commitSnapshot = path.join(w.root, 'commit-snapshot.json');
+    // The first code observation is after the initial journal read. Commit
+    // through the native producer at that boundary, without a provider call.
+    const result = w.execute(['-c', `
+import hashlib, json, sys
+from pathlib import Path
+import adjudicator_retro as retro
+
+writer = retro.NativeAttemptJournal.__new__(retro.NativeAttemptJournal)
+writer.path = Path(sys.argv[1])
+attempt_id, transition = sys.argv[2:4]
+snapshot_path = Path(sys.argv[4])
+observe = retro._inventory_code
+committed = False
+
+def observe_after_commit(root):
+    global committed
+    result = observe(root)
+    if not committed:
+        committed = True
+        if transition == 'begin_invocation':
+            writer.begin_invocation(attempt_id, {'run_id': 'concurrent-paid'})
+        else:
+            writer.persist_raw(attempt_id, {
+                'run_id': 'unknown-paid', 'output': 'concurrent private receipt',
+            })
+        snapshot_path.write_text(json.dumps([
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (writer.path, Path(str(writer.path) + '-wal'))
+        ]))
+    return result
+
+retro._inventory_code = observe_after_commit
+sys.argv = ['adjudicator_retro.py', *sys.argv[5:]]
+raise SystemExit(retro.main())
+`, w.journal, attemptId, transition, commitSnapshot, ...w.inventoryArgs.slice(1)]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /native inventory inputs changed during observation/);
+    assert.equal(result.stdout, '', 'a mixed observation must not emit an inventory');
+    const [mainHash, walHash] = JSON.parse(fs.readFileSync(commitSnapshot, 'utf8'));
+    assert.equal(mainHash, before[2][1], 'the producer must not checkpoint before the recheck');
+    assert.notEqual(walHash, before[3][1], 'the producer commit must reside in WAL');
+    // Producer process cleanup may checkpoint afterward. Compare the resulting
+    // durable files; a subsequent SQLite read may create an empty WAL sidecar.
+    const snapshot = () => before.slice(0, 3).map(([file]) =>
+      [file, sha256(fs.readFileSync(file))]);
+    const committed = snapshot();
+    assert.deepEqual(committed.slice(0, 2), before.slice(0, 2));
+
+    // Rejection must preserve the paid boundary/receipt for the next inventory.
+    const later = w.run(w.inventoryArgs);
+    const attempt = later.native_journal.attempts.find((item) => item.attempt_id === attemptId);
+    assert.equal(later.native_journal.attempts.length, 3);
+    assert.equal(attempt.matches_original_source, true);
+    if (transition === 'begin_invocation') {
+      assert.equal(attempt.state, 'in_flight');
+      assert.equal(attempt.backend_run_id, 'concurrent-paid');
+      assert.equal(later.paid_identity_summary.union_unique, 5);
+      assert.equal(later.row_diagnostics[0].unresolved_native_attempts[0].outcome, 'UNKNOWN');
+    } else {
+      assert.equal(attempt.state, 'raw_persisted');
+      assert.equal(attempt.backend_run_id, 'unknown-paid');
+      assert.equal(attempt.raw_response_sha256, sha256('concurrent private receipt'));
+      assert.equal(later.paid_identity_summary.union_unique, 4);
+      assert.equal(JSON.stringify(later).includes('concurrent private receipt'), false);
+    }
+    assert.deepEqual(later.original_paid_attempts.map((item) => item.backend_run_id),
+      ['original-paid', 'earlier-paid']);
+    assert.equal(later.dispatch_authorized, false);
+    assert.equal(attempt.receipt_authority, 'not_authenticated_by_inventory');
+    assert.deepEqual(snapshot(), committed);
+    for (const name of ['absent-state', 'absent-runtime', 'absent-brain.sqlite']) {
+      assert.equal(fs.existsSync(path.join(w.root, name)), false);
+    }
+  });
+}
+
 test('native inventory rejects dispatch and retry before touching a live WAL journal', (t) => {
   const w = world(t);
   const before = w.snapshot();

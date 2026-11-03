@@ -57,3 +57,31 @@ commit or push was made. Automatic approval review rejected PR-body reconciliati
 the `needs-human` label and the blocker comment because those tools require
 approval and this run's policy is `never`. PR #1081 was rechecked open with
 `draft=false` at the revision above.
+
+## Commit during inventory verification
+
+Follow-up checked on 2026-11-03 against `eb9cb496f103f80ea09126c7dc7038a2edff3a9e`.
+Two new tests commit native producer transitions after inventory's initial receipt
+read: a reservation acquires its paid invocation identity, or an in-flight attempt
+acquires a raw receipt. Hashes captured immediately after each commit establish
+that the changes reside in WAL while the main database remains unchanged.
+The real inventory CLI rejects both mixed observations without emitting JSON.
+A later inventory retains the committed identities/receipt hashes, original paid
+history and UNKNOWN boundary without authenticating grades or authorizing dispatch.
+Producer connection cleanup may checkpoint afterward; that resulting durable
+state is checked separately from the commit-time WAL observation.
+
+The inventory JavaScript command above passes all 33 tests, the diagnostic
+unittest command passes 32, and the replay/publication unittest command passes
+seven. JavaScript syntax and `git diff --check` pass. Removing only the final
+journal-record comparison in a temporary source copy makes both new tests fail
+with an unexpected successful CLI exit. No repository Python file changed.
+
+Reconciliation found no completed operational task. The configured canonical
+report, runtime directory and independent outcomes database remain absent. No
+authentic production inventory, dispatch, canonical refresh, October 18 evidence
+or next-20 observation is claimed. Pytest and Black remain unavailable. Staging
+failed because `.git/index.lock` is read-only, so no commit or push was made.
+Automatic approval review rejected PR-body reconciliation, `needs-human` labeling
+and the blocker comment because those tools require approval and this run's policy
+is `never`. PR #1081 was rechecked open with `draft=false` on the revision above.
