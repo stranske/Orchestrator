@@ -564,7 +564,6 @@ def observed_agents(snapshots: list[dict], ts: float) -> dict | None:
     return max(matches, key=lambda s: s["ts"])["agents"] if matches else None
 
 
-
 def claude_token_events(
     root: Path, start: float, now: float, *, stats: dict | None = None
 ) -> list[dict]:
@@ -728,9 +727,7 @@ def produce_claude_sample(
         and 0 <= now - cached.get("ts", 0) < pacing.TICK_SECONDS
     ):
         return cached, cached.get("cap_estimate"), cached.get("cap_pair_count", 0)
-    earliest = min(
-        [start] + [claude_bounds(r["t"] / 1000, authoritative_end)[0] for r in desktop]
-    )
+    earliest = min([start] + [claude_bounds(r["t"] / 1000, authoritative_end)[0] for r in desktop])
     events = claude_token_events(root, earliest, now)
     if not events:
         return None, None, 0
@@ -774,7 +771,9 @@ def usage(
     # A valid poll's (rolled) reset time stays authoritative even when its usage is
     # stale or describes the old week; the fallback is aligned to it.
     authoritative_end = (
-        polled["period_end"] if polled["poll"].get("valid") else calibration.get("claude_period_end")
+        polled["period_end"]
+        if polled["poll"].get("valid")
+        else calibration.get("claude_period_end")
     )
     produced = None
     pair_cap = None
@@ -839,8 +838,7 @@ def usage(
         candidates = [
             c
             for c in candidates
-            if c.get("used_fraction") is not None
-            and now - c["ts"] <= CLAUDE_USAGE_MAX_AGE_SECONDS
+            if c.get("used_fraction") is not None and now - c["ts"] <= CLAUDE_USAGE_MAX_AGE_SECONDS
         ]
     if candidates:
         selected = dict(max(candidates, key=lambda r: r["ts"]))
@@ -927,8 +925,8 @@ def usage(
         if pool == "claude":
             # Calendar-week buckets cannot stand in for this account's anchored
             # subscription week, and an old snapshot cannot become fresh on read.
-            bounds = claude_bounds(now, authoritative_end)
-            if abs(row["period_start"] - bounds[0]) > 1 or age < 0:
+            week = claude_bounds(now, authoritative_end)
+            if abs(row["period_start"] - week[0]) > 1 or age < 0:
                 continue
             return dict(
                 used_fraction=row["tokens"] / cap if cap else None,
@@ -937,7 +935,7 @@ def usage(
                 poll=polled["poll"],
                 weekly_tokens=row["tokens"],
                 period_start=row["period_start"],
-                period_end=bounds[1],
+                period_end=week[1],
                 sample_age_s=age,
                 desktop_sample_age_s=desktop_age,
                 desktop_sample_ts=desktop_ts,
@@ -986,6 +984,7 @@ def usage(
             fallback_reason="no Claude-only snapshot aligned to the subscription week",
         )
     return dict(used_fraction=None, ts=None, source="none", poll=polled["poll"])
+
 
 def usage_snapshot(now: float) -> dict:
     """One pool reading per build, preserving reset-aligned fallback periods."""
