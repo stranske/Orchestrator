@@ -102,3 +102,85 @@ fourth tasks require the owner host's actual observation and the existing bounde
 cadence. No flag, daily cap, writer lock, routing threshold, or cadence was changed.
 No live outcome or control comparison is claimed, and all operational acceptance
 remains incomplete.
+
+## Keepalive reconciliation and exact-revision verifier
+
+Reviewed the bootstrap commit `8b844a0` and implementation commit `1df14c5` before
+continuing. The latter changed three files: the auditor, its tests, and this
+report. Re-running its sixteen Node checks passed without failures or skips.
+The private-source recovery task remains blocked; the explicitly retained
+historical-provenance limitation is verified. A PR-body reconciliation was
+attempted through the GitHub connector, but it returned
+`MCP tool call requires approval, but approval policy is never`. No remote
+checkbox update succeeded. The following is the local reconciliation of the
+five distinct tasks and five acceptance criteria (duplicates have the same state):
+
+- [ ] Recover private bindings and an October 20 receipt: private files unavailable.
+- [ ] Reproduce named tests, focused files, and replay: pytest unavailable.
+- [ ] Establish November 3 population, refusals, flag, cadence, and lineage: owner state unavailable.
+- [ ] Observe an attributed bounded real apply, resolution, and control: not established.
+- [x] Keep operational acceptance incomplete and distinguish historical dates from current observation.
+- [ ] Exact-revision focused execution succeeds and replay authorizes at least 9/12.
+- [x] Retain the historical-provenance limitation explicitly.
+- [ ] Document actual November 3 eligible candidates and refusals.
+- [ ] Establish an attributable apply, acted_on > 0, resolution timing, and control.
+- [x] Do not represent a later run as historical execution.
+
+`scripts/verify_redirect_merged_revision.js` now provides one offline command
+for the second task:
+
+```sh
+node scripts/verify_redirect_merged_revision.js 8f596dc01e1ede350724c1b88bc36610380af79b /opt/anaconda3/bin/python3
+```
+
+Use the repository-selected Python interpreter when the owner interpreter above
+is unavailable. The command requires a full commit SHA already reachable from
+the local `origin/main` reference and records that reference's SHA. It archives
+the revision's complete `src/` and `tests/` trees plus `pyproject.toml`, hashes
+the archive, and runs both named nodes, both focused files, and the public offline
+replay from the extracted bytes. It does not execute dirty working-tree files.
+Each Python command gets private temporary operational state, the live flag and
+heartbeats off, and no inherited Python source path or pytest options. The
+temporary tree is removed even on execution failure. It does not install pytest
+or substitute another test runner.
+
+The JSON result records the actual observation time, interpreter identity,
+commands, exit statuses, process errors, stdout, and stderr. Success requires
+executed, passing tests without skips and `authorized N/12` with 9 <= N <= 12;
+a zero exit with a process error is also blocked. Historical replay receipt and
+operational acceptance remain `not_established` even on an offline success.
+
+The actual new execution is retained in
+[`issue-1088-merged-revision.json`](issue-1088-merged-revision.json). It used
+`/opt/hostedtoolcache/Python/3.14.9/x64/bin/python3` on merged revision
+`8f596dc01e1ede350724c1b88bc36610380af79b`, observed at
+`2026-11-03T15:59:31.876Z`. Both pytest invocations exited 1 before collection
+with `No module named pytest`. Offline replay exited 0 and printed
+`authorized 12/12 with named agents (dry-run)`. The subprocess layer additionally
+reported `EPERM`, which the verifier retains rather than silently ignoring.
+Installing pytest and Black into a temporary dependency directory also failed
+with no available distribution. The aggregate result is **blocked**, not verified.
+This is a new runner observation, not an October 20 receipt or an observation
+of the November 3 production chain.
+
+Six new verifier tests use explicitly manufactured Git repositories and Python
+process results; they establish no historical execution. They exercise dirty
+source isolation, actual Git ancestry and archive extraction, unmerged-revision
+refusal, missing pytest, skipped/empty execution, replay totals, process failures,
+and cleanup. The combined command passes all 22 checks without skips:
+
+```sh
+node --test --test-isolation=none tests/test_verify_redirect_merged_revision.js tests/test_redirect_stall_provenance.js tests/test_redirect_stall_fixtures.js tests/test_redirect_sweep_shell_backend.js
+```
+
+Both new JavaScript files pass `node --check`; `git diff --check` passes. No
+Python or workflow files changed. Production blocking count: **unknown**;
+drainable count: **unknown**; eligible candidates: **unknown**, not candidates 0.
+Neither the missing owner runtime nor an offline fixture count establishes an
+empty production population. No observed production failure was repaired and no
+bounded cadence, writer lock, or daily cap was changed.
+
+The required source commit was attempted after validation, but `git add` failed:
+`.git/index.lock: Read-only file system`. No files were staged or committed by
+this iteration. PR #1089 was re-read afterward and remains open with
+`draft=false` at `1df14c5c85945066c567f733b61107f3177bd888`.
