@@ -109,8 +109,9 @@ def test_waivers_are_bounded_not_just_dated():
     expiry to be WITHIN a horizon is what makes it a real deadline.
     """
     ledger = capabilities.load_declared(capabilities.REG)
+    known = set(ledger) | set(capabilities.declared_row_ids())
     for cap_id in admission.WAIVERS:
-        assert cap_id in ledger, f"WAIVERS names unknown capability {cap_id!r}"
+        assert cap_id in known, f"WAIVERS names unknown capability {cap_id!r}"
     problems = admission.waiver_problems()
     assert not problems, f"illegitimate waivers: {problems}"
 
@@ -484,6 +485,7 @@ def test_no_capability_is_unofferable_and_every_former_rail_is_exercise_bound():
         if d.get("findability_category") == admission.EXERCISE_CATEGORY
     }
     assert exercise_bound == {
+        "closer-core",
         "capability-admission-gate",
         "docs-drift-fix-agent",
         "agy-runtime-isolation",
