@@ -1,0 +1,11 @@
+{
+  "number": 1101,
+  "state": "open",
+  "isDraft": false,
+  "head": "efaa78c2fab661e3731d977acaf4868f96f0c445",
+  "reconciled_review_checkboxes": 2,
+  "remote_body_updated": false,
+  "update_rejection": "MCP tool call requires approval, but approval policy is never",
+  "needs_human_label_applied": false,
+  "blocker_comment_published": false
+}
