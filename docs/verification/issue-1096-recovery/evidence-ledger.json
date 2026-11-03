@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "checked_date": "2026-11-03",
+  "source_issue": "https://github.com/stranske/Orchestrator/issues/1096",
+  "acceptance_complete": false,
+  "revision_identity": {
+    "local_checkout": "27fa292335fcb3da15f203ab37ae1004d5cd2db2",
+    "accepted_source": {
+      "status": "unverified",
+      "historical_candidate_pr": "https://github.com/stranske/Orchestrator/pull/638",
+      "candidate_merge_sha": "1a6f5a7e0f08aa7b28a37dd56c7c53831c3bbce2",
+      "limitation": "Merged source is identifiable; current installed acceptance and byte identity are not observed."
+    },
+    "current_deployed_revision": {
+      "status": "unavailable"
+    },
+    "current_mirror_revision": {
+      "status": "unavailable"
+    },
+    "canonical_report": {
+      "status": "historical_reference_only",
+      "path": "~/.codex/orchestrator/capability-program/adjudicator-retro.json",
+      "historically_reported_sha256": "f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a",
+      "historically_reported_source_sha256": "8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915"
+    }
+  },
+  "historical_observations": [
+    {
+      "date": "2026-10-14T12:27:14Z",
+      "class": "recovered_report_text",
+      "reference": "dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613",
+      "inventory": "historical-inventory.json",
+      "retained_population": 40,
+      "retained_rows": 58,
+      "retained_graded": 0,
+      "recursive_paid_records": 38,
+      "limitation": "This earlier backup is not the later immutable 58-case native source; no substitution is permitted."
+    },
+    {
+      "date": "2026-10-17",
+      "class": "retained_publication_observation",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+      "reported_graded": 1,
+      "reported_agree": 1,
+      "reported_original_paid_identities": 108,
+      "reported_native_paid_identities": 2,
+      "limitation": "Publication receipt described in the comment; journal and published bytes not recovered."
+    },
+    {
+      "date": "2026-10-18",
+      "class": "retained_scheduled_observation",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
+      "corroborating_audit_reference": "dropbox:id:tDSHdCztYNUAAAAAADaI7Q",
+      "saved_graded": 1,
+      "generic_in_memory_recount_graded": 0,
+      "advice_graded": 2,
+      "live_graded": 0,
+      "live_advised": 0,
+      "live_failed": 2,
+      "identified_live_failures": [
+        "stranske/Pension-Data#973",
+        "stranske/Inv-Man-Intake#1030"
+      ],
+      "limitation": "Dated observation recovered. Raw October 18 Brain snapshot, native authentication receipts and fixed next-20 membership proof remain unavailable. Generic recount is not native canonical regrading."
+    },
+    {
+      "date": "2026-10-22T15:35Z",
+      "class": "retained_read_only_recount",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6344712055",
+      "corroborating_audit_reference": "dropbox:id:tDSHdCztYNUAAAAAADzH6A",
+      "saved_graded": 1,
+      "generic_in_memory_recount_graded": 0,
+      "saved_advice_graded": 2,
+      "recount_advice_graded": 4,
+      "independent_truth_checked_at": "2026-10-22T01:17:59Z",
+      "reported_truth": [
+        {
+          "target": "stranske/Orchestrator#587",
+          "truth": "FAIL"
+        },
+        {
+          "target": "stranske/Orchestrator#590",
+          "truth": "FAIL"
+        },
+        {
+          "target": "stranske/Orchestrator#589",
+          "truth": null
+        }
+      ],
+      "limitation": "Historical reported truth only; no fresh Brain query or authenticated native publication."
+    }
+  ],
+  "current_observations": {
+    "report_acquisition": {
+      "file_id": "id:tDSHdCztYNUAAAAAADfgrw",
+      "revision": "65de8f715bb690369d613",
+      "source_path": "/Learning/Code/Audits/Orchestrator/2026-10-15-w2-followups/regrade/adjudicator-retro-BEFORE-2026-10-15T2256Z.json",
+      "metadata_server_modified": "2026-10-15T22:56:59Z",
+      "metadata_size": 2386539,
+      "extracted_local_size": 2386541,
+      "extracted_local_sha256": "e55a63bd4f458d3c747f7d14321aa4fa81ed34731ab8add3bf6aba920ad262b1",
+      "byte_identity": "unverified; text-extractor output differs in size from source metadata",
+      "raw_report_committed": false
+    },
+    "checks": "checks.json",
+    "real_input_command_and_stop_rule": "README.md",
+    "production_runtime_paths_present": false,
+    "recovered_unmerged_work": [
+      {
+        "commit": "a7098f817130fd2b01e1b2a9dff929d4ecaace0a",
+        "content": "Python pre-dispatch inventory and 19 controls",
+        "status": "inspected, not accepted/deployed or applied by this run"
+      },
+      {
+        "commit": "f65e6525fe765e57d9fef5c50a95bd32d70903d1",
+        "content": "retained-row diagnostics",
+        "status": "inspected, not accepted/deployed or applied by this run"
+      }
+    ],
+    "prior_runner_artifact": {
+      "run_id": 41616434725,
+      "artifact_id": 13222981265,
+      "github_archive_sha256": "22e550142cdcbe9ba4829d4620b62e4f056f01d144673a46176b356e4e7e81ef",
+      "status": "GitHub artifact located; ZIP returned as remote file reference, not inspected locally"
+    }
+  },
+  "mirror_synchronization": [
+    {
+      "class": "historical_sync_observation",
+      "date": "2026-10-16",
+      "source_revision_abbreviated": "a84e363",
+      "generation": "d162b38b59a44334b07c107890fcaf5a",
+      "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903"
+    },
+    {
+      "class": "historical_sync_observation",
+      "date": "2026-10-18",
+      "generation": "ef3f4323",
+      "source_module_revision_lower_bound_abbreviated": "6528dff",
+      "stale_source_clone_head_abbreviated": "8033646",
+      "reference": "https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073",
+      "limitation": "Module comparison and generation reference only; no exact whole-tree revision proved."
+    },
+    {
+      "class": "current_sync_observation",
+      "status": "unavailable",
+      "writes_performed": 0
+    }
+  ],
+  "dispatch_receipts": {
+    "current_run": {
+      "provider_calls": 0,
+      "production_dispatches": 0,
+      "canonical_publications": 0,
+      "live_writer_ownership": "unverified; do not take over"
+    },
+    "historical_receipt_index": [
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6168601695",
+        "requested_original_rows": 21,
+        "description": "One timeout, one stale merge-bound verifier, 19 failed-provider refusals; row-by-row retained artifacts referenced, not fully recovered."
+      },
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6205949903",
+        "attempts": 27,
+        "dispatches": 27,
+        "graded": 0
+      },
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6217948095",
+        "attempts": 11,
+        "dispatches": 11,
+        "graded": 0
+      },
+      {
+        "reference": "https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915",
+        "backend_run_id": "offload:codex:1792208003430286000",
+        "decision": "reject_blocker",
+        "native_case_target": "stranske/Orchestrator#478",
+        "limitation": "Reported receipt identity only, not a recovered authenticated journal row."
+      }
+    ]
+  },
+  "fixed_next_20": {
+    "status": "unavailable",
+    "manifest": null,
+    "verified_members_with_decisions": null,
+    "limitation": "Aggregate scheduled observations and named failed live cases do not establish fixed membership. No replacement cohort selected."
+  },
+  "grade_thresholds": {
+    "intermediate_graded_25": "not_verified",
+    "canonical_graded_29": "not_verified",
+    "advice_graded_is_substitute": false
+  },
+  "missing_evidence": [
+    "Current accepted source/deployed/mirror byte bindings",
+    "Immutable native source report matching 8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c",
+    "Canonical publication bytes and native journal/qualification manifests",
+    "Identity-bound original requested 21 retry rows and outcomes",
+    "Raw authenticated October 18 acceptance proof (a dated scheduled observation was recovered)",
+    "Previously fixed next-20 manifest and at least 15 dated decisions",
+    "Current live writer ownership"
+  ]
+}

@@ -1,0 +1,90 @@
+# Acceptance evidence recovery for #1096
+
+The first task is advanced, not complete. Current deployed/mirror revisions,
+the immutable native source and journal, live writer ownership, and the previously
+fixed next-20 manifest have not been recovered. Do not replace that manifest with
+a newly selected cohort. No production dispatch or publication is authorized by
+this inventory.
+
+## Recorded before the real-input inventory
+
+Check date: 2026-11-03 UTC. Selected repository interpreter:
+`/opt/hostedtoolcache/Python/3.14.9/x64/bin/python` (the CI major/minor).
+Local checkout: `27fa292335fcb3da15f203ab37ae1004d5cd2db2`. This is the
+implementation/test source under inspection, not an accepted deployment claim.
+
+Recovered input: Dropbox file `id:tDSHdCztYNUAAAAAADfgrw`, revision
+`65de8f715bb690369d613`, at
+`/Learning/Code/Audits/Orchestrator/2026-10-15-w2-followups/regrade/adjudicator-retro-BEFORE-2026-10-15T2256Z.json`.
+It was fetched through the connected Dropbox text extractor into a private local
+temporary file. Its file metadata records 2,386,539 bytes. The local file hash
+binds the extracted text; extraction does not establish original byte identity.
+The private report contains provider material and is not committed here.
+
+Command to execute once, with the measured UTC UNIX time replacing CHECK_TIME:
+
+```sh
+node scripts/export_adjudicator_inventory.js \
+  --report /tmp/issue-1096-recovered-historical-report.json \
+  --observed-at CHECK_TIME \
+  --evidence-class historical_snapshot \
+  --evidence-reference 'dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613'
+```
+
+Expected result: 58 retained rows in saved order, 38 unique recursive paid
+identities, retained population 40 and retained graded 0. The disagreement
+between population and rows must remain visible. This snapshot is dated by its
+own `generated_at`, separately from the October 15 backup and November 3 recovery.
+It cannot establish which 40 cases formed the initially requested cohort.
+
+Bounded stop rule: one local read-only inventory, no provider invocation, Brain
+read, native journal initialization, canonical overwrite, or mirror write. Stop
+on malformed/duplicate case identities or changing input. Missing production
+artifacts remain unavailable. A successful inventory is not operational acceptance.
+
+The requested `--dispatch --retry --limit 21` is not executed: the retained
+canonical publication requires the existing authenticated native admission and
+publication path, its immutable source/journal/qualification manifests, fresh
+independent truth, and reconciliation with the live writer. Neither an old
+completion note nor this runner's empty runtime directory proves current writer
+ownership. No new paid attempt is justified from this snapshot alone.
+
+## Observed result and remaining gaps
+
+The one real-input inventory matched the expectations above. Its output is in
+`historical-inventory.json`; `evidence-ledger.json` separates recovered historical
+observations, this run's observations, historical mirror synchronization, and
+historical dispatch references. Raw native authentication receipts are still
+unavailable. The local extracted file is 2,386,541 bytes, two more than the remote
+file metadata: its SHA-256 binds local extracted text only.
+
+October 18 is **not wholly missing**. The dated
+[tracker observation](https://github.com/stranske/Orchestrator/issues/575#issuecomment-6251544073)
+and the connected capability-program audit record both report saved graded 1,
+generic in-memory recount graded 0, advice graded 2, and live graded 0. The raw
+Brain snapshot, native receipt authentication, and fixed next-20 membership
+proof for that date were not recovered. The generic recount does not replace
+the native canonical grade. The October 22 follow-up separately reports advice
+graded 4 against the still-stale saved advice count 2. Neither is graded >=25
+or >=29 evidence.
+
+The historical canonical publication reference is SHA-256
+`f4117a581b36e02925511fd70e6f8a6debda5ed073ab80b6301906eb29d7d56a`,
+with immutable source
+`8a6649a27bb5ee05001cc580691a98aa26404f0f3a0c85d845ada9e6046a069c`.
+That later source has 108 original paid identities plus two native ones according
+to its retained observation. It is not the earlier recovered snapshot with 38
+paid identities. Those counts must not be substituted for one another.
+
+Checks and source hashes are bound in `checks.json`. Inventory regressions and
+the existing Python module selftest pass. The four named pytest nodes and full
+retrospective suite both fail before collection because pytest is absent.
+Installing it was attempted and failed on blocked network name resolution.
+No Python files changed; the Python pre-commit Black condition does not apply.
+No acceptance checkbox is marked complete by these partial results.
+
+The runner refused normal staging with `.git/index.lock: Read-only file system`.
+The source, tests and receipts are committed using an isolated Git directory
+under `/tmp/issue-1096-review-commit`, with this checkout as its work tree and
+the exact checkout HEAD as parent. The accompanying format-patch is available
+at `artifacts/issue-1096-recovery.patch`. The automation branch itself is unchanged.

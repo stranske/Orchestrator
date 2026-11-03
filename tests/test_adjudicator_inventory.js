@@ -8,12 +8,131 @@ const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { test } = require('node:test');
-const { inventory } = require('../scripts/export_adjudicator_inventory');
+const { inventory, reportInventory } = require('../scripts/export_adjudicator_inventory');
 
 const repo = path.resolve(__dirname, '..');
 const script = path.join(repo, 'scripts/export_adjudicator_inventory.js');
 const now = 2000000000;
 const cutoff = now - 90 * 86400;
+
+function retainedReport(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-retained-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const report = path.join(root, 'historical.json');
+  const saved = { generated_at: now - 86400, population: 40,
+    summary: { cases: 58, graded: 1, advice_graded: 2 },
+    native_publication: { source_report_sha256: 'retained-claim' },
+    rows: [
+      { case_id: 'case-a', target: 'owner/repo#1', decision: 'needs_more_evidence',
+        backend_run_id: 'primary', raw_output: 'private backend response',
+        error: 'private error detail', native_projection: { graded: 29 },
+        retry_attempts: [{ backend_run_id: 'prior',
+          retry_attempts: [{ backend_run_id: 'oldest' }] }] },
+      { case_id: 'case-b', target: 'owner/repo#2', decision: 'reject_blocker',
+        later_truth: 'PASS', backend_run_id: 'prior' },
+    ] };
+  fs.writeFileSync(report, JSON.stringify(saved));
+  return { root, saved, options: { report, observedAt: now,
+    evidenceClass: 'historical_snapshot', evidenceReference: 'retained-source-reference' } };
+}
+
+test('report recovery preserves ordered rows, recursive paid history and conflicting counts', (t) => {
+  const { root, options } = retainedReport(t);
+  const before = fs.readFileSync(options.report);
+  const files = fs.readdirSync(root);
+  const result = reportInventory(options);
+  assert.deepEqual(result.cases.map(({ case_id }) => case_id), ['case-a', 'case-b']);
+  assert.equal(result.retained_population, 40);
+  assert.equal(result.case_count, 2, 'derive rows from evidence, never retained population/summary');
+  assert.deepEqual(result.retained_summary, { cases: 58, graded: 1, advice_graded: 2 });
+  assert.equal(result.report_sha256, createHash('sha256').update(before).digest('hex'));
+  assert.equal(result.report_byte_length, before.length);
+  assert.equal(result.retained_generated_at, now - 86400);
+  assert.equal(result.observed_at, now, 'recovery time is separate from the retained observation');
+  assert.deepEqual(result.paid_attempts.map((item) => item.backend_run_id),
+    ['primary', 'prior', 'oldest', 'prior']);
+  assert.deepEqual(result.paid_identity_summary, { records: 4, unique: 3, repeated: [
+    { backend_run_id: 'prior', locations: ['rows[0].retry_attempts[0]', 'rows[1]'] },
+  ] });
+  assert.equal(result.cases[0].retained_error_present, true);
+  assert.equal(result.cases[1].retained_error_present, false);
+  assert.equal(result.cases[1].retained_later_truth, 'PASS');
+  assert.equal(result.native_publication_present, true);
+  assert.equal(result.cases[0].native_projection_present, true);
+  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+  assert.equal(result.requested_cohort_verified, false);
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(Object.hasOwn(result, 'graded'), false, 'saved claims cannot create fresh grades');
+  assert.ok(result.evidence_gaps.includes('native_journal_not_observed'));
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.deepEqual(fs.readFileSync(options.report), before);
+  assert.deepEqual(fs.readdirSync(root), files, 'inventory creates no runtime files');
+});
+
+test('report recovery rejects missing input without initializing runtime state', (t) => {
+  const { root, options } = retainedReport(t);
+  const missing = path.join(root, 'missing', 'report.json');
+  assert.throws(() => reportInventory({ ...options, report: missing }), /ENOENT/);
+  assert.equal(fs.existsSync(path.dirname(missing)), false);
+});
+
+test('report recovery refuses malformed and ambiguous retained identities', (t) => {
+  const { saved, options } = retainedReport(t);
+  for (const change of [
+    (value) => { value.rows = {}; },
+    (value) => { value.rows[0] = null; },
+    (value) => { value.rows[1].case_id = 'case-a'; },
+    (value) => { value.rows[0].target = ''; },
+    (value) => { value.rows[0].retry_attempts = {}; },
+    (value) => { value.rows[0].retry_attempts[0].retry_attempts = [null]; },
+    (value) => { value.rows[0].backend_run_id = {}; },
+  ]) {
+    const malformed = structuredClone(saved);
+    change(malformed);
+    fs.writeFileSync(options.report, JSON.stringify(malformed));
+    assert.throws(() => reportInventory(options), /rows|case_id|retry_attempts|attempt|backend/);
+  }
+});
+
+test('report recovery requires explicit attribution and a valid check time', (t) => {
+  const { options } = retainedReport(t);
+  for (const overrides of [{ observedAt: NaN }, { observedAt: -1 },
+    { evidenceClass: 'authenticated' }, { evidenceReference: '' }]) {
+    assert.throws(() => reportInventory({ ...options, ...overrides }));
+  }
+});
+
+test('report recovery aborts if the input changes during observation', (t) => {
+  const { options } = retainedReport(t);
+  const read = fs.readFileSync;
+  let observations = 0;
+  fs.readFileSync = function observed(file, ...args) {
+    if (file === options.report && ++observations === 2) {
+      fs.writeFileSync(file, '{"rows":[]}');
+    }
+    return read(file, ...args);
+  };
+  try {
+    assert.throws(() => reportInventory(options), /changed during inventory/);
+  } finally {
+    fs.readFileSync = read;
+  }
+});
+
+test('report CLI never combines historical recovery with dispatch or current Brain selection', (t) => {
+  const { root, options } = retainedReport(t);
+  const args = [script, '--report', options.report, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference];
+  const result = execute(root, process.execPath, args);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), reportInventory(options));
+  for (const extra of [['--dispatch'], ['--db', 'absent.db'], ['--manifest', 'absent.json'],
+    ['--days', '90'], ['--expected-count', '58']]) {
+    const refused = execute(root, process.execPath, [...args, ...extra]);
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.equal(refused.stdout, '', 'refusal must not publish a partial inventory');
+  }
+});
 
 function world(t, schema = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));

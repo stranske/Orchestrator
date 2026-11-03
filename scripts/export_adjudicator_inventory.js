@@ -3,7 +3,8 @@
 // Read-only snapshot of the Brain selection used by adjudicator_retro.disputes,
 // plus explicit exclusions for runs or outcomes missing their matching row.
 // Requires Node >=22.13 (built-in SQLite). JSON goes to stdout; callers choose
-// where to preserve it. This tool never opens the retrospective report or roles.
+// where to preserve it. The separate --report mode inventories retained report
+// bytes, including recursive paid history, without opening Brain or roles.
 const path = require('node:path');
 const fs = require('node:fs');
 const { createHash } = require('node:crypto');
@@ -19,6 +20,92 @@ function integer(value, name, minimum) {
 
 function hasTarget(row) {
   return typeof row.target === 'string' && Boolean(row.target.trim());
+}
+
+function reportInventory({ report, observedAt, evidenceClass, evidenceReference }) {
+  integer(observedAt, 'observedAt', 0);
+  if (typeof report !== 'string' || !report.trim()) throw new Error('report is required');
+  if (!['historical_snapshot', 'current_snapshot'].includes(evidenceClass)) {
+    throw new Error('evidenceClass must be historical_snapshot or current_snapshot');
+  }
+  if (typeof evidenceReference !== 'string' || !evidenceReference.trim()) {
+    throw new Error('evidenceReference is required');
+  }
+  const bytes = fs.readFileSync(report);
+  const saved = JSON.parse(bytes);
+  if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
+  const seen = new Set();
+  const paid = [];
+  const cases = saved.rows.map((row, index) => {
+    if (!row || typeof row.case_id !== 'string' || !row.case_id.trim() || !hasTarget(row)) {
+      throw new Error(`rows[${index}] requires nonblank case_id and target`);
+    }
+    if (seen.has(row.case_id)) throw new Error(`duplicate case_id at rows[${index}]`);
+    seen.add(row.case_id);
+    // Iterative pre-order traversal preserves every retained receipt locator,
+    // including repeated paid identities. It never turns retries into cases.
+    const stack = [{ attempt: row, location: `rows[${index}]` }];
+    while (stack.length) {
+      const { attempt, location } = stack.pop();
+      if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) {
+        throw new Error(`invalid attempt at ${location}`);
+      }
+      if (attempt.backend_run_id !== undefined && attempt.backend_run_id !== null) {
+        if (typeof attempt.backend_run_id !== 'string' || !attempt.backend_run_id.trim()) {
+          throw new Error(`invalid backend_run_id at ${location}`);
+        }
+        paid.push({ case_id: row.case_id, backend_run_id: attempt.backend_run_id, location });
+      }
+      const history = attempt.retry_attempts === undefined ? [] : attempt.retry_attempts;
+      if (!Array.isArray(history)) throw new Error(`invalid retry_attempts at ${location}`);
+      for (let child = history.length - 1; child >= 0; child -= 1) {
+        stack.push({ attempt: history[child], location: `${location}.retry_attempts[${child}]` });
+      }
+    }
+    return {
+      case_id: row.case_id, target: row.target, location: `rows[${index}]`,
+      run_id: row.run_id ?? null,
+      verifier_verdict: row.verifier_verdict ?? null,
+      adjudicated_verdict: row.adjudicated_verdict ?? null,
+      retained_decision: row.decision ?? null,
+      retained_later_truth: row.later_truth ?? null,
+      retained_error_present: Boolean(row.error || row.errors?.length),
+      native_projection_present: Object.hasOwn(row, 'native_projection'),
+    };
+  });
+  const identities = new Map();
+  for (const item of paid) {
+    const occurrences = identities.get(item.backend_run_id) || [];
+    occurrences.push(item.location);
+    identities.set(item.backend_run_id, occurrences);
+  }
+  if (!fs.readFileSync(report).equals(bytes)) {
+    throw new Error('report changed during inventory');
+  }
+  return {
+    schema_version: 1,
+    scope: 'retained_report_only', evidence_class: evidenceClass,
+    evidence_reference: evidenceReference, observed_at: observedAt,
+    report_path: path.resolve(report), report_sha256: createHash('sha256').update(bytes).digest('hex'),
+    report_byte_length: bytes.length,
+    retained_generated_at: saved.generated_at ?? null,
+    retained_population: saved.population ?? null,
+    retained_summary: saved.summary ?? null,
+    native_publication_present: Object.hasOwn(saved, 'native_publication'),
+    cases, case_count: cases.length, paid_attempts: paid,
+    paid_identity_summary: {
+      records: paid.length, unique: identities.size,
+      repeated: [...identities].filter(([, locations]) => locations.length > 1)
+        .map(([backend_run_id, locations]) => ({ backend_run_id, locations })),
+    },
+    // Retained summaries can be stale or contradictory. No summary, source
+    // label, saved native projection or matching count authenticates a grade.
+    receipt_authority: 'not_authenticated_by_inventory',
+    requested_cohort_verified: false, dispatch_authorized: false,
+    evidence_gaps: ['original_cohort_provenance_unverified', 'native_journal_not_observed',
+      'independent_current_truth_not_observed', 'deployed_and_mirror_revisions_not_observed',
+      'fixed_next_20_manifest_not_observed'],
+  };
 }
 
 function readManifest(file) {
@@ -246,8 +333,11 @@ function inventory({ db, observedAt, days = 90, expectedCount = 71, manifest }) 
 
 function main() {
   try {
-    const { values } = parseArgs({ options: {
+    const { values, tokens } = parseArgs({ tokens: true, options: {
       db: { type: 'string' },
+      report: { type: 'string' },
+      'evidence-class': { type: 'string' },
+      'evidence-reference': { type: 'string' },
       'observed-at': { type: 'string' },
       days: { type: 'string', default: '90' },
       'expected-count': { type: 'string', default: '71' },
@@ -255,8 +345,23 @@ function main() {
       help: { type: 'boolean', short: 'h' },
     } });
     if (values.help) {
+      process.stdout.write('Report recovery: node scripts/export_adjudicator_inventory.js --report SAVED_JSON --observed-at UNIX_SECONDS --evidence-class historical_snapshot --evidence-reference SOURCE_REFERENCE\nRetained rows and paid identities only; no grade authentication or dispatch.\n');
       process.stdout.write('Usage: node scripts/export_adjudicator_inventory.js --db BRAIN --observed-at UNIX_SECONDS [--days 90] [--expected-count 71] [--manifest JSON_FILE]\nManifest: {"schema_version":2,"cases":[{"run_id":"...","target":"owner/repo#N","verifier_verdict":"NON_PASS","adjudicated_verdict":"PASS"}]}.\nVersion 1 accepts run_id and target only; it cannot detect changed verdicts.\nJSON is written to stdout. No replay, dispatch or outcome writes.\n');
       return;
+    }
+    if (values.report) {
+      if (tokens.some((item) => ['db', 'days', 'expected-count', 'manifest'].includes(item.name))) {
+        throw new Error('--report cannot combine with Brain window or manifest options');
+      }
+      const result = reportInventory({
+        report: values.report, observedAt: Number(values['observed-at']),
+        evidenceClass: values['evidence-class'], evidenceReference: values['evidence-reference'],
+      });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
+    if (values['evidence-class'] || values['evidence-reference']) {
+      throw new Error('--evidence-class and --evidence-reference require --report');
     }
     if (!values.db || !values['observed-at']) {
       throw new Error('--db and --observed-at are required');
@@ -274,5 +379,5 @@ function main() {
   }
 }
 
-module.exports = { inventory };
+module.exports = { inventory, reportInventory };
 if (require.main === module) main();
