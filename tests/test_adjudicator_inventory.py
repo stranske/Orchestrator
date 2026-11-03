@@ -253,3 +253,29 @@ def test_inventory_cli_requires_explicit_mode_for_inventory_paths(monkeypatch, c
         retro.main()
     assert exc.value.code == 2
     assert "require --inventory" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flag", ["--expected-source-hash", "--expected-canonical-hash", "--repository"]
+)
+def test_inventory_cli_refuses_ignored_pins_and_checkout(flag, inputs, monkeypatch, capsys):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "adjudicator_retro.py",
+            "--inventory",
+            "--report",
+            str(inputs["original_report"]),
+            "--canonical-report",
+            str(inputs["canonical_path"]),
+            "--native-journal",
+            str(inputs["journal_path"]),
+            flag,
+            "unused",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        retro.main()
+    assert exc.value.code == 2
+    assert "read-only" in capsys.readouterr().err

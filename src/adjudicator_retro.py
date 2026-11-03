@@ -3274,6 +3274,9 @@ def main() -> int:
                 args.case_input,
                 args.qualification,
                 args.cohort_manifest,
+                args.expected_source_hash,
+                args.expected_canonical_hash,
+                args.repository,
             )
         ):
             parser.error("--inventory is read-only and cannot combine with another mode or output")
