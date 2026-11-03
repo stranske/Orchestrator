@@ -45,6 +45,38 @@ function loggedRuns(bytes) {
   return { total: runs.length, latest: runs.slice(-20) };
 }
 
+function recordedSwitchReview(input) {
+  if (!input.bytes) return { status: input.status };
+  try {
+    const report = JSON.parse(input.bytes.toString('utf8'));
+    const monitor = report.value_chain;
+    const timestamp = (value) => Number.isSafeInteger(value) && value > 0;
+    if (!timestamp(report.generated_at)) throw new Error('invalid timestamp');
+    if (monitor?.disabled === true) return { status: 'monitor_disabled', recorded_at: report.generated_at };
+    if (!timestamp(monitor?.generated_at) || !Number.isSafeInteger(monitor.window_days)
+      || monitor.window_days <= 0 || !Array.isArray(monitor.rows)) throw new Error('invalid monitor');
+    const rows = monitor.rows.filter((row) => row?.capability === 'redirect-apply-bootstrap');
+    if (!rows.length) return { status: 'row_unavailable', recorded_at: report.generated_at };
+    if (rows.length !== 1) throw new Error('ambiguous row');
+    const fields = ['situation_count', 'offered', 'invocation_count', 'usable', 'acted_on',
+      'outcome', 'outcome_success'];
+    const counts = Object.fromEntries(fields.map((key) => [key, rows[0][key] ?? null]));
+    if (Object.values(counts).some((value) => value !== null
+      && (!Number.isSafeInteger(value) || value < 0))) throw new Error('invalid count');
+    const firstBreak = rows[0].first_break ?? null;
+    if (firstBreak !== null && !['no_situation', 'not_offered', 'not_invoked', 'unusable',
+      'not_acted_on', 'no_outcome', 'no_success', 'outcome_excluded',
+      'outcome_unscoreable', 'works'].includes(firstBreak)) throw new Error('invalid break');
+    // These are a retained report's rolling counts, not current eligibility or
+    // attribution of an individual apply. Never copy targets or free-form errors.
+    return { status: 'recorded', recorded_at: report.generated_at,
+      monitor_generated_at: monitor.generated_at, window_days: monitor.window_days,
+      counts, first_break: firstBreak };
+  } catch {
+    return { status: 'invalid' };
+  }
+}
+
 function observe({ runtime, stateDir = runtime, python = 'python3', env = process.env, run = spawnSync }) {
   const result = {
     observed_at: new Date().toISOString(),
@@ -69,6 +101,7 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
   const inputs = Object.fromEntries(Object.entries(files).map(([key, file]) => [key, read(file)]));
   for (const [key, { bytes, ...metadata }] of Object.entries(inputs)) result.artifacts[key] = metadata;
   if (inputs.log.bytes) result.logged_runs = loggedRuns(inputs.log.bytes);
+  result.recorded_switch_review = recordedSwitchReview(inputs.switch_review);
   let events;
   try {
     if (!inputs.corpus.bytes) throw new Error('unavailable');
@@ -110,6 +143,7 @@ function observe({ runtime, stateDir = runtime, python = 'python3', env = proces
   if (changed.length) {
     result.limitations.push('artifacts_changed_during_capture');
     result.changed_artifacts = changed;
+    if (changed.includes('switch_review')) result.recorded_switch_review = { status: 'changed_during_capture' };
     return result;
   }
   if (execution.status !== 0 || execution.signal || execution.error) {

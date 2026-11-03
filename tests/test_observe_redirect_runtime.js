@@ -180,3 +180,97 @@ test('CLI requires an explicit owner path', (t) => {
   assert.equal(main(['--apply']), 2);
   error.mock.restore();
 });
+
+// Explicitly manufactured snapshots exercise extraction only. Their rolling
+// demand and acted-on counts cannot establish a production population or apply.
+function reviewControl(s, row = {}) {
+  const file = path.join(s.stateDir, 'switch-review.json');
+  const report = { generated_at: 1793664060, value_chain: {
+    generated_at: 1793664000, window_days: 7,
+    rows: [{ capability: 'redirect-apply-bootstrap', situation_count: 18,
+      offered: 0, invocation_count: 3, usable: 2, acted_on: 0, outcome: 0,
+      outcome_success: 0, first_break: 'not_acted_on', ...row }],
+    errors: ['PRIVATE-error'],
+  }, unrelated: 'PRIVATE-target' };
+  const save = () => fs.writeFileSync(file, JSON.stringify(report));
+  save();
+  return { file, report, save };
+}
+
+test('retains the recorded redirect chain and its time window independently of current candidates', (t) => {
+  const s = sandbox(t);
+  const review = reviewControl(s);
+  const before = snapshot(s.root);
+  const result = observe(control(s));
+  assert.deepEqual(result.recorded_switch_review, {
+    status: 'recorded', recorded_at: 1793664060, monitor_generated_at: 1793664000,
+    window_days: 7, counts: { situation_count: 18, offered: 0, invocation_count: 3,
+      usable: 2, acted_on: 0, outcome: 0, outcome_success: 0 }, first_break: 'not_acted_on',
+  });
+  assert.equal(result.candidates, 0, 'demand 18 must not become eligible candidates');
+  assert.equal(result.drainable, 0);
+  assert.equal(result.operational_acceptance, 'not_established');
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+  assert.deepEqual(snapshot(s.root), before);
+
+  review.report.value_chain.rows[0].acted_on = 1;
+  review.report.value_chain.rows[0].first_break = 'no_outcome';
+  review.save();
+  fs.unlinkSync(s.corpus);
+  const absent = observe({ ...s, run() { assert.fail('owner corpus missing'); } });
+  assert.equal(absent.recorded_switch_review.counts.acted_on, 1);
+  assert.equal(absent.candidates, null);
+  assert.equal(absent.operational_acceptance, 'not_established', 'rolling activity is not individual attribution');
+});
+
+test('missing, disabled, ambiguous and malformed review rows never become zero acted-on counts', (t) => {
+  const s = sandbox(t);
+  assert.deepEqual(observe(control(s)).recorded_switch_review, { status: 'missing' });
+  const review = reviewControl(s, { acted_on: null });
+  delete review.report.value_chain.rows[0].outcome;
+  review.save();
+  let result = observe(control(s));
+  assert.equal(result.recorded_switch_review.counts.acted_on, null);
+  assert.equal(result.recorded_switch_review.counts.outcome, null);
+  const original = structuredClone(review.report);
+  const cases = [
+    ['monitor_disabled', (r) => { r.value_chain.disabled = true; }],
+    ['row_unavailable', (r) => { r.value_chain.rows = [{ capability: 'other', acted_on: 100 }]; }],
+    ['invalid', (r) => { r.generated_at = 'PRIVATE-date'; }],
+    ['invalid', (r) => { delete r.value_chain.generated_at; }],
+    ['invalid', (r) => { r.value_chain.window_days = 0; }],
+    ['invalid', (r) => { r.value_chain.rows.push(r.value_chain.rows[0]); }],
+    ...[-1, true, '1', 1.5, Number.MAX_SAFE_INTEGER + 1].map((value) =>
+      ['invalid', (r) => { r.value_chain.rows[0].acted_on = value; }]),
+    ['invalid', (r) => { r.value_chain.rows[0].first_break = 'PRIVATE-target'; }],
+  ];
+  for (const [status, mutate] of cases) {
+    const report = structuredClone(original);
+    mutate(report);
+    fs.writeFileSync(review.file, JSON.stringify(report));
+    result = observe(control(s));
+    assert.equal(result.recorded_switch_review.status, status);
+    assert.equal(result.recorded_switch_review.counts, undefined);
+    assert.equal(result.candidates, 0, 'an invalid old review must not replace the current screen');
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+  }
+  fs.writeFileSync(review.file, 'PRIVATE-malformed');
+  assert.deepEqual(observe(control(s)).recorded_switch_review, { status: 'invalid' });
+});
+
+test('a review rewritten during screening cannot retain verified chain counts', (t) => {
+  const s = sandbox(t);
+  const review = reviewControl(s);
+  const base = control(s);
+  const result = observe({ ...base, run(...args) {
+    const execution = base.run(...args);
+    review.report.value_chain.rows[0].acted_on = 1;
+    review.save();
+    return execution;
+  } });
+  assert.deepEqual(result.changed_artifacts, ['switch_review']);
+  assert.deepEqual(result.recorded_switch_review, { status: 'changed_during_capture' });
+  assert.equal(result.candidates, null);
+  assert.equal(result.drainable, null);
+  assert.equal(result.operational_acceptance, 'not_established');
+});

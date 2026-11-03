@@ -319,3 +319,46 @@ This correction does not establish a production failure or a live action.
 
 Staging the validated source, tests and report failed with
 `.git/index.lock: Read-only file system`; no commit was created by this iteration.
+
+## Recorded switch-review chain capture
+
+Reviewed the five implementation commits through `a57f1b6` and verified all 32
+existing scoped Node checks. The reconciliation above still applies: the first
+four distinct tasks remain open; retaining the historical-provenance limitation
+and separating observations from historical execution remain complete. The
+connector again rejected the PR-body update, blocker comment and additive
+`needs-human` label with `MCP tool call requires approval, but approval policy is
+never`. No remote checklist or label change succeeded.
+
+The existing runtime collector now extracts the single `redirect-apply-bootstrap`
+row from the retained switch review's `value_chain.rows`. It retains the report
+and monitor timestamps, rolling window, numeric chain counts (including
+`acted_on`), and the monitor's recorded `first_break`. It does not recompute a
+diagnosis or equate demand with current eligibility. Missing counts remain null;
+missing, disabled, malformed and duplicate rows cannot supply a zero. Only the
+known numeric fields and diagnosis vocabulary are emitted. A review rewritten
+during screening invalidates the retained counts. The existing file hash binds
+these values to the captured artifact; a recorded positive `acted_on` alone does
+not establish an attributable apply, stall resolution, or operational acceptance.
+
+Three new tests use manufactured reports, including demand 18 with current
+candidates 0, positive recorded activity with an unavailable current corpus,
+unknown counts, invalid rows, and a concurrent rewrite. The five-file Node
+command above now passes **35/35**, with no skips. Both changed JavaScript files
+pass syntax checks and `git diff --check` passes. No Python or workflow files
+changed.
+
+A new exact-revision observation at `2026-11-03T16:59:59.339Z` remains blocked on
+merged revision `8f596dc01e1ede350724c1b88bc36610380af79b`: both pytest invocations
+exit 1 with `No module named pytest`. Offline replay exits 0 with
+`authorized 12/12 with named agents (dry-run)`, while the subprocess layer still
+reports `EPERM`. Installing pytest again failed. At
+`2026-11-03T17:00:00.498Z`, the owner corpus and switch-review artifact were missing:
+blocking, drainable and candidates remain **unknown**, not candidates 0. The
+private receipts also remain absent. These are new runner observations, not an
+October 20 receipt or production evidence. No bounded live action was attempted.
+
+Staging these source, test and report changes failed with `.git/index.lock:
+Read-only file system`; this iteration could not create the required commit.
+The validated changes remain in the working tree for the automation's committing
+process. PR #1089 was re-read and remains open, `draft=false`, at `a57f1b6`.
