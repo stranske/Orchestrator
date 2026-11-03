@@ -7,6 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { test } = require('node:test');
+const { DatabaseSync } = require('node:sqlite');
+const { reportWindow } = require('../scripts/report_relay_join_window');
 
 const repo = path.resolve(__dirname, '..');
 const moduleDir = fs.existsSync(path.join(repo, 'src', 'rate_incidents.py'))
@@ -31,14 +33,14 @@ function world(t) {
     HANDOFF_DIR: root,
     HANDOFF_PACING_LOG: log,
   };
-  function run(args) {
+  function run(args, command = python) {
     // File capture works on hosts that disallow child-process pipes.
     const output = path.join(root, 'stdout');
     const errors = path.join(root, 'stderr');
     const stdout = fs.openSync(output, 'w');
     const stderr = fs.openSync(errors, 'w');
     try {
-      const result = spawnSync(python, args, {
+      const result = spawnSync(command, args, {
         cwd: root, env, stdio: ['ignore', stdout, stderr], timeout: 30000,
       });
       assert.ifError(result.error);
@@ -54,6 +56,15 @@ function world(t) {
   }
   return {
     root, log, tail,
+    report(end, start = deployment) {
+      return reportWindow({ db: path.join(root, 'brain.db'), start, end });
+    },
+    reportCli(end) {
+      return JSON.parse(run([
+        path.join(repo, 'scripts', 'report_relay_join_window.js'),
+        '--db', path.join(root, 'brain.db'), '--start', String(deployment), '--end', String(end),
+      ], process.execPath));
+    },
     append(id, ts) {
       assert.equal(cli([
         'append-relay-pacing-decision', '--source', 'codex', '--lane', 'opener',
@@ -277,4 +288,120 @@ test('the deployment boundary excludes an earlier decision despite both exits be
     ['one-second-before', older.decision_id, deployment - 1],
     ['at-deployment', current.decision_id, deployment],
   ]);
+});
+
+test('the report separates cumulative bindings from completed joins in the selected window', (t) => {
+  const w = world(t);
+  w.append('old-binding', deployment - 1);
+  w.exit('old-binding', deployment + 10);
+  w.append('timely-binding', deployment + 20);
+  const timely = w.exit('timely-binding', deployment + 30);
+  w.append('late-binding', deployment + 40);
+  const late = w.exit('late-binding', deadline + 1);
+
+  const before = fs.readFileSync(path.join(w.root, 'brain.db'));
+  const report = w.reportCli(deadline);
+  assert.equal(report.status, 'available');
+  assert.equal(report.cumulative_accepted_bindings_present, 3);
+  assert.equal(report.window_decisions, 2);
+  assert.equal(report.matching_completed_exit_decisions, 1);
+  assert.equal(report.accepted_window_joins, 1);
+  assert.equal(report.missing_join_decisions, 0);
+  assert.deepEqual(report.decisions.map((d) => [
+    d.raw_decision_id, d.decision_ts, d.status,
+    d.completed_rounds.map((r) => [r.decision_id, r.ts]), d.accepted_edge_ids.length,
+  ]), [
+    ['timely-binding', deployment + 20, 'accepted_join', [[timely.decision_id, deployment + 30]], 1],
+    ['late-binding', deployment + 40, 'no_completed_exit', [], 0],
+  ]);
+  const recovery = w.report(deadline + 1);
+  assert.equal(recovery.accepted_window_joins, 2);
+  assert.equal(recovery.decisions[1].completed_rounds[0].decision_id, late.decision_id);
+  assert.deepEqual(w.report(deadline), report);
+  assert.deepEqual(fs.readFileSync(path.join(w.root, 'brain.db')), before);
+});
+
+test('positive window totals do not conceal a matching completed exit with no accepted join', (t) => {
+  const w = world(t);
+  w.append('joined-decision', deployment + 10);
+  w.append('missing-join', deployment + 20);
+  // This import persists both source decisions, but only one has completed.
+  w.exit('joined-decision', deployment + 30);
+  fs.unlinkSync(w.log);
+  fs.mkdirSync(w.log);
+  const missing = w.exit('missing-join', deployment + 40);
+  assert.equal(missing.relay_pacing.status, 'unavailable');
+  const counts = w.snapshot(deployment + 40).counts;
+  assert.equal(counts.acted_on, 1);
+  assert.equal(counts.outcome, 1);
+
+  const before = fs.readFileSync(path.join(w.root, 'brain.db'));
+  const report = w.report(deployment + 40);
+  assert.equal(report.status, 'available');
+  assert.equal(report.cumulative_accepted_bindings_present, 1);
+  assert.equal(report.matching_completed_exit_decisions, 2);
+  assert.equal(report.accepted_window_joins, 1);
+  assert.equal(report.missing_join_decisions, 1);
+  const decision = report.decisions.find((d) => d.raw_decision_id === 'missing-join');
+  assert.equal(decision.status, 'missing_accepted_join');
+  assert.equal(decision.decision_ts, deployment + 20);
+  assert.equal(decision.completed_rounds[0].decision_id, missing.decision_id);
+  assert.equal(decision.completed_rounds[0].ts, deployment + 40);
+  assert.deepEqual(decision.accepted_edge_ids, []);
+  assert.deepEqual(fs.readFileSync(path.join(w.root, 'brain.db')), before);
+});
+
+test('ambiguous persisted exits cannot be reported as an attributable accepted join', (t) => {
+  const w = world(t);
+  w.append('duplicate-exit', deployment + 10);
+  const first = w.exit('duplicate-exit', deployment + 20);
+  const second = w.exit('duplicate-exit', deployment + 30);
+  const report = w.report(deployment + 30);
+  assert.equal(report.cumulative_accepted_bindings_present, 1);
+  assert.equal(report.matching_completed_exit_decisions, 0);
+  assert.equal(report.accepted_window_joins, 0);
+  assert.equal(report.decisions[0].status, 'ambiguous_completed_exits');
+  assert.deepEqual(report.decisions[0].completed_rounds.map((r) => r.decision_id),
+    [first.decision_id, second.decision_id]);
+  assert.deepEqual(report.decisions[0].accepted_edge_ids, []);
+});
+
+test('unavailable Brain reports unknown counts without creating a database', (t) => {
+  const w = world(t);
+  const report = w.report(deadline);
+  assert.equal(report.status, 'unavailable');
+  assert.equal(report.cumulative_accepted_bindings_present, null);
+  assert.equal(report.matching_completed_exit_decisions, null);
+  assert.equal(report.accepted_window_joins, null);
+  assert.equal(report.decisions, null);
+  assert.equal(report.errors.length, 1);
+  assert.equal(fs.existsSync(path.join(w.root, 'brain.db')), false);
+  assert.throws(() => w.report(deployment - 1), /ordered/);
+});
+
+test('an accepted flag cannot substitute for matching round facts and relay outcome evidence', (t) => {
+  const w = world(t);
+  w.append('exact-outcome', deployment + 10);
+  const completed = w.exit('exact-outcome', deployment + 20);
+  assert.equal(w.report(deployment + 20).accepted_window_joins, 1);
+  const db = new DatabaseSync(path.join(w.root, 'brain.db'));
+  try {
+    // Corrupt only this private fixture, retaining the accepted edge unchanged.
+    db.prepare("UPDATE completion_events SET producer='foreign' WHERE run_id=?")
+      .run(completed.decision_id);
+    const foreign = w.report(deployment + 20);
+    assert.equal(foreign.cumulative_accepted_bindings_present, 1);
+    assert.equal(foreign.matching_completed_exit_decisions, 1);
+    assert.equal(foreign.accepted_window_joins, 0);
+    assert.equal(foreign.missing_join_decisions, 1);
+
+    db.prepare("UPDATE routing_decisions_v2 SET agent='cursor' WHERE decision_id=?")
+      .run(completed.decision_id);
+    const mismatch = w.report(deployment + 20);
+    assert.equal(mismatch.matching_completed_exit_decisions, 0);
+    assert.equal(mismatch.accepted_window_joins, 0);
+    assert.equal(mismatch.decisions[0].status, 'completed_exit_mismatch');
+  } finally {
+    db.close();
+  }
 });
