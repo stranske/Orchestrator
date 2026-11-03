@@ -1,5 +1,56 @@
 # Original-cohort native candidate
 
+Before any dispatch, read the immutable source, current canonical report and
+existing native journal with the non-mutating inventory mode:
+
+```sh
+python src/adjudicator_retro.py --inventory \
+  --report /absolute/original-report.json \
+  --canonical-report /absolute/capability-program/adjudicator-retro.json \
+  --native-journal /absolute/native-attempts.sqlite \
+  --deployed-root /absolute/deployed-checkout \
+  --mirror-root /absolute/published-mirror
+```
+
+The JSON on stdout pins report hashes, ordered original case IDs, recursive paid
+attempt identities, and every journal attempt, including other source reports
+and unresolved reservations. Raw response and parsed-result bytes are represented
+only by hashes. It refuses a missing/foreign journal without creating or repairing
+it, rejects changed canonical lineage, and aborts if report or journal inputs
+change during observation. It cannot dispatch, publish, refresh truth or repair
+role records; `--dispatch`, `--retry` and other modes are refused.
+
+Code observations retain the selected path, resolved mirror generation, script
+hash, and checkout HEAD/dirty status when that location owns Git metadata. They
+do not prove that a scheduler or running reader selected those paths. Omitted
+code locations and historical observations are explicitly unavailable. Retained
+canonical summary numbers and journal validation states are inventory facts,
+not authenticated grading or retry authorization. Native publication still
+requires fresh collector capabilities and journal authentication below.
+
+Issue #1072 runner check on 2026-11-03: production state and the deployed mirror
+are unavailable in the CI workspace. The retained source-issue observation
+([receipt](https://github.com/stranske/Orchestrator/issues/579#issuecomment-6229128915))
+reports 58 rows, 108 original plus two native paid identities and one grade;
+these are historical claims, not a current inventory. Neither October 18 proof
+nor a fixed next-20 live-shadow observation was recovered here. The operational
+inventory task remains incomplete until this mode runs against the authentic
+runtime inputs; no dispatch was attempted from this workspace.
+
+Local implementation validation: all 482 adjudicator Python tests pass with
+`-m "not slow"`, including 19 inventory controls and the four original named
+regressions; the module selftest passes 23 checks. Full collection measures
+14,721 tests. The separate JavaScript CLI suite has 47 passing and 16 failing
+tests; all 16 failing test names reproduce on unchanged HEAD, including its
+stale 180-second timeout expectation. Existing retry/publication behavior was
+not changed by this inventory mode.
+
+The required repository-wide Black check passes with the pinned Black 26.10.1:
+993 Python files remain unchanged at line length 100. The official formatter
+ran serially because this sandbox cannot use its process executor. Staging the
+change was refused with `.git/index.lock: Read-only file system`; the runner's
+read-only Git metadata prevents the required commit in this environment.
+
 Issue #579's merged #622 rail authenticates one original case at a time. A
 single-case projection does not establish acceptance over the original cohort.
 `refresh_native_cohort` joins all validated journal cases for the frozen original

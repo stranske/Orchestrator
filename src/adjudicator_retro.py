@@ -345,6 +345,184 @@ def _validate_original_report(rows: list[dict]) -> None:
             raise ValueError("saved report case ID does not match immutable identity")
 
 
+def _inventory_code(root: Path | None) -> dict:
+    """Observe an explicitly selected code location without assuming a live reader uses it."""
+    if root is None:
+        return {"status": "unavailable", "reason": "no runtime code location supplied"}
+    root = Path(root).absolute()
+    resolved = root.resolve(strict=True)
+    code = resolved / "src/adjudicator_retro.py"
+    if not code.is_file():
+        code = resolved / "adjudicator_retro.py"
+    result = {
+        "status": "observed",
+        "path": str(root),
+        "resolved_path": str(resolved),
+        "adjudicator_sha256": hashlib.sha256(code.read_bytes()).hexdigest(),
+        "git_revision": None,
+        "tracked_files_clean": None,
+        "live_reader_binding": "unverified",
+    }
+    # A flat mirror inside another checkout must not inherit that checkout's HEAD.
+    if (resolved / ".git").exists():
+        result["git_revision"] = subprocess.run(
+            ["git", "-C", str(resolved), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+        result["tracked_files_clean"] = not subprocess.run(
+            [
+                "git",
+                "--no-optional-locks",
+                "-C",
+                str(resolved),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+    if root.resolve(strict=True) != resolved:
+        raise ValueError("runtime code location changed during inventory")
+    return result
+
+
+def inventory_native_state(
+    *,
+    original_report: Path,
+    canonical_path: Path,
+    journal_path: Path,
+    deployed_root: Path | None = None,
+    mirror_root: Path | None = None,
+) -> dict:
+    """Read pre-dispatch identities; serialized receipts grant no retry or grade authority.
+
+    The journal is opened read-only without initialization. UNKNOWN reservations,
+    foreign-source attempts, repeated original paid identities and all recursive
+    histories remain visible. No Brain read, capability issuance, provider call,
+    publication, or report normalization is performed.
+    """
+    source = original_report.read_bytes()
+    canonical = canonical_path.read_bytes()
+    source_hash = hashlib.sha256(source).hexdigest()
+    saved = json.loads(source)
+    current = json.loads(canonical)
+    if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list):
+        raise ValueError("saved report must contain a rows list")
+    if "native_publication" in saved:
+        raise ValueError("inventory requires the immutable original, not a native publication")
+    _validate_original_report(saved["rows"])
+    if not isinstance(current, dict) or not isinstance(current.get("rows"), list):
+        raise ValueError("canonical report must contain a rows list")
+    marker = current.get("native_publication")
+    if canonical != source:
+        if not isinstance(marker, dict) or marker.get("source_report_sha256") != source_hash:
+            raise ValueError("canonical report has foreign native publication lineage")
+        historical = []
+        for row in current["rows"]:
+            if not isinstance(row, dict):
+                raise ValueError("canonical report rows must be objects")
+            original_row = dict(row)
+            original_row.pop("native_projection", None)
+            historical.append(original_row)
+        if historical != saved["rows"] or current.get("population") != saved.get("population"):
+            raise ValueError("canonical report changed immutable original cohort")
+
+    case_ids = [row["case_id"] for row in saved["rows"]]
+    original_paid = [
+        {"case_id": row["case_id"], "backend_run_id": attempt["backend_run_id"]}
+        for row in saved["rows"]
+        for attempt in _attempt_rows([row])
+        if attempt.get("backend_run_id")
+    ]
+    # Do not instantiate NativeAttemptJournal: its constructor creates/repairs files.
+    with sqlite3.connect(journal_path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        if conn.execute("PRAGMA application_id").fetchone()[0] != NATIVE_JOURNAL_APPLICATION_ID:
+            raise ValueError("inventory requires an existing native journal")
+
+        def records():
+            return [
+                dict(row)
+                for row in conn.execute("SELECT * FROM native_attempts ORDER BY attempt_id")
+            ]
+
+        before = records()
+        attempts = []
+        for record in before:
+            item = {
+                key: record[key]
+                for key in (
+                    "attempt_id",
+                    "case_id",
+                    "material_revision",
+                    "case_digest",
+                    "state",
+                    "backend_run_id",
+                    "created_at",
+                    "updated_at",
+                    "report_sha256",
+                )
+            }
+            item["matches_original_source"] = record["report_sha256"] == source_hash
+            item["in_original_cohort"] = record["case_id"] in case_ids
+            for field in ("raw_response", "validated_json"):
+                value = record[field]
+                item[field + "_sha256"] = (
+                    hashlib.sha256(value.encode()).hexdigest() if value is not None else None
+                )
+            item["receipt_authority"] = "not_authenticated_by_inventory"
+            attempts.append(item)
+        deployed = _inventory_code(deployed_root)
+        mirror = _inventory_code(mirror_root)
+        if (
+            original_report.read_bytes() != source
+            or canonical_path.read_bytes() != canonical
+            or records() != before
+        ):
+            raise ValueError("native inventory inputs changed during observation")
+
+    original_ids = [item["backend_run_id"] for item in original_paid]
+    native_ids = [item["backend_run_id"] for item in attempts if item["backend_run_id"]]
+    return {
+        "schema_version": 1,
+        "checked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "evidence_class": "current_local_inventory_only",
+        "historical_observations": "unavailable; not established by this inventory",
+        "deployed_code": deployed,
+        "mirror_code": mirror,
+        "original_report": {
+            "path": str(original_report.resolve()),
+            "sha256": source_hash,
+            "population": saved.get("population"),
+            "case_ids": case_ids,
+        },
+        "canonical_report": {
+            "path": str(canonical_path.resolve()),
+            "sha256": hashlib.sha256(canonical).hexdigest(),
+            "native_publication_present": marker is not None,
+            "retained_summary": current.get("summary"),
+            "summary_authority": "not_authenticated_by_inventory",
+        },
+        "original_paid_attempts": original_paid,
+        "native_journal": {"path": str(journal_path.resolve()), "attempts": attempts},
+        "paid_identity_summary": {
+            "original_records": len(original_ids),
+            "original_unique": len(set(original_ids)),
+            "native_records": len(native_ids),
+            "native_unique": len(set(native_ids)),
+            "union_unique": len(set(original_ids) | set(native_ids)),
+            "overlapping_backend_ids": sorted(set(original_ids) & set(native_ids)),
+        },
+        "dispatch_authorized": False,
+    }
+
+
 def admit_collected_retry(
     *,
     original_report: Path,
@@ -2884,6 +3062,12 @@ def _selftest() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--selftest", action="store_true")
+    parser.add_argument(
+        "--inventory", action="store_true", help="read native identities without dispatch or writes"
+    )
+    parser.add_argument("--canonical-report", type=Path)
+    parser.add_argument("--deployed-root", type=Path)
+    parser.add_argument("--mirror-root", type=Path)
     parser.add_argument("--native-cohort", action="store_true")
     parser.add_argument("--native-publish", type=Path, metavar="CANONICAL_REPORT")
     parser.add_argument("--cohort-manifest", type=Path)
@@ -2947,6 +3131,49 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout < 1:
         parser.error("--timeout must be at least 1 second")
+    if args.inventory:
+        if any(
+            (
+                args.selftest,
+                args.native_admit,
+                args.native_refresh,
+                args.native_cohort,
+                args.native_publish,
+                args.dispatch,
+                args.retry,
+                args.collect_case,
+                args.prepare_collected_case,
+                args.judge_collected_case,
+                args.output,
+                args.case_input,
+                args.qualification,
+                args.cohort_manifest,
+            )
+        ):
+            parser.error("--inventory is read-only and cannot combine with another mode or output")
+        if not all((args.report, args.canonical_report, args.native_journal)):
+            parser.error("--inventory requires --report --canonical-report --native-journal")
+        try:
+            result = inventory_native_state(
+                original_report=args.report,
+                canonical_path=args.canonical_report,
+                journal_path=args.native_journal,
+                deployed_root=args.deployed_root,
+                mirror_root=args.mirror_root,
+            )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            sqlite3.Error,
+            subprocess.SubprocessError,
+        ) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, indent=2))
+        return 0
+    if any((args.canonical_report, args.deployed_root, args.mirror_root)):
+        parser.error("--canonical-report, --deployed-root and --mirror-root require --inventory")
     if args.selftest and any(
         (args.native_admit, args.native_refresh, args.native_cohort, args.native_publish)
     ):
