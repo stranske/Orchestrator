@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -378,6 +379,57 @@ class InventoryCodeStabilityTests(unittest.TestCase):
             self.assertEqual(result[key]["live_reader_binding"], "unverified")
         self.assertFalse(result["dispatch_authorized"])
         self.assertEqual(self.before, {key: path.read_bytes() for key, path in self.inputs.items()})
+
+    def test_inherited_git_locations_cannot_redirect_revision_or_dirty_status(self):
+        self.init_checkout()
+        foreign = self.root / "foreign"
+        self.git("clone", "-q", str(self.deployed), str(foreign))
+        (self.deployed / "adjudicator_retro.py").write_text("current deployment")
+        self.git("commit", "-qam", "current deployment")
+        expected_head = self.git("rev-parse", "HEAD").stdout.strip()
+        foreign_head = self.git("-C", str(foreign), "rev-parse", "HEAD").stdout.strip()
+        self.assertNotEqual(expected_head, foreign_head)
+        environments = [
+            {"GIT_DIR": str(foreign / ".git"), "GIT_WORK_TREE": str(foreign)},
+            {"GIT_WORK_TREE": str(foreign)},
+            {"GIT_INDEX_FILE": str(foreign / ".git/index")},
+            {"GIT_COMMON_DIR": str(foreign / ".git")},
+        ]
+        for environment in environments:
+            with self.subTest(environment=environment):
+                before = dict(os.environ)
+                with patch.dict(os.environ, environment):
+                    result = self.inventory()["deployed_code"]
+                    self.assertEqual(result["git_revision"], expected_head)
+                    self.assertTrue(result["tracked_files_clean"])
+                    self.assertEqual(
+                        result["adjudicator_sha256"],
+                        hashlib.sha256(b"current deployment").hexdigest(),
+                    )
+                    for name, value in environment.items():
+                        self.assertEqual(os.environ[name], value)
+                self.assertEqual(dict(os.environ), before)
+        self.assertEqual(self.before, {key: path.read_bytes() for key, path in self.inputs.items()})
+
+    def test_git_worktree_inventory_uses_its_own_metadata_under_foreign_environment(self):
+        self.init_checkout()
+        worktree = self.root / "deployed-worktree"
+        self.git("worktree", "add", "-q", "-b", "deployment", str(worktree))
+        self.git("commit", "--allow-empty", "-qm", "checkout only")
+        expected_head = self.git("-C", str(worktree), "rev-parse", "HEAD").stdout.strip()
+        (worktree / "adjudicator_retro.py").write_text("dirty worktree code")
+        self.assertTrue((worktree / ".git").is_file())
+        self.mirror = worktree
+        with patch.dict(
+            os.environ,
+            {"GIT_DIR": str(self.deployed / ".git"), "GIT_WORK_TREE": str(self.deployed)},
+        ):
+            result = self.inventory()["mirror_code"]
+        self.assertEqual(result["git_revision"], expected_head)
+        self.assertFalse(result["tracked_files_clean"])
+        self.assertEqual(
+            result["adjudicator_sha256"], hashlib.sha256(b"dirty worktree code").hexdigest()
+        )
 
 
 class InventoryReportStabilityTests(unittest.TestCase):

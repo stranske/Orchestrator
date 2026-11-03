@@ -1,5 +1,23 @@
 # Original-cohort native candidate
 
+Issue #1072 Git-location follow-up on 2026-11-03 (base `26bfc15`): both
+inventory Git reads now reuse the collector's `_local_git` environment isolation.
+Inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` or `GIT_COMMON_DIR` could
+otherwise redirect the reported revision or tracked status despite `git -C`.
+Two real-Git regressions cover independent repositories and linked worktrees;
+before the repair they produce four failed assertions and one error. Afterward,
+all 24 diagnostic tests, seven native replay/publication CLI tests and 23 module
+self-checks pass. `git diff --check` passes. The parent environment is preserved.
+
+Production inputs remain absent, so no authentic inventory or dispatch occurred
+and all operational checkboxes remain incomplete. Pytest and Black are missing;
+installation into `/tmp` failed with no package versions available. Both required
+Black commands failed with `command not found`, blocking commit and push. The
+GitHub tools rejected both the `needs-human` label and blocker comment on PR
+#1081 because they require approval while this run's policy is `never`. PR #1081
+was verified open with `draft=false`. October 18 and next-20 evidence remain
+unavailable.
+
 Issue #1072 report-identity follow-up on 2026-11-03 (base `57bd9f6`): inventory
 now pins both report locations and filesystem identities across its reads and
 returns the originally observed resolved paths. Byte-identical atomic replacement

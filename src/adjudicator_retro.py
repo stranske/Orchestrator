@@ -365,28 +365,12 @@ def _inventory_code(root: Path | None) -> dict:
     }
     # A flat mirror inside another checkout must not inherit that checkout's HEAD.
     if (resolved / ".git").exists():
-        result["git_revision"] = subprocess.run(
-            ["git", "-C", str(resolved), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.strip()
-        result["tracked_files_clean"] = not subprocess.run(
-            [
-                "git",
-                "--no-optional-locks",
-                "-C",
-                str(resolved),
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.strip()
+        # Inherited Git locations override -C, including in hooks and worktrees.
+        # Use the collector's isolated local reader for both identity and status.
+        result["git_revision"] = _local_git(resolved, "rev-parse", "HEAD").decode().strip()
+        result["tracked_files_clean"] = not _local_git(
+            resolved, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"
+        ).strip()
     if root.resolve(strict=True) != resolved:
         raise ValueError("runtime code location changed during inventory")
     return result
