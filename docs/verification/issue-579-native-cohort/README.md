@@ -1,5 +1,30 @@
 # Original-cohort native candidate
 
+Issue #1072 journal-identity follow-up on 2026-11-03 (base `0e772b6`): reviewed
+the recent inventory, publication-guard and diagnostic commits. None verifies an
+operational checkbox: the configured canonical report and independent outcomes
+database are still absent in this runner. Production inventory, retries, grading
+and dated live-shadow observations remain unverified. No dispatch was attempted.
+
+The inventory now pins the journal's resolved location and filesystem identity.
+SQLite connections retain the old file after atomic replacement; comparing only
+records on that connection could otherwise miss a replacement journal containing
+new UNKNOWN attempts. Four new standard-library regressions failed before the fix
+and pass afterward: identical-file replacement, replacement with a new unresolved
+attempt, a symlink switch with identical receipts, and journal disappearance.
+All 18 diagnostic tests and all 23 module self-checks pass. The inventory retains
+its read-only behavior and grants no receipt, retry or grading authority.
+
+The required Black formatting and repository-wide check commands cannot run:
+Black is missing, as is pytest; installation attempts found no available packages.
+No commit or push was made because the required Black gate cannot pass. Updating
+PR #1081's body to record task reconciliation was rejected because the tool
+requires approval while this run's approval policy is `never`; no checkbox was
+changed. This local note records the reconciliation without claiming completion.
+Attempts to add `needs-human` and post the blocker comment on PR #1081 were
+rejected for the same approval-policy reason. PR #1081 remains open and ready
+for review.
+
 Before any dispatch, read the immutable source, current canonical report and
 existing native journal with the non-mutating inventory mode:
 

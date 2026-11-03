@@ -440,8 +440,20 @@ def inventory_native_state(
         for attempt in _attempt_rows([row])
         if attempt.get("backend_run_id")
     ]
+
+    def journal_identity():
+        resolved = journal_path.resolve()
+        try:
+            stat = resolved.stat()
+        except FileNotFoundError:
+            return resolved, None, None
+        return resolved, stat.st_dev, stat.st_ino
+
+    # A connection keeps reading the old inode after an atomic replacement.
+    # Pin the selected file as well as comparing records on that connection.
+    observed_journal = journal_identity()
     # Do not instantiate NativeAttemptJournal: its constructor creates/repairs files.
-    with sqlite3.connect(journal_path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+    with sqlite3.connect(observed_journal[0].as_uri() + "?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
         if conn.execute("PRAGMA application_id").fetchone()[0] != NATIVE_JOURNAL_APPLICATION_ID:
             raise ValueError("inventory requires an existing native journal")
@@ -495,6 +507,8 @@ def inventory_native_state(
             or records() != before
         ):
             raise ValueError("native inventory inputs changed during observation")
+        if journal_identity() != observed_journal:
+            raise ValueError("native journal location changed during inventory")
 
     original_ids = [item["backend_run_id"] for item in original_paid]
     native_ids = [item["backend_run_id"] for item in attempts if item["backend_run_id"]]
@@ -520,7 +534,7 @@ def inventory_native_state(
         },
         "original_paid_attempts": original_paid,
         "row_diagnostics": diagnose_original_rows(saved["rows"], attempts),
-        "native_journal": {"path": str(journal_path.resolve()), "attempts": attempts},
+        "native_journal": {"path": str(observed_journal[0]), "attempts": attempts},
         "paid_identity_summary": {
             "original_records": len(original_ids),
             "original_unique": len(set(original_ids)),

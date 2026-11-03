@@ -380,5 +380,64 @@ class InventoryCodeStabilityTests(unittest.TestCase):
         self.assertEqual(self.before, {key: path.read_bytes() for key, path in self.inputs.items()})
 
 
+class InventoryJournalStabilityTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        original = self.root / "original.json"
+        canonical = self.root / "canonical.json"
+        original.write_text(json.dumps({"rows": [substantive_row()]}))
+        canonical.write_bytes(original.read_bytes())
+        journal = retro.NativeAttemptJournal(self.root / "native.sqlite")
+        journal.reserve("original-a", "revision", "digest", "source")
+        self.inputs = {
+            "original_report": original,
+            "canonical_path": canonical,
+            "journal_path": journal.path,
+        }
+        self.replacement = self.root / "replacement.sqlite"
+        self.replacement.write_bytes(journal.path.read_bytes())
+
+    def assert_rejected_change(self, change):
+        observe = retro._inventory_code
+        changed = False
+
+        def observe_then_change(root):
+            nonlocal changed
+            result = observe(root)
+            if not changed:
+                changed = True
+                change()
+            return result
+
+        with patch.object(retro, "_inventory_code", observe_then_change):
+            with self.assertRaisesRegex(ValueError, "journal.*changed"):
+                retro.inventory_native_state(**self.inputs)
+        self.assertTrue(changed)
+
+    def test_inventory_rejects_atomic_journal_replacement_with_identical_receipts(self):
+        self.assert_rejected_change(lambda: self.replacement.replace(self.inputs["journal_path"]))
+
+    def test_inventory_rejects_atomic_journal_replacement_with_new_unknown_attempt(self):
+        replacement = retro.NativeAttemptJournal.open_existing(self.replacement)
+        replacement.reserve("original-b", "revision", "digest", "source")
+        self.assert_rejected_change(lambda: self.replacement.replace(self.inputs["journal_path"]))
+
+    def test_inventory_rejects_journal_symlink_switch_with_identical_receipts(self):
+        link = self.root / "journal-link.sqlite"
+        link.symlink_to(self.inputs["journal_path"])
+        self.inputs["journal_path"] = link
+
+        def switch():
+            link.unlink()
+            link.symlink_to(self.replacement)
+
+        self.assert_rejected_change(switch)
+
+    def test_inventory_rejects_disappearing_journal(self):
+        self.assert_rejected_change(lambda: self.inputs["journal_path"].unlink())
+
+
 if __name__ == "__main__":
     unittest.main()
