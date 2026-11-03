@@ -76,6 +76,92 @@ test('report recovery rejects missing input without initializing runtime state',
   assert.equal(fs.existsSync(path.dirname(missing)), false);
 });
 
+test('attempt observations bind nested failure fields without exposing private error text', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  saved.rows[0].errors = ['private validation error', { detail: 'private backend detail' }];
+  saved.rows[0].retry_error = 'private retry failure';
+  saved.rows[0].role_record_error = 'private persistence failure';
+  saved.rows[0].retry_attempts[0].error = 'private earlier failure';
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const before = fs.readFileSync(options.report);
+  const files = fs.readdirSync(root);
+  const result = reportInventory(options);
+  const observed = result.retained_attempt_observations;
+  assert.deepEqual(observed.map((row) => row.location), [
+    'rows[0]', 'rows[0].retry_attempts[0]',
+    'rows[0].retry_attempts[0].retry_attempts[0]', 'rows[1]',
+  ]);
+  assert.deepEqual(observed.map((row) => row.backend_run_id),
+    ['primary', 'prior', 'oldest', 'prior']);
+  for (const [field, index] of [['error', 0], ['errors', 1],
+    ['retry_error', 2], ['role_record_error', 3]]) {
+    assert.deepEqual(observed[0].failure_fields[index], {
+      location: `rows[0].${field}`,
+      json_value_sha256: createHash('sha256').update(JSON.stringify(saved.rows[0][field])).digest('hex'),
+    });
+  }
+  assert.deepEqual(observed[1].failure_fields, [{
+    location: 'rows[0].retry_attempts[0].error',
+    json_value_sha256: createHash('sha256')
+      .update(JSON.stringify(saved.rows[0].retry_attempts[0].error)).digest('hex'),
+  }]);
+  assert.equal(observed[0].retained_result, 'conflicting_retained_decision_and_failure');
+  assert.equal(observed[1].retained_result, 'retained_run_failure');
+  assert.equal(observed[1].next_evidence_step, 'inspect_failure_fields_for_first_actual_broken_step');
+  assert.equal(observed[2].retained_result, 'no_retained_decision');
+  assert.equal(observed[3].retained_result, 'retained_binary_decision');
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+  assert.ok(!JSON.stringify(result).includes('private'));
+  assert.deepEqual(fs.readFileSync(options.report), before);
+  assert.deepEqual(fs.readdirSync(root), files);
+});
+
+test('saved decisions survive failed retries and remain distinct from independent truth', (t) => {
+  const { saved, options } = retainedReport(t);
+  saved.rows = [
+    { decision: 'uphold_blocker', later_truth: null,
+      retry_error: 'private retry failure', role_record_error: 'private Brain failure',
+      retry_attempts: [{ error: 'private failed retry', backend_run_id: 'paid-retry' }] },
+    { decision: 'reject_blocker', later_truth: 'PASS', errors: [], error: null },
+    { decision: 'needs_more_evidence' },
+    { decision: 'unrecognized-private-value', later_truth: 'UNKNOWN' },
+    {},
+  ].map((row, i) => ({ ...row, case_id: `case-${i}`, target: `owner/repo#${i + 1}` }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  const observed = result.retained_attempt_observations;
+  assert.deepEqual(observed.map((row) => row.retained_result), [
+    'retained_binary_decision', 'retained_run_failure', 'retained_binary_decision',
+    'retained_abstention', 'unrecognized_retained_decision', 'no_retained_decision',
+  ]);
+  assert.deepEqual(observed.map((row) => row.retained_binary_truth_present),
+    [false, false, true, false, false, false]);
+  assert.equal(observed[0].failure_fields.length, 2, 'persistence and retry failures stay visible');
+  assert.equal(observed[0].next_evidence_step,
+    'authenticate_native_receipt_then_refresh_independent_truth');
+  assert.equal(observed[3].next_evidence_step, 'recover_fresh_collected_evidence_before_any_retry');
+  assert.equal(observed[4].next_evidence_step, 'inspect_unrecognized_decision_before_any_retry');
+  assert.equal(observed[5].next_evidence_step, 'recover_attempt_completion_without_redispatch');
+  assert.equal(result.cases[0].retained_decision, 'uphold_blocker');
+  assert.equal(result.cases[0].retained_later_truth, null);
+  assert.equal(Object.hasOwn(result, 'graded'), false);
+});
+
+test('failure field hashes detect changed evidence even when retained classifications match', (t) => {
+  const { saved, options } = retainedReport(t);
+  const original = reportInventory(options);
+  saved.rows[0].error = 'different private failure';
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const changed = reportInventory(options);
+  assert.equal(original.retained_attempt_observations[0].retained_result,
+    changed.retained_attempt_observations[0].retained_result);
+  assert.notEqual(original.retained_attempt_observations[0].failure_fields[0].json_value_sha256,
+    changed.retained_attempt_observations[0].failure_fields[0].json_value_sha256);
+  assert.notEqual(original.report_sha256, changed.report_sha256);
+  assert.ok(!JSON.stringify(changed).includes('private'));
+});
+
 test('report recovery refuses malformed and ambiguous retained identities', (t) => {
   const { saved, options } = retainedReport(t);
   for (const change of [
@@ -158,6 +244,9 @@ test('retained report reconciliation preserves requested order and explains ever
     { status: 'matched', reasons: [], retained_locations: ['rows[7]'] },
   ]);
   assert.equal(reconciliation.all_requested_rows_uniquely_matched, false);
+  assert.deepEqual(reconciliation.cases.map((row) => row.retained_attempt_locations), [
+    [], [], [], [], [], ['rows[0]', 'rows[0].retry_attempts[0]'], ['rows[7]'],
+  ], 'only unique requested identities receive retained attempt evidence');
   assert.deepEqual(reconciliation.unmatched_retained_locations,
     ['rows[1]', 'rows[2]', 'rows[3]', 'rows[6]', 'rows[8]']);
   assert.equal(result.cases[0].retained_decision, 'reject_blocker');

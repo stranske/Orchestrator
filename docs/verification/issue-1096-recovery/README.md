@@ -1,5 +1,41 @@
 # Acceptance evidence recovery for #1096
 
+## Retained attempt diagnostics, 2026-11-03 UTC
+
+The retry inventory now exposes ordered attempt observations, including nested
+paid history, failure-field locations and JSON-value SHA-256 hashes. It separates
+saved decisions, abstentions, failures, missing decisions and conflicting saved
+fields. Failed retries and Brain persistence errors do not erase a parent binary
+decision. Only uniquely matched manifest identities receive attempt references.
+Private failure prose is omitted; inspect the original field to establish the
+first actual broken step. These observations do not authenticate any outcome.
+
+All [95 relevant regressions](attempt-diagnostics/validation.json) pass: 47 inventory,
+26 runner and 22 ledger checks. Source commit `eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275`
+has checkout `6749ae79c00be3c9362a01ce117e46dc304d931e` as its parent.
+The [required-test receipt](attempt-diagnostics/acceptance-run/checks.json), captured
+before editing, again records missing pytest before collection. The
+[pre-execution plan](attempt-diagnostics-plan.md) preserves the command and bounds.
+No Python files changed.
+
+The same earlier backup was [re-fetched and counted in memory](attempt-diagnostics/historical-acquisition.json):
+58 rows, 64 recursive attempts, 26 `error`, eight `errors` and 11 `retry_error`
+fields. These overlapping field counts are historical observations. Raw report
+text was not written or passed through the new CLI. It is not the authenticated
+native original, and no requested retry manifest was recovered.
+
+Recent commits were reviewed; no additional task is complete. The local task
+reconciliation below remains authoritative: recovery is partial, only the
+pre-execution inventory and ledger tasks plus attribution/disclosure criterion
+are verified complete. PR-body correction, blocker comment and `needs-human`
+label were rejected because connector mutations require approval and this run's
+policy is `never`. Remote checkboxes are unchanged. No provider call, publication,
+production write or mirror synchronization occurred.
+
+Git metadata is read-only. Source/evidence commits are preserved under
+`/tmp/issue1096-attempt-diagnostics-git-8to3n09t/repo.git` and in the
+[applyable patch](../../../artifacts/issue-1096-attempt-diagnostics.patch).
+
 ## Retained retry-manifest matching, 2026-11-03 UTC
 
 The [bounded required-test attempt](retry-manifest-followup/acceptance-run/checks.json)

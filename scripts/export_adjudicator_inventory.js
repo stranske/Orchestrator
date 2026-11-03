@@ -22,6 +22,46 @@ function hasTarget(row) {
   return typeof row.target === 'string' && Boolean(row.target.trim());
 }
 
+// These observations describe saved fields, never a freshly validated result.
+// Error prose can include private provider material. Bind it by JSON-value hash
+// and location so recovery can inspect the original without publishing the text.
+function attemptObservation(attempt, caseId, location) {
+  const failureFields = ['error', 'errors', 'retry_error', 'role_record_error']
+    .filter((field) => Boolean(attempt[field]) &&
+      (!Array.isArray(attempt[field]) || attempt[field].length > 0))
+    .map((field) => ({ location: `${location}.${field}`,
+      json_value_sha256: createHash('sha256').update(JSON.stringify(attempt[field])).digest('hex') }));
+  const runFailed = failureFields.some((item) =>
+    item.location === `${location}.error` || item.location === `${location}.errors`);
+  const binary = ['reject_blocker', 'uphold_blocker'].includes(attempt.decision);
+  const abstained = attempt.decision === 'needs_more_evidence';
+  let result;
+  let nextStep;
+  if ((binary || abstained) && runFailed) {
+    result = 'conflicting_retained_decision_and_failure';
+    nextStep = 'inspect_retained_conflict_before_any_retry';
+  } else if (runFailed) {
+    result = 'retained_run_failure';
+    nextStep = 'inspect_failure_fields_for_first_actual_broken_step';
+  } else if (binary) {
+    result = 'retained_binary_decision';
+    nextStep = 'authenticate_native_receipt_then_refresh_independent_truth';
+  } else if (abstained) {
+    result = 'retained_abstention';
+    nextStep = 'recover_fresh_collected_evidence_before_any_retry';
+  } else if (attempt.decision) {
+    result = 'unrecognized_retained_decision';
+    nextStep = 'inspect_unrecognized_decision_before_any_retry';
+  } else {
+    result = 'no_retained_decision';
+    nextStep = 'recover_attempt_completion_without_redispatch';
+  }
+  return { case_id: caseId, location, retained_result: result,
+    backend_run_id: attempt.backend_run_id ?? null,
+    retained_binary_truth_present: ['PASS', 'FAIL'].includes(attempt.later_truth),
+    failure_fields: failureFields, next_evidence_step: nextStep };
+}
+
 // Observe native receipt locators in one read-only SQLite snapshot. This does
 // not instantiate NativeAttemptJournal, parse provider output, authenticate a
 // decision, acquire the publication lock, or establish live writer ownership.
@@ -119,6 +159,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
   if (!saved || !Array.isArray(saved.rows)) throw new Error('report requires a rows array');
   const seen = new Set();
   const paid = [];
+  const observations = [];
   const cases = saved.rows.map((row, index) => {
     if (!row || typeof row.case_id !== 'string' || !row.case_id.trim() || !hasTarget(row)) {
       throw new Error(`rows[${index}] requires nonblank case_id and target`);
@@ -139,6 +180,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
         }
         paid.push({ case_id: row.case_id, backend_run_id: attempt.backend_run_id, location });
       }
+      observations.push(attemptObservation(attempt, row.case_id, location));
       const history = attempt.retry_attempts === undefined ? [] : attempt.retry_attempts;
       if (!Array.isArray(history)) throw new Error(`invalid retry_attempts at ${location}`);
       for (let child = history.length - 1; child >= 0; child -= 1) {
@@ -163,7 +205,8 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     identities.set(item.backend_run_id, occurrences);
   }
   const preDispatch = preDispatchInventory(saved, paid, journal);
-  const reconciliation = requestedManifest ? reconcileRetainedRows(cases, requestedManifest) : null;
+  const reconciliation = requestedManifest
+    ? reconcileRetainedRows(cases, requestedManifest, observations) : null;
   if (!fs.readFileSync(report).equals(bytes)) {
     throw new Error('report changed during inventory');
   }
@@ -182,6 +225,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
     retained_summary: saved.summary ?? null,
     native_publication_present: Object.hasOwn(saved, 'native_publication'),
     cases, case_count: cases.length, paid_attempts: paid,
+    retained_attempt_observations: observations,
     manifest_reconciliation: reconciliation,
     pre_dispatch: preDispatch,
     paid_identity_summary: {
@@ -203,7 +247,7 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
 
 // Reconcile identities only. A saved decision/truth pair, native marker, paid
 // locator or a perfect manifest match cannot authenticate an actual outcome.
-function reconcileRetainedRows(cases, manifest) {
+function reconcileRetainedRows(cases, manifest, observations) {
   const exact = (requested, row) => requested.target === row.target &&
     (manifest.schema_version === 1 ||
       (requested.verifier_verdict === row.verifier_verdict &&
@@ -240,6 +284,11 @@ function reconcileRetainedRows(cases, manifest) {
       }
     }
     return { ...item, status, reasons,
+      // Ambiguous/conflicting rows cannot lend their failures to a requested
+      // identity. A unique match still authenticates neither outcome nor truth.
+      retained_attempt_locations: matches.length === 1
+        ? observations.filter((row) => row.case_id === matches[0].case_id)
+          .map((row) => row.location) : [],
       retained_locations: (matches.length ? matches : candidates).map((row) => row.location) };
   });
   return { scope: 'supplied_manifest_against_retained_report_only',

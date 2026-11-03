@@ -245,6 +245,17 @@
       "plan": "retry-manifest-followup/plan.md",
       "original_manifest_recovered": false,
       "limitation": "Fixture-verified identity matching only. Required pytest execution remains blocked before collection; accepted deployment and original retry manifest remain unverified."
+    },
+    "retained_attempt_diagnostics_followup": {
+      "checked_at": "2026-11-03T20:30:34.741698+00:00",
+      "evaluated_revision": "eac39f3eb8b6a1a59457d39a6ceeb0e5bcfc3275",
+      "plan": "attempt-diagnostics-plan.md",
+      "checks": "attempt-diagnostics/acceptance-run/checks.json",
+      "validation": "attempt-diagnostics/validation.json",
+      "historical_acquisition": "attempt-diagnostics/historical-acquisition.json",
+      "required_tests_passed": false,
+      "newly_completed_tasks": 0,
+      "limitation": "Fixture-verified failure field locations, hashes and retained result classification only. Re-fetched historical report was counted in memory, not run through the new CLI. Original requested retry manifest, native authentication and deployment binding remain unavailable."
     }
   },
   "mirror_synchronization": [
