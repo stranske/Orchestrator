@@ -89,6 +89,7 @@ test('inventory exports every synthetic dispute and every exclusion without writ
   assert.equal(report.population_count, 79);
   assert.equal(report.included_count, 71);
   assert.equal(report.excluded_count, 8);
+  assert.equal(report.orphaned_outcome_count, 0);
   assert.equal(report.count_delta, 0);
   assert.equal(report.cutoff_inclusive, cutoff);
   assert.deepEqual(report.cases.map((row) => row.run_id), [
@@ -153,11 +154,12 @@ for (const state of ['missing', 'schema-less', 'empty', 'incomplete-schema']) {
       assert.equal(report.status, 'available');
       assert.deepEqual(report.cases, []);
       assert.equal(report.included_count, 0);
+      assert.equal(report.orphaned_outcome_count, 0);
       assert.equal(report.count_delta, -71);
     } else {
       assert.equal(report.status, 'unavailable');
       for (const key of ['cases', 'exclusions', 'included_count', 'excluded_count',
-        'population_count', 'count_delta']) assert.equal(report[key], null, key);
+        'population_count', 'count_delta', 'orphaned_outcome_count']) assert.equal(report[key], null, key);
       assert.ok(report.evidence_gaps.some((gap) => gap.kind === 'brain_unavailable'));
     }
     assert.equal(report.requested_cohort_verified, false);
@@ -263,6 +265,86 @@ test('a requested run on another target cannot satisfy case identity', (t) => {
   }]);
   assert.deepEqual(report.manifest_reconciliation.unexpected_cases,
     [{ run_id: 'same-run', target: 'owner/repo#1' }]);
+});
+
+test('inventory accounts for outcomes without run records as unavailable evidence', (t) => {
+  const { root, db } = world(t);
+  seed(db, [['included', now, 'NON_PASS', 'PASS'], ['no-outcome', now]]);
+  const connection = new DatabaseSync(db);
+  connection.exec(`
+    INSERT INTO outcomes VALUES ('orphan-dispute', 'NON_PASS', 'PASS', 1, 'durable', ${now});
+    INSERT INTO outcomes VALUES ('orphan-agreement', 'PASS', 'PASS', 1, 'durable', ${now});
+  `);
+  connection.close();
+  const manifest = manifestFile(root, ['included', 'orphan-dispute'].map((run_id) => ({
+    run_id, target: 'owner/repo#1',
+  })));
+  const before = fs.readFileSync(db);
+  const files = fs.readdirSync(root);
+  const report = inventory({ db, observedAt: now, expectedCount: 2, manifest });
+  assert.equal(report.status, 'available');
+  assert.equal(report.population_count, 4, 'every run and unmatched outcome is accounted for');
+  assert.equal(report.included_count, 1);
+  assert.equal(report.excluded_count, 3);
+  assert.equal(report.orphaned_outcome_count, 2);
+  assert.equal(report.population_count, report.included_count + report.excluded_count);
+  assert.deepEqual(report.cases.map((row) => row.run_id), ['included']);
+  assert.deepEqual(report.exclusions.filter((row) => row.run_id.startsWith('orphan-')), [
+    { run_id: 'orphan-agreement', target: null, ts: null,
+      verifier_verdict: 'PASS', adjudicated_verdict: 'PASS', merged: 1,
+      durability: 'durable', durability_checked_ts: now,
+      reasons: ['missing_run', 'missing_timestamp', 'agreeing_verdicts'] },
+    { run_id: 'orphan-dispute', target: null, ts: null,
+      verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS', merged: 1,
+      durability: 'durable', durability_checked_ts: now,
+      reasons: ['missing_run', 'missing_timestamp'] },
+  ]);
+  assert.deepEqual(report.evidence_gaps.filter((gap) => gap.kind === 'orphaned_outcome'), [
+    { kind: 'orphaned_outcome', run_id: 'orphan-agreement',
+      detail: 'No matching run record; target and replay-window membership are unknown.' },
+    { kind: 'orphaned_outcome', run_id: 'orphan-dispute',
+      detail: 'No matching run record; target and replay-window membership are unknown.' },
+  ]);
+  assert.deepEqual(report.manifest_reconciliation.cases, [
+    { run_id: 'included', target: 'owner/repo#1', status: 'included', reasons: [] },
+    { run_id: 'orphan-dispute', target: 'owner/repo#1', status: 'unavailable',
+      reasons: ['missing_run', 'missing_timestamp'] },
+  ]);
+  assert.equal(report.manifest_reconciliation.exact_match, false);
+  assert.deepEqual(report.manifest_reconciliation.unexpected_cases, []);
+  assert.equal(report.count_delta, -1);
+  assert.equal(report.requested_cohort_verified, false);
+  const result = execute(root, process.execPath, [script, '--db', db,
+    '--observed-at', String(now), '--expected-count', '2', '--manifest', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), report);
+  assert.deepEqual(fs.readFileSync(db), before);
+  // execute() creates only its stdout/stderr captures, never a SQLite sidecar.
+  assert.deepEqual(fs.readdirSync(root).filter((file) => !['stdout', 'stderr'].includes(file)), files);
+});
+
+test('an outcomes-only Brain is available with exclusions, rather than an observed empty store', (t) => {
+  const { root, db } = world(t);
+  const connection = new DatabaseSync(db);
+  connection.exec(`INSERT INTO outcomes VALUES ('orphan', 'NON_PASS', 'PASS', 1, 'durable', ${now})`);
+  connection.close();
+  const before = fs.readFileSync(db);
+  const files = fs.readdirSync(root);
+  const report = inventory({ db, observedAt: now });
+  assert.equal(report.status, 'available');
+  assert.equal(report.population_count, 1);
+  assert.equal(report.orphaned_outcome_count, 1);
+  assert.equal(report.included_count, 0);
+  assert.equal(report.excluded_count, 1);
+  assert.equal(report.count_delta, -71);
+  assert.equal(report.manifest_reconciliation, null);
+  assert.deepEqual(report.cases, []);
+  assert.deepEqual(report.exclusions[0].reasons, ['missing_run', 'missing_timestamp']);
+  assert.deepEqual(report.evidence_gaps.map((gap) => gap.kind), [
+    'requested_cohort_unverified', 'orphaned_outcome', 'inventory_count_discrepancy',
+  ]);
+  assert.deepEqual(fs.readFileSync(db), before);
+  assert.deepEqual(fs.readdirSync(root), files);
 });
 
 for (const unavailable of [false, true]) {

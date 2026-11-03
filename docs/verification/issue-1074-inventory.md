@@ -127,3 +127,45 @@ Staging in this checkout again failed because `.git/index.lock` cannot be
 created on the read-only filesystem. A source commit and transfer patch are
 prepared using a separate Git directory under `/tmp/1074-inventory-delivery`;
 the workspace edits remain available for automation to collect.
+
+## Follow-up: outcomes without run records
+
+The inventory previously omitted every outcome whose matching run record was
+absent. The Brain schema does not enforce that relationship. The exporter now
+reads runs and unmatched outcomes in one read-only statement. `population_count`
+includes both; `orphaned_outcome_count` distinguishes these outcomes from complete
+run/outcome pairs and remains null when the database is unavailable.
+
+Each unmatched outcome is an exclusion with `missing_run` and `missing_timestamp`
+reasons and a per-case evidence gap. Its target and time-window membership remain
+unknown. A supplied manifest entry backed by such an outcome is `unavailable`,
+rather than missing or associated with a different target. Eligible replay cases
+still match the production reader; no orphan outcome is dispatched or repaired.
+
+The two new regressions fail against parent `3a31863` and pass against the changed
+exporter. They exercise a mixed population, an outcomes-only store, manifest
+reconciliation, CLI serialization, unchanged database bytes and no SQLite
+sidecars. All 16 inventory tests pass. The related synthetic batch (1), closer
+(9), receipt (9), and focused reader/Gate (8) tests pass, as do 11 evidence
+unittests and 23 retrospective selftest checks. Syntax and whitespace checks pass.
+The [receipt](issue-1074-orphan-outcomes.json) binds the old/new source and test
+hashes to the two regressions' actual failure/pass output. Python files are
+unchanged. Current-source named pytest and full verifier success are not claimed;
+pytest is absent and the prior full CLI suite's 16 failures remain unresolved.
+
+The original Brain database and historical 71-case manifest are still unavailable.
+Operational inventory, real replay, observed closer invocation and actual report
+reconciliation remain unchecked. Reviewed source-issue comments provide bounded
+historical observations, not the missing complete identity manifest.
+
+The attempted PR-body reconciliation checks both copies of the verified
+inspection, Gate recovery and historical receipt tasks/criteria, leaves operational
+tasks unchecked, and replaces `Closes #1074` with `Tracks #1074`. Automatic approval
+review rejected that update, the blocker comment and the `needs-human` label:
+connector writes require approval while this run's approval policy is `never`.
+Remote metadata is unchanged. The prepared body is retained under
+`/tmp/1074-inventory-orphan-delivery/pr-body.md`.
+
+Workspace staging failed because `.git/index.lock` is read-only. A source commit
+and transfer patch are prepared with separate Git metadata under
+`/tmp/1074-inventory-orphan-delivery`; workspace edits remain available to automation.
