@@ -1,0 +1,9 @@
+Outcome: successful native held-branch provisioning in both lanes (unmocked _live_holder_pids).
+Checked: 2026-11-03
+Interpreter: /opt/anaconda3/bin/python3
+Command: inline disposable-repo witness (same layout as tests/test_provision_reclaim.py) before editing that file.
+
+provision: reclaimed stale worktree .../holder_closer holding pr-head
+provision: reclaimed stale worktree .../holder_opener holding orchestrator/issue-718
+closer: live_pids=[] reclaimed holder=True wt=example__repo__718__closer
+opener: live_pids=[] reclaimed holder=True wt=example__repo__718__opener

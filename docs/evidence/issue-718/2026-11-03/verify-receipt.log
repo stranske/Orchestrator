@@ -1,0 +1,575 @@
+# verify.py
+
+  tree:       checkout
+  state:      private copy, deleted after the run — ledger 25.8 MB; Brain 137.5 MB
+  time:       pytest 46m18s, selftests 50s (8 at a time), gates 55s
+  pytest:     14074 passed, 487 failed, 147 skipped total (103/19 max core-sibling; 44/31 max other) (14702 collected; floor 14702)
+  selftests:  125 of 127 modules ran, 0/7 max skipped
+  activation audit   ok  CAN FIRE:   49 of 49 live  (100%)
+  recurrence replay  ok  WOULD FIRE:  49 of 54
+  set coverage       ok  all 10 capability-set coverage checks passed over ALL 50 ledger capabilities (--roster for the per-capability table); 10 of 10 verdicts from this run's pytest
+  admission          ok  all 24 admission checks passed — 13 enforced, 19 legacy debt, commitments clean (24 of 24 verdicts from this run's pytest)
+  ledger validate    ok  "valid": true
+  declared:   all 19 rows this tree declares are registered in the ledger judged
+  entrypoints: 1 of 50 ledger row(s) declare code ABSENT from this tree — closer-core -> /Users/teacher/.codex/closer-core/closer_core.py (not found in any sibling checkout). WAIT-OR-MERGE, not retire/waive.
+  mypy ratchet: 0/0 max of 237 module(s) exempt, 237 checked — fully drained
+
+  SKIPPED (prerequisite absent on this machine — nothing here was checked):
+    pytest   SKIPPED [1] tests/semantic_composition_preexec/test_original_mechanisms.py:22: Original process mechanism definitions require independent preexecution review.
+    pytest   SKIPPED [1] tests/test_category46_closed_complete_metrics_join.py:60: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [36] tests/test_closer_native_production_composition.py:115: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [1] tests/test_closer_campaign_integration.py:118: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_completed_cohort_reuse.py:253: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [1] tests/test_closer_completed_cohort_reuse.py:396: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [2] tests/test_closer_completed_cohort_reuse.py:471: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [1] tests/test_closer_completed_cohort_reuse.py:537: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:73: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [7] tests/test_closer_core_http_watchdog.py:82: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [2] tests/test_closer_core_http_watchdog.py:95: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:132: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:139: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [4] tests/test_closer_core_http_watchdog.py:145: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:158: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:178: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:188: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [2] tests/test_closer_core_http_watchdog.py:200: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:249: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_core_http_watchdog.py:263: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [7] tests/test_closer_core_http_watchdog.py:281: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [4] tests/test_closer_core_http_watchdog.py:311: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [4] tests/test_closer_core_http_watchdog.py:332: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [4] tests/test_closer_core_http_watchdog.py:399: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [2] tests/test_closer_core_http_watchdog.py:418: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [4] tests/test_closer_core_http_watchdog.py:441: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [7] tests/test_closer_core_http_watchdog.py:462: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [8] tests/test_closer_core_http_watchdog.py:497: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_inert_harness_compat.py:197: existing configured Git Core source unavailable; export requires no query
+    pytest   SKIPPED [1] tests/test_closer_mechanisms.py:435: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [2] tests/test_closer_native_ci_terminal_lifecycle.py:161: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:133: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [3] tests/test_closer_runtime_binding.py:155: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:165: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:338: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:457: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:488: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:525: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_binding.py:559: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:86: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:108: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:125: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:156: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:185: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:214: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_runtime_drain.py:238: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [1] tests/test_closer_source_upgrade_integration.py:55: independently pinned Workflows Core source/package unavailable
+    pytest   SKIPPED [2] tests/test_closer_verifier_request_correlation.py:270: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [5] tests/test_closer_verifier_request_correlation.py:730: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [5] tests/test_closer_verifier_request_correlation.py:756: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [2] tests/test_closer_verifier_request_correlation.py:790: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    pytest   SKIPPED [5] tests/test_closer_verifier_request_correlation.py:978: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+
+  PROBLEMS:
+    - 487 pytest failure(s)/error(s)
+    - executed-or-skipped count dropped: 14074 passed + 147 skipped < floor 14700 — a test stopped being run without becoming a named skip
+    - 2 module selftest(s) failed: adapters, capability_propensity
+    - CEILING exceeded: 44 skipped test(s) > agreed maximum 31. This is bounded on purpose — either the new one is wrong, or raise `skipped_max` in .verify-floor.json deliberately and say why. None of them skipped only for a row this tree declares (see `declared:`). Skip categories: skipped test(s) 44/31 via `skipped_max` — clear by restoring the named missing prerequisite under SKIPPED (git family on the exec mirror), or raise the shape key deliberately; Closer Core sibling skipped test(s) 103/19 via `core_sibling_skipped_max` — clear when CLOSER_CORE_SOURCE points at a checkout with scripts/closer_runtime.py or Core is placed at the sibling portable path; skipped selftest(s) 0/7 via `selftest_skipped_max` — clear by restoring the named missing selftest prerequisite, or raise the shape key deliberately; skipped gate(s) 0/2 via `gate_skipped_max` — clear by restoring the named missing gate prerequisite, or raise the shape key deliberately.
+    - CEILING exceeded: 103 Closer Core sibling skipped test(s) > agreed maximum 19. This is bounded on purpose — either the new one is wrong, or raise `core_sibling_skipped_max` in .verify-floor.json deliberately and say why. Skip categories: skipped test(s) 44/31 via `skipped_max` — clear by restoring the named missing prerequisite under SKIPPED (git family on the exec mirror), or raise the shape key deliberately; Closer Core sibling skipped test(s) 103/19 via `core_sibling_skipped_max` — clear when CLOSER_CORE_SOURCE points at a checkout with scripts/closer_runtime.py or Core is placed at the sibling portable path; skipped selftest(s) 0/7 via `selftest_skipped_max` — clear by restoring the named missing selftest prerequisite, or raise the shape key deliberately; skipped gate(s) 0/2 via `gate_skipped_max` — clear by restoring the named missing gate prerequisite, or raise the shape key deliberately.
+    selftest adapters: son and "default state dir" in reason, reason
+AssertionError: /Users/teacher/.codex/orchestrator contains the user's hom
+    selftest capability_propensity: root {nested}"
+AssertionError: the private store /Users/teacher/.codex/orchestrator/agent-runtime/cursor/tmp/propensity-
+
+  pytest failures (479):
+    FAILED tests/test_agent_workspace_never_broad.py::test_every_homes_control_plane_is_refused_when_home_is_moved
+    FAILED tests/test_build_exec_mirror.py::test_the_documented_copier_builds_through_the_builder
+    FAILED tests/test_build_exec_mirror.py::test_the_documented_install_command_writes_the_documented_copier
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[builder]
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[documented]
+    FAILED tests/test_build_exec_mirror.py::test_presync_says_whether_ci_verified_the_shipped_tree[drifted]
+    FAILED tests/test_claude_identity_filesystem.py::test_real_retention_barrier_reaches_closer_interpret_uncertainty
+    FAILED tests/test_closer_assessment_audit.py::test_retained_assessment_is_not_invalidated_by_incomplete_producer_audit
+    FAILED tests/test_closer_assessment_audit.py::test_incomplete_audit_preserves_existing_typed_recovery_route
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[complete]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[core_mismatch]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[wrong_head]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[bad_envelope]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[bad_audit]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[bad_summary]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[huge_summary]
+    FAILED tests/test_closer_assessment_audit.py::test_audit_separation_preserves_binding_and_core_gap_guards[inline_summary]
+    FAILED tests/test_closer_batch_continuation.py::test_cleanup_is_once_and_releases_only_private_mutex_on_valid_or_rejected_stop[0]
+    FAILED tests/test_closer_batch_continuation.py::test_cleanup_is_once_and_releases_only_private_mutex_on_valid_or_rejected_stop[65]
+    FAILED tests/test_closer_batch_delivery.py::test_documented_automatic_wrapper_rejects_late_publication
+    FAILED tests/test_closer_batch_interpretation.py::test_native_coordinator_preserves_exact_callback_registration[False]
+    FAILED tests/test_closer_batch_interpretation.py::test_native_coordinator_preserves_exact_callback_registration[True]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_low_and_strong_parser_matrix[json]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_low_and_strong_parser_matrix[fenced]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_low_and_strong_parser_matrix[codex_jsonl]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_uncertain_restarts_without_duplicate[inflight]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_uncertain_restarts_without_duplicate[persistence]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_uncertain_restarts_without_duplicate[malformed]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_large_native_response_is_retained_once
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_nondecisions_never_gain_authority[worker_result4-adjudication_response_scope_changed]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_large_proofs_cross_native_stages_and_refuse_unstarted_effect
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_retained_low_proposal_hash_is_checked_before_escalation
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_response_retention_fault_never_repeats_provider[proposal.json]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_response_retention_fault_never_repeats_provider[worker-output.txt]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_response_retention_fault_never_repeats_provider[validation.json]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_oversized_actual_retained_file_is_rejected_before_read
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_validation_summary_cannot_replace_original_proofs[summary]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_strong_validation_summary_cannot_replace_original_proofs[output_hash]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_retained_read_fault_never_repeats_provider[exception-missing]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_retained_read_fault_never_repeats_provider[exception-hash]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_retained_read_fault_never_repeats_provider[act-hash]
+    FAILED tests/test_closer_batch_interpretation.py::test_batch_completed_retained_read_fault_never_repeats_provider[strong_act-hash]
+    FAILED tests/test_closer_delivery_lifecycle.py::test_positive_low_evidence_to_exact_head_merge_and_native_verifier_wait
+    FAILED tests/test_closer_delivery_lifecycle.py::test_positive_lifecycle_keeps_observed_evidence_barriers[wrong_attempt]
+    FAILED tests/test_closer_delivery_lifecycle.py::test_positive_lifecycle_keeps_observed_evidence_barriers[changed_head]
+    FAILED tests/test_closer_delivery_lifecycle.py::test_positive_lifecycle_keeps_observed_evidence_barriers[provider_uncertain]
+    FAILED tests/test_closer_dispatcher.py::test_nonpass_callback_preserves_complete_evidence_without_unused_disposition_duplicate
+    FAILED tests/test_closer_dispatcher.py::test_busy_shared_exception_pool_returns_valid_fresh_capacity_proof
+    FAILED tests/test_closer_dispatcher.py::test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard[plain-json-postverify-bound-receipt]
+    FAILED tests/test_closer_dispatcher.py::test_low_receipt_enters_existing_acceptance_and_exact_head_merge_guard[single-json-fence-postverify-bound-receipt]
+    FAILED tests/test_closer_dispatcher.py::test_low_failure_scope_preserves_item_holds_and_real_provider_failures[transport]
+    FAILED tests/test_closer_dispatcher.py::test_low_failure_scope_preserves_item_holds_and_real_provider_failures[refusal]
+    FAILED tests/test_closer_dispatcher.py::test_low_failure_scope_preserves_item_holds_and_real_provider_failures[inspection]
+    FAILED tests/test_closer_dispatcher.py::test_low_failure_scope_preserves_item_holds_and_real_provider_failures[malformed]
+    FAILED tests/test_closer_dispatcher.py::test_low_failure_scope_preserves_item_holds_and_real_provider_failures[quota]
+    FAILED tests/test_closer_dispatcher.py::test_low_failure_scope_preserves_item_holds_and_real_provider_failures[quota_normal_exit]
+    FAILED tests/test_closer_dispatcher.py::test_uncertain_provider_result_stops_before_fallback_exception_or_action[False]
+    FAILED tests/test_closer_dispatcher.py::test_uncertain_provider_result_stops_before_fallback_exception_or_action[True]
+    FAILED tests/test_closer_dispatcher_routing_independence.py::TestExceptionCallbackIdentity::test_non_codex_exception_callback_identity
+    FAILED tests/test_closer_evidence_recovery.py::test_real_dispatcher_collects_then_rescreens_and_reenters_same_closer
+    FAILED tests/test_closer_evidence_recovery.py::test_real_dispatcher_retains_no_progress_and_does_not_buy_another_collection
+    FAILED tests/test_closer_evidence_recovery.py::test_authoritative_capacity_reset_resumes_one_saved_plan_without_model_recollection
+    FAILED tests/test_closer_evidence_recovery.py::test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads[necessary]
+    FAILED tests/test_closer_evidence_recovery.py::test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads[useful]
+    FAILED tests/test_closer_evidence_recovery.py::test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads[nice_to_have]
+    FAILED tests/test_closer_evidence_recovery.py::test_real_closer_routes_only_necessary_requested_extras_to_targeted_reads[possibly_useful]
+    FAILED tests/test_closer_evidence_recovery.py::test_partial_log_progress_is_kept_and_only_unresolved_job_is_retried
+    FAILED tests/test_closer_evidence_recovery.py::test_recovered_preparation_cannot_cross_revision_or_use_compact_fallback[head-exception]
+    FAILED tests/test_closer_evidence_recovery.py::test_recovered_preparation_cannot_cross_revision_or_use_compact_fallback[head-act]
+    FAILED tests/test_closer_evidence_recovery.py::test_recovered_preparation_cannot_cross_revision_or_use_compact_fallback[revision-exception]
+    FAILED tests/test_closer_evidence_recovery.py::test_recovered_preparation_cannot_cross_revision_or_use_compact_fallback[revision-act]
+    FAILED tests/test_closer_evidence_recovery.py::test_recovered_preparation_cannot_cross_revision_or_use_compact_fallback[snapshot_hash-exception]
+    FAILED tests/test_closer_evidence_recovery.py::test_recovered_preparation_cannot_cross_revision_or_use_compact_fallback[snapshot_hash-act]
+    FAILED tests/test_closer_evidence_recovery.py::test_assessment_failure_cannot_overwrite_successful_recovery[routing]
+    FAILED tests/test_closer_evidence_recovery.py::test_assessment_failure_cannot_overwrite_successful_recovery[deadline]
+    FAILED tests/test_closer_evidence_recovery.py::test_read_deferral_without_reset_resumes_saved_plan[deadline]
+    FAILED tests/test_closer_evidence_recovery.py::test_read_deferral_without_reset_resumes_saved_plan[capacity_without_reset]
+    FAILED tests/test_closer_evidence_recovery.py::test_deadline_before_provider_start_is_retryable_but_uncertain_invocation_is_held
+    FAILED tests/test_closer_evidence_recovery.py::test_deadline_raised_after_provider_invocation_remains_held
+    FAILED tests/test_closer_evidence_recovery.py::test_source_owned_targeted_read_and_reentry_without_model_cause_carrier
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[missing]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[generic]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[multiple]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[unknown]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[missing_row]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[security]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_exception_admission_refuses_before_route_or_provider[authority]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_named_advice_merges_one_row_then_full_guard[False]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_named_advice_merges_one_row_then_full_guard[True]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[head]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[request_id]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[packet]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[basis]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[rewrite]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[broad_pass]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_strong_response_rejects_rebinding_and_broad_rewrites[duplicate_json]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_worker_strong_prompt_is_one_data_only_question
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_pipeline_persists_generic_request_hold_before_action
+    FAILED tests/test_closer_execution_contract_routes.py::test_scoped_worker_interruption_never_gains_completion_authority[missing_run]
+    FAILED tests/test_closer_execution_contract_routes.py::test_scoped_worker_interruption_never_gains_completion_authority[cancelled]
+    FAILED tests/test_closer_execution_contract_routes.py::test_scoped_worker_interruption_never_gains_completion_authority[unknown]
+    FAILED tests/test_closer_execution_contract_routes.py::test_post_transport_combined_prompt_bound_precedes_any_strong_allocation[ascii]
+    FAILED tests/test_closer_execution_contract_routes.py::test_post_transport_combined_prompt_bound_precedes_any_strong_allocation[unicode]
+    FAILED tests/test_closer_execution_contract_routes.py::test_post_transport_combined_prompt_bound_precedes_any_strong_allocation[escaped]
+    FAILED tests/test_closer_execution_contract_routes.py::test_actual_worker_rechecks_combined_prompt_bound_before_its_route
+    FAILED tests/test_closer_execution_contract_routes.py::test_post_transport_unknown_fields_never_reach_strong_prompt
+    FAILED tests/test_closer_execution_contract_routes.py::test_owner_required_hold_retains_only_actually_bound_named_identity[True]
+    FAILED tests/test_closer_execution_contract_routes.py::test_owner_required_hold_retains_only_actually_bound_named_identity[False]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[free-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[free-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[occupied-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[occupied-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[uncertain-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[uncertain-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[legacy-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[legacy-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[wrong_root-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[wrong_root-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[wrong_bound-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[wrong_bound-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[bool_bound-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[bool_bound-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[zero_bound-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[zero_bound-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[negative_bound-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[negative_bound-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[oversized_bound-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[oversized_bound-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[nonfinite_bound-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[nonfinite_bound-act]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[expired-prepare]
+    FAILED tests/test_closer_hold_followup.py::test_actual_io_release_observes_original_shared_pool[expired-act]
+    FAILED tests/test_closer_low_ci_imported_packet.py::test_actual_imported_packet_restarts_from_its_original_raw_custody
+    FAILED tests/test_closer_low_ci_imported_packet.py::test_imported_packet_never_falls_back_to_other_custody[foreign_raw]
+    FAILED tests/test_closer_low_ci_imported_packet.py::test_imported_packet_never_falls_back_to_other_custody[tamper]
+    FAILED tests/test_closer_low_ci_imported_packet.py::test_imported_packet_never_falls_back_to_other_custody[identity]
+    FAILED tests/test_closer_low_ci_imported_packet.py::test_imported_packet_never_falls_back_to_other_custody[symlink]
+    FAILED tests/test_closer_low_ci_imported_packet.py::test_missing_explicit_custody_root_never_reads_or_falls_back
+    FAILED tests/test_closer_native_fixture_port.py::test_only_exact_registered_fixture_forwards_unchanged_to_popen_and_tracks_child
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[lane]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[extra]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[shell_command]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[other_bash]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[bare_bash]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[foreign_wrapper]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[shell]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[executable]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[cwd]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[foreign_home]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[no_request]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[foreign_request]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[wrong_binding]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[symlink_request]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[BASH_ENV]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[ENV]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[LD_PRELOAD]
+    FAILED tests/test_closer_native_fixture_port.py::test_other_commands_or_unbound_process_options_never_reach_popen[DYLD_INSERT_LIBRARIES]
+    FAILED tests/test_closer_native_fixture_port.py::test_launch_revalidates_physical_script_and_manifest_after_registration[script_bytes]
+    FAILED tests/test_closer_native_fixture_port.py::test_launch_revalidates_physical_script_and_manifest_after_registration[script_symlink]
+    FAILED tests/test_closer_native_fixture_port.py::test_launch_revalidates_physical_script_and_manifest_after_registration[home_symlink]
+    FAILED tests/test_closer_native_fixture_port.py::test_launch_revalidates_physical_script_and_manifest_after_registration[manifest_bytes]
+    FAILED tests/test_closer_native_fixture_port.py::test_launch_revalidates_physical_script_and_manifest_after_registration[hardlink]
+    FAILED tests/test_closer_native_fixture_port.py::test_bound_metadata_candidates_and_exact_reader_forward_without_claiming_ownership
+    FAILED tests/test_closer_native_fixture_port.py::test_entry_candidate_needs_every_fresh_private_startup_join
+    FAILED tests/test_closer_native_fixture_port.py::test_reader_refuses_foreign_flags_birth_budget_and_process_overrides
+    FAILED tests/test_closer_native_fixture_port.py::test_expired_request_and_changed_pinned_reader_refuse_without_process
+    FAILED tests/test_closer_native_fixture_port.py::test_python_startup_injection_is_refused_before_any_process
+    FAILED tests/test_closer_native_fixture_port.py::test_private_launcher_and_module_tamper_are_refused_before_any_process
+    FAILED tests/test_closer_native_fixture_port.py::test_fixture_startup_environment_is_scoped_and_requires_user_site_disabled
+    FAILED tests/test_closer_native_fixture_port.py::test_unlisted_module_and_directory_refused_before_any_process
+    FAILED tests/test_closer_nonfinite_data_only.py::test_finite_cli_prelaunch_refusal_is_owned_pending_not_invalid_run
+    FAILED tests/test_closer_nonfinite_data_only.py::test_finite_cli_known_no_start_releases_only_its_collection_attempt
+    FAILED tests/test_closer_nonfinite_data_only.py::test_actual_nonfinite_callback_without_original_lease_is_owned_pending_and_never_invokes_broker_or_act
+    FAILED tests/test_closer_pre_model_readiness.py::test_ready_collector_packet_reaches_one_actual_advisory_boundary[ordinary]
+    FAILED tests/test_closer_pre_model_readiness.py::test_ready_collector_packet_reaches_one_actual_advisory_boundary[bound-nonpass]
+    FAILED tests/test_closer_pre_model_readiness.py::test_delivery_producer_to_consumer_preserves_criteria_and_uses_only_ready_evidence[ready-linear]
+    FAILED tests/test_closer_publication_private_git_environment.py::test_production_collector_pins_root_parent_of_native_shell_alias
+    FAILED tests/test_closer_strong_result_compaction.py::test_strong_callback_retains_metadata_once_and_keeps_original_guard[None]
+    FAILED tests/test_closer_strong_result_compaction.py::test_strong_callback_retains_metadata_once_and_keeps_original_guard[metadata_write]
+    FAILED tests/test_closer_strong_result_compaction.py::test_strong_callback_retains_metadata_once_and_keeps_original_guard[output_hash]
+    FAILED tests/test_closer_strong_result_compaction.py::test_strong_callback_retains_metadata_once_and_keeps_original_guard[original_proof]
+    FAILED tests/test_coverage_wp_roles.py::test_issue_body_validator_rejects_non_objects_and_blank_summaries
+    FAILED tests/test_coverage_wp_roles.py::test_selftest_fails_loudly_when_a_changed_collector_input_would_be_admitted
+    FAILED tests/test_gh_auth_preflight.py::test_a_deferred_tick_runs_its_local_steps_and_none_that_reach_github[False]
+    FAILED tests/test_gh_auth_preflight.py::test_a_deferred_tick_runs_its_local_steps_and_none_that_reach_github[True]
+    FAILED tests/test_gh_auth_preflight.py::test_an_authenticated_tick_runs_the_github_steps[False]
+    FAILED tests/test_gh_auth_preflight.py::test_an_authenticated_tick_runs_the_github_steps[True]
+    FAILED tests/test_gh_auth_preflight.py::test_a_refused_token_still_aborts_the_whole_tick
+    FAILED tests/test_install_closer_dispatcher.py::test_gate_precedes_round_and_relay_but_failure_runs_exit_cleanup[False-0]
+    FAILED tests/test_install_closer_dispatcher.py::test_gate_precedes_round_and_relay_but_failure_runs_exit_cleanup[False-1]
+    FAILED tests/test_install_closer_dispatcher.py::test_gate_precedes_round_and_relay_but_failure_runs_exit_cleanup[True-0]
+    FAILED tests/test_install_closer_dispatcher.py::test_gate_precedes_round_and_relay_but_failure_runs_exit_cleanup[True-1]
+    FAILED tests/test_install_verified_snapshot.py::test_tick_reader_excludes_real_publisher_across_child_imports[False]
+    FAILED tests/test_install_verified_snapshot.py::test_tick_reader_excludes_real_publisher_across_child_imports[True]
+    FAILED tests/test_install_verified_snapshot.py::test_standalone_python_reader_excludes_publisher_across_child_imports[incumbent-in-place]
+    FAILED tests/test_install_verified_snapshot.py::test_standalone_python_reader_excludes_publisher_across_child_imports[generation-entry]
+    FAILED tests/test_install_verified_snapshot.py::test_standalone_python_reader_excludes_publisher_across_child_imports[guarded-entry]
+    FAILED tests/test_install_verified_snapshot.py::test_unverified_route_stages_copier_and_never_claims_verification[success]
+    FAILED tests/test_install_verified_snapshot.py::test_unverified_route_stages_copier_and_never_claims_verification[invalid-payload]
+    FAILED tests/test_install_verified_snapshot.py::test_direct_copier_guard_keeps_live_tree_available[False-True]
+    FAILED tests/test_mirror_generations.py::MirrorGenerationTests::test_pinned_tick_still_aborts_on_refused_authentication
+    FAILED tests/test_mirror_generations.py::MirrorGenerationTests::test_tick_and_child_imports_remain_pinned_while_publication_completes
+    FAILED tests/test_mirror_sync_patch.py::test_green_path_installs_the_retained_snapshot_not_mutated_source
+    FAILED tests/test_mirror_sync_patch.py::test_missing_or_malformed_digest_receipt_fails_before_install[]
+    FAILED tests/test_mirror_sync_patch.py::test_missing_or_malformed_digest_receipt_fails_before_install[not-a-digest]
+    FAILED tests/test_mirror_sync_patch.py::test_missing_or_malformed_digest_receipt_fails_before_install[AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]
+    FAILED tests/test_mirror_sync_patch.py::test_missing_or_malformed_digest_receipt_fails_before_install[aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nextra]
+    FAILED tests/test_mirror_sync_patch.py::test_installer_failure_preserves_status_and_prints_both_recovery_paths[2]
+    FAILED tests/test_mirror_sync_patch.py::test_installer_failure_preserves_status_and_prints_both_recovery_paths[17]
+    FAILED tests/test_propensity_selftest_private_state.py::test_private_live_state_swaps_every_store_trips_on_a_touch_and_restores
+    FAILED tests/test_propensity_selftest_private_state.py::test_production_heartbeats_cannot_fire_inside_and_the_flag_is_restored
+    FAILED tests/test_propensity_selftest_private_state.py::test_record_overrides_are_watched_as_records_not_as_their_directory
+    FAILED tests/test_release_storage_test_isolation.py::test_test_fixtures_do_not_inherit_verifier_storage[native-attribution]
+    FAILED tests/test_verify_before_sync.py::test_ci_shard_passes_arguments_without_claiming_a_full_verdict
+    FAILED tests/test_verify_before_sync.py::test_ci_aggregate_passes_evidence_and_keeps_the_full_verdict
+    FAILED tests/test_verify_before_sync.py::test_a_green_scratch_mirror_is_verified_and_nothing_live_is_touched
+    FAILED tests/test_verify_before_sync.py::test_verify_py_reads_and_writes_only_a_copy_of_the_live_state
+    FAILED tests/test_verify_before_sync.py::test_a_symlinked_tmpdir_hands_verify_py_canonical_paths
+    FAILED tests/test_verify_before_sync.py::test_a_red_verdict_exits_one_and_prints_verify_pys_own_code
+    FAILED tests/test_verify_before_sync.py::test_a_green_verdict_can_publish_the_exact_verified_snapshot
+    FAILED tests/test_verify_before_sync.py::test_a_red_verdict_never_publishes_a_snapshot
+    FAILED tests/test_verify_before_sync.py::test_existing_snapshot_destination_creates_no_scratch_directory
+    FAILED tests/test_verify_before_sync.py::test_a_failed_copy_verifies_nothing
+    FAILED tests/test_verify_before_sync.py::test_a_source_that_moves_during_the_run_voids_the_verdict
+    FAILED tests/test_verify_before_sync.py::test_an_untracked_file_appearing_also_voids_the_verdict
+    FAILED tests/test_verify_before_sync.py::test_an_ignored_module_copied_to_the_mirror_is_part_of_the_identity
+    FAILED tests/test_verify_before_sync.py::test_a_tree_not_judged_as_the_mirror_shape_is_not_verified
+    FAILED tests/test_verify_before_sync.py::test_the_owner_sync_refuses_a_verdict_taken_under_the_bare_shape
+    FAILED tests/test_verify_before_sync.py::test_ci_expects_the_bare_shape_and_only_the_bare_shape[BARE EXEC MIRROR \u2014 bare_mirror_* ceilings apply-True]
+    FAILED tests/test_verify_before_sync.py::test_ci_expects_the_bare_shape_and_only_the_bare_shape[EXEC MIRROR \u2014 mirror_* ceilings apply-False]
+    FAILED tests/test_verify_before_sync.py::test_ci_expects_the_bare_shape_and_only_the_bare_shape[checkout-False]
+    FAILED tests/test_verify_before_sync.py::test_floor_may_lag_reaches_verify_py_only_when_asked[1---floor-may-lag]
+    FAILED tests/test_verify_before_sync.py::test_floor_may_lag_reaches_verify_py_only_when_asked[-]
+    FAILED tests/test_verify_before_sync.py::test_floor_may_lag_reaches_verify_py_only_when_asked[0-]
+    FAILED tests/test_verify_before_sync.py::test_identity_mode_prints_the_fingerprint_a_green_verdict_was_taken_on
+    FAILED tests/test_verify_before_sync.py::test_a_verify_run_that_changes_deployment_bytes_voids_the_snapshot
+    FAILED tests/test_verify_before_sync.py::test_registries_seeded_during_verification_never_land_in_the_mirror
+    FAILED tests/test_verify_before_sync.py::test_a_registry_the_source_ships_is_judged_as_shipped
+    FAILED tests/test_verify_before_sync.py::test_incomplete_verify_evidence_never_publishes_a_snapshot
+    FAILED tests/test_verify_before_sync.py::test_keep_leaves_the_scratch_mirror_for_inspection
+    FAILED tests/test_verify_before_sync.py::test_declared_rows_are_seeded_into_the_copy_before_verify_py_judges_it
+    FAILED tests/test_verify_before_sync.py::test_a_first_load_that_fails_is_not_verified_and_verify_py_never_runs
+    FAILED tests/test_verify_before_sync.py::test_without_a_ledger_in_the_copy_nothing_is_seeded_or_created
+    FAILED tests/test_verify_before_sync.py::test_the_real_first_load_registers_a_declared_row_the_live_ledger_lacks
+    ERROR tests/test_closer_acceptance_metrics_composition.py::test_actual_completed_post_is_work_while_downstream_verifier_stays_unknown
+    ERROR tests/test_closer_assessment_audit.py::test_tool_free_audit_prompt_never_requests_file_commands
+    ERROR tests/test_closer_ci_followup.py::test_public_ci_merge_verification_wait_and_restart_without_replaying_effects
+    ERROR tests/test_closer_ci_followup.py::test_public_ci_unknown_child_is_owned_without_new_child_or_retry
+    ERROR tests/test_closer_ci_followup.py::test_public_ci_stale_or_wrong_proof_never_creates_successor[wrong_check]
+    ERROR tests/test_closer_ci_followup.py::test_public_ci_stale_or_wrong_proof_never_creates_successor[stale_head]
+    ERROR tests/test_closer_ci_followup.py::test_public_ci_stale_or_wrong_proof_never_creates_successor[source]
+    ERROR tests/test_closer_ci_followup.py::test_same_frontier_guard_readmission_reports_latest_actual_descendant_receipt
+    ERROR tests/test_closer_controlled_origin.py::test_actual_registered_pipeline_missing_contract_stops_before_broker
+    ERROR tests/test_closer_controlled_origin.py::test_exported_native_fixture_reuses_explicit_controlled_world
+    ERROR tests/test_closer_data_only_context.py::test_unstructured_nonissue_body_survives_before_typed_inventory_hold
+    ERROR tests/test_closer_data_only_context.py::test_native_interpret_capacity_exhaustion_retains_capacity_recheck
+    ERROR tests/test_closer_data_only_context.py::test_native_interpret_maps_only_proven_no_spawn_transport_refusal[False]
+    ERROR tests/test_closer_data_only_context.py::test_native_interpret_maps_only_proven_no_spawn_transport_refusal[True]
+    ERROR tests/test_closer_dispatcher_finite_frontier.py::test_public_finite_reentry_reuses_packet_and_reaches_native_interpret
+    ERROR tests/test_closer_dispatcher_finite_frontier.py::test_public_finite_max_workers_caps_actual_target_executor
+    ERROR tests/test_closer_dispatcher_finite_frontier.py::test_public_finite_reentry_refuses_unknown_effect_and_never_replays
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_actual_known_native_boundary_signs_exact_active_descendant
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_original_root_proof_cannot_cover_arbitrary_child_without_leaf_receipt
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_signed_original_descendant_replay_refuses_changed_bytes[result]
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_signed_original_descendant_replay_refuses_changed_bytes[bundle]
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_signed_original_descendant_replay_refuses_changed_bytes[receipt]
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_signed_original_descendant_replay_refuses_changed_bytes[coverage]
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_actual_signed_leaf_wait_remains_owned_on_restart_without_terminal_bridge
+    ERROR tests/test_closer_hold_descendant_boundary.py::test_actual_authenticated_descendant_metrics_count_completed_request_branch
+    ERROR tests/test_closer_known_verification_rejection.py::test_actual_core_receipt_read_is_pure_and_rebound_guard_consistent_record_is_rejected
+    ERROR tests/test_closer_known_verification_rejection.py::test_actual_changed_revision_accepted_replacement_preserves_unique_archived_rejection_read
+    ERROR tests/test_closer_known_verification_rejection.py::test_core_unknown_outcome_cannot_mint_original_rejection_pin
+    ERROR tests/test_closer_known_verification_rejection.py::test_actual_rejection_cannot_retain_or_restamp_caller_supplied_core_pin
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_finite_main_verifies_selected_merge_despite_foreign_history
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_cli_continues_accepted_request_after_result_without_replaying_post
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_main_without_confirmed_merge_never_requests_successor[blocked]
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_main_without_confirmed_merge_never_requests_successor[uncertain]
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_successor_registry_rejects_changed_child_or_backend[arguments-finite successor requires the exact CLI-owned child/backend]
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_successor_registry_rejects_changed_child_or_backend[transport-finite dispatcher backend contains an unsupported transport override]
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_successor_registry_rejects_changed_child_or_backend[backend-finite callbacks require the exact CLI-constructed dispatcher backend]
+    ERROR tests/test_closer_merge_successor_integration.py::test_registered_backend_cannot_launch_child_from_external_caller
+    ERROR tests/test_closer_merge_successor_integration.py::test_public_post_produces_authenticated_accepted_wait_without_normalization
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-missing_submit]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-missing_advance]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-wrong_submit_id]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-wrong_advance_id]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-foreign_namespace]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-stale_head]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-unknown]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-no_effect]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-missing_ack]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-not_started_422]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[ineligible-provider_unknown]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-missing_submit]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-missing_advance]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-wrong_submit_id]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-wrong_advance_id]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-foreign_namespace]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-stale_head]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-unknown]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-no_effect]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-missing_ack]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-not_started_422]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_completed_request_wait_rejects_unbound_progress[historical_progress-provider_unknown]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[None]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[missing_submit]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[missing_advance]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[wrong_submit_id]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[wrong_advance_id]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[provider_unknown]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[outcome_unknown]
+    ERROR tests/test_closer_merge_successor_integration.py::test_cross_frontier_wait_checks_original_post_receipt[recovery_barrier]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_compact_prepare_wait_uses_authenticated_request_merge_identity[compact-positive]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_compact_prepare_wait_uses_authenticated_request_merge_identity[changed-head]
+    ERROR tests/test_closer_merge_successor_integration.py::test_actual_compact_prepare_wait_uses_authenticated_request_merge_identity[changed-merge]
+    ERROR tests/test_closer_merge_successor_integration.py::test_followup_reader_evaluates_nonpass_route_without_execution
+    ERROR tests/test_closer_native_capacity.py::test_no_profile_native_admission_and_public_queue_composition
+    ERROR tests/test_closer_native_complete.py::test_actual_registered_closed_issue_uses_io_without_model
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[snapshot_hash]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[packet_hash]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[missing_snapshot]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[target]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[revision]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[producer]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[readiness]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[cached]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[generic_complete]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[unknown]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[recovery]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[findings]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[old]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[future]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[nonfinite]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[head]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[open]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[pr]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[pending_ci]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[delivery]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[security]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[source]
+    ERROR tests/test_closer_native_complete.py::test_unbound_closed_issue_stays_on_existing_capacity_route[disposition]
+    ERROR tests/test_closer_native_descendants.py::test_real_descendant_receipts_cover_both_lineage_hops
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[missing]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[foreign]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[hash]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[frontier]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[runs]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[conflict]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[cycle]
+    ERROR tests/test_closer_native_descendants.py::test_actual_child_coverage_refuses_unbound_authority[subset]
+    ERROR tests/test_closer_native_descendants.py::test_old_receipt_requires_exact_finalized_original_coverage
+    ERROR tests/test_closer_native_descendants.py::test_unknown_actual_child_remains_unknown_never_historical
+    ERROR tests/test_closer_native_descendants.py::test_top_root_subset_cannot_be_replaced_by_descendant
+    ERROR tests/test_closer_native_descendants.py::test_finalized_known_bundle_requires_actual_worker_and_revalidates_bytes
+    ERROR tests/test_closer_native_descendants.py::test_capture_and_metrics_consume_actual_active_leaf
+    ERROR tests/test_closer_native_descendants.py::test_reported_bundle_and_aggregate_prevent_root_only_success[normal]
+    ERROR tests/test_closer_native_descendants.py::test_reported_bundle_and_aggregate_prevent_root_only_success[uncertain]
+    ERROR tests/test_closer_native_descendants.py::test_restart_current_b_requires_actual_prior_finalized_worker
+    ERROR tests/test_closer_native_descendants.py::test_unknown_signed_worker_observation_never_supplies_historical_release[uncertain]
+    ERROR tests/test_closer_native_descendants.py::test_actual_pinned_postrun_gate_finalizes_only_verified_cleanup[exact]
+    ERROR tests/test_closer_native_descendants.py::test_actual_pinned_postrun_gate_finalizes_only_verified_cleanup[wrong_nonce]
+    ERROR tests/test_closer_native_descendants.py::test_actual_pinned_postrun_gate_finalizes_only_verified_cleanup[missing]
+    ERROR tests/test_closer_native_descendants.py::test_real_native_hook_refuses_top_only_when_linked_child_missing
+    ERROR tests/test_closer_native_descendants.py::test_descendant_seal_requires_exact_signed_original_worker[owner]
+    ERROR tests/test_closer_native_descendants.py::test_descendant_seal_requires_exact_signed_original_worker[generation]
+    ERROR tests/test_closer_native_descendants.py::test_descendant_seal_requires_exact_signed_original_worker[state]
+    ERROR tests/test_closer_native_descendants.py::test_descendant_seal_requires_exact_signed_original_worker[target]
+    ERROR tests/test_closer_native_descendants.py::test_descendant_seal_requires_exact_signed_original_worker[result]
+    ERROR tests/test_closer_native_descendants.py::test_descendant_seal_requires_exact_signed_original_worker[runtime-manifest]
+    ERROR tests/test_closer_native_descendants.py::test_history_authority_bytes_are_reserved_before_native_revalidation
+    ERROR tests/test_closer_native_descendants.py::test_history_retained_ci_proof_budget_precedes_real_framework_reads[original_queue]
+    ERROR tests/test_closer_native_descendants.py::test_history_retained_ci_proof_budget_precedes_real_framework_reads[source_snapshot]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_actual_registered_ci_wait_uses_io_and_original_no_effect_queue
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[ids]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[check_head]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[id_type]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[duplicate_ids]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[head]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[unknown]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[recovery]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[cached]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[generic_wait]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[packet]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[snapshot]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[missing_snapshot]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[target]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[revision]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[producer]
+    ERROR tests/test_closer_native_pending_ci_wait.py::test_unbound_pending_ci_cannot_use_native_wait_lane[readiness]
+    ERROR tests/test_closer_native_stage_resources.py::test_native_merge_scoped_cli_needs_io_not_low_or_product_workspace
+    ERROR tests/test_closer_native_stage_resources.py::test_unqualified_interpretation_keeps_model_capacity_gate[model_needed]
+    ERROR tests/test_closer_native_stage_resources.py::test_unqualified_interpretation_keeps_model_capacity_gate[packet]
+    ERROR tests/test_closer_native_stage_resources.py::test_unqualified_interpretation_keeps_model_capacity_gate[snapshot]
+    ERROR tests/test_closer_native_stage_resources.py::test_unqualified_interpretation_keeps_model_capacity_gate[incomplete]
+    ERROR tests/test_closer_native_stage_resources.py::test_public_native_merge_and_verify_keep_real_queue_with_held_checkout
+    ERROR tests/test_closer_native_stage_resources.py::test_reduced_interpret_scope_revalidates_contract_under_inventory_lock
+    ERROR tests/test_closer_native_stage_resources.py::test_native_io_capacity_is_still_required
+    ERROR tests/test_closer_native_stage_resources.py::test_remote_discovery_never_rearms_own_unknown_act
+    ERROR tests/test_closer_reasoning_boundary.py::test_real_finite_cli_reasons_over_overlap_then_refuses_action
+    ERROR tests/test_closer_reasoning_boundary.py::test_missing_base_retains_evidence_gap_without_starting_controlled_model
+    ERROR tests/test_closer_reasoning_boundary.py::test_invalid_retained_packet_never_reaches_model
+    ERROR tests/test_closer_reasoning_boundary.py::test_substantive_reply_cannot_enter_exception_repair
+    ERROR tests/test_closer_reasoning_boundary.py::test_new_frontier_cannot_rearm_own_unknown_or_reconcile_it
+    ERROR tests/test_closer_reasoning_boundary.py::test_registered_legacy_native_discovery_stops_before_model_at_overlap
+    ERROR tests/test_closer_reasoning_boundary.py::test_global_corruption_is_not_an_observation_permission
+    ERROR tests/test_closer_reasoning_boundary.py::test_current_assignment_pause_remains_a_native_wait
+    ERROR tests/test_closer_reasoning_boundary.py::test_live_alias_owner_still_blocks_readonly_reasoning
+    ERROR tests/test_closer_reasoning_boundary.py::test_scope_proofs_distinguish_observation_from_effect
+    ERROR tests/test_closer_reasoning_boundary.py::test_observation_does_not_waive_scope_integrity_or_inventory[digest]
+    ERROR tests/test_closer_reasoning_boundary.py::test_observation_does_not_waive_scope_integrity_or_inventory[stale]
+    ERROR tests/test_closer_reasoning_boundary.py::test_observation_does_not_waive_scope_integrity_or_inventory[global]
+    ERROR tests/test_closer_reasoning_boundary.py::test_observation_does_not_waive_scope_integrity_or_inventory[inventory]
+    ERROR tests/test_closer_reasoning_boundary.py::test_observation_does_not_waive_scope_integrity_or_inventory[target]
+    ERROR tests/test_closer_reasoning_boundary.py::test_observation_does_not_waive_scope_integrity_or_inventory[purpose]
+    ERROR tests/test_closer_reasoning_fixture_import.py::test_standalone_import_constructs_only_private_inert_world
+    ERROR tests/test_closer_remote_legacy_dependency.py::test_registered_legacy_barriers_receive_full_source_snapshot[act]
+    ERROR tests/test_closer_remote_legacy_dependency.py::test_registered_legacy_barriers_receive_full_source_snapshot[reconcile]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_remote_act_avoids_unrelated_workspace_intent
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_remote_act_keeps_exact_alias_intents[pr:owner/repo#12]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_remote_act_keeps_exact_alias_intents[issue:owner/repo#2]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_remote_act_keeps_exact_alias_intents[branch:owner/repo@feature]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_execute_bound_rejects_actual_binding_drift[head]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_execute_bound_rejects_actual_binding_drift[footprint]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_execute_bound_rejects_actual_binding_drift[source_alias]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_registered_unqualified_act_retains_workspace_refusal
+    ERROR tests/test_closer_resources_finite_frontier.py::test_remote_capability_downgrade_before_locked_admission_fails_closed[snapshot]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_remote_capability_downgrade_before_locked_admission_fails_closed[contract]
+    ERROR tests/test_closer_resources_finite_frontier.py::test_remote_capability_downgrade_before_locked_admission_fails_closed[spec]
+    ERROR tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[foreign]
+    ERROR tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[wrong_merge]
+    ERROR tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[corrupt]
+    ERROR tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[history]
+    ERROR tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[capacity]
+    ERROR tests/test_closer_verifier_attribution.py::test_public_cli_real_queue_typed_attribution_boundary[deadline]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_public_racing_same_target_verifier_is_named_no_effect_wait
+    ERROR tests/test_closer_verifier_resource_wait.py::test_unchanged_frontier_waits_then_terminal_event_fresh_frontier_verifies_once
+    ERROR tests/test_closer_verifier_resource_wait.py::test_prewrite_blocking_run_never_becomes_target_owned_async[linked0]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_incomplete_active_inventory_never_authorizes_write
+    ERROR tests/test_closer_verifier_resource_wait.py::test_racing_empty_active_page_is_refetched_before_dispatch
+    ERROR tests/test_closer_verifier_resource_wait.py::test_active_verifier_on_second_page_still_prevents_post
+    ERROR tests/test_closer_verifier_resource_wait.py::test_fresh_complete_inventory_wakes_new_frontier_without_resetting_old_wait
+    ERROR tests/test_closer_verifier_resource_wait.py::test_timeout_after_correlated_dispatch_remains_uncertain
+    ERROR tests/test_closer_verifier_resource_wait.py::test_retained_resource_proof_rejects_tampered_identity
+    ERROR tests/test_closer_verifier_resource_wait.py::test_unrelated_active_repository_run_does_not_create_target_dependency[linked0]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_unrelated_active_repository_run_does_not_create_target_dependency[linked1]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[count_changes]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[duplicate_in_page]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[duplicate_across_pages]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[id_string]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[id_zero]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[id_bool]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[id_negative]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[excess_rows]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[missing_runs]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_malformed_active_inventory_never_dispatches[runs_not_list]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_retry_uses_complete_nonempty_foreign_page
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[status]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[hash]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[foreign_endpoint]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[page_zero]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[list]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[string]
+    ERROR tests/test_closer_verifier_resource_wait.py::test_inventory_observation_mutations_are_rejected[null]
+    ERROR tests/test_native_runtime_repeat_composition.py::test_initial_dispatch_then_new_dispatch_is_acknowledged_and_restart_idempotent
+    ERROR tests/test_native_runtime_repeat_composition.py::test_pre_post_read_or_binding_failure_leaves_previous_core_record_unchanged[read_wait]
+    ERROR tests/test_native_runtime_repeat_composition.py::test_pre_post_read_or_binding_failure_leaves_previous_core_record_unchanged[head_drift]
+    ERROR tests/test_native_runtime_repeat_composition.py::test_pre_post_read_or_binding_failure_leaves_previous_core_record_unchanged[hold_drift]
+    ERROR tests/test_native_runtime_repeat_composition.py::test_dispatch_timeout_and_restart_cannot_credit_preexisting_label
+    ERROR tests/test_native_runtime_repeat_composition.py::test_legacy_intent_without_mutation_kind_is_not_completed_from_old_label
+    ERROR tests/test_native_runtime_repeat_composition.py::test_exact_422_is_known_not_accepted_then_same_queue_can_retry_compatible_consumer
+    ERROR tests/test_native_runtime_repeat_pipeline.py::test_acknowledged_repeat_dispatch_staged_restart_is_stop_valid
+    ERROR tests/test_native_runtime_request_composition.py::test_native_publication_runtime_core_scoped_queue_requests_without_models[held]
+    ERROR tests/test_native_runtime_request_composition.py::test_native_publication_runtime_core_scoped_queue_requests_without_models[absent]
+    ERROR tests/test_native_runtime_request_composition.py::test_changed_runtime_bytes_hold_before_core_or_native_effect
+    ERROR tests/test_native_storage_tmpdir.py::test_actual_closer_cli_keeps_proven_storage_refusal_recoverable
+    ERROR tests/test_repeat_verification_reentry.py::test_ready_native_verification_needs_no_model_capacity
+    ERROR tests/test_repeat_verification_reentry.py::test_changed_finite_action_holds_before_collection_or_model[False]
+    ERROR tests/test_repeat_verification_reentry.py::test_changed_finite_action_holds_before_collection_or_model[True]
+    ERROR tests/test_repeat_verification_reentry.py::test_missing_product_checkout_blocks_model_consuming_public_path
+
+  pytest tail:
+    SKIPPED [1] tests/test_closer_runtime_drain.py:125: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [1] tests/test_closer_runtime_drain.py:156: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [1] tests/test_closer_runtime_drain.py:185: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [1] tests/test_closer_runtime_drain.py:214: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [1] tests/test_closer_runtime_drain.py:238: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [1] tests/test_closer_source_upgrade_integration.py:55: independently pinned Workflows Core source/package unavailable
+    SKIPPED [2] tests/test_closer_verifier_request_correlation.py:270: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [5] tests/test_closer_verifier_request_correlation.py:730: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [5] tests/test_closer_verifier_request_correlation.py:756: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [2] tests/test_closer_verifier_request_correlation.py:790: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    SKIPPED [5] tests/test_closer_verifier_request_correlation.py:978: CLOSER CORE SIBLING ABSENT: independent Closer Core source unavailable at /Users/teacher/.codex/orchestrator/worktrees/portable — place Core at that sibling path or set CLOSER_CORE_SOURCE to a checkout containing scripts/closer_runtime.py
+    252 failed, 14074 passed, 148 skipped, 2 xfailed, 46 warnings, 235 errors, 377 subtests passed in 2774.58s (0:46:14)

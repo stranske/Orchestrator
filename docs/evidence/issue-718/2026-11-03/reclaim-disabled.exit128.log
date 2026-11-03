@@ -1,0 +1,6 @@
+Reclaim disabled via no-op _reclaim_branch_holder (deliberate-break gate).
+Interpreter: /opt/anaconda3/bin/python3
+Checked: 2026-11-03
+
+returncode 128
+stderr fatal: 'pr-head' is already used by worktree at '.../holder'
