@@ -150,3 +150,32 @@ verified open with `draft=false` before the rejected updates.
 Staging this follow-up also failed with `.git/index.lock: Read-only file system`.
 The collector source, tests and new receipts remain uncommitted for the automation
 to collect; this turn could not satisfy the requested commit requirement.
+
+## Date-separation regression verification on November 3
+
+The retained owner-host inspection is still blocked: the existing search found
+only October test fixtures, and both runner observations left blocking, drainable
+and candidate counts unknown. No new owner-host observation is claimed here.
+
+On November 3, 2026, the scoped Node suite passed **47 tests**, with no
+failures or skips, on Node v24.22.2. Actual output is retained in
+[date-separation-node-tests.txt](date-separation-node-tests.txt). The command is
+the same four-file scoped command recorded above.
+
+The new regression uses explicitly manufactured November 3 records and simulated
+November 5 and 6 clocks. Those simulated dates are test inputs, not observation
+receipts. It verifies that each capture receives its own date while corpus mtime,
+lineage time, log time and review time stay separate. Even positive archived
+apply and acted-on review records cannot establish historical deployment or
+real-stall acceptance. A stale population remains unknown; removing the corpus
+also leaves blocking unknown and prevents screening. The invoking process flag
+is not replaced by the archived flag. All captures preserve the runtime bytes.
+
+This test advances the verified limitation/date-separation task already checked
+above. Authentic historical inspection, a real bounded apply-to-resolution chain,
+and remote completion reconciliation remain unchecked. No production flag,
+cadence, writer lock or daily cap changed, and no Python files changed.
+
+The required commit was attempted after verification. Staging failed with
+`.git/index.lock: Read-only file system`, so this round's test and evidence
+changes remain uncommitted for the automation to collect.

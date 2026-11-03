@@ -448,6 +448,68 @@ function reviewControl(s, row = {}) {
   return { file, report, save };
 }
 
+test('later captures keep their observation date apart from retained November 3 records', async (t) => {
+  // Manufactured archive: even a positive rolling review and an apply record
+  // cannot establish the historical deployment or a resolved production stall.
+  const s = sandbox(t);
+  const recordedAt = Date.parse('2026-11-03T03:00:00Z') / 1000;
+  const review = reviewControl(s, { acted_on: 1, outcome: 1,
+    outcome_success: 1, first_break: 'works' });
+  review.report.generated_at = recordedAt + 60;
+  review.report.value_chain.generated_at = recordedAt;
+  review.save();
+  fs.writeFileSync(s.corpus, JSON.stringify({ kind: 'redirect_apply', ts: recordedAt,
+    target: 'PRIVATE-archived-target', role_run_id: 'PRIVATE-archived-role',
+    applied: true, authorized: true, dry_run: false }) + '\n');
+  const log = path.join(s.stateDir, 'redirect-apply.log');
+  fs.writeFileSync(log, '[2026-11-03T03:00:00Z] redirect apply/link\n'
+    + 'offloads_spent=1 authorized=1 applied=1 (flag ORCH_REDIRECT_APPLY_BOOTSTRAP=1)\n');
+  const archivedTime = new Date(recordedAt * 1000);
+  for (const file of [s.corpus, s.plan, review.file, log]) {
+    fs.utimesSync(file, archivedTime, archivedTime);
+  }
+  const before = snapshot(s.root);
+  const base = control({ ...s, env: { ...s.env, ORCH_REDIRECT_APPLY_BOOTSTRAP: '0' } }, {
+    current_candidates: null, passing_screen: null, population: { status: 'stale' },
+  });
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-05T12:00:00Z') });
+  const first = await observe(base);
+  t.mock.timers.setTime(Date.parse('2026-11-06T12:00:00Z'));
+  const later = await observe(base);
+  assert.equal(first.observed_at, '2026-11-05T12:00:00.000Z');
+  assert.equal(later.observed_at, '2026-11-06T12:00:00.000Z');
+  for (const result of [first, later]) {
+    assert.equal(result.artifacts.corpus.mtime, archivedTime.toISOString());
+    assert.equal(result.recorded_lineage[0].recorded_at, recordedAt);
+    assert.equal(result.recorded_switch_review.recorded_at, recordedAt + 60);
+    assert.equal(result.recorded_switch_review.monitor_generated_at, recordedAt);
+    assert.equal(result.recorded_switch_review.counts.acted_on, 1);
+    assert.equal(result.logged_runs.latest[0].recorded_at, '2026-11-03T03:00:00Z');
+    assert.equal(result.process_flag, '0', 'archived flag must not replace the invoking flag');
+    assert.match(result.flag_scope, /deployed_tick_flag_not_established/);
+    assert.equal(result.status, 'unavailable');
+    assert.equal(result.candidates, null, 'an archived apply cannot supply current eligibility');
+    assert.equal(result.drainable, null);
+    assert.equal(result.operational_acceptance, 'not_established');
+    assert.equal(result.historical_replay_receipt, 'not_established');
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
+  }
+  assert.deepEqual(snapshot(s.root), before);
+
+  fs.unlinkSync(s.corpus);
+  const missingBefore = snapshot(s.root);
+  const missing = await observe({ ...base, run() { assert.fail('missing corpus must not be screened'); } });
+  assert.equal(missing.observed_at, later.observed_at);
+  assert.equal(missing.recorded_switch_review.counts.acted_on, 1);
+  assert.deepEqual(missing.limitations, ['owner_corpus_unavailable']);
+  assert.equal(missing.status, 'unavailable');
+  assert.equal(missing.blocking, null);
+  assert.equal(missing.candidates, null);
+  assert.equal(missing.drainable, null);
+  assert.equal(missing.operational_acceptance, 'not_established');
+  assert.deepEqual(snapshot(s.root), missingBefore);
+});
+
 test('retains the recorded redirect chain and its time window independently of current candidates', async (t) => {
   const s = sandbox(t);
   const review = reviewControl(s);
