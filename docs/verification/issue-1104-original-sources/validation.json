@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-03T22:50:31.990673+00:00",
+  "scope": "original-source recovery and read-only identity accounting; operational acceptance incomplete",
+  "evaluated_parent": "c7cdea15869b0c12f207f48d75ac119d7fb20878",
+  "source_sha256": {
+    "scripts/export_adjudicator_inventory.js": "cfa4055463f353e5858223e95c4512dc233b0c90a99f7cdef8cd20918233ce06",
+    "scripts/export_adjudicator_case_gaps.js": "fd6edf56a52fc08f9d47a0bf02e1b6d3dea468594bf502cc1c2129702582ec96",
+    "tests/test_adjudicator_inventory.js": "6e90564a41a0fca7d325042b5247c1369dbfcacb8da394a08dce46faeb429804",
+    "tests/test_adjudicator_case_gaps.js": "857da361fbc35cefe4a55af6700de9c6120de431ee09c327dbf5ea09b06b80a2"
+  },
+  "node": "v24.22.1",
+  "checks": [
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_inventory.js"
+      ],
+      "exit": 0,
+      "tests_passed": 32
+    },
+    {
+      "command": [
+        "node",
+        "tests/test_adjudicator_case_gaps.js"
+      ],
+      "exit": 0,
+      "tests_passed": 7
+    },
+    {
+      "command": [
+        "node",
+        "--test",
+        "tests/test_adjudicator_inventory.js",
+        "tests/test_adjudicator_case_gaps.js",
+        "tests/test_adjudicator_retrospective_batch.js",
+        "tests/test_adjudicator_closer_shadow.js",
+        "tests/test_adjudicator_receipts.js",
+        "tests/test_adjudicator_completion.js",
+        "tests/test_adjudicator_acceptance_runner.js"
+      ],
+      "exit": 0,
+      "test_files_passed": 7,
+      "failures": 0
+    },
+    {
+      "command": [
+        "node",
+        "scripts/export_adjudicator_inventory.js",
+        "--db",
+        "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+        "--observed-at",
+        "1793745600"
+      ],
+      "exit": 2,
+      "meaning": "Brain unavailable, not zero observed cases"
+    }
+  ],
+  "fresh_snapshot": {
+    "file": "runner-inventory.json",
+    "acquisition": "inventory API using current Unix time; JSON persisted by shell redirection",
+    "status": "unavailable"
+  },
+  "python_files_changed": false,
+  "named_pytest_acceptance_claimed": false,
+  "real_closer_observation_claimed": false,
+  "task_complete": false,
+  "operational_acceptance_complete": false
+}

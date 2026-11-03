@@ -40,7 +40,8 @@ function caseGaps(options) {
       .update(fs.readFileSync(require.resolve('./export_adjudicator_inventory'))).digest('hex'),
     supplied_case_count: cases.length,
     evidence_gap_count: cases.length,
-    unsupplied_requested_slots: Math.max(0, snapshot.expected_count - cases.length),
+    unsupplied_requested_slots: snapshot.requested_identity_accounting.unsupplied_requested_slots,
+    excess_supplied_cases: snapshot.requested_identity_accounting.excess_supplied_cases,
     // Retain manifest digest, observation time, exclusions and discrepancies
     // together with the gaps; do not turn an unavailable store into zero cases.
     inventory_snapshot: snapshot,

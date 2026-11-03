@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "acquisition": {
+    "provider": "authenticated Dropbox connector",
+    "tools": [
+      "dropbox_search",
+      "dropbox_fetch",
+      "dropbox_get_file_metadata"
+    ],
+    "representation": "extracted text; not a raw file download"
+  },
+  "sources": [
+    {
+      "id": "id:tDSHdCztYNUAAAAAADZ13w",
+      "url": "https://www.dropbox.com/scl/fi/k21zfzffi9ch0ubj4r6sh",
+      "path_display": "/Learning/Code/Audits/Orchestrator/2026-10-04-rarely-used-capabilities-audit.md",
+      "revision": "65d048505cb920369d613",
+      "server_modified": "2026-10-04T14:24:13Z",
+      "reported_original_size": 15179,
+      "extracted_text_file": "audit.extracted.md",
+      "membership_evidence": "No requested dispute identities supplied.",
+      "extracted_text_sha256": "901027c12212ca602d5203518ce95123d42e6bc0e77ecc8eb790c9728b6e4c4b",
+      "extracted_text_bytes": 15179,
+      "connector_extracted_text_bytes": 15180,
+      "connector_extracted_text_sha256": "994c9518aae2628d12e11618825202395d026cecbfec5693b3225d9d9487e69b",
+      "normalization": "terminal blank lines removed; one final newline retained"
+    },
+    {
+      "id": "id:tDSHdCztYNUAAAAAADZ1ow",
+      "url": "https://www.dropbox.com/scl/fi/s0tc91ituvxa5y7ecyj72",
+      "path_display": "/Learning/Code/Audits/Orchestrator/2026-10-04-gate-renewal-decisions.md",
+      "revision": "65d0878ea23570369d613",
+      "server_modified": "2026-10-04T19:07:09Z",
+      "reported_original_size": 7184,
+      "extracted_text_file": "decisions.extracted.md",
+      "membership_evidence": "No requested dispute identities supplied.",
+      "extracted_text_sha256": "ddab66812102b2b2745681190bbcd3d0df74a71bfd79374a7cccb277a32b9fe8",
+      "extracted_text_bytes": 7184,
+      "connector_extracted_text_bytes": 7185,
+      "connector_extracted_text_sha256": "84f09bfd66b6e22f619afce5e0eba9fc553e2939f8b6f21f75ba4284e974a9ba",
+      "normalization": "terminal blank lines removed; one final newline retained"
+    }
+  ],
+  "program_reference": {
+    "id": "id:tDSHdCztYNUAAAAAADaI7Q",
+    "path_display": "/Learning/Code/Audits/Orchestrator/2026-10-04-capability-program.md",
+    "revision": "65ef6a3f4a1b70369d613",
+    "server_modified": "2026-10-29T08:41:05Z",
+    "url": "https://www.dropbox.com/scl/fi/4aekdl2519ovjrickz4t0",
+    "excerpt": "| U-ADJ | role-adjudicator | 71 persisted disputes in the Brain (57 NON_PASS\u2192merged, 9 FAIL_HOLLOW, 5 other); WF `needs_human` splits | retrospective shadow on the 71 with merged diff + gate run as ground truth; then live-shadow at the closer's disposition step | case-packet builder (script) | agreement with later durability vs \"merged means PASS\" on \u226540 cases; cost per case | W1 retrospective, W3 live-shadow |",
+    "limitation": "Current document was modified after the original request; this excerpt corroborates the original aggregate request, not original membership."
+  },
+  "requested_count": 71,
+  "authenticated_original_identities": [],
+  "unidentified_requested_slots": 71,
+  "original_source_revision": {
+    "reported_short_revision": "c88282b",
+    "full_revision": "c88282b063d6b79efbac2103e5769166ea7b27f2",
+    "authenticated_commit_url": "https://github.com/stranske/Orchestrator/commit/c88282b063d6b79efbac2103e5769166ea7b27f2",
+    "acquisition": "authenticated GitHub connector: github_fetch_commit"
+  },
+  "permitted_inventory": {
+    "status": "unavailable",
+    "database": "/home/runner/.codex/orchestrator/feedback/orchestrator.db",
+    "population_count": null,
+    "included_count": null,
+    "excluded_count": null,
+    "count_delta": null,
+    "snapshot_file": "runner-inventory.json",
+    "snapshot_sha256": "6fbf77a68ff1c3d35397be02bcb620d0a25bc00126ce27edba4e352a307c8cac"
+  },
+  "owner_boundary": {
+    "excluded_repositories": [
+      "stranske/Collab-Admin"
+    ],
+    "excluded_repositories_inspected": false,
+    "original_exclusion_identities": "UNKNOWN",
+    "original_exclusion_count": null
+  },
+  "resolved_gap": "The cited audit and its companion decision record were located and their extracted text recovered.",
+  "remaining_gaps": [
+    "Original dispute identity manifest unavailable; aggregate counts cannot supply identities.",
+    "Original Brain unavailable; no complete permitted inventory or original exclusion identities recovered."
+  ],
+  "requested_cohort_verified": false,
+  "task_complete": false,
+  "operational_acceptance_complete": false,
+  "supersedes": "../issue-1104-cohort-recovery/reconciliation.json: audit location and full source revision gaps only",
+  "recorded_at": "2026-11-03T22:49:39.065684+00:00"
+}

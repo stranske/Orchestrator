@@ -64,6 +64,18 @@ function readManifest(file) {
 }
 
 function reconcile(report, manifest) {
+  const suppliedCount = manifest?.cases.length ?? 0;
+  // Count unsupplied slots separately from supplied identities whose evidence
+  // is missing. Neither an equal-sized inventory nor a caller-supplied manifest
+  // authenticates membership in the original request.
+  report.requested_identity_accounting = {
+    scope: 'supplied_manifest_only',
+    expected_count: report.expected_count,
+    supplied_case_count: suppliedCount,
+    unsupplied_requested_slots: Math.max(0, report.expected_count - suppliedCount),
+    excess_supplied_cases: Math.max(0, suppliedCount - report.expected_count),
+    by_status: null,
+  };
   if (!manifest) return report;
   const observed = new Map([...(report.cases || []), ...(report.exclusions || [])]
     .map((row) => [row.run_id, row]));
@@ -125,6 +137,9 @@ function reconcile(report, manifest) {
       ...(manifest.schema_version === 2 ? { verifier_verdict, adjudicated_verdict } : {}),
     }));
   const countDelta = manifest.cases.length - report.expected_count;
+  const statuses = ['included', 'excluded', 'missing', 'unavailable', 'identity_mismatch'];
+  report.requested_identity_accounting.by_status = Object.fromEntries(statuses.map((status) =>
+    [status, cases.filter((row) => row.status === status).length]));
   const exactMatch = report.status === 'available' && countDelta === 0 &&
     cases.every((row) => row.status === 'included') && unexpected.length === 0;
   report.manifest_reconciliation = {

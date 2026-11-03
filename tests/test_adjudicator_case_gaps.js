@@ -187,6 +187,23 @@ test('an empty supplied manifest cannot claim recovery or hide the missing reque
   assert.ok(ledger.inventory_snapshot.evidence_gaps.some((row) => row.kind === 'requested_manifest_discrepancy'));
 });
 
+test('gap export retains excess identities as a discrepancy instead of silently capping the cohort', (t) => {
+  const options = world(t, [identity('one'), identity('two')]);
+  options.expectedCount = 1;
+  const before = fs.readFileSync(options.db);
+  const result = invoke(options);
+  assert.equal(result.status, 0, result.stderr);
+  const ledger = JSON.parse(result.stdout);
+  assert.equal(ledger.supplied_case_count, 2);
+  assert.equal(ledger.unsupplied_requested_slots, 0);
+  assert.equal(ledger.excess_supplied_cases, 1);
+  assert.deepEqual(ledger.cases.map((row) => row.run_id), ['one', 'two']);
+  assert.equal(ledger.inventory_snapshot.manifest_reconciliation.count_delta, 1);
+  assert.equal(ledger.requested_cohort_verified, false);
+  assert.equal(ledger.operational_acceptance_complete, false);
+  assert.deepEqual(fs.readFileSync(options.db), before);
+});
+
 test('invalid arguments and manifests produce no partial ledger or Brain writes', (t) => {
   const options = world(t, [identity('one')]);
   const before = fs.readFileSync(options.db);

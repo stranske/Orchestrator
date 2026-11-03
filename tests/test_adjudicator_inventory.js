@@ -121,6 +121,83 @@ function world(t, schema = true) {
   return { root, db };
 }
 
+test('identity accounting keeps unsupplied slots separate from missing, excluded and mismatched cases', (t) => {
+  const { root, db } = world(t);
+  seed(db, [
+    ['included', now, 'NON_PASS', 'PASS'],
+    ['mismatch', now, 'NON_PASS', 'PASS'],
+    ['no-outcome', now],
+  ]);
+  const requested = [
+    { run_id: 'included', target: 'owner/repo#1' },
+    { run_id: 'mismatch', target: 'owner/repo#2' },
+    { run_id: 'no-outcome', target: 'owner/repo#1' },
+    { run_id: 'absent', target: 'owner/repo#1' },
+    { run_id: 'owner-excluded', target: 'stranske/Collab-Admin#1' },
+  ].map((row) => ({ ...row, verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' }));
+  const manifest = manifestFile(root, requested, 2);
+  const before = fs.readFileSync(db);
+  const report = inventory({ db, observedAt: now, expectedCount: 71, manifest });
+  assert.deepEqual(report.requested_identity_accounting, {
+    scope: 'supplied_manifest_only', expected_count: 71, supplied_case_count: 5,
+    unsupplied_requested_slots: 66, excess_supplied_cases: 0,
+    by_status: { included: 1, excluded: 1, missing: 1, unavailable: 1, identity_mismatch: 1 },
+  });
+  assert.equal(report.manifest_reconciliation.count_delta, -66);
+  assert.equal(report.requested_cohort_verified, false);
+  const excess = inventory({ db, observedAt: now, expectedCount: 4, manifest });
+  assert.equal(excess.requested_identity_accounting.unsupplied_requested_slots, 0);
+  assert.equal(excess.requested_identity_accounting.excess_supplied_cases, 1);
+  assert.equal(excess.manifest_reconciliation.count_delta, 1);
+  assert.equal(excess.requested_cohort_verified, false);
+  const result = execute(root, process.execPath, [script, '--db', db,
+    '--observed-at', String(now), '--manifest', manifest]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), report);
+  assert.deepEqual(fs.readFileSync(db), before);
+});
+
+test('an equal-sized later inventory supplies no original identities without a manifest', (t) => {
+  const { root, db } = world(t);
+  seed(db, Array.from({ length: 71 }, (_, n) => [`later-${n}`, now, 'NON_PASS', 'PASS']));
+  const withoutManifest = inventory({ db, observedAt: now });
+  assert.equal(withoutManifest.count_delta, 0);
+  assert.deepEqual(withoutManifest.requested_identity_accounting, {
+    scope: 'supplied_manifest_only', expected_count: 71, supplied_case_count: 0,
+    unsupplied_requested_slots: 71, excess_supplied_cases: 0, by_status: null,
+  });
+  const empty = inventory({ db, observedAt: now, manifest: manifestFile(root, [], 2) });
+  assert.equal(empty.requested_identity_accounting.unsupplied_requested_slots, 71);
+  assert.equal(Object.values(empty.requested_identity_accounting.by_status).reduce((a, b) => a + b), 0);
+  assert.equal(empty.manifest_reconciliation.unexpected_cases.length, 71);
+  assert.equal(empty.requested_cohort_verified, false);
+  assert.equal(empty.manifest_reconciliation.exact_match, false);
+});
+
+for (const version of [1, 2]) {
+  test(`schema ${version} accounts for unsupplied slots even with unavailable inventory`, (t) => {
+    const { root, db } = world(t);
+    fs.unlinkSync(db);
+    const manifest = manifestFile(root, [
+      { run_id: 'unknown', target: 'owner/repo#1', verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' },
+      { run_id: 'excluded', target: 'stranske/Collab-Admin#1', verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' },
+    ], version);
+    const report = inventory({ db, observedAt: now, manifest });
+    assert.equal(report.status, 'unavailable');
+    assert.equal(report.included_count, null);
+    assert.deepEqual(report.requested_identity_accounting, {
+      scope: 'supplied_manifest_only', expected_count: 71, supplied_case_count: 2,
+      unsupplied_requested_slots: 69, excess_supplied_cases: 0,
+      by_status: { included: 0, excluded: 1, missing: 0, unavailable: 1, identity_mismatch: 0 },
+    });
+    const result = execute(root, process.execPath, [script, '--db', db,
+      '--observed-at', String(now), '--manifest', manifest]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), report);
+    assert.equal(fs.existsSync(db), false);
+  });
+}
+
 function seed(db, rows) {
   const connection = new DatabaseSync(db);
   try {
