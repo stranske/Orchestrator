@@ -233,6 +233,61 @@ def test_historical_current_record_cannot_authorize_unreviewed_live_contract():
     assert closer._contract_digest(ORIGINAL) == ORIGINAL_SHA
 
 
+@pytest.mark.parametrize("qualification_id", sorted(roles.ROLE_QUALIFICATIONS))
+def test_historical_qualification_refuses_live_launch_before_offload(qualification_id, monkeypatch):
+    """A source mismatch must block every historical row while it is otherwise eligible."""
+    record = copy.deepcopy(roles.ROLE_QUALIFICATIONS[qualification_id])
+    descriptor = closer._controlled_model_contract("closer_exception")
+    if record["production_model_contract"] == descriptor:
+        # A reviewed successor is exercised by the native proof test below.
+        return
+    profile = execution_profiles.get_profile(record["profile_identity"]["profile_id"])
+    checked_at = record["qualified_at"] + 1
+    original_record = roles.qualified_record
+    original_support = roles.execution_source_support
+    source_checks = []
+
+    def historical_record(profile, role):
+        return original_record(profile, role, now=checked_at, records={qualification_id: record})
+
+    def historical_support(*args, **kwargs):
+        source_checks.append(args[2])
+        return original_support(*args, **{**kwargs, "checked_at": checked_at})
+
+    assert historical_record(profile, roles.STRONG_CRITERION_ADJUDICATION) == record
+    monkeypatch.setattr(roles, "qualified_record", historical_record)
+    monkeypatch.setattr(roles, "execution_source_support", historical_support)
+    # Installed runtime eligibility is a fixture; source admission stays real.
+    monkeypatch.setattr(roles, "is_runtime_qualified", lambda *_args: True)
+
+    def forbidden_offload(*_args, **_kwargs):
+        pytest.fail("historical source qualification reached the broker")
+
+    launch = {
+        "profile_id": profile["profile_id"],
+        "task_type": "closer_exception",
+        "operation_id": "historical-source-refusal",
+        "frontier": {"frontier_id": "historical-source-refusal"},
+        "target": "offline/repo#1",
+        "prompt": "bounded inert request",
+    }
+    with pytest.raises(
+        closer.ControlledOriginUnavailable,
+        match="reviewed production execution contract unavailable",
+    ):
+        closer._controlled_launch_options(**launch)
+    result = closer._controlled_offload(
+        agent="claude",
+        **launch,
+        basis={},
+        deadline=time.time() + 10,
+        offload=forbidden_offload,
+    )
+    assert result == closer._controlled_prestart_refusal()
+    assert source_checks == [descriptor, descriptor]
+    assert roles.ROLE_QUALIFICATIONS[qualification_id] == record
+
+
 def test_current_production_requires_reviewed_source_before_native_proof_and_enrollment(
     world,
     controlled_world,
