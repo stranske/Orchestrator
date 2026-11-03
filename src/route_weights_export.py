@@ -1033,6 +1033,9 @@ def _selftest() -> None:
         assert document["task_types"]["review"]["evidence_ok"] is False, document
         assert document["reserve"]["implement"][0]["agent"] == "claude", document
         assert "unknown" not in document["task_types"], document
+        assert not (
+            HOSTED_UNRUNNABLE_AGENTS & set(document["exploration"]["challengers"].values())
+        ), document["exploration"]["challengers"]
         import comparative
 
         assert document["comparative"]["schema"] == comparative.SCHEMA, document["comparative"]

@@ -66,7 +66,11 @@ def test_challengers_exclude_hosted_unrunnable_agents(monkeypatch, week):
     block = export._exploration_block(2, by_task, task_types, week * export.WEEK_SECONDS)
     assert set(block["challengers"]) == set(export.CONSUMER_TASK_TYPES)
     assert "gemini" not in block["challengers"].values()
-    assert all(challenger in {"cursor", "codex"} for challenger in block["challengers"].values())
+    assert all(
+        challenger in {"cursor", "codex"}
+        for challenger in block["challengers"].values()
+        if challenger is not None
+    )
 
     # With only one runnable seat, there is no non-winner to explore.
     monkeypatch.setattr(export.router, "KEEPALIVE_AGENTS", {"codex", "gemini"})

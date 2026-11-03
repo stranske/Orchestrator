@@ -93,9 +93,14 @@ def test_missing_weights_sample_remote_prior_without_creating_a_database(tmp_pat
     document = export.build_document(database, now=100)
     assert document["source_version"] == 0
     assert not database.exists()
+    hosted_runnable = (
+        export.router.KEEPALIVE_AGENTS
+        - export.router.RESERVE_AGENTS
+        - export.HOSTED_UNRUNNABLE_AGENTS
+    )
     for task_type, challenger in document["exploration"]["challengers"].items():
         assert document["task_types"][task_type]["evidence_ok"] is False
-        assert challenger in export.router.KEEPALIVE_AGENTS - export.router.RESERVE_AGENTS
+        assert challenger in hosted_runnable
 
 
 def test_export_does_not_label_an_exploitation_pick_as_a_challenger(tmp_path: Path) -> None:
@@ -115,7 +120,8 @@ def test_challenger_excludes_the_thresholded_consumer_winner(tmp_path: Path) -> 
         c.execute("UPDATE route_weights SET posterior=0.99 WHERE agent='gemini'")
         c.execute(
             "INSERT INTO route_weights (version, task_type, agent, posterior, n_obs, success_rate) "
-            "VALUES (2, 'implement', 'cursor', 0.5, 100, 0.5)"
+            # High posterior, below the consumer observation floor — not a ranking winner.
+            "VALUES (2, 'implement', 'cursor', 0.95, 1, 0.95)"
         )
     document = export.build_document(database, now=2 * export.WEEK_SECONDS)
     assert document["task_types"]["implement"]["ranking"][0]["agent"] == "codex"
