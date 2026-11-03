@@ -334,3 +334,42 @@ Automatic approval review rejected this run's blocker comment and `needs-human`
 label because connector writes require approval while the run policy is `never`.
 Neither remote change is claimed; the blockers and required inputs are recorded
 locally above.
+
+## Retained dispatch refusals, 2026-11-03
+
+Source commit `17a86642dd506b9f45938b252d1649699e8634f7` adds exact matching for
+two historical launcher refusal messages. Their origin remains separate from
+repository-emitted failures; altered prose or conflicting attempt fields remain
+unresolved. A later refusal preserves its parent decision and prior paid history.
+Existing inventory tests passed 50/50; the new controls failed 2/53 before the
+change and passed 53/53 afterward. Runner controls passed 26/26.
+
+The [recorded plan](dispatch-refusal-followup/plan.md) precedes execution.
+[Revision-bound required-test output](dispatch-refusal-followup/acceptance-run/checks.json)
+still shows missing pytest before collection on checkout `441f22e`. Accepted
+deployment binding is unverified. No test acceptance checkbox is complete.
+
+[Historical diagnostics](dispatch-refusal-followup/historical-refusals.json)
+and the [selected input fields](dispatch-refusal-followup/selected-fields.json)
+identify 8 primary failed-provider guard refusals, 11 later retry guard refusals,
+and 17 primary round-boundary refusals. The 38 retained paid identities are
+unchanged. These are retained refusal locations, not authenticated outcomes or
+proof of membership in the original requested retry manifest. That manifest and
+the fixed next-20 manifest remain unavailable; no replacement cohort was chosen.
+
+The refetched text has 2,386,540 bytes and SHA-256
+`669ec8da79c8219a11d17955c2ae2c26ca380834980bcb5aba758f8cdd389f87`.
+It is distinct from the earlier extracted acquisition and from the remote file's
+2,386,539-byte metadata size. This extraction does not establish remote byte
+identity. The raw report remains outside the repository; saved input contains
+only selected identity, decision, failure and recursive history fields.
+
+Normal staging failed because checkout Git metadata is read-only. The source
+commit is preserved in `/tmp/issue-1096-dispatch-git-t888wrpm`; the patch handoff
+is `artifacts/issue-1096-dispatch-refusals.patch`. No provider call, canonical
+publication, production write or mirror synchronization occurred. No additional
+task is marked complete.
+
+The connector rejected this follow-up's blocker comment and `needs-human` label:
+both require approval while run policy is `never`. Neither change was applied.
+PR #1097 was checked open with `draft=false` at head `441f22e` before handoff.

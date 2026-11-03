@@ -42,9 +42,23 @@ const failureMessages = new Map([
     ['proposal_validation', 'mutating_recommendation_rejected', 6]],
 ]);
 
+// Exact messages recovered from the historical launcher, not current repository
+// emitters. Source: dropbox:id:tDSHdCztYNUAAAAAADfgrw@65de8f715bb690369d613.
+// They record refusal before a new invocation, not a timeout on this row. Paid
+// history and any parent decision must be recovered independently of the text.
+const retainedLauncherRefusals = new Map([
+  ['native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch',
+    'failed_provider_guard_refused_dispatch'],
+  ['native round boundary before new evidence/provider attempt',
+    'round_boundary_refused_dispatch'],
+]);
+
 function failureMessage(value) {
   if (typeof value !== 'string') return null;
   if (failureMessages.has(value)) return failureMessages.get(value);
+  if (retainedLauncherRefusals.has(value)) {
+    return ['dispatch_admission', retainedLauncherRefusals.get(value), 2.5, 'retained_launcher'];
+  }
   // The roles emitter prefixes nonzero backend exits. Do not infer timeout,
   // cost, invocation completion or provider failure details from the suffix.
   const exit = /^backend exit=(-?\d+)(?: [^\r\n]*)?$/.exec(value);
@@ -60,9 +74,18 @@ function firstRetainedBreak(fields, conflict = false) {
   if (conflict || fields.some((item) => !item.classification)) {
     return { status: 'unresolved', ...empty };
   }
+  const refusal = fields.find((item) => item.classification[3] === 'retained_launcher');
+  // A refusal alongside execution/validation errors (or a different refusal)
+  // does not establish which attempt those fields describe. Do not invent an
+  // ordering between historical launcher fields and repository-emitted errors.
+  if (refusal && fields.some((item) =>
+    item.classification[1] !== refusal.classification[1])) {
+    return { status: 'unresolved', ...empty };
+  }
   const first = fields.reduce((left, right) =>
     left.classification[2] <= right.classification[2] ? left : right);
   return { status: 'recorded', stage: first.classification[0], code: first.classification[1],
+    message_origin: first.classification[3] || 'repository_emitter',
     evidence_locations: fields.filter((item) => item.classification[2] === first.classification[2])
       .map((item) => item.location) };
 }

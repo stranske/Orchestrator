@@ -208,6 +208,82 @@ test('unknown and contradictory failure prose cannot borrow a recognized stage',
   assert.ok(!JSON.stringify(result).includes('private'));
 });
 
+const retainedRefusals = [
+  ['native backend unavailable after terminal timeout; preserving original paid rows, no repeated failed-provider dispatch',
+    'failed_provider_guard_refused_dispatch'],
+  ['native round boundary before new evidence/provider attempt',
+    'round_boundary_refused_dispatch'],
+];
+
+test('exact retained launcher refusals explain admission without claiming a backend attempt', (t) => {
+  const { saved, options } = retainedReport(t);
+  saved.rows = retainedRefusals.map(([error], i) => ({
+    case_id: `case-${i}`, target: `owner/repo#${i}`, error,
+  }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const before = fs.readFileSync(options.report);
+  const result = reportInventory(options);
+  for (const [i, row] of result.retained_attempt_observations.entries()) {
+    assert.equal(row.first_broken_step.status, 'recorded');
+    assert.equal(row.first_broken_step.stage, 'dispatch_admission');
+    assert.equal(row.first_broken_step.code, retainedRefusals[i][1]);
+    assert.equal(row.first_broken_step.message_origin, 'retained_launcher');
+    assert.deepEqual(row.first_broken_step.evidence_locations, [`rows[${i}].error`]);
+    assert.equal(row.failure_fields[0].json_value_sha256,
+      createHash('sha256').update(JSON.stringify(saved.rows[i].error)).digest('hex'));
+    assert.equal(row.backend_run_id, null, 'refusal prose cannot supply a paid receipt');
+  }
+  assert.deepEqual(result.paid_attempts, []);
+  assert.equal(result.dispatch_authorized, false);
+  assert.equal(result.requested_cohort_verified, false);
+  assert.equal(result.receipt_authority, 'not_authenticated_by_inventory');
+  assert.deepEqual(fs.readFileSync(options.report), before);
+});
+
+test('launcher refusal matching rejects changed prose and contradictory attempt fields', (t) => {
+  const { saved, options } = retainedReport(t);
+  const attempts = retainedRefusals.flatMap(([message]) => [
+    { error: `earlier note: ${message}` },
+    { error: `${message} private suffix` },
+    { error: message.replace('native ', '') },
+    { error: message, errors: ['backend exit=124 timed out after 180s'] },
+    { error: message, errors: ['private unknown error'] },
+    { error: message, decision: 'uphold_blocker' },
+  ]);
+  attempts.push({ error: retainedRefusals[0][0], errors: [retainedRefusals[1][0]] });
+  saved.rows = attempts.map((row, i) => ({
+    ...row, case_id: `case-${i}`, target: `owner/repo#${i}`,
+  }));
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  for (const row of result.retained_attempt_observations) {
+    assert.equal(row.first_broken_step.status, 'unresolved');
+    assert.equal(row.first_broken_step.stage, null);
+  }
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
+test('later launcher refusals preserve the parent decision and prior paid history', (t) => {
+  const { saved, options } = retainedReport(t);
+  saved.rows = [{ case_id: 'case-a', target: 'owner/repo#1', decision: 'uphold_blocker',
+    backend_run_id: 'parent-paid', retry_error: retainedRefusals[0][0], retry_attempts: [{
+      backend_run_id: 'earlier-paid', errors: ['backend exit=124 timed out after 180s'],
+    }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const result = reportInventory(options);
+  const [parent, prior] = result.retained_attempt_observations;
+  assert.equal(parent.retained_result, 'retained_binary_decision');
+  assert.equal(parent.first_broken_step.status, 'not_recorded');
+  assert.equal(parent.later_retry_broken_step.stage, 'dispatch_admission');
+  assert.equal(parent.later_retry_broken_step.message_origin, 'retained_launcher');
+  assert.deepEqual(parent.later_retry_broken_step.evidence_locations, ['rows[0].retry_error']);
+  assert.equal(prior.first_broken_step.stage, 'backend_execution');
+  assert.equal(prior.first_broken_step.message_origin, 'repository_emitter');
+  assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id),
+    ['parent-paid', 'earlier-paid']);
+  assert.equal(result.cases[0].retained_decision, 'uphold_blocker');
+});
+
 test('later retries and persistence breaks cannot replace the parent attempt failure or decision', (t) => {
   const { saved, options } = retainedReport(t);
   saved.rows = [{ case_id: 'case-a', target: 'owner/repo#1', decision: 'uphold_blocker',

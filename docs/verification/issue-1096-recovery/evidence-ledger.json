@@ -270,6 +270,33 @@
       "original_retry_manifest_recovered": false,
       "authenticated_outcomes_verified": false,
       "task_checkboxes_newly_verified_complete": 0
+    },
+    "dispatch_refusal_followup": {
+      "checked_at": "2026-11-03T21:38:20.654Z",
+      "source_commit": "17a86642dd506b9f45938b252d1649699e8634f7",
+      "source_parent": "441f22ebb3550d88c42061d85fa1275cd1da8116",
+      "plan": "dispatch-refusal-followup/plan.md",
+      "checks": "dispatch-refusal-followup/acceptance-run/checks.json",
+      "validation": "dispatch-refusal-followup/validation.json",
+      "historical_input_scope": "selected_retained_historical_fields_only",
+      "retained_refusal_occurrences": 36,
+      "primary_failed_provider_refusals": 8,
+      "later_failed_provider_refusals": 11,
+      "primary_round_boundary_refusals": 17,
+      "original_retry_manifest_recovered": false,
+      "authenticated_outcomes_verified": false,
+      "required_tests_passed": false,
+      "task_checkboxes_newly_verified_complete": 0,
+      "limitation": "Exact retained refusal messages only. The earlier 58-row backup is not the immutable native source or fixed cohort. No authenticated completion, current truth, canonical grade, accepted deployment or live writer ownership is established. No new provider call or production write occurred.",
+      "blocker_comment": "rejected_connector_requires_approval_policy_never",
+      "needs_human_label": "rejected_connector_requires_approval_policy_never",
+      "pr_readiness": {
+        "checked_at": "2026-11-03T21:39:56.909Z",
+        "number": 1097,
+        "state": "open",
+        "isDraft": false,
+        "head": "441f22ebb3550d88c42061d85fa1275cd1da8116"
+      }
     }
   },
   "mirror_synchronization": [
