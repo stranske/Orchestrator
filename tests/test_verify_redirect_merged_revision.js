@@ -51,7 +51,15 @@ function pythonControl(change = () => {}) {
     let stdout;
     if (args.includes('-c')) stdout = '{"executable":"/control/python","version":"control"}\n';
     else if (args.includes('--replay-stalls')) stdout = 'authorized 12/12 with named agents (dry-run)\n';
-    else stdout = args.some((arg) => arg.includes('::')) ? '2 passed in 0.01s\n' : '40 passed in 0.02s\n';
+    else {
+      const nodes = args.filter((arg) => arg.includes('::'));
+      const executed = nodes.length ? nodes : [
+        'tests/test_redirect_chain_gate.py::test_control',
+        'tests/test_redirect_apply_prescreen.py::test_control',
+      ];
+      stdout = executed.map((node) => `${node} PASSED [100%]\n`).join('')
+        + (nodes.length ? '2 passed in 0.01s\n' : '40 passed in 0.02s\n');
+    }
     const result = { status: 0, stdout, stderr: '' };
     change(result, args);
     return result;
@@ -77,7 +85,7 @@ test('runs all required checks from merged bytes with isolated state and current
   assert.deepEqual(result.executions.map((row) => row.name),
     ['interpreter', 'named_tests', 'focused_files', 'offline_replay']);
   for (const row of result.executions.filter((row) => row.name.includes('test') || row.name === 'focused_files')) {
-    assert.deepEqual(row.argv.slice(-3), ['-q', '-m', 'not slow']);
+    assert.deepEqual(row.argv.slice(-3), ['-v', '-m', 'not slow']);
   }
   assert.match(result.executions[1].argv.join(' '), /::test_replay_of_the_twelve_historical_stalls_authorizes_at_least_nine/);
   assert.match(result.executions[1].argv.join(' '), /::test_redirect_apply_daily_cap_refuses_second_apply/);
@@ -156,4 +164,23 @@ test('process errors prevent verification even if a child reports a zero exit', 
   assert.equal(result.status, 'blocked');
   assert.equal(result.executions[0].exit_code, 0);
   assert.equal(result.executions[0].error_code, 'EPERM');
+});
+
+test('pass counts cannot substitute for executing both named nodes and both focused files', (t) => {
+  const s = repository(t);
+  for (const mode of ['summary_only', 'wrong_named_node', 'one_focused_file']) {
+    const control = pythonControl((result, args) => {
+      if (!args.includes('pytest')) return;
+      if (mode === 'summary_only') result.stdout = '2 passed in 0.01s\n';
+      if (mode === 'wrong_named_node' && args.some((arg) => arg.includes('::'))) {
+        result.stdout = result.stdout.replace('test_redirect_apply_daily_cap_refuses_second_apply', 'test_other');
+      }
+      if (mode === 'one_focused_file' && !args.some((arg) => arg.includes('::'))) {
+        result.stdout = result.stdout.replaceAll('tests/test_redirect_apply_prescreen.py', 'tests/test_redirect_chain_gate.py');
+      }
+    });
+    const result = verify({ repository: s.root, revision: s.revision, python: '/control/python', run: control.run });
+    assert.equal(result.status, 'blocked', mode);
+    assert.equal(result.authorized, 12);
+  }
 });

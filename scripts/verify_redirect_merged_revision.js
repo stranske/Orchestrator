@@ -94,8 +94,8 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
     const interpreter = execute('interpreter', [
       '-c', 'import json, sys; print(json.dumps({"executable": sys.executable, "version": sys.version}))',
     ]);
-    const named = execute('named_tests', ['-m', 'pytest', ...namedNodes, '-q', '-m', 'not slow']);
-    const focused = execute('focused_files', ['-m', 'pytest', ...focusedFiles, '-q', '-m', 'not slow']);
+    const named = execute('named_tests', ['-m', 'pytest', ...namedNodes, '--color=no', '-v', '-m', 'not slow']);
+    const focused = execute('focused_files', ['-m', 'pytest', ...focusedFiles, '--color=no', '-v', '-m', 'not slow']);
     const replay = execute('offline_replay', [
       'src/redirect_apply.py', '--replay-stalls', 'tests/fixtures/redirect_stalls',
     ]);
@@ -107,9 +107,23 @@ function verify({ repository, revision, python = 'python3', run = spawnSync }) {
       return cleanExit(row) && count && Number(count[1]) >= minimum
         && !/\b(?:skipped|failed|error)\b/i.test(summary);
     };
+    // Counts alone can credit two unrelated tests or two cases from one file.
+    // Bind successful execution to the requested node and file identities too.
+    const passedNodes = (row) => Array.from(
+      row.stdout.matchAll(/^(\S+) PASSED(?:\s|$)/gm), (match) => match[1],
+    );
+    const namedPassed = passedNodes(named);
+    const focusedPassed = passedNodes(focused);
+    const requiredNodesPassed = namedNodes.every((node) => namedPassed.some(
+      (actual) => actual === node || actual.startsWith(`${node}[`),
+    ));
+    const requiredFilesPassed = focusedFiles.every((file) => focusedPassed.some(
+      (actual) => actual.startsWith(`${file}::`),
+    ));
     const authorized = replay.stdout.trim().match(/^authorized (\d+)\/12 with named agents \(dry-run\)$/);
     receipt.authorized = authorized ? Number(authorized[1]) : null;
     receipt.status = cleanExit(interpreter) && passed(named, 2) && passed(focused, 2)
+      && requiredNodesPassed && requiredFilesPassed
       && cleanExit(replay) && receipt.authorized >= 9 && receipt.authorized <= 12
       ? 'verified' : 'blocked';
     if (receipt.status !== 'verified') receipt.reason = 'focused_execution_or_replay_not_verified';

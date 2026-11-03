@@ -553,3 +553,50 @@ The required commit attempt failed at staging: `.git/index.lock: Read-only file
 system`. No commit or push occurred. The blocker comment and additive
 `needs-human` label were also rejected with the same approval-policy error;
 neither remote mutation succeeded. PR #1089 was verified open and ready for review.
+
+## Recovered October 14 receipt and execution identity checks
+
+Reviewed implementation commits through `8565000`; the first recovery task is
+still incomplete. Connected Dropbox storage yielded an actual copy of
+[`582-deliberate-recheck.json`](https://www.dropbox.com/scl/fi/kzmueuo52j0awnuygzbzi),
+retained verbatim as
+[`issue-1088-recovered-october14-recheck.json`](issue-1088-recovered-october14-recheck.json).
+The storage metadata reports modification at `2026-10-14T11:18:38Z`; that is
+storage metadata, not a new claim about execution time. Both recorded restoration
+digests independently match `git show` bytes from the receipt's evaluated merged
+revision `81fbab57e6622cd67c28dd7b7b3507a8d3ff55c0`: `src/redirect_apply.py` and
+`tests/fixtures/redirect_stalls/historical-12.json`. This recovers supporting
+mutation evidence, not private source-to-fixture bindings or an October 20 replay
+receipt. Searches of connected storage did not recover either of those items;
+the historical-provenance limitation remains explicit. Earlier statements that
+neither private receipt was available describe the earlier runner-only search.
+
+A manufactured verifier regression demonstrated that a bare two-pass summary,
+the wrong named node, or passing tests from only one focused file could be
+credited as verified. The verifier now requests uncolored verbose pytest output
+and requires passing identities for both required named nodes and both focused
+files in addition to successful summaries and exits. These controls verify the
+offline acceptance tool only; they establish no production defect or outcome.
+
+At `2026-11-03T19:02:09.476Z`, the selected Python 3.14 interpreter again evaluated
+merged `8f596dc01e1ede350724c1b88bc36610380af79b`. Both pytest commands failed
+before collection with missing pytest; installation into `/tmp` also failed.
+Replay exited zero with `authorized 12/12 with named agents (dry-run)`; subprocess
+`EPERM` remains retained and the aggregate stays blocked. At
+`2026-11-03T18:59:10.521Z`, owner runtime observation remained unavailable:
+blocking, drainable and eligible candidates are **unknown**, not candidates 0.
+No armed flag, cadence, writer lock or daily cap was changed.
+
+PR reconciliation still requires unchecking the unsupported production-inspection
+task and checking the duplicated date-separation and provenance-limitation items
+already verified above. The GitHub connector rejected that concrete body update:
+`MCP tool call requires approval, but approval policy is never`. No new task is
+complete and operational acceptance remains incomplete.
+
+All **46** scoped Node checks pass without failures or skips. Both changed
+JavaScript files pass syntax checks and `git diff --check` passes; no Python or
+workflow files changed. Staging the four changed/new files failed because
+`.git/index.lock` is on a read-only filesystem, so no commit was created. The
+connector also rejected the blocker comment and additive `needs-human` label
+with the approval-policy error above. PR #1089 was re-read open and non-draft
+at `85650008e9966d020e7a36a71c59ea4d0f2147d1`.
