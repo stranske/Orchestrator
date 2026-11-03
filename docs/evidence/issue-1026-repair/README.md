@@ -4,7 +4,7 @@ Checked 2026-11-03 UTC against main `44cbb45e5d2bada21592cc6b83957ef6e3790030` p
 
 ## Outcome and stop rule
 
-Outcome 1 is a ready repair PR with exact-head required CI passing, unique shard assignment, and recorded mutation failures/restored passes. Stop after two focused repair attempts or 30 minutes. Only one repair attempt was needed locally. No local full test suite or verify pipeline was run.
+Outcome 1 is a ready repair PR with exact-head required CI passing, unique shard assignment, and recorded mutation failures/restored passes. Stop after two focused repair attempts or 30 minutes. Two focused repair attempts were used; no third repair is authorized by this run's stop rule. No local full test suite or verify pipeline was run.
 
 Focused acceptance command (private fresh directories for both environment variables):
 
@@ -27,3 +27,7 @@ Issue #1026 supplies the ranking at main `21b8ad24`, measured 2026-10-29T22:15:1
 Historical focused pytest-only percentages reported in #1028 were 46.3 -> 63.2, 21.1 -> 40.5, and 25.0 -> 54.9 respectively; they are not combined deltas and were not remeasured here. Historical CI run 41554962180 published no combined coverage payload. Until the repair workflow completes, zero of the historical 205 target units have a confirmed combined before/after measurement; the entire 180-unit requested gain remains unverified. The historical-scope gain could be 0 through 205 units (shortfall against 180: 0 through 180). This interval does not bound current-main file growth or regressions. env_prereq's 45-unit historical count has no stable line list. No positive combined gain is claimed.
 
 The existing CI workflow runs `src/verify.py --coverage` through its shard/aggregate path. Its exact-head result, rather than a local full run, determines CI completion and any available combined measurement.
+
+## Attempt 2: flat-layout failure
+
+CI run 41678655576 on `3b31258009e9b93f78c8933e90af8b749d19a142` passed all six normal shards but flat shard 2 failed the harness test's assumption that `src/env_prereq.py` exists. The test now stubs `paths.checkout_root` to its private temporary directory and creates `present.txt`, checking real presence/absence behavior in either layout. No production edit remains. `attempt-2/` records a second behavioral mutation of `repo_files_absent` (returning None for a missing file): the exact harness node failed, then passed after restoration. Final named acceptance command: 24 passed in 10.07s. Black and Ruff passed on the changed test file. CI on the second head remains the required acceptance step.

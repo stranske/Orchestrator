@@ -1,0 +1,10 @@
+[
+  {
+    "node": "tests/test_coverage_round_1026.py::test_env_prereq_harness_glue_and_detectors",
+    "production": "src/env_prereq.py::repo_files_absent",
+    "mutation": "return None",
+    "broken_rc": 1,
+    "restored_rc": 0,
+    "sha256": "976775f3cda425667069e85f16e22693d283b486565c2a92f68da302ceeeb7bc"
+  }
+]

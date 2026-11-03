@@ -1,0 +1,46 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________ test_env_prereq_harness_glue_and_detectors __________________
+
+tmp_path = PosixPath('/Users/teacher/.codex/orchestrator/agent-runtime/codex/tmp/pytest-of-teacher/pytest-481/test_env_prereq_harness_glue_a0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x11acf5e80>
+capsys = <_pytest.capture.CaptureFixture object at 0x11abcdb80>
+
+    def test_env_prereq_harness_glue_and_detectors(tmp_path, monkeypatch, capsys):
+        """Harness glue and local detectors name absences without spawning agents."""
+        with pytest.raises(env_prereq.MissingPrerequisite, match="gone"):
+            env_prereq.require(None, "gone")
+        assert env_prereq.selftest_skipped("mod", None, "missing cli") is True
+        assert env_prereq.PREREQ_ABSENT_MARK in capsys.readouterr().out
+        assert env_prereq.selftest_skipped("mod", None) is False
+    
+        gaps: list[str] = []
+        assert env_prereq.runnable(gaps, None) is True
+        assert env_prereq.runnable(gaps, "no ledger") is False
+        assert gaps == ["no ledger"]
+        env_prereq.report_gaps("mod", gaps)
+        assert "section skipped" in capsys.readouterr().out
+    
+        monkeypatch.setenv("VIBE_HOME", str(tmp_path / "novibe"))
+        assert "vibe config absent" in (env_prereq.vibe_config_absent() or "")
+        vibe = tmp_path / "vibe"
+        vibe.mkdir()
+        (vibe / "config.toml").write_text('active_model = "demo"\n')
+        monkeypatch.setenv("VIBE_HOME", str(vibe))
+        assert env_prereq.vibe_config_absent() is None
+        assert env_prereq.vibe_active_model() == "demo"
+        (vibe / "config.toml").write_text("not = [toml\n")
+        assert env_prereq.vibe_active_model() is None
+    
+        import paths
+    
+        monkeypatch.setattr(paths, "checkout_root", lambda _here: tmp_path)
+        (tmp_path / "present.txt").write_text("present\n")
+        missing = env_prereq.repo_files_absent("does-not-exist-1026.xyz")
+>       assert missing and "does-not-exist-1026.xyz" in missing
+E       assert (None)
+
+tests/test_coverage_round_1026.py:387: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_coverage_round_1026.py::test_env_prereq_harness_glue_and_detectors
+1 failed in 0.36s

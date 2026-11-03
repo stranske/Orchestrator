@@ -379,9 +379,13 @@ def test_env_prereq_harness_glue_and_detectors(tmp_path, monkeypatch, capsys):
     (vibe / "config.toml").write_text("not = [toml\n")
     assert env_prereq.vibe_active_model() is None
 
+    import paths
+
+    monkeypatch.setattr(paths, "checkout_root", lambda _here: tmp_path)
+    (tmp_path / "present.txt").write_text("present\n")
     missing = env_prereq.repo_files_absent("does-not-exist-1026.xyz")
     assert missing and "does-not-exist-1026.xyz" in missing
-    assert env_prereq.repo_files_absent("src/env_prereq.py") is None
+    assert env_prereq.repo_files_absent("present.txt") is None
 
     monkeypatch.setattr(
         env_prereq.shutil, "which", lambda name: None if name == "node" else "/bin/true"
