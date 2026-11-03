@@ -164,6 +164,31 @@ test('rejects both merged distinct targets and split repeated targets', (t) => {
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE-/);
 });
 
+test('rejects unchanged source targets even when the mapping is one-to-one', (t) => {
+  const s = sandbox(t);
+  const files = [s.corpus, ...fixtureNames.map((name) => path.join(s.copy, name))];
+  // Preserve repeated targets and every retained fact. Only anonymization is absent.
+  for (let i = 0; i < fixtureNames.length; i++) {
+    const fixture = JSON.parse(fs.readFileSync(files[i + 1]));
+    s.entries[i].report.target = fixture.target;
+  }
+  s.save();
+  const before = files.map((file) => fs.readFileSync(file));
+  const run = cli(t, [s.corpus, s.copy]);
+  assert.equal(run.status, 1);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.status, 'mismatch');
+  assert.equal(result.verified_bindings, 0);
+  assert.deepEqual(result.bindings, []);
+  assert.deepEqual(result.limitations,
+    fixtureNames.map((name) => `${name}: target_not_anonymized`));
+  assert.equal(result.historical_replay_receipt, 'not_established');
+  for (const entry of s.entries) {
+    assert.ok(!run.stdout.includes(entry.report.target), 'source targets must stay private');
+  }
+  assert.deepEqual(files.map((file) => fs.readFileSync(file)), before);
+});
+
 test('fails closed on malformed private input and missing fixture files', (t) => {
   const s = sandbox(t);
   fs.appendFileSync(s.corpus, 'PRIVATE-invalid-json\n');

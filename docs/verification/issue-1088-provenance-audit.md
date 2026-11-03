@@ -184,3 +184,49 @@ The required source commit was attempted after validation, but `git add` failed:
 `.git/index.lock: Read-only file system`. No files were staged or committed by
 this iteration. PR #1089 was re-read afterward and remains open with
 `draft=false` at `1df14c5c85945066c567f733b61107f3177bd888`.
+
+## Third-iteration observation and auditor correction
+
+At `2026-11-03T16:17:34Z`, this runner still had no
+`/home/runner/.codex/orchestrator` directory or `/Users/teacher/.codex/orchestrator`.
+The default corpus, stage-2 plan, sweep report, `.last-redirect-apply-link`,
+`redirect-apply.log`, and `switch-review.json` were absent. None of
+`ORCH_LOCAL_RUNTIME`, `ORCH_STATE_DIR`, `ORCH_REDIRECT_SHADOW_CORPUS`, or
+`ORCH_REDIRECT_APPLY_BOOTSTRAP` was set in the runner environment. This establishes
+an unavailable owner-runtime observation, not an empty production population.
+
+Production blocking count: **unknown**; drainable count: **unknown**; eligible
+candidates: **unknown**. Refusals, action lineage, and actual cadence execution
+are also unavailable. The checkout exports the bootstrap default as 1 and declares
+the existing bounded apply/link cadence with GitHub preflight deferral. Source
+configuration does not establish the deployed November 3 flag or successful
+execution. No production break can be located from these missing artifacts;
+demand 18 supplies no eligibility evidence. No live action was attempted here.
+
+Reviewed `1df14c5` and `ba18153` and reran all 22 existing scoped Node checks
+successfully before reconciling the checklist. The three completed distinct
+items remain exactly those checked in the local reconciliation above (six
+checkboxes across the PR body's duplicated sections). The attempted PR-body
+update was rejected with `MCP tool call requires approval, but approval policy
+is never`; the remote checkboxes were not updated. Pytest remains unavailable
+under the repository-selected interpreter. Private bindings and a genuine
+October 20 receipt remain unavailable; the first four distinct tasks stay open.
+
+A manufactured corpus whose targets exactly equal the fixture targets exposed
+a concrete auditor defect: a one-to-one identity mapping incorrectly passed as
+anonymization. The new regression first failed because the CLI returned 0. The
+auditor now rejects each unchanged target with `target_not_anonymized`, retaining
+the existing nonempty-string and one-to-one checks. The regression verifies exit
+1, zero accepted bindings, no disclosed source targets, and unchanged corpus and
+fixture bytes. The same four-file Node command above now passes **23/23**, without
+failures or skips. Both changed JavaScript files pass `node --check`, and
+`git diff --check` passes. No Python or workflow files changed. This correction
+advances binding validation; it does not recover historical provenance or
+establish operational acceptance.
+
+The blocker comment and additive `needs-human` label were also attempted through
+the connector and rejected by the same approval policy. No remote mutation
+succeeded. Staging these three changed files failed with
+`.git/index.lock: Read-only file system`, so this iteration could not create the
+required source commit. The changes remain in the working tree for collection
+by the automation's committing process.

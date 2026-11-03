@@ -123,6 +123,10 @@ function audit(corpus, fixtures = defaultFixtures) {
       result.limitations.push(`${name}: target_anonymization_not_one_to_one`);
       continue;
     }
+    if (original === anonymous) {
+      result.limitations.push(`${name}: target_not_anonymized`);
+      continue;
+    }
     sourceTargets.set(original, anonymous);
     fixtureTargets.set(anonymous, original);
     result.bindings.push({
