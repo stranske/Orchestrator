@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -510,3 +511,24 @@ def test_remote_only_cli_is_explicit(monkeypatch):
     merge_guard.main(["o/r#41", "--remote-only"])
     merge_guard.main(["o/r#41"])
     assert [row["remote_only"] for row in received] == [True, False]
+
+
+def test_read_only_admission_consumes_one_120_second_read_budget(monkeypatch):
+    clock = iter([10.0, 20.0, 131.0])
+    monkeypatch.setattr(merge_guard, "time", SimpleNamespace(monotonic=lambda: next(clock)))
+    reads = []
+    monkeypatch.setattr(
+        merge_guard, "_admission_read", lambda command, **kw: reads.append(kw["timeout"])
+    )
+    monkeypatch.setattr(
+        merge_guard, "pr_metadata", lambda target, run_fn: run_fn(["gh", "api", target])
+    )
+
+    def inspect(target, **kwargs):
+        kwargs["metadata_fn"](target)
+        kwargs["metadata_fn"](target)
+
+    monkeypatch.setattr(merge_guard, "guarded_merge", inspect)
+    with pytest.raises(TimeoutError, match="guard read request deadline"):
+        merge_guard.read_only_admission("o/r#9", "a" * 40)
+    assert reads == [110.0]

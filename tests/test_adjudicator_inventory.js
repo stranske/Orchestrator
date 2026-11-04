@@ -15,12 +15,22 @@ const script = path.join(repo, 'scripts/export_adjudicator_inventory.js');
 const now = 2000000000;
 const cutoff = now - 90 * 86400;
 
-test('owner exclusions are accounted for without reading excluded outcome evidence', (t) => {
+for (const [variant, excludedTarget] of [
+  ['mixed case', 'StRaNsKe/CoLlAb-AdMiN#1'],
+  ['spaces', ' stranske/Collab-Admin #1 '],
+  ['tabs and newlines', '\tStRaNsKe/CoLlAb-AdMiN\r\n#1'],
+  ['Unicode whitespace', '\u00a0stranske/Collab-Admin\u2003#1'],
+]) {
+  test(`owner exclusions are accounted for without reading excluded outcome evidence: ${variant}`,
+    (t) => checkOwnerExclusion(t, excludedTarget));
+}
+
+function checkOwnerExclusion(t, excludedTarget) {
   const { root, db } = world(t);
   const connection = new DatabaseSync(db);
+  connection.prepare('INSERT INTO runs VALUES (?,?,?)').run('excluded', excludedTarget, now);
   connection.exec(`
     INSERT INTO runs VALUES
-      ('excluded', 'StRaNsKe/CoLlAb-AdMiN#1', ${now}),
       ('allowed', 'stranske/Orchestrator#1', ${now}),
       ('lookalike', 'stranske/Collab-Admin-archive#1', ${now});
     ALTER TABLE runs RENAME TO run_rows;
@@ -45,7 +55,7 @@ test('owner exclusions are accounted for without reading excluded outcome eviden
   'excluded timestamps must not be evaluated either');
   connection.close();
   const requested = ['excluded', 'allowed', 'lookalike'].map((run_id) => ({
-    run_id, target: run_id === 'excluded' ? 'StRaNsKe/CoLlAb-AdMiN#1' :
+    run_id, target: run_id === 'excluded' ? excludedTarget :
       run_id === 'allowed' ? 'stranske/Orchestrator#1' : 'stranske/Collab-Admin-archive#1',
     verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
   }));
@@ -80,13 +90,18 @@ test('owner exclusions are accounted for without reading excluded outcome eviden
   assert.deepEqual(fs.readFileSync(db), before);
   assert.deepEqual(fs.readFileSync(manifest), manifestBefore);
   assert.deepEqual(fs.readdirSync(root), files, 'no reports or SQLite sidecars created');
-});
+}
 
-test('requested owner exclusions remain explicit with missing or contradictory inventory', (t) => {
+for (const target of ['stranske/Collab-Admin#7', '\tstranske/Collab-Admin\u00a0#7']) {
+  test(`requested owner exclusions remain explicit with missing or contradictory inventory: ${JSON.stringify(target)}`,
+    (t) => checkRequestedOwnerExclusion(t, target));
+}
+
+function checkRequestedOwnerExclusion(t, target) {
   const { root, db } = world(t);
   seed(db, [['reused-run', now, 'NON_PASS', 'PASS']]);
   const requested = ['reused-run', 'absent'].map((run_id) => ({
-    run_id, target: 'stranske/Collab-Admin#7',
+    run_id, target,
     verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS',
   }));
   for (const version of [1, 2]) {
@@ -104,7 +119,7 @@ test('requested owner exclusions remain explicit with missing or contradictory i
       assert.equal(fs.existsSync(path.join(root, 'unavailable.db')), false);
     }
   }
-});
+}
 
 function world(t, schema = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adjudicator-inventory-'));
