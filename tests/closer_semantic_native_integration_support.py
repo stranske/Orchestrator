@@ -1085,7 +1085,7 @@ RESERVATION_DRAIN_BRIDGE_ROLE_MANIFEST = (
     / "fixtures/semantic_api_reference/current_reservation_drain_bridge_role_v1.json"
 )
 RESERVATION_DRAIN_BRIDGE_ROLE_SHA256 = (
-    "646aaf835af06b353c09083f8273668cb23aaf599b8f4fcae16d93fc49b686f4"
+    "936a59dce6baf480e3816398a5cdc803010e4e176a5afbf5aaaed89178bdb80a"
 )
 
 

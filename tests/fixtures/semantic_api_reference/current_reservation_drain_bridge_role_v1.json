@@ -1,15 +1,15 @@
 {
   "base_commit": "58618d8a24f8661a97fc0310303cff7ab2415f79",
   "bridged_qualification_id": "sonnet-current-role-qualification:c6a57e37d7839ca227306d33b94b0ce3672b1eb3260bded3363e61932c774a4a",
-  "current_model_contract_sha256": "810cddbb24bf387ee4de4bc71ffd4d500dbf616d11ac3d0b9f29332145941140",
+  "current_model_contract_sha256": "1f51ee1e971622f95406b399c3459d64bdcc3c9d15424e5fb740e1a7a3c659d7",
   "role_module": {
-    "after_file_sha256": "caf2c9d8b37370a61cebb4b37039be4563b7bf0e2d4afce499bc7cf513fc3277",
-    "after_module_ast_sha256": "8796aad2a595cb4c599b5ecae658d037c8dac6ec2ead801d19934e5fb9e8f5a5",
+    "after_file_sha256": "e544abcb1b68975e22df7c662bcf797b43364579af97b384ea9b8a254e0fe96c",
+    "after_module_ast_sha256": "4352850242528ab351f6d0af33fb38f887238258bf1c6ba917ef061670136f80",
     "assignment_delta": {
       "ROLE_QUALIFICATIONS": {
-        "after_ast_sha256": "c8fe93336860f233133fe530559168ce69da03f6f861759b4fff588e0a6e93c5",
+        "after_ast_sha256": "dc47cb5ea7633e688a116d6d6fc8c75d7c0d10dfe8d43ad7759fea48d7e0d9bd",
         "before_ast_sha256": "57a1c99f554885f2c2481320131e02a9d0954836a18f5540a95051b26fe349a1",
-        "bridged_record_after_ast_sha256": "2bc9e6bf81f68892eb92614a2c99ad32ab7a92d0be8f4c232e0f2a48d03af578",
+        "bridged_record_after_ast_sha256": "ccc94162dbeeebc63b61006c5c7e7af16aa88333c3134baa22c4db3738395fca",
         "bridged_record_before_ast_sha256": "bbd87166fd890a70ece340e95c42a6ef8bf15a30d0c5314694defc71cb097bef"
       }
     },
@@ -17,15 +17,15 @@
     "before_module_ast_sha256": "51c7a0e1415a28f7be4e08211becaadff87a58a7f33afd12499b4941a4a9dcaa",
     "historical_reversal": [
       {
-        "after_fragment": "810cddbb24bf387ee4de4bc71ffd4d500dbf616d11ac3d0b9f29332145941140",
+        "after_fragment": "1f51ee1e971622f95406b399c3459d64bdcc3c9d15424e5fb740e1a7a3c659d7",
         "before_fragment": "e27810baa6b79d0f8efb11e49bf57c6dcd59bb04c9c329e55237422464fb2c4a"
       },
       {
-        "after_fragment": "4c4133c9ee903160c5611f88997c3472c8e1b33921465e7bc95f35d1b4d7cad8",
+        "after_fragment": "92fb656b5fdc984429afee4677a6759fa8638807b18768211053958474bdfc75",
         "before_fragment": "23f70fc7b2f248c57514784a5025082e853fac1a1ae1b65c3b97ba14fd56d906"
       },
       {
-        "after_fragment": "05213baacf908fc04408b731f8a26dd26f97ff82ff042cfbeb72ebd5fadd1188",
+        "after_fragment": "25ff635448188791fa778fffb3ac2fc345441e9ad36f1c2656aed35c093022b6",
         "before_fragment": "05e27369baf6c61c65fa3786164c9aff1c2dd1cbf4fdc70aeca1bdfa5144f04b"
       }
     ]
