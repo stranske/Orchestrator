@@ -508,6 +508,80 @@ test('report recovery refuses malformed and ambiguous retained identities', (t) 
   }
 });
 
+test('nested retries cannot borrow a root identity when their saved identities conflict', (t) => {
+  const { saved, options } = retainedReport(t);
+  const identity = { case_id: 'case-a', run_id: 'original-run', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  for (const field of Object.keys(identity)) {
+    for (const nested of [false, true]) {
+      const original = structuredClone(saved);
+      const root = Object.assign(original.rows[0], identity);
+      const retry = { ...identity, [field]: 'private conflicting identity',
+        decision: 'reject_blocker', later_truth: 'PASS', backend_run_id: 'primary' };
+      root.retry_attempts = nested ? [{ retry_attempts: [retry] }] : [retry];
+      const bytes = JSON.stringify(original);
+      fs.writeFileSync(options.report, bytes);
+      const location = nested ? 'rows[0].retry_attempts[0].retry_attempts[0]'
+        : 'rows[0].retry_attempts[0]';
+      assert.throws(() => reportInventory(options), (error) => {
+        assert.equal(error.message, `invalid retained retry identity at ${location}.${field}`);
+        assert.ok(!error.message.includes('private'));
+        return true;
+      });
+      assert.equal(fs.readFileSync(options.report, 'utf8'), bytes);
+    }
+  }
+});
+
+test('explicit retry identities must be verifiable while compact histories remain intact', (t) => {
+  const { root, saved, options } = retainedReport(t);
+  const identity = { case_id: 'case-a', run_id: 'original-run', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  Object.assign(saved.rows[0], identity);
+  saved.rows[0].retry_attempts = [{ ...identity, backend_run_id: 'paid-earlier',
+    retry_attempts: [{ backend_run_id: 'paid-oldest' }] }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity], 2);
+  const before = fs.readFileSync(options.report);
+  const result = reportInventory({ ...options, manifest });
+  assert.deepEqual(result.manifest_reconciliation.cases[0].retained_attempt_locations,
+    ['rows[0]', 'rows[0].retry_attempts[0]', 'rows[0].retry_attempts[0].retry_attempts[0]']);
+  assert.deepEqual(result.paid_attempts.map((row) => row.backend_run_id),
+    ['primary', 'paid-earlier', 'paid-oldest', 'prior']);
+  assert.deepEqual(fs.readFileSync(options.report), before);
+  assert.equal(result.manifest_reconciliation.authenticated_outcomes_verified, false);
+  assert.equal(result.dispatch_authorized, false);
+
+  for (const value of [null, '', ' ', 12, {}, [], 'private unbound run']) {
+    const changed = structuredClone(saved);
+    // Even a valid child run cannot establish its root's missing run identity.
+    delete changed.rows[0].run_id;
+    changed.rows[0].retry_attempts[0].run_id = value;
+    fs.writeFileSync(options.report, JSON.stringify(changed));
+    assert.throws(() => reportInventory(options),
+      /invalid retained retry identity at rows\[0\]\.retry_attempts\[0\]\.run_id/);
+  }
+});
+
+test('CLI refuses cross-case retries before emitting manifest or native receipt matches', (t) => {
+  const { root, saved, options } = nativeJournal(t);
+  const identity = { run_id: 'original-run', target: 'owner/repo#1',
+    verifier_verdict: 'NON_PASS', adjudicated_verdict: 'PASS' };
+  Object.assign(saved.rows[0], identity);
+  saved.rows[0].retry_attempts = [{ case_id: 'case-b', backend_run_id: 'native-provider' }];
+  fs.writeFileSync(options.report, JSON.stringify(saved));
+  const manifest = manifestFile(root, [identity], 2);
+  const inputs = [options.report, options.journal, manifest];
+  const before = inputs.map((file) => fs.readFileSync(file));
+  const result = execute(root, process.execPath, [script, '--report', options.report,
+    '--journal', options.journal, '--manifest', manifest, '--observed-at', String(now),
+    '--evidence-class', options.evidenceClass, '--evidence-reference', options.evidenceReference]);
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '', 'no partial report may lend the root identity to this retry');
+  assert.match(result.stderr, /invalid retained retry identity at rows\[0\]\.retry_attempts\[0\]\.case_id/);
+  assert.deepEqual(inputs.map((file) => fs.readFileSync(file)), before);
+});
+
 test('report recovery requires explicit attribution and a valid check time', (t) => {
   const { options } = retainedReport(t);
   for (const overrides of [{ observedAt: NaN }, { observedAt: -1 },

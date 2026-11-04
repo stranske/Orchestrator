@@ -405,6 +405,20 @@ function reportInventory({ report, observedAt, evidenceClass, evidenceReference,
       if (!attempt || typeof attempt !== 'object' || Array.isArray(attempt)) {
         throw new Error(`invalid attempt at ${location}`);
       }
+      // Compact histories may omit repeated identity fields. Explicit saved
+      // identities must bind this root case before its manifest or native
+      // receipt locators can be attributed to a retry, at any nesting depth.
+      // Report only the field location: conflicting values may be private.
+      if (attempt !== row) {
+        for (const field of ['case_id', 'run_id', 'target', 'verifier_verdict',
+          'adjudicated_verdict']) {
+          if (Object.hasOwn(attempt, field) &&
+              (typeof row[field] !== 'string' || !row[field].trim() ||
+               attempt[field] !== row[field])) {
+            throw new Error(`invalid retained retry identity at ${location}.${field}`);
+          }
+        }
+      }
       if (attempt.backend_run_id !== undefined && attempt.backend_run_id !== null) {
         if (typeof attempt.backend_run_id !== 'string' || !attempt.backend_run_id.trim()) {
           throw new Error(`invalid backend_run_id at ${location}`);

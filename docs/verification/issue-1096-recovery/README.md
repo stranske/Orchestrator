@@ -1,5 +1,17 @@
 # Acceptance evidence recovery for #1096
 
+## Retained retry identity validation, 2026-11-04 UTC
+
+The inventory now refuses nested attempts whose explicit case, run, target or
+verdict identity conflicts with the root or cannot be verified against it.
+Compact histories that omit repeated fields remain supported. A conflicting
+retry cannot borrow the root's manifest or native receipt locators; refusal
+emits a field location without private values or partial JSON. Input bytes stay
+unchanged. All 122 focused regressions pass, including three controls that failed
+before implementation. [Results and limitations](retry-identity-followup/results.md)
+link the source commit, patch, plan and revision-bound required-test failure.
+Original retry reconciliation and operational acceptance remain incomplete.
+
 ## Packet evidence floor diagnostics, 2026-11-03 UTC
 
 The retained-report inventory now explains packet content gaps per attempt,

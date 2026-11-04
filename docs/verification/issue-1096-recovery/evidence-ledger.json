@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "checked_date": "2026-11-03",
+  "checked_date": "2026-11-04",
   "source_issue": "https://github.com/stranske/Orchestrator/issues/1096",
   "acceptance_complete": false,
   "revision_identity": {
@@ -337,6 +337,25 @@
       "limitation": "Fixture-verified packet floor diagnostics with production rule comparison. Historical field counts only; no new CLI execution on original report bytes, original retry identities, authenticated receipt, current truth or canonical grade.",
       "blocker_comment": "rejected_connector_requires_approval_policy_never",
       "needs_human_label": "rejected_connector_requires_approval_policy_never"
+    },
+    "retry_identity_followup": {
+      "checked_at": "2026-11-04T00:22:48.917Z",
+      "source_revision": "f0acc6900ba1f860d02868f61da987a4afa0a592",
+      "parent_revision": "ba918d748be8dc58d50741734a2930a10a20ad69",
+      "validation": "retry-identity-followup/validation.json",
+      "checks": "retry-identity-followup/acceptance-run/checks.json",
+      "plan": "retry-identity-followup/plan.md",
+      "results": "retry-identity-followup/results.md",
+      "inventory_tests_passed": 67,
+      "runner_tests_passed": 33,
+      "ledger_tests_passed": 22,
+      "required_tests_passed": false,
+      "accepted_deployment_verified": false,
+      "new_acceptance_checkboxes_complete": 0,
+      "original_retry_task_complete": false,
+      "dispatch_performed": false,
+      "canonical_publication_performed": false,
+      "limitation": "Conflicting saved retry identities are refused; original requested identities and authenticated operational evidence remain unavailable."
     }
   },
   "mirror_synchronization": [
